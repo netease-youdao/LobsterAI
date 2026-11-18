@@ -9,8 +9,62 @@ import sys
 import subprocess
 import os
 import platform
+import shutil
+import tempfile
 from pathlib import Path
 from openpyxl import load_workbook
+
+WINDOWS_PLATFORM = 'Windows'
+
+
+def recalc_windows(filename, timeout):
+    """Recalculate XLSX in an isolated, headless LibreOffice profile on Windows."""
+    source = Path(filename).resolve()
+    if source.suffix.lower() != '.xlsx':
+        return {'error': 'Windows recalculation supports .xlsx only; original file was not changed'}
+    executable = shutil.which('soffice.com')
+    if not executable:
+        for variable in ('PROGRAMFILES', 'PROGRAMFILES(X86)'):
+            candidate = Path(os.environ.get(variable, '')) / 'LibreOffice/program/soffice.com'
+            if candidate.is_file():
+                executable = str(candidate)
+                break
+    if not executable:
+        return {'error': 'LibreOffice was not found; original file was not changed'}
+    original = source.stat()
+    # Keep output on the same volume so replacement is atomic. A unique profile
+    # avoids macro setup and never attaches to an existing user Office window.
+    with tempfile.TemporaryDirectory(prefix='.recalc-', dir=source.parent) as temporary:
+        root = Path(temporary)
+        output = root / 'output'
+        output.mkdir()
+        cmd = [executable, f'-env:UserInstallation={(root / "profile").as_uri()}',
+               '--headless', '--nologo', '--norestore', '--convert-to',
+               'xlsx:Calc MS Excel 2007 XML', '--outdir', str(output), str(source)]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Only terminate the process tree created by this invocation.
+            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                           capture_output=True, timeout=10,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            process.kill()
+            process.communicate(timeout=5)
+            return {'error': f'LibreOffice recalculation timed out after {timeout}s; original file was not changed'}
+        converted = output / source.name
+        if process.returncode != 0 or not converted.is_file():
+            detail = (stderr or stdout).decode('utf-8', errors='replace').strip()
+            return {'error': f'LibreOffice recalculation failed: {detail}; original file was not changed'}
+        # Validate the generated workbook before replacing the source.
+        workbook = load_workbook(converted, read_only=True)
+        workbook.close()
+        current = source.stat()
+        if (current.st_mtime_ns, current.st_size) != (original.st_mtime_ns, original.st_size):
+            return {'error': 'Source workbook changed during recalculation; original file was not changed'}
+        os.replace(converted, source)
+    return None
 
 
 def setup_libreoffice_macro():
@@ -66,7 +120,17 @@ def recalc(filename, timeout=30):
     
     abs_path = str(Path(filename).absolute())
     
-    if not setup_libreoffice_macro():
+    if timeout <= 0:
+        return {'error': 'Timeout must be positive'}
+
+    if platform.system() == WINDOWS_PLATFORM:
+        try:
+            error = recalc_windows(abs_path, timeout)
+        except Exception as exc:
+            return {'error': f'Windows recalculation failed: {exc}'}
+        if error:
+            return error
+    elif not setup_libreoffice_macro():
         return {'error': 'Failed to setup LibreOffice macro'}
     
     cmd = [
@@ -76,7 +140,7 @@ def recalc(filename, timeout=30):
     ]
     
     # Handle timeout command differences between Linux and macOS
-    if platform.system() != 'Windows':
+    if platform.system() != WINDOWS_PLATFORM:
         timeout_cmd = 'timeout' if platform.system() == 'Linux' else None
         if platform.system() == 'Darwin':
             # Check if gtimeout is available on macOS
@@ -89,7 +153,10 @@ def recalc(filename, timeout=30):
         if timeout_cmd:
             cmd = [timeout_cmd, str(timeout)] + cmd
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Windows has already recalculated without the legacy macro above.
+    result = (subprocess.CompletedProcess(cmd, 0, '', '')
+              if platform.system() == WINDOWS_PLATFORM
+              else subprocess.run(cmd, capture_output=True, text=True))
     
     if result.returncode != 0 and result.returncode != 124:  # 124 is timeout exit code
         error_msg = result.stderr or 'Unknown error during recalculation'

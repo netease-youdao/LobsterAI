@@ -2,6 +2,8 @@ import type { ThemeDefinition } from '../themes/types';
 
 /** localStorage key read by index.html's pre-React splash to pick light/dark before any JS bundle loads */
 export const THEME_APPEARANCE_STORAGE_KEY = 'lobster-theme-appearance';
+/** Effective theme shared with companion windows, including an active skin's binding. */
+export const THEME_ID_STORAGE_KEY = 'lobster-theme-id';
 
 export interface ThemeStorage {
   get(key: string): string | null | Promise<string | null>;

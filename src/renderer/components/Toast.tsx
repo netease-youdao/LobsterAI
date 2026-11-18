@@ -13,19 +13,32 @@ export interface ToastEventDetail {
   onAction?: () => void;
 }
 
+export const ToastPlacement = {
+  Center: 'center',
+  Top: 'top',
+} as const;
+export type ToastPlacement = typeof ToastPlacement[keyof typeof ToastPlacement];
+
 interface ToastProps {
+  placement?: ToastPlacement;
   message: string;
   closeLabel: string;
   actionLabel?: string;
   onAction?: () => void;
   onClose?: () => void;
+  /** Centers the toast on its nearest positioned ancestor instead of the window. */
+  contained?: boolean;
 }
 
-const Toast: React.FC<ToastProps> = ({ message, closeLabel, actionLabel, onAction, onClose }) => {
+const Toast: React.FC<ToastProps> = ({ message, closeLabel, actionLabel, onAction, onClose, placement = ToastPlacement.Center, contained = false }) => {
   return (
-    <div className="pointer-events-none fixed left-1/2 top-1/2 z-[10000] w-max max-w-full -translate-x-1/2 -translate-y-1/2 px-4">
+    <div className={`pointer-events-none ${contained ? 'absolute' : 'fixed'} left-1/2 z-[10000] w-max max-w-full -translate-x-1/2 px-4 ${
+      placement === ToastPlacement.Top ? 'top-8' : 'top-1/2 -translate-y-1/2'
+    }`}>
       <div
-        className="pointer-events-auto w-fit max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-foreground shadow-elevated animate-scale-in"
+        className={`pointer-events-auto w-fit rounded-xl border border-border-subtle bg-surface px-3.5 py-2.5 text-foreground shadow-elevated animate-scale-in ${
+          placement === ToastPlacement.Top ? 'max-w-[min(42rem,calc(100vw-2rem))]' : 'max-w-[min(28rem,calc(100vw-2rem))]'
+        }`}
         role="status"
         aria-live="polite"
       >

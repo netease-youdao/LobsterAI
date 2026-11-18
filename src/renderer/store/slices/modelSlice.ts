@@ -2,12 +2,15 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { ProviderName } from '@shared/providers/constants';
 import type { LobsterAIRequestCapability } from '@shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '@shared/providers/modelRuntimeProfiles';
-import type { ModelThinkingConfig } from '@shared/providers/modelThinking';
+import type { ModelThinkingConfig, ModelThinkingLevel } from '@shared/providers/modelThinking';
 
+import type { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
 
 export interface Model {
+  presetId?: ModelPresetId;
+  presetThinkingLevel?: ModelThinkingLevel;
   id: string;
   name: string;
   provider?: string; // 模型所属的提供商
@@ -22,12 +25,19 @@ export interface Model {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  contextWindowOptions?: number[];
   maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
   explicitContextCache?: boolean; // 是否支持服务端显式上下文缓存
   description?: string; // 模型能力简介
   costMultiplier?: number; // 积分消耗倍率 (1.0=标准)
+  limitedFree?: boolean;
+  limitedFreeActive?: boolean;
+  limitedFreeStartAt?: string | null;
+  limitedFreeEndAt?: string | null;
+  subscriptionPriority?: boolean;
+  busy?: boolean;
   moreModel?: boolean; // 是否收起到“更多模型”分组
   accessible?: boolean; // false = 模型可见但用户无权使用（置灰）
   restrictionHint?: string; // 限制提示（如 "订阅套餐/购买加油包可用"）
@@ -59,7 +69,7 @@ export function isSameModelIdentity(
 }
 
 function isModelAccessible(model: Model | undefined): model is Model {
-  return !!model && model.accessible !== false;
+  return !!model && model.accessible !== false && model.busy !== true;
 }
 
 function selectPreferredAccessibleModel(
@@ -67,10 +77,16 @@ function selectPreferredAccessibleModel(
   currentModel: Model,
 ): Model {
   const matchedModel = allAvailableModels.find(m => isSameModelIdentity(m, currentModel));
-  if (isModelAccessible(matchedModel)) {
+  // A locked current model was never chosen by the user (setDefaultSelectedModel
+  // rejects locked models): it is only the entry displayed while nothing is
+  // usable, e.g. the logged-out public catalog. Once the account's own catalog
+  // arrives it must not pin the default; the first accessible model wins.
+  if (isModelAccessible(matchedModel) && isModelAccessible(currentModel)) {
     return matchedModel;
   }
-  return allAvailableModels.find(isModelAccessible) ?? matchedModel ?? allAvailableModels[0] ?? currentModel;
+  return allAvailableModels.find(model => isModelAccessible(model))
+    ?? matchedModel
+    ?? allAvailableModels[0] ?? currentModel;
 }
 
 // 从 providers 配置中构建初始可用模型列表
@@ -98,10 +114,19 @@ function buildInitialModels(): Model[] {
 export let availableModels: Model[] = buildInitialModels();
 const defaultModelProvider = defaultConfig.model.defaultModelProvider;
 
+export const ServerModelLoadStatus = {
+  Idle: 'idle',
+  Loading: 'loading',
+  Ready: 'ready',
+  Error: 'error',
+} as const;
+export type ServerModelLoadStatus = typeof ServerModelLoadStatus[keyof typeof ServerModelLoadStatus];
+
 interface ModelState {
   defaultSelectedModel: Model;
   selectedModelByAgent: Record<string, Model>;
   availableModels: Model[];
+  serverModelLoadStatus: ServerModelLoadStatus;
 }
 
 /**
@@ -118,6 +143,7 @@ export function selectAgentSelectedModel(
   agentModelRef: string,
 ): Model {
   const override = modelState.selectedModelByAgent[agentId];
+  if (override?.presetId && isModelAccessible(override)) return override;
   const trimmed = agentModelRef.trim();
   if (trimmed) {
     const resolved = resolveOpenClawModelRef(trimmed, modelState.availableModels);
@@ -130,7 +156,7 @@ export function selectAgentSelectedModel(
   if (isModelAccessible(modelState.defaultSelectedModel)) {
     return modelState.defaultSelectedModel;
   }
-  return modelState.availableModels.find(isModelAccessible) ?? modelState.defaultSelectedModel;
+  return modelState.availableModels.find(model => isModelAccessible(model)) ?? modelState.defaultSelectedModel;
 }
 
 /**
@@ -160,18 +186,22 @@ const initialState: ModelState = {
   ) || availableModels[0],
   selectedModelByAgent: {},
   availableModels: availableModels,
+  serverModelLoadStatus: ServerModelLoadStatus.Idle,
 };
 
 const modelSlice = createSlice({
   name: 'model',
   initialState,
   reducers: {
+    setServerModelLoadStatus: (state, action: PayloadAction<ServerModelLoadStatus>) => {
+      state.serverModelLoadStatus = action.payload;
+    },
     setSelectedModel: (state, action: PayloadAction<{ agentId: string; model: Model }>) => {
-      if (action.payload.model.accessible === false) return;
+      if (!isModelAccessible(action.payload.model)) return;
       state.selectedModelByAgent[action.payload.agentId] = action.payload.model;
     },
     setDefaultSelectedModel: (state, action: PayloadAction<Model>) => {
-      if (action.payload.accessible === false) return;
+      if (!isModelAccessible(action.payload)) return;
       state.defaultSelectedModel = action.payload;
     },
     clearAgentSelectedModel: (state, action: PayloadAction<string>) => {
@@ -194,6 +224,7 @@ const modelSlice = createSlice({
       syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
     },
     setServerModels: (state, action: PayloadAction<Model[]>) => {
+      state.serverModelLoadStatus = ServerModelLoadStatus.Ready;
       // 服务端模型放前面，自配模型保留在后面
       const userModels = state.availableModels.filter(m => !m.isServerModel);
       state.availableModels = [...action.payload, ...userModels];
@@ -209,6 +240,7 @@ const modelSlice = createSlice({
       syncSelectedModelByAgent(state.selectedModelByAgent, state.availableModels);
     },
     clearServerModels: (state) => {
+      state.serverModelLoadStatus = ServerModelLoadStatus.Idle;
       state.availableModels = state.availableModels.filter(m => !m.isServerModel);
       availableModels = state.availableModels;
       // 如果 defaultSelectedModel 是服务端模型，切换到第一个可用模型
@@ -223,6 +255,7 @@ const modelSlice = createSlice({
 });
 
 export const {
+  setServerModelLoadStatus,
   setSelectedModel,
   setDefaultSelectedModel,
   clearAgentSelectedModel,

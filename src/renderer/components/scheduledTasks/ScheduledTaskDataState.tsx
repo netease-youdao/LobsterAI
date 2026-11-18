@@ -31,7 +31,7 @@ const ScheduledTaskDataState: React.FC<ScheduledTaskDataStateProps> = ({
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 inline-flex items-center gap-1.5 text-sm text-primary transition-colors hover:text-primary-hover"
+          className="mt-4 inline-flex items-center gap-1.5 text-sm text-foreground transition-colors hover:underline underline-offset-4"
         >
           <ArrowPathIcon className="h-4 w-4" />
           {i18nService.t('scheduledTasksRetry')}
@@ -47,7 +47,7 @@ const ScheduledTaskDataState: React.FC<ScheduledTaskDataStateProps> = ({
 
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
-      <ArrowPathIcon className="mb-3 h-6 w-6 animate-spin text-primary" />
+      <ArrowPathIcon className="mb-3 h-6 w-6 animate-spin text-foreground" />
       <p className="text-sm text-secondary">{label}</p>
     </div>
   );

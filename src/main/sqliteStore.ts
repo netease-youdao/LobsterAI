@@ -5,13 +5,14 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { AgentId, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
+import { AgentId, AgentModelSelectionMode, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
 import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
 } from '../shared/cowork/openclawCronSessionKey';
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
+import { repairForkedSessionToolUseIds } from './libs/coworkForkToolUseIds';
 import {
   openSqliteDatabaseWithRecovery,
   SqliteBackupManager,
@@ -26,6 +27,7 @@ type ChangePayload<T = unknown> = {
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 const AGENT_WORKING_DIRECTORY_BACKFILL_KEY = 'agents.workingDirectoryBackfill.v1.completed';
 const SCHEDULED_TASK_SESSION_BACKFILL_KEY = 'coworkSessions.scheduledTaskIdBackfill.v1.completed';
+export const FORK_TOOL_USE_ID_REPAIR_KEY = 'coworkMessages.forkToolUseIdRepair.v1.completed';
 const EXTRACT_SCHEDULED_TASK_ID_SQL_FUNCTION = 'lobster_extract_scheduled_task_id';
 
 const extractScheduledTaskIdFromMessageMetadata = (metadata: unknown): string | null => {
@@ -49,6 +51,8 @@ export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
   private emitter = new EventEmitter();
+  /** Listener count per key; writes to unwatched keys skip reading the previous value. */
+  private watchedKeys = new Map<string, number>();
   private didRunMigration = false;
 
   private constructor(db: Database.Database, dbPath: string) {
@@ -109,6 +113,9 @@ export class SqliteStore {
         cwd TEXT NOT NULL,
         system_prompt TEXT NOT NULL DEFAULT '',
         model_override TEXT NOT NULL DEFAULT '',
+        model_preset_id TEXT,
+        context_window_override INTEGER,
+        context_window_owner_key TEXT,
         thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
         parent_session_id TEXT,
@@ -217,9 +224,11 @@ export class SqliteStore {
         system_prompt TEXT NOT NULL DEFAULT '',
         identity TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
+        model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}',
         thinking_level TEXT NOT NULL DEFAULT '',
         working_directory TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
+        icon_customized INTEGER,
         skill_ids TEXT NOT NULL DEFAULT '[]',
         subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
         enabled INTEGER NOT NULL DEFAULT 1,
@@ -395,6 +404,20 @@ export class SqliteStore {
 
       if (!colNames.includes('active_skill_ids')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN active_skill_ids TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('model_preset_id')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN model_preset_id TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('context_window_override')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN context_window_override INTEGER;');
+        this.didRunMigration = true;
+      }
+      if (!colNames.includes('context_window_owner_key')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN context_window_owner_key TEXT;');
         this.didRunMigration = true;
       }
 
@@ -593,6 +616,23 @@ export class SqliteStore {
       console.warn('[SqliteStore] failed to backfill scheduled task session ids:', error);
     }
 
+    // Migration: forks used to drop toolUseId from copied messages, so parallel tool
+    // results no longer paired with their calls. Restore the ids from the parent once.
+    try {
+      if (this.get<string>(FORK_TOOL_USE_ID_REPAIR_KEY) !== '1') {
+        const repairedMessageCount = repairForkedSessionToolUseIds(this.db);
+        if (repairedMessageCount > 0) {
+          this.didRunMigration = true;
+          console.log(
+            `[SqliteStore] restored tool call ids on ${repairedMessageCount} forked messages.`,
+          );
+        }
+        this.set(FORK_TOOL_USE_ID_REPAIR_KEY, '1');
+      }
+    } catch (error) {
+      console.warn('[SqliteStore] failed to restore tool call ids on forked messages:', error);
+    }
+
     // `thinking_level` is also required by all agent reads. Migrate it before
     // optional layout columns so upgrades from partially migrated databases
     // cannot leave the agents table unreadable.
@@ -606,6 +646,20 @@ export class SqliteStore {
     } catch (error) {
       console.error('[SqliteStore] failed to add agents.thinking_level:', error);
       throw error;
+    }
+
+    // Legacy model bindings have no provenance: preserve them until the user
+    // explicitly opts into inheritance. New experts opt in when installed.
+    const modelColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+    if (!modelColumns.some(column => column.name.toLowerCase() === 'model_selection_mode')) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}';`);
+    }
+
+    // Null preserves legacy avatar ownership inference; explicit edits are recorded from now on.
+    const avatarColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+    if (!avatarColumns.some(column => column.name.toLowerCase() === 'icon_customized')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN icon_customized INTEGER;');
+      this.didRunMigration = true;
     }
 
     // Migration: Add model preference and layout columns to agents
@@ -795,7 +849,16 @@ export class SqliteStore {
       callback(payload.newValue, payload.oldValue);
     };
     this.emitter.on('change', handler);
-    return () => this.emitter.off('change', handler);
+    this.watchedKeys.set(key, (this.watchedKeys.get(key) ?? 0) + 1);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.emitter.off('change', handler);
+      const remaining = (this.watchedKeys.get(key) ?? 1) - 1;
+      if (remaining > 0) this.watchedKeys.set(key, remaining);
+      else this.watchedKeys.delete(key);
+    };
   }
 
   get<T = unknown>(key: string): T | undefined {
@@ -812,7 +875,9 @@ export class SqliteStore {
   }
 
   set<T = unknown>(key: string, value: T): void {
-    const oldValue = this.get<T>(key);
+    // Some values are large; only parse the previous one when a listener will receive it.
+    const watched = this.watchedKeys.has(key);
+    const oldValue = watched ? this.get<T>(key) : undefined;
     const now = Date.now();
     this.db
       .prepare(
@@ -825,13 +890,14 @@ export class SqliteStore {
     `,
       )
       .run(key, JSON.stringify(value), now);
-    this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
+    if (watched) this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
   }
 
   delete(key: string): void {
-    const oldValue = this.get(key);
+    const watched = this.watchedKeys.has(key);
+    const oldValue = watched ? this.get(key) : undefined;
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
-    this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
+    if (watched) this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
   }
 
   getDatabase(): Database.Database {

@@ -22,6 +22,9 @@ export interface DockQuestionOption { id: string; label: string; description?: s
 export interface DockQuestion {
   id: string;
   title: string;
+  /** Optional short display heading; title remains the plugin's answer key. */
+  heading?: string;
+  subtitle?: string;
   options: DockQuestionOption[];
   multiSelect: boolean;
   /** Whether a typed answer is accepted next to (or instead of) the options. */
@@ -79,7 +82,11 @@ export function permissionDockRequest(permission: CoworkPermissionRequest): Dock
     if (options.some((option, optionIndex) => options.findIndex((other) => other.id === option.id) !== optionIndex)) return null;
     const allowFreeText = native ? question.isOther === true || options.length === 0 : true;
     if (!options.length && !allowFreeText) return null;
-    questions.push({ id, title: question.question, multiSelect: question.multiSelect === true, options, allowFreeText });
+    questions.push({
+      id, title: question.question, multiSelect: question.multiSelect === true, options, allowFreeText,
+      ...(typeof question.title === 'string' && question.title.trim() ? { heading: question.title.trim() } : {}),
+      ...(typeof question.subtitle === 'string' && question.subtitle.trim() ? { subtitle: question.subtitle } : {}),
+    });
   }
   if (!questions.length) return null;
   return {

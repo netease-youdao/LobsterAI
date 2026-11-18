@@ -31,6 +31,21 @@ export const shouldAutoScrollForPosition = (
   return distanceToBottom <= threshold;
 };
 
+// The viewport can shrink under a reader without any scroll from them (the
+// question dock opening, a taller prompt input). A scroll event from that same
+// frame may already have been measured against the smaller viewport and turned
+// following off, so also judge the position by the height before the resize.
+export const shouldKeepBottomOnViewportResize = (
+  following: boolean,
+  distanceToBottomBeforeResize: number,
+  userDetachedFromBottom: boolean,
+  viewportLocked: boolean,
+): boolean => following || shouldAutoScrollForPosition(
+  distanceToBottomBeforeResize,
+  userDetachedFromBottom,
+  viewportLocked,
+);
+
 export const isAtConversationSessionBottom = (
   messagesOffset: number,
   loadedMessageCount: number,

@@ -3,9 +3,14 @@
 const path = require('path');
 
 const config = require('../electron-builder.json');
-const { BuildEnv } = require('./build-env.cjs');
+const { BuildEnv, PackagingEnv } = require('./build-env.cjs');
 const { readBuildKeyfrom } = require('./build-keyfrom.cjs');
 const { configureMacWebAuthnEntitlements } = require('./mac-webauthn-entitlements.cjs');
+const { packagingEnv } = require('./codown-config.cjs');
+
+if (process.env[PackagingEnv.OutputDir]) {
+  config.directories = { ...config.directories, output: path.resolve(process.env[PackagingEnv.OutputDir]) };
+}
 
 // Opt-in web installer (small NSIS stub that downloads the app package from a
 // CDN at install time). Default builds are full offline installers; nothing
@@ -103,7 +108,8 @@ for (const platformName of ['mac', 'win', 'linux']) {
   mergeExtraResources(platformName);
 }
 
-configureMacWebAuthnEntitlements(config, process.env.APPLE_TEAM_ID);
+// Resolve explicit signing options consistently for direct and codown builds.
+configureMacWebAuthnEntitlements(config, packagingEnv(path.join(__dirname, '..')));
 
 // Sign every Windows binary electron-builder produces (LobsterAI.exe, the
 // uninstaller, the installer) through the internal Youdao signing service,

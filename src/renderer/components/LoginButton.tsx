@@ -1,4 +1,4 @@
-import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ChevronRightIcon, GiftIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
 import React, {
   useCallback,
   useEffect,
@@ -8,6 +8,8 @@ import React, {
 } from 'react';
 import { useSelector } from 'react-redux';
 
+import { FeedbackUiEvent } from '../../shared/feedback/constants';
+import type { SubscriptionTrialState } from '../../shared/subscriptionTrial/constants';
 import inviteCreditsIconUrl from '../assets/icons/invite-credits.svg';
 import logoutIconUrl from '../assets/icons/logout.svg';
 import promoSubscriptionIconUrl from '../assets/icons/promo-subscription.svg';
@@ -17,10 +19,12 @@ import usageOverviewIconUrl from '../assets/icons/usage-overview.svg';
 import { EnterpriseAccountMenu } from '../features/enterpriseAccount/components/EnterpriseAccountMenu';
 import { selectEnterpriseAccountContext } from '../features/enterpriseAccount/selectors';
 import { authService } from '../services/auth';
+import { BrowserLoginStatus } from '../services/browserLoginSession';
 import {
   getPortalCreditsDetailUrl,
   getPortalCreditsResetActivityUrl,
   getPortalInvitationUrl,
+  getPortalPennyActivityUrl,
   getPortalPricingUrl,
   getPortalProfileUrl,
   getPortalRechargeUrl,
@@ -29,29 +33,41 @@ import { i18nService } from '../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { RootState } from '../store';
 import type { FreeCreditsReward } from '../store/slices/authSlice';
+import { AccountConnectionNotice } from './AccountConnectionNotice';
+import { AccountConnectionState, getAccountConnectionState } from './accountConnectionState';
 import {
   type AccountPlanAnalyticsContext,
   getAccountMenuDisplayName,
   getAccountPlanAnalyticsContext,
   getAccountPlanPresentation,
   getFinalRewards,
+  isPennyActivityMenuEntryVisible,
 } from './accountMenuState';
 import { ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME } from './accountMenuStyles';
 import CreditsFinalRewardModal from './CreditsFinalRewardModal';
 import { DailyCheckInAccountMenuEntry } from './DailyCheckInActivity';
 import { getDailyCheckInAuthScopeKey } from './dailyCheckInActivityState';
+import { waitForDailyCheckInRefresh } from './dailyCheckInSnapshotStore';
 import UserAvatarIcon from './icons/UserAvatarIcon';
+import BrowserLoginStatusCard from './login/BrowserLoginStatusCard';
+import { useBrowserLoginSession } from './login/useBrowserLoginSession';
+import LogoutConfirmDialog from './LogoutConfirmDialog';
+import SidebarLoginPromoBubble, { SIDEBAR_LOGIN_PROMO_BUBBLE_ID } from './SidebarLoginPromoBubble';
 import {
   type StartupCreditCampaignEntry,
   useStartupCreditCampaignEntry,
 } from './startupCreditCampaignBridge';
 import {
+  type DailyCheckInLoadResult,
   DailyCheckInLoadResultStatus,
   type DailyCheckInSnapshot,
-  loadDailyCheckInSnapshot,
+  dailyCheckInSnapshotStore,
 } from './useDailyCheckInActivity';
 
 const ACCOUNT_MENU_ANALYTICS_SOURCE = 'home_account_menu';
+// With no snapshot cached yet, the first open waits this long at most so the
+// check-in entry usually renders with the menu instead of shifting it later.
+const DAILY_CHECK_IN_MENU_OPEN_WAIT_MS = 250;
 const reportAccountMenuAction = (
   actionType: string,
   options: {
@@ -94,6 +110,34 @@ const writeAccountMenuRendererLog = (
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.debug(`[LoginButton] renderer log unavailable: ${errorMessage}`);
+  }
+};
+
+const refreshMenuDailyCheckIn = async (
+  accountScope: string,
+): Promise<DailyCheckInLoadResult> => {
+  try {
+    const result = await dailyCheckInSnapshotStore.refresh(accountScope);
+    if (result.status === DailyCheckInLoadResultStatus.Failed) {
+      const message = `daily check-in refresh failed for account menu code=${result.code ?? 'unknown'}`;
+      console.warn(`[LoginButton] ${message}`);
+      writeAccountMenuRendererLog('warn', message);
+    }
+    return result;
+  } catch (error) {
+    console.warn('[LoginButton] failed to refresh daily check-in for account menu:', error);
+    writeAccountMenuRendererLog('warn', 'failed to refresh daily check-in for account menu');
+    return { status: DailyCheckInLoadResultStatus.Failed };
+  }
+};
+
+const loadSubscriptionTrialState = async (): Promise<SubscriptionTrialState | null> => {
+  try {
+    return await window.electron.subscriptionTrial.status();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.debug(`[LoginButton] subscription trial status unavailable: ${errorMessage}`);
+    return null;
   }
 };
 
@@ -160,7 +204,7 @@ const AccountMenuAction: React.FC<AccountMenuActionProps> = ({
     type="button"
     title={title}
     onClick={() => void onClick()}
-    className={`flex w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-[13px] transition-colors hover:bg-surface-raised ${
+    className={`mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] transition-colors hover:bg-surface-raised ${
       danger ? 'text-red-500' : 'text-foreground'
     }`}
   >
@@ -168,6 +212,10 @@ const AccountMenuAction: React.FC<AccountMenuActionProps> = ({
     <span className="min-w-0 flex-1 truncate">{label}</span>
     {trailing}
   </button>
+);
+
+const AccountMenuSeparator: React.FC = () => (
+  <div role="separator" className="mx-4 h-px bg-border" />
 );
 
 const DiamondSparkleIcon: React.FC = () => (
@@ -274,10 +322,15 @@ const PointsStackIcon: React.FC = () => (
   </svg>
 );
 
+const PennyActivityIcon: React.FC = () => (
+  <GiftIcon className="h-4 w-4 shrink-0 text-[#111111] dark:text-white" aria-hidden="true" />
+);
+
 interface UserMenuProps {
   dailyCheckInSnapshot: DailyCheckInSnapshot | null;
   onClose: () => void;
   onOpenFinalReward: (campaignCode: string) => void;
+  pennyActivityEntryVisible: boolean;
   startupCreditEntry: StartupCreditCampaignEntry;
 }
 
@@ -285,35 +338,41 @@ const UserMenu: React.FC<UserMenuProps> = ({
   dailyCheckInSnapshot,
   onClose,
   onOpenFinalReward,
+  pennyActivityEntryVisible,
   startupCreditEntry,
 }) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const quota = useSelector((state: RootState) => state.auth.quota);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
+  const connectionState = useSelector((state: RootState) => getAccountConnectionState(state.auth));
   const isEn = i18nService.getLanguage() === 'en';
   // The menu fetches on mount, so start in the loading state to avoid a
   // one-frame "--" flash before the mount effect runs.
-  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(!connectionState);
 
   const refreshProfileSummary = useCallback(async () => {
     setSummaryLoading(true);
     try {
-      await authService.fetchProfileSummary();
+      await authService.recoverAccount();
     } finally {
       setSummaryLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void refreshProfileSummary();
-  }, [refreshProfileSummary]);
+    if (!connectionState) void refreshProfileSummary();
+  }, [connectionState, refreshProfileSummary]);
 
   const openPortalUrl = async (url: string) => {
     await window.electron.shell.openExternal(url);
     onClose();
   };
 
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   const handleLogout = async () => {
+    setLoggingOut(true);
     try {
       await authService.logout();
       reportAccountMenuAction('logout', {
@@ -329,6 +388,9 @@ const UserMenu: React.FC<UserMenuProps> = ({
         result: 'failed',
       });
       throw error;
+    } finally {
+      setLoggingOut(false);
+      setLogoutConfirmOpen(false);
     }
   };
 
@@ -475,6 +537,24 @@ const UserMenu: React.FC<UserMenuProps> = ({
     }
   };
 
+  const handlePennyActivity = async () => {
+    try {
+      await openPortalUrl(getPortalPennyActivityUrl());
+      reportAccountMenuAction('open_penny_activity', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'success',
+      });
+    } catch (error) {
+      reportAccountMenuAction('open_penny_activity', {
+        creditItemCount: creditItems.length,
+        hasCredits,
+        result: 'failed',
+      });
+      throw error;
+    }
+  };
+
   const handleCreditsResetActivity = async () => {
     try {
       await openPortalUrl(getPortalCreditsResetActivityUrl());
@@ -504,7 +584,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
   };
 
   const totalCredits = profileSummary?.totalCreditsRemaining ?? 0;
-  const creditsUnavailable = !profileSummary && !summaryLoading;
+  const creditsUnavailable = !profileSummary && (!summaryLoading || Boolean(connectionState));
   let creditsTrailingContent: React.ReactNode;
   if (profileSummary) {
     creditsTrailingContent = (
@@ -513,7 +593,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
         <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
       </>
     );
-  } else if (summaryLoading) {
+  } else if (summaryLoading && !connectionState) {
     creditsTrailingContent = (
       <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-secondary" />
     );
@@ -556,10 +636,13 @@ const UserMenu: React.FC<UserMenuProps> = ({
         <div className="truncate text-sm font-medium text-foreground">
           {accountName}
         </div>
+        {connectionState && (
+          <AccountConnectionNotice state={connectionState} className="mt-2 w-full text-xs" />
+        )}
       </div>
 
       {/* Account destinations */}
-      <div className="border-b border-border py-1">
+      <div className="py-1">
         {visibleAccountPlan && (
           <AccountPlanAction
             label={visibleAccountPlan.label}
@@ -607,8 +690,10 @@ const UserMenu: React.FC<UserMenuProps> = ({
         />
       </div>
 
-      {/* Campaigns and invitations */}
-      <div className="border-b border-border py-1">
+      <AccountMenuSeparator />
+
+      {/* Campaigns, invitations and feedback */}
+      <div className="py-1">
         {campaignActionLabel && (
           <AccountMenuAction
             icon={<PortalMenuIcon src={promoSubscriptionIconUrl} darkInvert />}
@@ -627,21 +712,45 @@ const UserMenu: React.FC<UserMenuProps> = ({
             />
           );
         })}
+        {pennyActivityEntryVisible && (
+          <AccountMenuAction
+            icon={<PennyActivityIcon />}
+            label={i18nService.t('authPennyActivityEntry')}
+            onClick={handlePennyActivity}
+          />
+        )}
         <AccountMenuAction
           icon={<PortalMenuIcon src={inviteCreditsIconUrl} darkInvert />}
           label={i18nService.t('authInviteFriendsForCredits')}
           onClick={handleInvite}
         />
+        <AccountMenuAction
+          icon={<QuestionMarkCircleIcon className="h-4 w-4 shrink-0 text-[#111111] dark:text-white" aria-hidden="true" />}
+          label={i18nService.t('feedbackTitle')}
+          onClick={() => {
+            onClose();
+            window.dispatchEvent(new Event(FeedbackUiEvent.Open));
+          }}
+        />
       </div>
 
-      {/* Session action */}
+      <AccountMenuSeparator />
+
+      {/* Session actions */}
       <div className="py-1">
         <AccountMenuAction
           icon={<PortalMenuIcon src={logoutIconUrl} darkInvert />}
           label={i18nService.t('authLogout')}
-          onClick={handleLogout}
+          onClick={() => setLogoutConfirmOpen(true)}
         />
       </div>
+      {logoutConfirmOpen && (
+        <LogoutConfirmDialog
+          isLoggingOut={loggingOut}
+          onCancel={() => setLogoutConfirmOpen(false)}
+          onConfirm={() => void handleLogout()}
+        />
+      )}
     </div>
   );
 };
@@ -654,20 +763,24 @@ const formatRewardExpiry = (expiresAt: string): string => {
 interface LoginButtonProps {
   contentLeftOffset?: number;
   loggedOutVariant?: 'default' | 'sidebarPromo';
+  loginPromoTipVisible?: boolean;
 }
 
 const LoginButton: React.FC<LoginButtonProps> = ({
   contentLeftOffset = 0,
   loggedOutVariant = 'default',
+  loginPromoTipVisible = false,
 }) => {
   const {
     accountGeneration,
     isLoggedIn,
     isLoading,
+    sessionStatus,
     ownerAccountKey,
     profileSummary,
     user,
   } = useSelector((state: RootState) => state.auth);
+  const connectionState = getAccountConnectionState({ isLoading, isLoggedIn, sessionStatus });
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const startupCreditEntry = useStartupCreditCampaignEntry();
   const [showMenu, setShowMenu] = useState(false);
@@ -676,8 +789,13 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     startupCreditEntry,
   );
   const [menuDailyCheckInSnapshot, setMenuDailyCheckInSnapshot] = useState<DailyCheckInSnapshot | null>(null);
+  const [menuPennyActivityEntryVisible, setMenuPennyActivityEntryVisible] = useState(false);
+  const [loggedOutPennyActivityEntryVisible, setLoggedOutPennyActivityEntryVisible] = useState(false);
   const [selectedFinalRewardCode, setSelectedFinalRewardCode] = useState<string | null>(null);
   const [finalRewardLoading, setFinalRewardLoading] = useState(false);
+  const [loginStarting, setLoginStarting] = useState(false);
+  const loginStartingRef = useRef(false);
+  const loginSession = useBrowserLoginSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const menuOpenRequestRef = useRef(0);
   const mountedRef = useRef(true);
@@ -692,8 +810,27 @@ const LoginButton: React.FC<LoginButtonProps> = ({
   );
   const finalRewardText = getFinalRewardText(finalReward);
   const finalRewardOpen = finalReward !== undefined;
+  const canLoadMenuDailyCheckIn = isLoggedIn
+    && !connectionState
+    && !enterpriseAccountContext
+    && startupCreditEntry.resolved
+    && !startupCreditEntry.available;
 
   authAccountScopeRef.current = authAccountScope;
+
+  const prefetchMenuDailyCheckIn = useCallback(() => {
+    if (!canLoadMenuDailyCheckIn
+        || dailyCheckInSnapshotStore.isFresh(authAccountScope)) return;
+    dailyCheckInSnapshotStore.refresh(authAccountScope).catch((error: unknown) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.debug(`[LoginButton] daily check-in prefetch failed: ${errorMessage}`);
+    });
+  }, [authAccountScope, canLoadMenuDailyCheckIn]);
+
+  // Warm the snapshot once the account is ready so the first open is instant.
+  useEffect(() => {
+    prefetchMenuDailyCheckIn();
+  }, [prefetchMenuDailyCheckIn]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -708,10 +845,15 @@ const LoginButton: React.FC<LoginButtonProps> = ({
       const target = event.target;
       const isEnterpriseAccountFlyout = target instanceof Element
         && target.closest('[data-enterprise-account-flyout="true"]') !== null;
+      // Dialogs opened from the menu (e.g. the logout confirmation) are portaled
+      // to <body>; clicks inside them must not dismiss the menu that owns them.
+      const isInsideModal = target instanceof Element
+        && target.closest('[data-app-modal]') !== null;
       if (
         containerRef.current
         && !containerRef.current.contains(target as Node)
         && !isEnterpriseAccountFlyout
+        && !isInsideModal
       ) {
         setShowMenu(false);
       }
@@ -736,6 +878,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     setMenuOpening(false);
     setShowMenu(false);
     setMenuDailyCheckInSnapshot(null);
+    setMenuPennyActivityEntryVisible(false);
   }, [authAccountScope, isLoggedIn]);
 
   useEffect(() => {
@@ -744,13 +887,50 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     setMenuOpening(false);
     setShowMenu(false);
     setMenuDailyCheckInSnapshot(null);
+    setMenuPennyActivityEntryVisible(false);
   }, [isLoggedIn]);
 
-  if (isLoading) {
-    return null;
-  }
+  // The login promo bubble can appear on hover at any time, so the optional
+  // offer row is resolved ahead of time instead of when the bubble is shown.
+  useEffect(() => {
+    setLoggedOutPennyActivityEntryVisible(false);
+    if (isLoggedIn || connectionState) return;
+    let cancelled = false;
+    void loadSubscriptionTrialState().then(state => {
+      if (cancelled) return;
+      setLoggedOutPennyActivityEntryVisible(isPennyActivityMenuEntryVisible(state, {
+        isLoggedIn: false,
+        isEnterprise: false,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState, isLoggedIn]);
+
+  // The optional campaign loads after the menu opens and must never delay it.
+  useEffect(() => {
+    setMenuPennyActivityEntryVisible(false);
+    if (!showMenu || !isLoggedIn || enterpriseAccountContext || user?.accountMode === 'enterprise') return;
+    let cancelled = false;
+    void loadSubscriptionTrialState().then(state => {
+      if (cancelled) return;
+      setMenuPennyActivityEntryVisible(isPennyActivityMenuEntryVisible(state, {
+        isLoggedIn: true,
+        isEnterprise: false,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authAccountScope, enterpriseAccountContext, isLoggedIn, showMenu, user?.accountMode]);
 
   const handleClick = async () => {
+    if (isLoading) return;
+    if (connectionState) {
+      setShowMenu(current => !current);
+      return;
+    }
     if (isLoggedIn) {
       const creditItemCount = profileSummary?.creditItems?.length ?? 0;
       if (showMenu) {
@@ -768,56 +948,82 @@ const LoginButton: React.FC<LoginButtonProps> = ({
 
       const requestId = ++menuOpenRequestRef.current;
       const requestAccountScope = authAccountScope;
-      const selectedStartupCreditEntry = startupCreditEntry;
-      const shouldLoadDailyCheckIn = !enterpriseAccountContext
-        && selectedStartupCreditEntry.resolved
-        && !selectedStartupCreditEntry.available;
-      setMenuOpening(true);
-      setMenuStartupCreditEntry(selectedStartupCreditEntry);
-      setMenuDailyCheckInSnapshot(null);
+      const isCurrentMenuRequest = () => (
+        mountedRef.current
+        && menuOpenRequestRef.current === requestId
+        && authAccountScopeRef.current === requestAccountScope
+      );
+      setMenuStartupCreditEntry(startupCreditEntry);
+      setMenuPennyActivityEntryVisible(false);
       reportAccountMenuAction('open_menu', {
         creditItemCount,
         hasCredits: creditItemCount > 0,
         isLoggedIn: true,
       });
-      let dailyCheckInSnapshot: DailyCheckInSnapshot | null = null;
-      try {
-        if (shouldLoadDailyCheckIn) {
-          const result = await loadDailyCheckInSnapshot();
-          if (result.status === DailyCheckInLoadResultStatus.Ready) {
-            dailyCheckInSnapshot = result.snapshot;
-          } else if (result.status === DailyCheckInLoadResultStatus.Failed) {
-            const message = `daily check-in preload failed before opening account menu code=${result.code ?? 'unknown'}`;
-            console.warn(`[LoginButton] ${message}`);
-            writeAccountMenuRendererLog('warn', message);
-          }
-        }
-      } catch (error) {
-        console.warn('[LoginButton] failed to preload daily check-in before opening account menu:', error);
-        writeAccountMenuRendererLog(
-          'warn',
-          'failed to preload daily check-in before opening account menu',
-        );
-      } finally {
-        if (
-          mountedRef.current
-          && menuOpenRequestRef.current === requestId
-          && authAccountScopeRef.current === requestAccountScope
-        ) {
-          setMenuDailyCheckInSnapshot(dailyCheckInSnapshot);
-          setShowMenu(true);
-          setMenuOpening(false);
-        }
+      if (!canLoadMenuDailyCheckIn) {
+        setMenuDailyCheckInSnapshot(null);
+        setShowMenu(true);
+        return;
       }
+
+      // The store may have dropped a refresh that lost to a claim, so read it
+      // back instead of trusting the refresh result directly.
+      const showLatestDailyCheckIn = () => {
+        if (!isCurrentMenuRequest()) return;
+        setMenuDailyCheckInSnapshot(dailyCheckInSnapshotStore.get(requestAccountScope));
+      };
+      const cachedSnapshot = dailyCheckInSnapshotStore.get(requestAccountScope);
+      const refreshRequest = dailyCheckInSnapshotStore.isFresh(requestAccountScope)
+        ? null
+        : refreshMenuDailyCheckIn(requestAccountScope);
+
+      // A known snapshot opens the menu at once; the refresh updates the entry
+      // in place, which keeps the layout steady.
+      if (cachedSnapshot || !refreshRequest) {
+        setMenuDailyCheckInSnapshot(cachedSnapshot);
+        setShowMenu(true);
+        void refreshRequest?.then(showLatestDailyCheckIn);
+        return;
+      }
+
+      setMenuOpening(true);
+      setMenuDailyCheckInSnapshot(null);
+      const earlyResult = await waitForDailyCheckInRefresh(
+        refreshRequest,
+        DAILY_CHECK_IN_MENU_OPEN_WAIT_MS,
+      );
+      if (!isCurrentMenuRequest()) return;
+      setMenuDailyCheckInSnapshot(dailyCheckInSnapshotStore.get(requestAccountScope));
+      setShowMenu(true);
+      setMenuOpening(false);
+      if (earlyResult === null) void refreshRequest.then(showLatestDailyCheckIn);
       return;
     }
+    setShowMenu(false);
+    await handleLogin();
+  };
+
+  const handleLogin = async () => {
+    // The browser handoff can take a few seconds; repeat clicks would only
+    // open extra login tabs.
+    // The ref also catches clicks that land before the disabled state renders.
+    if (loginStartingRef.current) return;
+    loginStartingRef.current = true;
     const loginVariant = useSidebarPromoLogin ? 'sidebar_promo' : 'default';
     writeAccountMenuRendererLog('debug', `login requested variant=${loginVariant}`);
+    setLoginStarting(true);
     try {
-      await authService.login();
+      const result = await authService.login();
+      if (!result.success) {
+        writeAccountMenuRendererLog(
+          'warn',
+          `login browser handoff failed variant=${loginVariant} reason=${result.reason ?? 'unknown'}`,
+        );
+      }
       reportAccountMenuAction('login', {
         isLoggedIn: false,
-        result: 'success',
+        result: result.success ? 'success' : 'failed',
+        errorCode: result.success ? undefined : (result.reason ?? 'unknown'),
       });
     } catch (error) {
       writeAccountMenuRendererLog('warn', `login request failed variant=${loginVariant}`);
@@ -826,6 +1032,9 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         result: 'failed',
       });
       throw error;
+    } finally {
+      loginStartingRef.current = false;
+      if (mountedRef.current) setLoginStarting(false);
     }
   };
 
@@ -855,20 +1064,41 @@ const LoginButton: React.FC<LoginButtonProps> = ({
     }
   };
 
-  const useSidebarPromoLogin = !isLoggedIn && loggedOutVariant === 'sidebarPromo';
+  const useSidebarPromoLogin = !isLoggedIn && !connectionState && loggedOutVariant === 'sidebarPromo';
+  // The session also reflects logins started from other entry points.
+  const loginSessionActive = !isLoggedIn && !connectionState && loginSession !== null;
+  const loginOpening = loginStarting || (loginSessionActive && (
+    loginSession.status === BrowserLoginStatus.Opening || loginSession.status === BrowserLoginStatus.Verifying
+  ));
+  const loginInProgress = loginOpening || (loginSessionActive && loginSession.status === BrowserLoginStatus.Waiting);
+  const loginStatusCardVisible = loginSessionActive
+    && (loginSession.status !== BrowserLoginStatus.Opening || loginSession.url !== null);
+  const loginButtonTitle = (() => {
+    if (connectionState) return i18nService.t(isLoading ? 'authRestoringSession' : 'authConnectionUnavailable');
+    if (loginOpening) return i18nService.t('loginStarting');
+    if (loginInProgress) return i18nService.t('browserLoginWaitingTitle');
+    return undefined;
+  })();
 
   return (
     <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={handleClick}
+        onFocus={prefetchMenuDailyCheckIn}
+        onPointerEnter={prefetchMenuDailyCheckIn}
+        // Only the handoff itself blocks clicks; while waiting, a click reopens the page.
+        disabled={isLoading || loginOpening}
+        aria-busy={isLoading || loginInProgress}
+        aria-describedby={useSidebarPromoLogin && !loginSessionActive ? SIDEBAR_LOGIN_PROMO_BUBBLE_ID : undefined}
+        title={loginButtonTitle}
         className={
           useSidebarPromoLogin
-            ? 'sidebar-login-rainbow inline-flex h-7 w-[5.75rem] shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform]'
+            ? `peer sidebar-login-rainbow inline-flex h-7 shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform] ${loginInProgress ? 'min-w-[5.75rem]' : 'w-[5.75rem]'}`
             : 'inline-flex h-7 items-center justify-start gap-2 rounded-md px-1.5 text-sm font-normal text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] cursor-pointer'
         }
       >
-        {isLoggedIn ? (
+        {isLoggedIn || connectionState ? (
           <>
             {user?.avatarUrl ? (
               <img src={user.avatarUrl} alt="" className="h-4 w-4 shrink-0 rounded-full" />
@@ -876,18 +1106,50 @@ const LoginButton: React.FC<LoginButtonProps> = ({
               <UserAvatarIcon className="h-4 w-4 shrink-0" />
             )}
             <span className="truncate max-w-[80px]">{i18nService.t('myAccount')}</span>
+            {connectionState === AccountConnectionState.Restoring && (
+              <ArrowPathIcon className="h-3.5 w-3.5 shrink-0 animate-spin text-secondary" />
+            )}
           </>
         ) : (
           useSidebarPromoLogin ? (
-            i18nService.t('sidebarLoginNow')
+            loginInProgress ? (
+              <>
+                <ArrowPathIcon className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                {i18nService.t('browserLoginWaitingLabel')}
+              </>
+            ) : (
+              i18nService.t('sidebarLoginNow')
+            )
           ) : (
             <>
-              <UserAvatarIcon className="h-4 w-4 shrink-0" />
-              {i18nService.t('login')}
+              {loginInProgress ? (
+                <ArrowPathIcon className="h-4 w-4 shrink-0 animate-spin text-secondary" aria-hidden="true" />
+              ) : (
+                <UserAvatarIcon className="h-4 w-4 shrink-0" />
+              )}
+              {i18nService.t(loginInProgress ? 'browserLoginWaitingLabel' : 'login')}
             </>
           )
         )}
       </button>
+      {useSidebarPromoLogin && !loginSessionActive && (
+        <SidebarLoginPromoBubble
+          autoVisible={loginPromoTipVisible}
+          pennyOfferVisible={loggedOutPennyActivityEntryVisible}
+        />
+      )}
+      {loginStatusCardVisible && (
+        <BrowserLoginStatusCard
+          session={loginSession}
+          onRetry={() => void handleLogin()}
+          onDismiss={() => { void authService.cancelLogin(); }}
+        />
+      )}
+      {showMenu && !isLoggedIn && connectionState && (
+        <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-xl border border-border bg-surface p-3 shadow-popover">
+          <AccountConnectionNotice state={connectionState} className="w-full text-xs" />
+        </div>
+      )}
       {showMenu && isLoggedIn && (
         enterpriseAccountContext
           ? (
@@ -901,6 +1163,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
               dailyCheckInSnapshot={menuDailyCheckInSnapshot}
               onClose={() => setShowMenu(false)}
               onOpenFinalReward={setSelectedFinalRewardCode}
+              pennyActivityEntryVisible={menuPennyActivityEntryVisible}
               startupCreditEntry={menuStartupCreditEntry}
             />
           )

@@ -1,6 +1,8 @@
 import './artifactPreviewTabItem.css';
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
+
+import ArtifactPreviewTabMenu from './ArtifactPreviewTabMenu';
 
 interface ArtifactPreviewTabItemProps {
   active: boolean;
@@ -9,6 +11,8 @@ interface ArtifactPreviewTabItemProps {
   closeLabel: string;
   onActivate: () => void;
   onClose: () => void;
+  onCloseOthers?: () => void;
+  onCloseToRight?: () => void;
   /** Optional status marker rendered after the label, e.g. an unread dot. */
   indicator?: React.ReactNode;
 }
@@ -34,8 +38,12 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
   closeLabel,
   onActivate,
   onClose,
+  onCloseOthers,
+  onCloseToRight,
   indicator,
 }) => {
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number }>();
+  const dismissMenu = useCallback(() => setMenuPosition(undefined), []);
   const handleCloseClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     onClose();
@@ -59,6 +67,16 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
       data-artifact-preview-active={active ? 'true' : undefined}
       onMouseDown={handleMouseDown}
       onAuxClick={handleAuxClick}
+      onContextMenu={event => {
+        event.preventDefault(); event.stopPropagation();
+        setMenuPosition({ x: event.clientX, y: event.clientY });
+      }}
+      onKeyDown={event => {
+        if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        setMenuPosition({ x: rect.left, y: rect.bottom });
+      }}
       className={`artifact-preview-tab non-draggable group relative flex h-7 min-w-[44px] max-w-[190px] flex-1 items-center rounded-lg text-xs transition-colors [container-type:inline-size] ${
         active
           ? 'bg-surface-raised text-foreground shadow-sm'
@@ -70,11 +88,15 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
         onClick={onActivate}
         className="artifact-preview-tab__activate flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 text-left"
         title={label}
+        aria-haspopup="menu"
+        aria-expanded={Boolean(menuPosition)}
       >
         <span className="artifact-preview-tab__icon flex shrink-0 items-center">{icon}</span>
         <span className="artifact-preview-tab__label truncate">{label}</span>
         {indicator}
       </button>
+      {menuPosition && <ArtifactPreviewTabMenu position={menuPosition} onDismiss={dismissMenu} onCloseTab={onClose}
+        onCloseOthers={onCloseOthers} onCloseToRight={onCloseToRight} />}
       <button
         type="button"
         onClick={handleCloseClick}

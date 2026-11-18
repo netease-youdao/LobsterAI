@@ -1,0 +1,685 @@
+diff --git a/extensions/browser/src/browser/chrome-mcp-process.ts b/extensions/browser/src/browser/chrome-mcp-process.ts
+index 6c7d9b1..0d05b7b 100644
+--- a/extensions/browser/src/browser/chrome-mcp-process.ts
++++ b/extensions/browser/src/browser/chrome-mcp-process.ts
+@@ -20,6 +20,11 @@ import {
+   getChromeMcpProcessCleanupDeps,
+   retainedChromeMcpCleanupSessions as retainedCleanupSessions,
+ } from "./chrome-mcp-state.js";
++import { listChromeMcpWindowsProcessesNative } from "./chrome-mcp-windows-processes.js";
++
++// Fallback only, when koffi cannot load. Loading CimCmdlets and enumerating every
++// process routinely takes 1.7-3 s on ordinary machines, so 2 s failed most attaches.
++const CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS = 10_000;
+ 
+ function readChromeMcpTransportPid(transport: StdioClientTransport): number | undefined {
+   const pid = transport.pid;
+@@ -90,6 +95,12 @@ async function listChromeMcpPlatformProcesses(
+       return await listChromeMcpLinuxProcesses();
+     }
+     const windows = platform === "win32";
++    if (windows) {
++      const nativeSnapshots = listChromeMcpWindowsProcessesNative();
++      if (nativeSnapshots) {
++        return nativeSnapshots;
++      }
++    }
+     const { stdout } = await runExec(
+       windows ? "powershell.exe" : "ps",
+       windows
+@@ -104,7 +115,7 @@ async function listChromeMcpPlatformProcesses(
+         env: windows ? undefined : { ...process.env, LC_ALL: "C", TZ: "UTC" },
+         logOutput: false,
+         maxBuffer: 4 * 1024 * 1024,
+-        timeoutMs: 2_000,
++        timeoutMs: windows ? CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS : 2_000,
+       },
+     );
+     if (windows) {
+diff --git a/extensions/browser/src/browser/chrome-mcp-windows-processes.e2e.test.ts b/extensions/browser/src/browser/chrome-mcp-windows-processes.e2e.test.ts
+new file mode 100644
+index 0000000..09dca4b
+--- /dev/null
++++ b/extensions/browser/src/browser/chrome-mcp-windows-processes.e2e.test.ts
+@@ -0,0 +1,213 @@
++// End-to-end coverage: real Chrome MCP attach and Windows subprocess-tree cleanup without PowerShell.
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
++import {
++  closeChromeMcpSession,
++  listChromeMcpTabs,
++  resetChromeMcpSessionsForTest,
++} from "./chrome-mcp.js";
++import { getChromeMcpPid } from "./chrome-mcp-tabs.js";
++import { setChromeMcpWindowsProcessTableReaderForTest } from "./chrome-mcp-windows-processes.js";
++
++type ExecCall = { command: string; args: string[]; timeoutMs?: number; elapsedMs: number };
++
++const execState = vi.hoisted(() => ({
++  calls: [] as ExecCall[],
++  // Extra latency injected into the PowerShell process list, as seen on slow hosts.
++  powershellDelayMs: 0,
++}));
++
++vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
++  return {
++    ...actual,
++    runExec: async (...params: Parameters<typeof actual.runExec>) => {
++      const [command, args, opts] = params;
++      const delayedArgs =
++        command === "powershell.exe" && execState.powershellDelayMs > 0
++          ? args.map((arg) =>
++              arg.startsWith("Get-CimInstance")
++                ? `Start-Sleep -Milliseconds ${execState.powershellDelayMs}; ${arg}`
++                : arg,
++            )
++          : args;
++      const started = Date.now();
++      try {
++        return await actual.runExec(command, delayedArgs, opts);
++      } finally {
++        execState.calls.push({
++          command,
++          args,
++          timeoutMs: typeof opts === "number" ? opts : opts?.timeoutMs,
++          elapsedMs: Date.now() - started,
++        });
++      }
++    },
++  };
++});
++
++// A dependency-free stdio MCP server that, like Chrome MCP, owns a long-lived
++// grandchild. It reports both pids so the test can prove the whole tree is gone.
++const FAKE_SERVER_SOURCE = `
++import { spawn } from "node:child_process";
++import fs from "node:fs";
++import readline from "node:readline";
++
++const reportPath = process.argv.find((arg) => arg.startsWith("--report="))?.slice("--report=".length);
++const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
++  stdio: "ignore",
++  windowsHide: true,
++});
++fs.writeFileSync(reportPath, JSON.stringify({ server: process.pid, grandchild: grandchild.pid }));
++
++const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
++readline.createInterface({ input: process.stdin }).on("line", (line) => {
++  const message = JSON.parse(line);
++  if (message.id === undefined) {
++    return;
++  }
++  if (message.method === "initialize") {
++    send({
++      id: message.id,
++      result: {
++        protocolVersion: message.params.protocolVersion,
++        capabilities: { tools: {} },
++        serverInfo: { name: "fake-chrome-mcp", version: "1.0.0" },
++      },
++    });
++  } else if (message.method === "tools/list") {
++    send({ id: message.id, result: { tools: [{ name: "list_pages", inputSchema: { type: "object" } }] } });
++  } else if (message.method === "tools/call") {
++    send({
++      id: message.id,
++      result: {
++        content: [{ type: "text", text: "1: about:blank [selected]" }],
++        structuredContent: { pages: [{ id: 1, url: "about:blank", selected: true }] },
++      },
++    });
++  } else {
++    send({ id: message.id, error: { code: -32601, message: "Method not found" } });
++  }
++});
++`;
++
++let fixtureDir = "";
++let launcherPath = "";
++
++function isAlive(pid: number): boolean {
++  try {
++    process.kill(pid, 0);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++function readReport(reportPath: string): { server: number; grandchild: number } {
++  return JSON.parse(fs.readFileSync(reportPath, "utf8"));
++}
++
++async function attachListAndClose(profileName: string) {
++  const reportPath = path.join(fixtureDir, `${profileName}.json`);
++  const profileOptions = { mcpCommand: launcherPath, mcpArgs: [`--report=${reportPath}`] };
++
++  const attachStarted = Date.now();
++  const tabs = await listChromeMcpTabs(profileName, profileOptions);
++  const attachMs = Date.now() - attachStarted;
++  expect(tabs).toHaveLength(1);
++
++  const rootPid = getChromeMcpPid(profileName);
++  const { server, grandchild } = readReport(reportPath);
++  expect(rootPid).toBeTypeOf("number");
++  for (const pid of [rootPid ?? 0, server, grandchild]) {
++    expect(isAlive(pid)).toBe(true);
++  }
++
++  const closeStarted = Date.now();
++  await expect(closeChromeMcpSession(profileName)).resolves.toBe(true);
++  const closeMs = Date.now() - closeStarted;
++  await vi.waitFor(
++    () => {
++      for (const pid of [rootPid ?? 0, server, grandchild]) {
++        expect(isAlive(pid)).toBe(false);
++      }
++    },
++    { timeout: 5_000, interval: 50 },
++  );
++  return { attachMs, closeMs, rootPid, server, grandchild };
++}
++
++describe.runIf(process.platform === "win32")("chrome MCP Windows subprocess tree (e2e)", () => {
++  beforeAll(() => {
++    fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chrome-mcp-e2e-"));
++    fs.writeFileSync(path.join(fixtureDir, "fake-chrome-mcp.mjs"), FAKE_SERVER_SOURCE);
++    // Mirrors LobsterAI's production launcher: cmd.exe owns the Node server.
++    launcherPath = path.join(fixtureDir, "fake-chrome-mcp.cmd");
++    fs.writeFileSync(
++      launcherPath,
++      [
++        "@echo off",
++        "chcp 65001 >nul 2>&1",
++        `"${process.execPath}" "%~dp0fake-chrome-mcp.mjs" %*`,
++        "",
++      ].join("\r\n"),
++    );
++  });
++
++  afterAll(() => {
++    fs.rmSync(fixtureDir, { recursive: true, force: true });
++  });
++
++  afterEach(async () => {
++    await resetChromeMcpSessionsForTest();
++    setChromeMcpWindowsProcessTableReaderForTest(undefined);
++    execState.calls.length = 0;
++    execState.powershellDelayMs = 0;
++  });
++
++  it("attaches, lists pages, and reaps the launcher tree repeatedly without PowerShell", async () => {
++    // Slow PowerShell must not matter: the native path never starts it.
++    execState.powershellDelayMs = 2_500;
++    const rounds = [];
++    for (let round = 0; round < 5; round += 1) {
++      rounds.push(await attachListAndClose(`native-${round}`));
++    }
++    console.log(
++      `[chrome-mcp-e2e] native rounds: ${rounds
++        .map(({ attachMs, closeMs }) => `attach=${attachMs}ms close=${closeMs}ms`)
++        .join("; ")}`,
++    );
++
++    expect(execState.calls.filter(({ command }) => command === "powershell.exe")).toEqual([]);
++    const taskkills = execState.calls.filter(({ command }) => command === "taskkill");
++    expect(taskkills.map(({ args }) => Number(args[1]))).toEqual(
++      rounds.map(({ rootPid }) => rootPid),
++    );
++    for (const { attachMs } of rounds) {
++      expect(attachMs).toBeLessThan(5_000);
++    }
++  }, 120_000);
++
++  it("survives a PowerShell list slower than the old 2 s limit when koffi is unavailable", async () => {
++    setChromeMcpWindowsProcessTableReaderForTest(null);
++    execState.powershellDelayMs = 2_500;
++
++    const result = await attachListAndClose("powershell-fallback");
++    const lists = execState.calls.filter(({ command }) => command === "powershell.exe");
++    console.log(
++      `[chrome-mcp-e2e] fallback attach=${result.attachMs}ms close=${result.closeMs}ms lists=${lists
++        .map(({ elapsedMs }) => `${elapsedMs}ms`)
++        .join(",")}`,
++    );
++
++    // Attach lists twice and close at least three times; every one would have
++    // exceeded the former 2 s timeout, and each fits the 10 s fallback budget.
++    expect(lists.length).toBeGreaterThanOrEqual(5);
++    for (const { timeoutMs, elapsedMs } of lists) {
++      expect(timeoutMs).toBe(10_000);
++      expect(elapsedMs).toBeGreaterThan(2_000);
++    }
++  }, 180_000);
++});
+diff --git a/extensions/browser/src/browser/chrome-mcp-windows-processes.test.ts b/extensions/browser/src/browser/chrome-mcp-windows-processes.test.ts
+new file mode 100644
+index 0000000..f2267cc
+--- /dev/null
++++ b/extensions/browser/src/browser/chrome-mcp-windows-processes.test.ts
+@@ -0,0 +1,210 @@
++// Browser tests cover native Windows process snapshots for Chrome MCP subprocess cleanup.
++import { spawn } from "node:child_process";
++import { once } from "node:events";
++import fs from "node:fs";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
++import {
++  ensureChromeMcpAvailable,
++  resetChromeMcpSessionsForTest,
++  setChromeMcpProcessCleanupDepsForTest,
++  setChromeMcpSessionFactoryForTest,
++} from "./chrome-mcp.js";
++import {
++  buildChromeMcpWindowsProcessSnapshots,
++  listChromeMcpWindowsProcessesNative,
++  setChromeMcpWindowsProcessTableReaderForTest,
++  type ChromeMcpWindowsProcessEntry,
++} from "./chrome-mcp-windows-processes.js";
++
++const runExec = vi.hoisted(() => vi.fn());
++
++vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
++  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
++  runExec,
++}));
++
++function createCleanupSession(): ChromeMcpSession {
++  return {
++    client: {
++      callTool: vi.fn(),
++      listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
++      close: vi.fn().mockResolvedValue(undefined),
++      connect: vi.fn().mockResolvedValue(undefined),
++    },
++    transport: { pid: 123 },
++    ready: Promise.resolve(),
++    processCleanup: { status: "open" },
++  } as unknown as ChromeMcpSession;
++}
++
++function imagePathOf(identity: string | undefined): string {
++  return identity?.slice(identity.indexOf("|") + 1) ?? "";
++}
++
++describe("chrome MCP native Windows process snapshots", () => {
++  beforeEach(async () => {
++    await resetChromeMcpSessionsForTest();
++    runExec.mockReset();
++  });
++
++  afterEach(async () => {
++    await resetChromeMcpSessionsForTest();
++    setChromeMcpWindowsProcessTableReaderForTest(undefined);
++  });
++
++  it("binds ancestry, creation time, and image path in one snapshot row", () => {
++    expect(
++      buildChromeMcpWindowsProcessSnapshots([
++        { pid: 100, ppid: 4, createdTicks: 10n, imagePath: "C:\\App\\app.exe" },
++        { pid: 123, ppid: 100, createdTicks: 20n, imagePath: "C:\\Node\\node.exe" },
++      ]),
++    ).toEqual([
++      { pid: 100, ppid: 4, identity: "win32:10|C:\\App\\app.exe" },
++      { pid: 123, ppid: 100, identity: "win32:20|C:\\Node\\node.exe" },
++    ]);
++  });
++
++  it("drops processes that cannot prove a live birth identity", () => {
++    expect(
++      buildChromeMcpWindowsProcessSnapshots([
++        { pid: 4, ppid: 0 },
++        { pid: 200, ppid: 100, createdTicks: 30n },
++        { pid: 300, ppid: 4, createdTicks: 40n, imagePath: "C:\\Tools\\tool.exe" },
++      ]),
++    ).toEqual([{ pid: 300, ppid: 4, identity: "win32:40|C:\\Tools\\tool.exe" }]);
++  });
++
++  it("detaches a child whose parent pid now belongs to a younger process", () => {
++    const snapshots = buildChromeMcpWindowsProcessSnapshots([
++      { pid: 100, ppid: 4, createdTicks: 50n, imagePath: "C:\\Reused\\reused.exe" },
++      { pid: 123, ppid: 100, createdTicks: 20n, imagePath: "C:\\Orphan\\orphan.exe" },
++    ]);
++
++    expect(snapshots.find((snapshot) => snapshot.pid === 123)?.ppid).toBe(0);
++  });
++
++  it("falls back before any native identity is issued and stays on the fallback", () => {
++    const reader = vi.fn((): ChromeMcpWindowsProcessEntry[] => {
++      throw new Error("Process32FirstW failed with error 24.");
++    });
++    setChromeMcpWindowsProcessTableReaderForTest(reader);
++
++    expect(listChromeMcpWindowsProcessesNative()).toBeUndefined();
++    expect(listChromeMcpWindowsProcessesNative()).toBeUndefined();
++    expect(reader).toHaveBeenCalledOnce();
++  });
++
++  it("fails closed instead of switching identity formats after native rows were issued", () => {
++    let fail = false;
++    setChromeMcpWindowsProcessTableReaderForTest(() => {
++      if (fail) {
++        throw new Error("Process32NextW failed with error 5.");
++      }
++      return [{ pid: 123, ppid: 1, createdTicks: 20n, imagePath: "C:\\Node\\node.exe" }];
++    });
++
++    expect(listChromeMcpWindowsProcessesNative()).toEqual([
++      { pid: 123, ppid: 1, identity: "win32:20|C:\\Node\\node.exe" },
++    ]);
++    fail = true;
++    expect(() => listChromeMcpWindowsProcessesNative()).toThrow(
++      "Process32NextW failed with error 5.",
++    );
++  });
++
++  it("cleans up a Windows subprocess tree from the native table without PowerShell", async () => {
++    let alive = true;
++    const reader = vi.fn((): ChromeMcpWindowsProcessEntry[] => [
++      { pid: 1, ppid: 0, createdTicks: 1n, imagePath: "C:\\App\\gateway.exe" },
++      ...(alive
++        ? [
++            { pid: 123, ppid: 1, createdTicks: 20n, imagePath: "C:\\Node\\node.exe" },
++            { pid: 124, ppid: 123, createdTicks: 30n, imagePath: "C:\\Node\\worker.exe" },
++          ]
++        : []),
++    ]);
++    setChromeMcpWindowsProcessTableReaderForTest(reader);
++    const taskkillProcessTree = vi.fn(async () => {
++      alive = false;
++    });
++    setChromeMcpProcessCleanupDepsForTest({
++      platform: "win32",
++      taskkillProcessTree,
++      sleep: vi.fn().mockResolvedValue(undefined),
++    });
++    setChromeMcpSessionFactoryForTest(async () => createCleanupSession());
++
++    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
++
++    expect(taskkillProcessTree).toHaveBeenCalledExactlyOnceWith(123);
++    expect(reader).toHaveBeenCalledTimes(3);
++    expect(runExec).not.toHaveBeenCalled();
++  });
++
++  it("gives the PowerShell fallback a startup-tolerant timeout when koffi is unavailable", async () => {
++    setChromeMcpWindowsProcessTableReaderForTest(null);
++    let alive = true;
++    runExec.mockImplementation(async () => ({
++      stdout: alive ? "123\t1\t2026-11-07T01:00:00.0000000+08:00\tC:\\Node\\node.exe\r\n" : "",
++      stderr: "",
++    }));
++    const taskkillProcessTree = vi.fn(async () => {
++      alive = false;
++    });
++    setChromeMcpProcessCleanupDepsForTest({
++      platform: "win32",
++      taskkillProcessTree,
++      sleep: vi.fn().mockResolvedValue(undefined),
++    });
++    setChromeMcpSessionFactoryForTest(async () => createCleanupSession());
++
++    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
++
++    expect(taskkillProcessTree).toHaveBeenCalledExactlyOnceWith(123);
++    expect(runExec).toHaveBeenCalledWith(
++      "powershell.exe",
++      expect.arrayContaining(["-NoProfile", "-NonInteractive"]),
++      expect.objectContaining({ timeoutMs: 10_000 }),
++    );
++  });
++
++  it.runIf(process.platform === "win32")(
++    "reads this process, a live child, and the child's exit through kernel32",
++    async () => {
++      const self = listChromeMcpWindowsProcessesNative()?.find(
++        (snapshot) => snapshot.pid === process.pid,
++      );
++      expect(self?.ppid).toBe(process.ppid);
++      expect(self?.identity).toMatch(/^win32:\d+\|/);
++      expect(fs.realpathSync.native(imagePathOf(self?.identity)).toLowerCase()).toBe(
++        fs.realpathSync.native(process.execPath).toLowerCase(),
++      );
++
++      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
++        stdio: "ignore",
++        windowsHide: true,
++      });
++      const exited = once(child, "exit");
++      let childIdentity: string | undefined;
++      try {
++        await once(child, "spawn");
++        const childRow = listChromeMcpWindowsProcessesNative()?.find(
++          (snapshot) => snapshot.pid === child.pid,
++        );
++        expect(childRow?.ppid).toBe(process.pid);
++        childIdentity = childRow?.identity;
++        expect(childIdentity).toMatch(/^win32:\d+\|/);
++      } finally {
++        child.kill();
++        await exited;
++      }
++
++      expect(
++        listChromeMcpWindowsProcessesNative()?.some(
++          (snapshot) => snapshot.pid === child.pid && snapshot.identity === childIdentity,
++        ),
++      ).toBe(false);
++    },
++  );
++});
+diff --git a/extensions/browser/src/browser/chrome-mcp-windows-processes.ts b/extensions/browser/src/browser/chrome-mcp-windows-processes.ts
+new file mode 100644
+index 0000000..2433e3c
+--- /dev/null
++++ b/extensions/browser/src/browser/chrome-mcp-windows-processes.ts
+@@ -0,0 +1,206 @@
++// Reads the Windows process table through kernel32 so Chrome MCP ownership checks need no PowerShell.
++import { createRequire } from "node:module";
++import type { ChromeMcpProcessSnapshot } from "./chrome-mcp-contracts.js";
++
++const require = createRequire(import.meta.url);
++
++/** One Toolhelp row plus the birth identity its process handle reported, when it could be opened. */
++export type ChromeMcpWindowsProcessEntry = {
++  pid: number;
++  ppid: number;
++  /** FILETIME ticks; absent when the process could not be opened or has already exited. */
++  createdTicks?: bigint;
++  imagePath?: string;
++};
++
++export type ChromeMcpWindowsProcessTableReader = () => ChromeMcpWindowsProcessEntry[];
++
++const TH32CS_SNAPPROCESS = 0x2;
++const INVALID_HANDLE_VALUE = -1;
++const ERROR_NO_MORE_FILES = 18;
++const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
++const MAX_PATH = 260;
++const IMAGE_PATH_MAX_CHARS = 32_768;
++
++let nativeReader: ChromeMcpWindowsProcessTableReader | null | undefined;
++let nativeReaderProven = false;
++
++function loadNativeProcessTableReader(): ChromeMcpWindowsProcessTableReader | null {
++  if (process.platform !== "win32") {
++    return null;
++  }
++  try {
++    const koffi: typeof import("koffi").default = require("koffi");
++    const kernel32 = koffi.load("kernel32.dll");
++    const processEntry = koffi.struct({
++      dwSize: "uint32_t",
++      cntUsage: "uint32_t",
++      th32ProcessID: "uint32_t",
++      th32DefaultHeapID: "uintptr_t",
++      th32ModuleID: "uint32_t",
++      cntThreads: "uint32_t",
++      th32ParentProcessID: "uint32_t",
++      pcPriClassBase: "int32_t",
++      dwFlags: "uint32_t",
++      szExeFile: koffi.array("uint16_t", MAX_PATH),
++    });
++    const entrySize = koffi.sizeof(processEntry);
++    const fileTime = koffi.struct({ low: "uint32_t", high: "uint32_t" });
++    const getLastError = kernel32.func("uint32_t __stdcall GetLastError()");
++    const createSnapshot = kernel32.func(
++      "intptr_t __stdcall CreateToolhelp32Snapshot(uint32_t flags, uint32_t processId)",
++    );
++    const firstProcess = kernel32.func("__stdcall", "Process32FirstW", "int32_t", [
++      "intptr_t",
++      koffi.inout(koffi.pointer(processEntry)),
++    ]);
++    const nextProcess = kernel32.func("__stdcall", "Process32NextW", "int32_t", [
++      "intptr_t",
++      koffi.inout(koffi.pointer(processEntry)),
++    ]);
++    const openProcess = kernel32.func(
++      "intptr_t __stdcall OpenProcess(uint32_t access, int32_t inheritHandle, uint32_t processId)",
++    );
++    const closeHandle = kernel32.func("int32_t __stdcall CloseHandle(intptr_t handle)");
++    const getProcessTimes = kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [
++      "intptr_t",
++      koffi.out(koffi.pointer(fileTime)),
++      koffi.out(koffi.pointer(fileTime)),
++      koffi.out(koffi.pointer(fileTime)),
++      koffi.out(koffi.pointer(fileTime)),
++    ]);
++    const queryImageName = kernel32.func(
++      "int32_t __stdcall QueryFullProcessImageNameW(intptr_t process, uint32_t flags, _Out_ void *exeName, _Inout_ uint32_t *size)",
++    );
++    const ticks = (value: { low: number; high: number }) =>
++      (BigInt(value.high) << 32n) | BigInt(value.low);
++
++    const readBirthIdentity = (
++      pid: number,
++      imageBuffer: Buffer,
++    ): Pick<ChromeMcpWindowsProcessEntry, "createdTicks" | "imagePath"> => {
++      const handle = openProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
++      if (!handle) {
++        return {};
++      }
++      try {
++        const creation = { low: 0, high: 0 };
++        const exit = { low: 0, high: 0 };
++        // A handle can outlive its process; a set exit time means the pid is gone.
++        if (
++          !getProcessTimes(handle, creation, exit, { low: 0, high: 0 }, { low: 0, high: 0 }) ||
++          ticks(exit) !== 0n
++        ) {
++          return {};
++        }
++        const size: [number] = [IMAGE_PATH_MAX_CHARS];
++        if (!queryImageName(handle, 0, imageBuffer, size)) {
++          return {};
++        }
++        return {
++          createdTicks: ticks(creation),
++          imagePath: imageBuffer.toString("utf16le", 0, size[0] * 2),
++        };
++      } finally {
++        closeHandle(handle);
++      }
++    };
++
++    return () => {
++      const snapshot = createSnapshot(TH32CS_SNAPPROCESS, 0);
++      if (snapshot === INVALID_HANDLE_VALUE) {
++        throw new Error(`CreateToolhelp32Snapshot failed with error ${getLastError()}.`);
++      }
++      const rows: ChromeMcpWindowsProcessEntry[] = [];
++      try {
++        // koffi zero-fills the remaining fields and writes every field back after each call.
++        const entry: { dwSize: number; th32ProcessID: number; th32ParentProcessID: number } = {
++          dwSize: entrySize,
++          th32ProcessID: 0,
++          th32ParentProcessID: 0,
++        };
++        if (!firstProcess(snapshot, entry)) {
++          throw new Error(`Process32FirstW failed with error ${getLastError()}.`);
++        }
++        do {
++          rows.push({ pid: entry.th32ProcessID, ppid: entry.th32ParentProcessID });
++          entry.dwSize = entrySize;
++        } while (nextProcess(snapshot, entry));
++        const lastError = getLastError();
++        // Any other stop reason is a truncated table, which could hide a live owned process.
++        if (lastError !== ERROR_NO_MORE_FILES) {
++          throw new Error(`Process32NextW failed with error ${lastError}.`);
++        }
++      } finally {
++        closeHandle(snapshot);
++      }
++      const imageBuffer = Buffer.alloc(IMAGE_PATH_MAX_CHARS * 2);
++      for (const row of rows) {
++        Object.assign(row, readBirthIdentity(row.pid, imageBuffer));
++      }
++      return rows;
++    };
++  } catch {
++    return null;
++  }
++}
++
++/** Joins Toolhelp ancestry with birth identities, dropping rows that cannot prove one. */
++export function buildChromeMcpWindowsProcessSnapshots(
++  entries: ChromeMcpWindowsProcessEntry[],
++): ChromeMcpProcessSnapshot[] {
++  const createdByPid = new Map<number, bigint>();
++  for (const entry of entries) {
++    if (entry.createdTicks !== undefined) {
++      createdByPid.set(entry.pid, entry.createdTicks);
++    }
++  }
++  return entries.flatMap((entry) => {
++    if (entry.createdTicks === undefined || !entry.imagePath) {
++      return [];
++    }
++    // Toolhelp keeps an exited parent's pid. A process born after this child that
++    // now owns that pid is not its parent, so the child must not join its tree.
++    const parentCreated = createdByPid.get(entry.ppid);
++    const ppid = parentCreated !== undefined && parentCreated > entry.createdTicks ? 0 : entry.ppid;
++    return [{ pid: entry.pid, ppid, identity: `win32:${entry.createdTicks}|${entry.imagePath}` }];
++  });
++}
++
++/**
++ * Lists Windows processes without starting PowerShell. Returns `undefined` when
++ * the native reader is unavailable and the caller should use its fallback.
++ *
++ * The source is fixed once native rows have been returned: identities from the
++ * fallback use a different format, and mixing them would make a live owned
++ * process look exited (skipping its cleanup) or a tracked root look replaced.
++ */
++export function listChromeMcpWindowsProcessesNative(): ChromeMcpProcessSnapshot[] | undefined {
++  if (nativeReader === undefined) {
++    nativeReader = loadNativeProcessTableReader();
++  }
++  if (!nativeReader) {
++    return undefined;
++  }
++  let entries: ChromeMcpWindowsProcessEntry[];
++  try {
++    entries = nativeReader();
++  } catch (err) {
++    if (nativeReaderProven) {
++      throw err;
++    }
++    // No identity has been issued from native rows yet, so the fallback can own all of them.
++    nativeReader = null;
++    return undefined;
++  }
++  nativeReaderProven = true;
++  return buildChromeMcpWindowsProcessSnapshots(entries);
++}
++
++/** Replace the native reader; `null` disables it, `undefined` restores loading. */
++export function setChromeMcpWindowsProcessTableReaderForTest(
++  reader: ChromeMcpWindowsProcessTableReader | null | undefined,
++): void {
++  nativeReader = reader;
++  nativeReaderProven = false;
++}

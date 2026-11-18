@@ -1,0 +1,243 @@
+diff --git a/src/plugins/discovery.test.ts b/src/plugins/discovery.test.ts
+index 942f28e..46ee114 100644
+--- a/src/plugins/discovery.test.ts
++++ b/src/plugins/discovery.test.ts
+@@ -1632,14 +1632,16 @@ describe("discoverOpenClawPlugins", () => {
+     writePluginEntry(path.join(packageDir, "dist", "one.js"));
+     writePluginEntry(path.join(packageDir, "dist", "two.js"));
+ 
++    // A realpath lookup is either a full fs.realpathSync or one lstat through a cached parent.
+     const realpathSync = vi.spyOn(fs, "realpathSync");
++    const lstatSync = vi.spyOn(fs, "lstatSync");
+     const { candidates } = discoverOpenClawPlugins({
+       env: buildDiscoveryEnv(stateDir),
+     });
+ 
+     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
+     expect(
+-      realpathSync.mock.calls.filter(
++      [...realpathSync.mock.calls, ...lstatSync.mock.calls].filter(
+         ([targetPath]) => path.resolve(String(targetPath)) === path.resolve(packageDir),
+       ),
+     ).toHaveLength(1);
+diff --git a/src/plugins/manifest-registry.test.ts b/src/plugins/manifest-registry.test.ts
+index a045d75..73dce10 100644
+--- a/src/plugins/manifest-registry.test.ts
++++ b/src/plugins/manifest-registry.test.ts
+@@ -2066,7 +2066,9 @@ describe("loadPluginManifestRegistry", () => {
+       configSchema: { type: "object" },
+     });
+     fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
++    // A realpath lookup is either a full fs.realpathSync or one lstat through a cached parent.
+     const realpathSpy = vi.spyOn(fs, "realpathSync");
++    const lstatSpy = vi.spyOn(fs, "lstatSync");
+ 
+     const registry = loadSingleCandidateRegistry({
+       idHint: "cached-provider",
+@@ -2076,7 +2078,9 @@ describe("loadPluginManifestRegistry", () => {
+ 
+     expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
+     expect(
+-      realpathSpy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource),
++      [...realpathSpy.mock.calls, ...lstatSpy.mock.calls].filter(
++        ([filePath]) => filePath === providerDiscoverySource,
++      ),
+     ).toHaveLength(1);
+   });
+ 
+diff --git a/src/plugins/plugin-cache-files.ts b/src/plugins/plugin-cache-files.ts
+index c287f24..fd108a7 100644
+--- a/src/plugins/plugin-cache-files.ts
++++ b/src/plugins/plugin-cache-files.ts
+@@ -12,6 +12,7 @@ import type {
+   PluginJsonCacheResult,
+ } from "./plugin-cache-files.types.js";
+ import { bindPluginCacheRoot, getPluginCacheRoot } from "./plugin-cache.js";
++import { realpathThroughParentSync } from "./realpath-through-parent.js";
+ 
+ const DEFAULT_PLUGIN_METADATA_MAX_BYTES = 16 * 1024 * 1024;
+ 
+@@ -59,7 +60,11 @@ export function pluginCacheRealpathSync(targetPath: string, native = false): str
+   const key = native ? "nativeRealpath" : "realpath";
+   if (facts[key] === undefined) {
+     try {
+-      facts[key] = native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
++      facts[key] = native
++        ? fs.realpathSync.native(targetPath)
++        : realpathThroughParentSync(targetPath, (parentPath) =>
++            pluginCacheRealpathSync(parentPath),
++          );
+       pathFacts(facts[key])[key] = facts[key];
+     } catch {
+       facts[key] = null;
+diff --git a/src/plugins/plugin-registry-snapshot.ts b/src/plugins/plugin-registry-snapshot.ts
+index 0149e44..29df2ea 100644
+--- a/src/plugins/plugin-registry-snapshot.ts
++++ b/src/plugins/plugin-registry-snapshot.ts
+@@ -41,8 +41,9 @@ import {
+   type PluginManifestRegistry,
+ } from "./manifest-registry.js";
+ import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
+-import { isPathInside, safeRealpathSync } from "./path-safety.js";
++import { isPathInside } from "./path-safety.js";
+ import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
++import { safeRealpathWithParentsSync } from "./realpath-through-parent.js";
+ import { resolvePluginSourceRoots } from "./roots.js";
+ 
+ function resolvePluginRegistryContent(
+@@ -249,7 +250,7 @@ function isContainedPluginPath(
+     for (let cursor = target; ; cursor = path.dirname(cursor)) {
+       try {
+         fs.lstatSync(cursor);
+-        const realCursor = safeRealpathSync(cursor, cache);
++        const realCursor = safeRealpathWithParentsSync(cursor, cache);
+         return realCursor ? path.resolve(realCursor, path.relative(cursor, target)) : null;
+       } catch {
+         if (cursor === path.dirname(cursor)) {
+@@ -340,8 +341,8 @@ function isRealPathInside(
+   childPath: string,
+   cache: Map<string, string>,
+ ): boolean {
+-  const parent = safeRealpathSync(parentPath, cache);
+-  const child = safeRealpathSync(childPath, cache);
++  const parent = safeRealpathWithParentsSync(parentPath, cache);
++  const child = safeRealpathWithParentsSync(childPath, cache);
+   return Boolean(parent && child && isPathInside(parent, child));
+ }
+ 
+@@ -375,8 +376,10 @@ function hasMismatchedPersistedBundledRoot(
+       if (!sourceCheckout) {
+         return false;
+       }
+-      const resolvedBundledRoot = safeRealpathSync(bundledRoot, realpathCache) ?? bundledRoot;
+-      const resolvedPluginRoot = safeRealpathSync(plugin.rootDir, realpathCache) ?? plugin.rootDir;
++      const resolvedBundledRoot =
++        safeRealpathWithParentsSync(bundledRoot, realpathCache) ?? bundledRoot;
++      const resolvedPluginRoot =
++        safeRealpathWithParentsSync(plugin.rootDir, realpathCache) ?? plugin.rootDir;
+       const sourcePackage = tryReadJsonSync<PackageManifest>(
+         path.join(
+           legacyRoot,
+diff --git a/src/plugins/realpath-through-parent.test.ts b/src/plugins/realpath-through-parent.test.ts
+new file mode 100644
+index 0000000..855cde8
+--- /dev/null
++++ b/src/plugins/realpath-through-parent.test.ts
+@@ -0,0 +1,62 @@
++/** Tests realpath resolution through cached parent directories. */
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { safeRealpathWithParentsSync } from "./realpath-through-parent.js";
++
++let tempRoot: string;
++
++beforeEach(() => {
++  tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-realpath-parent-")));
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  fs.rmSync(tempRoot, { recursive: true, force: true });
++});
++
++function writeFile(relativePath: string): string {
++  const filePath = path.join(tempRoot, relativePath);
++  fs.mkdirSync(path.dirname(filePath), { recursive: true });
++  fs.writeFileSync(filePath, "");
++  return filePath;
++}
++
++function linkDirectory(target: string, link: string): void {
++  fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
++}
++
++describe("safeRealpathWithParentsSync", () => {
++  it("returns what fs.realpathSync returns, through linked directories", () => {
++    const cache = new Map<string, string>();
++    const file = writeFile(path.join("plugin", "dist", "index.js"));
++    linkDirectory(path.join(tempRoot, "plugin"), path.join(tempRoot, "linked"));
++    const viaLink = path.join(tempRoot, "linked", "dist", "index.js");
++
++    expect(safeRealpathWithParentsSync(file, cache)).toBe(fs.realpathSync(file));
++    expect(safeRealpathWithParentsSync(viaLink, cache)).toBe(fs.realpathSync(viaLink));
++    expect(safeRealpathWithParentsSync(viaLink, cache)).toBe(file);
++  });
++
++  it("reuses cached parents so sibling paths cost one lstat", () => {
++    const cache = new Map<string, string>();
++    const manifest = writeFile(path.join("a", "b", "plugin", "openclaw.plugin.json"));
++    const packageJson = writeFile(path.join("a", "b", "plugin", "package.json"));
++    safeRealpathWithParentsSync(manifest, cache);
++
++    const lstat = vi.spyOn(fs, "lstatSync");
++    expect(safeRealpathWithParentsSync(packageJson, cache)).toBe(packageJson);
++    expect(lstat).toHaveBeenCalledTimes(1);
++  });
++
++  it("returns null for missing paths without caching them", () => {
++    const cache = new Map<string, string>();
++    const missing = path.join(tempRoot, "plugin", "index.js");
++
++    expect(safeRealpathWithParentsSync(missing, cache)).toBeNull();
++    expect(cache.has(missing)).toBe(false);
++    writeFile(path.join("plugin", "index.js"));
++    expect(safeRealpathWithParentsSync(missing, cache)).toBe(missing);
++  });
++});
+diff --git a/src/plugins/realpath-through-parent.ts b/src/plugins/realpath-through-parent.ts
+new file mode 100644
+index 0000000..2abb474
+--- /dev/null
++++ b/src/plugins/realpath-through-parent.ts
+@@ -0,0 +1,49 @@
++/**
++ * Realpaths plugin paths through their already-resolved parent directory.
++ *
++ * fs.realpathSync lstat's every path component on each call. Plugin discovery
++ * and index checks realpath thousands of files under a few directories, and on
++ * Windows hosts where security software makes each metadata call under
++ * %APPDATA%/%LOCALAPPDATA% cost about 1ms those repeated walks dominated
++ * startup. Reusing the parent's realpath from the caller's cache costs one
++ * lstat per new path and returns what fs.realpathSync returns.
++ */
++import fs from "node:fs";
++import path from "node:path";
++
++/** Throws like fs.realpathSync when the path is missing; links fall back to it. */
++export function realpathThroughParentSync(
++  targetPath: string,
++  realpathParent: (parentPath: string) => string | null,
++): string {
++  const absolute = path.resolve(targetPath);
++  const parent = path.dirname(absolute);
++  if (parent === absolute || fs.lstatSync(absolute).isSymbolicLink()) {
++    return fs.realpathSync(absolute);
++  }
++  const realParent = realpathParent(parent);
++  return realParent === null
++    ? fs.realpathSync(absolute)
++    : path.join(realParent, path.basename(absolute));
++}
++
++/** safeRealpathSync that also keeps each resolved parent directory in `cache`. */
++export function safeRealpathWithParentsSync(
++  targetPath: string,
++  cache: Map<string, string>,
++): string | null {
++  const cached = cache.get(targetPath);
++  if (cached) {
++    return cached;
++  }
++  try {
++    const resolved = realpathThroughParentSync(targetPath, (parentPath) =>
++      safeRealpathWithParentsSync(parentPath, cache),
++    );
++    cache.set(targetPath, resolved);
++    cache.set(resolved, resolved);
++    return resolved;
++  } catch {
++    return null;
++  }
++}

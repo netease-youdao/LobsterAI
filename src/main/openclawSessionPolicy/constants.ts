@@ -21,6 +21,10 @@ export const DEFAULT_OPENCLAW_SESSION_POLICY_CONFIG: OpenClawSessionPolicyConfig
 export const OPENCLAW_SESSION_MAINTENANCE = {
   pruneAfter: '365d',
   maxEntries: 1000000,
+  // Transcripts of deleted/reset sessions (`*.deleted.*`, `*.reset.*` and
+  // their SQLite archive rows). OpenClaw otherwise keeps them indefinitely;
+  // LobsterAI's own chat history lives in lobsterai.sqlite and is unaffected.
+  resetArchiveRetention: '30d',
 } as const;
 
 export const OpenClawSessionPolicyIpc = {

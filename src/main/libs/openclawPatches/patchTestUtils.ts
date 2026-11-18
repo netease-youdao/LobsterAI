@@ -19,7 +19,9 @@ export function readCurrentOpenClawPatch(patchFile: string): string {
   const patchPath = path.join(getCurrentOpenClawPatchDir(), patchFile);
   expect(fs.existsSync(patchPath)).toBe(true);
 
-  const patchContent = fs.readFileSync(patchPath, 'utf8');
+  // Patches are LF in the repo, but Windows checkouts with core.autocrlf=true
+  // (Git for Windows' default) see CRLF; multi-line assertions expect LF.
+  const patchContent = fs.readFileSync(patchPath, 'utf8').replace(/\r\n/g, '\n');
   expect(patchContent.trim().length).toBeGreaterThan(0);
   return patchContent;
 }

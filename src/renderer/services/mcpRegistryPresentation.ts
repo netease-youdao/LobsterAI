@@ -29,6 +29,49 @@ function pickLocalized(
 }
 
 /**
+ * Text from a connector's credential form. Its unsuffixed texts are Chinese and
+ * the `_en` variants English, so either language falls back to the other.
+ */
+export function pickMcpConnectorText(
+  language: McpLanguage,
+  zh: string | undefined,
+  en: string | undefined,
+): string {
+  return pickLocalized(language, zh, en);
+}
+
+/** "Try asking" prompts for a connector, in the UI language when it has them. */
+export function getRegistryEntryExamples(entry: McpRegistryEntry, language: McpLanguage): string[] {
+  const zh = entry.connector?.examples_zh ?? [];
+  const en = entry.connector?.examples_en ?? [];
+  const preferred = language === 'zh' ? zh : en;
+  return preferred.length > 0 ? preferred : (language === 'zh' ? en : zh);
+}
+
+/** Credentials the user must supply: stdio env keys plus required connector fields. */
+export function getRegistryEntryRequiredKeyCount(entry: McpRegistryEntry): number {
+  const requiredFields = entry.connector?.tokenSchema?.fields.filter(field => field.required).length ?? 0;
+  return (entry.requiredEnvKeys?.length ?? 0) + requiredFields;
+}
+
+const URL_HOST_RE = /^https?:\/\/([^/?#]+)/i;
+
+/**
+ * Short "where it runs" text for a marketplace card: the host of a remote
+ * connector (templates keep their `${KEY}` out of view), else the command.
+ */
+export function getRegistryEntryEndpointSummary(entry: McpRegistryEntry): string {
+  const url = entry.connector?.url;
+  if (url) {
+    const host = URL_HOST_RE.exec(url)?.[1];
+    return host && !host.includes('${') ? host : url;
+  }
+  if (!entry.command) return '';
+  if (entry.defaultArgs.length === 0) return entry.command;
+  return `${entry.command} ${entry.defaultArgs[entry.defaultArgs.length - 1]}`;
+}
+
+/**
  * Display name for a marketplace entry. `name` is the English name, so only a
  * Chinese variant is carried separately; entries without one keep showing it.
  */

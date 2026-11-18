@@ -145,6 +145,27 @@ describe('media generation status polling', () => {
 
     expect(requestStatus).toHaveBeenCalledTimes(2);
     expect(result.isError).toBe(true);
-    expect(result.details).toMatchObject({ status: 'timeout', pollCount: 2 });
+    expect(result.details).toMatchObject({ status: 'polling_stopped', pollCount: 2 });
+  });
+
+  test('server timeout ends observation immediately', async () => {
+    const requestStatus = vi.fn<() => Promise<MediaStatusResponse>>().mockResolvedValue(response('timeout'));
+    const result = await pollMediaStatus({ mediaType: 'video', taskId: 'task', toolCallId: 'call', policy, requestStatus });
+    expect(requestStatus).toHaveBeenCalledTimes(1);
+    expect(result.details?.status).toBe('timeout');
+  });
+
+  test.each([false, true])('durable task yields unless a dependent workflow waits: %s', async (waitForResult) => {
+    let nowMs = 0;
+    const requestStatus = vi.fn<() => Promise<MediaStatusResponse>>()
+      .mockResolvedValueOnce(response('processing', { protocolVersion: 2 }))
+      .mockResolvedValueOnce(response('processing', { protocolVersion: 2 }))
+      .mockResolvedValueOnce(response('succeeded', { protocolVersion: 2, localPath: 'C:/skin.png' }));
+    const result = await pollMediaStatus({ mediaType: 'image', taskId: 'task', toolCallId: 'call',
+      policy: { ...policy, timeoutMs: 180_000, fastIntervalMs: 60_000 }, requestStatus, waitForResult,
+      now: () => nowMs, wait: async (ms) => { nowMs += ms; } });
+    expect(result.details?.status).toBe(waitForResult ? 'succeeded' : 'processing');
+    expect(result.details?.background).toBe(waitForResult ? undefined : true);
+    expect(requestStatus).toHaveBeenCalledTimes(waitForResult ? 3 : 2);
   });
 });

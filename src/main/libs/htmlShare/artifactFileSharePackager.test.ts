@@ -12,6 +12,7 @@ import {
   HtmlShareSourceType,
 } from '../../../shared/htmlShare/constants';
 import { packageArtifactFile } from './artifactFileSharePackager';
+import { sanitizeOptionalHtmlShareContent } from './htmlShareError';
 
 const tempRoots: string[] = [];
 const archiveRoots: string[] = [];
@@ -47,6 +48,34 @@ afterEach(async () => {
 });
 
 describe('artifactFileSharePackager', () => {
+  test('shares a generated image file with empty inline content', async () => {
+    const root = await createTempRoot();
+    const fileName = 'generated-image-20261030-151541-1.png';
+    const filePath = path.join(root, fileName);
+    const bytes = pngBytes();
+    await writeFile(filePath, bytes);
+
+    const packaged = await packageArtifactFile({
+      sourceType: HtmlShareSourceType.ImageFile,
+      fileName,
+      filePath,
+      content: sanitizeOptionalHtmlShareContent('', 1024),
+    });
+    const zip = await loadZip(packaged.archivePath);
+
+    expect(Object.keys(zip.files)).toEqual([fileName]);
+    expect(await zip.file(fileName)!.async('nodebuffer')).toEqual(bytes);
+    expect(packaged.entryFile).toBe(fileName);
+    expect(packaged.contentType).toBe('image/png');
+  });
+
+  test('still rejects an image without any source after normalizing empty content', async () => {
+    await expect(packageArtifactFile({
+      sourceType: HtmlShareSourceType.ImageFile,
+      content: sanitizeOptionalHtmlShareContent('', 1024),
+    })).rejects.toThrow('Current image preview content cannot be shared.');
+  });
+
   test('packages Mermaid as a single UTF-8 source file', async () => {
     const content = 'flowchart TD\nA --> B\n';
 

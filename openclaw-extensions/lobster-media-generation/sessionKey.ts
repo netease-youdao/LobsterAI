@@ -3,6 +3,14 @@ const AGENT_SESSION_PREFIX = 'agent:';
 const LOBSTERAI_SESSION_MARKER = 'lobsterai';
 const SUBAGENT_SESSION_MARKER = 'subagent';
 
+/** Native tools additionally require a run captured by the trusted lifecycle hook. */
+export function isLobsterAiMediaSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = (sessionKey ?? '').trim();
+  return isLobsterAiDesktopSessionKey(raw)
+    || /^agent:[^:\s]+:\S+/.test(raw)
+    || /^cron:[^:\s]+$/.test(raw);
+}
+
 export function isLobsterAiDesktopSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? '').trim();
   if (!raw) return false;

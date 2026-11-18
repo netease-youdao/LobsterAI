@@ -1,4 +1,5 @@
 import { OpenClawQuestion } from '../../shared/cowork/openclawQuestion';
+import { readMediaConfirmationState } from '../../shared/media/confirmation';
 import type { CoworkPermissionRequest } from '../types/cowork';
 
 type RecoveryApi = {
@@ -15,7 +16,8 @@ export function restoreNativeQuestionPermissions(api: RecoveryApi, enqueue: (req
   void api.getPendingQuestions().then((requests) => {
     if (cancelled) return;
     for (const request of requests) {
-      if (request.toolName === OpenClawQuestion.ToolName && !dismissed.has(request.requestId)) enqueue(request);
+      if ((request.toolName === OpenClawQuestion.ToolName || readMediaConfirmationState(request.toolInput?.mediaConfirmation))
+        && !dismissed.has(request.requestId)) enqueue(request);
     }
   }).catch((error) => {
     if (!cancelled) console.warn('[NativeQuestion] failed to recover pending questions:', error);

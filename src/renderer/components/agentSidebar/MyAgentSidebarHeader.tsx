@@ -12,8 +12,8 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
   onCreateAgent,
 }) => {
   return (
-    <div className="group sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center justify-between bg-surface-raised pl-3 pr-1">
-      <h2 className="min-w-0 truncate text-sm font-normal text-secondary">
+    <div className="group sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center justify-between bg-surface-raised pl-2 pr-1">
+      <h2 className="min-w-0 truncate text-xs font-normal text-secondary/80">
         {i18nService.t('myAgents')}
       </h2>
       <Tooltip

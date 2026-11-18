@@ -20,6 +20,9 @@ Use "Text extraction" or "Raw XML access" sections below
 Use "Creating a new Word document" workflow
 
 ### Editing Existing Document
+- **LobsterAI live editing (preferred when the `word_read` / `word_edit` tools are available)**
+  Use "Live editing in LobsterAI" below for text, paragraph and formatting changes. The document opens in LobsterAI's right-side Word editor, edits appear there immediately, untouched formatting is preserved, and the file saves automatically.
+
 - **Your own document + simple changes**
   Use "Basic OOXML editing" workflow
 
@@ -28,6 +31,20 @@ Use "Creating a new Word document" workflow
 
 - **Legal, academic, business, or government docs**
   Use **"Redlining workflow"** (required)
+
+## Live editing in LobsterAI
+
+When the `word_read` and `word_edit` tools exist, edit existing documents through them instead of regenerating or repacking the file:
+
+1. Call `word_read` with the absolute `path`. It returns `revision`, and for each paragraph its `id`, `style` and `text` (table cells include `table`/`row`/`cell`), plus the user's current `selection` when there is one ("修改这里" means that selection).
+2. Call `word_edit` with the same `path`, `expectedRevision` from the read, and a list of `edits` addressed by paragraph `id`:
+   - `replace_text` `{paragraph, find, replace, occurrence?}` for wording changes; it keeps the run formatting around the phrase.
+   - `set_text`, `insert_paragraph` (`anchor` is a paragraph id, `"start"` or `"end"`; `\n` in `text` makes several paragraphs; `style` such as `"Heading 1"`), `delete_paragraph`.
+   - `format_text` (bold, italic, underline, strike, color, highlight, size in pt, font) on a `find` phrase or the whole paragraph; `format_paragraph` (style, alignment, spacing and indents in pt).
+   - `insert_table` with `rows` as a 2D array of strings.
+3. If the call is refused because the revision changed, the user edited the document meanwhile: read again and redo the edit against the new ids. If any edit in a call fails, nothing is applied; fix the reported edit and retry.
+
+Use the OOXML workflows below only for what these tools cannot do: tracked changes, comments, headers/footers, images, or documents LobsterAI reports as read-only.
 
 ## Reading and analyzing content
 

@@ -34,7 +34,7 @@ const getLocalStorage = (): Storage | null => {
     if (typeof globalThis !== 'undefined' && 'localStorage' in globalThis) {
       return globalThis.localStorage;
     }
-  } catch (error) {
+  } catch {
     return null;
   }
   return null;
@@ -47,7 +47,7 @@ const readRawExportKey = (stored: unknown): Uint8Array<ArrayBuffer> | null => {
   if (typeof stored === 'string') {
     try {
       return base64ToBytes(stored);
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -80,7 +80,7 @@ const readExportKeyFromLocalStorage = (): Uint8Array<ArrayBuffer> | null => {
   }
   try {
     return base64ToBytes(stored);
-  } catch (error) {
+  } catch {
     return null;
   }
 };
@@ -92,7 +92,7 @@ const writeExportKeyToLocalStorage = (raw: Uint8Array) => {
   }
   try {
     storage.setItem(CONFIG_KEYS.PROVIDERS_EXPORT_KEY, bytesToBase64(raw));
-  } catch (error) {
+  } catch {
     return;
   }
 };
@@ -154,7 +154,12 @@ export const decryptSecret = async (payload: EncryptedPayload): Promise<string> 
   if (!payload?.encrypted || !payload?.iv) {
     throw new Error('Invalid encrypted payload');
   }
-  const key = await getExportKey();
+  // Importing an old backup must not create a replacement local key on failure.
+  const raw = await getStoredExportKey();
+  if (!raw || raw.byteLength !== EXPORT_KEY_BYTES) {
+    throw new Error('Legacy export key unavailable');
+  }
+  const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
   const iv = base64ToBytes(payload.iv);
   const encrypted = base64ToBytes(payload.encrypted);
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted);

@@ -1,9 +1,12 @@
 import './subscriptionTrialCampaign.css';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
+import { AuthSessionStatus, AuthSubscriptionStatus } from '../../shared/auth/constants';
+import { EnterpriseAccountMode } from '../../shared/enterpriseAccount/constants';
 import type { SubscriptionTrialState } from '../../shared/subscriptionTrial/constants';
+import { selectIsEnterpriseAccount } from '../features/enterpriseAccount/selectors';
 import { getPortalSubscriptionTrialUrl, isTestModeEnabled } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
 import type { RootState } from '../store';
@@ -32,6 +35,7 @@ interface PendingPopup {
   local: SubscriptionTrialPopupState;
   receivedAt: number;
   receivedWallTime: number;
+  visibilityEpoch: number;
 }
 const popupTime = (popup: PendingPopup): number => popup.state.serverTimeEpochMs + Math.max(
   0, performance.now() - popup.receivedAt, Date.now() - popup.receivedWallTime,
@@ -42,7 +46,12 @@ const isAvailable = (state: SubscriptionTrialState | null): boolean => Boolean(
 );
 
 const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, taskCreatedSignal }) => {
-  const { isLoggedIn, isLoading, user, accountGeneration } = useSelector((state: RootState) => state.auth);
+  const { isLoggedIn, isLoading, sessionStatus, user, quota, accountGeneration } = useSelector((state: RootState) => state.auth);
+  const isEnterpriseAccount = useSelector(selectIsEnterpriseAccount);
+  const enterprise = isLoggedIn && isEnterpriseAccount;
+  const authReady = !isLoading && sessionStatus !== AuthSessionStatus.TemporarilyUnavailable;
+  const subscriptionReady = !isLoggedIn || Boolean(quota?.subscriptionStatus);
+  const subscribed = isLoggedIn && quota?.subscriptionStatus === AuthSubscriptionStatus.Active;
   const identity = user?.yid ?? user?.userId ?? user?.id;
   const owner = `${accountGeneration}:${isLoggedIn ? identity : 'anonymous'}`;
   const ownerRef = useRef(owner);
@@ -56,6 +65,7 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
   enabledRef.current = enabled;
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
+  const visibilityEpochRef = useRef(0);
   const runRef = useRef<() => void>(() => undefined);
   const diagnosticRef = useRef('');
   const openingRef = useRef(false);
@@ -76,6 +86,13 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
     pendingRef.current = value;
     setPending(value);
   };
+  const canDisplay = enabled && authReady && subscriptionReady && privacyAgreed === true
+    && !otherOpen && !enterprise && !subscribed;
+
+  useLayoutEffect(() => {
+    // Revoke the previous approval while hidden, before a later render can restore the popup.
+    if (isLoggedIn && !canDisplay) visibilityEpochRef.current += 1;
+  }, [canDisplay, isLoggedIn]);
 
   useEffect(() => i18nService.subscribe(() => languageChanged(value => value + 1)), []);
   useEffect(() => {
@@ -96,14 +113,42 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
     let disposed = false;
     let fetching = false;
     const current = () => !disposed && ownerRef.current === owner;
+    const confirmDisplay = async (): Promise<number | null> => {
+      const visibilityEpoch = visibilityEpochRef.current;
+      if (!enabledRef.current || otherDialogOpen()) { diagnose('waiting_for_other_dialog'); return null; }
+      // Both a new popup and a restored popup must use a fresh account response.
+      const result = await window.electron.auth.getQuota();
+      if (!current() || visibilityEpoch !== visibilityEpochRef.current) return null;
+      if (!result.success) { diagnose('subscription_refresh_failed'); return null; }
+      const subscriptionStatus = result.quota?.subscriptionStatus;
+      if (
+        subscriptionStatus === AuthSubscriptionStatus.Enterprise
+        || result.quota?.accountMode === EnterpriseAccountMode.Enterprise
+        || result.enterpriseContext
+      ) { diagnose('enterprise'); return null; }
+      if (subscriptionStatus !== AuthSubscriptionStatus.Free) {
+        diagnose(subscriptionStatus === AuthSubscriptionStatus.Active
+          ? 'subscribed' : 'subscription_refresh_failed');
+        return null;
+      }
+      // getQuota can return cached enterprise context after a failed refresh.
+      // Require an explicit successful context refresh before approving a personal account.
+      const enterpriseResult = await window.electron.enterpriseAccount.getContext();
+      if (!current() || visibilityEpoch !== visibilityEpochRef.current) return null;
+      if (!enterpriseResult.success) { diagnose('enterprise_refresh_failed'); return null; }
+      if (enterpriseResult.context) { diagnose('enterprise'); return null; }
+      if (!enabledRef.current || otherDialogOpen()) { diagnose('waiting_for_other_dialog'); return null; }
+      return visibilityEpoch;
+    };
     const load = async () => {
       if (fetching) return;
-      if (isLoading || privacyAgreed !== true || (isLoggedIn && identity == null)) {
-        diagnose(isLoading ? 'auth_loading' : privacyAgreed !== true ? 'onboarding'
-          : 'missing_identity');
+      if (!authReady || privacyAgreed !== true || enterprise || !subscriptionReady || subscribed || (isLoggedIn && identity == null)) {
+        diagnose(!authReady ? 'auth_not_ready' : privacyAgreed !== true ? 'onboarding'
+          : enterprise ? 'enterprise' : !subscriptionReady ? 'subscription_status_pending' : subscribed ? 'subscribed' : 'missing_identity');
         setPopup(null);
         return;
       }
+      const loadVisibilityEpoch = visibilityEpochRef.current;
       fetching = true;
       try {
         const state = await window.electron.subscriptionTrial.status();
@@ -120,7 +165,13 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
         if (queued?.owner === owner) {
           if (queued.state.campaignCode === state.campaignCode && state.serverTimeEpochMs < queued.local.nextShowAt) {
             // Refresh the activity deadline, including early shutdowns, without recounting an open popup.
-            setPopup({ ...queued, state, local: { ...queued.local, expiresAt }, receivedAt, receivedWallTime });
+            let visibilityEpoch = queued.visibilityEpoch;
+            if (isLoggedIn && visibilityEpoch !== visibilityEpochRef.current) {
+              const confirmedEpoch = await confirmDisplay();
+              if (confirmedEpoch === null || pendingRef.current !== queued) return;
+              visibilityEpoch = confirmedEpoch;
+            }
+            setPopup({ ...queued, state, local: { ...queued.local, expiresAt }, receivedAt, receivedWallTime, visibilityEpoch });
             return;
           }
           setPopup(null);
@@ -132,15 +183,26 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
         if ((saved?.dismissCount ?? 0) >= 3) { diagnose('dismissed_three_times'); return; }
         if (state.serverTimeEpochMs < nextShowAt) { diagnose('client_shown_this_week'); return; }
         if (!enabledRef.current || otherDialogOpen()) { diagnose('waiting_for_other_dialog'); return; }
+        let visibilityEpoch = visibilityEpochRef.current;
+        if (isLoggedIn) {
+          const confirmedEpoch = await confirmDisplay();
+          if (confirmedEpoch === null) return;
+          visibilityEpoch = confirmedEpoch;
+        }
         const firstShownDay = saved?.firstShownDay ?? beijingDayStart(state.serverTimeEpochMs);
         setPopup({
-          owner, state, key, receivedAt, receivedWallTime,
+          owner, state, key, receivedAt, receivedWallTime, visibilityEpoch,
           local: {
             nextShowAt: nextBeijingWeek(firstShownDay, state.serverTimeEpochMs), expiresAt,
             firstShownDay, dismissCount: saved?.dismissCount ?? 0, cadenceVersion: 2,
           },
         });
-      } finally { fetching = false; }
+      } finally {
+        fetching = false;
+        // A hide/show transition during a request must not lose the wakeup for a fresh check.
+        if (current() && isLoggedIn && loadVisibilityEpoch !== visibilityEpochRef.current
+          && enabledRef.current && !otherDialogOpen()) runRef.current();
+      }
     };
     const run = () => { void load().catch(() => { if (current()) diagnose('request_failed'); }); };
     runRef.current = run;
@@ -154,14 +216,14 @@ const SubscriptionTrialCampaign: React.FC<Props> = ({ enabled, privacyAgreed, ta
       window.removeEventListener('focus', run);
       if (runRef.current === run) runRef.current = () => undefined;
     };
-  }, [owner, identity, isLoggedIn, isLoading, privacyAgreed]);
+  }, [owner, identity, isLoggedIn, authReady, privacyAgreed, enterprise, subscriptionReady, subscribed]);
 
   // Overlay changes wake the existing request loop without resetting local frequency.
   useEffect(() => { if (enabled) runRef.current(); }, [enabled]);
   useEffect(() => { if (taskCreatedSignal > 0) runRef.current(); }, [taskCreatedSignal]);
   const pendingServerTime = pending ? popupTime(pending) : 0;
-  const visible = enabled && !isLoading && privacyAgreed === true && !otherOpen
-    && !!pending && pending.owner === owner
+  const visible = canDisplay && !!pending && pending.owner === owner
+    && (!isLoggedIn || pending.visibilityEpoch === visibilityEpochRef.current)
     && pendingServerTime < Math.min(pending.local.expiresAt, pending.local.nextShowAt);
   useEffect(() => {
     if (!visible || !pending) return;

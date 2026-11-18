@@ -671,7 +671,7 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/auto-reply/reply/get-reply.ts',
       snippets: [
-        'resolveAgentRunCwd(cfg, agentId, optsWithCommandQueueOverride?.cwd) ?? workspaceDir',
+        'getRuntimeConfigSnapshot() ?? cfg,',
         'cwd: runCwd',
       ],
     },
@@ -724,6 +724,62 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-low-level-dispatch-reply-reservation.patch': [
+    {
+      file: 'src/auto-reply/reply/dispatch-from-config.ts',
+      snippets: [
+        'return await dispatchReplyFromConfigWithQueuePolicy(params, true);',
+        'params.dispatcher.markComplete();',
+      ],
+    },
+    {
+      file: 'src/auto-reply/reply/dispatch-from-config.low-level-reservation.test.ts',
+      snippets: ['releases the dispatcher reservation once the channel dispatch settles'],
+    },
+  ],
+  'openclaw-malformed-tool-call-continuation.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/malformed-tool-call-recovery.ts',
+      snippets: [
+        'export const MALFORMED_TOOL_CALL_RETRY_LIMIT = 2',
+        'export function isMalformedToolCallAssistantTurn',
+        'export function continueAfterMalformedToolCall',
+        'malformed tool call rejected before execution:',
+      ],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.ts',
+      snippets: ['!settledTurnFinalizationAttempted && continueAfterMalformedToolCall(input)'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts',
+      snippets: ['isMalformedToolCallAssistantTurn('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+      snippets: ['malformedToolCallAttempts: 0'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/terminal-resolution.malformed-tool-call.test.ts',
+      snippets: [
+        "continues a side-effecting turn after the provider's tool call is rejected",
+        'does not request isolated finalization for a rejected tool call',
+      ],
+    },
+  ],
+  'openclaw-openai-oauth-token-proxy.patch': [
+    {
+      file: 'extensions/openai/openai-chatgpt-oauth-token.runtime.ts',
+      snippets: [
+        'mode: "trusted_env_proxy",',
+        'hostnameAllowlist: ["auth.openai.com"]',
+      ],
+    },
+    {
+      file: 'extensions/openai/openai-chatgpt-oauth-token.proxy.test.ts',
+      snippets: ['OpenAI token %s proxy routing'],
+    },
+  ],
   'openclaw-openai-compatible-cache-control.patch': [
     {
       file: 'packages/ai/src/transports/openai-completions-params.ts',
@@ -761,6 +817,37 @@ const v20260801StrongPatchValidators = {
     {
       file: 'src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts',
       snippets: ['bounds compaction recovery for an output budget rejection'],
+    },
+  ],
+  'openclaw-openai-completions-tool-call-repair.patch': [
+    {
+      file: 'packages/ai/src/providers/openai-completions-tool-calls.ts',
+      snippets: [
+        'const MALFORMED_TOOL_CALL_DIAGNOSTIC_TYPE = "malformed_tool_call_arguments"',
+        'repairStringLiterals: true',
+        'readMalformedToolCallArgumentsDiagnostics(error)',
+      ],
+      forbiddenSnippets: ['finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);'],
+    },
+    {
+      file: 'packages/ai/src/transports/transport-stream-shared.ts',
+      snippets: [
+        'function repairTerminalToolCallArguments',
+        'class MalformedToolCallArgumentsError extends Error',
+        'export function readMalformedToolCallArgumentsDiagnostics',
+      ],
+    },
+    {
+      file: 'packages/ai/src/utils/json-parse.ts',
+      snippets: ['preserveValidControlEscapes'],
+    },
+    {
+      file: 'packages/ai/src/transports/openai-completions-stream.ts',
+      snippets: ['providerStopReason: finishReason,'],
+    },
+    {
+      file: 'packages/ai/src/providers/openai-completions.legacy-function-call.test.ts',
+      snippets: ['repairs a complete modern tool terminal with $reason'],
     },
   ],
   'openclaw-plugin-archive-windows-timeout.patch': [
@@ -953,6 +1040,81 @@ const v20260801StrongPatchValidators = {
       snippets: ['does not reject cleanup after bookkeeping when the ended hook throws'],
     },
   ],
+  'openclaw-tool-call-result-projection.patch': [
+    {
+      file: 'src/agents/tool-search.ts',
+      snippets: [
+        '{ tool: { id: callResult.tool.id, name: callResult.tool.name }, result: textOnlyResult },',
+        'function splitToolCallResultImages(result: AgentToolResult<unknown>)',
+      ],
+    },
+    {
+      file: 'src/agents/tool-search.mcp-error.test.ts',
+      snippets: [
+        'The model sees only the tool identity; details keep the full catalog entry.',
+        'returns native image blocks from a deferred MCP tool behind the untrusted wrapper',
+      ],
+    },
+  ],
+  'openclaw-tool-search-direct-tools.patch': [
+    {
+      file: 'src/agents/tool-search-config.ts',
+      snippets: ['function readDirectToolNames(value: unknown)', '...readDirectToolNames(raw.direct),'],
+    },
+    {
+      file: 'src/agents/tool-search-catalog.ts',
+      snippets: [
+        'export function createOperatorPinnedToolMatcher(',
+        'if (params.minDeferredChars && deferredChars < params.minDeferredChars) {',
+      ],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.ts',
+      snippets: ['operatorDirectToolNames: toolSearchConfig.directToolNames,'],
+    },
+    {
+      file: 'src/config/zod-schema.agent-runtime.ts',
+      snippets: [
+        'direct: z.array(z.string()).optional(),',
+        'minDeferredChars: z.number().int().nonnegative().optional(),',
+      ],
+    },
+    {
+      file: 'src/agents/tool-surface-plan.test.ts',
+      snippets: [
+        'does not pin a duplicated name, so a lookalike cannot take its place',
+        'skips compaction when the deferred schemas fall below minDeferredChars',
+      ],
+    },
+  ],
+  'openclaw-tool-payload-transcript-fidelity.patch': [
+    {
+      file: 'src/agents/transcript-redact.ts',
+      snippets: [
+        'redactTranscriptText: (value: string) => value,',
+        'byte-identical for provider prefix caches',
+      ],
+      forbiddenSnippets: ['function resolveTranscriptLoggingConfig('],
+    },
+    {
+      file: 'src/agents/session-tool-result-guard.ts',
+      snippets: ['persisted tool details keep their text'],
+      forbiddenSnippets: ['PERSISTED_DETAIL_REDACTION_BOUNDARY'],
+    },
+    {
+      file: 'src/agents/embedded-agent-tool-results.ts',
+      snippets: ['tool arguments and results keep their text in live events'],
+      forbiddenSnippets: ['function redactStringsDeep('],
+    },
+    {
+      file: 'src/agents/transcript-redact.test.ts',
+      snippets: ['keeps 40-character relative paths in tool results unchanged'],
+    },
+    {
+      file: 'src/agents/sessions/agent-session-code-mode-source.test.ts',
+      snippets: ['the next provider context replays exactly what the model saw'],
+    },
+  ],
   'openclaw-view-image-task-cwd.patch': [
     {
       file: 'src/agents/openclaw-tools.ts',
@@ -1142,6 +1304,15 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-memory-knn-child-electron-node-env.patch': [
+    {
+      file: 'extensions/memory-core/src/memory/manager-search-knn-subprocess.ts',
+      snippets: [
+        'if (typeof process.versions.electron === "string") {',
+        'childEnv.ELECTRON_RUN_AS_NODE = "1";',
+      ],
+    },
+  ],
   'openclaw-memory-sidecar-archive-generations.patch': [
     {
       file: 'extensions/memory-core/src/migration/doctor-memory-sidecar.ts',
@@ -1236,6 +1407,70 @@ const v20260801StrongPatchValidators = {
       ],
     },
   ],
+  'openclaw-managed-workspace-alias-follow.patch': [
+    {
+      file: 'src/agents/workspace-state-store.ts',
+      snippets: [
+        'const MANAGED_WORKSPACE_ROOT_ENV = "LOBSTERAI_MANAGED_WORKSPACE_ROOT"',
+        'function followsCurrentWorkspaceTarget(workspaceDir: string): boolean',
+        'followCurrentTarget: followExistingTarget',
+        '.updateTable("workspace_path_aliases")',
+      ],
+    },
+    {
+      file: 'src/agents/workspace.managed-relink.test.ts',
+      snippets: [
+        'serves the synced workspace without reseeding bootstrap',
+      ],
+    },
+  ],
+  'openclaw-bounded-history-chunked-window.patch': [
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-active-context.ts',
+      snippets: [
+        'const BOUNDED_CONTEXT_STEP_DIVISOR = 4;',
+        'function resolveBoundedContextStart(',
+        'function readBoundedContextBytes(',
+        'const boundaryOmitted = boundary !== undefined && headerBytes + boundaryBytes > maxBytes;',
+      ],
+    },
+  ],
+  'openclaw-bounded-history-compaction.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/session-context-limits.ts',
+      snippets: ['export function resolveEmbeddedSessionContextLimits('],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt-session-prepare.ts',
+      snippets: ['resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget)'],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: [
+        'function shouldCompactByModelContextBytes(',
+        'const compactionOptional = compactionTrigger === "model_context_bytes";',
+      ],
+    },
+    {
+      file: 'src/config/sessions/session-accessor.sqlite-reset-window.ts',
+      snippets: ['export function readVisibleTranscriptRetainedPrefixBytes('],
+    },
+  ],
+  'openclaw-session-window-preflight-compaction.patch': [
+    {
+      file: 'src/auto-reply/reply/memory-flush.ts',
+      snippets: [
+        // openclaw-user-context-window-selection.patch replaces this resolver;
+        // validate the final source after both patches have been applied.
+        'function resolveConfiguredContextWindowProfile(',
+        'const profile = resolveConfiguredContextWindowProfile(params);',
+      ],
+    },
+    {
+      file: 'src/auto-reply/reply/agent-runner-memory.ts',
+      snippets: ['contextWindow: entry.contextWindow,', 'contextWindow: entry?.contextWindow,'],
+    },
+  ],
 };
 
 v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
@@ -1268,6 +1503,410 @@ v20260801StrongPatchValidators['zzz-openclaw-plugin-degraded-startup.patch'] = [
   {
     file: 'src/flows/plugin-health-availability.ts',
     snippets: ['error instanceof HealthCheckRegistrationError', 'describePluginAvailabilityFailure'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-skip-turn-replay-after-model-call.patch'] = [
+  {
+    file: 'src/auto-reply/reply/agent-runner-error-handler.ts',
+    snippets: ['  modelCallStarted: boolean;'],
+    orderedSnippets: [
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES',
+      '!params.overloadRetryState.modelCallStarted &&',
+      'params.consumeTransientHttpRetry()',
+    ],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-execution.ts',
+    snippets: ['overloadRetryState.modelCallStarted = true;', 'modelCallStarted: false,'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-tolerate-replaced-thinking-catalog-owner.patch'] = [
+  {
+    file: 'src/agents/prepared-model-catalog.ts',
+    snippets: ['continue;'],
+    // The read-only owner path still throws the same error text, so check the
+    // scoped loader's own sequence instead of forbidding the throw.
+    orderedSnippets: [
+      'async function loadScopedReadOnlyModelCatalog(',
+      'if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {',
+      'continue;',
+      'if (isPreparedModelCatalogFull(prepared.modelCatalog)) {',
+    ],
+  },
+  {
+    file: 'src/agents/prepared-model-catalog.scoped-thinking.test.ts',
+    snippets: ['falls back to the scoped catalog while a published owner has the replaced config'],
+  },
+];
+
+v20260801StrongPatchValidators['zz-openclaw-plan-completion-check.patch'] = [
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts',
+    snippets: [
+      'const PLAN_COMPLETION_CHECK_CUSTOM_TYPE = "openclaw.plan-completion-check";',
+      'deferTerminalDelivery: shouldRunBeforeAgentFinalize === true,',
+    ],
+    orderedSnippets: [
+      'completionCheck.checked = true;',
+      'customType: PLAN_COMPLETION_CHECK_CUSTOM_TYPE,',
+      '{ deliverAs: "followUp" },',
+      'return { continueCurrentTurn: true };',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-subscribe.handlers.lifecycle.ts',
+    snippets: ['const continueCurrentTurn = () => {', 'hasPendingContinuation:', 'stream: "checkpoint",'],
+    orderedSnippets: ['const continueCurrentTurn = () => {', 'emitAssistantCheckpoint(ctx);'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/terminal-retry-state.ts',
+    snippets: ['completionCheck: { unfinishedPlan: false, checked: false },'],
+  },
+  {
+    file: 'src/agents/tools/progress-card-tool.ts',
+    snippets: ['options.onPlanSaved?.('],
+  },
+];
+
+v20260801StrongPatchValidators['zzzz-openclaw-bootstrap-prefix-cache.patch'] = [
+  {
+    file: 'src/shared/google-turn-ordering.ts',
+    snippets: ['timestamp: first.timestamp,'],
+    forbiddenSnippets: ['Date.now()'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts',
+    snippets: ['keeps reconstructed bootstrap messages byte-identical across runs'],
+  },
+  {
+    file: 'src/config/sessions/session-accessor.sqlite-bounded-context.test.ts',
+    snippets: ['keeps bootstrap stable across reopens after a long turn is byte-truncated'],
+  },
+  {
+    file: 'src/auto-reply/reply/agent-runner-memory.test.ts',
+    snippets: ['keeps bootstrap stable on bounded fallback after a compaction %s failure'],
+  },
+];
+
+v20260801StrongPatchValidators['zzz-openclaw-session-prefix-cache.patch'] = [
+  {
+    file: 'src/agents/lobsterai-session-snapshot.ts',
+    snippets: ['lobsterai.session-identity.v1', 'buildLobsterAiSessionSnapshotMessage'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts',
+    snippets: [
+      'omitRuntimeSessionIdentity: sessionIdentitySnapshot !== undefined',
+      'userDate: sessionIdentitySnapshot ? "" : userDate',
+      'sessionIdentitySnapshot ? LOBSTERAI_RUNTIME_FACTS_INSTRUCTIONS : undefined',
+    ],
+    forbiddenSnippets: ['sessionKey: undefined, sessionId: undefined, sessionUrl: undefined'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/system-prompt.ts',
+    snippets: ['omitRuntimeSessionIdentity: params.omitRuntimeSessionIdentity'],
+  },
+  {
+    file: 'src/agents/system-prompt.ts',
+    snippets: [
+      'params.omitRuntimeSessionIdentity',
+      'sessionKey: undefined, sessionId: undefined, sessionUrl: undefined',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-system-prompt.session-cache.test.ts',
+    snippets: ['preserves prepared memory ownership while keeping task identity out of system text'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-settle.ts',
+    snippets: [
+      'sessionIdentitySnapshot: systemPrompt.sessionIdentitySnapshot',
+      'acknowledgePersistedUserReplay: sessionManager.acknowledgeReplayedUserMessage',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts',
+    snippets: [
+      'persistentRuntimeContext: buildLobsterAiSessionSnapshotMessage(',
+      'acknowledgePersistedUserReplay: input.acknowledgePersistedUserReplay',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts',
+    snippets: [
+      'persistentRuntimeContext: input.persistentRuntimeContext',
+      'acknowledgePersistedUserReplay: input.acknowledgePersistedUserReplay',
+    ],
+  },
+  {
+    file: 'src/agents/session-tool-result-guard-wrapper.ts',
+    snippets: [
+      'key !== pendingPreparedUserTurnMessage?.idempotencyKey',
+      'return await guard.acknowledgeReplayedUserMessage(message)',
+    ],
+  },
+  {
+    file: 'src/agents/session-tool-result-guard.ts',
+    snippets: ['acknowledgeReplayedUserMessage: async'],
+    orderedSnippets: [
+      'acknowledgeReplayedUserMessage: async',
+      'const prepared = persistMessage(message)',
+      'suppressNextUserMessagePersistence = false;',
+      'await opts?.onUserMessagePersistenceSuppressed?.(prepared)',
+    ],
+  },
+  {
+    file: 'src/agents/sessions/agent-session-prompting.ts',
+    snippets: [
+      'this.missingRuntimeContext(options?.persistentRuntimeContext)',
+      'this.missingRuntimeContext(this.persistentRuntimeContext)',
+      'this.persistentRuntimeContext = undefined;',
+      'if (!acknowledgedReplay)',
+      'this.runWithSessionWriteSettlement(() => acknowledgeReplay(replayedUser))',
+    ],
+    orderedSnippets: [
+      'messages.push(this.createUserMessage(expandedText, currentImages));',
+      'messages.push(runtimeContext);',
+    ],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-heartbeat-cost-isolation.patch'] = [
+  {
+    file: 'src/agents/bash-tools.exec-runtime.ts',
+    snippets: [
+      'originTrace: getActiveDiagnosticTraceContext(),',
+      'originTrace: session.originTrace,',
+    ],
+  },
+  {
+    file: 'src/infra/heartbeat-runner-prompt.ts',
+    snippets: [
+      'const execOriginTrace = firstExecEvent?.originTrace;',
+      'event.originTrace?.traceId === execOriginTrace?.traceId',
+      'pendingIds.has(event.id)',
+      'if (params.scheduledTaskCount)',
+    ],
+  },
+  {
+    file: 'src/infra/heartbeat-runner-delivery.ts',
+    snippets: [
+      'requestPendingHeartbeatEventWake(prepared.sessionKey, wake.agentId)',
+    ],
+  },
+  {
+    file: 'src/infra/heartbeat-runner-run.ts',
+    snippets: [
+      'runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>',
+      'runHeartbeatOnceInTrace(opts)',
+      'createChildDiagnosticTraceContext(originTrace)',
+      'wake.preflight.execOriginTrace',
+      'HEARTBEAT_SKIP_NO_PENDING_EVENT',
+    ],
+  },
+  {
+    file: 'src/infra/heartbeat-runner-execution.ts',
+    snippets: [
+      'recheckHeartbeatExecBatch(',
+      'return { kind: "no-pending-event" } as const;',
+      'const execTriageOnly =',
+      'skillFilter: [],',
+      'toolsAllow: usesHeartbeatResponseTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : [],',
+    ],
+  },
+];
+
+v20260801StrongPatchValidators['zzz-openclaw-stream-drop-reconnect.patch'] = [
+  {
+    file: 'packages/ai/src/transports/transport-drop-evidence.ts',
+    snippets: [
+      'export function readTransientTransportErrorCode',
+      'export function recordSilentTransportDrop',
+    ],
+  },
+  {
+    file: 'packages/ai/src/transports/transport-stream-shared.ts',
+    snippets: ['recordSilentTransportDrop(output, error, projection);'],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/attempt-recovery.ts',
+    snippets: [
+      'export const MAX_TRANSPORT_DROP_CONTINUATIONS = 5;',
+      'export const MODEL_RETRY_AGENT_EVENT_STREAM = "model_retry";',
+      'recoveryState.transportDropRetryPending = true;',
+    ],
+  },
+  {
+    file: 'src/agents/embedded-agent-runner/run/context-recovery-state.ts',
+    snippets: ['transportDropRetryPending: false,'],
+  },
+];
+v20260801StrongPatchValidators['openclaw-plugin-realpath-parent-cache.patch'] = [
+  {
+    file: 'src/plugins/realpath-through-parent.ts',
+    snippets: [
+      'export function realpathThroughParentSync(',
+      'export function safeRealpathWithParentsSync(',
+    ],
+  },
+  {
+    file: 'src/plugins/plugin-cache-files.ts',
+    snippets: ['realpathThroughParentSync(targetPath, (parentPath) =>'],
+  },
+  {
+    file: 'src/plugins/plugin-registry-snapshot.ts',
+    snippets: ['const realCursor = safeRealpathWithParentsSync(cursor, cache);'],
+    forbiddenSnippets: ['safeRealpathSync('],
+  },
+];
+v20260801StrongPatchValidators['openclaw-windows-native-plugin-require.patch'] = [
+  {
+    file: 'src/plugins/native-module-require.ts',
+    snippets: [
+      'function toRequirePath(modulePath: string): string {',
+      'const requirePath = toRequirePath(modulePath);',
+      'nodeRequire.resolve(toRequirePath(modulePath))',
+    ],
+  },
+];
+v20260801StrongPatchValidators['openclaw-windows-registry-codepage-native.patch'] = [
+  {
+    file: 'src/infra/windows-install-roots.ts',
+    snippets: [
+      'function loadNativeRegistryReader(): NativeRegistryReader | null {',
+      '"int32_t __stdcall RegGetValueW(intptr_t key, str16 subKey, str16 valueName, uint32_t flags, _Out_ uint32_t *type, _Out_ void *data, _Inout_ uint32_t *size)"',
+      'const nativeValue = readNativeRegistryValue(key, valueName);',
+      'export function queryWindowsRegistryDwordNative(key: string, valueName: string): number | null {',
+    ],
+    orderedSnippets: [
+      'function defaultQueryRegistryValue(key: string, valueName: string): string | null {',
+      'const nativeValue = readNativeRegistryValue(key, valueName);',
+      'const regExe = locateWindowsRegExe();',
+    ],
+  },
+  {
+    file: 'src/infra/windows-encoding.ts',
+    snippets: [
+      'function loadNativeConsoleCodePageReader(): NativeConsoleCodePageReader | null {',
+      'kernel32.func("uint32_t __stdcall GetConsoleOutputCP()")',
+      'queryWindowsRegistryDwordNative("HKCU\\\\Console", "CodePage")',
+    ],
+    orderedSnippets: [
+      'export function resolveWindowsConsoleEncoding(): string | null {',
+      'const nativeCodePage = readNativeConsoleCodePage();',
+      '["/d", "/s", "/c", "chcp"]',
+    ],
+  },
+];
+v20260801StrongPatchValidators['zz-openclaw-windows-process-start-native.patch'] = [
+  {
+    file: 'src/infra/windows-process-start.ts',
+    snippets: [
+      'function loadNativeStartTimeReader(): NativeStartTimeReader | null {',
+      'kernel32.func("__stdcall", "GetProcessTimes", "int32_t", [',
+      'const nativeStartTime = readNativeStartTime(pid);',
+    ],
+  },
+];
+v20260801StrongPatchValidators['openclaw-chrome-mcp-windows-native-snapshot.patch'] = [
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-windows-processes.ts',
+    snippets: [
+      'function loadNativeProcessTableReader(): ChromeMcpWindowsProcessTableReader | null {',
+      '"intptr_t __stdcall CreateToolhelp32Snapshot(uint32_t flags, uint32_t processId)"',
+      'export function listChromeMcpWindowsProcessesNative(): ChromeMcpProcessSnapshot[] | undefined {',
+    ],
+  },
+  {
+    file: 'extensions/browser/src/browser/chrome-mcp-process.ts',
+    snippets: [
+      'const CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS = 10_000;',
+      'timeoutMs: windows ? CHROME_MCP_WINDOWS_POWERSHELL_PROCESS_LIST_TIMEOUT_MS : 2_000,',
+    ],
+    orderedSnippets: [
+      'const windows = platform === "win32";',
+      'const nativeSnapshots = listChromeMcpWindowsProcessesNative();',
+      'windows ? "powershell.exe" : "ps",',
+    ],
+  },
+];
+v20260801StrongPatchValidators['zz-openclaw-dreaming-cleanup-only-when-enabled.patch'] = [
+  {
+    file: 'extensions/memory-core/src/dreaming.ts',
+    snippets: [
+      'const isStartupDreamingEnabled = (startupCfg: OpenClawConfig): boolean => {',
+      'if (isStartupDreamingEnabled(startupConfig)) {',
+    ],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-deleted-agent-session-scan.patch'] = [
+  {
+    file: 'src/state/agent-deletion-journal.ts',
+    snippets: [
+      'export function listAgentDeletionIds(',
+      'const ids = withExistingOpenClawStateDatabaseReadOnly(',
+    ],
+  },
+  {
+    file: 'src/config/sessions/targets.ts',
+    snippets: [
+      'const deletedAgentIds = listAgentDeletionIds({ env });',
+      'return !owner || !deletedAgentIds.has(normalizeAgentId(owner));',
+    ],
+  },
+  {
+    file: 'src/gateway/session-startup-migration.test.ts',
+    snippets: ['cold-starts with retained deleted agents and still repairs live session history'],
+  },
+  {
+    file: 'src/config/sessions/targets-discovery.test.ts',
+    snippets: [
+      'excludes retained deleted stores (cleanup completed: %s) until identity recreation',
+      'preserves live shared-store maintenance when %s is deleted',
+    ],
+  },
+  {
+    file: 'src/state/agent-deletion-journal.discovery.test.ts',
+    snippets: ['does not migrate an existing database without a deletion journal'],
+  },
+  {
+    file: 'src/plugins/host-hook-cleanup.session-store.test.ts',
+    snippets: ['cleans live plugin state without opening retained deleted agent databases'],
+  },
+];
+
+v20260801StrongPatchValidators['openclaw-managed-media-deleted-agent-gc.patch'] = [
+  {
+    file: 'src/state/agent-deletion-journal.ts',
+    snippets: ['export function listAgentDeletionJournalEntriesReadOnly('],
+  },
+  {
+    file: 'src/gateway/managed-outgoing-gc-lifecycle.ts',
+    snippets: [
+      'const deletions = listAgentDeletionJournalEntriesReadOnly({ env });',
+      'const keyOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);',
+      'const pendingFences = deletions',
+    ],
+  },
+  {
+    file: 'src/gateway/managed-image-attachments.ts',
+    snippets: [
+      'isManagedMediaCleanupBlockedByAgentDeletion({',
+      'if (shouldDelete && !isDeletionBlocked()) {',
+      'if (!isDeletionBlocked()) {',
+    ],
+  },
+  {
+    file: 'src/gateway/managed-outgoing-gc-deleted-agents.test.ts',
+    snippets: [
+      'cold-starts with retained deleted history and still cleans live orphans',
+      'retains legacy global media owned by a retired fixed-store agent',
+      'rechecks deletion after asynchronous transient eligibility work',
+    ],
   },
 ];
 

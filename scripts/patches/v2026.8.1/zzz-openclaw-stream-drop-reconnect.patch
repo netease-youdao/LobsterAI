@@ -1,0 +1,1122 @@
+diff --git a/packages/ai/src/transports/transport-drop-evidence.ts b/packages/ai/src/transports/transport-drop-evidence.ts
+new file mode 100644
+index 0000000..efe9fc9
+--- /dev/null
++++ b/packages/ai/src/transports/transport-drop-evidence.ts
+@@ -0,0 +1,117 @@
++/**
++ * LobsterAI: records silent transport drops so the embedded runner can resume
++ * the turn from its transcript instead of ending it.
++ *
++ * A stream that dies after it already delivered visible text or a tool call is
++ * not silent: resuming would duplicate or replace that output. Reasoning that
++ * streamed before the drop does not count, because errored assistant turns are
++ * dropped from replay.
++ */
++import type { AssistantMessage } from "@openclaw/llm-core";
++import {
++  appendAssistantMessageDiagnostic,
++  createAssistantMessageDiagnostic,
++} from "../utils/diagnostics.js";
++import type { ProviderErrorProjection } from "../utils/provider-error.js";
++
++export const PROVIDER_TRANSPORT_FAILURE_DIAGNOSTIC = "provider_transport_failure";
++
++// undici reports a body cut off mid-stream as TypeError("terminated") whose cause
++// is the socket error, e.g. SocketError("other side closed", UND_ERR_SOCKET).
++const UNDICI_TERMINATED_MESSAGE = "terminated";
++const UNDICI_TERMINATED_CODE = "UND_ERR_TERMINATED";
++const MAX_CAUSE_DEPTH = 6;
++
++const TRANSIENT_TRANSPORT_CODES = new Set([
++  "ECONNRESET",
++  "ECONNREFUSED",
++  "ECONNABORTED",
++  "EPIPE",
++  "ETIMEDOUT",
++  "ENETDOWN",
++  "ENETUNREACH",
++  "EHOSTUNREACH",
++  "EAI_AGAIN",
++  "UND_ERR_SOCKET",
++  "UND_ERR_BODY_TIMEOUT",
++  "UND_ERR_HEADERS_TIMEOUT",
++  "UND_ERR_CONNECT",
++  "UND_ERR_CONNECT_TIMEOUT",
++  "ERR_HTTP2_INVALID_SESSION",
++  "ERR_HTTP2_STREAM_ERROR",
++  "ERR_HTTP2_SESSION_ERROR",
++]);
++
++const TRANSIENT_TRANSPORT_MESSAGES = ["other side closed", "socket hang up"];
++
++function readString(value: unknown): string | undefined {
++  return typeof value === "string" && value.trim() ? value.trim() : undefined;
++}
++
++/** Returns the transient transport code found on the error or its causes, if any. */
++export function readTransientTransportErrorCode(error: unknown): string | undefined {
++  const seen = new Set<unknown>();
++  let terminated = false;
++  let current: unknown = error;
++  for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
++    if (!current || typeof current !== "object" || seen.has(current)) {
++      break;
++    }
++    seen.add(current);
++    const record = current as { code?: unknown; message?: unknown; name?: unknown; cause?: unknown };
++    const code = readString(record.code)?.toUpperCase();
++    if (code && TRANSIENT_TRANSPORT_CODES.has(code)) {
++      return code;
++    }
++    const message = readString(record.message)?.toLowerCase();
++    if (message === UNDICI_TERMINATED_MESSAGE && record.name === "TypeError") {
++      terminated = true;
++    } else if (message && TRANSIENT_TRANSPORT_MESSAGES.some((snippet) => message.includes(snippet))) {
++      return "UND_ERR_SOCKET";
++    }
++    current = record.cause;
++  }
++  return terminated ? UNDICI_TERMINATED_CODE : undefined;
++}
++
++/** True when the assistant already delivered text, a tool call, or other non-reasoning content. */
++function hasDeliveredContent(output: AssistantMessage): boolean {
++  const content = Array.isArray(output.content) ? output.content : [];
++  return content.some((block) => {
++    const record = block as { type?: unknown; text?: unknown };
++    if (record.type === "thinking" || record.type === "redacted_thinking") {
++      return false;
++    }
++    return !(record.type === "text" && typeof record.text === "string" && !record.text.trim());
++  });
++}
++
++/** Appends a transport-failure diagnostic when a transient drop left no delivered output. */
++export function recordSilentTransportDrop(
++  output: AssistantMessage,
++  error: unknown,
++  projection: ProviderErrorProjection,
++): void {
++  if (
++    projection.stopReason !== "error" ||
++    hasDeliveredContent(output) ||
++    output.diagnostics?.some((diagnostic) => diagnostic.type === PROVIDER_TRANSPORT_FAILURE_DIAGNOSTIC)
++  ) {
++    return;
++  }
++  const transportErrorCode = readTransientTransportErrorCode(error);
++  if (!transportErrorCode) {
++    return;
++  }
++  const eventsEmitted = Array.isArray(output.content) && output.content.length > 0;
++  // Reuse the bounded, redacted terminal message so the diagnostic cannot expose
++  // the original throw (stack, headers, request body).
++  appendAssistantMessageDiagnostic(
++    output,
++    createAssistantMessageDiagnostic(PROVIDER_TRANSPORT_FAILURE_DIAGNOSTIC, projection.errorMessage, {
++      eventsEmitted,
++      phase: eventsEmitted ? "after_message_stream_start" : "before_message_stream_start",
++      transportErrorCode,
++    }),
++  );
++}
+diff --git a/packages/ai/src/transports/transport-drop-evidence.test.ts b/packages/ai/src/transports/transport-drop-evidence.test.ts
+new file mode 100644
+index 0000000..86d7b5b
+--- /dev/null
++++ b/packages/ai/src/transports/transport-drop-evidence.test.ts
+@@ -0,0 +1,145 @@
++import type { AssistantMessage } from "@openclaw/llm-core";
++import { describe, expect, it } from "vitest";
++import {
++  PROVIDER_TRANSPORT_FAILURE_DIAGNOSTIC,
++  readTransientTransportErrorCode,
++} from "./transport-drop-evidence.js";
++import { assignTransportErrorDetails } from "./transport-stream-shared.js";
++
++// undici shape when the peer closes the socket mid-body.
++function undiciTerminatedError(): Error {
++  const socketError = Object.assign(new Error("other side closed"), {
++    name: "SocketError",
++    code: "UND_ERR_SOCKET",
++  });
++  return new TypeError("terminated", { cause: socketError });
++}
++
++function makeOutput(content: AssistantMessage["content"]): AssistantMessage {
++  return {
++    role: "assistant",
++    api: "openai-completions",
++    provider: "lobsterai-server",
++    model: "deepseek-flash",
++    content,
++    usage: {
++      input: 0,
++      output: 0,
++      cacheRead: 0,
++      cacheWrite: 0,
++      totalTokens: 0,
++      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++    },
++    stopReason: "error",
++    timestamp: 1,
++  } as AssistantMessage;
++}
++
++function transportDiagnostics(output: AssistantMessage) {
++  return (output.diagnostics ?? []).filter(
++    (diagnostic) => diagnostic.type === PROVIDER_TRANSPORT_FAILURE_DIAGNOSTIC,
++  );
++}
++
++describe("readTransientTransportErrorCode", () => {
++  it("prefers the socket code under an undici terminated error", () => {
++    expect(readTransientTransportErrorCode(undiciTerminatedError())).toBe("UND_ERR_SOCKET");
++  });
++
++  it("recognizes a bare undici terminated error", () => {
++    expect(readTransientTransportErrorCode(new TypeError("terminated"))).toBe("UND_ERR_TERMINATED");
++  });
++
++  it("recognizes reset codes on the error itself", () => {
++    expect(
++      readTransientTransportErrorCode(Object.assign(new Error("read"), { code: "ECONNRESET" })),
++    ).toBe("ECONNRESET");
++  });
++
++  it.each([
++    ["an HTTP error", Object.assign(new Error("400 bad request"), { status: 400 })],
++    ["an abort", Object.assign(new Error("Request was aborted"), { name: "AbortError" })],
++    ["a plain terminated message", new Error("terminated")],
++    ["a non-error value", "terminated"],
++  ])("ignores %s", (_label, error) => {
++    expect(readTransientTransportErrorCode(error)).toBeUndefined();
++  });
++
++  it("stops on cyclic causes", () => {
++    const error = new Error("loop") as Error & { cause?: unknown };
++    error.cause = error;
++    expect(readTransientTransportErrorCode(error)).toBeUndefined();
++  });
++});
++
++describe("assignTransportErrorDetails transport drops", () => {
++  it("records a drop that only streamed reasoning", () => {
++    const output = makeOutput([
++      { type: "thinking", thinking: "check the config", thinkingSignature: "reasoning_content" },
++    ]);
++
++    assignTransportErrorDetails(output, undiciTerminatedError());
++
++    expect(output.errorMessage).toBe("terminated");
++    expect(transportDiagnostics(output)).toEqual([
++      expect.objectContaining({
++        error: expect.objectContaining({ message: "terminated" }),
++        details: {
++          eventsEmitted: true,
++          phase: "after_message_stream_start",
++          transportErrorCode: "UND_ERR_SOCKET",
++        },
++      }),
++    ]);
++  });
++
++  it("records a drop before any content", () => {
++    const output = makeOutput([]);
++
++    assignTransportErrorDetails(output, undiciTerminatedError());
++
++    expect(transportDiagnostics(output)[0]?.details).toMatchObject({
++      eventsEmitted: false,
++      phase: "before_message_stream_start",
++    });
++  });
++
++  it.each([
++    ["visible text", [{ type: "text", text: "Partial answer" }]],
++    ["a tool call", [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]],
++  ] as const)("does not record a drop after %s", (_label, content) => {
++    const output = makeOutput([...content] as AssistantMessage["content"]);
++
++    assignTransportErrorDetails(output, undiciTerminatedError());
++
++    expect(transportDiagnostics(output)).toEqual([]);
++  });
++
++  it("does not record non-transient failures", () => {
++    const output = makeOutput([]);
++
++    assignTransportErrorDetails(output, new Error("500 internal error"));
++
++    expect(transportDiagnostics(output)).toEqual([]);
++  });
++
++  it("does not record an aborted request", () => {
++    const controller = new AbortController();
++    controller.abort();
++    const output = makeOutput([]);
++
++    assignTransportErrorDetails(output, undiciTerminatedError(), controller.signal);
++
++    expect(output.stopReason).toBe("aborted");
++    expect(transportDiagnostics(output)).toEqual([]);
++  });
++
++  it("records the drop once", () => {
++    const output = makeOutput([]);
++
++    assignTransportErrorDetails(output, undiciTerminatedError());
++    assignTransportErrorDetails(output, undiciTerminatedError());
++
++    expect(transportDiagnostics(output)).toHaveLength(1);
++  });
++});
+diff --git a/packages/ai/src/transports/transport-stream-shared.ts b/packages/ai/src/transports/transport-stream-shared.ts
+index 109eb0f..eb726d9 100644
+--- a/packages/ai/src/transports/transport-stream-shared.ts
++++ b/packages/ai/src/transports/transport-stream-shared.ts
+@@ -17,6 +17,7 @@ import { headersToRecord } from "../utils/headers.js";
+ import { repairJson } from "../utils/json-parse.js";
+ import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
++import { recordSilentTransportDrop } from "./transport-drop-evidence.js";
+ import {
+   parseJsonObjectPreservingUnsafeIntegers,
+   quoteUnsafeIntegerLiterals,
+@@ -538,6 +539,7 @@ export function assignTransportErrorDetails(
+ ): ProviderErrorProjection {
+   const projection = projectProviderError(error, signal);
+   Object.assign(output, projection);
++  recordSilentTransportDrop(output, error, projection);
+   return projection;
+ }
+ 
+diff --git a/src/agents/embedded-agent-runner/run.transport-drop-continuation.integration.test.ts b/src/agents/embedded-agent-runner/run.transport-drop-continuation.integration.test.ts
+new file mode 100644
+index 0000000..0de28f1
+--- /dev/null
++++ b/src/agents/embedded-agent-runner/run.transport-drop-continuation.integration.test.ts
+@@ -0,0 +1,202 @@
++// Full-entry coverage for resuming a turn after the provider stream dropped mid-reply.
++import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
++import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
++import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
++import {
++  mockedRunEmbeddedAttempt,
++  resetSharedRunIntegrationHarnessMocks,
++} from "./run.overflow-compaction.harness.js";
++import {
++  createSharedRunIntegrationSession,
++  loadSharedRunIntegrationHarness,
++} from "./run.shared-integration-harness.test-support.js";
++
++vi.mock("../../utils/sleep.js", () => ({ sleep: vi.fn(async () => undefined) }));
++
++let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
++let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
++
++// Live shape: the local token proxy aborted a mid-stream SSE body, so undici
++// reported "terminated" after the model had only streamed reasoning.
++const droppedAssistant = buildEmbeddedRunnerAssistant({
++  api: "openai-completions",
++  stopReason: "error",
++  errorMessage: "terminated",
++  content: [{ type: "thinking", thinking: "Check the remaining config files." }],
++  diagnostics: [
++    {
++      type: "provider_transport_failure",
++      timestamp: 1,
++      details: { transportErrorCode: "UND_ERR_SOCKET" },
++    },
++  ],
++});
++
++const userMessage = { role: "user", content: "fix the build" };
++const writeAssistant = buildEmbeddedRunnerAssistant({
++  stopReason: "toolUse",
++  content: [{ type: "toolCall", id: "call-write", name: "write", arguments: {} }],
++});
++
++// A write committed a side effect, then the next model call dropped.
++function makeDropAfterToolBatchAttempt() {
++  return makeAttemptResult({
++    assistantTexts: [],
++    lastAssistant: droppedAssistant,
++    currentAttemptAssistant: droppedAssistant,
++    messagesSnapshot: [
++      userMessage,
++      writeAssistant,
++      { role: "toolResult", toolCallId: "call-write", toolName: "write" },
++      droppedAssistant,
++    ] as never,
++    toolMetas: [{ toolName: "write", toolCallId: "call-write", replaySafe: false }],
++    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
++    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++  });
++}
++
++// The first model call of the turn dropped; nothing ran yet.
++function makeDropBeforeToolsAttempt() {
++  return makeAttemptResult({
++    assistantTexts: [],
++    lastAssistant: droppedAssistant,
++    currentAttemptAssistant: droppedAssistant,
++    messagesSnapshot: [userMessage, droppedAssistant] as never,
++  });
++}
++
++type AttemptCallParams = {
++  prompt?: string;
++  sessionId?: string;
++  suppressNextUserMessagePersistence?: boolean;
++  onUserMessagePersisted?: (message: unknown) => void;
++};
++
++function requireAttemptCall(index: number): AttemptCallParams {
++  const call = mockedRunEmbeddedAttempt.mock.calls[index];
++  if (!call) {
++    throw new Error(`expected embedded attempt call ${index}`);
++  }
++  return call[0] as AttemptCallParams;
++}
++
++// The real attempt persists the user turn before its first model call.
++function persistUserTurnThen(result: ReturnType<typeof makeAttemptResult>) {
++  return async (params: unknown) => {
++    (params as AttemptCallParams).onUserMessagePersisted?.(userMessage);
++    return result;
++  };
++}
++
++describe("runEmbeddedAgent transport-drop continuation", () => {
++  beforeAll(async () => {
++    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
++  });
++
++  beforeEach(async () => {
++    resetSharedRunIntegrationHarnessMocks();
++    session = await createSharedRunIntegrationSession();
++  });
++
++  afterEach(async () => {
++    await session?.cleanup();
++  });
++
++  it("resumes from the transcript after a drop that followed a tool batch", async () => {
++    mockedRunEmbeddedAttempt
++      .mockImplementationOnce(persistUserTurnThen(makeDropAfterToolBatchAttempt()))
++      .mockResolvedValueOnce(makeAttemptResult());
++
++    const result = await runEmbeddedAgent({
++      ...session.runParams,
++      runId: "run-transport-drop-after-tools",
++    });
++
++    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
++    const initial = requireAttemptCall(0);
++    const retry = requireAttemptCall(1);
++    expect(retry.prompt).toContain("cut off by a network error");
++    expect(retry.prompt).not.toBe(session.runParams.prompt);
++    // The continuation is model-only context, never a persisted user turn.
++    expect(retry.suppressNextUserMessagePersistence).toBe(true);
++    expect(retry.sessionId).toBe(initial.sessionId);
++    expect(result.meta.error).toBeUndefined();
++  });
++
++  it("resumes from the transcript after the first model call of the turn dropped", async () => {
++    mockedRunEmbeddedAttempt
++      .mockImplementationOnce(persistUserTurnThen(makeDropBeforeToolsAttempt()))
++      .mockResolvedValueOnce(makeAttemptResult());
++
++    const result = await runEmbeddedAgent({
++      ...session.runParams,
++      runId: "run-transport-drop-before-tools",
++    });
++
++    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
++    const retry = requireAttemptCall(1);
++    expect(retry.prompt).toContain("cut off by a network error");
++    expect(retry.suppressNextUserMessagePersistence).toBe(true);
++    expect(result.meta.error).toBeUndefined();
++  });
++
++  it("keeps backing off when the network is still settling on the resumed call", async () => {
++    const proxyFailure = buildEmbeddedRunnerAssistant({
++      api: "openai-completions",
++      stopReason: "error",
++      errorMessage: "502 LobsterAI proxy upstream request failed: net::ERR_NETWORK_CHANGED",
++      content: [],
++    });
++    mockedRunEmbeddedAttempt
++      .mockImplementationOnce(persistUserTurnThen(makeDropAfterToolBatchAttempt()))
++      .mockResolvedValueOnce(
++        makeAttemptResult({
++          assistantTexts: [],
++          lastAssistant: proxyFailure,
++          currentAttemptAssistant: proxyFailure,
++          messagesSnapshot: [userMessage, proxyFailure] as never,
++          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++        }),
++      )
++      .mockResolvedValueOnce(makeAttemptResult());
++
++    const result = await runEmbeddedAgent({
++      ...session.runParams,
++      runId: "run-transport-drop-network-settling",
++    });
++
++    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
++    expect(requireAttemptCall(2).prompt).toContain("cut off by a network error");
++    expect(result.meta.error).toBeUndefined();
++  });
++
++  it("keeps resuming consecutive drops and surfaces the error once the budget is spent", async () => {
++    mockedRunEmbeddedAttempt.mockImplementationOnce(
++      persistUserTurnThen(makeDropAfterToolBatchAttempt()),
++    );
++    for (let index = 0; index < 5; index += 1) {
++      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
++        makeAttemptResult({
++          assistantTexts: [],
++          lastAssistant: droppedAssistant,
++          currentAttemptAssistant: droppedAssistant,
++          messagesSnapshot: [userMessage, droppedAssistant] as never,
++          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
++        }),
++      );
++    }
++
++    const result = await runEmbeddedAgent({
++      ...session.runParams,
++      runId: "run-transport-drop-exhausted",
++    });
++
++    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(6);
++    expect(result.meta.error?.kind).toBe("incomplete_turn");
++    expect(result.payloads?.[0]?.text).toContain(
++      "some tool actions may have already been executed",
++    );
++  });
++});
+diff --git a/src/agents/embedded-agent-runner/run/attempt-recovery.test.ts b/src/agents/embedded-agent-runner/run/attempt-recovery.test.ts
+index cbe9594..72fcea1 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-recovery.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-recovery.test.ts
+@@ -1,5 +1,7 @@
+-import { describe, expect, it, vi } from "vitest";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { emitAgentEvent } from "../../../infra/agent-events.js";
+ import type { AssistantMessage } from "../../../llm/types.js";
++import { sleep } from "../../../utils/sleep.js";
+ import {
+   buildEmbeddedRunnerAssistant,
+   createMockUsage,
+@@ -7,10 +9,21 @@ import {
+ } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+ import { normalizeUsage } from "../../usage.js";
+ import { createUsageAccumulator } from "../usage-accumulator.js";
+-import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
++import {
++  MAX_TRANSPORT_DROP_CONTINUATIONS,
++  MODEL_RETRY_AGENT_EVENT_STREAM,
++  recoverEmbeddedRunAttempt,
++  resolveTransportDropRetryDelayMs,
++} from "./attempt-recovery.js";
+ import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
+ 
++vi.mock("../../../utils/sleep.js", () => ({ sleep: vi.fn(async () => undefined) }));
++vi.mock("../../../infra/agent-events.js", async (importOriginal) => ({
++  ...(await importOriginal<typeof import("../../../infra/agent-events.js")>()),
++  emitAgentEvent: vi.fn(),
++}));
++
+ type TransportDropScenario = {
+   errorMessage?: string;
+   content?: AssistantMessage["content"];
+@@ -18,6 +31,14 @@ type TransportDropScenario = {
+   activeCount?: number;
+   codeModeSuspended?: boolean;
+   transportDropContinuations?: number;
++  /** The attempt resumed an earlier drop. */
++  transportDropRetryPending?: boolean;
++  /** The drop came before any tool batch of the turn. */
++  withoutToolBatch?: boolean;
++  /** The attempt resumed a drop and ran no tools of its own. */
++  withoutAttemptToolProgress?: boolean;
++  userPromptPersisted?: boolean;
++  abortSignal?: AbortSignal;
+   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
+   yieldDetected?: boolean;
+ };
+@@ -51,27 +72,36 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
+     content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
+     usage: createMockUsage(0, 0),
+   });
+-  const messagesSnapshot = [
+-    { role: "user", content: "why is it unauthorized?" },
+-    toolAssistant,
+-    ...toolCalls.map((id) => ({ role: "toolResult", toolCallId: id, toolName: "exec" })),
+-    erroredAssistant,
+-  ] as never;
++  const messagesSnapshot = (
++    scenario.withoutToolBatch
++      ? [{ role: "user", content: "why is it unauthorized?" }, erroredAssistant]
++      : [
++          { role: "user", content: "why is it unauthorized?" },
++          toolAssistant,
++          ...toolCalls.map((id) => ({ role: "toolResult", toolCallId: id, toolName: "exec" })),
++          erroredAssistant,
++        ]
++  ) as never;
++  const attemptRanTools = !scenario.withoutToolBatch && !scenario.withoutAttemptToolProgress;
+   const attempt = makeEmbeddedRunnerAttempt({
+     messagesSnapshot,
+-    toolMetas: toolCalls.map((toolCallId) => ({
+-      toolCallId,
+-      toolName: "exec",
+-      replaySafe: false,
+-      ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
+-    })) as never,
++    toolMetas: (attemptRanTools
++      ? toolCalls.map((toolCallId) => ({
++          toolCallId,
++          toolName: "exec",
++          replaySafe: false,
++          ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
++        }))
++      : []) as never,
+     lastAssistant: erroredAssistant,
+     currentAttemptAssistant: erroredAssistant,
+-    itemLifecycle: {
+-      startedCount: toolCalls.length,
+-      completedCount: toolCalls.length,
+-      activeCount: scenario.activeCount ?? 0,
+-    },
++    itemLifecycle: attemptRanTools
++      ? {
++          startedCount: toolCalls.length,
++          completedCount: toolCalls.length,
++          activeCount: scenario.activeCount ?? 0,
++        }
++      : { startedCount: 0, completedCount: 0, activeCount: 0 },
+     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
+     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
+   });
+@@ -81,8 +111,10 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
+   });
+   const markOwnedTranscriptRetry = vi.fn();
+   const continueFromCurrentTranscript = vi.fn();
++  const activateInternalPrompt = vi.fn();
+   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
+   contextRecoveryState.transportDropContinuations = scenario.transportDropContinuations ?? 0;
++  contextRecoveryState.transportDropRetryPending = scenario.transportDropRetryPending ?? false;
+   const failoverRetryController = {
+     resolveAuthProfileFailureReason: vi.fn(),
+     advanceAuthProfile: vi.fn(),
+@@ -97,10 +129,17 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
+         agentId: "main",
+         sessionId: "session:transport-drop",
+         runId: "run:transport-drop",
++        ...(scenario.abortSignal ? { abortSignal: scenario.abortSignal } : {}),
+       },
+       resolvedSessionKey: "agent:main:transport-drop",
+       startedAtMs: Date.now(),
+-      laneController: { throwIfAborted: vi.fn() },
++      laneController: {
++        throwIfAborted: vi.fn(() => {
++          if (scenario.abortSignal?.aborted) {
++            throw new Error("Operation aborted");
++          }
++        }),
++      },
+     },
+     preparedRuntime: {
+       provider: "openai",
+@@ -130,8 +169,10 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
+     runtimePlan: { auth: {} },
+     sessionPromptState: {
+       sessionFile: "/tmp/session.jsonl",
++      activePrompt: { persisted: scenario.userPromptPersisted ?? true, internal: false },
+       markOwnedTranscriptRetry,
+       continueFromCurrentTranscript,
++      activateInternalPrompt,
+     },
+     failoverRetryController,
+     compactionRuntime: disabledCompactionRuntime,
+@@ -149,33 +190,184 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
+     recovery,
+     markOwnedTranscriptRetry,
+     continueFromCurrentTranscript,
++    activateInternalPrompt,
+     contextRecoveryState,
+     failoverRetryController,
+   };
+ }
+ 
++function modelRetryEvents() {
++  return vi
++    .mocked(emitAgentEvent)
++    .mock.calls.map(([event]) => event)
++    .filter((event) => event.stream === MODEL_RETRY_AGENT_EVENT_STREAM);
++}
++
+ describe("recoverEmbeddedRunAttempt", () => {
++  beforeEach(() => {
++    vi.mocked(sleep).mockClear();
++    vi.mocked(emitAgentEvent).mockClear();
++  });
++
+   it("continues from the transcript after a transient transport drop on a settled exec batch", async () => {
+     const {
+       recovery,
+       markOwnedTranscriptRetry,
+-      continueFromCurrentTranscript,
++      activateInternalPrompt,
+       contextRecoveryState,
+       failoverRetryController,
+     } = await recoverAfterTransportDrop();
+ 
+     expect(recovery).toMatchObject({ action: "retry" });
+     expect(contextRecoveryState.transportDropContinuations).toBe(1);
++    expect(contextRecoveryState.transportDropRetryPending).toBe(true);
+     expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
+-    expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
++    expect(activateInternalPrompt).toHaveBeenCalledTimes(1);
++    expect(activateInternalPrompt.mock.calls[0]?.[0]).toContain("cut off by a network error");
+     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+   });
+ 
++  it("backs off and reports the continuation before resuming", async () => {
++    await recoverAfterTransportDrop({
++      errorMessage: "terminated",
++      diagnostics: [
++        {
++          type: "provider_transport_failure",
++          timestamp: 1,
++          details: { transportErrorCode: "UND_ERR_SOCKET" },
++        },
++      ],
++    });
++
++    const delayMs = vi.mocked(sleep).mock.calls[0]?.[0];
++    expect(delayMs).toBeGreaterThanOrEqual(800);
++    expect(delayMs).toBeLessThanOrEqual(1200);
++    expect(modelRetryEvents()).toEqual([
++      expect.objectContaining({
++        runId: "run:transport-drop",
++        data: {
++          phase: "retrying",
++          attempt: 1,
++          maxAttempts: MAX_TRANSPORT_DROP_CONTINUATIONS,
++          delayMs,
++          error: "terminated",
++          errorCode: "UND_ERR_SOCKET",
++        },
++      }),
++    ]);
++  });
++
++  it("resumes a drop that came before any tool batch once the user request is persisted", async () => {
++    const { recovery, activateInternalPrompt, contextRecoveryState } =
++      await recoverAfterTransportDrop({ withoutToolBatch: true });
++
++    expect(recovery).toMatchObject({ action: "retry" });
++    expect(contextRecoveryState.transportDropContinuations).toBe(1);
++    expect(activateInternalPrompt).toHaveBeenCalledTimes(1);
++  });
++
++  it("does not resume a pre-tool drop whose user request was never persisted", async () => {
++    const { recovery, activateInternalPrompt } = await recoverAfterTransportDrop({
++      withoutToolBatch: true,
++      userPromptPersisted: false,
++    });
++
++    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
++    expect(activateInternalPrompt).not.toHaveBeenCalled();
++    expect(sleep).not.toHaveBeenCalled();
++  });
++
++  it("keeps resuming when the resumed attempt drops again before running tools", async () => {
++    const { recovery, contextRecoveryState } = await recoverAfterTransportDrop({
++      transportDropRetryPending: true,
++      transportDropContinuations: 2,
++      withoutAttemptToolProgress: true,
++    });
++
++    expect(recovery).toMatchObject({ action: "retry" });
++    expect(contextRecoveryState.transportDropContinuations).toBe(3);
++  });
++
++  it("keeps backing off when the resumed call fails with a retryable error before any output", async () => {
++    const { recovery, contextRecoveryState } = await recoverAfterTransportDrop({
++      transportDropRetryPending: true,
++      transportDropContinuations: 1,
++      withoutAttemptToolProgress: true,
++      errorMessage: "502 LobsterAI proxy upstream request failed: net::ERR_NETWORK_CHANGED",
++      diagnostics: [],
++      content: [],
++    });
++
++    expect(recovery).toMatchObject({ action: "retry" });
++    expect(contextRecoveryState.transportDropContinuations).toBe(2);
++  });
++
++  it("stops resuming when the resumed call fails with a non-retryable error", async () => {
++    const { recovery } = await recoverAfterTransportDrop({
++      transportDropRetryPending: true,
++      transportDropContinuations: 1,
++      withoutAttemptToolProgress: true,
++      errorMessage: "401 invalid api key",
++      diagnostics: [],
++      content: [],
++    });
++
++    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
++  });
++
++  it("does not resume an unsettled batch that was not proven by an earlier attempt", async () => {
++    const { recovery } = await recoverAfterTransportDrop({ withoutAttemptToolProgress: true });
++
++    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
++  });
++
++  it("restarts the budget after the attempt made tool progress", async () => {
++    const { recovery, contextRecoveryState } = await recoverAfterTransportDrop({
++      transportDropRetryPending: true,
++      transportDropContinuations: MAX_TRANSPORT_DROP_CONTINUATIONS,
++    });
++
++    expect(recovery).toMatchObject({ action: "retry" });
++    expect(contextRecoveryState.transportDropContinuations).toBe(1);
++  });
++
++  it("reports exhaustion once consecutive drops spend the budget", async () => {
++    const { recovery, activateInternalPrompt } = await recoverAfterTransportDrop({
++      transportDropRetryPending: true,
++      transportDropContinuations: MAX_TRANSPORT_DROP_CONTINUATIONS,
++      withoutAttemptToolProgress: true,
++    });
++
++    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
++    expect(activateInternalPrompt).not.toHaveBeenCalled();
++    expect(modelRetryEvents()).toEqual([
++      expect.objectContaining({
++        data: expect.objectContaining({
++          phase: "exhausted",
++          attempt: MAX_TRANSPORT_DROP_CONTINUATIONS,
++          maxAttempts: MAX_TRANSPORT_DROP_CONTINUATIONS,
++        }),
++      }),
++    ]);
++  });
++
++  it("stops without resuming when the run is aborted during the backoff", async () => {
++    const abortController = new AbortController();
++    vi.mocked(sleep).mockImplementationOnce(async () => {
++      abortController.abort();
++      throw new Error("aborted");
++    });
++
++    await expect(
++      recoverAfterTransportDrop({ abortSignal: abortController.signal }),
++    ).rejects.toThrow("Operation aborted");
++  });
++
+   it.each([0, 1])(
+     "continues a parked Code Mode run from its persisted waiting result with activeCount=%i",
+     async (activeCount) => {
+-      const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
++      const { recovery, markOwnedTranscriptRetry, activateInternalPrompt } =
+         await recoverAfterTransportDrop({
+           codeModeSuspended: true,
+           activeCount,
+@@ -183,7 +375,7 @@ describe("recoverEmbeddedRunAttempt", () => {
+ 
+       expect(recovery).toMatchObject({ action: "retry" });
+       expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(1);
+-      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
++      expect(activateInternalPrompt).toHaveBeenCalledTimes(1);
+     },
+   );
+ 
+@@ -201,14 +393,34 @@ describe("recoverEmbeddedRunAttempt", () => {
+       "the errored turn already carried visible text",
+       { content: [{ type: "text", text: "Partial" }] },
+     ],
+-    ["the continuation budget is spent", { transportDropContinuations: 2 }],
++    [
++      "the continuation budget is spent",
++      {
++        transportDropRetryPending: true,
++        transportDropContinuations: MAX_TRANSPORT_DROP_CONTINUATIONS,
++        withoutAttemptToolProgress: true,
++      },
++    ],
+   ])("keeps the replay gate closed when %s", async (_label, scenario) => {
+-    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
++    const { recovery, markOwnedTranscriptRetry, activateInternalPrompt } =
+       await recoverAfterTransportDrop(scenario);
+ 
+     expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
+     expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
+-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
++    expect(activateInternalPrompt).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    [1, 1_000],
++    [2, 2_000],
++    [3, 4_000],
++    [4, 8_000],
++    [5, 16_000],
++    [6, 16_000],
++  ])("backs off continuation %i by about %i ms", (continuation, expectedMs) => {
++    expect(resolveTransportDropRetryDelayMs(continuation, () => 0.5)).toBe(expectedMs);
++    expect(resolveTransportDropRetryDelayMs(continuation, () => 0)).toBe(expectedMs * 0.8);
++    expect(resolveTransportDropRetryDelayMs(continuation, () => 1)).toBe(expectedMs * 1.2);
+   });
+ 
+   it("surfaces before_agent_run blocks with current carried usage", async () => {
+diff --git a/src/agents/embedded-agent-runner/run/attempt-recovery.ts b/src/agents/embedded-agent-runner/run/attempt-recovery.ts
+index 1bafb14..fb6fccb 100644
+--- a/src/agents/embedded-agent-runner/run/attempt-recovery.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-recovery.ts
+@@ -1,6 +1,8 @@
++import { emitAgentEvent } from "../../../infra/agent-events.js";
+ import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+ import type { AssistantMessage } from "../../../llm/types.js";
+ import { isRetryableAssistantError } from "../../../llm/utils/retry.js";
++import { sleep } from "../../../utils/sleep.js";
+ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
+ import type { FailoverReason } from "../../embedded-agent-helpers.js";
+@@ -35,15 +37,66 @@ import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state
+ import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
+ import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
+ 
+-const MAX_TRANSPORT_DROP_CONTINUATIONS = 2;
++// LobsterAI: consecutive transport-drop continuations, with exponential backoff
++// between them. Progress (a completed tool batch) restarts the budget.
++export const MAX_TRANSPORT_DROP_CONTINUATIONS = 5;
++const TRANSPORT_DROP_RETRY_BASE_DELAY_MS = 1_000;
++const TRANSPORT_DROP_RETRY_MAX_DELAY_MS = 16_000;
++const TRANSPORT_DROP_RETRY_JITTER_RATIO = 0.2;
++
++/** Agent event stream that reports transport-drop continuations to gateway clients. */
++export const MODEL_RETRY_AGENT_EVENT_STREAM = "model_retry";
++export const ModelRetryPhase = {
++  Retrying: "retrying",
++  Exhausted: "exhausted",
++} as const;
++
++// Model-only context for the resumed attempt. The persisted transcript already
++// holds the user request and any settled tool results; errored turns are dropped.
++const TRANSPORT_DROP_CONTINUATION_PROMPT =
++  "Continue from the current transcript. The previous model response was cut off by a network error before any of it was delivered. If tool results follow the latest user request, continue after the latest tool result and do not rerun completed tools unless the transcript shows they are still needed; otherwise answer the latest user request. Do not repeat the original user request.";
++
++export function resolveTransportDropRetryDelayMs(
++  continuation: number,
++  random: () => number = Math.random,
++): number {
++  const baseDelayMs = Math.min(
++    TRANSPORT_DROP_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, continuation - 1),
++    TRANSPORT_DROP_RETRY_MAX_DELAY_MS,
++  );
++  const jitterMs = baseDelayMs * TRANSPORT_DROP_RETRY_JITTER_RATIO * (random() * 2 - 1);
++  return Math.max(0, Math.round(baseDelayMs + jitterMs));
++}
++
++function readTransportErrorCode(assistant: AssistantMessage): string | undefined {
++  const details = assistant.diagnostics?.find(
++    (diagnostic) => diagnostic.type === "provider_transport_failure",
++  )?.details;
++  const code = details?.transportErrorCode;
++  return typeof code === "string" && code ? code : undefined;
++}
++
++function emitModelRetryEvent(runId: string, data: Record<string, unknown>): void {
++  try {
++    emitAgentEvent({ runId, stream: MODEL_RETRY_AGENT_EVENT_STREAM, data });
++  } catch (error) {
++    log.warn(`model retry event emission failed: runId=${runId} error=${formatErrorMessage(error)}`);
++  }
++}
+ 
+ /** Errored assistant turn with transient transport evidence and no visible output. */
+-function isSilentTransportDropAssistant(assistant: AssistantMessage | undefined): boolean {
++function isSilentTransportDropAssistant(
++  assistant: AssistantMessage | undefined,
++  // LobsterAI: while resuming a drop, any retryable failure before output (for
++  // example the proxy's 502 while the network settles) continues the backoff.
++  requireTransportDiagnostic = true,
++): boolean {
+   if (
+     !assistant ||
+     assistant.stopReason !== "error" ||
+     !isRetryableAssistantError(assistant) ||
+-    !assistant.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
++    (requireTransportDiagnostic &&
++      !assistant.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure"))
+   ) {
+     return false;
+   }
+@@ -149,26 +202,6 @@ export async function recoverEmbeddedRunAttempt(input: {
+     attempt.preflightRecovery?.source === "mid-turn" &&
+     midTurnBatchSettled &&
+     !hasAsyncActivity(attempt.toolMetas);
+-  // A transient transport failure that lands after the whole tool batch settled
+-  // is a resume, not a replay: the continuation prompt re-enters after the
+-  // persisted tool results and nothing from the failed attempt is resubmitted.
+-  // Only a silent errored assistant qualifies; partial visible text would be
+-  // duplicated or replaced. Everything #122516 closed for side-effecting
+-  // attempts (prompt resubmission, profile rotation, model fallback) stays
+-  // closed below this branch.
+-  const settledTransportDropAssistant =
+-    !currentAttemptReplaySafe &&
+-    !promptError &&
+-    !aborted &&
+-    !timedOut &&
+-    !terminalInterrupted &&
+-    !hasAttemptTerminalState(attempt) &&
+-    midTurnBatchSettled &&
+-    // A parked Code Mode result is persisted same-session state. Continuing is
+-    // how the model reaches wait; it does not resubmit the prompt or exec call.
+-    isSilentTransportDropAssistant(currentAttemptAssistant)
+-      ? currentAttemptAssistant
+-      : undefined;
+   const { signalOwnedInterruption } = terminalState;
+   const assistantOverflowCandidate =
+     currentAttemptCompletedAssistant !== undefined
+@@ -230,11 +263,38 @@ export async function recoverEmbeddedRunAttempt(input: {
+       }),
+     };
+   }
+-  if (
+-    !currentAttemptReplaySafe &&
+-    !canContinueSettledMidTurnOverflow &&
+-    !settledTransportDropAssistant
+-  ) {
++  // A transient transport failure that lands after the whole tool batch settled
++  // is a resume, not a replay: the continuation prompt re-enters after the
++  // persisted tool results and nothing from the failed attempt is resubmitted.
++  // Only a silent errored assistant qualifies; partial visible text would be
++  // duplicated or replaced. Everything #122516 closed for side-effecting
++  // attempts (prompt resubmission, profile rotation, model fallback) stays
++  // closed below this branch.
++  // LobsterAI: a drop before any tool batch of the turn resumes the same way once
++  // the user request is persisted, and an attempt that resumed a drop and ran no
++  // tools still sits after the batch the earlier attempt proved settled.
++  const recoveryState = input.contextRecoveryState;
++  const resumedAfterTransportDrop = recoveryState.transportDropRetryPending === true;
++  recoveryState.transportDropRetryPending = false;
++  const attemptMadeToolProgress = (attempt.toolMetas?.length ?? 0) > 0;
++  const resumingTransportDrop = resumedAfterTransportDrop && !attemptMadeToolProgress;
++  const transportDropResumePointSettled =
++    midTurnBatchSettled ||
++    resumingTransportDrop ||
++    (!settledEvidence.assistant && sessionPromptState.activePrompt?.persisted === true);
++  const transportDropAssistant =
++    !promptError &&
++    !aborted &&
++    !timedOut &&
++    !terminalInterrupted &&
++    !hasAttemptTerminalState(attempt) &&
++    transportDropResumePointSettled &&
++    // A parked Code Mode result is persisted same-session state. Continuing is
++    // how the model reaches wait; it does not resubmit the prompt or exec call.
++    isSilentTransportDropAssistant(currentAttemptAssistant, !resumingTransportDrop)
++      ? currentAttemptAssistant
++      : undefined;
++  if (!currentAttemptReplaySafe && !canContinueSettledMidTurnOverflow && !transportDropAssistant) {
+     return replayUnsafeOutcome;
+   }
+ 
+@@ -355,23 +415,58 @@ export async function recoverEmbeddedRunAttempt(input: {
+       }),
+     };
+   }
+-  const recoveryState = input.contextRecoveryState;
+-  if (
+-    settledTransportDropAssistant &&
+-    recoveryState.transportDropContinuations < MAX_TRANSPORT_DROP_CONTINUATIONS
+-  ) {
+-    runInput.laneController.throwIfAborted();
+-    recoveryState.transportDropContinuations += 1;
+-    sessionPromptState.markOwnedTranscriptRetry();
+-    sessionPromptState.continueFromCurrentTranscript();
++  if (transportDropAssistant) {
++    if (attemptMadeToolProgress) {
++      recoveryState.transportDropContinuations = 0;
++    }
++    const errorText = transportDropAssistant.errorMessage?.trim() || "unknown";
++    const errorCode = readTransportErrorCode(transportDropAssistant);
++    if (recoveryState.transportDropContinuations < MAX_TRANSPORT_DROP_CONTINUATIONS) {
++      runInput.laneController.throwIfAborted();
++      recoveryState.transportDropContinuations += 1;
++      const continuation = recoveryState.transportDropContinuations;
++      const delayMs = resolveTransportDropRetryDelayMs(continuation);
++      log.warn(
++        `provider transport dropped before the model reply was delivered; continuing from the transcript ` +
++          `attempt=${continuation}/${MAX_TRANSPORT_DROP_CONTINUATIONS} delayMs=${delayMs} ` +
++          `provider=${preparedRuntime.provider} model=${preparedRuntime.modelId} ` +
++          `error=${errorText} code=${errorCode ?? "none"} ` +
++          `runId=${params.runId} sessionId=${params.sessionId}`,
++      );
++      emitModelRetryEvent(params.runId, {
++        phase: ModelRetryPhase.Retrying,
++        attempt: continuation,
++        maxAttempts: MAX_TRANSPORT_DROP_CONTINUATIONS,
++        delayMs,
++        error: errorText,
++        ...(errorCode ? { errorCode } : {}),
++      });
++      try {
++        await sleep(delayMs, params.abortSignal);
++      } catch (error) {
++        runInput.laneController.throwIfAborted();
++        throw error;
++      }
++      runInput.laneController.throwIfAborted();
++      recoveryState.transportDropRetryPending = true;
++      sessionPromptState.markOwnedTranscriptRetry();
++      sessionPromptState.activateInternalPrompt(TRANSPORT_DROP_CONTINUATION_PROMPT);
++      return retry();
++    }
+     log.warn(
+-      `provider transport dropped after a settled tool batch; continuing from the transcript ` +
+-        `attempt=${recoveryState.transportDropContinuations}/${MAX_TRANSPORT_DROP_CONTINUATIONS} ` +
++      `provider transport drop continuations exhausted ` +
++        `attempts=${recoveryState.transportDropContinuations}/${MAX_TRANSPORT_DROP_CONTINUATIONS} ` +
+         `provider=${preparedRuntime.provider} model=${preparedRuntime.modelId} ` +
+-        `error=${settledTransportDropAssistant.errorMessage?.trim() ?? "unknown"} ` +
++        `error=${errorText} code=${errorCode ?? "none"} ` +
+         `runId=${params.runId} sessionId=${params.sessionId}`,
+     );
+-    return retry();
++    emitModelRetryEvent(params.runId, {
++      phase: ModelRetryPhase.Exhausted,
++      attempt: recoveryState.transportDropContinuations,
++      maxAttempts: MAX_TRANSPORT_DROP_CONTINUATIONS,
++      error: errorText,
++      ...(errorCode ? { errorCode } : {}),
++    });
+   }
+   // Settled-tool continuation authorizes only current-transcript overflow and
+   // transport-drop recovery. Every path below can replay or replace the original
+diff --git a/src/agents/embedded-agent-runner/run/context-recovery-state.ts b/src/agents/embedded-agent-runner/run/context-recovery-state.ts
+index da048cb..efec168 100644
+--- a/src/agents/embedded-agent-runner/run/context-recovery-state.ts
++++ b/src/agents/embedded-agent-runner/run/context-recovery-state.ts
+@@ -12,6 +12,8 @@ export function createEmbeddedRunContextRecoveryState() {
+     timeoutCompactionAttempts: 0,
+     toolResultTruncationAttempted: false,
+     transportDropContinuations: 0,
++    // LobsterAI: the next attempt resumes a transport drop.
++    transportDropRetryPending: false,
+     observeContextAccounting(event: EmbeddedContextAccountingEvent) {
+       // Producer order, not terminal usage copies, determines the current context.
+       const tokens = event.kind === "compaction" ? event.tokensAfter : event.contextTokens;

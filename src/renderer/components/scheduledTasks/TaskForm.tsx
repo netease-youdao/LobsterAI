@@ -686,7 +686,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
   };
 
   const inputClass =
-    'w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50';
+    'w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-neutral-500/40';
   const textareaInputClass =
     'w-full rounded-t-lg px-3 py-2 text-sm text-foreground focus:outline-none resize-none bg-transparent';
   const labelClass = 'block text-[13px] font-medium leading-5 text-foreground/85 mb-1';
@@ -742,7 +742,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
       }
     };
 
-    const fieldSelectClass = `rounded-md border border-border bg-surface px-1.5 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 flex-1 min-w-0`;
+    const fieldSelectClass = `rounded-md border border-border bg-surface px-1.5 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-neutral-500/40 flex-1 min-w-0`;
 
     return (
       <div className="space-y-2">
@@ -755,7 +755,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
             onClick={handleSwitchToBuilder}
             className={`px-2.5 py-1 text-xs font-medium transition-colors ${
               form.cronMode === 'builder'
-                ? 'bg-primary text-white'
+                ? 'bg-surface-raised text-foreground'
                 : 'bg-surface text-secondary hover:bg-surface-raised'
             }`}
           >
@@ -768,7 +768,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
             onClick={handleSwitchToRaw}
             className={`px-2.5 py-1 text-xs font-medium transition-colors ${
               form.cronMode === 'raw'
-                ? 'bg-primary text-white'
+                ? 'bg-surface-raised text-foreground'
                 : 'bg-surface text-secondary hover:bg-surface-raised'
             }`}
           >
@@ -1014,7 +1014,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
                   onClick={() =>
                     updateForm({ planType: 'cron', cronExpr: existingExpr, cronTz: existingTz })
                   }
-                  className="text-xs text-primary hover:text-primary/80 font-medium transition-colors shrink-0"
+                  className="text-xs text-foreground hover:text-foreground/80 font-medium transition-colors shrink-0"
                 >
                   {i18nService.t(
                     'scheduledTasksFormAdvancedEditAsCron' as Parameters<typeof i18nService.t>[0],
@@ -1562,7 +1562,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
                 {i18nService.t('scheduledTasksFormPayloadTextAgentHint')}
               </p>
             )}
-            <div className="relative rounded-lg border border-border bg-surface focus-within:ring-2 focus-within:ring-primary/50">
+            <div className="relative rounded-lg border border-border bg-surface focus-within:ring-2 focus-within:ring-neutral-500/40">
               <textarea
                 value={form.payloadText}
                 onChange={event => updateForm({ payloadText: event.target.value })}
@@ -1656,7 +1656,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
             type="button"
             onClick={() => void handleSubmit()}
             disabled={submitting}
-            className="px-4 py-1.5 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
+            className="px-4 py-1.5 text-[14px] font-semibold leading-5 bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting
               ? i18nService.t('saving')
@@ -1733,7 +1733,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
           <button
             type="button"
             onClick={() => setPayloadEditorOpen(false)}
-            className="px-4 py-1.5 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+            className="px-4 py-1.5 text-[14px] font-semibold leading-5 bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
           >
             {i18nService.t('scheduledTasksFormPayloadEditorDone')}
           </button>

@@ -1,4 +1,9 @@
 import {
+  MediaPreferenceMode,
+  MediaSelectionMode,
+  MediaSelectionSource,
+} from '../../../shared/media/defaultPolicy';
+import {
   SkinAssetSlot,
   SkinWorkflowKind,
   type SkinWorkflowKind as SkinWorkflowKindValue,
@@ -47,12 +52,38 @@ const buildSkinPackInstruction = (selection?: CoworkMediaSelection): string => {
   return lines.join('\n');
 };
 
+const MEDIA_GENERATION_POLICY_HEADING = 'Media Generation Policy';
+
+/**
+ * Static media policy for the managed AGENTS.md section. It used to travel in
+ * every desktop session's first message, billed as uncached input each time;
+ * in AGENTS.md it is part of the cached prefix and also covers IM sessions,
+ * which have the same media tools.
+ */
+export const MANAGED_MEDIA_GENERATION_POLICY_PROMPT = [
+  `## ${MEDIA_GENERATION_POLICY_HEADING}`,
+  '',
+  'When `lobsterai_image_generate` or `lobsterai_video_generate` is available:',
+  '- Availability by system default is NOT user authorization to generate or spend credits.',
+  '- Generate only when the user requests a new image/video or image editing as a deliverable. Do not add decorative media to an unrelated task.',
+  '- Use deterministic charts, Mermaid/SVG, document tools or application code for data charts, mind maps, diagrams, annotations and editable interfaces.',
+  '- Writing a video script/storyboard, analyzing an image/video, editing existing footage, and rendering a Remotion animation do not request generative video.',
+  '- For ambiguous requests, clarify the intended deliverable before invoking a paid media tool.',
+  '- Default image calls produce one image. Extra attempts (including retries) share the root turn budget and require confirmation. Do not bypass this with subagents or another tool.',
+  '- Every video submission requires explicit user confirmation, enforced by the native tool before it submits a paid request. Call the requested video tool to present that confirmation; do not ask a separate confirmation question. Cancellation is final for that attempt; do not retry automatically.',
+  '- Use the image/video model named in the session\'s "[LobsterAI media availability]" note when one is given.',
+].join('\n');
+
 export const buildMediaGenerationTurnInstruction = (
   selection?: CoworkMediaSelection,
   hasMediaSkillActive?: boolean,
   workflowKind?: SkinWorkflowKindValue,
 ): string => {
   if (workflowKind === SkinWorkflowKind.SkinPack) {
+    if (selection?.imagePreference === MediaPreferenceMode.Off
+      || (selection?.mode === MediaSelectionMode.None && selection.preferencesRevision === undefined)) {
+      return 'Image generation is disabled by the user. Do not generate skin assets or fall back to a different paid tool. Ask the user to enable image generation first.';
+    }
     return buildSkinPackInstruction(selection);
   }
 
@@ -66,6 +97,32 @@ export const buildMediaGenerationTurnInstruction = (
       ].join('\n');
     }
     return '';
+  }
+
+  const usesDefaults = selection.imageSource === MediaSelectionSource.Default
+    || selection.videoSource === MediaSelectionSource.Default;
+  if (usesDefaults) {
+    // The policy itself is static and lives in the cached AGENTS.md section;
+    // only the per-session model choice travels in this uncached message.
+    const rules = [
+      '[LobsterAI media availability]',
+      `System defaults make media generation available; they are NOT user authorization to generate or spend credits. Follow "${MEDIA_GENERATION_POLICY_HEADING}" in AGENTS.md.`,
+    ];
+    if (selection.imageModelId) {
+      rules.push(
+        `For an image generation request, use lobsterai_image_generate with model "${selection.imageModelId}".`,
+        `Image model source: ${selection.imageSource}. Do not silently switch to seedream or another image provider.`,
+      );
+    }
+    if (selection.videoModelId) {
+      rules.push(
+        `For a generative video request, use lobsterai_video_generate with model "${selection.videoModelId}".`,
+        `Video model source: ${selection.videoSource}. Do not silently switch to seedance or another video provider.`,
+      );
+    }
+    if (selection.imageDefault) rules.push(`Default image parameters: ${JSON.stringify(selection.imageDefault.params)}.`);
+    if (selection.videoDefault) rules.push(`Default video parameters: ${JSON.stringify(selection.videoDefault.params)}.`);
+    return rules.join('\n');
   }
 
   const lines = [

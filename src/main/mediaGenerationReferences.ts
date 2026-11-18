@@ -22,6 +22,7 @@ export const MediaAttachmentRole = {
 export type MediaAttachmentRole = typeof MediaAttachmentRole[keyof typeof MediaAttachmentRole];
 
 export interface MediaAttachmentRefMain {
+  imageEdit?: import('../shared/imageEditing/types').ImageEditRequest;
   token: string;
   mediaType: MediaAttachmentKind;
   index: number;

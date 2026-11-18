@@ -180,11 +180,22 @@ export function collectSessionArtifacts(
   return detected;
 }
 
+async function statExistingFile(filePath: string): Promise<{ mtimeMs?: number } | null> {
+  try {
+    const stat = await window.electron.dialog.statFile(filePath);
+    return stat?.success && stat.isFile ? stat : null;
+  } catch {
+    // File unreadable or missing.
+    return null;
+  }
+}
+
 /**
  * Resolve a detected file artifact against disk: verify the file exists and
  * hydrate its content, returning the display-ready artifact or null when the
  * file is missing/unreadable. Videos are returned without reading (players
- * stream from the file path directly).
+ * stream from the file path directly). Images and HTML are only checked for
+ * existence: they render from the file itself, so their content stays empty.
  */
 export async function loadDetectedFileArtifact(
   artifact: Artifact,
@@ -198,21 +209,21 @@ export async function loadDetectedFileArtifact(
   }
 
   if (artifact.type === ArtifactTypeValue.Html) {
-    try {
-      const stat = await window.electron.dialog.statFile(absPath);
-      if (stat?.success && stat.isFile) {
-        return { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() };
-      }
-    } catch {
-      // File unreadable or missing.
-    }
-    return null;
+    const stat = await statExistingFile(absPath);
+    return stat ? { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() } : null;
+  }
+
+  // The file's mtime versions the image URL: reopening a task reuses the decoded
+  // image, while a file changed on disk is fetched again.
+  if (artifact.type === ArtifactTypeValue.Image) {
+    const stat = await statExistingFile(absPath);
+    return stat ? { ...artifact, content: '', filePath: absPath, contentVersion: stat.mtimeMs } : null;
   }
 
   try {
     const result = await window.electron.dialog.readFileAsDataUrl(absPath);
     if (result?.success && result.dataUrl) {
-      const isTextType = artifact.type !== ArtifactTypeValue.Image && artifact.type !== ArtifactTypeValue.Document;
+      const isTextType = artifact.type !== ArtifactTypeValue.Document;
       let content = result.dataUrl;
       if (isTextType) {
         try {

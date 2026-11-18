@@ -70,6 +70,17 @@ resolve_http_node_runtime() {
   return 1
 }
 
+# Not via `env`: the one on PATH may not be coreutils. uv's installer adds
+# ~/.local/bin/env, which ignores its arguments and silently runs nothing.
+run_http_node() {
+  (
+    if [ ${#HTTP_NODE_ENV_PREFIX[@]} -gt 0 ]; then
+      export "${HTTP_NODE_ENV_PREFIX[@]}"
+    fi
+    exec "$HTTP_NODE_CMD" "${HTTP_NODE_ARGS[@]}" "$@"
+  )
+}
+
 http_request() {
   local METHOD="$1"
   local URL="$2"
@@ -112,7 +123,7 @@ http_request() {
     return 127
   fi
 
-  env "${HTTP_NODE_ENV_PREFIX[@]}" "$HTTP_NODE_CMD" "${HTTP_NODE_ARGS[@]}" - "$METHOD" "$URL" "$BODY" <<'NODE'
+  run_http_node - "$METHOD" "$URL" "$BODY" <<'NODE'
 const [method, url, body] = process.argv.slice(2);
 
 (async () => {
@@ -154,7 +165,7 @@ build_search_payload() {
   local ENGINE="$4"
 
   if resolve_http_node_runtime; then
-    env "${HTTP_NODE_ENV_PREFIX[@]}" "$HTTP_NODE_CMD" "${HTTP_NODE_ARGS[@]}" - "$CONNECTION_ID" "$QUERY" "$MAX_RESULTS" "$ENGINE" <<'NODE'
+    run_http_node - "$CONNECTION_ID" "$QUERY" "$MAX_RESULTS" "$ENGINE" <<'NODE'
 const [connectionId, query, maxResultsRaw, engineRaw] = process.argv.slice(2);
 const maxResults = Number.parseInt(maxResultsRaw, 10);
 const engine = engineRaw || 'auto';

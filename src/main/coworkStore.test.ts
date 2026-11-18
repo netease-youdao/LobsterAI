@@ -22,14 +22,20 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
+import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import {
+  COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
   COWORK_SEARCH_MESSAGE_PAGE_MAX_CONTENT_BYTES,
   CoworkForkMode,
 } from '../shared/cowork/constants';
+import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
+import { ModelPresetId } from '../shared/modelPresets/constants';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
 import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +61,9 @@ function setupDb(): void {
       cwd TEXT NOT NULL,
       system_prompt TEXT NOT NULL DEFAULT '',
       model_override TEXT NOT NULL DEFAULT '',
+      model_preset_id TEXT,
+      context_window_override INTEGER,
+      context_window_owner_key TEXT,
       thinking_level TEXT NOT NULL DEFAULT '',
       execution_mode TEXT NOT NULL DEFAULT 'local',
       active_skill_ids TEXT,
@@ -128,9 +137,11 @@ function setupDb(): void {
       system_prompt TEXT NOT NULL DEFAULT '',
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
+      model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}',
       thinking_level TEXT NOT NULL DEFAULT '',
       working_directory TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
+      icon_customized INTEGER,
       skill_ids TEXT NOT NULL DEFAULT '[]',
       subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
@@ -203,6 +214,27 @@ function insertSession(
   ).run(id, title, pinned, pinOrder, agentId, now, now);
 }
 
+test('finds the persisted origin trace without choosing the latest turn or a fork copy', () => {
+  insertSession('origin');
+  insertSession('fork');
+  const traceId = 'a'.repeat(32);
+  const metadata = JSON.stringify({ llmTrace: {
+    traceId, startedAt: 1000,
+    usageContext: { sessionId: 'origin', ownerAccountKey: 'personal:user-a', serverBaseUrl: 'https://server.example' },
+  } });
+  insertMessage('original-message', 'origin', 'user', 'original', metadata, 1);
+  insertMessage('next-message', 'origin', 'user', 'next', JSON.stringify({ llmTrace: { traceId: 'b'.repeat(32), startedAt: 2000 } }), 2);
+  insertMessage('broken-message', 'origin', 'user', 'broken', '{broken', 3);
+  insertMessage('fork-copy', 'fork', 'user', 'original', metadata, 1);
+
+  expect(store.findUserMessageByTrace(traceId)).toMatchObject({ sessionId: 'origin', message: { id: 'original-message' } });
+  expect(store.findUserMessageByTrace(traceId, 'origin')?.message.id).toBe('original-message');
+  expect(store.findUserMessageByTrace(traceId, 'fork')).toBeNull();
+  expect(store.findUserMessageByTrace('invalid')).toBeNull();
+  insertMessage('ambiguous-message', 'origin', 'user', 'duplicate', metadata, 4);
+  expect(store.findUserMessageByTrace(traceId)).toBeNull();
+});
+
 /** Insert a message row directly, bypassing CoworkStore.addMessage. */
 function insertMessage(
   id: string,
@@ -252,6 +284,119 @@ test('getSession returns all messages when one has corrupt metadata', () => {
   // Null metadata → undefined
   const nullMsg = session!.messages.find((m) => m.id === 'msg-null')!;
   expect(nullMsg.metadata).toBeUndefined();
+});
+
+test('paged metadata: getSession opens a long session with corrupt metadata in the latest page', () => {
+  const sid = 'paged-corrupt-session';
+  const corruptId = 'paged-corrupt-message';
+  insertSession(sid);
+  insertMessage('earlier-user', sid, 'user', 'earlier message', '{}', 1, 1000);
+  for (let index = 1; index <= COWORK_MESSAGE_PAGE_SIZE; index++) {
+    const corrupt = index === COWORK_MESSAGE_PAGE_SIZE;
+    insertMessage(
+      corrupt ? corruptId : `page-message-${index}`,
+      sid,
+      corrupt ? 'tool_use' : 'assistant',
+      corrupt ? 'preserved tool content' : `reply ${index}`,
+      corrupt ? '{broken' : JSON.stringify({ index }),
+      index + 1,
+      1000 + index,
+    );
+  }
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const session = store.getSession(sid);
+    expect(session).not.toBeNull();
+    expect(session).toMatchObject({ messagesOffset: 1, totalMessages: COWORK_MESSAGE_PAGE_SIZE + 1 });
+    expect(session!.messages).toHaveLength(COWORK_MESSAGE_PAGE_SIZE);
+    expect(session!.messages[0]).toMatchObject({ id: 'page-message-1', metadata: { index: 1 } });
+    expect(session!.messages.at(-1)).toEqual({
+      id: corruptId,
+      type: 'tool_use',
+      content: 'preserved tool content',
+      timestamp: 1000 + COWORK_MESSAGE_PAGE_SIZE,
+      metadata: undefined,
+    });
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message ${corruptId} in session ${sid}, discarding metadata`,
+    );
+    expect(db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get(corruptId))
+      .toEqual({ metadata: '{broken' });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('paged metadata: direct paging preserves order and content when one selected row is corrupt', () => {
+  const sid = 'paged-mixed-session';
+  const corruptId = 'selected-corrupt';
+  insertSession(sid);
+  insertMessage('excluded-corrupt', sid, 'tool_use', 'outside this page', '{broken', 1, 1000);
+  insertMessage('selected-valid', sid, 'user', 'valid content', '{"keep":true}', 2, 2000);
+  insertMessage(corruptId, sid, 'tool_use', 'corrupt metadata content', '{broken', 3, 3000);
+  insertMessage('selected-null', sid, 'assistant', 'null metadata content', null, 4, 4000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(store.getPagedSessionMessages(sid, 3, 1)).toEqual([
+      { id: 'selected-valid', type: 'user', content: 'valid content', timestamp: 2000, metadata: { keep: true } },
+      { id: corruptId, type: 'tool_use', content: 'corrupt metadata content', timestamp: 3000, metadata: undefined },
+      { id: 'selected-null', type: 'assistant', content: 'null metadata content', timestamp: 4000, metadata: undefined },
+    ]);
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message ${corruptId} in session ${sid}, discarding metadata`,
+    );
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('paged metadata: valid and null metadata and empty pages remain unchanged without warnings', () => {
+  const sid = 'paged-valid-session';
+  insertSession(sid);
+  insertMessage('valid', sid, 'user', 'valid content', '{"nested":{"keep":true}}', 1, 1000);
+  insertMessage('null', sid, 'assistant', 'null content', null, 2, 2000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(store.getPagedSessionMessages(sid, 2, 0)).toEqual([
+      { id: 'valid', type: 'user', content: 'valid content', timestamp: 1000, metadata: { nested: { keep: true } } },
+      { id: 'null', type: 'assistant', content: 'null content', timestamp: 2000, metadata: undefined },
+    ]);
+    expect(store.getPagedSessionMessages(sid, 2, 2)).toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test.each([
+  { name: 'getRecentConversationMessages', read: (id: string) => store.getRecentConversationMessages(id, 3) },
+  { name: 'getAllConversationMessages', read: (id: string) => store.getAllConversationMessages(id) },
+])('$name preserves messages with corrupt stored metadata', ({ read }) => {
+  const sid = 'conversation-metadata';
+  insertSession(sid);
+  insertMessage('excluded-tool', sid, 'tool_use', 'excluded tool', '{broken', 1, 1000);
+  insertMessage('valid', sid, 'user', 'valid content', '{"nested":{"keep":true}}', 2, 4000);
+  insertMessage('corrupt', sid, 'assistant', 'preserved content', '{broken', 3, 2000);
+  insertMessage('null', sid, 'assistant', 'null metadata', null, 4, 3000);
+
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(read(sid)).toEqual([
+      { id: 'valid', type: 'user', content: 'valid content', timestamp: 4000, metadata: { nested: { keep: true } } },
+      { id: 'corrupt', type: 'assistant', content: 'preserved content', timestamp: 2000, metadata: undefined },
+      { id: 'null', type: 'assistant', content: 'null metadata', timestamp: 3000, metadata: undefined },
+    ]);
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[CoworkStore] corrupt metadata detected for message corrupt in session ${sid}, discarding metadata`,
+    );
+    expect(db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get('corrupt'))
+      .toEqual({ metadata: '{broken' });
+  } finally {
+    warnSpy.mockRestore();
+  }
 });
 
 test('getSessionSearchMessagePage keeps absolute mixed-message offsets without returning metadata or tool content', () => {
@@ -332,6 +477,72 @@ test('getSessionSearchMessagePage treats corrupt assistant metadata as non-think
     timestamp: expect.any(Number),
     absoluteMessageIndex: 0,
   }]);
+});
+
+test('getSessionMessageRailIndex numbers visible messages by full message order', () => {
+  const sid = 'rail-index-session';
+  insertSession(sid);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_order
+    ON cowork_messages(session_id, COALESCE(sequence, created_at), created_at)`);
+
+  insertMessage('user-0', sid, 'user', 'first question', null, 1);
+  insertMessage('tool-1', sid, 'tool_use', 'tool call', JSON.stringify({ large: 'x'.repeat(100_000) }), 2);
+  insertMessage('thinking-2', sid, 'assistant', 'private chain of thought', '{"isThinking":true}', 3);
+  insertMessage('assistant-3', sid, 'assistant', 'visible answer', '{"isThinking":false}', 4);
+  insertMessage('corrupt-4', sid, 'assistant', 'answer with corrupt metadata', '{broken', 5);
+  insertMessage('blank-5', sid, 'assistant', '   ', null, 6);
+  insertMessage('user-6', sid, 'user', 'follow up', null, 7);
+
+  expect(store.getSessionMessageRailIndex(sid).map(item => [item.messageId, item.messageOffset, item.sequence]))
+    .toEqual([['user-0', 0, 1], ['assistant-3', 3, 4], ['corrupt-4', 4, 5], ['user-6', 6, 7]]);
+  expect(store.getSessionMessageRailIndex(sid)[1]).toMatchObject({
+    type: 'assistant',
+    preview: 'visible answer',
+    contentLen: 'visible answer'.length,
+  });
+});
+
+test('findMediaTaskMessages finds the call, its result and status checks of one task', () => {
+  const sid = 'media-task-session';
+  insertSession(sid);
+  insertSession('other-session');
+  insertMessage('generate-call', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-1', toolInput: { prompt: 'cat' } }), 1);
+  insertMessage('generate-result', sid, 'tool_result', '', JSON.stringify({ toolUseId: 'call-1', toolResultDetails: { taskId: '133' } }), 2);
+  insertMessage('status-call', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-2', toolInput: { action: 'status', taskId: 133 } }), 3);
+  insertMessage('status-card', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-3', mediaStatusDetails: { taskId: '133' } }), 4);
+  insertMessage('similar-task', sid, 'tool_use', '', JSON.stringify({ toolUseId: 'call-4', toolInput: { taskId: '1334' } }), 5);
+  insertMessage('corrupt', sid, 'tool_result', '', '{"toolUseId":"call-1"', 6);
+  insertMessage('assistant', sid, 'assistant', 'call-1 133', JSON.stringify({ toolUseId: 'call-1' }), 7);
+  insertMessage('other-session-call', 'other-session', 'tool_use', '', JSON.stringify({ toolUseId: 'call-1' }), 1);
+
+  const found = store.findMediaTaskMessages(sid, 'call-1', '133');
+
+  expect(found.map(row => row.id).sort()).toEqual(['generate-call', 'generate-result', 'status-call', 'status-card']);
+  expect(found.find(row => row.id === 'status-call')?.metadata.toolUseId).toBe('call-2');
+});
+
+test('message writes keep generated media as file references', () => {
+  const sid = 'media-metadata-session';
+  insertSession(sid);
+  const dataUrl = `data:image/png;base64,${'A'.repeat(200_000)}`;
+  const asset = { type: 'image', url: dataUrl, originalUrl: dataUrl, filePath: '/tmp/generated.png' };
+
+  const added = store.addMessage(sid, {
+    type: 'tool_result',
+    content: 'Task ID: 1',
+    metadata: { toolResultDetails: { mediaType: 'image', resultUrls: [dataUrl], assets: [asset] } },
+  });
+  store.updateMessage(sid, added.id, {
+    metadata: { ...added.metadata, mediaStatusDetails: { mediaType: 'image', resultUrls: [dataUrl], assets: [asset] } },
+  });
+
+  const stored = db.prepare('SELECT metadata FROM cowork_messages WHERE id = ?').get(added.id) as { metadata: string };
+  expect(stored.metadata).not.toContain('base64');
+  expect(stored.metadata.length).toBeLessThan(2_000);
+  expect(JSON.stringify(added.metadata)).not.toContain('base64');
+  expect(store.getSession(sid)?.messages[0].metadata?.toolResultDetails).toMatchObject({
+    assets: [{ filePath: '/tmp/generated.png', url: expect.stringMatching(/^file:/) }],
+  });
 });
 
 test('getSessionSearchMessagePage bounds user and assistant content while preserving an over-limit sentinel', () => {
@@ -440,6 +651,69 @@ test('getSessionSearchMessagePage keyset cursor preserves ROWID order for legacy
     ['tie-4', 4],
   ]);
   expect(thirdPage.nextOffset).toBe(5);
+});
+
+test('listFilteredSessions combines status, session ids and time across all agents', () => {
+  insertSession('running-old', 'main', 'Running old', 1000);
+  insertSession('running-new', 'writer', 'Running new', 3000);
+  insertSession('failed', 'main', 'Failed', 2000);
+  insertSession('done', 'main', 'Done', 4000);
+  db.prepare("UPDATE cowork_sessions SET status = 'running' WHERE id IN ('running-old', 'running-new')").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'error' WHERE id = 'failed'").run();
+  db.prepare("UPDATE cowork_sessions SET status = 'completed' WHERE id = 'done'").run();
+
+  const ids = (sessions: { id: string }[]) => sessions.map(session => session.id);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'] }))).toEqual(['running-new', 'running-old']);
+  expect(ids(store.listFilteredSessions({ statuses: ['running'], updatedSince: 2000 }))).toEqual(['running-new']);
+  expect(ids(store.listFilteredSessions({ sessionIds: ['done', 'failed', 'missing'] }))).toEqual(['done', 'failed']);
+  expect(ids(store.listFilteredSessions({ updatedSince: 2500 }))).toEqual(['done', 'running-new']);
+  expect(ids(store.listFilteredSessions({ limit: 1 }))).toEqual(['done']);
+  expect(store.listFilteredSessions({ statuses: [] })).toEqual([]);
+  expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
+});
+
+test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
+  insertSession('older', 'main', 'Ski poster', 1000);
+  insertSession('newer', 'main', 'Jacket edit', 2000);
+  insertSession('thinking-only', 'main', 'Thinking only', 3000);
+  insertSession('tool-only', 'main', 'Tool only', 4000);
+  insertSession('other-agent', 'writer', 'Other agent', 5000);
+
+  insertMessage('older-user', 'older', 'user', 'Remove the zipper on the left arm', null, 1, 100);
+  insertMessage('newer-user', 'newer', 'user', 'Keep the zipper', null, 1, 200);
+  insertMessage('newer-reply', 'newer', 'assistant', 'Done: the ZIPPER now matches.', '{"isFinal":true}', 2, 300);
+  insertMessage('newer-unrelated', 'newer', 'assistant', 'Anything else?', null, 3, 400);
+  insertMessage('thinking', 'thinking-only', 'assistant', 'zipper reasoning', '{"isThinking":true}', 1, 500);
+  insertMessage('tool', 'tool-only', 'tool_result', 'zipper.png', null, 1, 600);
+  insertMessage('other', 'other-agent', 'user', 'zipper on another agent', '{broken', 1, 700);
+
+  const results = store.searchSessionContent({ query: 'zipper' });
+  expect(results.map(result => result.session.id)).toEqual(['other-agent', 'newer', 'older']);
+
+  const newer = results.find(result => result.session.id === 'newer');
+  expect(newer?.match).toMatchObject({
+    messageId: 'newer-reply',
+    messageType: 'assistant',
+    matchCount: 2,
+    matchedAt: 300,
+  });
+  const snippet = newer?.match.snippet ?? '';
+  const highlightStart = newer?.match.highlightStart ?? -1;
+  expect(snippet.slice(highlightStart, highlightStart + 6)).toBe('ZIPPER');
+
+  expect(store.searchSessionContent({ query: 'zipper', agentId: 'writer' }).map(result => result.session.id))
+    .toEqual(['other-agent']);
+  expect(store.searchSessionContent({ query: 'zipper', limit: 1 })).toHaveLength(1);
+  expect(store.searchSessionContent({ query: '   ' })).toEqual([]);
+});
+
+test('searchSessionContent treats LIKE wildcards in the query literally', () => {
+  insertSession('percent', 'main', 'Percent', 1000);
+  insertSession('plain', 'main', 'Plain', 2000);
+  insertMessage('percent-msg', 'percent', 'user', 'Discount is 50% off', null, 1, 100);
+  insertMessage('plain-msg', 'plain', 'user', 'Discount is 500 off', null, 1, 200);
+
+  expect(store.searchSessionContent({ query: '50%' }).map(result => result.session.id)).toEqual(['percent']);
 });
 
 test('searchSessions finds matching titles beyond the recent page', () => {
@@ -671,6 +945,29 @@ test('deleteSession removes the continuity capsule row', () => {
   expect(rows.count).toBe(0);
 });
 
+test('listChannelSessionModelOverrides returns IM sessions pinned to their own model', () => {
+  const sessionKey = 'agent:main:moltbot-popo:bot:direct:user@example.com';
+  const im = store.createSession('IM', '/tmp', '', 'local', [], 'main', 'deepseek/deepseek-v4-flash');
+  const imAgentModel = store.createSession('IM agent model', '/tmp');
+  const unmapped = store.createSession('IM without key', '/tmp', '', 'local', [], 'main', 'deepseek/deepseek-v4-flash');
+  store.createSession('Desktop', '/tmp', '', 'local', [], 'main', 'deepseek/deepseek-v4-flash');
+  const insertMapping = db.prepare(
+    `INSERT INTO im_session_mappings (
+      im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at
+    ) VALUES (?, 'popo', ?, 'main', ?, 1, 1)`,
+  );
+  insertMapping.run('direct:user', im.id, sessionKey);
+  insertMapping.run('direct:other', imAgentModel.id, 'agent:main:moltbot-popo:bot:direct:other');
+  insertMapping.run('direct:legacy', unmapped.id, null);
+
+  expect(store.listChannelSessionModelOverrides()).toEqual([
+    { sessionId: im.id, modelOverride: 'deepseek/deepseek-v4-flash', sessionKey },
+  ]);
+
+  store.updateSession(im.id, { modelOverride: '' });
+  expect(store.listChannelSessionModelOverrides()).toEqual([]);
+});
+
 test('forkSession copies the source continuity capsule to the forked session', () => {
   const source = store.createSession('Source', '/tmp');
   store.upsertContinuityCapsule(source.id, {
@@ -832,6 +1129,68 @@ test('getTurnStartTimestampAt uses the earliest time when a channel user message
   expect(store.getTurnStartTimestampAt(sid, 3)).toBe(2000);
   // Without an earlier user message the turn starts at its first message.
   expect(store.getTurnStartTimestampAt(sid, 0)).toBe(500);
+});
+
+test.each([null, ModelPresetId.Balanced, ModelPresetId.Ultimate])(
+  'getSession retains paged turn usage after a model-change notice (%s)',
+  (presetId) => {
+    const sid = 'sess-model-change-usage';
+    insertSession(sid);
+    const turnUsage = buildCoworkTurnUsage({
+      requestCount: 1,
+      failedRequestCount: 0,
+      models: ['deepseek-v4.1-flash'],
+      creditsUsed: 1.25,
+      uncachedInputTokens: 100,
+      outputTokens: 50,
+    }, { traceId: '4bf92f3577b34da6a3ce929d0e0e4736', now: 40_000 });
+    expect(turnUsage?.status).toBe(CoworkTurnUsageStatus.Settled);
+    insertMessage('user-1', sid, 'user', 'long task', JSON.stringify({ turnUsage }), 1, 1000);
+    for (let index = 2; index <= COWORK_MESSAGE_PAGE_SIZE; index += 1) {
+      insertMessage(`reply-${index}`, sid, 'assistant', 'reply', null, index, index * 1000);
+    }
+    expect(store.getSession(sid)?.messages[0]?.metadata?.turnUsage).toEqual(turnUsage);
+
+    store.updateSession(sid, { modelOverride: 'next-model', modelPresetId: presetId });
+    store.addMessage(sid, {
+      type: 'system',
+      content: '',
+      metadata: {
+        kind: CoworkSystemMessageKind.ModelChanged,
+        modelChange: { previousModelRef: 'deepseek-v4.1-flash', nextModelRef: 'next-model', nextPresetId: presetId },
+      },
+    });
+
+    // The notice pushes the user message, which owns the usage, outside the page.
+    const session = store.getSession(sid);
+    expect(session?.messagesOffset).toBe(1);
+    expect(session?.messages).toHaveLength(COWORK_MESSAGE_PAGE_SIZE);
+    expect(session?.messages.some(message => message.id === 'user-1')).toBe(false);
+    expect(session?.leadingTurnUsage).toEqual({ userMessageId: 'user-1', turnUsage });
+    expect(session?.leadingTurnStartTimestamp).toBe(1000);
+    expect(store.getMessage(sid, 'user-1')?.metadata?.turnUsage).toEqual(turnUsage);
+
+    // Once the user message is loaded, usage comes from its metadata directly.
+    expect(store.getSession(sid, COWORK_MESSAGE_PAGE_SIZE + 1)?.leadingTurnUsage).toBeNull();
+  },
+);
+
+test('getSession does not inherit usage when the page starts with a new user message', () => {
+  const sid = 'sess-usage-new-turn';
+  insertSession(sid);
+  insertMessage('user-1', sid, 'user', 'first task', null, 1, 1000);
+  insertMessage('assistant-1', sid, 'assistant', 'first reply', null, 2, 2000);
+  insertMessage('user-2', sid, 'user', 'next task', null, 3, 3000);
+  insertMessage('assistant-2', sid, 'assistant', 'next reply', null, 4, 4000);
+
+  const session = store.getSession(sid, 2);
+  expect(session?.messagesOffset).toBe(2);
+  expect(session?.leadingTurnUsage).toBeNull();
+  expect(session?.leadingTurnStartTimestamp).toBe(3000);
+
+  const contextSpy = vi.spyOn(store, 'getTurnContextAt');
+  expect(store.getSession(sid, 0)?.messages).toEqual([]);
+  expect(contextSpy).not.toHaveBeenCalled();
 });
 
 test('getSession returns all messages when ALL have corrupt metadata', () => {
@@ -1070,7 +1429,10 @@ test('forkSession copies stable history and records fork metadata', () => {
   expect(fork.messages.map((message) => message.content)).toEqual(['start here', 'finished answer']);
   expect(fork.messages.every((message) => !['msg-user', 'msg-assistant'].includes(message.id))).toBe(true);
   expect(fork.messages[0].metadata).toEqual({ keep: true });
-  expect(fork.messages[1].metadata).toEqual({ keep: 'yes' });
+  expect(fork.messages[1].metadata).toEqual({
+    keep: 'yes',
+    toolUseId: deriveForkToolUseId(fork.id, 'tool-done'),
+  });
 
   const forkRows = db
     .prepare('SELECT content, sequence FROM cowork_messages WHERE session_id = ? ORDER BY sequence ASC')
@@ -1079,6 +1441,27 @@ test('forkSession copies stable history and records fork metadata', () => {
     { content: 'start here', sequence: 1 },
     { content: 'finished answer', sequence: 3 },
   ]);
+});
+
+test('forkSession keeps parallel tool results paired with their calls', () => {
+  const sid = 'sess-fork-parallel-tools';
+  insertSession(sid);
+  insertMessage('msg-user-parallel', sid, 'user', 'write three files', null, 1, 1000);
+  insertMessage('use-1', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_00_a' }), 2, 2000);
+  insertMessage('use-2', sid, 'tool_use', 'Using tool: write', JSON.stringify({ toolName: 'write', toolUseId: 'call_01_b' }), 3, 2001);
+  insertMessage('result-2', sid, 'tool_result', 'wrote 2', JSON.stringify({ toolResult: 'wrote 2', toolUseId: 'call_01_b' }), 4, 2002);
+  insertMessage('result-1', sid, 'tool_result', 'wrote 1', JSON.stringify({ toolResult: 'wrote 1', toolUseId: 'call_00_a' }), 5, 2003);
+  insertMessage('msg-done-parallel', sid, 'assistant', 'done', null, 6, 3000);
+
+  const fork = store.forkSession({ sourceSessionId: sid });
+  const toolUseIdByContent = new Map(fork.messages.map(message => [message.content, message.metadata?.toolUseId]));
+
+  expect(toolUseIdByContent.get('wrote 1')).toBe(deriveForkToolUseId(fork.id, 'call_00_a'));
+  expect(toolUseIdByContent.get('wrote 2')).toBe(deriveForkToolUseId(fork.id, 'call_01_b'));
+  const [firstUse, secondUse] = fork.messages.filter(message => message.type === 'tool_use');
+  expect(firstUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 1'));
+  expect(secondUse.metadata?.toolUseId).toBe(toolUseIdByContent.get('wrote 2'));
+  expect(fork.messages.some(message => message.metadata?.toolUseId === 'call_00_a')).toBe(false);
 });
 
 test('forkSession keeps the selected plan message when its streaming flag is stale', () => {
@@ -1275,6 +1658,18 @@ test('agent CRUD stores model preferences and working directory independently', 
   expect(store.getAgent(agent.id)?.workingDirectory).toBe('/tmp/docs-next');
 });
 
+test('inherited expert bindings persist independently and startup backfill does not freeze an empty inheritance', () => {
+  const expert = store.createAgent({ name: 'Inherited expert', source: AgentSource.Preset, modelSelectionMode: AgentModelSelectionMode.Inherit });
+  const custom = store.createAgent({ name: 'Custom agent' });
+  expect(store.backfillEmptyAgentModels('custom/fallback')).toBe(1);
+  expect(store.getAgent(expert.id)).toMatchObject({ model: '', modelSelectionMode: AgentModelSelectionMode.Inherit });
+  expect(store.getAgent(custom.id)).toMatchObject({ model: 'custom/fallback', modelSelectionMode: AgentModelSelectionMode.Explicit });
+  store.updateAgent(expert.id, { model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High });
+  expect(store.listAgents().find(agent => agent.id === expert.id)).toMatchObject({
+    model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High, modelSelectionMode: AgentModelSelectionMode.Inherit,
+  });
+});
+
 test('deleteAgent removes its task history before an agent with the same name is recreated', () => {
   const agent = store.createAgent({ name: 'Docs Agent' });
   const session = store.createSession('Old Docs Task', '/tmp/docs-project', '', 'local', [], agent.id);
@@ -1331,6 +1726,41 @@ test('agent CRUD normalizes legacy icons to the default svg avatar', () => {
 
   const updated = store.updateAgent(designedIconAgent.id, { icon: 'legacy-icon' });
   expect(updated?.icon).toBe(DefaultAgentAvatarIcon);
+});
+
+test('preset avatar refresh respects persisted user ownership and leaves other settings unchanged', () => {
+  const agent = store.createAgent({ id: 'office-expert', name: 'My expert', source: AgentSource.Preset,
+    presetId: 'office-expert', systemPrompt: 'Custom instructions' });
+  expect(agent.iconCustomized).toBe(false);
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-office.webp';
+  expect(store.updatePresetAgentAvatar(agent.id, icon)).toMatchObject({
+    icon, iconCustomized: false, name: 'My expert', systemPrompt: 'Custom instructions',
+  });
+  expect(store.updateAgent(agent.id, { name: 'Renamed', icon })?.iconCustomized).toBe(false);
+  const chosen = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Heart });
+  expect(store.updateAgent(agent.id, { icon: chosen })?.iconCustomized).toBe(true);
+  expect(store.updatePresetAgentAvatar(agent.id, icon)).toMatchObject({ icon: chosen, iconCustomized: true });
+  store.updateAgent(agent.id, { icon: DefaultAgentAvatarIcon });
+  expect(store.updatePresetAgentAvatar(agent.id, icon)?.icon).toBe(DefaultAgentAvatarIcon);
+});
+
+test('legacy defaults migrate conservatively and main/custom agents never receive catalog avatars', () => {
+  const original = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Data });
+  const agent = store.createAgent({ id: 'renamed-preset', name: 'Old expert', source: AgentSource.Preset,
+    presetId: 'data-advisor', icon: original });
+  db.prepare('UPDATE agents SET icon_customized = NULL WHERE id = ?').run(agent.id);
+  expect(store.getAgent(agent.id)?.iconCustomized).toBe(false);
+  const edited = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Creation });
+  db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(edited, agent.id);
+  expect(store.getAgent(agent.id)?.iconCustomized).toBe(true);
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-research.webp';
+  expect(store.updatePresetAgentAvatar(agent.id, icon)?.icon).toBe(edited);
+  for (const protectedAgent of [
+    store.createAgent({ id: AgentId.Main, name: 'Main', source: AgentSource.Preset }),
+    store.createAgent({ id: 'user-agent', name: 'User agent', icon: original }),
+  ]) {
+    expect(store.updatePresetAgentAvatar(protectedAgent.id, icon)?.icon).toBe(protectedAgent.icon);
+  }
 });
 
 test('agent pinning stores first-pinned-first order', () => {
@@ -1541,6 +1971,42 @@ test('subagent upsert notifies creation and actual repeated running timestamp wr
   store.upsertSubagentChildSession(options);
   expect(listener).toHaveBeenCalledTimes(2);
   expect(listener.mock.calls.map(call => call[0].changedSessionIds)).toEqual([[options.id], [options.id]]);
+});
+
+test('subagent upsert seeds the spawn task as the first user message once', () => {
+  insertSession('parent-task');
+  const options = {
+    id: 'child-task',
+    parentSessionId: 'parent-task',
+    childSessionKey: 'agent:blog:subagent:child-task',
+    title: 'Publish',
+    agentId: 'main',
+    task: '  Publish the translated article.\n',
+    createdAt: 1234,
+  };
+  store.upsertSubagentChildSession(options);
+  store.addMessage(options.id, { type: 'system', content: 'Subagent failed.' }, 2000);
+  store.upsertSubagentChildSession({ ...options, status: 'error' });
+
+  expect(store.getSession(options.id)?.messages.map(({ type, content, timestamp }) => ({ type, content, timestamp })))
+    .toEqual([
+      { type: 'user', content: 'Publish the translated article.', timestamp: 1234 },
+      { type: 'system', content: 'Subagent failed.', timestamp: 2000 },
+    ]);
+});
+
+test('subagent upsert without a task leaves the child transcript empty', () => {
+  insertSession('parent-no-task');
+  store.upsertSubagentChildSession({
+    id: 'child-no-task',
+    parentSessionId: 'parent-no-task',
+    childSessionKey: 'agent:blog:subagent:child-no-task',
+    title: 'Child',
+    agentId: 'main',
+    task: '   ',
+  });
+
+  expect(store.getSession('child-no-task')?.messages).toEqual([]);
 });
 
 test('outer session transaction publishes final values once and drops rollback or reverted writes', () => {

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, nativeImage, Tray } from 'electron';
 import path from 'path';
 
+import { AppIpcChannel } from '../shared/app/constants';
 import { APP_NAME } from './appConstants';
 import { t } from './i18n';
 
@@ -9,6 +10,13 @@ let contextMenu: Menu | null = null;
 let clickHandler: (() => void) | null = null;
 let rightClickHandler: (() => void) | null = null;
 let trayReminder: TrayReminderState = { count: 0 };
+let companionActions: TrayCompanionActions | undefined;
+
+interface TrayCompanionActions {
+  isEnabled(): boolean;
+  toggleEnabled(): void;
+  openPanel(): void;
+}
 
 export interface TrayReminderState {
   count: number;
@@ -84,6 +92,16 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
       },
     },
     { type: 'separator' },
+    ...(companionActions ? [
+      { label: t('desktopCompanionOpenPanel'), click: () => companionActions?.openPanel() },
+      {
+        label: t('desktopCompanionEnable'),
+        type: 'checkbox' as const,
+        checked: companionActions.isEnabled(),
+        click: () => companionActions?.toggleEnabled(),
+      },
+      { type: 'separator' as const },
+    ] : []),
     {
       label: labels.settings,
       click: () => {
@@ -91,7 +109,7 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
         if (win && !win.isDestroyed()) {
           if (!win.isVisible()) win.show();
           if (!win.isFocused()) win.focus();
-          win.webContents.send('app:openSettings');
+          win.webContents.send(AppIpcChannel.OpenSettings);
         }
       },
     },
@@ -105,8 +123,10 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
   ]);
 }
 
-export function createTray(getWindow: () => BrowserWindow | null): Tray {
+export function createTray(getWindow: () => BrowserWindow | null, actions?: TrayCompanionActions): Tray {
+  companionActions = actions ?? companionActions;
   if (tray) {
+    updateTrayMenu(getWindow);
     return tray;
   }
 
@@ -174,6 +194,7 @@ export function destroyTray(): void {
     clickHandler = null;
     rightClickHandler = null;
     trayReminder = { count: 0 };
+    companionActions = undefined;
   }
 }
 

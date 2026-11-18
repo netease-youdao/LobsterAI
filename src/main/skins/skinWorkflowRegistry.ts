@@ -1,4 +1,5 @@
 import type { InstalledKitRecord } from '../../shared/kit/constants';
+import { MediaPreferenceMode } from '../../shared/media/defaultPolicy';
 import {
   SkinWorkflowKind,
   type SkinWorkflowKind as SkinWorkflowKindValue,
@@ -58,6 +59,11 @@ export class SkinWorkflowRegistry {
       }
     }
 
+    if (input.mediaSelection?.imagePreference === MediaPreferenceMode.Off
+      || (input.mediaSelection?.mode === MediaSelectionMode.None && input.mediaSelection.preferencesRevision === undefined)) {
+      return { workflowKind, mediaSelection: input.mediaSelection };
+    }
+
     if (!input.mediaGenerationEntitled) {
       return { workflowKind };
     }
@@ -69,7 +75,13 @@ export class SkinWorkflowRegistry {
     return {
       workflowKind,
       mediaSelection: {
+        ...input.mediaSelection,
         mode: MediaSelectionMode.Image,
+        videoModelId: undefined,
+        videoDefault: undefined,
+        ...(input.mediaSelection?.imageDefault
+          ? { imageDefault: { ...input.mediaSelection.imageDefault, maxOutputsPerTurn: 2 } }
+          : {}),
         ...(selectedImageModelId ? { imageModelId: selectedImageModelId } : {}),
         ...(input.mediaSelection?.modelName
           ? { modelName: input.mediaSelection.modelName }

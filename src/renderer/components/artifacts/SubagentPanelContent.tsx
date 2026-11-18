@@ -202,6 +202,7 @@ const SubagentDetailContent: React.FC<{
           </div>
         ) : (
           <ConversationTurnsView
+            scrollContainerRef={contentRef}
             messages={effectiveMessages}
             isStreaming={status === SubagentSessionStatus.Running}
             readOnly

@@ -1,1 +1,1 @@
-export { registerMcpHandlers } from './handlers';
+export { cancelAllMcpOAuthLogins, registerMcpHandlers } from './handlers';

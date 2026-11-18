@@ -17,6 +17,7 @@ import {
   listBundledOpenClawExtensionIds,
   listBundledOpenClawExtensionManifests,
   resolveOpenClawExtensionPluginId,
+  syncLocalOpenClawExtensionsIntoRuntime,
 } from './openclawLocalExtensions';
 import { removeTreeNoFollowSync } from './removeTreeNoFollow';
 
@@ -109,5 +110,65 @@ describe('runtime-bundled preinstalled extensions', () => {
     expect(warn).toHaveBeenCalledOnce();
     removal.mockRestore();
     expect(cleanupStaleThirdPartyPluginsFromBundledDir(runtime, ['ordinary-plugin'])).toEqual(['ordinary-plugin']);
+  });
+});
+
+describe('local extension sync into the dev runtime', () => {
+  let root: string;
+  let runtime: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-local-extension-sync-'));
+    environment.appPath = root;
+    environment.packaged = false;
+    runtime = path.join(root, 'runtime');
+    fs.mkdirSync(path.join(root, 'openclaw-extensions', 'ask-user-question', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'openclaw-extensions', 'ask-user-question', 'openclaw.plugin.json'), '{"id":"ask-user-question"}');
+    fs.writeFileSync(path.join(root, 'openclaw-extensions', 'ask-user-question', 'src', 'index.ts'), 'export {};');
+    fs.mkdirSync(path.join(runtime, 'third-party-extensions'), { recursive: true });
+  });
+
+  afterEach(() => {
+    removeTreeNoFollowSync(root);
+  });
+
+  test('leaves unchanged plugin files untouched so their fingerprint stays stable', () => {
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual(['ask-user-question']);
+    const manifest = path.join(runtime, 'third-party-extensions', 'ask-user-question', 'openclaw.plugin.json');
+    const before = fs.statSync(manifest);
+
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual([]);
+    const after = fs.statSync(manifest);
+    expect(after.ino).toBe(before.ino);
+    expect(after.ctimeMs).toBe(before.ctimeMs);
+
+    fs.writeFileSync(path.join(root, 'openclaw-extensions', 'ask-user-question', 'src', 'index.ts'), 'export const changed = true;');
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual(['ask-user-question']);
+    expect(fs.readFileSync(path.join(runtime, 'third-party-extensions', 'ask-user-question', 'src', 'index.ts'), 'utf8'))
+      .toBe('export const changed = true;');
+  });
+
+  test('drops a precompiled bundle once its TypeScript source changes', () => {
+    const source = path.join(root, 'openclaw-extensions', 'ask-user-question');
+    const target = path.join(runtime, 'third-party-extensions', 'ask-user-question');
+    fs.writeFileSync(path.join(source, 'package.json'), '{"openclaw":{"extensions":["./src/index.ts"]}}');
+    fs.writeFileSync(path.join(source, 'src', 'shipped.ts'), 'export {};');
+    fs.writeFileSync(path.join(source, 'src', 'shipped.js'), 'export {};');
+    syncLocalOpenClawExtensionsIntoRuntime(runtime);
+    // State after `openclaw:precompile`: a bundle and a package.json pointing at it.
+    fs.writeFileSync(path.join(target, 'src', 'index.js'), 'stale bundle');
+    fs.writeFileSync(path.join(target, 'package.json'), '{"openclaw":{"extensions":["./src/index.js"]}}');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // Restoring package.json alone keeps the still-current bundle.
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual(['ask-user-question']);
+    expect(fs.existsSync(path.join(target, 'src', 'index.js'))).toBe(true);
+
+    fs.writeFileSync(path.join(source, 'src', 'index.ts'), 'export const changed = true;');
+    expect(syncLocalOpenClawExtensionsIntoRuntime(runtime).copied).toEqual(['ask-user-question']);
+    expect(fs.existsSync(path.join(target, 'src', 'index.js'))).toBe(false);
+    expect(fs.existsSync(path.join(target, 'src', 'shipped.js'))).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('ask-user-question'));
+    log.mockRestore();
   });
 });

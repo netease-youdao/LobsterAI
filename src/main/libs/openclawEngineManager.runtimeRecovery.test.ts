@@ -18,6 +18,7 @@ vi.mock('electron', () => ({
   app: {
     getAppPath: () => electronState.appPath,
     getPath: () => electronState.userDataPath,
+    getVersion: () => '2026.9.24',
     get isPackaged() {
       return electronState.isPackaged;
     },
@@ -28,11 +29,18 @@ vi.mock('electron', () => ({
 }));
 
 import { INSTALLER_RESOURCES_TAR } from './installerResourceRecovery';
+import { detectLoopbackBlock, LoopbackSelfTestOutcome } from './loopbackSelfTest';
 import { OpenClawEngineManager } from './openclawEngineManager';
 import { spawnOpenClawGatewayProcess } from './openclawGatewayProcess';
 import { runOpenClawStartupCompatibility } from './openclawStartupCompatibility';
+import { OPENCLAW_STARTUP_PREP_MARKER_FILE } from './openclawStartupPrep';
+import { migrateLegacyStateBeforeStartup } from './openclawStartupStateMigration';
 import { OPENCLAW_WORKER_SHIM_TARGETS } from './openclawWorkerShims';
 
+vi.mock('./loopbackSelfTest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./loopbackSelfTest')>();
+  return { ...actual, detectLoopbackBlock: vi.fn(actual.detectLoopbackBlock) };
+});
 vi.mock('./openclawGatewayProcess', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawGatewayProcess')>(),
   spawnOpenClawGatewayProcess: vi.fn(),
@@ -41,6 +49,10 @@ vi.mock('./openclawStartupCompatibility', async (importOriginal) => ({
   ...await importOriginal<typeof import('./openclawStartupCompatibility')>(),
   runOpenClawStartupCompatibility: vi.fn(),
 }));
+vi.mock('./openclawStartupStateMigration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./openclawStartupStateMigration')>();
+  return { ...actual, migrateLegacyStateBeforeStartup: vi.fn(actual.migrateLegacyStateBeforeStartup) };
+});
 import {
   migrateLegacyOpenClawPluginInstalls,
   OpenClawPluginInstallMigrationStatus,
@@ -193,6 +205,36 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
   });
 
+  test('stops before spawning while Windows drops loopback to this executable, until an explicit retry', async () => {
+    fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
+    const manager = new OpenClawEngineManager();
+    vi.spyOn(manager, 'ensureReady').mockResolvedValue({ phase: OpenClawEnginePhase.Ready } as ReturnType<typeof manager.getStatus>);
+    const dropped = {
+      blocked: true,
+      attempts: 2,
+      last: { outcome: LoopbackSelfTestOutcome.Blocked, code: 'ETIMEDOUT', elapsedMs: 300 },
+    };
+    vi.mocked(detectLoopbackBlock).mockClear().mockResolvedValueOnce(dropped).mockResolvedValueOnce(dropped);
+
+    await expect(manager.startGateway('loopback-test')).resolves.toMatchObject({
+      phase: OpenClawEnginePhase.Error,
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+      canRetry: true,
+    });
+    // Automatic starts keep the block instead of testing or spawning again.
+    await expect(manager.startGateway('auto-restart')).resolves.toMatchObject({
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+    });
+    expect(detectLoopbackBlock).toHaveBeenCalledOnce();
+
+    await expect(manager.startGateway('manual-retry', { retryBlocked: true })).resolves.toMatchObject({
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+    });
+    expect(detectLoopbackBlock).toHaveBeenCalledTimes(2);
+    expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(manager.getStateDir(), 'gateway-token'))).toBe(false);
+  });
+
   test.each([false, true])('prepares existing SQLite before spawning, with legacy discovery=%s', async legacyDiscovery => {
     setProcessProperty('platform', 'darwin');
     fs.writeFileSync(path.join(resourcesDir, 'cfmind', 'openclaw.mjs'), 'export {};\n');
@@ -285,4 +327,62 @@ describe('OpenClawEngineManager startup runtime recovery', () => {
     });
     expect(spawnOpenClawGatewayProcess).not.toHaveBeenCalled();
   });
+
+  // Module mocks keep call history across tests; each prep test starts and ends clean.
+  const withStartupPrepMocks = async (run: () => Promise<void>) => {
+    vi.mocked(runOpenClawStartupCompatibility).mockReset()
+      .mockResolvedValue({ status: OpenClawStartupMigrationStatus.Skipped });
+    vi.mocked(migrateLegacyStateBeforeStartup).mockClear();
+    vi.mocked(spawnOpenClawGatewayProcess).mockReset().mockImplementation(() => {
+      throw new Error('stop at spawn');
+    });
+    try {
+      await run();
+    } finally {
+      vi.mocked(runOpenClawStartupCompatibility).mockReset();
+      vi.mocked(migrateLegacyStateBeforeStartup).mockClear();
+      vi.mocked(spawnOpenClawGatewayProcess).mockReset();
+    }
+  };
+
+  test('records a clean preparation and skips both helpers on the next start', () => withStartupPrepMocks(async () => {
+    const { manager } = prepareSpawnlessStartup();
+    vi.mocked(runOpenClawStartupCompatibility).mockReset()
+      .mockResolvedValue({ status: OpenClawStartupMigrationStatus.Skipped });
+    const markerPath = path.join(path.dirname(manager.getStateDir()), OPENCLAW_STARTUP_PREP_MARKER_FILE);
+    const retiredIdentity = path.join(manager.getStateDir(), 'identity', 'device.json');
+    const clean = { status: OpenClawStartupMigrationStatus.Skipped, settled: true, probePaths: [retiredIdentity] };
+    vi.mocked(migrateLegacyStateBeforeStartup).mockResolvedValueOnce(clean);
+
+    await expect(manager.startGateway('first-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledOnce();
+    expect(migrateLegacyStateBeforeStartup).toHaveBeenCalledOnce();
+    expect(JSON.parse(fs.readFileSync(markerPath, 'utf8')).probes).toEqual({ [retiredIdentity]: 'missing' });
+
+    await expect(manager.startGateway('second-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledOnce();
+    expect(migrateLegacyStateBeforeStartup).toHaveBeenCalledOnce();
+    expect(spawnOpenClawGatewayProcess).toHaveBeenCalledTimes(2);
+
+    // A legacy input that appears later (for example after a downgrade) reruns both helpers.
+    fs.mkdirSync(path.dirname(retiredIdentity), { recursive: true });
+    fs.writeFileSync(retiredIdentity, '{}');
+    vi.mocked(migrateLegacyStateBeforeStartup).mockResolvedValueOnce(clean);
+    await expect(manager.startGateway('third-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyStateBeforeStartup).toHaveBeenCalledTimes(2);
+  }));
+
+  test('never skips preparation for config that needs the compatibility helper', () => withStartupPrepMocks(async () => {
+    const { manager } = prepareSpawnlessStartup();
+    vi.mocked(runOpenClawStartupCompatibility).mockReset()
+      .mockResolvedValue({ status: OpenClawStartupMigrationStatus.Skipped });
+    const clean = { status: OpenClawStartupMigrationStatus.Skipped, settled: true, probePaths: [] };
+    vi.mocked(migrateLegacyStateBeforeStartup).mockResolvedValueOnce(clean).mockResolvedValueOnce(clean);
+    fs.writeFileSync(manager.getConfigPath(), JSON.stringify({ gateway: { mode: 'local', reload: { mode: 'hot' } } }));
+
+    await expect(manager.startGateway('first-start')).rejects.toThrow('stop at spawn');
+    await expect(manager.startGateway('second-start')).rejects.toThrow('stop at spawn');
+    expect(runOpenClawStartupCompatibility).toHaveBeenCalledTimes(2);
+  }));
 });

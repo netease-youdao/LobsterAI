@@ -10,7 +10,7 @@ import {
   OpenClawConfigSelfHealSkipReason,
   OpenClawConfigSelfHealStatus,
 } from './openclawConfigSelfHeal';
-import { isMissingUnaliasedPluginPath } from './openclawPluginRepairPaths';
+import { isMissingUnaliasedPluginPath, isRuntimeThirdPartyExtensionsDir } from './openclawPluginRepairPaths';
 import { assertOwnedRepairPath } from './openclawRepairPaths';
 import { listLegacySessionStorePaths } from './openclawSessionLegacyMigration';
 import type { StartupMigrationRunner } from './openclawStartupStateMigration';
@@ -18,9 +18,6 @@ import { safelyReplaceTextFileSync } from './safeFileReplace';
 
 const UTF8_BOM = '\uFEFF';
 const THIRD_PARTY_EXTENSIONS_DIR = 'third-party-extensions';
-// Do not infer ownership just from the final directory name: users can link
-// arbitrary custom plugin directories with the same name.
-const PREVIOUS_RUNTIME_EXTENSIONS = /[/\\](?:resources[/\\]cfmind|vendor[/\\]openclaw-runtime[/\\][^/\\]+)[/\\]third-party-extensions[/\\]*$/i;
 export const OPENCLAW_REPAIR_PREFLIGHT_REPORT = 'preflight-report.json';
 
 interface PreflightOptions {
@@ -89,7 +86,7 @@ function replaceConfigPluginPaths(params: PreflightOptions, raw: Buffer): string
   if (!fs.existsSync(currentPath) || !fs.statSync(currentPath).isDirectory()) return [];
   const replaced: string[] = [];
   const paths = config.plugins.load.paths.filter((loadPath: unknown) => {
-    if (typeof loadPath !== 'string' || !PREVIOUS_RUNTIME_EXTENSIONS.test(loadPath)
+    if (typeof loadPath !== 'string' || !isRuntimeThirdPartyExtensionsDir(loadPath)
       || !isMissingUnaliasedPluginPath(loadPath)) return true;
     replaced.push(loadPath);
     return false;

@@ -16,7 +16,9 @@ describe('SidebarTaskSearchButton', () => {
 
       expect(html).toContain('type="button"');
       expect(html).toContain(`aria-label="${label}"`);
-      expect(html).toContain(`title="${label}"`);
+      // The styled Tooltip (label + shortcut) replaces the native title, which macOS hides here.
+      expect(html).not.toContain('title=');
+      expect(html).toContain('sidebar-search-icon-flip');
       expect(html).toContain('h-8 w-8');
       expect(html).toContain('h-[18px] w-[18px]');
       expect(html).toContain('aria-hidden="true"');

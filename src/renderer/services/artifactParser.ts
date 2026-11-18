@@ -253,6 +253,60 @@ export function dedupeArtifactsForDisplay(
   return result;
 }
 
+/**
+ * Put the artifacts a turn's replies point at first, so the deliverable the
+ * user asked for leads the card list instead of whatever was produced
+ * earliest (a generated image, a helper file). The latest reply ranks first,
+ * each reply keeping the order it lists its files in; everything else
+ * follows in detection order.
+ *
+ * `rawArtifacts` are the turn's artifacts before display dedupe: a reply's
+ * link may have been merged into a card detected from a tool step, so
+ * references are matched by identity key rather than by artifact id.
+ */
+export function orderArtifactsByReplyReferences(
+  displayArtifacts: Artifact[],
+  rawArtifacts: Artifact[],
+  replyMessageIds: readonly string[],
+): Artifact[] {
+  if (displayArtifacts.length < 2 || replyMessageIds.length === 0) return displayArtifacts;
+
+  const rawArtifactsByMessageId = new Map<string, Artifact[]>();
+  for (const artifact of rawArtifacts) {
+    const messageArtifacts = rawArtifactsByMessageId.get(artifact.messageId);
+    if (messageArtifacts) {
+      messageArtifacts.push(artifact);
+    } else {
+      rawArtifactsByMessageId.set(artifact.messageId, [artifact]);
+    }
+  }
+
+  const referenceRankByKey = new Map<string, number>();
+  let rank = 0;
+  for (let index = replyMessageIds.length - 1; index >= 0; index -= 1) {
+    for (const artifact of rawArtifactsByMessageId.get(replyMessageIds[index]) ?? []) {
+      for (const key of getArtifactIdentityKeys(artifact)) {
+        if (!referenceRankByKey.has(key)) referenceRankByKey.set(key, rank);
+      }
+      rank += 1;
+    }
+  }
+  if (referenceRankByKey.size === 0) return displayArtifacts;
+
+  const unreferencedRank = rank;
+  return displayArtifacts
+    .map((artifact, index) => ({
+      artifact,
+      index,
+      rank: Math.min(
+        unreferencedRank,
+        ...getArtifactIdentityKeys(artifact).map(key => referenceRankByKey.get(key) ?? unreferencedRank),
+      ),
+    }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(entry => entry.artifact);
+}
+
 export function resolveArtifactIdForDisplay(
   artifacts: Artifact[],
   artifactId: string,
@@ -690,7 +744,7 @@ export function normalizeLocalServiceOrigin(url: string): string {
   }
 }
 
-function isLocalServiceUrl(url: string): boolean {
+export function isLocalServiceUrl(url: string): boolean {
   try {
     const parsed = new URL(trimLocalServiceUrl(url));
     const isHttp = parsed.protocol === 'http:' || parsed.protocol === 'https:';

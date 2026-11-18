@@ -1,8 +1,9 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { ShareDeploymentCandidateSource } from '../../shared/shareDeployment/constants';
+import { type Artifact, ArtifactTypeValue } from '../types/artifact';
 import type { CoworkMessage } from '../types/cowork';
-import { collectSessionArtifacts } from './artifactDetection';
+import { collectSessionArtifacts, loadDetectedFileArtifact } from './artifactDetection';
 
 const CWD = '/Users/admin/project012';
 
@@ -147,5 +148,73 @@ describe('collectSessionArtifacts', () => {
     const messages = [toolUse, toolResult(toolUse, true)];
 
     expect(collectSessionArtifacts(messages, 'sess1', CWD)).toHaveLength(0);
+  });
+});
+
+describe('loadDetectedFileArtifact', () => {
+  const MTIME_MS = 1_761_700_000_123;
+
+  const fileArtifact = (type: Artifact['type'], filePath: string): Artifact => ({
+    id: `artifact-${type}`,
+    messageId: 'm1',
+    sessionId: 'sess1',
+    type,
+    title: filePath.split('/').pop() ?? filePath,
+    content: '',
+    filePath,
+    source: 'file',
+    createdAt: 1,
+  });
+
+  const stubDialog = (options: { exists: boolean; dataUrl?: string }) => {
+    const dialog = {
+      statFile: vi.fn(async () => (options.exists
+        ? { success: true, isFile: true, mtimeMs: MTIME_MS }
+        : { success: false, error: 'ENOENT' })),
+      readFileAsDataUrl: vi.fn(async () => (options.exists && options.dataUrl
+        ? { success: true, dataUrl: options.dataUrl }
+        : { success: false, error: 'ENOENT' })),
+    };
+    vi.stubGlobal('window', { electron: { dialog } });
+    return dialog;
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test('image files are only checked for existence, never read as a data URL', async () => {
+    const dialog = stubDialog({ exists: true, dataUrl: 'data:image/png;base64,AAAA' });
+
+    const loaded = await loadDetectedFileArtifact(fileArtifact(ArtifactTypeValue.Image, `${CWD}/out/cat.png`), CWD);
+
+    expect(dialog.readFileAsDataUrl).not.toHaveBeenCalled();
+    expect(dialog.statFile).toHaveBeenCalledWith(`${CWD}/out/cat.png`);
+    expect(loaded).toMatchObject({ content: '', filePath: `${CWD}/out/cat.png`, contentVersion: MTIME_MS });
+  });
+
+  test('relative image paths resolve against the session cwd', async () => {
+    const dialog = stubDialog({ exists: true });
+
+    const loaded = await loadDetectedFileArtifact(fileArtifact(ArtifactTypeValue.Image, 'out/cat.png'), CWD);
+
+    expect(dialog.statFile).toHaveBeenCalledWith(`${CWD}/out/cat.png`);
+    expect(loaded?.filePath).toBe(`${CWD}/out/cat.png`);
+  });
+
+  test('missing image files yield no artifact', async () => {
+    const dialog = stubDialog({ exists: false });
+
+    expect(await loadDetectedFileArtifact(fileArtifact(ArtifactTypeValue.Image, `${CWD}/gone.png`), CWD)).toBeNull();
+    expect(dialog.readFileAsDataUrl).not.toHaveBeenCalled();
+  });
+
+  test('text files are still read and decoded', async () => {
+    const dialog = stubDialog({ exists: true, dataUrl: `data:text/markdown;base64,${btoa('# hi')}` });
+
+    const loaded = await loadDetectedFileArtifact(fileArtifact(ArtifactTypeValue.Markdown, `${CWD}/notes.md`), CWD);
+
+    expect(dialog.readFileAsDataUrl).toHaveBeenCalledWith(`${CWD}/notes.md`);
+    expect(loaded?.content).toBe('# hi');
   });
 });

@@ -1,5 +1,5 @@
 import {
-  type AuthSessionChangedEvent,
+  AuthLoginFailureReason,
   AuthSessionChangeReason,
   AuthSessionStatus,
 } from '@shared/auth/constants';
@@ -14,7 +14,7 @@ import type { EnterpriseAccountContext } from '../../shared/enterpriseAccount/ty
 import { setEnterpriseAccountContext } from '../features/enterpriseAccount/enterpriseAccountSlice';
 import { store } from '../store';
 import { setLoggedIn, setLoggedOut } from '../store/slices/authSlice';
-import { clearServerModels } from '../store/slices/modelSlice';
+import { clearServerModels, ServerModelLoadStatus, setServerModels } from '../store/slices/modelSlice';
 import {
   authService,
   isAuthAccountRequestCurrent,
@@ -22,10 +22,13 @@ import {
   mapPricingCatalogTextModelsToServerModels,
   mapPricingCatalogToPublicServerModels,
 } from './auth';
+import { browserLoginSession, BrowserLoginStatus } from './browserLoginSession';
+import { getPortalLoginUrl } from './endpoints';
 import { i18nService } from './i18n';
 
 afterEach(() => {
   authService.destroy();
+  browserLoginSession.clear();
   store.dispatch(setLoggedOut());
   store.dispatch(clearServerModels());
   store.dispatch(setEnterpriseAccountContext(null));
@@ -264,6 +267,74 @@ describe('auth-scoped renderer requests', () => {
   });
 });
 
+describe('browser login cancellation and callback ordering', () => {
+  const setup = () => {
+    const apiFetch = vi.fn().mockResolvedValue({
+      ok: true, data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+    });
+    const login = vi.fn().mockResolvedValue({ success: true, redirectUrl: 'https://example.com/login' });
+    const exchange = vi.fn().mockResolvedValue({ success: false });
+    const cancelLogin = vi.fn().mockResolvedValue({ success: true });
+    vi.stubGlobal('window', {
+      electron: { api: { fetch: apiFetch }, auth: { login, exchange, cancelLogin }, log: { fromRenderer: vi.fn() } },
+    });
+    return { apiFetch, login, exchange, cancelLogin };
+  };
+
+  test('cancel while resolving the URL prevents a delayed browser launch', async () => {
+    const mocks = setup();
+    let resolveLookup: (value: unknown) => void = () => {};
+    mocks.apiFetch.mockImplementationOnce(() => new Promise(resolve => { resolveLookup = resolve; }));
+    const pending = authService.login();
+    await vi.waitFor(() => expect(mocks.apiFetch).toHaveBeenCalled());
+    await authService.cancelLogin();
+    resolveLookup({ ok: true, data: { data: { value: 'https://example.com/login' } } });
+    await expect(pending).resolves.toMatchObject({ reason: AuthLoginFailureReason.Cancelled });
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('cancelled browser handoff and callback cannot reopen the wait or exchange credentials', async () => {
+    const mocks = setup();
+    let resolveOpen: (value: unknown) => void = () => {};
+    mocks.login.mockImplementationOnce(() => new Promise(resolve => { resolveOpen = resolve; }));
+    const pending = authService.login();
+    await vi.waitFor(() => expect(mocks.login).toHaveBeenCalled());
+    await authService.cancelLogin();
+    resolveOpen({ success: true, redirectUrl: 'https://example.com/login' });
+    await pending;
+    await expect(authService.handleCallback('cancelled-code')).resolves.toBe(false);
+    expect(mocks.exchange).not.toHaveBeenCalled();
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('cancel during exchange ignores a late successful reply', async () => {
+    const mocks = setup();
+    await authService.login();
+    let resolveExchange: (value: unknown) => void = () => {};
+    mocks.exchange.mockImplementationOnce(() => new Promise(resolve => { resolveExchange = resolve; }));
+    const pending = authService.handleCallback('pending-code');
+    expect(browserLoginSession.getSnapshot()?.status).toBe(BrowserLoginStatus.Verifying);
+    await authService.cancelLogin();
+    resolveExchange({ success: true, user: { yid: 'late-user', nickname: 'Late User', avatarUrl: null } });
+    await expect(pending).resolves.toBe(false);
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('a callback failure is not overwritten by a late browser launch reply', async () => {
+    const mocks = setup();
+    let resolveOpen: (value: unknown) => void = () => {};
+    mocks.login.mockImplementationOnce(() => new Promise(resolve => { resolveOpen = resolve; }));
+    const pending = authService.login();
+    await vi.waitFor(() => expect(mocks.login).toHaveBeenCalled());
+    await authService.handleCallback('rejected-code');
+    resolveOpen({ success: true, redirectUrl: 'https://example.com/login' });
+    await pending;
+    expect(browserLoginSession.getSnapshot()?.status).toBe(BrowserLoginStatus.Failed);
+  });
+});
+
 describe('login diagnostics', () => {
   test('persists renderer lifecycle logs without including the login URL', async () => {
     const fromRenderer = vi.fn();
@@ -282,7 +353,7 @@ describe('login diagnostics', () => {
             data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
           }),
         },
-        auth: { login },
+        auth: { login, cancelLogin: vi.fn().mockResolvedValue({ success: true }) },
         log: { fromRenderer },
       },
     });
@@ -329,8 +400,125 @@ describe('login diagnostics', () => {
     expect(fromRenderer).toHaveBeenCalledWith(
       'warn',
       'AuthService',
-      expect.stringMatching(/^login attempt \d+ could not open the system browser$/),
+      expect.stringMatching(/^login attempt \d+ could not open the system browser reason=unknown$/),
     );
+    // Keep an actionable error instead of silently dismissing the login gate.
+    expect(browserLoginSession.getSnapshot()).toEqual({ status: BrowserLoginStatus.OpenFailed, url: null });
+  });
+
+  test('offers the login link when the browser could not be opened', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const manualUrl = 'https://lobsterai.youdao.com/portal#/login?source=electron&state=s';
+    vi.stubGlobal('window', {
+      electron: {
+        api: {
+          fetch: vi.fn().mockResolvedValue({
+            ok: true,
+            data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+          }),
+        },
+        auth: {
+          login: vi.fn().mockResolvedValue({
+            success: false,
+            reason: AuthLoginFailureReason.OpenTimedOut,
+            redirectUrl: manualUrl,
+          }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await authService.login();
+
+    expect(browserLoginSession.getSnapshot()).toEqual({
+      status: BrowserLoginStatus.OpenFailed,
+      url: manualUrl,
+    });
+  });
+
+  test('keeps the login wait visible until the account signs in', async () => {
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const loginUrl = 'https://lobsterai.youdao.com/portal#/login?source=electron&state=s';
+    let resolveLogin: (value: { success: boolean; redirectUrl: string }) => void = () => {};
+    vi.stubGlobal('window', {
+      electron: {
+        api: {
+          fetch: vi.fn().mockResolvedValue({
+            ok: true,
+            data: { data: { value: 'https://lobsterai.youdao.com/portal#/login' } },
+          }),
+        },
+        auth: { login: vi.fn(() => new Promise(resolve => { resolveLogin = resolve; })) },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    const pending = authService.login();
+    expect(browserLoginSession.getSnapshot()?.status).toBe(BrowserLoginStatus.Opening);
+    await vi.waitFor(() => expect(window.electron.auth.login).toHaveBeenCalled());
+    resolveLogin({ success: true, redirectUrl: loginUrl });
+    await pending;
+    expect(browserLoginSession.getSnapshot()).toEqual({ status: BrowserLoginStatus.Waiting, url: loginUrl });
+
+    store.dispatch(setLoggedIn({
+      user: { yid: 'signed-in-user', nickname: 'Signed In User', avatarUrl: null },
+      quota: null,
+      ownerAccountKey: 'personal:signed-in-user',
+    }));
+    expect(browserLoginSession.getSnapshot()).toBeNull();
+  });
+
+  test('uses the portal login URL when the overmind lookup stalls', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const login = vi.fn().mockResolvedValue({ success: true });
+    vi.stubGlobal('window', {
+      electron: {
+        api: { fetch: vi.fn(() => new Promise(() => {})) },
+        auth: { login, cancelLogin: vi.fn().mockResolvedValue({ success: true }) },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    const pending = authService.login();
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(login).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+
+    expect(login).toHaveBeenCalledWith(getPortalLoginUrl());
+  });
+
+  test('reuses the last resolved login URL when a later lookup stalls', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const resolvedUrl = 'https://lobsterai.youdao.com/portal#/login?from=overmind';
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { data: { value: resolvedUrl } } })
+      .mockImplementation(() => new Promise(() => {}));
+    const login = vi.fn().mockResolvedValue({ success: true });
+    vi.stubGlobal('window', {
+      electron: {
+        api: { fetch },
+        auth: { login, cancelLogin: vi.fn().mockResolvedValue({ success: true }) },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await authService.login();
+    const pending = authService.login();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await pending;
+
+    expect(login).toHaveBeenNthCalledWith(1, resolvedUrl);
+    expect(login).toHaveBeenNthCalledWith(2, resolvedUrl);
   });
 });
 
@@ -621,11 +809,45 @@ describe('server model loading', () => {
     // The first attempt settles immediately so startup never waits on backoff.
     await expect(authService.refreshServerModels()).resolves.toBe(false);
     expect(planModelIds()).toEqual([]);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Error);
 
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(getModels).toHaveBeenCalledTimes(2);
     expect(planModelIds()).toEqual(['qwen3.7-plus']);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
+  });
+
+  test('reports loading while a request is pending and ready for a confirmed empty response', async () => {
+    let resolveModels!: (value: { success: boolean; models: never[] }) => void;
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels: vi.fn(() => new Promise(resolve => { resolveModels = resolve; })) },
+      },
+    });
+    signIn();
+    const request = authService.refreshServerModels();
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Loading);
+    resolveModels({ success: true, models: [] });
+    await expect(request).resolves.toBe(true);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
+    expect(planModelIds()).toEqual([]);
+  });
+
+  test('a late rejected request cannot replace the next account model status with an error', async () => {
+    let rejectModels!: (reason: Error) => void;
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getModels: vi.fn(() => new Promise((_resolve, reject) => { rejectModels = reject; })) },
+      },
+    });
+    signIn('personal:first');
+    const request = authService.refreshServerModels();
+    signIn('personal:second');
+    store.dispatch(setServerModels([]));
+    rejectModels(new Error('offline'));
+    await expect(request).resolves.toBe(false);
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
   });
 
   test('gives up after the configured attempts and warns once', async () => {
@@ -726,6 +948,85 @@ describe('server model loading', () => {
     expect(planModelIds()).toEqual(['qwen3.7-plus']);
 
     await vi.advanceTimersByTimeAsync(12_000);
+  });
+
+  test('retries the logged-out public catalog in the background after a transient failure', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getPricingCatalog = vi.fn()
+      .mockRejectedValueOnce(new Error('net::ERR_INTERNET_DISCONNECTED'))
+      .mockResolvedValueOnce({
+        success: true,
+        textModels: [{ modelId: 'deepseek-v4-pro', modelName: 'DeepSeek-V4-Pro' }],
+      });
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getPricingCatalog },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    // Logged out, the network-recovery refresh reloads the public catalog.
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    expect(planModelIds()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(getPricingCatalog).toHaveBeenCalledTimes(2);
+    expect(planModelIds()).toEqual(['deepseek-v4-pro']);
+    expect(store.getState().model.availableModels.find(model => model.isServerModel)?.accessible)
+      .toBe(false);
+  });
+
+  test('stops retrying the public catalog once the user logs in', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const getPricingCatalog = vi.fn().mockRejectedValue(new Error('offline'));
+    vi.stubGlobal('window', {
+      electron: {
+        auth: { getPricingCatalog },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await expect(authService.refreshServerModels()).resolves.toBe(false);
+    signIn();
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(getPricingCatalog).toHaveBeenCalledOnce();
+  });
+
+  test('falls back to the public catalog when an inconsistent login is cleared', async () => {
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          exchange: vi.fn().mockResolvedValue({
+            success: true,
+            user: {
+              yid: 'enterprise-user',
+              accountMode: 'enterprise',
+              nickname: 'Enterprise User',
+              avatarUrl: null,
+            },
+            quota: null,
+            enterpriseContext: null,
+          }),
+          getPricingCatalog: vi.fn().mockResolvedValue({
+            success: true,
+            textModels: [{ modelId: 'deepseek-v4-pro', modelName: 'DeepSeek-V4-Pro' }],
+          }),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+    signIn();
+
+    await expect(authService.handleCallback('auth-code')).resolves.toBe(false);
+
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    await vi.waitFor(() => expect(planModelIds()).toEqual(['deepseek-v4-pro']));
   });
 
   test('still loads plan models when the quota refresh fails', async () => {
@@ -851,6 +1152,143 @@ describe('auth state restoration', () => {
     creditsRemaining: 900,
   };
 
+  test('an offline cold start recovers the account and models on retry without another login', async () => {
+    vi.useFakeTimers();
+    store.dispatch(setLoggedOut());
+    store.dispatch(clearServerModels());
+    const getModels = vi.fn().mockResolvedValue({
+      success: true,
+      models: [{ modelId: 'recovered-model', modelName: 'Recovered Model', accessible: true }],
+    });
+    const getUser = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        status: AuthSessionStatus.TemporarilyUnavailable,
+        hasCredentials: true,
+        cachedUser: user,
+      })
+      .mockResolvedValueOnce({ success: true, user, quota, enterpriseContext: null });
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', { electron: { auth: { getUser, getModels } } });
+
+    await authService.refreshAuthState({ clearOnFailure: true });
+    expect(store.getState().auth).toMatchObject({
+      isLoading: false,
+      isLoggedIn: true,
+      sessionStatus: AuthSessionStatus.TemporarilyUnavailable,
+      ownerAccountKey: null,
+      user,
+    });
+    expect(getModels).not.toHaveBeenCalled();
+
+    await authService.recoverAccount();
+    expect(getUser).toHaveBeenCalledTimes(2);
+    expect(store.getState().auth.sessionStatus).toBe(AuthSessionStatus.Authenticated);
+    expect(store.getState().auth.ownerAccountKey).toBe('personal:user@example.com');
+    expect(store.getState().model.serverModelLoadStatus).toBe(ServerModelLoadStatus.Ready);
+    expect(store.getState().model.availableModels.some(model => model.id === 'recovered-model')).toBe(true);
+  });
+
+  test('restores a secondary window after another window signs in without exchanging the code again', async () => {
+    const exchange = vi.fn();
+    const getModels = vi.fn().mockResolvedValue({
+      success: true,
+      models: [{ modelId: 'signed-in-model', modelName: 'Signed-in Model', accessible: true }],
+    });
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          exchange,
+          getModels,
+          getUser: vi.fn().mockResolvedValue({ success: true, user, quota, enterpriseContext: null }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+
+    await authService.handleSessionChanged({
+      status: AuthSessionStatus.Authenticated,
+      reason: AuthSessionChangeReason.UserLogin,
+    });
+
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: true,
+      sessionStatus: AuthSessionStatus.Authenticated,
+      user,
+      quota,
+    });
+    expect(getModels).toHaveBeenCalledOnce();
+    expect(store.getState().model.availableModels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'signed-in-model', accessible: true }),
+    ]));
+    expect(exchange).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('logout clears the window and rejects a pending restore (initially signed in: %s)', async initiallySignedIn => {
+    const response = { success: true, user, quota, enterpriseContext: null };
+    let resolveUser!: (value: typeof response) => void;
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', {
+      dispatchEvent,
+      electron: {
+        auth: {
+          getUser: vi.fn(() => new Promise<typeof response>(resolve => { resolveUser = resolve; })),
+          getPricingCatalog: vi.fn().mockResolvedValue({ success: true, textModels: [] }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+    if (initiallySignedIn) {
+      store.dispatch(setLoggedIn({ user, quota, ownerAccountKey: 'personal:user@example.com' }));
+    }
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const logout = authService.handleSessionChanged({
+      status: AuthSessionStatus.Unauthenticated,
+      reason: AuthSessionChangeReason.UserLogout,
+    });
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    resolveUser(response);
+    await Promise.all([refresh, logout]);
+
+    expect(store.getState().auth).toMatchObject({
+      isLoggedIn: false,
+      sessionStatus: AuthSessionStatus.Unauthenticated,
+      user: null,
+      quota: null,
+    });
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  test('a newer login event supersedes a pending restore in a signed-out window', async () => {
+    const oldResponse = { success: true, user, quota, enterpriseContext: null };
+    let resolveUser!: (value: typeof oldResponse) => void;
+    const nextUser = { ...user, yid: 'next@example.com' };
+    vi.spyOn(authService, 'fetchProfileSummary').mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electron: {
+        auth: {
+          getModels: vi.fn().mockResolvedValue({ success: true, models: [] }),
+          getUser: vi.fn()
+            .mockImplementationOnce(() => new Promise<typeof oldResponse>(resolve => { resolveUser = resolve; }))
+            .mockResolvedValue({ ...oldResponse, user: nextUser }),
+        },
+      },
+    });
+    store.dispatch(setLoggedOut());
+
+    const refresh = authService.refreshAuthState({ clearOnFailure: true });
+    const login = authService.handleSessionChanged({
+      status: AuthSessionStatus.Authenticated,
+      reason: AuthSessionChangeReason.UserLogin,
+    });
+    resolveUser(oldResponse);
+    await Promise.all([refresh, login]);
+
+    expect(store.getState().auth.user).toEqual(nextUser);
+  });
+
   test('preserves the current login snapshot for a temporary verification failure', async () => {
     store.dispatch(setLoggedIn({
       user,
@@ -934,10 +1372,7 @@ describe('auth state restoration', () => {
       },
     });
 
-    const serviceWithSessionHandler = authService as unknown as {
-      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
-    };
-    await serviceWithSessionHandler.handleSessionChanged({
+    await authService.handleSessionChanged({
       status: AuthSessionStatus.Expired,
       reason: AuthSessionChangeReason.RefreshRejected,
     });
@@ -969,10 +1404,7 @@ describe('auth state restoration', () => {
       },
     });
 
-    const serviceWithSessionHandler = authService as unknown as {
-      handleSessionChanged: (event: AuthSessionChangedEvent) => Promise<void>;
-    };
-    await serviceWithSessionHandler.handleSessionChanged({
+    await authService.handleSessionChanged({
       status: AuthSessionStatus.Expired,
       reason: AuthSessionChangeReason.EnterpriseMembershipRevoked,
     });

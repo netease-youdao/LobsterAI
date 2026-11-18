@@ -7,6 +7,7 @@ import artifactReducer from './slices/artifactSlice';
 import asrQuotaReducer from './slices/asrQuotaSlice';
 import authReducer from './slices/authSlice';
 import coworkReducer from './slices/coworkSlice';
+import imageEditorReducer from './slices/imageEditorSlice';
 import imReducer from './slices/imSlice';
 import kitReducer from './slices/kitSlice';
 import mcpReducer from './slices/mcpSlice';
@@ -22,6 +23,7 @@ export const store = configureStore({
     skill: skillReducer,
     mcp: mcpReducer,
     im: imReducer,
+    imageEditor: imageEditorReducer,
     quickAction: quickActionReducer,
     scheduledTask: scheduledTaskReducer,
     agent: agentReducer,

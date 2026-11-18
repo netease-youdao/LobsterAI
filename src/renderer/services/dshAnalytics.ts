@@ -128,6 +128,7 @@ export function resolveDshOpenWorkbenchErrorCode(
 }
 
 export interface DshOpenWorkbenchEventInput {
+  dshInstanceId?: string;
   /** Engine phase when the user clicked, before any install/start ran. */
   phaseBefore: string;
   result: DshAnalyticsResult;
@@ -145,6 +146,7 @@ export function buildDshOpenWorkbenchEvent(input: DshOpenWorkbenchEventInput): L
     actionType: DshAnalyticsActionType.OpenWorkbench,
     source: LogReporterSource.SettingsExperimental,
     phaseBefore: input.phaseBefore,
+    dshInstanceId: input.dshInstanceId,
     result: input.result,
     errorCode: failed ? (input.errorCode ?? DshAnalyticsErrorCode.Unknown) : undefined,
     errorDetail: errorDetail || undefined,

@@ -87,6 +87,11 @@ Requirements:
 - Windows builds may need bundled/portable Git setup: `npm run setup:mingit`.
 - Windows packaging also sets up the Python runtime via
   `npm run setup:python-runtime`.
+- New libraries go in `devDependencies` (`npm install -D`): Vite bundles the
+  main and renderer code, and electron-builder copies every production
+  dependency into `app.asar` again. `dependencies` is only for modules loaded
+  or resolved outside the bundles; `tests/electronBuilderAppFiles.test.ts`
+  lists each one with its reason.
 
 OpenClaw environment variables:
 - `OPENCLAW_SRC`: override the OpenClaw source checkout path. Default is
@@ -219,6 +224,11 @@ Key modules:
   migrations, and local metadata.
 - `src/main/mcp/`: MCP server storage, runtime, marketplace, and launch
   resolution.
+- `src/main/office/`: in-place Office editors (Word, Excel, PowerPoint): file
+  store, package admission, agent tool bridge and MCP servers, all driven by
+  `MAIN_OFFICE_FORMATS`. See
+  `specs/features/office-editing/2026-09-28-office-module-architecture.md`
+  before adding a format.
 
 Security model:
 - Renderer uses `src/main/preload.ts` and `contextBridge`.
@@ -246,6 +256,9 @@ Main areas:
   session UI.
 - `src/renderer/components/artifacts/`: artifact panel, badges, preview cards,
   renderers, and file directory view.
+- `src/renderer/services/office/` and
+  `src/renderer/components/artifacts/renderers/office/`: Office editor
+  sessions, agent handlers, editor shell, toolbars and previews.
 - `src/renderer/components/scheduledTasks/`: scheduled task list, form, detail,
   run history, and template UI.
 - `src/renderer/components/im/`: IM platform settings and multi-instance UI.
@@ -264,6 +277,7 @@ Useful shared areas:
 - `src/shared/auth/`
 - `src/shared/cowork/`
 - `src/shared/artifactPreview/`
+- `src/shared/office/` (`OFFICE_EDITORS`, the Office editor table)
 - `src/shared/mcp/`
 - `src/shared/providers/`
 - `src/shared/platform/`
@@ -521,3 +535,8 @@ storage, runtime, windowing, or OpenClaw config/restart behavior.
 - For oversized files, propose a scoped extraction plan before doing structural
   refactors.
 - If a file has unrelated user changes, work around them and do not revert them.
+- Desktop companion (floating orb) surfaces on macOS are nonactivating `panel`
+  windows so they show over other apps' full-screen Spaces. Native
+  `Menu.popup()` menus do not show there, which is why the orb's right-click
+  menu is drawn in its own panel (`src/main/desktopCompanion/companionContextMenu.ts`).
+  Do not add native popup menus to companion surfaces on macOS.

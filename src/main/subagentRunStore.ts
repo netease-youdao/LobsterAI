@@ -75,6 +75,11 @@ export class SubagentRunStore {
       .run(childCoworkSessionId, id);
   }
 
+  hasChildSession(childCoworkSessionId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM subagent_runs WHERE child_cowork_session_id = ? LIMIT 1')
+      .get(childCoworkSessionId) !== undefined;
+  }
+
   clearChildSessionReference(childCoworkSessionId: string): void {
     this.db.prepare('UPDATE subagent_runs SET child_cowork_session_id = NULL WHERE child_cowork_session_id = ?')
       .run(childCoworkSessionId);

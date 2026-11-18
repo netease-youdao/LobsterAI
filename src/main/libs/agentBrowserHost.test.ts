@@ -35,6 +35,10 @@ const electronMocks = vi.hoisted(() => {
         listeners.set(event, [...(listeners.get(event) ?? []), listener]);
         return webContents;
       }),
+      removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        listeners.set(event, (listeners.get(event) ?? []).filter(value => value !== listener));
+        return webContents;
+      }),
       reload: vi.fn(),
       sendInputEvent: vi.fn(),
       setWindowOpenHandler: vi.fn<(handler: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) => void>(),
@@ -46,6 +50,7 @@ const electronMocks = vi.hoisted(() => {
     return webContents;
   };
   const webContentsInstances: Array<ReturnType<typeof createWebContents>> = [];
+  const viewInstances: Array<{ setBounds: ReturnType<typeof vi.fn> }> = [];
 
   return {
     clearCache: vi.fn<() => Promise<void>>(),
@@ -55,9 +60,12 @@ const electronMocks = vi.hoisted(() => {
     flushStorageData: vi.fn(),
     flushStore: vi.fn<() => Promise<void>>(),
     fromPartition: vi.fn(),
+    getUserAgent: vi.fn<() => string>(),
     setPermissionCheckHandler: vi.fn(),
     setPermissionRequestHandler: vi.fn(),
     setProxy: vi.fn<() => Promise<void>>(),
+    setUserAgent: vi.fn(),
+    viewInstances,
     webContentsInstances,
   };
 });
@@ -79,6 +87,7 @@ vi.mock('electron', () => ({
       this.webContents = options.webContents as unknown as typeof this.webContents
         ?? electronMocks.createWebContents();
       electronMocks.webContentsInstances.push(this.webContents);
+      electronMocks.viewInstances.push(this);
     }
   },
 }));
@@ -92,7 +101,18 @@ import {
   AgentBrowserPartition,
   BrowserDisplayMode,
 } from '../../shared/browserWebAccess/constants';
-import { AgentBrowserHost, BrowserCdpCommand, BrowserMcpTool, BrowserWindowOpenAction } from './agentBrowserHost';
+import {
+  AgentBrowserHost,
+  BrowserCdpCommand,
+  BrowserMcpTool,
+  BrowserWindowOpenAction,
+  toChromeUserAgent,
+} from './agentBrowserHost';
+
+const ELECTRON_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) LobsterAI/2026.10.19 Chrome/150.0.7871.250 Electron/43.5.0 Safari/537.36';
+const CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) Chrome/150.0.7871.250 Safari/537.36';
 
 const createHost = (
   overrides: Partial<ConstructorParameters<typeof AgentBrowserHost>[0]> = {},
@@ -104,12 +124,15 @@ const createHost = (
   credentialService: {} as never,
   credentialApprovalService: {} as never,
   resolveSessionKey: () => undefined,
+  getLanguage: () => 'en',
   ...overrides,
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   electronMocks.webContentsInstances.length = 0;
+  electronMocks.viewInstances.length = 0;
+  electronMocks.getUserAgent.mockReturnValue(ELECTRON_USER_AGENT);
   electronMocks.clearCache.mockResolvedValue();
   electronMocks.clearStorageData.mockResolvedValue();
   electronMocks.createImageFromBuffer.mockReset();
@@ -122,9 +145,11 @@ beforeEach(() => {
     clearCache: electronMocks.clearCache,
     clearStorageData: electronMocks.clearStorageData,
     flushStorageData: electronMocks.flushStorageData,
+    getUserAgent: electronMocks.getUserAgent,
     setPermissionCheckHandler: electronMocks.setPermissionCheckHandler,
     setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
     setProxy: electronMocks.setProxy,
+    setUserAgent: electronMocks.setUserAgent,
     on: vi.fn(),
     removeListener: vi.fn(),
   });
@@ -459,6 +484,68 @@ describe('AgentBrowserHost popup navigation', () => {
 });
 
 describe('AgentBrowserHost OpenClaw browser baseline', () => {
+  test('finishes navigation when the new top-level document is ready despite a hanging resource', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      await host.newPage();
+      const contents = electronMocks.webContentsInstances[0];
+      let started!: () => void;
+      const loading = new Promise<void>(resolve => { started = resolve; });
+      contents.loadURL.mockImplementationOnce(() => { started(); return new Promise(() => {}); });
+      let settled = false;
+      const navigation = host.handleToolRequest({
+        tool: BrowserMcpTool.NavigatePage,
+        args: { pageId: 1, url: 'https://example.com/slow-image', timeout: 100 },
+      }).then(result => { settled = true; return result; });
+      await loading;
+      contents.emit('dom-ready'); // A previous document must not finish this navigation.
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      contents.emit('did-navigate', {}, 'https://example.com/slow-image', 200, 'OK');
+      contents.emit('dom-ready');
+      await vi.advanceTimersByTimeAsync(101);
+      expect((await navigation).isError).not.toBe(true);
+      expect(contents.removeListener).toHaveBeenCalledWith('dom-ready', expect.any(Function));
+      expect(contents.removeListener).toHaveBeenCalledWith('did-navigate', expect.any(Function));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps a failed main-document navigation failed even if an error page becomes ready', async () => {
+    const host = createHost();
+    await host.newPage();
+    const contents = electronMocks.webContentsInstances[0];
+    contents.loadURL.mockRejectedValueOnce(new Error('ERR_NAME_NOT_RESOLVED'));
+    const result = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage, args: { pageId: 1, url: 'https://missing.invalid' },
+    });
+    contents.emit('dom-ready');
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('ERR_NAME_NOT_RESOLVED');
+  });
+
+  test('times out an uncommitted document and removes its navigation listeners', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      await host.newPage();
+      const contents = electronMocks.webContentsInstances[0];
+      contents.removeListener.mockClear();
+      contents.loadURL.mockImplementationOnce(() => new Promise(() => {}));
+      const navigation = host.handleToolRequest({
+        tool: BrowserMcpTool.NavigatePage,
+        args: { pageId: 1, url: 'https://example.com/hang-document', timeout: 100 },
+      });
+      await vi.advanceTimersByTimeAsync(101);
+      expect((await navigation).isError).toBe(true);
+      expect(contents.removeListener).toHaveBeenCalledWith('dom-ready', expect.any(Function));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('serializes concurrent cold list requests into one blank page', async () => {
     const host = createHost();
 
@@ -804,5 +891,99 @@ describe('AgentBrowserHost script evaluation', () => {
 
     expect((await evaluate()).isError).toBe(true);
     expect(sendCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentBrowserHost browsing without a visible panel', () => {
+  test('presents the plain Chrome user agent', () => {
+    createHost();
+
+    expect(toChromeUserAgent(ELECTRON_USER_AGENT)).toBe(CHROME_USER_AGENT);
+    expect(toChromeUserAgent(CHROME_USER_AGENT)).toBe(CHROME_USER_AGENT);
+    expect(electronMocks.setUserAgent).toHaveBeenCalledWith(CHROME_USER_AGENT);
+  });
+
+  test('gives pages a desktop viewport before the panel has ever been shown', async () => {
+    const host = createHost();
+
+    await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} });
+
+    expect(electronMocks.viewInstances[0].setBounds).toHaveBeenCalledWith({
+      x: 0,
+      y: 0,
+      width: 1280,
+      height: 800,
+    });
+  });
+
+  test('reuses the last panel size for pages opened while the panel is hidden', async () => {
+    const host = createHost();
+    host.setView({ visible: false, bounds: { x: 10, y: 20, width: 900, height: 600 } });
+
+    await host.newPage();
+
+    expect(electronMocks.viewInstances[0].setBounds).toHaveBeenCalledWith({
+      x: 10,
+      y: 20,
+      width: 900,
+      height: 600,
+    });
+  });
+
+  test('fails an Agent screenshot that Chromium never answers instead of hanging', async () => {
+    vi.useFakeTimers();
+    try {
+      const sendCommand = vi.fn((method: string) => (
+        method === 'Page.captureScreenshot' ? new Promise(() => {}) : Promise.resolve({})
+      ));
+      const page = {
+        pageId: 1,
+        loading: false,
+        refs: new Map(),
+        view: {
+          webContents: {
+            debugger: {
+              attach: vi.fn(),
+              isAttached: () => true,
+              sendCommand,
+            },
+            isDestroyed: () => false,
+          },
+        },
+      };
+      const host = createHost();
+      const hostState = host as unknown as {
+        pages: Map<number, typeof page>;
+        selectedPageId?: number;
+      };
+      hostState.pages.set(page.pageId, page);
+      hostState.selectedPageId = page.pageId;
+
+      const resultPromise = host.handleToolRequest({ tool: BrowserMcpTool.TakeScreenshot, args: {} });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await resultPromise;
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toEqual({
+        type: 'text',
+        text: 'In-app browser screenshot timed out after 10000ms.',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('searches address text with an engine for the app language', async () => {
+    const zhHost = createHost({ getLanguage: () => 'zh' });
+    await zhHost.navigate('lobster ai');
+    expect(electronMocks.webContentsInstances[0].loadURL).toHaveBeenLastCalledWith(
+      'https://www.baidu.com/s?wd=lobster%20ai',
+    );
+
+    const enHost = createHost({ getLanguage: () => 'en' });
+    await enHost.navigate('lobster ai');
+    expect(electronMocks.webContentsInstances[1].loadURL).toHaveBeenLastCalledWith(
+      'https://www.bing.com/search?q=lobster%20ai',
+    );
   });
 });

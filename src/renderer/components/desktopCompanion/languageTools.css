@@ -1,0 +1,81 @@
+/* Translate and read-aloud cards; the shared card parts live in selectionSurface.css. */
+
+/* Native popup options need explicit colors; some platforms keep a light menu background in dark mode. */
+.lt-select option, .lt-rate option { background: var(--s-bg); color: var(--s-ink); }
+
+/* Source and target sit in equal halves under the title bar, so the direction stays in view while answers scroll. */
+.lt-langs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; flex-shrink: 0; padding: 2px 16px 14px; }
+.lt-lang {
+  position: relative; display: flex; align-items: center; height: 36px; padding: 0 12px; overflow: hidden;
+  border: 1px solid var(--s-line); border-radius: 10px; color: var(--s-ink-3); font-size: 13.5px; white-space: nowrap; text-overflow: ellipsis;
+}
+.lt-arrow { width: 16px; height: 16px; color: var(--s-ink-3); stroke-width: 1.8; }
+.lt-select { padding: 0; overflow: visible; color: var(--s-ink); font-weight: 500; transition: background-color 0.12s, border-color 0.12s; }
+.lt-select:hover { background: var(--s-fill); }
+.lt-select:focus-within { border-color: var(--s-line-strong); }
+.lt-select select {
+  width: 100%; height: 100%; padding: 0 32px 0 12px; border: 0; border-radius: inherit; outline: none; appearance: none;
+  background: transparent; color: inherit; font: inherit; text-overflow: ellipsis; cursor: pointer;
+}
+.lt-select svg { position: absolute; right: 11px; width: 14px; height: 14px; color: var(--s-ink-3); stroke-width: 2; pointer-events: none; }
+
+.lt-translation { min-height: 24px; color: var(--s-ink); font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.lt-translation .sel-thinking { font-size: 13px; }
+.lt-conversation:has(> *) { margin-top: 14px; padding-top: 2px; border-top: 0.5px solid var(--s-divider); }
+
+.lt-player {
+  flex-shrink: 0; margin: 0 16px 16px; padding: 12px; border: 1px solid var(--s-divider); border-radius: 14px;
+  background: linear-gradient(180deg, var(--s-bg), var(--s-field));
+}
+.lt-controls { display: flex; align-items: center; gap: 10px; }
+.lt-play {
+  width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%;
+  background: var(--s-primary); color: var(--s-primary-ink); transition: background-color 0.15s, transform 0.1s;
+}
+.lt-play svg { width: 18px; height: 18px; stroke-width: 1.8; }
+.lt-play:hover:not(:disabled) { background: var(--s-primary-hover); }
+.lt-play:active:not(:disabled) { transform: scale(0.94); }
+.lt-loading-icon { position: relative; display: grid; place-items: center; width: 24px; height: 24px; }
+.lt-loading-icon svg { width: 12px; height: 12px; }
+.lt-spinner { position: absolute; inset: 0; border: 1.5px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: 50%; animation: lt-spin 0.8s linear infinite; }
+.lt-track { flex: 1; min-width: 0; }
+.lt-status { display: flex; align-items: center; gap: 8px; min-width: 0; line-height: 20px; }
+.lt-status strong { overflow: hidden; color: var(--s-ink); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.lt-meta { display: block; margin-top: 1px; color: var(--s-ink-2); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.lt-wave { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; height: 12px; color: var(--s-ink-2); }
+.lt-wave i { width: 2px; height: 5px; border-radius: 1px; background: currentColor; animation: lt-wave 0.85s ease-in-out infinite alternate; }
+.lt-wave i:nth-child(2) { height: 11px; }
+.lt-wave i:nth-child(3) { height: 8px; }
+.lt-wave i:nth-child(2n) { animation-delay: -0.4s; }
+.lt-timeline { display: flex; align-items: center; gap: 10px; min-height: 16px; margin-top: 10px; }
+.lt-progress { position: relative; flex: 1; height: 4px; overflow: hidden; border-radius: 4px; background: var(--s-fill-strong); }
+.lt-progress i { display: block; height: 100%; border-radius: inherit; background: var(--s-primary); transition: width 0.3s ease; }
+.lt-progress[data-loading="true"]::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--s-ink-4);
+  transform: translateX(-100%); animation: lt-loading 1.6s ease-in-out infinite;
+}
+.lt-progress-label { flex-shrink: 0; color: var(--s-ink-2); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lt-rate { position: relative; flex-shrink: 0; }
+.lt-rate select {
+  height: 30px; padding: 0 23px 0 10px; border: 1px solid var(--s-divider); border-radius: 9px; outline: none; appearance: none;
+  background: var(--s-bg); color: var(--s-ink-2); font-family: inherit; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.lt-rate select:hover { background: var(--s-fill); border-color: var(--s-line); color: var(--s-ink); }
+.lt-rate select:focus-visible { outline: 2px solid color-mix(in srgb, var(--s-accent) 60%, transparent); }
+.lt-rate svg { position: absolute; top: 10px; right: 8px; width: 10px; height: 10px; color: var(--s-ink-3); stroke-width: 2; pointer-events: none; }
+.lt-stop { width: 30px; height: 30px; border-radius: 9px; color: var(--s-ink-2); }
+.lt-stop .sel-stop-glyph { width: 9px; height: 9px; border-radius: 2px; }
+.sel-surface .lt-stop:disabled { opacity: 0.45; }
+
+.sel-card[data-tool="tts"] .sel-scroll { padding-bottom: 14px; }
+.sel-card[data-tool="tts"] .sel-quote { margin-bottom: 0; color: var(--s-ink-2); }
+
+@keyframes lt-wave { to { transform: scaleY(0.35); opacity: 0.6; } }
+@keyframes lt-spin { to { transform: rotate(360deg); } }
+@keyframes lt-loading { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .lt-wave i, .lt-spinner, .lt-progress[data-loading="true"]::after { animation: none; }
+  .lt-progress[data-loading="true"]::after { transform: none; opacity: 0.35; }
+  .lt-play, .lt-progress i { transition: none; }
+}

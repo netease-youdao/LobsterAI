@@ -9,6 +9,9 @@ import renderer from 'vite-plugin-electron-renderer';
 // PORT lets tooling (e.g. browser preview) assign a free port; electron:dev
 // pins 5175 via the --port CLI flag, which overrides server.port anyway.
 const devPort = Number(process.env.PORT ?? '') || 5175;
+// Keep production and development dependency transforms aligned with Electron.
+// The Word layout engine initializes HarfBuzz with top-level await.
+const rendererTarget = 'es2022';
 const katexVersion = process.env.npm_package_dependencies_katex?.replace(/^[~^]/, '') || '0.16.0';
 const pdfJsAssetRoot = path.resolve(__dirname, 'node_modules/pdfjs-dist');
 const pdfJsPublicPath = '/pdfjs/';
@@ -92,7 +95,7 @@ export default defineConfig({
             minify: false,
             rollupOptions: {
               external: (id) => {
-                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
+                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate'];
                 if (staticExternals.includes(id)) return true;
                 if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
                 return false;
@@ -104,12 +107,23 @@ export default defineConfig({
             },
           },
         },
-        // package.json starts Electron after all five output files stabilize.
+        // package.json starts Electron after all preload and main output files stabilize.
         onstart() {},
       },
       {
         // 预加载脚本入口文件
         entry: 'src/main/preload.ts',
+        vite: {
+          build: {
+            sourcemap: true,
+            outDir: 'dist-electron',
+            minify: false,
+          },
+        },
+        onstart() {},
+      },
+      {
+        entry: 'src/main/appQuitConfirmationPreload.ts',
         vite: {
           build: {
             sourcemap: true,
@@ -170,6 +184,7 @@ export default defineConfig({
     },
   },
   build: {
+    target: rendererTarget,
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
@@ -179,6 +194,9 @@ export default defineConfig({
       // sandboxed thumbnail page never shares chunks with the app entry.
       input: {
         main: path.resolve(__dirname, 'index.html'),
+        desktopCompanion: path.resolve(__dirname, 'desktop-companion.html'),
+        companionComposer: path.resolve(__dirname, 'companion-composer.html'),
+        companionScreenshot: path.resolve(__dirname, 'companion-screenshot.html'),
       },
     },
   },
@@ -186,6 +204,15 @@ export default defineConfig({
     port: devPort,
     strictPort: true,
     host: true,
+    // Vite marks pre-bundled deps `immutable` under a `?v=` hash that can repeat
+    // across re-optimizations with different chunk files. Electron's HTTP cache
+    // (shared by every checkout and launch) never revalidates those, so the
+    // renderer imports chunks this server no longer has (404) and never mounts.
+    // server.headers is applied after Vite's own Cache-Control; with no-cache
+    // each load revalidates against the ETag and gets a 304 when unchanged.
+    headers: {
+      'Cache-Control': 'no-cache',
+    },
     hmr: {
       port: devPort,
     },
@@ -194,10 +221,12 @@ export default defineConfig({
       // Ignore vendor/ to prevent dev reload when plugins are installed into
       // vendor/openclaw-runtime/.../third-party-extensions/
       // Skip temporary trees (which may contain circular junctions) and Electron output.
+      // Anchor artifacts/ (repo-root scratch output) so src/renderer/components/artifacts/ still
+      // hot-reloads; chokidar never matches relative globs, and a directory path covers its subtree.
       ignored: [
         '**/vendor/**',
         '**/.work/**',
-        '**/artifacts/**',
+        path.resolve(__dirname, 'artifacts'),
         '**/dist-electron/**',
       ],
     },
@@ -205,6 +234,7 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
     esbuildOptions: {
+      target: rendererTarget,
       define: {
         __VERSION__: JSON.stringify(katexVersion),
       },

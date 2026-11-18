@@ -1,4 +1,4 @@
-import { LightBulbIcon } from '@heroicons/react/24/outline';
+import { ArrowRightCircleIcon, LightBulbIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 
 import { coworkService } from '../../services/cowork';
@@ -16,6 +16,8 @@ const TIP_KEYS = [
 
 const TIP_ROTATE_MS = 5000;
 const SLOW_HINT_AFTER_MS = 15000;
+// Matches the root's `duration-200`: how long the screen stays mounted while it fades out.
+const EXIT_FADE_MS = 200;
 
 // sessionStorage key written by index.html's static splash so the overlay
 // continues from the same tip instead of jumping to a different one.
@@ -65,6 +67,14 @@ interface EngineStartupOverlayProps {
    * frame so startup is one continuous screen.
    */
   bootstrapping?: boolean;
+  /**
+   * Name of the page an in-app link asked for while this screen covers the app
+   * (e.g. a launch ad clicked before the gateway is up). The page is already
+   * open underneath; the row tells the user it is waiting for them.
+   */
+  destinationLabel?: string | null;
+  /** Lets the user call that navigation off; the row has no cancel control without it. */
+  onCancelDestination?: () => void;
 }
 
 /**
@@ -75,7 +85,11 @@ interface EngineStartupOverlayProps {
  * index.html contains a static pre-React replica of this page; keep the
  * layout in sync so the handoff between the two is invisible.
  */
-const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrapping = false }) => {
+const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({
+  bootstrapping = false,
+  destinationLabel = null,
+  onCancelDestination,
+}) => {
   const [status, setStatus] = useState<OpenClawEngineStatus | null>(
     () => coworkService.getOpenClawEngineStatusSnapshot()
   );
@@ -111,6 +125,36 @@ const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrappi
   const animateIn = visible && !wasVisibleRef.current;
   wasVisibleRef.current = visible;
   overlayWasVisible = visible;
+
+  // The row keeps its last label while it collapses, and stays as it was during the
+  // fade-out: the parent clears the destination the moment the engine is ready.
+  const [destinationRow, setDestinationRow] = useState(() => ({
+    label: destinationLabel ?? '',
+    open: Boolean(destinationLabel),
+  }));
+  useEffect(() => {
+    if (!visible) return;
+    setDestinationRow((previous) => {
+      if (destinationLabel) return { label: destinationLabel, open: true };
+      return previous.open ? { ...previous, open: false } : previous;
+    });
+  }, [visible, destinationLabel]);
+
+  // Stay mounted for a short fade-out so the app underneath is revealed rather than cut to.
+  const [present, setPresent] = useState(visible);
+  useEffect(() => {
+    if (visible) {
+      setPresent(true);
+      return undefined;
+    }
+    const exitTimer = window.setTimeout(() => {
+      setPresent(false);
+      // Start the next appearance (e.g. a later gateway restart) without a stale row.
+      setDestinationRow((previous) => (previous.open ? { ...previous, open: false } : previous));
+    }, EXIT_FADE_MS);
+    return () => window.clearTimeout(exitTimer);
+  }, [visible]);
+  const exiting = !visible && present;
 
   useEffect(() => {
     if (!visible) {
@@ -156,7 +200,7 @@ const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrappi
     setTipIndex(idx);
   };
 
-  if (!visible) {
+  if (!visible && !present) {
     return null;
   }
 
@@ -165,7 +209,12 @@ const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrappi
     : null;
 
   return (
-    <div className={`fixed inset-0 z-[100] flex items-center justify-center bg-surface ${animateIn ? 'animate-fade-in' : ''}`}>
+    <div
+      aria-hidden={exiting || undefined}
+      className={`fixed inset-0 z-[100] flex items-center justify-center bg-surface transition-opacity duration-200 motion-reduce:transition-none ${
+        animateIn ? 'animate-fade-in' : ''
+      } ${exiting ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
+    >
       {/* brand gradient, same as WelcomeDialog */}
       <div
         className="absolute inset-0"
@@ -222,6 +271,31 @@ const EngineStartupOverlay: React.FC<EngineStartupOverlayProps> = ({ bootstrappi
           {progressPercent !== null && (
             <span className="text-xs tabular-nums text-secondary shrink-0">{progressPercent}%</span>
           )}
+        </div>
+
+        {/* where a link clicked during startup lands once the engine is ready */}
+        <div
+          className={`grid w-full transition-[grid-template-rows,opacity,visibility] duration-300 ease-smooth motion-reduce:transition-none ${
+            destinationRow.open ? 'visible grid-rows-[1fr] opacity-100' : 'invisible grid-rows-[0fr] opacity-0'
+          }`}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div className="mt-5 flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/5 px-4 py-2.5">
+              <ArrowRightCircleIcon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                {i18nService.t('engineStartingDestination').replace('{name}', () => destinationRow.label)}
+              </span>
+              {onCancelDestination && (
+                <button
+                  type="button"
+                  onClick={onCancelDestination}
+                  className="shrink-0 rounded text-xs text-secondary transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  {i18nService.t('cancel')}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* rotating feature tips */}

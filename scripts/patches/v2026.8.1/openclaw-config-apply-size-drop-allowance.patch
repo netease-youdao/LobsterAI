@@ -1,0 +1,144 @@
+diff --git a/packages/gateway-protocol/src/schema/config.ts b/packages/gateway-protocol/src/schema/config.ts
+index 9b6a4c48..a3da19ea 100644
+--- a/packages/gateway-protocol/src/schema/config.ts
++++ b/packages/gateway-protocol/src/schema/config.ts
+@@ -42,10 +42,15 @@ const ConfigApplyLikeParamProperties = {
+   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+ } as const;
+ 
+-const ConfigApplyLikeParamsSchema = closedObject(ConfigApplyLikeParamProperties);
+-
+ /** Raw config apply request that may schedule a restart. */
+-export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
++export const ConfigApplyParamsSchema = closedObject({
++  ...ConfigApplyLikeParamProperties,
++  /**
++   * The full-config owner intends a large shrink, e.g. a host removing a model
++   * catalog. Waives only the size-drop clobber check for this write.
++   */
++  allowConfigSizeDrop: Type.Optional(Type.Boolean()),
++});
+ /** Raw config patch request that may schedule a restart. */
+ export const ConfigPatchParamsSchema = closedObject({
+   ...ConfigApplyLikeParamProperties,
+diff --git a/src/config/io.observe-recovery.test.ts b/src/config/io.observe-recovery.test.ts
+index 5fec1d05..7ac9bdf8 100644
+--- a/src/config/io.observe-recovery.test.ts
++++ b/src/config/io.observe-recovery.test.ts
+@@ -473,6 +473,31 @@ describe("config observe recovery", () => {
+     });
+   });
+ 
++  it.each(["async", "sync"] as const)(
++    "%s recovery leaves a size drop alone when the backup already holds the current bytes",
++    async (mode) => {
++      await withSuiteHome(async (home) => {
++        const { deps, configPath, auditPath, warn } = makeDeps(home);
++        const snapshot = await makeSnapshot(configPath, largeRecoverableCoreConfig);
++        await promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger });
++        const shrunk = await writeConfigRaw(configPath, recoverableCoreConfig);
++        await fsp.copyFile(configPath, `${configPath}.bak`);
++        const input = { deps, configPath, ...shrunk, prepareBackup: approveRecoveryCandidate };
++
++        const recovered =
++          mode === "async"
++            ? await maybeRecoverSuspiciousConfigRead(input)
++            : maybeRecoverSuspiciousConfigReadSync(input);
++
++        expect(recovered).toEqual(shrunk);
++        await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(shrunk.raw);
++        await expect(listClobberFiles(configPath)).resolves.toEqual([]);
++        expectWarnNotContaining(warn, "Config auto-restored");
++        await expect(readObserveEvents(auditPath)).resolves.toEqual([]);
++      });
++    },
++  );
++
+   it("read snapshots auto-restore tiny valid clobbers before recording them observed", async () => {
+     await withSuiteHome(async (home) => {
+       const { io, configPath, warn } = createTestConfigIO(home);
+diff --git a/src/config/io.observe-recovery.ts b/src/config/io.observe-recovery.ts
+index 83a107c6..fd5bb1c7 100644
+--- a/src/config/io.observe-recovery.ts
++++ b/src/config/io.observe-recovery.ts
+@@ -395,7 +395,9 @@ function* recoverSuspiciousConfigRead(
+   }
+   const { suspicious, suspiciousSignature } = recoveryContext;
+   const backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+-  if (!backupRaw) {
++  // A backup with the current bytes recovers nothing; restoring it would only
++  // record a false clobber. A host that writes both files means the new shape.
++  if (!backupRaw || backupRaw === raw) {
+     return returnOriginalConfigRead(params);
+   }
+   const backupParse = parseBackupConfigRaw(deps, backupRaw);
+diff --git a/src/gateway/server-methods/config.test.ts b/src/gateway/server-methods/config.test.ts
+index d42f3a10..200a43bd 100644
+--- a/src/gateway/server-methods/config.test.ts
++++ b/src/gateway/server-methods/config.test.ts
+@@ -929,3 +929,48 @@ describe("config.patch model input normalization", () => {
+     expect(storedConfig.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
+   });
+ });
++
++describe("config.apply size-drop allowance", () => {
++  async function invokeConfigApply(extraParams: Record<string, unknown>) {
++    const harness = createConfigHandlerHarness({
++      method: "config.apply",
++      params: { raw: JSON.stringify({ gateway: { mode: "local" } }), baseHash: "base-hash", ...extraParams },
++    });
++    await expectDefined(
++      configHandlers["config.apply"],
++      'configHandlers["config.apply"] test invariant',
++    )(harness.options);
++    return harness;
++  }
++
++  function committedWriteOptions(): Record<string, unknown> {
++    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
++    const [{ writeOptions }] = configWriteMocks.commitGatewayConfigWrite.mock.calls[0] as [
++      { writeOptions: Record<string, unknown> },
++    ];
++    return writeOptions;
++  }
++
++  it("waives the size-drop check only for a writer that opts in", async () => {
++    await invokeConfigApply({ allowConfigSizeDrop: true });
++
++    expect(committedWriteOptions()).toMatchObject({ allowConfigSizeDrop: true });
++  });
++
++  it("keeps the size-drop check for writers that do not opt in", async () => {
++    await invokeConfigApply({ allowConfigSizeDrop: false });
++
++    expect(committedWriteOptions().allowConfigSizeDrop).toBeUndefined();
++  });
++
++  it("rejects a non-boolean allowance before writing", async () => {
++    const harness = await invokeConfigApply({ allowConfigSizeDrop: "true" });
++
++    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
++    expect(harness.respond).toHaveBeenCalledWith(
++      false,
++      undefined,
++      expect.objectContaining({ message: expect.stringContaining("invalid config.apply params") }),
++    );
++  });
++});
+diff --git a/src/gateway/server-methods/config.ts b/src/gateway/server-methods/config.ts
+index 138425f0..60d59485 100644
+--- a/src/gateway/server-methods/config.ts
++++ b/src/gateway/server-methods/config.ts
+@@ -1246,7 +1246,11 @@ export const configHandlers: GatewayRequestHandlers = {
+     });
+     const writeResult = await commitGatewayConfigWriteOrRespond({
+       snapshot,
+-      writeOptions,
++      // Explicit per request; other writers keep the size-drop clobber check.
++      writeOptions:
++        params.allowConfigSizeDrop === true
++          ? { ...writeOptions, allowConfigSizeDrop: true }
++          : writeOptions,
+       nextConfig: parsed.writeConfig,
+       context,
+       disconnectSharedAuthClients,

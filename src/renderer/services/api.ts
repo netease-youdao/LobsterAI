@@ -1,4 +1,11 @@
-import { ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
+import {
+  normalizeGeminiApiBaseUrl,
+  OpenAIApiMode,
+  ProviderName,
+  resolveCodingPlanBaseUrl,
+  resolveProviderOpenAIApiMode,
+  usesCustomGeminiApiFormat,
+} from '../../shared/providers';
 import { store } from '../store';
 import { ChatMessagePayload, ChatUserMessageInput, ImageAttachment } from '../types/chat';
 import { configService } from './config';
@@ -8,6 +15,7 @@ export interface ApiConfig {
   baseUrl: string;
   provider?: string;
   apiFormat?: 'anthropic' | 'openai' | 'gemini';
+  openaiApiMode?: OpenAIApiMode;
 }
 
 type ProviderRuntimeCredential = {
@@ -102,8 +110,8 @@ class ApiService {
     return `${normalized}/v1/responses`;
   }
 
-  private shouldUseOpenAIResponsesApi(provider: string): boolean {
-    return provider === 'openai';
+  private shouldUseOpenAIResponsesApi(provider: string, config?: ApiConfig): boolean {
+    return provider === 'openai' || config?.openaiApiMode === OpenAIApiMode.Responses;
   }
 
   private buildImageHint(images?: ImageAttachment[]): string {
@@ -319,9 +327,11 @@ class ApiService {
         
         return {
           apiKey: runtimeCredential?.apiKey ?? providerConfig.apiKey,
-          baseUrl: runtimeCredential?.baseUrl ?? baseUrl,
+          baseUrl: runtimeCredential?.baseUrl
+            ?? (usesCustomGeminiApiFormat(provider, apiFormat) ? normalizeGeminiApiBaseUrl(baseUrl) : baseUrl),
           provider: provider,
           apiFormat,
+          openaiApiMode: resolveProviderOpenAIApiMode(provider, { ...providerConfig, apiFormat }),
         };
       }
     }
@@ -795,7 +805,7 @@ class ApiService {
       this.cancelOngoingRequest();
       const requestId = generateRequestId();
       this.currentRequestId = requestId;
-      const useResponsesApi = this.shouldUseOpenAIResponsesApi(provider);
+      const useResponsesApi = this.shouldUseOpenAIResponsesApi(provider, config);
 
       const userMessage: ChatMessagePayload = {
         role: 'user',

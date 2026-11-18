@@ -11,13 +11,46 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # package-lock.json is not committed, so in-range updates already install
+    # automatically. Only open a PR when the declared range has to move.
+    versioning-strategy: "increase-if-necessary"
+    ignore:
+      # Major upgrades need code migration; do them as deliberate PRs.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # For 0.x packages a minor bump is breaking, which semver-major does not cover.
+      - dependency-name: "@sinclair/typebox"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@tailwindcss/typography"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@wecom/wecom-aibot-sdk"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@xmldom/xmldom"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "docx-preview"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "esbuild"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "eslint-plugin-react-refresh"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "fflate"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "katex"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "vite-plugin-electron"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "vite-plugin-electron-renderer"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "xlsx"
+        update-types: ["version-update:semver-minor"]
     groups:
-      electron:
+      # All @univerjs/* packages are pinned to one version and must move together.
+      univer:
         patterns:
-          - "electron*"
-      anthropic:
+          - "@univerjs/*"
+      docx-editor:
         patterns:
-          - "@anthropic-ai/*"
+          - "@docx-editor.dev/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"

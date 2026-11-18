@@ -24,26 +24,22 @@ const STATUS_OPTIONS = [
 
 const historyGridClass = 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_88px] items-center gap-3';
 
-const statusConfig: Record<TaskStatus, { label: string; color: string; activeColor: string }> = {
+const statusConfig: Record<TaskStatus, { label: string; color: string }> = {
   [TaskStatus.Success]: {
     label: 'scheduledTasksStatusSuccess',
     color: 'text-green-600 dark:text-green-400',
-    activeColor: 'bg-green-500/10 border-green-500/30 text-green-600 dark:text-green-400',
   },
   [TaskStatus.Error]: {
     label: 'scheduledTasksStatusError',
     color: 'text-red-500',
-    activeColor: 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400',
   },
   [TaskStatus.Skipped]: {
     label: 'scheduledTasksStatusSkipped',
     color: 'text-yellow-500',
-    activeColor: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-600 dark:text-yellow-400',
   },
   [TaskStatus.Running]: {
     label: 'scheduledTasksStatusRunning',
     color: 'text-blue-500',
-    activeColor: 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400',
   },
 };
 
@@ -178,7 +174,7 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
                 onClick={() => handleStatusToggle(s)}
                 className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                   isActive
-                    ? cfg.activeColor
+                    ? 'bg-surface-raised border-secondary/40 text-foreground'
                     : 'border-transparent text-secondary hover:bg-surface-raised'
                 }`}
               >
@@ -308,7 +304,7 @@ const AllRunsHistory: React.FC<AllRunsHistoryProps> = ({ searchText = '' }) => {
             <button
               type="button"
               onClick={handleLoadMore}
-              className="w-full py-3 text-sm text-primary hover:text-primary-hover transition-colors"
+              className="w-full py-3 text-sm text-foreground hover:underline underline-offset-4 transition-colors"
             >
               {i18nService.t('scheduledTasksLoadMore')}
             </button>

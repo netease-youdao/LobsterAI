@@ -71,6 +71,7 @@ const manifest = {
   version: buildInfo.dshVersion,
   target: targetId,
   patchHash: buildInfo.patchHash,
+  pnpmVersion: buildInfo.pnpmVersion,
   archive: path.basename(archivePath),
   sha256,
   size: archiveBytes.length,

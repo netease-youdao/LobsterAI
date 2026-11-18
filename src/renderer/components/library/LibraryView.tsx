@@ -72,7 +72,9 @@ import {
   MANAGEMENT_PAGE_TITLE_TEXT,
   MANAGEMENT_TITLE_TEXT,
 } from '../common/managementTypography';
+import CloudFilesIcon from '../icons/CloudFilesIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import LocalFilesIcon from '../icons/LocalFilesIcon';
 import ShareUploadIcon from '../icons/ShareUploadIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
@@ -256,19 +258,24 @@ const SourceTab: React.FC<{
     role="tab"
     aria-selected={active}
     onClick={onClick}
-    className={`non-draggable inline-flex h-8 items-center gap-1.5 rounded-lg px-3 ${MANAGEMENT_PAGE_TITLE_TEXT} font-semibold transition-colors ${
+    className={`non-draggable relative inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-6 ${MANAGEMENT_PAGE_TITLE_TEXT} font-semibold transition-colors ${
       active ? 'bg-surface-raised text-foreground' : 'text-secondary hover:text-foreground'
     }`}
   >
+    {source === LibrarySourceFilter.Local ? (
+      <LocalFilesIcon className="h-[18px] w-[18px] shrink-0" />
+    ) : (
+      <CloudFilesIcon className="h-[18px] w-[18px] shrink-0" />
+    )}
     {i18nService.t(`librarySource_${source}`)}
-    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-      {loading && (
+    {loading && (
+      <span className="absolute inset-y-0 right-1.5 flex w-3.5 items-center justify-center">
         <LibraryLoadingIndicator
           label={i18nService.t('libraryUpdating')}
           announce={announceLoading}
         />
-      )}
-    </span>
+      </span>
+    )}
   </button>
 );
 

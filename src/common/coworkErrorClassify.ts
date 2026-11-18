@@ -21,9 +21,12 @@ export const CoworkErrorI18nKey = {
   ModelOverloaded: 'coworkErrorModelOverloaded',
   ModelResponseTimeout: 'coworkErrorModelResponseTimeout',
   NetworkError: 'coworkErrorNetworkError',
+  NetworkErrorViaSystemProxy: 'coworkErrorNetworkErrorViaSystemProxy',
   ServerError: 'coworkErrorServerError',
   TranscriptOversized: 'coworkErrorTranscriptOversized',
+  ContextRecoveryFailed: 'coworkErrorContextRecoveryFailed',
   GatewayHeapOutOfMemory: 'coworkErrorGatewayHeapOutOfMemory',
+  WorkspaceAliasRepointed: 'coworkErrorWorkspaceAliasRepointed',
 } as const;
 
 const LOBSTERAI_QUOTA_EXHAUSTED_PATTERN =
@@ -34,8 +37,18 @@ const MODEL_CAPACITY_OVERLOAD_PATTERN =
 
 const API_KEY_PATTERN = String.raw`(?:api\s*key|api[_-]?key|apikey)`;
 const UNAVAILABLE_NETWORK_CODE_PATTERN = String.raw`(?:ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]+)`;
+// Chromium network errors from Electron net.fetch, e.g. relayed by the LobsterAI token proxy.
+const CHROMIUM_NET_ERROR_PATTERN = String.raw`net::ERR_[A-Z0-9_]+`;
 
-const ERROR_RULES: Array<[RegExp, string]> = [
+// Node fs errors, e.g. "EACCES: permission denied, mkdir '/Volumes/Elements'".
+// They name the local file at fault, so they are shown verbatim instead of
+// matching provider rules such as "permission denied" (model access).
+const LOCAL_FILE_SYSTEM_ERROR_PATTERN =
+  /\b(?:EACCES|EPERM|ENOENT|ENOTDIR|EISDIR|EROFS|ENOSPC|EBUSY|EEXIST|ENOTEMPTY): [^\n]*?, (?:open|opendir|scandir|mkdir|mkdtemp|rmdir|rm|unlink|rename|copyfile|cp|stat|lstat|access|chmod|chown|realpath|readlink|symlink|link|utime|write|read) '/;
+
+/** A null key stops classification so the caller shows the original error. */
+const ERROR_RULES: Array<[RegExp, string | null]> = [
+  [LOCAL_FILE_SYSTEM_ERROR_PATTERN, null],
   // A persisted local cooldown is not a new provider billing/auth failure.
   [/Inline API key for provider "[^"]+" is temporarily disabled after a provider auth\/billing failure/i, CoworkErrorI18nKey.ProviderCooldown],
   // OAuth / token refresh failures. Must precede generic auth handling.
@@ -59,7 +72,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Oversized Cowork/OpenClaw gateway message payloads.
   [/chat\.send payload too large|max payload size exceeded|gateway closed \(1009\)|message too big/i, 'coworkErrorMessageTooLarge'],
   // Input too long: context length, HTTP 413, Qwen, payload too large
-  [/input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
+  [/Auto-compaction could not recover this turn.*kept this conversation mapped to the current session/i, CoworkErrorI18nKey.ContextRecoveryFailed],
+  [/input.*too.*long|context.*length.*exceeded|context_window_exceeded|maximum context length|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
   // PDF processing failure
   [/could not process pdf/i, 'coworkErrorCouldNotProcessPdf'],
   // Model not found: standard, Qwen, Ollama
@@ -67,6 +81,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Gateway / connection issues
   [new RegExp(OpenClawTranscriptSafetyErrorCode.ActiveTranscriptOversized, 'i'), CoworkErrorI18nKey.TranscriptOversized],
   [new RegExp(`gatewayFailureKind=${OpenClawGatewayFailureKind.HeapOutOfMemory}|JavaScript heap out of memory`, 'i'), CoworkErrorI18nKey.GatewayHeapOutOfMemory],
+  // OpenClaw refuses a workspace path that now resolves to another folder than recorded.
+  [/workspace path alias(?:es)? (?:points to a different current target|resolve to conflicting state|conflicts with canonical state)/i, CoworkErrorI18nKey.WorkspaceAliasRepointed],
   [/gateway request timeout for sessions\.patch/i, 'coworkGatewaySessionSyncTimeout'],
   [/gateway.*disconnect|client disconnected/i, 'coworkErrorGatewayDisconnected'],
   [/service restart/i, 'coworkErrorServiceRestart'],
@@ -75,8 +91,9 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
   // Model/provider response timeouts. Must precede generic request/network timeouts.
   [/LLM (?:idle timeout|request timed out)|no response from model|model response (?:timeout|timed out)/i, CoworkErrorI18nKey.ModelResponseTimeout],
-  // Network errors
-  [new RegExp(`${UNAVAILABLE_NETWORK_CODE_PATTERN}|fetch failed|ConnectTimeoutError|network request failed|socket (?:hang up|closed|reset)|connection.*(?:refused|reset|aborted|closed|timeout|timed out)|could not connect|network.*error|request.*timed out`, 'i'), CoworkErrorI18nKey.NetworkError],
+  // Network errors. Must precede server errors: a proxy-relayed connection failure
+  // arrives as HTTP 502 but never reached the server.
+  [new RegExp(`${UNAVAILABLE_NETWORK_CODE_PATTERN}|${CHROMIUM_NET_ERROR_PATTERN}|fetch failed|ConnectTimeoutError|network request failed|socket (?:hang up|closed|reset)|connection.*(?:refused|reset|aborted|closed|timeout|timed out)|could not connect|network.*error|request.*timed out`, 'i'), CoworkErrorI18nKey.NetworkError],
   // Server errors: HTTP 500/502/503
   [/internal.server.error|bad.gateway|service.unavailable|\b50[023]\b/i, CoworkErrorI18nKey.ServerError],
   // Unknown / unclassified errors from upstream (OpenClaw wraps unrecognized errors)
@@ -90,6 +107,7 @@ const ERROR_RULES: Array<[RegExp, string]> = [
 export function classifyErrorKey(error: string, provider?: string): string | null {
   for (const [pattern, key] of ERROR_RULES) {
     if (pattern.test(error)) {
+      if (key === null) return null;
       // LobsterAI owns the upstream keys; its user quota has separate codes above.
       return key === CoworkErrorI18nKey.InsufficientBalance
         && provider?.trim() === ProviderName.LobsteraiServer

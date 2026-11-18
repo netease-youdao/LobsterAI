@@ -63,6 +63,22 @@ export const BrowserDisplayMode = {
 
 export type BrowserDisplayMode = typeof BrowserDisplayMode[keyof typeof BrowserDisplayMode];
 
+/**
+ * One-time switch of existing installs to the in-app browser. The applied
+ * version lives on the top-level app config so a later explicit choice wins.
+ */
+export const BROWSER_DISPLAY_MODE_MIGRATION_VERSION = 1;
+
+const BrowserSearchUrlPrefix = {
+  Baidu: 'https://www.baidu.com/s?wd=',
+  Bing: 'https://www.bing.com/search?q=',
+} as const;
+
+/** Search URL for address-bar text that is not a URL; reachable without a proxy in China. */
+export const buildBrowserSearchUrl = (query: string, language?: string): string => (
+  `${language === 'zh' ? BrowserSearchUrlPrefix.Baidu : BrowserSearchUrlPrefix.Bing}${encodeURIComponent(query)}`
+);
+
 export const BrowserNetworkMode = {
   ProxyCompatible: 'proxy-compatible',
   Strict: 'strict',
@@ -288,7 +304,7 @@ export interface BrowserDiagnosticResult {
 export const defaultBrowserWebAccessConfig: BrowserWebAccessConfig = {
   browserEnabled: true,
   profileMode: BrowserProfileMode.Managed,
-  displayMode: BrowserDisplayMode.External,
+  displayMode: BrowserDisplayMode.InApp,
   networkMode: BrowserNetworkMode.ProxyCompatible,
   followGlobalProxy: true,
   allowedHostnames: [],

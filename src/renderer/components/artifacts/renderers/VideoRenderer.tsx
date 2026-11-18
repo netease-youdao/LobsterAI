@@ -1,4 +1,9 @@
-import { ArtifactPreviewProtocol } from '@shared/artifactPreview/constants';
+import { ArtifactPreviewHost, ArtifactPreviewProtocol } from '@shared/artifactPreview/constants';
+import {
+  LOCAL_FILE_THUMBNAIL_FIT_PARAM,
+  LOCAL_FILE_THUMBNAIL_PARAM,
+  LocalFileThumbnailFit,
+} from '@shared/artifactPreview/localFileThumbnail';
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
@@ -36,16 +41,25 @@ function normalizeLocalPath(filePath: string): string {
   return normalized.replace(/\\/g, '/');
 }
 
-function buildLocalFileSrc(filePath: string, cacheKey: number): string {
+/**
+ * `thumbnail` asks for a copy downscaled to `edge` pixels on the side its `fit` names; the protocol
+ * serves the original when it is no larger.
+ */
+export function buildLocalFileSrc(
+  filePath: string,
+  cacheKey: number,
+  thumbnail?: { edge: number; fit: LocalFileThumbnailFit },
+): string {
   const normalized = normalizeLocalPath(filePath);
-  const pathForUrl = /^[A-Za-z]:/.test(normalized) || normalized.startsWith('/')
+  const pathForUrl = normalized.startsWith('/')
     ? normalized
     : `/${normalized}`;
   const encoded = pathForUrl.split('/').map(encodeURIComponent).join('/');
-  const prefix = /^[A-Za-z]:/.test(pathForUrl)
-    ? `${ArtifactPreviewProtocol.LocalFile}:///`
-    : `${ArtifactPreviewProtocol.LocalFile}://`;
-  return `${prefix}${encoded}?v=${cacheKey}`;
+  // Standard custom schemes need an authority; an empty host is rejected by Chromium media loading.
+  const thumbnailQuery = !thumbnail ? ''
+    : `&${LOCAL_FILE_THUMBNAIL_PARAM}=${thumbnail.edge}${thumbnail.fit === LocalFileThumbnailFit.Cover
+      ? `&${LOCAL_FILE_THUMBNAIL_FIT_PARAM}=${thumbnail.fit}` : ''}`;
+  return `${ArtifactPreviewProtocol.LocalFile}://${ArtifactPreviewHost.LocalFile}${encoded}?v=${cacheKey}${thumbnailQuery}`;
 }
 
 function buildFileUrlSrc(filePath: string): string {
@@ -132,7 +146,12 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
             setVideoAspectRatio(`${videoWidth} / ${videoHeight}`);
           }
         }}
-        onError={() => {
+        onError={(event) => {
+          window.electron?.log?.fromRenderer?.('warn', 'ArtifactPreview', `Video source failed: ${JSON.stringify({
+            sourceIndex: activeSourceIndex,
+            code: event.currentTarget.error?.code,
+            message: event.currentTarget.error?.message,
+          })}`);
           if (activeSourceIndex < sources.length - 1) {
             setActiveSourceIndex(index => index + 1);
             return;

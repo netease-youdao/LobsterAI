@@ -1,6 +1,7 @@
 import { type ProviderConfig, ProviderRegistry } from '@shared/providers';
 
 import {
+  BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
@@ -12,10 +13,12 @@ import {
 export const ShortcutAction = {
   NewChat: 'newChat',
   Search: 'search',
+  ConversationSearch: 'conversationSearch',
   Settings: 'settings',
   SendMessage: 'sendMessage',
   ShowShortcuts: 'showShortcuts',
   FocusPrompt: 'focusPrompt',
+  VoiceInput: 'voiceInput',
   StopCurrentTask: 'stopCurrentTask',
   ToggleSidebar: 'toggleSidebar',
   ToggleArtifacts: 'toggleArtifacts',
@@ -39,6 +42,7 @@ export const ShortcutAction = {
   OpenMcp: 'openMcp',
   OpenSettingsGeneral: 'openSettingsGeneral',
   OpenSettingsAppearance: 'openSettingsAppearance',
+  OpenSettingsDesktopCompanion: 'openSettingsDesktopCompanion',
   OpenSettingsAgentEngine: 'openSettingsAgentEngine',
   OpenSettingsModel: 'openSettingsModel',
   OpenSettingsIm: 'openSettingsIm',
@@ -71,6 +75,11 @@ export const FontPreferences = {
 // each version resets at most once and later user choices survive upgrades.
 export const UI_FONT_SIZE_MIGRATION_VERSION = 1;
 export const CODE_FONT_SIZE_MIGRATION_VERSION = 1;
+
+// Bump when a default shortcut moves so stored configs still carrying the old
+// default follow it once. v1: task search Cmd/Ctrl+F -> K, focus prompt K -> L,
+// find in conversation gets its own Cmd/Ctrl+F action.
+export const SHORTCUTS_MIGRATION_VERSION = 1;
 
 export const normalizeFontPreference = (
   value: unknown,
@@ -126,6 +135,8 @@ export interface AppConfig {
   codeFontSize?: number;
   // 已应用的代码字号强制重置版本(见 CODE_FONT_SIZE_MIGRATION_VERSION)
   codeFontSizeMigrationVersion?: number;
+  // 已应用的快捷键默认值迁移版本(见 SHORTCUTS_MIGRATION_VERSION)
+  shortcutsMigrationVersion?: number;
   // 语言配置
   language: 'zh' | 'en';
   // 是否使用系统代理
@@ -140,6 +151,8 @@ export interface AppConfig {
   notificationSettings?: NotificationSettings;
   // 浏览器与网页访问配置
   browserWebAccess: BrowserWebAccessConfig;
+  // 已应用的内置浏览器默认切换版本(见 BROWSER_DISPLAY_MODE_MIGRATION_VERSION，由主进程执行)
+  browserDisplayModeMigrationVersion?: number;
   // 语言初始化标记 (用于判断是否是首次启动)
   language_initialized?: boolean;
   // 应用配置
@@ -178,9 +191,9 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
     ],
-    defaultModel: 'deepseek-reasoner',
+    defaultModel: 'deepseek-v4-flash',
     defaultModelProvider: 'deepseek',
   },
   providers: buildDefaultProviders(),
@@ -196,6 +209,7 @@ export const defaultConfig: AppConfig = {
   usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
+  browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
@@ -208,11 +222,13 @@ export const defaultConfig: AppConfig = {
   },
   shortcuts: {
     [ShortcutAction.NewChat]: 'CommandOrControl+N',
-    [ShortcutAction.Search]: 'CommandOrControl+F',
+    [ShortcutAction.Search]: 'CommandOrControl+K',
+    [ShortcutAction.ConversationSearch]: 'CommandOrControl+F',
     [ShortcutAction.Settings]: 'CommandOrControl+,',
     [ShortcutAction.SendMessage]: 'Enter',
     [ShortcutAction.ShowShortcuts]: 'CommandOrControl+/',
-    [ShortcutAction.FocusPrompt]: 'CommandOrControl+K',
+    [ShortcutAction.FocusPrompt]: 'CommandOrControl+L',
+    [ShortcutAction.VoiceInput]: '',
     [ShortcutAction.StopCurrentTask]: 'CommandOrControl+.',
     [ShortcutAction.ToggleSidebar]: 'CommandOrControl+B',
     [ShortcutAction.ToggleArtifacts]: 'CommandOrControl+Shift+B',
@@ -236,6 +252,7 @@ export const defaultConfig: AppConfig = {
     [ShortcutAction.OpenMcp]: 'CommandOrControl+5',
     [ShortcutAction.OpenSettingsGeneral]: '',
     [ShortcutAction.OpenSettingsAppearance]: '',
+    [ShortcutAction.OpenSettingsDesktopCompanion]: '',
     [ShortcutAction.OpenSettingsAgentEngine]: '',
     [ShortcutAction.OpenSettingsModel]: '',
     [ShortcutAction.OpenSettingsIm]: '',

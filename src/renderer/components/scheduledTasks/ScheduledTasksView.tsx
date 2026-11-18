@@ -1,5 +1,5 @@
 import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlusIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -9,14 +9,13 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
+import ManagementSearchHeader from '../common/ManagementSearchHeader';
 import {
-  MANAGEMENT_BODY_TEXT,
   MANAGEMENT_META_TEXT,
   MANAGEMENT_PAGE_TITLE_TEXT,
   MANAGEMENT_TITLE_TEXT,
 } from '../common/managementTypography';
 import ComposeIcon from '../icons/ComposeIcon';
-import PlusCircleIcon from '../icons/PlusCircleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import AllRunsHistory from './AllRunsHistory';
@@ -247,30 +246,26 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
         </div>
       </div>
 
-      {/* List mode mirrors the other management pages (Kits / Skills):
-          description, then a sticky search + action + tabs toolbar. */}
+      {/* Keep the description, search, and creation action in one responsive toolbar. */}
       {showTabs ? (
         <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="mx-auto w-full max-w-[1120px] px-8 py-6">
             <div className="space-y-4">
-              <p className={`${MANAGEMENT_BODY_TEXT} pb-2 text-secondary`}>
-                {i18nService.t('scheduledTasksPageSubtitle')}
-              </p>
-
-              {/* Sticky toolbar: Search + New Task + tabs */}
+              {/* Sticky toolbar: description + search + New Task + tabs */}
               <div
                 data-skin-management-toolbar="true"
                 className="sticky top-0 z-10 space-y-4 bg-background pb-2"
               >
-                <div className="flex items-center gap-3">
-                  <div className="relative flex-1">
+                <ManagementSearchHeader description={i18nService.t('scheduledTasksPageSubtitle')}>
+                  <div className="management-search-header__search relative min-w-0">
                     <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
                     <input
                       type="text"
                       value={searchText}
                       onChange={e => setSearchText(e.target.value)}
                       placeholder={i18nService.t('scheduledTasksSearchPlaceholder')}
-                      className="w-full pl-9 pr-8 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+                      aria-label={i18nService.t('scheduledTasksSearchPlaceholder')}
+                      className="h-9 w-full pl-9 pr-8 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-neutral-500/40"
                     />
                     {searchText && (
                       <button
@@ -278,25 +273,22 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                         onClick={() => setSearchText('')}
                         aria-label={i18nService.t('scheduledTasksClearSearch')}
                         title={i18nService.t('scheduledTasksClearSearch')}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       >
                         <XCircleIconSolid className="h-4 w-4" />
                       </button>
                     )}
                   </div>
-                  {/* Unlike the skills page, creating is THE primary action here,
-                      so the button keeps the loud primary fill. The transparent
-                      border keeps its height in lockstep with the search input. */}
                   <button
                     type="button"
                     onClick={handleCreateNew}
                     disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
-                    className="px-3 py-2 text-sm rounded-xl border border-transparent transition-colors bg-primary text-white hover:bg-primary-hover flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
+                    className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <PlusCircleIcon className="h-4 w-4" />
+                    <PlusIcon className="h-5 w-5" aria-hidden="true" />
                     <span>{i18nService.t('scheduledTasksNewTask')}</span>
                   </button>
-                </div>
+                </ManagementSearchHeader>
 
                 {/* Tasks / History tabs */}
                 <div className="flex items-center border-b border-border">
@@ -321,7 +313,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                       )}
                       <div
                         className={`absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
-                          activeTab === tab ? 'bg-primary' : 'bg-transparent'
+                          activeTab === tab ? 'bg-foreground' : 'bg-transparent'
                         }`}
                       />
                     </button>

@@ -1,3 +1,4 @@
+import { extractPastedTextBlocks } from '../../../shared/cowork/pastedText';
 import type { CoworkMessage, CoworkSession } from '../../types/cowork';
 
 export const CoworkTextExportFormat = {
@@ -8,6 +9,12 @@ export type CoworkTextExportFormat =
   typeof CoworkTextExportFormat[keyof typeof CoworkTextExportFormat];
 
 type Translate = (key: string) => string;
+
+const toMarkdownFence = (text: string): string => {
+  const longestBacktickRun = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length));
+  const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1));
+  return `${fence}\n${text}\n${fence}`;
+};
 
 export function mergeCoworkTextExportMessages(
   storedMessages: CoworkMessage[],
@@ -53,8 +60,15 @@ export function buildCoworkSessionMarkdown(
           lines.push('');
         }
       }
-      lines.push(msg.content);
+      const { text, blocks: pastedTexts } = extractPastedTextBlocks(msg.content);
+      lines.push(text);
       lines.push('');
+      for (const pastedText of pastedTexts) {
+        lines.push(`### ${t('coworkPastedTextTitle')}`);
+        lines.push('');
+        lines.push(toMarkdownFence(pastedText.text));
+        lines.push('');
+      }
     } else if (msg.type === 'assistant') {
       lines.push('## 🤖 Assistant');
       lines.push('');

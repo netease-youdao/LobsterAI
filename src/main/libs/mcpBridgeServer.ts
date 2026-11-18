@@ -1,14 +1,25 @@
 /**
  * McpBridgeServer — authenticated loopback callbacks shared by OpenClaw integrations.
  *
- * Provides AskUser, media-generation, decision-model, and in-app browser
- * endpoints. Binds to 127.0.0.1 only and requires the per-process bridge secret.
+ * Provides AskUser, media-generation, decision-model, in-app browser, Office
+ * editor (Word, Excel, PowerPoint) and host-info endpoints. Binds to 127.0.0.1
+ * only and requires the bridge secret, which persists for an app version so
+ * OpenClaw's config stays stable.
  */
 import crypto from 'crypto';
 import http from 'http';
-import net from 'net';
 
+import { ASK_USER_QUESTION_TIMEOUT_MS } from '../../shared/cowork/constants';
+import type {
+  MediaConfirmationCommand, MediaConfirmationResponse, MediaConfirmationState, VideoConfirmationDetails,
+} from '../../shared/media/confirmation';
+import { MediaConfirmationReason } from '../../shared/media/confirmation';
+import { listenOnLoopback } from './loopbackListen';
+import { MediaConfirmationRequests, type RecoverableMediaConfirmation } from './mediaConfirmationRequests';
 import { serializeForLog } from './sanitizeForLog';
+
+/** Whitespace keepalive while an AskUser request waits; well under undici's 5-minute body timeout. */
+const ASK_USER_KEEPALIVE_MS = 30_000;
 
 const log = (level: string, msg: string) => {
   const formatted = `[McpBridge:HTTP][${level}] ${msg}`;
@@ -26,22 +37,28 @@ const log = (level: string, msg: string) => {
 export type AskUserRequest = {
   requestId: string;
   sessionKey?: string;
+  mediaConfirmation?: MediaConfirmationState;
   questions: Array<{
     id?: string;
     question: string;
     header?: string;
     title?: string;
     subtitle?: string;
+    /** Catalogue pricing fingerprint, so unchanged prose cannot hide a price change. */
+    quoteKey?: string;
     options: Array<{ label: string; description?: string }>;
     multiSelect?: boolean;
+    /** Video generation confirmations: what the desktop card lays out. */
+    video?: VideoConfirmationDetails;
   }>;
 };
 
-export type AskUserResponse = {
-  behavior: 'allow' | 'deny';
-  answers?: Record<string, string>;
-  skippedQuestionIds?: string[];
-};
+export type AskUserResponse = MediaConfirmationResponse;
+
+export interface AskUserOptions {
+  sessionKey?: string;
+  recoverableMedia?: RecoverableMediaConfirmation;
+}
 
 type PendingAskUser = {
   requestId: string;
@@ -50,11 +67,14 @@ type PendingAskUser = {
 };
 
 export type MediaGenerationRequest = {
+  /** Local HTTP connection lifetime; never taken from the request body. */
+  signal?: AbortSignal;
   tool: string;
   args: Record<string, unknown>;
   context: {
     sessionKey: string;
     toolCallId: string;
+    runId?: string;
   };
 };
 
@@ -74,6 +94,23 @@ export type BrowserToolResponse = {
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
+
+/** A request from the web-search skill's bridge server to the hidden search page. */
+export type WebSearchPageRequest = Record<string, unknown> & { op?: unknown };
+
+export type WebSearchPageResponse = {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+  code?: string;
+};
+
+export type WebSearchPageHandler = (request: WebSearchPageRequest) => Promise<WebSearchPageResponse>;
+
+/** Document editor tools (the Office editors) share the browser tools' request and result shapes. */
+export type EditorToolRequest = BrowserToolRequest;
+export type EditorToolResponse = BrowserToolResponse;
+export type EditorToolHandler = (request: EditorToolRequest) => Promise<EditorToolResponse>;
 
 export type DecisionToolRequest = {
   args: Record<string, unknown>;
@@ -101,13 +138,28 @@ export class McpBridgeServer {
   private readonly pendingAskUser = new Map<string, PendingAskUser>();
   private onAskUserCallback: ((request: AskUserRequest) => void) | null = null;
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
+  private readonly mediaConfirmations = new MediaConfirmationRequests({
+    publish: request => {
+      if (!this.onAskUserCallback) throw new Error('AskUser route unavailable');
+      this.onAskUserCallback(request);
+    },
+    dismiss: requestId => this.onAskUserDismissCallback?.(requestId),
+  });
+
+  getPendingMediaConfirmations(): AskUserRequest[] { return this.mediaConfirmations.list(); }
+  actOnMediaConfirmation(command: MediaConfirmationCommand): Promise<boolean> { return this.mediaConfirmations.act(command); }
+
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
+  private onWebSearchPageCallback: WebSearchPageHandler | null = null;
+  /** Editor tool handlers by route, served at `/<route>/tool`. */
+  private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(secret: string) {
     this.secret = secret;
-    log('INFO', `McpBridgeServer created, secret prefix="${secret.slice(0, 8)}…"`);
+    // The secret persists across launches; never log any part of it.
+    log('INFO', 'McpBridgeServer created');
   }
 
   get port(): number | null {
@@ -126,8 +178,25 @@ export class McpBridgeServer {
     return this._port ? `http://127.0.0.1:${this._port}/browser/tool` : null;
   }
 
+  get webSearchCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/web-search/page` : null;
+  }
+
   get decisionCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
+  }
+
+  /**
+   * Per-launch host facts (the app's process id) for bridge clients. They are
+   * served here instead of being written into openclaw.json: any config change
+   * makes OpenClaw rerun its startup migrations on the next gateway start.
+   */
+  get hostInfoUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/host/info` : null;
+  }
+
+  editorCallbackUrl(route: string): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/${route}/tool` : null;
   }
 
   /**
@@ -158,6 +227,15 @@ export class McpBridgeServer {
     this.onBrowserToolCallback = callback;
   }
 
+  onWebSearchPage(callback: WebSearchPageHandler): void {
+    this.onWebSearchPageCallback = callback;
+  }
+
+  /** Serve a document editor's tools at `/<route>/tool`; `editorName` appears in errors the agent reads. */
+  onEditorTool(route: string, editorName: string, handler: EditorToolHandler): void {
+    this.editorTools.set(route, { editorName, handler });
+  }
+
   /**
    * Register a callback for decision_evaluate tool requests. The signal
    * aborts when the plugin drops the connection (tool call cancelled).
@@ -170,6 +248,8 @@ export class McpBridgeServer {
    * Resolve a pending AskUserQuestion request (called when user clicks in the modal).
    */
   resolveAskUser(requestId: string, response: AskUserResponse): void {
+    // Recoverable media approves only through its revision-checked command.
+    if (this.mediaConfirmations.deny(requestId, response.reason ?? MediaConfirmationReason.NoRoute)) return;
     const pending = this.pendingAskUser.get(requestId);
     if (!pending) return;
     clearTimeout(pending.timer);
@@ -185,8 +265,9 @@ export class McpBridgeServer {
   async askUserInternal(
     questions: AskUserRequest['questions'],
     timeoutMs = 120_000,
-    options: { sessionKey?: string } = {},
+    options: AskUserOptions = {},
   ): Promise<AskUserResponse> {
+    if (options.recoverableMedia) return this.mediaConfirmations.request(questions, options.sessionKey, options.recoverableMedia);
     const requestId = crypto.randomUUID();
     const sessionKey = options.sessionKey?.trim() || undefined;
     log('INFO', `AskUser (internal) request, requestId=${requestId}`);
@@ -213,44 +294,45 @@ export class McpBridgeServer {
   }
 
   /**
-   * Start the HTTP callback server on a free port.
+   * Start the HTTP callback server, reusing the previous launch's port while it
+   * is free so the callback URLs in openclaw.json stay stable.
    */
-  async start(): Promise<number> {
+  async start(preferredPort?: number | null): Promise<number> {
     if (this.server) {
       throw new Error('McpBridgeServer is already running');
     }
 
-    const port = await this.findFreePort();
-
-    return new Promise((resolve, reject) => {
-      const srv = http.createServer((req, res) => {
-        this.handleRequest(req, res).catch((err) => {
-          log('ERROR', `Unhandled error in handleRequest: ${err instanceof Error ? err.message : String(err)}`);
-          if (!res.headersSent) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Internal server error' }));
-          }
-        });
-      });
-
-      srv.on('error', (err) => {
-        log('ERROR', `HTTP server error: ${err.message}`);
-        reject(err);
-      });
-
-      srv.listen(port, '127.0.0.1', () => {
-        this._port = port;
-        this.server = srv;
-        log('INFO', `McpBridgeServer listening on http://127.0.0.1:${port}`);
-        resolve(port);
+    const srv = http.createServer((req, res) => {
+      this.handleRequest(req, res).catch((err) => {
+        log('ERROR', `Unhandled error in handleRequest: ${err instanceof Error ? err.message : String(err)}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Internal server error' }));
+        }
       });
     });
+
+    let bound: { port: number; reused: boolean };
+    try {
+      bound = await listenOnLoopback(srv, '127.0.0.1', preferredPort);
+    } catch (err) {
+      log('ERROR', `HTTP server error: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+    srv.on('error', (err) => {
+      log('ERROR', `HTTP server error: ${err.message}`);
+    });
+    this._port = bound.port;
+    this.server = srv;
+    log('INFO', `McpBridgeServer listening on http://127.0.0.1:${bound.port}${bound.reused ? ' (reused port)' : ''}`);
+    return bound.port;
   }
 
   /**
    * Stop the HTTP callback server.
    */
   async stop(): Promise<void> {
+    this.mediaConfirmations.clear();
     if (!this.server) return;
 
     return new Promise((resolve) => {
@@ -300,8 +382,26 @@ export class McpBridgeServer {
       return;
     }
 
+    if (req.url?.startsWith('/web-search/page')) {
+      await this.handleWebSearchPage(req, res);
+      return;
+    }
+
     if (req.url?.startsWith('/decision/tool')) {
       await this.handleDecisionTool(req, res);
+      return;
+    }
+
+    if (req.url?.startsWith('/host/info')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ pid: process.pid }));
+      return;
+    }
+
+    const editorRoute = /^\/([a-z][a-z0-9-]*)\/tool(?:[/?]|$)/.exec(req.url ?? '')?.[1];
+    const editorTool = editorRoute ? this.editorTools.get(editorRoute) : undefined;
+    if (editorTool) {
+      await this.handleEditorTool(req, res, editorTool.handler, editorTool.editorName);
       return;
     }
 
@@ -310,7 +410,8 @@ export class McpBridgeServer {
   }
 
   private async handleAskUser(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const ASKUSER_TIMEOUT_MS = 120_000;
+    const ASKUSER_TIMEOUT_MS = ASK_USER_QUESTION_TIMEOUT_MS;
+    let keepalive: ReturnType<typeof setInterval> | undefined;
 
     try {
       const body = await this.readBody(req);
@@ -329,6 +430,13 @@ export class McpBridgeServer {
       const requestId = crypto.randomUUID();
       log('INFO', `AskUser waiting for user response, requestId=${requestId}`);
 
+      // The wait can outlast the caller's fetch header/body timeouts (5 min in
+      // undici), so send the headers now and keep the body alive with
+      // whitespace, which JSON.parse ignores, until the answer arrives.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.flushHeaders();
+      keepalive = setInterval(() => res.write(' '), ASK_USER_KEEPALIVE_MS);
+
       // Create a Promise that resolves when the user responds or timeout
       const userResponse = await new Promise<AskUserResponse>((resolve) => {
         const timer = setTimeout(() => {
@@ -339,6 +447,17 @@ export class McpBridgeServer {
         }, ASKUSER_TIMEOUT_MS);
 
         this.pendingAskUser.set(requestId, { requestId, resolve, timer });
+
+        // The asker gave up (its MCP call timed out, the run was stopped):
+        // close the dialog now instead of leaving it up until the timeout.
+        res.once('close', () => {
+          if (!this.pendingAskUser.has(requestId)) return;
+          log('INFO', `AskUser caller disconnected, requestId=${requestId}`);
+          clearTimeout(timer);
+          this.pendingAskUser.delete(requestId);
+          this.onAskUserDismissCallback?.(requestId);
+          resolve({ behavior: 'deny' });
+        });
 
         // Notify LobsterAI to show the modal
         if (this.onAskUserCallback) {
@@ -356,13 +475,14 @@ export class McpBridgeServer {
       });
 
       log('INFO', `AskUser resolved, requestId=${requestId} behavior=${userResponse.behavior}`);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(userResponse));
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       log('ERROR', `AskUser request error: ${errMsg}`);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ behavior: 'deny' }));
+    } finally {
+      if (keepalive) clearInterval(keepalive);
     }
   }
 
@@ -402,7 +522,17 @@ export class McpBridgeServer {
         return;
       }
 
-      const result = await this.onMediaGenerationCallback(request);
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      res.once('close', onClose);
+      if (res.destroyed) controller.abort();
+      let result: MediaGenerationResponse;
+      try {
+        result = await this.onMediaGenerationCallback({ ...request, signal: controller.signal });
+      } finally {
+        res.off('close', onClose);
+      }
+      if (res.destroyed) return;
       const contentPreview = serializeForLog(result.content);
       log('INFO', `Media generation completed for tool="${request.tool}" in ${Date.now() - t0}ms with isError=${result.isError ?? false}. Details=${serializeForLog(result.details ?? {})} Result=${contentPreview}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -461,6 +591,30 @@ export class McpBridgeServer {
     }
   }
 
+  private async handleWebSearchPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const reply = (status: number, payload: WebSearchPageResponse) => {
+      if (res.writableEnded) return;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+    try {
+      const request = JSON.parse(await this.readBody(req)) as WebSearchPageRequest | null;
+      if (!request || typeof request !== 'object' || typeof request.op !== 'string') {
+        reply(400, { success: false, error: 'Missing web search page operation.' });
+        return;
+      }
+      if (!this.onWebSearchPageCallback) {
+        reply(503, { success: false, error: 'LobsterAI in-app browser is not ready.' });
+        return;
+      }
+      reply(200, await this.onWebSearchPageCallback(request));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `Web search page request failed: ${message}`);
+      reply(500, { success: false, error: `LobsterAI web search error: ${message}` });
+    }
+  }
+
   private async handleDecisionTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -502,25 +656,39 @@ export class McpBridgeServer {
     }
   }
 
+  /** Document editor tools: forward to the renderer-backed handler and relay its result. */
+  private async handleEditorTool(req: http.IncomingMessage, res: http.ServerResponse, callback: EditorToolHandler, editorName: string): Promise<void> {
+    const startedAt = Date.now();
+    const reply = (status: number, payload: BrowserToolResponse): void => {
+      if (res.writableEnded) return;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+    try {
+      const request = JSON.parse(await this.readBody(req)) as EditorToolRequest;
+      if (typeof request.tool !== 'string' || !request.tool.trim()) {
+        reply(400, { content: [{ type: 'text', text: `Missing ${editorName} tool name.` }], isError: true });
+        return;
+      }
+      const result = await callback({
+        tool: request.tool,
+        args: request.args && typeof request.args === 'object' && !Array.isArray(request.args) ? request.args : {},
+      });
+      log('INFO', `${editorName} tool "${request.tool}" completed in ${Date.now() - startedAt}ms with isError=${result.isError ?? false}`);
+      reply(200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log('ERROR', `${editorName} tool request failed after ${Date.now() - startedAt}ms: ${message}`);
+      reply(500, { content: [{ type: 'text', text: `LobsterAI ${editorName} editor error: ${message}` }], isError: true });
+    }
+  }
+
   private readBody(req: http.IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
       req.on('error', reject);
-    });
-  }
-
-  private findFreePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const srv = net.createServer();
-      srv.once('error', reject);
-      srv.once('listening', () => {
-        const addr = srv.address();
-        const port = typeof addr === 'object' && addr ? addr.port : 0;
-        srv.close(() => resolve(port));
-      });
-      srv.listen(0, '127.0.0.1');
     });
   }
 }

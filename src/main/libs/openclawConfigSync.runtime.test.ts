@@ -10,12 +10,18 @@ import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
 } from '../../shared/browserCredentials/constants';
+import { EmbeddingProvider } from '../../shared/cowork/embedding';
 import { WeixinPlugin } from '../../shared/im/weixin';
+import { MediaConfirmationPolicy } from '../../shared/media/confirmation';
 import { OpenClawSkillReviewMode } from '../../shared/openclawEngine/constants';
 import { OpenClawProviderId, ProviderName } from '../../shared/providers';
+import { ComputerUseMcpEnv, ComputerUseMcpServerName } from '../computerUse/computerUseMcpServer';
 import { DEFAULT_DISCORD_OPENCLAW_CONFIG, DEFAULT_QQ_CONFIG, DiscordDmPolicy } from '../im/types';
 import { OpenClawAgentOwnership } from './openclawAgentModels';
+import { CHROME_DISK_CACHE_SIZE_ARG, OPENCLAW_MEMORY_CORE_PLUGIN_ID } from './openclawConfigSync';
+import { persistOpenClawConfigTarget } from './openclawConfigTarget';
 import { OpenClawQQPlugin, QQ_APPROVALS_DISABLED } from './openclawQQConfig';
+import { OpenClawUserConfigOverlay } from './openclawUserConfigOverlay';
 
 vi.mock('electron', () => ({
   app: {
@@ -30,8 +36,10 @@ vi.mock('electron', () => ({
 
 const mockRuntimeState = vi.hoisted(() => ({
   proxyPort: null as number | null,
+  bundledExtensionsDir: null as string | null,
   thirdPartyExtensionsDir: null as string | null,
   modelCompatPluginAvailable: true,
+  runtimeBundledExtensions: new Set<string>(['xai']),
   serverModels: [] as Array<{
     modelId: string;
     modelName?: string;
@@ -52,6 +60,7 @@ const mockRuntimeState = vi.hoisted(() => ({
     baseURL: string;
     apiKey: string;
     apiType: 'anthropic' | 'openai';
+    openaiApiMode?: 'chat-completions' | 'responses';
     authType?: 'apikey' | 'oauth';
     codingPlanEnabled: boolean;
     models: Array<{
@@ -102,8 +111,16 @@ const mockRuntimeState = vi.hoisted(() => ({
       modelName?: string;
       contextWindow?: number;
       maxTokens?: number;
+      openaiApiMode?: 'chat-completions' | 'responses';
     };
   },
+}));
+
+const fakeIpNetworkMock = vi.hoisted(() => ({ active: false }));
+
+// The real check reads this machine's network interfaces.
+vi.mock('./fakeIpNetwork', () => ({
+  isFakeIpNetworkActive: () => fakeIpNetworkMock.active,
 }));
 
 vi.mock('./claudeSettings', () => ({
@@ -115,13 +132,13 @@ vi.mock('./claudeSettings', () => ({
 }));
 
 vi.mock('./openclawLocalExtensions', () => ({
-  findBundledExtensionsDir: () => null,
+  findBundledExtensionsDir: () => mockRuntimeState.bundledExtensionsDir,
   findThirdPartyExtensionsDir: () => mockRuntimeState.thirdPartyExtensionsDir,
   hasBundledOpenClawExtension: (id: string) => (
     id !== 'qwen-portal-auth'
     && (id !== 'lobsterai-model-compat' || mockRuntimeState.modelCompatPluginAvailable)
   ),
-  hasRuntimeBundledOpenClawExtension: (id: string) => id === 'xai',
+  hasRuntimeBundledOpenClawExtension: (id: string) => mockRuntimeState.runtimeBundledExtensions.has(id),
   resolveOpenClawExtensionPluginId: (id: string) => {
     const manifestIds: Record<string, string> = {
       qqbot: 'openclaw-qqbot',
@@ -144,8 +161,10 @@ describe('OpenClawConfigSync runtime config output', () => {
 
   beforeEach(() => {
     mockRuntimeState.proxyPort = null;
+    mockRuntimeState.bundledExtensionsDir = null;
     mockRuntimeState.thirdPartyExtensionsDir = null;
     mockRuntimeState.modelCompatPluginAvailable = true;
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai']);
     mockRuntimeState.serverModels = [];
     mockRuntimeState.enabledProviders = [];
     mockRuntimeState.providerSourceEntries = [];
@@ -216,6 +235,129 @@ describe('OpenClawConfigSync runtime config output', () => {
       ...overrides,
     } as never);
   };
+
+  test('prepares a changed proxy config without publishing it to the live watcher', async () => {
+    const sync = await createSync();
+    expect(sync.sync('bootstrap')).toMatchObject({ ok: true });
+    const original = fs.readFileSync(configPath, 'utf8');
+    mockRuntimeState.proxyPort = 4121;
+    mockRuntimeState.serverModels = [{ modelId: 'deepseek-flash', provider: 'deepseek', apiFormat: 'openai-completions' }];
+    const prepared = sync.prepare('proxy-rebound');
+    expect(prepared).toMatchObject({ ok: true, changed: true });
+    expect(prepared.target?.raw).toContain('4121');
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(original);
+  });
+
+  test('renders a byte-identical config on the next app launch', async () => {
+    // OpenClaw keys its startup migration checkpoint on the whole config; any
+    // per-launch value (process id, timestamp) reruns those migrations on every start.
+    mockRuntimeState.proxyPort = 4121;
+    const getResolvedMcpServers = () => [{
+      name: 'local-tools',
+      transportType: 'stdio' as const,
+      command: 'node',
+      args: ['server.mjs'],
+      env: { LOCAL_TOOLS_MODE: 'desktop' },
+    }];
+    const firstLaunch = await createSync({ getResolvedMcpServers });
+    expect(firstLaunch.sync('startup')).toMatchObject({ ok: true, changed: true });
+    const written = fs.readFileSync(configPath, 'utf8');
+
+    const originalPid = process.pid;
+    Object.defineProperty(process, 'pid', { configurable: true, value: originalPid + 1 });
+    try {
+      const nextLaunch = await createSync({ getResolvedMcpServers });
+      expect(nextLaunch.sync('startup')).toMatchObject({ ok: true, changed: false });
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(written);
+    } finally {
+      Object.defineProperty(process, 'pid', { configurable: true, value: originalPid });
+    }
+  });
+
+  test('merges openclaw.user.json overrides into every render and removes them again', async () => {
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    const userConfigPath = path.join(stateDir, 'openclaw.user.json');
+    fs.writeFileSync(userConfigPath, `{
+      // Comments are allowed.
+      agents: { defaults: { blockStreamingDefault: "on" } },
+      hooks: { internal: { enabled: true } },
+      gateway: { auth: { mode: "none" } },
+      plugins: { allow: ["my-plugin"], entries: { "my-plugin": { enabled: true } } },
+    }`);
+    const sync = await createSync({ userConfigOverlay });
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    expect(sync.sync('user-overlay-apply')).toMatchObject({ ok: true, changed: true });
+    const applied = read();
+    expect(applied.agents.defaults.blockStreamingDefault).toBe('on');
+    expect(applied.agents.defaults.model).toBeTruthy();
+    expect(applied.hooks).toEqual({ internal: { enabled: true } });
+    expect(applied.gateway.auth).toEqual({ mode: 'token', token: '${OPENCLAW_GATEWAY_TOKEN}' });
+    expect(applied.plugins.allow).toEqual(expect.arrayContaining([OPENCLAW_MEMORY_CORE_PLUGIN_ID, 'my-plugin']));
+    expect(applied.plugins.entries['my-plugin']).toEqual({ enabled: true });
+    expect(sync.sync('user-overlay-steady')).toMatchObject({ ok: true, changed: false });
+
+    fs.writeFileSync(userConfigPath, '{}');
+    expect(sync.sync('user-overlay-cleared')).toMatchObject({ ok: true, changed: true });
+    const cleared = read();
+    expect(cleared.agents.defaults.blockStreamingDefault).toBeUndefined();
+    expect(cleared.hooks).toBeUndefined();
+    expect(cleared.plugins.allow).not.toContain('my-plugin');
+    expect(cleared.plugins.entries['my-plugin']).toBeUndefined();
+    expect(cleared.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(sync.sync('user-overlay-cleared-steady')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('applies openclaw.user.json overrides while no model is configured', async () => {
+    const values = new Map<string, unknown>();
+    const userConfigOverlay = new OpenClawUserConfigOverlay({
+      getConfigDir: () => stateDir,
+      getStore: () => ({
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        set: (key: string, value: unknown) => { values.set(key, value); },
+      }),
+    });
+    fs.writeFileSync(path.join(stateDir, 'openclaw.user.json'), '{ hooks: { internal: { enabled: true } } }');
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync({ userConfigOverlay });
+    expect(sync.sync('user-overlay-minimal')).toMatchObject({ ok: true });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.hooks).toEqual({ internal: { enabled: true } });
+    expect(config.models).toBeUndefined();
+  });
+
+  test('activates virtual-model routing hooks and preserves the grant across config syncs', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(
+      process.cwd(), 'openclaw-extensions/lobster-model-routing/openclaw.plugin.json',
+    ), 'utf8'));
+    expect(manifest.activation.onCapabilities).toContain('hook');
+    mockRuntimeState.proxyPort = 4121;
+    const sync = await createSync();
+    expect(sync.sync('model-routing-bootstrap')).toMatchObject({ ok: true });
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(read().plugins.allow).toContain(manifest.id);
+    expect(read().plugins.entries[manifest.id]).toEqual({
+      enabled: true,
+      hooks: { allowConversationAccess: true },
+      config: { proxyUrl: 'http://127.0.0.1:4121', token: '${LOBSTER_PROXY_TOKEN}' },
+    });
+    mockRuntimeState.proxyPort = 4122;
+    expect(sync.sync('model-routing-proxy-rebound')).toMatchObject({ ok: true });
+    expect(read().plugins.entries[manifest.id]).toMatchObject({
+      hooks: { allowConversationAccess: true },
+      config: { proxyUrl: 'http://127.0.0.1:4122' },
+    });
+    mockRuntimeState.proxyPort = null;
+    expect(sync.sync('model-routing-proxy-unavailable')).toMatchObject({ ok: true });
+    expect(read().plugins.entries[manifest.id]).toEqual({ enabled: false });
+  });
 
   test('enables channel scheduling without promoting IM senders to global owners', async () => {
     fs.writeFileSync(configPath, JSON.stringify({
@@ -513,10 +655,30 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(_meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
     expect(config).toEqual({
       gateway: { mode: 'local' },
+      plugins: { allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] },
       skills: { workshop: { autonomous: { mode: OpenClawSkillReviewMode.Off } } },
       agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
     });
     expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test('adds the first-start plugin allowlist to an existing minimal config', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' } }));
+    const apiConfig = mockRuntimeState.rawApiConfig.config;
+    mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    expect(sync.sync('no-model')).toMatchObject({ ok: true, changed: true });
+    const minimal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(minimal.plugins).toEqual({ allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID] });
+    expect(sync.sync('repeat-start')).toMatchObject({ ok: true, changed: false });
+
+    mockRuntimeState.rawApiConfig.config = apiConfig;
+    expect(sync.sync('model-configured')).toMatchObject({ ok: true, changed: true });
+    const configured = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(configured.plugins.allow).toContain(OPENCLAW_MEMORY_CORE_PLUGIN_ID);
+    expect(configured.plugins.allow).toContain(OpenClawQQPlugin.Id);
+    expect(configured.models.providers).not.toEqual({});
   });
 
   test('still removes plugin-index-managed installs when no model is available', async () => {
@@ -531,6 +693,92 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins).toEqual(plugins);
     expect(config.gateway).toEqual({ mode: 'remote', remote: { url: 'wss://gateway.example.test' } });
+  });
+
+  describe('when another LobsterAI install wrote the shared profile', () => {
+    // E.g. `npm run electron:dev` after the installed app, a reinstall to
+    // another directory, or a moved macOS app bundle.
+    const installedRoot = 'C:\\Users\\dev\\AppData\\Local\\Programs\\LobsterAI';
+    const installedExtensions = `${installedRoot}\\resources\\cfmind\\third-party-extensions`;
+    const installedLaunch = {
+      command: `${installedRoot}\\LobsterAI.exe`,
+      args: [`${installedRoot}\\resources\\app.asar\\node_modules\\local-tools\\server.mjs`],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+    const userExtensions = 'C:\\Users\\dev\\AppData\\Roaming\\LobsterAI\\third-party-extensions';
+    // Same final directory name, but not inside a LobsterAI runtime.
+    const linkedPlugins = 'D:\\plugins\\third-party-extensions';
+    const currentServer = {
+      name: 'local-tools',
+      transportType: 'stdio' as const,
+      command: process.execPath,
+      args: [path.join(process.cwd(), 'node_modules', 'local-tools', 'server.mjs')],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+    const currentLaunch = { command: currentServer.command, args: currentServer.args, env: currentServer.env };
+    const read = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    beforeEach(() => {
+      mockRuntimeState.bundledExtensionsDir = path.join(tmpDir, 'vendor', 'openclaw-runtime', 'current', 'third-party-extensions');
+      fs.writeFileSync(configPath, JSON.stringify({
+        gateway: { mode: 'local' },
+        plugins: {
+          allow: [OPENCLAW_MEMORY_CORE_PLUGIN_ID],
+          load: { paths: [installedExtensions, userExtensions, linkedPlugins] },
+        },
+        mcp: { servers: { 'local-tools': installedLaunch, 'uninstalled-tools': installedLaunch } },
+      }, null, 2));
+    });
+
+    test('renders this install\'s runtime paths on the first sync while no model is configured', async () => {
+      mockRuntimeState.rawApiConfig.config = null;
+      const sync = await createSync({ getResolvedMcpServers: () => [currentServer] });
+
+      expect(sync.sync('startup')).toMatchObject({ ok: true, changed: true });
+      const config = read();
+      expect(config.plugins.load.paths).toEqual([mockRuntimeState.bundledExtensionsDir, userExtensions, linkedPlugins]);
+      expect(config.mcp).toEqual({ servers: { 'local-tools': currentLaunch } });
+      expect(sync.sync('restart')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('renders this install\'s runtime paths on the first full sync', async () => {
+      const sync = await createSync({ getResolvedMcpServers: () => [currentServer] });
+
+      expect(sync.sync('startup')).toMatchObject({ ok: true, changed: true });
+      const config = read();
+      expect(config.plugins.load.paths).toEqual([mockRuntimeState.bundledExtensionsDir]);
+      expect(config.mcp).toEqual({ servers: { 'local-tools': currentLaunch } });
+      expect(sync.sync('restart')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('drops the inherited runtime entries when this install bundles neither', async () => {
+      mockRuntimeState.bundledExtensionsDir = null;
+      mockRuntimeState.rawApiConfig.config = null;
+      const sync = await createSync();
+
+      expect(sync.sync('startup')).toMatchObject({ ok: true, changed: true });
+      const config = read();
+      expect(config.plugins.load.paths).toEqual([userExtensions, linkedPlugins]);
+      expect(config).not.toHaveProperty('mcp');
+      expect(sync.sync('restart')).toMatchObject({ ok: true, changed: false });
+    });
+
+    test('keeps rendered MCP servers unchanged across logout and model recovery', async () => {
+      const sync = await createSync({ getResolvedMcpServers: () => [currentServer] });
+      expect(sync.sync('configured')).toMatchObject({ ok: true, changed: true });
+      const configured = read();
+
+      const apiConfig = mockRuntimeState.rawApiConfig.config;
+      mockRuntimeState.rawApiConfig.config = null;
+      expect(sync.sync('logout')).toMatchObject({ ok: true, changed: true });
+      const loggedOut = read();
+      expect(loggedOut.mcp).toEqual(configured.mcp);
+      expect(loggedOut.plugins.load).toEqual(configured.plugins.load);
+
+      mockRuntimeState.rawApiConfig.config = apiConfig;
+      expect(sync.sync('models-recovered')).toMatchObject({ ok: true, changed: true });
+      expect(read().mcp).toEqual(configured.mcp);
+    });
   });
 
   test('emits stable explicit ownership after an upgrade and preserves channel routing', async () => {
@@ -960,6 +1208,32 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.meta.lastTouchedAt).toBeUndefined();
   });
 
+  test.each([
+    { models: 'signed in', hasApiConfig: true },
+    { models: 'no model yet', hasApiConfig: false },
+  ])('drops the retired meta stamp of a pre-v2026.8.1 config at startup ($models)', async ({ hasApiConfig }) => {
+    // LobsterAI 2026.9.4 (OpenClaw v2026.6.1) stamped both fields on every config write.
+    const legacyMeta = { lastTouchedVersion: '2026.6.1', lastTouchedAt: '2026-10-10T08:14:13.654Z' };
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 'local' }, meta: legacyMeta }, null, 2));
+    if (!hasApiConfig) mockRuntimeState.rawApiConfig.config = null;
+    const sync = await createSync();
+
+    // Startup only prepares; the stopped-gateway bootstrap persists the target.
+    const startup = sync.prepare('startup');
+    expect(startup.ok).toBe(true);
+    persistOpenClawConfigTarget(configPath, startup.target!);
+    const upgraded = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(upgraded.meta).not.toHaveProperty('lastTouchedAt');
+    expect(upgraded.meta.lastTouchedVersion).toBe('2026.6.1');
+
+    // A config that a build without this fix already rewrote heals on the next start.
+    fs.writeFileSync(configPath, JSON.stringify({ ...upgraded, meta: { ...upgraded.meta, ...legacyMeta } }, null, 2));
+    const relaunch = sync.prepare('startup');
+    expect(relaunch).toMatchObject({ ok: true, changed: false });
+    persistOpenClawConfigTarget(configPath, relaunch.target!);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual(upgraded);
+  });
+
   test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/openclaw.mjs'))).each([false, true])(
     'passes validation from the pinned OpenClaw runtime (Discord enabled: %s)',
     async (discordEnabled) => {
@@ -1169,6 +1443,80 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
     expect(config.memory.search.remote).toBeUndefined();
     expect(config.agents.defaults.memorySearch).toBeUndefined();
+  });
+
+  const embeddingCoworkConfig = (embeddingProvider: string, embeddingEnabled = true) => ({
+    workingDirectory: tmpDir,
+    systemPrompt: '',
+    executionMode: 'local',
+    agentEngine: 'openclaw',
+    memoryEnabled: true,
+    memoryImplicitUpdateEnabled: false,
+    memoryLlmJudgeEnabled: false,
+    memoryGuardLevel: 'balanced',
+    memoryUserMemoriesMaxItems: 100,
+    skipMissedJobs: false,
+    embeddingEnabled,
+    embeddingProvider,
+    embeddingModel: 'embed-model',
+    embeddingLocalModelPath: '',
+    embeddingVectorWeight: 0.7,
+    embeddingRemoteBaseUrl: 'http://127.0.0.1:11434/v1',
+    embeddingRemoteApiKey: '',
+  });
+
+  test.each([
+    [EmbeddingProvider.OpenAI, 'openai'],
+    [EmbeddingProvider.Gemini, 'google'],
+    [EmbeddingProvider.Voyage, 'voyage'],
+    [EmbeddingProvider.Mistral, 'mistral'],
+    [EmbeddingProvider.Ollama, 'ollama'],
+  ])('allows the bundled plugin that serves %s memory embeddings', async (provider, pluginId) => {
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai', pluginId]);
+    const sync = await createSync({ getCoworkConfig: () => embeddingCoworkConfig(provider) });
+
+    expect(sync.sync('memory-embedding-plugin').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.memory.search.provider).toBe(provider);
+    expect(config.plugins.allow).toContain(pluginId);
+    expect(config.plugins.entries[pluginId]).toEqual({ enabled: true });
+  });
+
+  test('serves the local embedding provider through the OpenAI plugin, as before', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai', 'openai']);
+    const sync = await createSync({ getCoworkConfig: () => embeddingCoworkConfig(EmbeddingProvider.Local) });
+
+    expect(sync.sync('memory-embedding-local').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.memory.search.provider).toBe(EmbeddingProvider.OpenAI);
+    expect(config.plugins.allow).toContain('openai');
+  });
+
+  test('does not allow an embedding plugin the runtime lacks', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sync = await createSync({ getCoworkConfig: () => embeddingCoworkConfig(EmbeddingProvider.Voyage) });
+
+    expect(sync.sync('memory-embedding-missing-plugin').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.allow).not.toContain('voyage');
+    expect(config.plugins.entries.voyage).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('needs bundled plugin voyage'));
+  });
+
+  test('leaves embedding plugins out while embeddings are disabled', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set(['xai', 'openai']);
+    const sync = await createSync({
+      getCoworkConfig: () => embeddingCoworkConfig(EmbeddingProvider.OpenAI, false),
+    });
+
+    expect(sync.sync('memory-embedding-disabled').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.allow).not.toContain('openai');
+    expect(config.plugins.entries.openai).toBeUndefined();
   });
 
   test('configures OpenClaw chat image attachment limit to 30MB', async () => {
@@ -1413,7 +1761,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toEqual(['--proxy-server=http://127.0.0.1:7890']);
+    expect(config.browser.extraArgs).toEqual(['--proxy-server=http://127.0.0.1:7890', CHROME_DISK_CACHE_SIZE_ARG]);
   });
 
   test('does not write managed browser proxy args in strict browser network mode', async () => {
@@ -1432,7 +1780,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toBeUndefined();
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
     expect(config.browser.ssrfPolicy.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
@@ -1451,7 +1799,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.browser.extraArgs).toBeUndefined();
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
   });
 
   test('does not create an agent model allowlist for OpenAI OAuth when system proxy is enabled', async () => {
@@ -1669,6 +2017,57 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(fs.readFileSync(path.join(writerWorkspace, 'SOUL.md'), 'utf8')).toBe('writer soul\n');
     expect(fs.readFileSync(path.join(writerWorkspace, 'IDENTITY.md'), 'utf8')).toBe('writer identity\n');
     expect(fs.existsSync(path.join(writerWorkspace, 'USER.md'))).toBe(false);
+  });
+
+  test('keeps existing persona files and leaves the persona out of a non-main AGENTS.md', async () => {
+    const writerWorkspace = path.join(stateDir, 'workspace-writer');
+    fs.mkdirSync(writerWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(writerWorkspace, 'SOUL.md'), 'soul edited by the agent\n', 'utf8');
+    fs.writeFileSync(path.join(writerWorkspace, 'IDENTITY.md'), '', 'utf8');
+
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: 'Default app style.',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getAgents: () => [
+        {
+          id: 'writer',
+          name: 'Writer',
+          description: '',
+          systemPrompt: 'stored soul',
+          identity: 'stored identity',
+          model: '',
+          workingDirectory: '',
+          icon: '',
+          skillIds: [],
+          subagentAllowAgentIds: [],
+          enabled: true,
+          pinned: false,
+          isDefault: false,
+          source: 'custom',
+          presetId: '',
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+
+    expect(sync.sync('agent-updated').ok).toBe(true);
+
+    expect(fs.readFileSync(path.join(writerWorkspace, 'SOUL.md'), 'utf8')).toBe('soul edited by the agent\n');
+    expect(fs.readFileSync(path.join(writerWorkspace, 'IDENTITY.md'), 'utf8')).toBe('');
+    const agentsMd = fs.readFileSync(path.join(writerWorkspace, 'AGENTS.md'), 'utf8');
+    expect(agentsMd).not.toContain('stored soul');
+    expect(agentsMd).toContain('## System Prompt\n\nDefault app style.');
   });
 
   test('merges all server models into existing lobsterai provider and updates image input', async () => {
@@ -1910,6 +2309,25 @@ describe('OpenClawConfigSync runtime config output', () => {
         },
       },
     }));
+  });
+
+  test('keeps the plan provider without a placeholder model while the plan catalog is empty', async () => {
+    mockRuntimeState.proxyPort = 56646;
+    mockRuntimeState.serverModels = [];
+
+    const sync = await createSync();
+    expect(sync.sync('signed-out-custom-primary')).toMatchObject({ ok: true });
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // Agents bound to plan models still route to the token proxy.
+    expect(config.models.providers['lobsterai-server']).toMatchObject({
+      baseUrl: 'http://127.0.0.1:56646/v1',
+      models: [],
+    });
+    // No plan model borrows the custom primary's ID (openai/gpt-test).
+    expect(Object.keys(config.agents.defaults.models ?? {}).filter(ref => ref.startsWith('lobsterai-server/')))
+      .toEqual([]);
+    expect(JSON.stringify(config.agents.defaults.modelPolicy ?? {})).not.toContain('lobsterai-server/');
   });
 
   test('writes explicit cache params for Anthropic, Qwen, and custom providers', async () => {
@@ -2669,14 +3087,27 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins.entries['lobster-media-generation']).toEqual({
       enabled: true,
+      hooks: { allowConversationAccess: true },
       config: {
         callbackUrl: 'http://127.0.0.1:5175/media-callback',
         secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
         requestTimeoutMs: 150000,
+        confirmationTimeoutMs: MediaConfirmationPolicy.RetentionMs,
       },
     });
     expect(config.tools.deny).not.toContain('image_generate');
     expect(config.tools.deny).not.toContain('video_generate');
+  });
+
+  test('hides OpenClaw tools that need a paired node', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('paired-node-tools');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // LobsterAI pairs no OpenClaw node; desktop control goes through the Computer Use kit.
+    expect(config.tools.deny).toEqual(expect.arrayContaining(['web_search', 'computer', 'nodes', 'mobile_ui']));
   });
 
   test('keeps media generation plugin configured without media entitlement', async () => {
@@ -2691,10 +3122,12 @@ describe('OpenClawConfigSync runtime config output', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(config.plugins.entries['lobster-media-generation']).toEqual({
       enabled: true,
+      hooks: { allowConversationAccess: true },
       config: {
         callbackUrl: 'http://127.0.0.1:5175/media-callback',
         secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
         requestTimeoutMs: 150000,
+        confirmationTimeoutMs: MediaConfirmationPolicy.RetentionMs,
       },
     });
     expect(config.tools.deny).not.toContain('image_generate');
@@ -2779,18 +3212,77 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(sync.sync('provider-added-again').changed).toBe(false);
   });
 
-  test('declares and allowlists the bundled xai plugin so its compat hooks load', async () => {
+  const xaiProvider = (authType?: 'oauth') => ({
+    providerName: ProviderName.Xai,
+    baseURL: 'https://api.x.ai/v1',
+    apiKey: authType ? '' : 'xai-key',
+    apiType: 'openai' as const,
+    ...(authType ? { authType } : {}),
+    codingPlanEnabled: false,
+    models: [{ id: 'grok-4.3', name: 'Grok 4.3' }],
+  });
+
+  test.each([
+    ['an API key', xaiProvider()],
+    ['OAuth', xaiProvider('oauth')],
+  ])('declares and allowlists the bundled xai plugin for an xAI provider using %s', async (_label, provider) => {
+    mockRuntimeState.enabledProviders = [provider];
     const sync = await createSync();
 
     const result = sync.sync('xai-plugin-declared');
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.models.providers[OpenClawProviderId.Xai]).toBeDefined();
     expect(config.plugins.entries.xai).toEqual({ enabled: true });
     // plugins.allow is a strict allowlist once non-empty — without this entry
     // the xai plugin never loads and grok models lose their reasoningEffort
     // compat (xAI rejects the parameter for every model except grok-4.3).
     expect(config.plugins.allow).toContain('xai');
+  });
+
+  test('keeps the bundled xai plugin off while no xAI provider is configured', async () => {
+    // What every sync wrote before the plugin became conditional.
+    fs.writeFileSync(configPath, JSON.stringify({
+      plugins: { entries: { xai: { enabled: true } }, allow: ['xai'] },
+    }));
+    const sync = await createSync();
+
+    expect(sync.sync('xai-plugin-off').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: false });
+    expect(config.plugins.allow).not.toContain('xai');
+    expect(sync.sync('xai-plugin-off-again').changed).toBe(false);
+  });
+
+  test('turns the bundled xai plugin on and off with the xAI provider', async () => {
+    const sync = await createSync();
+    expect(sync.sync('before-xai').ok).toBe(true);
+
+    mockRuntimeState.enabledProviders = [xaiProvider()];
+    expect(sync.sync('xai-added').ok).toBe(true);
+    let config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: true });
+    expect(config.plugins.allow).toContain('xai');
+
+    mockRuntimeState.enabledProviders = [];
+    expect(sync.sync('xai-removed').ok).toBe(true);
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toEqual({ enabled: false });
+    expect(config.plugins.allow).not.toContain('xai');
+  });
+
+  test('leaves the xai plugin undeclared when the runtime does not bundle it', async () => {
+    mockRuntimeState.runtimeBundledExtensions = new Set();
+    mockRuntimeState.enabledProviders = [xaiProvider()];
+    const sync = await createSync();
+
+    expect(sync.sync('xai-plugin-missing').ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries.xai).toBeUndefined();
+    expect(config.plugins.allow).not.toContain('xai');
   });
 
   test('keeps memory-core selected and explicitly disables dreaming when dreaming is off', async () => {
@@ -2907,6 +3399,181 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(selection.providerConfig.auth).toBe(AuthType.OAuth);
     expect(selection.providerConfig).not.toHaveProperty('headers');
     expect(selection.providerConfig).not.toHaveProperty('apiKey');
+  });
+
+  test('maps custom provider Responses mode to the openai-responses transport', async () => {
+    const { OpenAIApiMode, OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://gateway.example.com/v1/responses/',
+      modelId: 'gpt-5.5',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: 'custom_0',
+    });
+
+    expect(selection.providerId).toBe('custom_0');
+    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAIResponses);
+    expect(selection.providerConfig.models[0].api).toBe(OpenClawApi.OpenAIResponses);
+    expect(selection.providerConfig.baseUrl).toBe('https://gateway.example.com/v1');
+  });
+
+  test('keeps Chat Completions for custom providers without Responses mode', async () => {
+    const { OpenAIApiMode, OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    for (const openaiApiMode of [undefined, OpenAIApiMode.ChatCompletions]) {
+      const selection = buildProviderSelection({
+        apiKey: 'sk-custom',
+        baseURL: 'https://gateway.example.com/v1',
+        modelId: 'gpt-5.5',
+        apiType: 'openai',
+        openaiApiMode,
+        providerName: 'custom_0',
+      });
+      expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+    }
+
+    const anthropicSelection = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://gateway.example.com',
+      modelId: 'claude-sonnet-4-6',
+      apiType: 'anthropic',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: 'custom_0',
+    });
+    expect(anthropicSelection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
+  });
+
+  test('ignores Responses mode for built-in providers with their own routing', async () => {
+    const { OpenAIApiMode, OpenClawApi, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-deepseek',
+      baseURL: 'https://api.deepseek.com',
+      modelId: 'deepseek-v4-flash',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: ProviderName.DeepSeek,
+    });
+
+    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+  });
+
+  test('keeps built-in providers on their own transport in Responses or Gemini mode', async () => {
+    const { OpenAIApiMode, OpenClawApi, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    for (const providerName of [ProviderName.OpenRouter, ProviderName.Volcengine, ProviderName.Minimax]) {
+      const selection = buildProviderSelection({
+        apiKey: 'sk-test',
+        baseURL: 'https://api.example.com/v1',
+        modelId: 'test-model',
+        apiType: 'openai',
+        openaiApiMode: OpenAIApiMode.Responses,
+        geminiNative: true,
+        providerName,
+      });
+      expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+    }
+  });
+
+  test('maps custom Gemini providers to the Google GenAI transport', async () => {
+    const { OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-gemini',
+      baseURL: 'https://relay.example.com/gemini',
+      modelId: 'gemini-3-pro',
+      apiType: 'openai',
+      geminiNative: true,
+      providerName: 'custom_1',
+      supportsThinking: true,
+    });
+
+    expect(selection.providerId).toBe('custom_1');
+    expect(selection.primaryModel).toBe('custom_1/gemini-3-pro');
+    expect(selection.providerConfig.api).toBe(OpenClawApi.GoogleGenerativeAI);
+    expect(selection.providerConfig.models[0].api).toBe(OpenClawApi.GoogleGenerativeAI);
+    expect(selection.providerConfig.baseUrl).toBe('https://relay.example.com/gemini/v1beta');
+    expect(selection.providerConfig.apiKey).toBe('${LOBSTER_APIKEY_CUSTOM_1}');
+  });
+
+  test('keeps Chat Completions for Responses mode on coding plan and OAuth routes', async () => {
+    const { OpenAIApiMode, OpenClawApi, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const codingPlan = buildProviderSelection({
+      apiKey: 'sk-ark',
+      baseURL: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      modelId: 'ark-code-latest',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: ProviderName.Volcengine,
+      codingPlanEnabled: true,
+    });
+    expect(codingPlan.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+
+    const oauth = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://gateway.example.com/v1',
+      modelId: 'gpt-5.5',
+      apiType: 'openai',
+      openaiApiMode: OpenAIApiMode.Responses,
+      providerName: 'custom_0',
+      authType: 'oauth',
+    });
+    expect(oauth.providerConfig.api).toBe(OpenClawApi.OpenAICompletions);
+  });
+
+  test('writes Responses transport for custom providers during sync', async () => {
+    mockRuntimeState.rawApiConfig = {
+      config: {
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-custom',
+        model: 'gpt-5.5',
+        apiType: 'openai',
+      },
+      providerMetadata: {
+        providerName: 'custom_0',
+        codingPlanEnabled: false,
+        supportsImage: true,
+        modelName: 'GPT 5.5',
+        openaiApiMode: 'responses',
+      },
+    };
+    mockRuntimeState.enabledProviders = [
+      {
+        providerName: 'custom_0',
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-custom',
+        apiType: 'openai',
+        openaiApiMode: 'responses',
+        codingPlanEnabled: false,
+        models: [
+          { id: 'gpt-5.5', name: 'GPT 5.5', supportsImage: true },
+          { id: 'gpt-5.5-mini', name: 'GPT 5.5 Mini', supportsImage: true },
+        ],
+      },
+    ];
+
+    const sync = await createSync();
+    const result = sync.sync('custom-responses-api');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const customProvider = config.models.providers.custom_0;
+    expect(customProvider.api).toBe('openai-responses');
+    expect(customProvider.baseUrl).toBe('https://gateway.example.com/v1');
+    expect(customProvider.models.map((model: { id: string; api: string }) => [model.id, model.api])).toEqual([
+      ['gpt-5.5', 'openai-responses'],
+      ['gpt-5.5-mini', 'openai-responses'],
+    ]);
+    expect(config.agents.defaults.model.primary).toBe('custom_0/gpt-5.5');
   });
 
   test('maps MiniMax OAuth mode to the MiniMax portal provider', async () => {
@@ -3119,6 +3786,33 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(customSelection.providerId).toBe('custom_0');
     expect(customSelection.primaryModel).toBe('custom_0/qwen3.6-plus');
     expect(customSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
+  });
+
+  test('lets model editor overrides beat the provider preset when writing OpenClaw input', async () => {
+    const { ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+    const baseOptions = {
+      apiKey: 'sk-test',
+      baseURL: 'https://api.xiaomimimo.com/v1/chat/completions',
+      modelId: 'mimo-v2.5-pro',
+      apiType: 'openai' as const,
+      providerName: ProviderName.Xiaomi,
+      supportsImage: true,
+      supportsThinking: true,
+      modelName: 'MiMo V2.5 Pro',
+    };
+
+    // Without an override the text-only preset still wins over a stale snapshot.
+    const presetSelection = buildProviderSelection(baseOptions);
+    expect(presetSelection.providerConfig.models[0].input).toEqual(['text']);
+    expect(presetSelection.providerConfig.models[0].reasoning).toBe(true);
+
+    const overriddenSelection = buildProviderSelection({
+      ...baseOptions,
+      capabilityOverrides: { image: true, thinking: false },
+    });
+    expect(overriddenSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
+    expect(overriddenSelection.providerConfig.models[0].reasoning).toBe(false);
   });
 
   test('marks DeepSeek, Xiaomi, and known GLM models as reasoning-capable', async () => {
@@ -3823,6 +4517,28 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.channels['openclaw-weixin']).not.toHaveProperty('accountId');
   });
 
+  test('always admits every weixin sender regardless of the stored dmPolicy and allowFrom', async () => {
+    for (const dmPolicy of ['allowlist', 'pairing', 'disabled'] as const) {
+      const sync = await createSync({
+        getWeixinConfig: () => ({
+          enabled: true,
+          accountId: '97a130e3b62f@im.bot',
+          dmPolicy,
+          allowFrom: ['wxid_someone_else@im.wechat'],
+          debug: false,
+        }),
+      });
+
+      expect(sync.sync(`weixin-${dmPolicy}`).ok).toBe(true);
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      expect(config.channels[WeixinPlugin.Id]).toEqual({
+        enabled: true,
+        dmPolicy: 'open',
+        allowFrom: ['*'],
+      });
+    }
+  });
+
   test('writes managed browser policy forcing host target', async () => {
     const { OpenClawConfigSync } = await import('./openclawConfigSync');
 
@@ -3874,6 +4590,183 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.loopDetection).toEqual({
       enabled: true,
     });
+  });
+
+  test('defers only the long tail behind Tool Search and pins interaction and frequent-scenario tools', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('tool-search');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.tools.toolSearch).toEqual({
+      enabled: true,
+      mode: 'directory',
+      direct: [
+        'AskUserQuestion',
+        'browser',
+        'web_fetch',
+        'memory_search',
+        'memory_get',
+        'automations',
+        // Office editor and computer-use MCP servers, by prefix.
+        'lobster-word__*',
+        'lobster-excel__*',
+        'lobster-ppt__*',
+        'computer-use__*',
+      ],
+      minDeferredChars: 20000,
+    });
+    // Room for the static policies moved out of uncached per-session messages.
+    expect(config.agents.defaults.bootstrapMaxChars).toBe(32000);
+    // Control UI surfaces LobsterAI never renders, and the native question tool
+    // that duplicates AskUserQuestion.
+    expect(config.tools.deny).toEqual(expect.arrayContaining([
+      'dashboard',
+      'portal',
+      'terminal',
+      'github_identity_status',
+      'ask_user',
+    ]));
+    // A user-enabled skill review still needs the workshop tool.
+    expect(config.tools.deny).not.toContain('skill_workshop');
+    // The progress card has no desktop surface.
+    expect(config.tools.updatePlan).toBe(false);
+
+    const agentsMd = fs.readFileSync(path.join(stateDir, 'workspace-main', 'AGENTS.md'), 'utf8');
+    expect(agentsMd).toContain('## Deferred Tools');
+    expect(agentsMd).toContain('a tool reachable through `tool_search` counts as available');
+    // The deferred-tools rule comes before the sections that say "if it is available".
+    expect(agentsMd.indexOf('## Deferred Tools')).toBeLessThan(agentsMd.indexOf('## Command Execution & User Interaction Policy'));
+    // Static policies now cached in AGENTS.md instead of each session's first message or turn.
+    expect(agentsMd).toContain('## Media Generation Policy');
+    expect(agentsMd).toContain('NOT user authorization to generate or spend credits');
+    expect(agentsMd).toContain('## Local Time');
+    expect(agentsMd).toContain('"Local time:" line');
+  });
+
+  test('writes one Office editing section and slims pristine template sections around user content', async () => {
+    const sync = await createSync();
+    const marker = '<!-- LobsterAI managed: do not edit below this line -->';
+    const workspaceDir = path.join(stateDir, 'workspace-main');
+    const agentsMdPath = path.join(workspaceDir, 'AGENTS.md');
+    const userSection = '## My Rules\n\n- Always answer in Chinese.';
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(agentsMdPath, [
+      '# AGENTS.md - Your Workspace',
+      '',
+      userSection,
+      '',
+      // Verbatim from OpenClaw's bundled template; its link does not resolve in a workspace.
+      '## Related',
+      '',
+      '- [Default AGENTS.md](/reference/AGENTS.default)',
+      '',
+      marker,
+      '',
+      '## Stale managed section',
+      '',
+    ].join('\n'), 'utf8');
+
+    expect(sync.sync('agents-md-slim').ok).toBe(true);
+
+    const [userContent, managedContent] = fs.readFileSync(agentsMdPath, 'utf8').split(marker);
+    expect(userContent).toBe(`# AGENTS.md - Your Workspace\n\n${userSection}\n\n`);
+    expect(managedContent).not.toContain('Stale managed section');
+    // Every request carries this file: the Office rules are stated once, not once per format.
+    expect(managedContent.match(/^## Editing Existing/gm)).toHaveLength(1);
+    expect(managedContent).toContain('`.xlsx`: `excel_read` / `excel_edit`');
+    expect(managedContent).toContain('another read verifies nothing and costs a full extra model request');
+
+    // A second sync finds nothing left to slim and leaves the file alone.
+    const firstWrite = fs.readFileSync(agentsMdPath, 'utf8');
+    expect(sync.sync('agents-md-slim-again').ok).toBe(true);
+    expect(fs.readFileSync(agentsMdPath, 'utf8')).toBe(firstWrite);
+  });
+
+  test('registers the LobsterAI Office editor tools as native MCP servers', async () => {
+    const { OpenClawConfigSync } = await import('./openclawConfigSync');
+    const { OFFICE_EDITORS } = await import('../../shared/office/editors');
+    const launch = (server: string) => ({
+      command: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      args: [`/state/generated/${server}-mcp/${server}-mcp-server.mjs`],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
+    const serverNames = OFFICE_EDITORS.map(editor => editor.agent.serverName);
+    // An editor whose bridge is down is simply missing from the servers it reports.
+    let available = serverNames;
+    const sync = new OpenClawConfigSync({
+      engineManager: {
+        getConfigPath: () => configPath,
+        getGatewayToken: () => 'gateway-token',
+        getStateDir: () => stateDir,
+        getBaseDir: () => tmpDir,
+      } as never,
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      getOfficeMcpServers: () => Object.fromEntries(available.map(server => [server, launch(server)])),
+      isEnterprise: () => false,
+      getPopoInstances: () => [],
+      getNeteaseBeeChanConfig: () => null,
+      getWeixinConfig: () => null,
+      getIMSettings: () => null,
+      getSkillsList: () => [],
+      getAgents: () => [],
+    } as never);
+    expect(sync.sync('office-editor-tools').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    for (const server of serverNames) expect(config.mcp.servers[server]).toEqual(launch(server));
+
+    available = serverNames.slice(1);
+    expect(sync.sync('office-editor-tools-partly-unavailable').ok).toBe(true);
+    const withoutBridge = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(withoutBridge.mcp.servers[serverNames[0]]).toBeUndefined();
+    for (const server of available) expect(withoutBridge.mcp.servers[server]).toEqual(launch(server));
+  });
+
+  test('allows the fake-IP range for web fetch only on a fake-IP network', async () => {
+    const sync = await createSync();
+    try {
+      expect(sync.sync('web-fetch-direct-network').ok).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tools.web.fetch.ssrfPolicy).toBeUndefined();
+
+      fakeIpNetworkMock.active = true;
+      expect(sync.sync('web-fetch-fake-ip-network').ok).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tools.web.fetch.ssrfPolicy)
+        .toEqual({ allowRfc2544BenchmarkRange: true });
+    } finally {
+      fakeIpNetworkMock.active = false;
+    }
+  });
+
+  test.each([
+    { globalProxyEnabled: true, followGlobalProxy: true, expected: true },
+    { globalProxyEnabled: true, followGlobalProxy: false, expected: false },
+    { globalProxyEnabled: false, followGlobalProxy: true, expected: false },
+    { globalProxyEnabled: false, followGlobalProxy: false, expected: false },
+  ])('maps web fetch proxy preference with global=$globalProxyEnabled and follow=$followGlobalProxy', async ({ globalProxyEnabled, followGlobalProxy, expected }) => {
+    const { setSystemProxyEnabled } = await import('./systemProxy');
+    const { defaultBrowserWebAccessConfig } = await import('../../shared/browserWebAccess/constants');
+    setSystemProxyEnabled(globalProxyEnabled);
+    const sync = await createSync({
+      getBrowserWebAccessConfig: () => ({
+        webFetch: { ...defaultBrowserWebAccessConfig.webFetch, followGlobalProxy },
+      }),
+    });
+
+    expect(sync.sync('web-fetch-proxy').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.tools.web.fetch.useTrustedEnvProxy).toBe(expected);
   });
 
   test('writes browser and web fetch access settings', async () => {
@@ -3978,7 +4871,8 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.browser.attachOnly).toBeUndefined();
     expect(config.browser.remoteCdpTimeoutMs).toBeUndefined();
     expect(config.browser.remoteCdpHandshakeTimeoutMs).toBeUndefined();
-    expect(config.browser.extraArgs).toBeUndefined();
+    // User-provided extraArgs are not passed through; only the managed cache cap is.
+    expect(config.browser.extraArgs).toEqual([CHROME_DISK_CACHE_SIZE_ARG]);
     expect(config.browser.snapshotDefaults).toBeUndefined();
     expect(config.tools.web.fetch).toMatchObject({
       enabled: true,
@@ -3990,7 +4884,7 @@ describe('OpenClawConfigSync runtime config output', () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
     expect(config.tools.web.fetch.useEnvProxy).toBeUndefined();
-    expect(config.tools.web.fetch.useTrustedEnvProxy).toBeUndefined();
+    expect(config.tools.web.fetch.useTrustedEnvProxy).toBe(true);
 
     browserDisplayMode = BrowserDisplayMode.InApp;
     let browserCallbackUrl: string | null = 'http://127.0.0.1:3210/browser/tool';
@@ -4168,6 +5062,183 @@ describe('OpenClawConfigSync runtime config output', () => {
       args: ['server.js'],
     });
     expect(config.mcp.servers.Evil).toBeUndefined();
+  });
+
+  test('passes toolFilter and supportsParallelToolCalls through to mcp.servers', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'docs-server',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          toolFilter: { include: ['doc.get', 'sheet.*', '', '  '] },
+          supportsParallelToolCalls: true,
+        },
+        {
+          name: 'plain-tools',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          // An empty filter means "not configured" and must not emit toolFilter.
+          toolFilter: { include: [], exclude: [] },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-passthrough');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['docs-server'].toolFilter).toEqual({
+      include: ['doc.get', 'sheet.*'],
+    });
+    expect(config.mcp.servers['docs-server'].supportsParallelToolCalls).toBe(true);
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('toolFilter');
+    expect(config.mcp.servers['plain-tools']).not.toHaveProperty('supportsParallelToolCalls');
+  });
+
+  test('writes auth: "oauth" for OAuth remote servers and drops their static Authorization header', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'oauth-remote',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          headers: { Authorization: 'Bearer stale', 'X-Tenant': 'acme' },
+          auth: 'oauth',
+        },
+        {
+          name: 'header-remote',
+          transportType: 'sse',
+          url: 'https://sse.example.com/sse',
+          headers: { Authorization: 'Bearer kept' },
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-oauth');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['oauth-remote']).toMatchObject({
+      url: 'https://mcp.example.com/mcp',
+      transport: 'streamable-http',
+      auth: 'oauth',
+      headers: { 'x-tenant': 'acme' },
+    });
+    expect(config.mcp.servers['oauth-remote'].headers).not.toHaveProperty('authorization');
+    expect(config.mcp.servers['header-remote']).not.toHaveProperty('auth');
+    expect(config.mcp.servers['header-remote'].headers).toEqual({ authorization: 'Bearer kept' });
+  });
+
+  test('repairs an escaped internal MCP secret reference while keeping other values literal', async () => {
+    const serverName = ComputerUseMcpServerName.BuiltIn;
+    const secretKey = ComputerUseMcpEnv.BridgeSecret;
+    fs.writeFileSync(configPath, JSON.stringify({
+      mcp: { servers: { [serverName]: { env: { [secretKey]: '$${LOBSTER_MCP_BRIDGE_SECRET}' } } } },
+    }));
+    const sync = await createSync({
+      getMcpBridgeSecret: () => 'fixture-bridge-secret',
+      getResolvedMcpServers: () => [{
+        name: serverName,
+        transportType: 'stdio',
+        command: 'node',
+        env: { [ComputerUseMcpEnv.SelfAppName]: '${LOBSTER_PROXY_TOKEN}' },
+        gatewayEnvRefs: { [secretKey]: secretKey },
+      }],
+    });
+
+    expect(sync.sync('computer-use-auth-repair')).toMatchObject({ ok: true, changed: true });
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const entry = JSON.parse(raw).mcp.servers[serverName];
+    expect(entry.env).toEqual({
+      [secretKey]: '${LOBSTER_MCP_BRIDGE_SECRET}',
+      [ComputerUseMcpEnv.SelfAppName]: '$${LOBSTER_PROXY_TOKEN}',
+    });
+    expect(entry).not.toHaveProperty('gatewayEnvRefs');
+    expect(raw).not.toContain('fixture-bridge-secret');
+    expect(sync.collectSecretEnvVars()[secretKey]).toBe('fixture-bridge-secret');
+    expect(sync.sync('computer-use-auth-repair')).toMatchObject({ ok: true, changed: false });
+  });
+
+  test.each(['http', 'sse'] as const)('escapes external %s and stdio MCP values without expanding gateway secrets', async (transportType) => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'remote-literal',
+          transportType,
+          url: 'https://mcp.example.com/mcp?key=${LOBSTER_APIKEY_SERVER}',
+          headers: { Authorization: 'Bearer ${OPENCLAW_GATEWAY_TOKEN}', 'X-Plain': 'plain ${lower} $5' },
+        },
+        {
+          name: 'stdio-literal',
+          transportType: 'stdio',
+          command: '/${NODE_DIR}/node',
+          args: ['server.js', '--token=${LOBSTER_PROXY_TOKEN}'],
+          cwd: '/${WORKSPACE}/mcp',
+          env: { API_KEY: '${LOBSTER_MCP_BRIDGE_SECRET}', ALREADY: '$${KEEP}' },
+          toolFilter: { exclude: ['${WEIRD_TOOL}'] },
+        },
+        {
+          // Matching the built-in name and env key must not confer trust.
+          name: ComputerUseMcpServerName.BuiltIn,
+          transportType: 'stdio',
+          command: 'node',
+          env: { [ComputerUseMcpEnv.BridgeSecret]: '${LOBSTER_MCP_BRIDGE_SECRET}' },
+        },
+      ],
+    });
+
+    expect(sync.sync('mcp-escape').ok).toBe(true);
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(raw);
+    expect(config.mcp.servers['remote-literal']).toMatchObject({
+      url: 'https://mcp.example.com/mcp?key=$${LOBSTER_APIKEY_SERVER}',
+      headers: {
+        authorization: 'Bearer $${OPENCLAW_GATEWAY_TOKEN}',
+        'x-plain': 'plain ${lower} $5',
+      },
+    });
+    expect(config.mcp.servers['stdio-literal']).toMatchObject({
+      command: '/$${NODE_DIR}/node',
+      args: ['server.js', '--token=$${LOBSTER_PROXY_TOKEN}'],
+      cwd: '/$${WORKSPACE}/mcp',
+      env: { API_KEY: '$${LOBSTER_MCP_BRIDGE_SECRET}', ALREADY: '$$${KEEP}' },
+      toolFilter: { exclude: ['$${WEIRD_TOOL}'] },
+    });
+    expect(config.mcp.servers[ComputerUseMcpServerName.BuiltIn].env).toEqual({
+      [ComputerUseMcpEnv.BridgeSecret]: '$${LOBSTER_MCP_BRIDGE_SECRET}',
+    });
+    // No unescaped placeholder from user data survives in the MCP section.
+    expect(JSON.stringify(config.mcp)).not.toMatch(/(^|[^$])\$\{[A-Z_][A-Z0-9_]*\}/);
+  });
+
+  test('passes positive MCP timeouts through and drops invalid ones', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'slow-remote',
+          transportType: 'http',
+          url: 'https://mcp.example.com/mcp',
+          requestTimeoutMs: 60000,
+          connectionTimeoutMs: 5000,
+        },
+        {
+          name: 'bad-timeouts',
+          transportType: 'http',
+          url: 'https://mcp.example.com/other',
+          requestTimeoutMs: 0,
+          connectionTimeoutMs: Number.NaN,
+        },
+      ],
+    });
+
+    expect(sync.sync('mcp-timeouts').ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['slow-remote']).toMatchObject({ requestTimeoutMs: 60000, connectionTimeoutMs: 5000 });
+    expect(config.mcp.servers['bad-timeouts']).not.toHaveProperty('requestTimeoutMs');
+    expect(config.mcp.servers['bad-timeouts']).not.toHaveProperty('connectionTimeoutMs');
+>>>>>>> upstream/main
   });
 });
 

@@ -86,6 +86,25 @@ test('deleteSubagentRun removes a single run, messages, and gateway transcript',
   );
 });
 
+test('isChildSession recognizes a materialized child whatever its session key', () => {
+  const tracker = new SubagentTracker(runStore, messageStore, () => null);
+  runStore.insertSubagentRun({
+    id: 'run-visible',
+    parentSessionId: 'parent-1',
+    sessionKey: 'agent:blog:dashboard:visible-child',
+    childCoworkSessionId: 'child-session-1',
+    agentId: 'blog',
+    task: 'publish',
+    label: 'publish',
+    status: 'running',
+    createdAt: 1000,
+  });
+
+  expect(tracker.isChildSession('child-session-1')).toBe(true);
+  expect(tracker.isChildSession('parent-1')).toBe(false);
+  expect(new SubagentTracker(null as never, null, () => null).isChildSession('child-session-1')).toBe(false);
+});
+
 test('deleteSubagentRun returns after local deletion without waiting for gateway cleanup', async () => {
   let resolveGatewayDelete: (() => void) | null = null;
   const gatewayDeletePromise = new Promise<void>((resolve) => {
@@ -239,6 +258,97 @@ test('getSubTaskHistory preserves persisted message timestamps', async () => {
     timestamp: 1001,
     metadata: undefined,
   }]);
+  expect(gatewayClient.request).not.toHaveBeenCalled();
+});
+
+test.each(['done', 'error'] as const)('getSubTaskHistory tolerates corrupt stored metadata and caches %s runs', async (status) => {
+  const gatewayClient: GatewayClientLike = {
+    request: vi.fn().mockResolvedValue({ messages: [] }),
+  };
+  const tracker = new SubagentTracker(runStore, messageStore, () => gatewayClient);
+  runStore.insertSubagentRun({
+    id: 'run-metadata',
+    parentSessionId: 'parent-1',
+    sessionKey: 'agent:main:subagent:run-metadata',
+    agentId: 'worker',
+    task: 'inspect files',
+    label: 'worker',
+    status,
+    createdAt: 1000,
+  });
+  messageStore.insertMessages('run-metadata', [
+    { id: 'null', type: 'assistant', content: 'null metadata', timestamp: 3000, sequence: 3 },
+    { id: 'valid', type: 'user', content: 'valid content', metadata: { nested: { keep: true } }, timestamp: 4000, sequence: 1 },
+    { id: 'corrupt', type: 'tool_use', content: 'preserved tool content', timestamp: 2000, sequence: 2 },
+  ]);
+  db.prepare('UPDATE subagent_messages SET metadata = ? WHERE id = ?').run('{broken', 'corrupt');
+  runStore.markMessagesPersisted('run-metadata');
+
+  const readSpy = vi.spyOn(messageStore, 'getMessages');
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const messages = await tracker.getSubTaskHistory('parent-1', 'run-metadata');
+  expect(messages).toEqual([
+    { id: 'valid', type: 'user', content: 'valid content', timestamp: 4000, metadata: { nested: { keep: true } } },
+    { id: 'corrupt', type: 'tool_use', content: 'preserved tool content', timestamp: 2000, metadata: undefined },
+    { id: 'null', type: 'assistant', content: 'null metadata', timestamp: 3000, metadata: undefined },
+  ]);
+  expect(await tracker.getSubTaskHistory('parent-1', 'run-metadata')).toEqual(messages);
+  expect(readSpy).toHaveBeenCalledExactlyOnceWith('run-metadata');
+  expect(gatewayClient.request).not.toHaveBeenCalled();
+  expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+    '[SubagentTracker] corrupt metadata detected for message corrupt in run run-metadata, discarding metadata',
+  );
+  expect(db.prepare('SELECT metadata FROM subagent_messages WHERE id = ?').get('corrupt'))
+    .toEqual({ metadata: '{broken' });
+});
+
+test('getSubTaskHistory preserves every message when all stored metadata is corrupt', async () => {
+  const gatewayClient: GatewayClientLike = { request: vi.fn() };
+  const tracker = new SubagentTracker(runStore, messageStore, () => gatewayClient);
+  runStore.insertSubagentRun({
+    id: 'run-corrupt',
+    parentSessionId: 'parent-1',
+    sessionKey: 'agent:main:subagent:run-corrupt',
+    agentId: 'worker',
+    task: 'inspect files',
+    label: 'worker',
+    status: 'done',
+    createdAt: 1000,
+  });
+  messageStore.insertMessages('run-corrupt', [
+    { id: 'first', type: 'user', content: 'question', timestamp: 1001, sequence: 1 },
+    { id: 'last', type: 'assistant', content: 'answer', timestamp: 1002, sequence: 2 },
+  ]);
+  db.prepare('UPDATE subagent_messages SET metadata = ? WHERE run_id = ?').run('{broken', 'run-corrupt');
+  runStore.markMessagesPersisted('run-corrupt');
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  expect(await tracker.getSubTaskHistory('parent-1', 'run-corrupt')).toEqual([
+    { id: 'first', type: 'user', content: 'question', timestamp: 1001, metadata: undefined },
+    { id: 'last', type: 'assistant', content: 'answer', timestamp: 1002, metadata: undefined },
+  ]);
+  expect(warnSpy).toHaveBeenCalledTimes(2);
+  expect(gatewayClient.request).not.toHaveBeenCalled();
+});
+
+test('getSubTaskHistory propagates database errors while reading stored metadata', async () => {
+  const gatewayClient: GatewayClientLike = { request: vi.fn() };
+  const tracker = new SubagentTracker(runStore, messageStore, () => gatewayClient);
+  runStore.insertSubagentRun({
+    id: 'run-db-error',
+    parentSessionId: 'parent-1',
+    sessionKey: 'agent:main:subagent:run-db-error',
+    agentId: 'worker',
+    task: 'inspect files',
+    label: 'worker',
+    status: 'done',
+    createdAt: 1000,
+  });
+  runStore.markMessagesPersisted('run-db-error');
+  const error = new Error('database read failed');
+  vi.spyOn(messageStore, 'getMessages').mockImplementation(() => { throw error; });
+
+  await expect(tracker.getSubTaskHistory('parent-1', 'run-db-error')).rejects.toBe(error);
   expect(gatewayClient.request).not.toHaveBeenCalled();
 });
 

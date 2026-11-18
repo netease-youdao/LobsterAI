@@ -1,5 +1,7 @@
 import { type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { PassThrough } from 'stream';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -9,7 +11,7 @@ import type { OpenClawDreamingRecoverySummary } from '../../shared/openclawEngin
 import { OpenClawStartupCompatibilityMode } from '../../shared/openclawEngine/startupCompatibility';
 import { OpenClawStartupMigrationStatus } from '../../shared/openclawEngine/startupMigration';
 import { OPENCLAW_STARTUP_MIGRATION_REFUSAL } from './openclawDreamingStartupFailure';
-import { OpenClawGatewaySignal } from './openclawGatewayProcess';
+import { GATEWAY_STOP_GRACE_MS, OpenClawGatewaySignal } from './openclawGatewayProcess';
 
 vi.mock('electron', () => ({
   app: { getAppPath: () => process.cwd(), isPackaged: false },
@@ -20,16 +22,19 @@ vi.mock('./openclawLocalExtensions', () => ({
   listLocalOpenClawExtensionIds: () => [],
 }));
 
-import { OpenClawEngineManager, type OpenClawEngineStatus } from './openclawEngineManager';
+import { OpenClawEngineManager, OpenClawEngineManagerEvent, type OpenClawEngineStatus } from './openclawEngineManager';
 
 interface SupervisorInternals {
   stateDir: string;
   startupCompatibilityRunner: ((mode: OpenClawStartupCompatibilityMode) => Promise<{ status: OpenClawStartupMigrationStatus; error?: string; dreamingRecovery?: OpenClawDreamingRecoverySummary }>) | null;
   gatewayReadyProcesses: WeakSet<ChildProcess>;
+  gatewayStartupReadyAt: { child: ChildProcess; at: number } | null;
   gatewayProcess: ChildProcess | null;
   gatewayRecentOutput: WeakMap<ChildProcess, string[]>;
+  noteGatewayOutput: (child: ChildProcess) => void;
   gatewayRestartAttempt: number;
   gatewayRestartTimer: ReturnType<typeof setTimeout> | null;
+  scheduleGatewayRestartBudgetReset: (child: ChildProcess) => void;
   startGatewayPromise: Promise<OpenClawEngineStatus> | null;
   shutdownRequested: boolean;
   attachGatewayExitHandlers: (child: ChildProcess) => void;
@@ -39,6 +44,7 @@ interface SupervisorInternals {
   stopGatewayProcess: (child: ChildProcess) => Promise<void>;
   setStatus: (status: OpenClawEngineStatus) => void;
   doStartGateway: () => Promise<OpenClawEngineStatus>;
+  attachGatewayProcessLogs: (child: ChildProcess) => void;
   resolveRuntimeMetadata: () => { root: string | null; version: string | null };
 }
 
@@ -65,13 +71,17 @@ function makeSupervisor() {
     stateDir: path.join(process.cwd(), 'fixtures', 'state'),
     gatewayProcess: null,
     gatewayRecentOutput: new WeakMap(),
+    gatewayLastOutputAt: new WeakMap(),
     gatewayGenerationByProcess: new WeakMap(),
     gatewayFailureByProcess: new WeakMap(),
     expectedGatewayExits: new WeakSet(),
     gatewayReadyProcesses: new WeakSet(),
+    startupPrepSkippedProcesses: new WeakSet(),
+    startupPrepMarker: { check: vi.fn(() => ({ valid: false, reason: 'test' })), record: vi.fn(), clear: vi.fn() },
     gatewayRestartTimer: null,
     gatewayRestartWait: null,
     gatewayRestartAttempt: 0,
+    gatewayRestartBudgetResetTimer: null,
     gatewayLifecycleGeneration: 0,
     shutdownRequested: false,
     gatewayPort: 18789,
@@ -99,6 +109,40 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+describe('gateway boot progress', () => {
+  test('announces config loading once per gateway process', () => {
+    const { manager, internals } = makeSupervisor();
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-boot-progress-'));
+    Object.assign(manager, { logsDir, gatewaySpawnedAt: Date.now() });
+    const loadingConfig = vi.fn();
+    manager.on(OpenClawEngineManagerEvent.GatewayLoadingConfig, loadingConfig);
+    const spawnWithOutput = () => {
+      const child = Object.assign(makeChild(), { stdout: new PassThrough() });
+      internals.attachGatewayProcessLogs(child);
+      return child;
+    };
+    // Real gateway output colors the timestamp, the subsystem tag and the message.
+    const esc = String.fromCharCode(27);
+    const line = (text: string) => Buffer.from(
+      `${esc}[90m2026-11-05T11:06:27.001+08:00${esc}[39m ${esc}[36m[gateway]${esc}[39m ${esc}[36m${text}${esc}[39m\n`,
+    );
+    try {
+      const first = spawnWithOutput();
+      first.stdout!.emit('data', line('starting...'));
+      expect(loadingConfig).not.toHaveBeenCalled();
+      first.stdout!.emit('data', line('loading configuration…'));
+      first.stderr!.emit('data', line('loading configuration…'));
+      expect(loadingConfig).toHaveBeenCalledOnce();
+
+      const second = spawnWithOutput();
+      second.stderr!.emit('data', line('loading configuration…'));
+      expect(loadingConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('terminal plugin startup block', () => {
@@ -414,6 +458,35 @@ describe('OpenClaw gateway restart supervision', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  test('trusts a startup readiness confirmed moments ago for the same process instead of probing again', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    const probe = vi.spyOn(internals, 'isGatewayStartupReady').mockResolvedValue(true);
+    internals.gatewayStartupReadyAt = { child, at: Date.now() };
+
+    await expect(manager.startGateway('channel-sync-ensure-ready')).resolves.toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(probe).not.toHaveBeenCalled();
+
+    // A confirmation for another process, or one that has aged, is probed as before.
+    internals.gatewayStartupReadyAt = { child: makeChild(), at: Date.now() };
+    await manager.startGateway('channel-sync-ensure-ready');
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    internals.gatewayStartupReadyAt = { child, at: Date.now() };
+    await vi.advanceTimersByTimeAsync(5_000);
+    await manager.startGateway('channel-sync-ensure-ready');
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not trust a startup readiness once the engine has left the running phase', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayStartupReadyAt = { child, at: Date.now() };
+    internals.setStatus({ phase: OpenClawEnginePhase.Starting, version: '2026.8.1', canRetry: false });
+    const probe = vi.spyOn(internals, 'isGatewayStartupReady').mockResolvedValue(true);
+
+    await expect(manager.startGateway('channel-sync-ensure-ready')).resolves.toMatchObject({ phase: OpenClawEnginePhase.Running });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
   test('still shows startup and waits for explicit readiness for a process that has never been ready', async () => {
     const { manager, internals, phases } = makeSupervisor();
     internals.setStatus({ phase: OpenClawEnginePhase.Ready, version: '2026.8.1', canRetry: false });
@@ -461,16 +534,19 @@ describe('OpenClaw gateway restart supervision', () => {
 
   test('keeps one startup screen and never starts the replacement before the old process exits', async () => {
     const { manager, internals, child, phases } = makeSupervisor();
+    const publishConfig = vi.fn(() => expect(internals.gatewayProcess).toBeNull());
     const start = vi.spyOn(manager, 'startGateway').mockImplementation(async () => {
+      expect(publishConfig).toHaveBeenCalledOnce();
       expect((await manager.ensureReady()).phase).toBe(OpenClawEnginePhase.Starting);
       internals.setStatus({ phase: OpenClawEnginePhase.Running, version: '2026.8.1', canRetry: false });
       return manager.getStatus();
     });
-    const first = manager.restartGateway('mcp-change');
+    const first = manager.restartGateway('mcp-change', { beforeStart: publishConfig });
     const concurrent = manager.restartGateway('another-config-change');
 
     await vi.advanceTimersByTimeAsync(5_300);
     expect(start).not.toHaveBeenCalled();
+    expect(publishConfig).not.toHaveBeenCalled();
     expect(phases).toEqual([OpenClawEnginePhase.Starting]);
     child.exitCode = 0;
     closeChild(child, 0);
@@ -486,7 +562,7 @@ describe('OpenClaw gateway restart supervision', () => {
     const start = vi.spyOn(manager, 'startGateway');
     const pending = manager.restartGateway('mcp-change');
     const rejected = expect(pending).rejects.toThrow('did not exit after SIGKILL');
-    await vi.advanceTimersByTimeAsync(process.platform === 'win32' ? 36_000 : 8_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS + (process.platform === 'win32' ? 30_000 : 2_000));
     await rejected;
 
     expect(internals.gatewayProcess).toBe(child);
@@ -504,7 +580,7 @@ describe('OpenClaw gateway restart supervision', () => {
       return manager.getStatus();
     });
     const pending = manager.restartGateway('config-delivery-fallback');
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS);
     expect(start).not.toHaveBeenCalled();
     vi.mocked(process.kill).mockImplementation(() => {
       throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
@@ -616,6 +692,64 @@ describe('OpenClaw gateway restart supervision', () => {
 
     await expect(ready).resolves.toBe(false);
     expect(phases).toEqual([OpenClawEnginePhase.Starting]);
+  });
+
+  describe('startup readiness wait', () => {
+    function startWaiting() {
+      const context = makeSupervisor();
+      const probe = vi.spyOn(context.internals, 'isGatewayStartupReady').mockResolvedValue(false);
+      const settled = vi.fn();
+      const ready = context.internals.waitForGatewayReady(18789, 300_000).then((value) => {
+        settled(value);
+        return value;
+      });
+      return { ...context, probe, settled, ready };
+    }
+
+    async function emitOutputEvery(internals: SupervisorInternals, child: ChildProcess, intervalMs: number, untilMs: number) {
+      for (let at = intervalMs; at <= untilMs; at += intervalMs) {
+        await vi.advanceTimersByTimeAsync(intervalMs);
+        internals.noteGatewayOutput(child);
+      }
+    }
+
+    test('keeps a slow start that is still producing output past the base deadline', async () => {
+      const { internals, child, probe, settled, ready } = startWaiting();
+      await emitOutputEvery(internals, child, 30_000, 300_000);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(settled).not.toHaveBeenCalled();
+      probe.mockResolvedValue(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(ready).resolves.toBe(true);
+      expect(internals.gatewayReadyProcesses.has(child)).toBe(true);
+    });
+
+    test('still gives up at the base deadline when the gateway produced no output', async () => {
+      const { settled, ready } = startWaiting();
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(ready).resolves.toBe(false);
+    });
+
+    test('gives up once output has stopped for the idle window', async () => {
+      const { internals, child, settled, ready } = startWaiting();
+      await emitOutputEvery(internals, child, 50_000, 400_000);
+      await vi.advanceTimersByTimeAsync(239_000);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(ready).resolves.toBe(false);
+    });
+
+    test('enforces the absolute limit when output never stops', async () => {
+      const { internals, child, settled, ready } = startWaiting();
+      await emitOutputEvery(internals, child, 30_000, 870_000);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(settled).not.toHaveBeenCalled();
+      internals.noteGatewayOutput(child);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(ready).resolves.toBe(false);
+    });
   });
 
   test('waits for an in-flight startup to acknowledge cancellation before returning from stop', async () => {
@@ -766,6 +900,22 @@ describe('OpenClaw gateway restart supervision', () => {
       OpenClawEnginePhase.Error,
     ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The real doStartGateway path is covered by openclawEngineManager.restartBudget.test.ts.
+  test('a gateway that stays healthy past the stability window refills the restart budget', async () => {
+    const { manager, internals, child } = makeSupervisor();
+    internals.gatewayRestartAttempt = 4;
+    internals.scheduleGatewayRestartBudgetReset(child);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(internals.gatewayRestartAttempt).toBe(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(internals.gatewayRestartAttempt).toBe(0);
+
+    closeChild(child, 1);
+    expect(internals.gatewayRestartAttempt).toBe(1);
+    expect(manager.getStatus().phase).toBe(OpenClawEnginePhase.Starting);
   });
 });
 

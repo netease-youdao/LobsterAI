@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   OPENCLAW_PLUGIN_SKILLS_DIRECTORY, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST,
-  OpenClawRepairPhase, OpenClawRepairPluginSource,
+  OpenClawRepairPhase, OpenClawRepairPluginSource, type OpenClawRepairProgress, OpenClawRepairProgressStage,
 } from '../../shared/openclawEngine/repair';
 import {
   assertOwnedRepairPath, type CompatibilityRepairOptions, type CompatibilityRepairOwners,
@@ -17,7 +17,7 @@ import {
 
 const directories: string[] = [];
 function fixture(phase: OpenClawRepairPhase = OpenClawRepairPhase.Snapshot): CompatibilityRepairOptions {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-repair-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-repair-')));
   directories.push(root);
   const stateDir = path.join(root, 'state');
   const backupDir = path.join(root, 'backup');
@@ -111,6 +111,107 @@ test('snapshot includes committed WAL data, config, and legacy transcripts witho
   } finally { db.close(); }
 });
 
+test('snapshot skips regenerable caches but keeps browser site data and the files later phases read', async () => {
+  const options = fixture();
+  const write = (relative: string) => {
+    const file = path.join(options.stateDir, ...relative.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, relative);
+  };
+  const profile = 'browser/openclaw/user-data';
+  const skipped = [
+    '.compile-cache', `${profile}/GraphiteDawnCache`, `${profile}/GrShaderCache`,
+    `${profile}/Default/Cache`, `${profile}/Default/Code Cache`, `${profile}/Default/GPUCache`,
+    `${profile}/Default/DawnWebGPUCache`, `${profile}/Default/Service Worker/CacheStorage`,
+    'browser/imported/user-data/Profile 1/GPUCache',
+  ];
+  for (const directory of skipped) write(`${directory}/data_0`);
+  const kept = [
+    `${profile}/Local State`, `${profile}/Default/Cookies`,
+    `${profile}/Default/Local Storage/leveldb/000003.log`,
+    `${profile}/Default/IndexedDB/https_example.com_0.indexeddb.leveldb/CURRENT`,
+    `${profile}/Default/Service Worker/Database/CURRENT`,
+    `${profile}/Default/Service Worker/ScriptCache/index`,
+    // Same names outside Chromium's cache locations are not caches.
+    `${profile}/Default/Extensions/abc/1.0/Cache/kept.js`,
+    'agents/main/Cache/kept.txt', 'agents/main/.compile-cache/kept.txt',
+    'agents/main/sessions/sessions.json',
+  ];
+  for (const file of kept) write(file);
+  const dbPath = path.join(options.stateDir, 'state', 'openclaw.sqlite');
+  fs.mkdirSync(path.dirname(dbPath));
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE ledger (value TEXT); INSERT INTO ledger VALUES ('kept')");
+  db.close();
+
+  const report = await repairOpenClawCompatibility(options, owners());
+  expect(report, report.error).toMatchObject({ success: true });
+  const original = path.join(options.backupDir, 'original');
+  for (const directory of skipped) {
+    expect(fs.existsSync(path.join(original, ...directory.split('/')))).toBe(false);
+    expect(fs.existsSync(path.join(options.stateDir, ...directory.split('/'), 'data_0'))).toBe(true);
+  }
+  for (const file of kept) expect(fs.readFileSync(path.join(original, ...file.split('/')), 'utf8')).toBe(file);
+  // Preflight reads the config and session stores, Plugins reads the state ledger.
+  expect(fs.readFileSync(path.join(original, 'openclaw.json'), 'utf8')).toBe('{}');
+  const saved = new DatabaseSync(path.join(original, 'state', 'openclaw.sqlite'), { readOnly: true });
+  try { expect(saved.prepare('SELECT value FROM ledger').get()?.value).toBe('kept'); } finally { saved.close(); }
+  const manifest = JSON.parse(fs.readFileSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), 'utf8'));
+  expect([...manifest.skippedRegenerablePaths].sort()).toEqual(skipped.map(item => path.join(...item.split('/'))).sort());
+  expect(report.changes).toContainEqual(expect.stringContaining(`Skipped ${skipped.length} regenerable cache directories`));
+  const recovery = await repairOpenClawCompatibility({ ...options, phase: OpenClawRepairPhase.Recovery }, owners());
+  expect(recovery, recovery.error).toMatchObject({ success: true });
+});
+
+test('snapshot leaves already-imported transcript archives in place, copies the agent databases, and reports measured progress', async () => {
+  const options = fixture();
+  const write = (relative: string, content: string) => {
+    const file = path.join(options.stateDir, ...relative.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+    return file;
+  };
+  const agentDb = path.join(options.stateDir, 'agents', 'main', 'agent', 'openclaw-agent.sqlite');
+  fs.mkdirSync(path.dirname(agentDb), { recursive: true });
+  const db = new DatabaseSync(agentDb);
+  db.exec("CREATE TABLE transcript_events (text TEXT); INSERT INTO transcript_events VALUES ('imported history')");
+  db.close();
+  const kept = ['agents/main/sessions/sessions.json', 'agents/main/sessions/live.jsonl', 'session-sqlite-migration-runs/run-1.json'];
+  for (const file of kept) write(file, file);
+  const archives = ['agents/main/session-sqlite-import-archive', 'session-sqlite-import-archive'];
+  const archived = archives.map(archive => write(`${archive}/history.jsonl.imported-1`, 'already imported'));
+  const reports: OpenClawRepairProgress[] = [];
+
+  const report = await repairOpenClawCompatibility(options, { ...owners(), reportProgress: value => reports.push(value) });
+  expect(report, report.error).toMatchObject({ success: true });
+  const original = path.join(options.backupDir, 'original');
+  for (const archive of archives) expect(fs.existsSync(path.join(original, ...archive.split('/')))).toBe(false);
+  for (const file of archived) expect(fs.readFileSync(file, 'utf8')).toBe('already imported');
+  for (const file of kept) expect(fs.readFileSync(path.join(original, ...file.split('/')), 'utf8')).toBe(file);
+  const saved = new DatabaseSync(path.join(original, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'), { readOnly: true });
+  try { expect(saved.prepare('SELECT text FROM transcript_events').get()?.text).toBe('imported history'); } finally { saved.close(); }
+  const manifest = JSON.parse(fs.readFileSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST), 'utf8'));
+  expect([...manifest.skippedSessionImportArchivePaths].sort()).toEqual(archives.map(item => path.join(...item.split('/'))).sort());
+  expect(manifest.restoreInstructions).toContain('skippedSessionImportArchivePaths');
+  expect(report.changes).toContainEqual(expect.stringContaining('Left 2 session import archives in place'));
+
+  // config, agent database and the three kept files; the archives are not counted.
+  const totals = { totalFiles: 5, totalBytes: fs.statSync(agentDb).size + 2 + kept.reduce((sum, file) => sum + file.length, 0) };
+  const copy = reports.filter(value => value.stage === OpenClawRepairProgressStage.Copy);
+  expect(copy[0]).toEqual({ phase: OpenClawRepairPhase.Snapshot, stage: OpenClawRepairProgressStage.Copy, files: 0, bytes: 0, ...totals });
+  expect(copy.at(-1)).toMatchObject({ files: 5, bytes: totals.totalBytes, ...totals });
+});
+
+test('a linked session import archive still cannot be snapshotted', async () => {
+  const options = fixture();
+  const link = path.join(options.stateDir, 'agents', 'main', 'session-sqlite-import-archive');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(path.join(path.dirname(options.stateDir), 'elsewhere'), link, 'junction');
+  const report = await repairOpenClawCompatibility(options, owners());
+  expect(report).toMatchObject({ success: false, failurePath: link });
+  expect(fs.existsSync(path.join(options.backupDir, OPENCLAW_REPAIR_SNAPSHOT_MANIFEST))).toBe(false);
+});
+
 test('failed ownership or backup cannot run later repairs and remains diagnosable', async () => {
   const options = fixture();
   fs.writeFileSync(path.join(options.stateDir, 'broken.sqlite'), 'corrupt');
@@ -188,9 +289,15 @@ test('healthy installations and same-ID third-party packages are retained', asyn
   expect(deps.acceptBundledPlugin).not.toHaveBeenCalled();
 });
 
-function migratedPluginFixture() {
+function migratedPluginFixture(linkedAncestor = false) {
   const context = pluginFixture();
-  const base = path.dirname(context.options.stateDir);
+  let base = path.dirname(context.options.stateDir);
+  if (linkedAncestor) {
+    // Both profiles live under a folder relocated through a symlink or Windows junction.
+    fs.mkdirSync(path.join(base, 'relocated'));
+    fs.symlinkSync(path.join(base, 'relocated'), path.join(base, 'profiles'), 'junction');
+    base = path.join(base, 'profiles');
+  }
   context.options.stateDir = path.join(base, 'admin', 'LobsterAI', 'openclaw', 'state');
   fs.mkdirSync(context.options.stateDir, { recursive: true });
   context.options.configPath = path.join(context.options.stateDir, 'openclaw.json');
@@ -200,8 +307,8 @@ function migratedPluginFixture() {
   return context;
 }
 
-test('reconciles a missing previous-profile install and backs up its SQLite ledger including WAL', async () => {
-  const { options, deps, records, root, user } = migratedPluginFixture();
+test.each([false, true])('reconciles a missing previous-profile install and backs up its SQLite ledger including WAL (linked ancestor: %s)', async linkedAncestor => {
+  const { options, deps, records, root, user } = migratedPluginFixture(linkedAncestor);
   const dbPath = path.join(options.stateDir, 'state', 'openclaw.sqlite');
   fs.mkdirSync(path.dirname(dbPath));
   const db = new DatabaseSync(dbPath);
@@ -221,9 +328,10 @@ test('reconciles a missing previous-profile install and backs up its SQLite ledg
   } finally { db.close(); }
 });
 
-test.each(['existing', 'custom-path', 'conflicting-package', 'linked-parent', 'permission-denied'])(
-  'preserves an ambiguous previous-profile installation: %s', async scenario => {
-    const { options, deps, records } = migratedPluginFixture();
+test.each(['existing', 'custom-path', 'conflicting-package', 'linked-parent', 'permission-denied']
+  .flatMap(scenario => [false, true].map(linkedAncestor => ({ scenario, linkedAncestor }))))(
+  'preserves an ambiguous previous-profile installation: $scenario (linked ancestor: $linkedAncestor)', async ({ scenario, linkedAncestor }) => {
+    const { options, deps, records } = migratedPluginFixture(linkedAncestor);
     const installPath = records.deepseek.installPath!;
     if (scenario === 'existing') fs.mkdirSync(installPath, { recursive: true });
     if (scenario === 'custom-path') records.deepseek.installPath = path.join(path.dirname(options.backupDir), 'custom-plugin');

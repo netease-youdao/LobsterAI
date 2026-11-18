@@ -28,6 +28,8 @@ interface McpDetailModalProps {
   description: string;
   stats: McpDetailStat[];
   info: McpDetailInfoRow[];
+  /** "Try asking" prompts the marketplace entry suggests. */
+  examples?: string[];
   /** Primary action pill in the header (install / connect). */
   action?: React.ReactNode;
   /** Management strip along the bottom (enable, edit, delete). */
@@ -47,6 +49,7 @@ const McpDetailModal: React.FC<McpDetailModalProps> = ({
   description,
   stats,
   info,
+  examples,
   action,
   footer,
   onClose,
@@ -110,9 +113,27 @@ const McpDetailModal: React.FC<McpDetailModalProps> = ({
         </>
       )}
 
-      {info.length > 0 && (
+      {examples && examples.length > 0 && (
         <>
           <h3 className={`mb-2 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground ${description ? 'mt-5' : ''}`}>
+            {i18nService.t('mcpDetailExamples')}
+          </h3>
+          <ul className="space-y-1.5">
+            {examples.map(example => (
+              <li
+                key={example}
+                className={`rounded-lg bg-surface-raised px-3 py-2 ${MANAGEMENT_BODY_TEXT} leading-relaxed text-foreground`}
+              >
+                {example}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {info.length > 0 && (
+        <>
+          <h3 className={`mb-2 ${MANAGEMENT_BODY_TEXT} font-semibold text-foreground ${description || examples?.length ? 'mt-5' : ''}`}>
             {i18nService.t('mcpDetailInfo')}
           </h3>
           <div className="space-y-2">

@@ -9,6 +9,7 @@ import { type Artifact, PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact'
 import type { CoworkMessage, CoworkSession } from '../../types/cowork';
 import { showShellFailureToast } from '../../utils/localFileActions';
 import AssistantTurnBlock from '../cowork/AssistantTurnBlock';
+import { buildMediaTaskPresentations } from '../cowork/mediaTaskPresentation';
 import {
   buildConversationTurns,
   buildDisplayItems,
@@ -211,6 +212,7 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
     () => buildConversationTurns(displayItems, { leadingTurnStartTimestamp }),
     [displayItems, leadingTurnStartTimestamp],
   );
+  const mediaTaskPresentations = useMemo(() => buildMediaTaskPresentations(turns), [turns]);
 
   // Detect deliverable file artifacts from the run transcript so the modal
   // shows the same end-of-turn file cards as the main session view.
@@ -322,7 +324,7 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
               <button
                 type="button"
                 onClick={handleManualRetry}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-primary hover:bg-surface-raised transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-foreground hover:bg-surface-raised transition-colors"
               >
                 <ArrowPathIcon className="w-3.5 h-3.5" />
                 {i18nService.t('scheduledTasksSessionRetry')}
@@ -363,6 +365,7 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({
                     {showAssistantBlock && (
                       <AssistantTurnBlock
                         turn={turn}
+                        mediaTaskPresentations={mediaTaskPresentations}
                         artifacts={turnArtifacts}
                         localServiceDirectory={sessionCwd}
                         onOpenArtifactPreview={handleOpenArtifactPreview}

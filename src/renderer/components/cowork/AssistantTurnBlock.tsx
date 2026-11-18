@@ -12,9 +12,10 @@ import {
   parseCoworkErrorDetail,
 } from '../../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import { hasLayerDecompositionWarning } from '../../../shared/media/warnings';
 import purchaseOfferFirstBadge from '../../assets/purchase-offer-first.svg';
 import purchaseOfferLimitedBadge from '../../assets/purchase-offer-limited.svg';
-import { dedupeArtifactsForDisplay } from '../../services/artifactParser';
+import { dedupeArtifactsForDisplay, orderArtifactsByReplyReferences } from '../../services/artifactParser';
 import { getPortalPricingUrl } from '../../services/endpoints';
 import { i18nService } from '../../services/i18n';
 import { type LogEventAction, LogReporterAction } from '../../services/logReporter';
@@ -28,10 +29,11 @@ import {
 } from '../../services/lowCreditPurchaseOffer';
 import type { RootState } from '../../store';
 import type { LowCreditPurchaseOffer } from '../../store/slices/authSlice';
-import type { Artifact } from '../../types/artifact';
+import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { revealLocalPathWithToast } from '../../utils/localFileActions';
 import { ArtifactPreviewCard } from '../artifacts';
+import InlineImageGallery from '../artifacts/imageEditor/InlineImageGallery';
 import AbnormalIcon from '../icons/AbnormalIcon';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
@@ -41,9 +43,12 @@ import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
 import AssistantMessageItem from './AssistantMessageItem';
+import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
 import MediaPollingIndicator from './MediaPollingIndicator';
+import { hasRecoveredMediaAssets, isMediaTaskSettled } from './MediaTaskCard';
+import { buildMediaTaskPresentations, isMediaGenerationToolName, type MediaTaskPresentations } from './mediaTaskPresentation';
 import { MessageCopyButton } from './MessageActionButton';
 import {
   canFoldTurnProcess,
@@ -58,11 +63,14 @@ import {
   COWORK_DETAIL_GUTTER_CLASS,
   formatElapsedDuration,
   formatTurnDuration,
+  getActivityCurrentActionText,
   getActivityIndicatorStatusText,
   getActivityLiveStatusText,
+  getAssistantMessageDisplayText,
   getConsolidatedItemKey,
   getContextCompactionMessageLabel,
   getMediaCompletionDisplayText,
+  getModelReconnectMessageLabel,
   getRetainedMediaPollCount,
   getStreamingTextSignature,
   getThinkingPhaseLabels,
@@ -72,6 +80,7 @@ import {
   getTurnActivityFingerprint,
   getTurnAnswerStartIndex,
   getTurnEndTimestamp,
+  getTurnReplyMessageIds,
   getTurnStartTimestamp,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
@@ -81,36 +90,18 @@ import {
   isActivityItemLive,
   isContextCompactionMessage,
   isDuplicateGeneratedVideoAssistantMessage,
+  isModelChangeMessage,
+  isModelReconnectMessage,
   type ToolGroupItem,
+  withTurnModelPreset,
 } from './messageDisplayUtils';
+import ModelChangeDivider from './ModelChangeDivider';
+import ModelReconnectStatusLine from './ModelReconnectStatusLine';
 import ThinkingBlock from './ThinkingBlock';
 import ToolCallGroup from './ToolCallGroup';
+import TurnUsageChip from './TurnUsageChip';
+import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useStreamStall } from './useStreamStall';
-
-const encodeLocalPathForUrl = (filePath: string): string => {
-  return filePath
-    .replace(/\\/g, '/')
-    .split('/')
-    .map((segment, index) => {
-      if (index === 0 && segment === '') return '';
-      if (/^[A-Za-z]:$/.test(segment)) return segment;
-      return encodeURIComponent(segment);
-    })
-    .join('/');
-};
-
-const toLocalFileSrc = (filePath: string): string => {
-  const normalized = filePath.trim().replace(/^file:\/\//i, '').replace(/^localfile:\/\//i, '');
-  const withoutLeadingDriveSlash = /^\/[A-Za-z]:/.test(normalized) ? normalized.slice(1) : normalized;
-  const encoded = encodeLocalPathForUrl(withoutLeadingDriveSlash);
-  if (/^[A-Za-z]:/.test(withoutLeadingDriveSlash)) {
-    return `localfile:///${encoded}`;
-  }
-  if (encoded.startsWith('/')) {
-    return `localfile://${encoded}`;
-  }
-  return `localfile:///${encoded}`;
-};
 
 // ── ContextCompressionIcon ───────────────────────────────────────────────────
 
@@ -178,6 +169,9 @@ const ContextCompactionDivider: React.FC<{ label: string; active?: boolean }> = 
 // One tick: the first value the user sees is "1s", counting up naturally.
 const ACTIVITY_TIMER_APPEAR_DELAY_MS = 1000;
 const ACTIVITY_LONG_WAIT_HINT_DELAY_MS = 30_000;
+// A start request normally returns within milliseconds; one still pending
+// after this is waiting for the engine (startup, a busy gateway, config).
+const ACTIVITY_RUN_START_WAIT_HINT_DELAY_MS = 2_000;
 
 // Rotate the phase word while the model is still silent, so the row visibly keeps moving.
 const ACTIVITY_PHASE_INTERVAL_MS = 2200;
@@ -195,13 +189,31 @@ export const ActivityIndicator: React.FC<{
   liveStatusText?: string | null;
   /** Whether the turn has shown anything yet; silent gaps after that read as "working". */
   hasContent?: boolean;
-}> = ({ fingerprint, startTimestamp, statusTextOverride, liveStatusText = null, hasContent = false }) => {
+  /** The task's start request is still in flight, so nothing has reached the model yet. */
+  awaitingRunStart?: boolean;
+}> = ({
+  fingerprint,
+  startTimestamp,
+  statusTextOverride,
+  liveStatusText = null,
+  hasContent = false,
+  awaitingRunStart = false,
+}) => {
   const [isLongWaiting, setIsLongWaiting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [phaseIndex, setPhaseIndex] = useState(0);
+  // Elapsed time is anchored to message timestamps so it survives remounts
+  // (switching sessions/views); until the turn has a timestamp, show no
+  // counter rather than one restarted from zero.
+  const elapsedMs = startTimestamp != null ? Math.max(0, now - startTimestamp) : null;
+  // A start that is still pending after the grace period is waiting for the
+  // engine; calling that "thinking" makes a stalled engine look like a slow model.
+  const awaitingEngine = awaitingRunStart
+    && elapsedMs != null
+    && elapsedMs >= ACTIVITY_RUN_START_WAIT_HINT_DELAY_MS;
   // Waiting for the model's first output: nothing overrides the label, no
   // step is running, and the turn has shown nothing yet.
-  const thinking = !statusTextOverride && !liveStatusText && !isLongWaiting && !hasContent;
+  const thinking = !statusTextOverride && !awaitingEngine && !liveStatusText && !isLongWaiting && !hasContent;
 
   useEffect(() => {
     if (!thinking) {
@@ -232,14 +244,11 @@ export const ActivityIndicator: React.FC<{
     return () => window.clearInterval(intervalId);
   }, []);
 
-  // Elapsed time is anchored to message timestamps so it survives remounts
-  // (switching sessions/views); until the turn has a timestamp, show no
-  // counter rather than one restarted from zero.
-  const elapsedMs = startTimestamp != null ? Math.max(0, now - startTimestamp) : null;
   const phases = getThinkingPhaseLabels();
   // A running step always names itself; the long-wait hint only applies to a
   // silent model, never to a command that is simply taking its time.
   const statusText = statusTextOverride
+    ?? (awaitingEngine ? i18nService.t('coworkActivityWaitEngineReady') : null)
     ?? liveStatusText
     ?? (thinking
       ? phases[phaseIndex % phases.length]
@@ -526,34 +535,11 @@ const VideoArtifactPathList: React.FC<{ artifacts: Artifact[] }> = ({ artifacts 
   );
 };
 
-// ── MediaImageInline ────────────────────────────────────────────────────────
-
-const MediaImageInline: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) => {
-  if (artifacts.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {artifacts.map(artifact => {
-        const src = artifact.filePath
-          ? toLocalFileSrc(artifact.filePath)
-          : artifact.content;
-        if (!src) return null;
-        return (
-          <img
-            key={artifact.id}
-            src={src}
-            alt={artifact.title || ''}
-            className="max-w-[320px] max-h-[240px] rounded-lg border border-border object-contain"
-          />
-        );
-      })}
-    </div>
-  );
-};
-
 // ── AssistantTurnBlock ───────────────────────────────────────────────────────
 
 const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
+  mediaTaskPresentations?: MediaTaskPresentations;
   artifacts?: Artifact[];
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
@@ -570,16 +556,25 @@ const AssistantTurnBlock: React.FC<{
   renderToolGroupOverride?: (group: ToolGroupItem) => React.ReactNode;
   showActivityIndicator?: boolean;
   activityStatusOverride?: string | null;
+  /** The session's start request is still in flight (optimistic temp session). */
+  awaitingRunStart?: boolean;
   showCopyButtons?: boolean;
+  enableMessageSpeech?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
+  modelSwitchNoticeMessageId?: string | null;
+  onDismissModelSwitchNotice?: () => void;
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
   /** True while subagents spawned in this turn are still running; keeps the process unfolded. */
   hasRunningSubagents?: boolean;
+  /** Error message whose card offers to continue a turn cut short by a dropped model stream. */
+  streamInterruptedErrorMessageId?: string | null;
+  onContinueAfterStreamInterruption?: () => void;
 }> = ({
   turn,
+  mediaTaskPresentations,
   artifacts,
   resolveLocalFilePath,
   mapDisplayText,
@@ -595,12 +590,18 @@ const AssistantTurnBlock: React.FC<{
   renderToolGroupOverride,
   showActivityIndicator = false,
   activityStatusOverride = null,
+  awaitingRunStart = false,
   showCopyButtons = true,
+  enableMessageSpeech = false,
   completedGoal,
   hiddenSystemMessageId,
+  modelSwitchNoticeMessageId,
+  onDismissModelSwitchNotice,
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
+  streamInterruptedErrorMessageId,
+  onContinueAfterStreamInterruption,
 }) => {
   const creditQuotaSnapshot = useSelector((state: RootState) => state.auth.creditQuotaSnapshot);
   const hideCreditQuotaBanner = !creditQuotaSnapshot || creditQuotaSnapshot.creditsRemaining > 0;
@@ -614,9 +615,13 @@ const AssistantTurnBlock: React.FC<{
     }),
     [turn.assistantItems, hideCreditQuotaBanner, isStreamingTurn],
   );
+  const taskPresentations = useMemo(
+    () => mediaTaskPresentations ?? buildMediaTaskPresentations([turn]),
+    [mediaTaskPresentations, turn],
+  );
   const consolidatedItems = useMemo(
-    () => consolidateMediaPolling(visibleAssistantItems),
-    [visibleAssistantItems],
+    () => consolidateMediaPolling(visibleAssistantItems, taskPresentations),
+    [visibleAssistantItems, taskPresentations],
   );
   const toolGroupOverrides = useMemo(() => {
     const overrides = new Map<string, React.ReactNode>();
@@ -634,17 +639,30 @@ const AssistantTurnBlock: React.FC<{
   );
   const artifactCards = useMemo(
     () => artifacts
-      ? dedupeArtifactsForDisplay(
+      ? orderArtifactsByReplyReferences(
+          dedupeArtifactsForDisplay(
+            artifacts,
+            { defaultProjectDirectory: localServiceDirectory },
+          ),
           artifacts,
-          { defaultProjectDirectory: localServiceDirectory },
+          getTurnReplyMessageIds(turn),
         )
       : [],
-    [artifacts, localServiceDirectory],
+    [artifacts, localServiceDirectory, turn],
+  );
+  // Raster images are shown in the conversation itself; the remaining artifacts keep their file cards.
+  const imageArtifacts = useMemo(
+    () => artifactCards.filter(artifact => artifact.type === ArtifactTypeValue.Image),
+    [artifactCards],
+  );
+  const fileArtifactCards = useMemo(
+    () => artifactCards.filter(artifact => artifact.type !== ArtifactTypeValue.Image),
+    [artifactCards],
   );
   const visibleArtifactCards = useMemo(() => {
-    return artifactCardsExpanded ? artifactCards : artifactCards.slice(0, 3);
-  }, [artifactCards, artifactCardsExpanded]);
-  const hiddenArtifactCardCount = Math.max(0, artifactCards.length - visibleArtifactCards.length);
+    return artifactCardsExpanded ? fileArtifactCards : fileArtifactCards.slice(0, 3);
+  }, [fileArtifactCards, artifactCardsExpanded]);
+  const hiddenArtifactCardCount = Math.max(0, fileArtifactCards.length - visibleArtifactCards.length);
   const retainedMediaPollCountsRef = useRef<Map<string, number>>(new Map());
   const currentMediaPollCounts = useMemo(
     () => collectMediaPollCounts(consolidatedItems),
@@ -667,16 +685,69 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(false);
   }, [turn.id]);
 
+  const turnStartTimestamp = getTurnStartTimestamp(turn);
+  const turnEndTimestamp = getTurnEndTimestamp(turn);
+  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
+    ? turnEndTimestamp - turnStartTimestamp
+    : null;
+  // The user message may be outside the loaded page of a long turn.
+  const turnUsage = isStreamingTurn ? null : getConversationTurnUsage(turn);
+  const turnUsageMessageId = turn.userMessage?.id ?? turn.inheritedTurnUsage?.userMessageId;
+  const turnUsageSlot = showCopyButtons && turnUsage && turnUsageMessageId ? (
+    <TurnUsageChip
+      userMessageId={turnUsageMessageId}
+      turnUsage={turnUsage}
+      durationMs={processDurationMs}
+    />
+  ) : null;
+  // Prefer the final visible text reply; interrupted turns may need a footer.
+  let turnUsageReplyId: string | null = null;
+  for (let index = consolidatedItems.length - 1; index >= 0; index--) {
+    const item = consolidatedItems[index];
+    if (item.type === 'tool_group' || item.type === 'media_polling_group') break;
+    if (item.type !== 'assistant' || item.message.metadata?.isThinking
+      || isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) continue;
+    const hasInlineImage = artifacts?.some(artifact => artifact.type === 'image' && artifact.messageId === item.message.id);
+    if (hasInlineImage && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) continue;
+    const content = mapDisplayText ? mapDisplayText(item.message.content) : item.message.content;
+    if (hasText(getAssistantMessageDisplayText(content))) {
+      turnUsageReplyId = item.message.id;
+      break;
+    }
+  }
+
   const renderSystemMessage = (message: CoworkMessage) => {
+    if (isModelChangeMessage(message) && message.metadata?.modelChange) {
+      return (
+        <ModelChangeDivider
+          change={message.metadata.modelChange}
+          showNotice={message.id === modelSwitchNoticeMessageId}
+          onDismissNotice={onDismissModelSwitchNotice}
+        />
+      );
+    }
     if (message.id === hiddenSystemMessageId) {
       return null;
+    }
+    if (isModelReconnectMessage(message)) {
+      return (
+        <ModelReconnectStatusLine
+          label={getModelReconnectMessageLabel(message)}
+          status={message.metadata?.status}
+        />
+      );
     }
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');
     if (getMediaCompletionDisplayText(message, rawContent)) {
-      return null;
+      if (hasLayerDecompositionWarning((message.metadata?.toolResultDetails as Record<string, unknown> | undefined)?.warnings)) {
+        return <p role="status" className="text-xs text-amber-600 dark:text-amber-400">{i18nService.t('mediaLayerDecompositionWarning')}</p>;
+      }
+      return hasRecoveredMediaAssets(message.metadata?.toolResultDetails as Record<string, unknown> | undefined)
+        ? <p role="status" className="text-xs text-secondary">{i18nService.t('mediaImageSavedToRecovery')}</p>
+        : null;
     }
     const normalizedContent = getScheduledReminderDisplayText(rawContent) ?? rawContent;
     const errorKey = getSystemMessageErrorKey(message, normalizedContent);
@@ -720,6 +791,17 @@ const AssistantTurnBlock: React.FC<{
           <div className="mt-1 pl-6 text-xs text-muted">{errorModelLine}</div>
         )}
         {errorDetail && <SystemErrorTechnicalDetail detail={errorDetail} />}
+        {onContinueAfterStreamInterruption && message.id === streamInterruptedErrorMessageId && (
+          <div className="mt-2 pl-6">
+            <button
+              type="button"
+              onClick={onContinueAfterStreamInterruption}
+              className="inline-flex h-7 items-center justify-center rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
+            >
+              {i18nService.t('coworkModelReconnectContinueAction')}
+            </button>
+          </div>
+        )}
       </div>
     );
   };
@@ -837,20 +919,6 @@ const AssistantTurnBlock: React.FC<{
         );
       }
 
-      if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
-        return null;
-      }
-
-      // Check if there are image artifacts for this message (inline MEDIA display)
-      const imageArtifacts = artifacts?.filter(a =>
-        a.type === 'image' && a.messageId === item.message.id,
-      );
-      if (imageArtifacts && imageArtifacts.length > 0 && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
-        return (
-          <MediaImageInline key={item.message.id} artifacts={imageArtifacts} />
-        );
-      }
-
       const hasToolGroupAfter = consolidatedItems
         .slice(index + 1)
         .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
@@ -858,6 +926,17 @@ const AssistantTurnBlock: React.FC<{
       const hasAssistantAfter = consolidatedItems
         .slice(index + 1)
         .some(laterItem => laterItem.type === 'assistant');
+      if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
+        return null;
+      }
+
+      // A message that only carries MEDIA tokens has nothing to say: its images show in the turn's gallery.
+      const hasMessageImages = artifacts?.some(a =>
+        a.type === ArtifactTypeValue.Image && a.messageId === item.message.id,
+      );
+      if (hasMessageImages && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
+        return null;
+      }
 
       return (
         <AssistantMessageItem
@@ -866,9 +945,16 @@ const AssistantTurnBlock: React.FC<{
           resolveLocalFilePath={resolveLocalFilePath}
           mapDisplayText={mapDisplayText}
           showCopyButton={isLastAssistant}
+          enableMessageSpeech={enableMessageSpeech && isLastAssistant && planConfirmationMessageId !== item.message.id}
           onFork={isLastAssistant ? onForkMessage : undefined}
-          turnMetadata={isLastAssistant ? (item.message.metadata as CoworkMessageMetadata) : undefined}
+          turnMetadata={isLastAssistant
+            ? withTurnModelPreset(
+              item.message.metadata as CoworkMessageMetadata,
+              turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+            )
+            : undefined}
           completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
+          turnUsageSlot={item.message.id === turnUsageReplyId ? turnUsageSlot : null}
           planConfirmationMessageId={planConfirmationMessageId}
           onConfirmPlan={onConfirmPlan}
           onAdjustPlan={onAdjustPlan}
@@ -891,6 +977,7 @@ const AssistantTurnBlock: React.FC<{
         <ToolCallGroup
           key={`tool-${item.group.toolUse.id}`}
           group={item.group}
+          mediaTaskPresentation={taskPresentations.get(item.group.toolUse.id)}
           isLastInSequence={isLastInSequence}
           mapDisplayText={mapDisplayText}
           retainedMediaPollCounts={retainedMediaPollCounts}
@@ -971,11 +1058,6 @@ const AssistantTurnBlock: React.FC<{
   // Tool errors stay on their own step row (Codex app behavior); they do not
   // color this duration line or force the fold open.
   const isProcessExpanded = processExpanded || processContainsSearchTarget;
-  const turnStartTimestamp = getTurnStartTimestamp(turn);
-  const turnEndTimestamp = getTurnEndTimestamp(turn);
-  const processDurationMs = turnStartTimestamp != null && turnEndTimestamp != null
-    ? turnEndTimestamp - turnStartTimestamp
-    : null;
   const processBaseLabel = processDurationMs != null && processDurationMs >= 1000
     ? i18nService.t('coworkTurnProcessDuration').replace('{duration}', formatTurnDuration(processDurationMs))
     : i18nService.t('coworkTurnProcess');
@@ -987,9 +1069,25 @@ const AssistantTurnBlock: React.FC<{
   const processLabel = processBaseLabel;
   // What the running step is doing right now, for the status line: the last
   // work item while it is still live; null in the silent gaps between steps.
-  const liveStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
+  const liveStepStatusText = liveTailItem && isActivityItemLive(liveTailItem) && !isTailTextStalled
     ? getActivityLiveStatusText(liveTailItem)
     : null;
+  // The running step's own line sits right above the status line. When both
+  // would read the same phrase ("Waiting for command output" twice), the
+  // status line keeps to the plain working label beside the turn's clock.
+  const isStatusRepeatingStepLine = liveStepStatusText != null
+    && liveTailItem?.type === 'tool_group'
+    && !toolGroupOverrides.has(liveTailItem.group.toolUse.id)
+    && !isMediaGenerationToolName(String(liveTailItem.group.toolUse.metadata?.toolName ?? ''))
+    && liveStepStatusText === getActivityCurrentActionText(liveTailItem);
+  const liveStatusText = isStatusRepeatingStepLine
+    ? i18nService.t('coworkProcessing')
+    : liveStepStatusText;
+  // While a generation placeholder is the step running right now it already shows
+  // the progress and elapsed time; the status line below would only repeat them.
+  const isLiveMediaPlaceholder = liveTailItem?.type === 'tool_group'
+    && isMediaGenerationToolName(String(liveTailItem.group.toolUse.metadata?.toolName ?? ''))
+    && [...taskPresentations.values()].some(presentation => presentation.showCard && !isMediaTaskSettled(presentation.details));
 
   const handleProcessToggle = () => {
     const nextExpanded = !isProcessExpanded;
@@ -1006,7 +1104,10 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length) {
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+
+  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1038,57 +1139,69 @@ const AssistantTurnBlock: React.FC<{
             ) : (
               renderChunks.map((chunk, chunkIndex) => renderChunk(chunk, chunkIndex))
             )}
-            {showActivityIndicator && (
+            {showActivityIndicator && (activityStatusOverride || !isLiveMediaPlaceholder) && (
               <ActivityIndicator
                 fingerprint={getTurnActivityFingerprint(turn)}
                 startTimestamp={getTurnStartTimestamp(turn)}
                 statusTextOverride={activityStatusOverride}
                 liveStatusText={liveStatusText}
                 hasContent={visibleAssistantItems.length > 0}
+                awaitingRunStart={awaitingRunStart}
               />
             )}
             {artifacts && artifacts.length > 0 && (
               <div className="space-y-2 pt-1">
                 <VideoArtifactPathList artifacts={videoPathArtifacts} />
-                <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
-                  <div className="divide-y divide-border">
-                    {visibleArtifactCards.map(artifact => (
-                      <ArtifactPreviewCard
-                        key={artifact.id}
-                        artifact={artifact}
-                        localServiceDirectory={localServiceDirectory}
-                        onOpenLocalService={onOpenLocalService}
-                        onDeployLocalService={onDeployLocalService}
-                        onOpenHtmlFile={onOpenHtmlFile}
-                        onOpenPreview={onOpenArtifactPreview}
-                      />
-                    ))}
-                  </div>
-                  {(hiddenArtifactCardCount > 0 || (artifactCardsExpanded && artifactCards.length > 3)) && (
-                    <div className="border-t border-border px-4 py-2 text-center">
-                      {hiddenArtifactCardCount > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => setArtifactCardsExpanded(true)}
-                          className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
-                        >
-                          <span>{i18nService.t('artifactPreviewCardShowMore').replace('{count}', String(hiddenArtifactCardCount))}</span>
-                          <ChevronDownIcon className="h-4 w-4" />
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setArtifactCardsExpanded(false)}
-                          className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
-                        >
-                          <span>{i18nService.t('artifactPreviewCardShowLess')}</span>
-                          <ChevronUpIcon className="h-4 w-4" />
-                        </button>
-                      )}
+                <InlineImageGallery artifacts={imageArtifacts} editable={!onOpenArtifactPreview} />
+                {fileArtifactCards.length > 0 && (
+                  <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
+                    <div className="divide-y divide-border">
+                      {visibleArtifactCards.map(artifact => (
+                        <ArtifactPreviewCard
+                          key={artifact.id}
+                          artifact={artifact}
+                          localServiceDirectory={localServiceDirectory}
+                          onOpenLocalService={onOpenLocalService}
+                          onDeployLocalService={onDeployLocalService}
+                          onOpenHtmlFile={onOpenHtmlFile}
+                          onOpenPreview={onOpenArtifactPreview}
+                        />
+                      ))}
                     </div>
-                  )}
-                </div>
+                    {(hiddenArtifactCardCount > 0 || (artifactCardsExpanded && fileArtifactCards.length > 3)) && (
+                      <div className="border-t border-border px-4 py-2 text-center">
+                        {hiddenArtifactCardCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setArtifactCardsExpanded(true)}
+                            className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
+                          >
+                            <span>{i18nService.t('artifactPreviewCardShowMore').replace('{count}', String(hiddenArtifactCardCount))}</span>
+                            <ChevronDownIcon className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setArtifactCardsExpanded(false)}
+                            className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-secondary hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.035] transition-colors"
+                          >
+                            <span>{i18nService.t('artifactPreviewCardShowLess')}</span>
+                            <ChevronUpIcon className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
+            )}
+            {trailingTurnUsageSlot && (
+              <AssistantTurnFooter
+                turn={turn}
+                turnUsageSlot={trailingTurnUsageSlot}
+                mapDisplayText={mapDisplayText}
+                onForkMessage={onForkMessage}
+              />
             )}
           </div>
         </div>

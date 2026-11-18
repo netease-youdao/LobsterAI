@@ -4,7 +4,6 @@ import { WeixinPlugin, WeixinQrLoginTimeout } from '../../shared/im/weixin';
 import { DEFAULT_WEIXIN_CONFIG } from './types';
 
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => '/private/tmp' } }));
-vi.mock('./nimGateway', () => ({ NimGateway: class {} }));
 vi.mock('./imStore', () => ({
   IMStore: class {
     private config = { weixin: { ...DEFAULT_WEIXIN_CONFIG } };
@@ -47,6 +46,28 @@ test('first QR login activates before readiness/RPC and successful login persist
   expect(manager.getConfig().weixin).toMatchObject({ enabled: true, accountId: 'account' });
   expect(manager.isWeixinQrLoginActive()).toBe(false);
   expect(sync).toHaveBeenCalledOnce();
+  expect(sync).toHaveBeenCalledWith('weixin-qr-plugin-activation', {
+    restartGatewayIfRunning: false, requireSuccess: true,
+  });
+});
+
+test('refreshing a QR code does not request a forced gateway restart', async () => {
+  const sync = vi.fn(async () => {});
+  const manager = new IMGatewayManager({} as never, {
+    syncOpenClawConfig: sync,
+    ensureOpenClawGatewayReady: async () => {},
+    getOpenClawGatewayClient: () => ({ request: async () => ({ qrDataUrl: 'qr', sessionKey: 'one' }) } as never),
+  });
+  await manager.weixinQrLoginStart();
+  await manager.weixinQrLoginStart();
+  expect(sync).toHaveBeenCalledTimes(2);
+  expect(sync).toHaveBeenNthCalledWith(2, 'weixin-qr-plugin-activation', {
+    restartGatewayIfRunning: false, requireSuccess: true,
+  });
+  await manager.weixinQrLoginWait('one');
+  expect(sync).toHaveBeenLastCalledWith('weixin-qr-plugin-activation', {
+    restartGatewayIfRunning: false, requireSuccess: true,
+  });
 });
 
 test('failed first login restores the disabled plugin and preserves existing account credentials', async () => {

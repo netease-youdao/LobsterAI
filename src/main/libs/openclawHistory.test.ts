@@ -12,11 +12,45 @@ import {
   isPreCompactionMemoryFlushPromptText,
   isSilentReplyPrefixText,
   isSilentReplyText,
+  resolveHistoryToolCallInvocation,
   stripTrailingSilentReplyTail,
   stripTrailingSilentReplyToken,
 } from './openclawHistory';
 
+describe('resolveHistoryToolCallInvocation', () => {
+  test('returns a direct tool call as is', () => {
+    expect(resolveHistoryToolCallInvocation({
+      type: 'toolCall', name: 'message', arguments: { filePath: '/tmp/a.pdf' },
+    })).toEqual({ name: 'message', arguments: { filePath: '/tmp/a.pdf' } });
+  });
+
+  test.each(['message', 'openclaw:core:message'])(
+    'unwraps a deferred tool run through tool_call with id %s',
+    (id) => {
+      expect(resolveHistoryToolCallInvocation({
+        type: 'toolCall', name: 'tool_call', arguments: { id, args: { filePath: '/tmp/a.pdf' } },
+      })).toEqual({ name: 'message', arguments: { filePath: '/tmp/a.pdf' } });
+    },
+  );
+
+  test('ignores non tool-call blocks and tool_call without a target', () => {
+    expect(resolveHistoryToolCallInvocation({ type: 'text', text: 'hi' })).toBeNull();
+    expect(resolveHistoryToolCallInvocation({ type: 'toolCall', name: 'tool_call', arguments: {} })).toBeNull();
+  });
+});
+
 describe('openclawHistory', () => {
+  test('omits leaked image-history diagnostics only from assistant answers', () => {
+    const diagnostic = '[session:history] omitted image payload: missing data or mimeType';
+    const content = [{ type: 'text', text: 'Image ready.' }, { type: 'text', text: diagnostic }];
+    expect(extractGatewayMessageText({ role: 'assistant', content })).toBe('Image ready.');
+    expect(extractGatewayHistoryEntry({ role: 'assistant', content })).toEqual({ role: 'assistant', text: 'Image ready.' });
+    expect(extractGatewayHistoryEntry({ role: 'assistant', content: diagnostic })).toBeNull();
+    for (const role of ['user', 'toolResult', 'system']) {
+      expect(extractGatewayMessageText({ role, content: diagnostic })).toBe(diagnostic);
+    }
+  });
+
   test('extracts plain text content blocks', () => {
     expect(
       extractGatewayMessageText({

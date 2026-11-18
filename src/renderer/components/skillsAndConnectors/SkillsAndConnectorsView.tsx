@@ -3,9 +3,12 @@ import React, { useEffect, useRef } from 'react';
 import { i18nService } from '../../services/i18n';
 import { MANAGEMENT_PAGE_TITLE_TEXT } from '../common/managementTypography';
 import ComposeIcon from '../icons/ComposeIcon';
+import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 import SidebarMcpIcon from '../icons/SidebarMcpIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SkillIcon from '../icons/SkillIcon';
+import { reportKitAction } from '../kits/analytics';
+import KitsManager from '../kits/KitsManager';
 import { McpManager } from '../mcp';
 import { reportMcpAction } from '../mcp/analytics';
 import { SkillsManager } from '../skills';
@@ -24,11 +27,14 @@ interface SkillsAndConnectorsViewProps {
   onNewChat?: () => void;
   onCreateSkillByChat?: () => void;
   onUseSkill?: (skillId: string) => void;
+  onTryAsking?: (text: string, kitId: string) => void;
+  onUseKit?: (kitId: string) => void;
   updateBadge?: React.ReactNode;
   skillsReadOnly?: boolean;
 }
 
 const SECTION_ICONS: Record<SkillsConnectorsSection, React.FC<{ className?: string }>> = {
+  [SkillsConnectorsSection.Kits]: SidebarKitsIcon,
   [SkillsConnectorsSection.Skills]: SkillIcon,
   [SkillsConnectorsSection.Connectors]: SidebarMcpIcon,
 };
@@ -41,6 +47,8 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
   onNewChat,
   onCreateSkillByChat,
   onUseSkill,
+  onTryAsking,
+  onUseKit,
   updateBadge,
   skillsReadOnly,
 }) => {
@@ -55,12 +63,15 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
 
   const handleSectionSelect = (section: SkillsConnectorsSection) => {
     if (section === activeSection) return;
-    const report = section === SkillsConnectorsSection.Connectors ? reportMcpAction : reportSkillAction;
-    report('section_change', {
-      source: 'skills_connectors_view',
-      fromSection: activeSection,
-      targetSection: section,
-    });
+    {
+      const report = section === SkillsConnectorsSection.Kits ? reportKitAction
+        : section === SkillsConnectorsSection.Connectors ? reportMcpAction : reportSkillAction;
+      report('section_change', {
+        source: 'skills_connectors_view',
+        fromSection: activeSection,
+        targetSection: section,
+      });
+    }
     onSectionChange(section);
   };
 
@@ -89,7 +100,7 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
             {updateBadge}
           </div>
         )}
-        {/* The two section titles ARE the page header: quiet pill tabs, active
+        {/* Section titles form the page header: quiet pill tabs, active
             marked by a soft raised background rather than an underline (the
             managers below already own the underline language). */}
         <div
@@ -123,7 +134,9 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
 
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-[1120px] px-8 py-6">
-          {activeSection === SkillsConnectorsSection.Connectors ? (
+          {activeSection === SkillsConnectorsSection.Kits ? (
+            <KitsManager onTryAsking={onTryAsking} onUseKit={onUseKit} />
+          ) : activeSection === SkillsConnectorsSection.Connectors ? (
             <McpManager />
           ) : (
             <SkillsManager

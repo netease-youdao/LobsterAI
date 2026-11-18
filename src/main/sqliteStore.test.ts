@@ -4,8 +4,9 @@ import os from 'os';
 import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { AgentAvatarSvg, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
+import { AgentAvatarSvg, AgentModelSelectionMode, AgentSource, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
+import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 
 vi.mock('electron', () => ({
   app: {
@@ -16,7 +17,8 @@ vi.mock('electron', () => ({
 
 import { DB_FILENAME } from './appConstants';
 import { CoworkStore } from './coworkStore';
-import { SqliteStore } from './sqliteStore';
+import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
+import { FORK_TOOL_USE_ID_REPAIR_KEY, SqliteStore } from './sqliteStore';
 
 let tempDirs: string[] = [];
 
@@ -85,6 +87,27 @@ const createLegacyDatabase = (userDataPath: string): void => {
 
   db.close();
 };
+
+test('model inheritance migration preserves legacy expert choices and survives a restart after opting in', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  legacyDb.prepare('UPDATE agents SET source = ?, preset_id = ?, model = ? WHERE id = ?')
+    .run(AgentSource.Preset, 'legacy-expert', 'custom/user-choice', 'docs');
+  legacyDb.close();
+
+  const store = await SqliteStore.create(userDataPath);
+  const coworkers = new CoworkStore(store.getDatabase());
+  expect(coworkers.getAgent('docs')).toMatchObject({ model: 'custom/user-choice', modelSelectionMode: AgentModelSelectionMode.Explicit });
+  coworkers.updateAgent('docs', { modelSelectionMode: AgentModelSelectionMode.Inherit, model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High });
+  store.close();
+
+  const reopened = await SqliteStore.create(userDataPath);
+  expect(new CoworkStore(reopened.getDatabase()).getAgent('docs')).toMatchObject({
+    modelSelectionMode: AgentModelSelectionMode.Inherit, model: 'lobsterai-server/yd-fast', thinkingLevel: ModelThinkingLevel.High,
+  });
+  reopened.close();
+});
 
 test('backfills agent working directories from legacy cowork config only once', async () => {
   const userDataPath = createTempUserDataPath();
@@ -166,6 +189,19 @@ test('installs required thinking columns independently from best-effort legacy m
     ).get(),
   ).toEqual({ thinking_level: '' });
   reopenedStore.close();
+});
+
+test('adds nullable avatar ownership to legacy agents without classifying user data eagerly', async () => {
+  const userDataPath = createTempUserDataPath();
+  createLegacyDatabase(userDataPath);
+  const store = await SqliteStore.create(userDataPath);
+  const rows = store.getDatabase().prepare('SELECT icon_customized FROM agents').all();
+  expect(rows.length).toBeGreaterThan(0);
+  expect(rows.every(row => (row as { icon_customized: number | null }).icon_customized === null)).toBe(true);
+  store.close();
+  const reopened = await SqliteStore.create(userDataPath);
+  expect(reopened.getDatabase().prepare('SELECT icon_customized FROM agents').all()).toEqual(rows);
+  reopened.close();
 });
 
 test('creates continuity capsule table during startup migration', async () => {
@@ -545,4 +581,81 @@ test('adds scheduled task ids and backfills existing cron sessions from message 
     'main',
   )).toBe('legacy-cron-session-newer');
   reopenedStore.close();
+});
+
+test('kv change listeners keep receiving previous values for the keys they watch', async () => {
+  const store = await SqliteStore.create(createTempUserDataPath());
+  const changes: Array<[unknown, unknown]> = [];
+  const unsubscribe = store.onDidChange<number>('watched', (newValue, oldValue) => changes.push([newValue, oldValue]));
+
+  store.set('watched', 1);
+  store.set('watched', 2);
+  store.set('unwatched', 3);
+  store.delete('watched');
+  expect(changes).toEqual([[1, undefined], [2, 1], [undefined, 2]]);
+  expect(store.get('unwatched')).toBe(3);
+
+  unsubscribe();
+  unsubscribe();
+  const second = store.onDidChange<number>('watched', (newValue, oldValue) => changes.push([newValue, oldValue]));
+  store.set('watched', 4);
+  expect(changes.at(-1)).toEqual([4, undefined]);
+  second();
+  store.set('watched', 5);
+  expect(changes).toHaveLength(4);
+  store.close();
+});
+
+test('kv delete of an unwatched key removes the value', async () => {
+  const store = await SqliteStore.create(createTempUserDataPath());
+  store.set('media.intentBody.v1:key', 'body');
+  store.delete('media.intentBody.v1:key');
+  expect(store.get('media.intentBody.v1:key')).toBeUndefined();
+  store.close();
+});
+
+test('restores tool call ids on forked messages once at startup', async () => {
+  const userDataPath = createTempUserDataPath();
+  const store = await SqliteStore.create(userDataPath);
+  const db = store.getDatabase();
+  const insertSession = db.prepare(`
+    INSERT INTO cowork_sessions (id, title, cwd, parent_session_id, forked_at, created_at, updated_at)
+    VALUES (?, 'session', '/repo', ?, ?, ?, ?)
+  `);
+  const insertMessage = db.prepare(`
+    INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+    VALUES (?, ?, ?, '', ?, ?, ?)
+  `);
+  insertSession.run('source', null, null, 1000, 1000);
+  insertMessage.run('src-use', 'source', 'tool_use', JSON.stringify({ toolUseId: 'call-1' }), 2000, 2);
+  insertMessage.run('src-result', 'source', 'tool_result', JSON.stringify({ toolUseId: 'call-1' }), 2001, 3);
+  insertSession.run('fork', 'source', 5000, 5000, 5000);
+  insertMessage.run('fork-use', 'fork', 'tool_use', JSON.stringify({ toolName: 'write' }), 2000, 2);
+  insertMessage.run('fork-result', 'fork', 'tool_result', JSON.stringify({ toolResult: 'ok' }), 2001, 3);
+  store.delete(FORK_TOOL_USE_ID_REPAIR_KEY);
+  store.close();
+
+  const getToolUseIds = (database: Database.Database) => (
+    database.prepare(`
+      SELECT id, json_extract(metadata, '$.toolUseId') AS tool_use_id
+      FROM cowork_messages WHERE session_id = 'fork' ORDER BY sequence
+    `).all() as Array<{ id: string; tool_use_id: string | null }>
+  );
+
+  const reopenedStore = await SqliteStore.create(userDataPath);
+  const repaired = getToolUseIds(reopenedStore.getDatabase());
+  expect(repaired.map(row => row.tool_use_id)).toEqual([
+    deriveForkToolUseId('fork', 'call-1'),
+    deriveForkToolUseId('fork', 'call-1'),
+  ]);
+  expect(reopenedStore.get(FORK_TOOL_USE_ID_REPAIR_KEY)).toBe('1');
+
+  reopenedStore.getDatabase()
+    .prepare("UPDATE cowork_messages SET metadata = '{}' WHERE id = 'fork-use'")
+    .run();
+  reopenedStore.close();
+
+  const thirdStore = await SqliteStore.create(userDataPath);
+  expect(getToolUseIds(thirdStore.getDatabase())[0].tool_use_id).toBeNull();
+  thirdStore.close();
 });

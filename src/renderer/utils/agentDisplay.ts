@@ -1,5 +1,7 @@
 import { AgentId, DefaultAgentProfile, LegacyAgentName } from '@shared/agent';
 
+export { usesManagedPresetAvatar } from '@shared/agent/presetAvatar';
+
 import { i18nService } from '../services/i18n';
 
 interface AgentDisplaySource {

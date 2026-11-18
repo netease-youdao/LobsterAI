@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import { showToast } from '../../utils/localFileActions';
+import PlanModeIcon from '../icons/PlanModeIcon';
 import MarkdownContent from '../MarkdownContent';
 import {
   bucketLength,
@@ -28,6 +29,15 @@ interface ProposedPlanBlockProps {
 }
 
 const ACTION_FEEDBACK_DURATION_MS = 1500;
+
+// The plan sits inside a card, so its headings step down one level to stay
+// below the conversation's own markdown headings.
+const PLAN_MARKDOWN_CLASS = [
+  'prose dark:prose-invert max-w-none',
+  '[&_h1]:!text-[length:var(--lobster-text-markdownH3)]',
+  '[&_h2]:!text-[length:var(--lobster-text-markdownH3)]',
+  '[&_h3]:!text-[length:var(--lobster-text-markdownH4)]',
+].join(' ');
 
 const getPlanAnalyticsParams = (content: string) => ({
   planLength: content.length,
@@ -146,15 +156,16 @@ const ProposedPlanBlock: React.FC<ProposedPlanBlockProps> = ({
 
   return (
     <section
-      className="overflow-hidden rounded-lg border border-primary/20 bg-primary/5"
+      className="overflow-hidden rounded-xl border border-border bg-background"
       aria-label={i18nService.t('coworkProposedPlanTitle')}
     >
       <header
-        className="flex min-h-12 items-center justify-between gap-3 border-b border-primary/10 px-4 py-2"
+        className="flex h-10 items-center justify-between gap-3 bg-surface-raised/40 pl-4 pr-1.5 sm:pl-5"
         data-cowork-search-exclude="true"
       >
-        <div className="min-w-0 text-sm font-medium text-primary">
-          {i18nService.t('coworkProposedPlanTitle')}
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
+          <PlanModeIcon className="h-4 w-4 shrink-0 text-secondary" />
+          <span className="truncate">{i18nService.t('coworkProposedPlanTitle')}</span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <MessageActionButton
@@ -195,10 +206,10 @@ const ProposedPlanBlock: React.FC<ProposedPlanBlockProps> = ({
         </div>
       </header>
       {contentExpanded && (
-        <div className="px-4 py-3 sm:px-5 sm:py-4">
+        <div className="border-t border-border px-4 py-4 sm:px-5">
           <MarkdownContent
             content={content}
-            className="prose dark:prose-invert max-w-none"
+            className={PLAN_MARKDOWN_CLASS}
             resolveLocalFilePath={resolveLocalFilePath}
             forceExpanded={forceExpanded}
             onImageClick={onImageClick}
@@ -207,26 +218,26 @@ const ProposedPlanBlock: React.FC<ProposedPlanBlockProps> = ({
       )}
       {showConfirmationActions && (
         <div
-          className="flex flex-wrap items-center justify-between gap-3 border-t border-primary/10 px-4 py-3 sm:px-5"
+          className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-surface-raised/40 px-4 py-2.5 sm:px-5"
           data-cowork-search-exclude="true"
         >
-          <div className="text-sm font-medium text-secondary">
+          <div className="text-sm text-secondary">
             {i18nService.t('coworkPlanConfirmationReady')}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleConfirmExecution}
-              className="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-white transition-colors hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary/30"
+              onClick={handleAdjustPlan}
+              className="inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-3.5 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
             >
-              {i18nService.t('coworkPlanConfirmExecute')}
+              {i18nService.t('coworkPlanAdjust')}
             </button>
             <button
               type="button"
-              onClick={handleAdjustPlan}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-border bg-background px-3 text-sm font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+              onClick={handleConfirmExecution}
+              className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3.5 text-sm font-medium text-white transition-colors hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
             >
-              {i18nService.t('coworkPlanAdjust')}
+              {i18nService.t('coworkPlanConfirmExecute')}
             </button>
           </div>
         </div>

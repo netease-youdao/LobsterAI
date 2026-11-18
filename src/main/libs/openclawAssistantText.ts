@@ -1,3 +1,5 @@
+import { stripAssistantImageDiagnostic } from '../../shared/cowork/assistantImageDiagnostic';
+
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   Boolean(value && typeof value === 'object' && !Array.isArray(value))
 );
@@ -86,14 +88,14 @@ const collectThinkingChunks = (value: unknown): string[] => {
 
 export function extractOpenClawAssistantStreamText(payload: unknown): string {
   const chunks = collectTextChunks(payload);
-  return chunks.join('\n').trim();
+  return stripAssistantImageDiagnostic(chunks.join('\n').trim());
 }
 
 export function extractOpenClawAssistantStreamParts(payload: unknown): { text: string; thinking: string } {
   const textChunks = collectTextChunks(payload);
   const thinkingChunks = collectThinkingChunks(payload);
   return {
-    text: textChunks.join('\n').trim(),
+    text: stripAssistantImageDiagnostic(textChunks.join('\n').trim()),
     thinking: thinkingChunks.join('\n\n').trim(),
   };
 }

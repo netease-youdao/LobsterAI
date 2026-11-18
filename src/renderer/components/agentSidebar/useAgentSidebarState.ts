@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { coworkService } from '../../services/cowork';
 import { localStore } from '../../services/store';
@@ -10,6 +10,7 @@ import {
   selectCurrentSessionId,
   selectPendingPermissionSessionIds,
 } from '../../store/selectors/coworkSelectors';
+import { setSidebarRevealAgentId } from '../../store/slices/agentSlice';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import {
@@ -202,14 +203,15 @@ export const removeAgentSidebarAgentTaskPreviews = (
   return next;
 };
 
-export const useAgentSidebarState = ({
-  includeActivityTasks = false,
-}: {
-  includeActivityTasks?: boolean;
-} = {}) => {
+export const useAgentSidebarState = () => {
+  const dispatch = useDispatch();
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const sidebarRevealAgentId = useSelector((state: RootState) => state.agent.sidebarRevealAgentId);
   const currentSessionId = useSelector(selectCurrentSessionId);
+  const currentSessionAgentId = useSelector((state: RootState) => (
+    state.cowork.currentSession ? normalizeAgentId(state.cowork.currentSession.agentId) : null
+  ));
   const sessions = useSelector(selectCoworkSessions);
   const completedUnreadSessionIds = useSelector(selectCompletedUnreadSessionIds);
   const pendingPermissionSessionIds = useSelector(selectPendingPermissionSessionIds);
@@ -242,6 +244,8 @@ export const useAgentSidebarState = ({
         id: agent.id,
         name: agent.name,
         icon: agent.icon,
+        iconCustomized: agent.iconCustomized,
+        source: agent.source,
         enabled: agent.enabled,
         pinned: agent.pinned ?? false,
         pinOrder: agent.pinOrder ?? null,
@@ -598,6 +602,22 @@ export const useAgentSidebarState = ({
     });
   }, []);
 
+  const canRevealAgent = enabledAgents.some((agent) => agent.id === sidebarRevealAgentId);
+  const canRevealSession = enabledAgents.some((agent) => agent.id === currentSessionAgentId);
+
+  useEffect(() => {
+    if (!preferenceLoaded || !sidebarRevealAgentId || !canRevealAgent) return;
+    // Consume the intent after preferences load, including repeated summons of the same expert.
+    expandAgent(sidebarRevealAgentId);
+    dispatch(setSidebarRevealAgentId(null));
+  }, [canRevealAgent, dispatch, expandAgent, preferenceLoaded, sidebarRevealAgentId]);
+
+  useEffect(() => {
+    if (!preferenceLoaded || !currentSessionId || !currentSessionAgentId || !canRevealSession) return;
+    // Only navigation reveals the group. Streaming updates must respect a manual collapse.
+    expandAgent(currentSessionAgentId);
+  }, [canRevealSession, currentSessionAgentId, currentSessionId, expandAgent, preferenceLoaded]);
+
   const collapseAgent = useCallback((agentId: string) => {
     setExpandedAgentIds((previous) => {
       return previous.includes(agentId) ? previous.filter((id) => id !== agentId) : previous;
@@ -693,15 +713,12 @@ export const useAgentSidebarState = ({
 
   const {
     agentNodes,
-    activityAgentNodes,
     hasUnreadCompletedTasks,
   } = useMemo<{
     agentNodes: AgentSidebarAgentNode[];
-    activityAgentNodes: AgentSidebarAgentNode[];
     hasUnreadCompletedTasks: boolean;
   }>(() => {
     const visibleNodes: AgentSidebarAgentNode[] = [];
-    const activityNodes: AgentSidebarAgentNode[] = [];
     let hasUnreadCompletedTasks = false;
 
     sortedEnabledAgents.forEach((agent) => {
@@ -724,10 +741,7 @@ export const useAgentSidebarState = ({
         hasUnreadCompletedTasks = true;
       }
       const visibleTaskPreviews = sortedTaskPreviews.slice(0, visibleTaskLimit);
-      const taskPreviewsToMap = includeActivityTasks
-        ? sortedTaskPreviews
-        : visibleTaskPreviews;
-      const tasks = taskPreviewsToMap.map((session) => {
+      const tasks = visibleTaskPreviews.map((session) => {
         return toAgentSidebarTaskNode(
           session,
           currentSessionId,
@@ -735,7 +749,7 @@ export const useAgentSidebarState = ({
           pendingPermissionSessionIdSet,
         );
       });
-      const node = {
+      visibleNodes.push({
         ...agent,
         isExpanded: expandedAgentIdSet.has(agent.id),
         isTaskListExpanded,
@@ -744,19 +758,11 @@ export const useAgentSidebarState = ({
         isLoadingTasks: loadingAgentIdSet.has(agent.id),
         hasLoadError: failedAgentIdSet.has(agent.id),
         tasks,
-      };
-      if (includeActivityTasks) {
-        activityNodes.push(node);
-      }
-      visibleNodes.push({
-        ...node,
-        tasks: includeActivityTasks ? tasks.slice(0, visibleTaskLimit) : tasks,
       });
     });
 
     return {
       agentNodes: visibleNodes,
-      activityAgentNodes: activityNodes,
       hasUnreadCompletedTasks,
     };
   }, [
@@ -766,7 +772,6 @@ export const useAgentSidebarState = ({
     expandedTaskListAgentIdSet,
     failedAgentIdSet,
     hasMoreTasksByAgentId,
-    includeActivityTasks,
     loadingAgentIdSet,
     pendingPermissionSessionIdSet,
     sortedEnabledAgents,
@@ -776,7 +781,6 @@ export const useAgentSidebarState = ({
 
   return {
     agentNodes,
-    activityAgentNodes,
     hasUnreadCompletedTasks,
     expandedTaskListAgentIdSet,
     patchTaskPreview,

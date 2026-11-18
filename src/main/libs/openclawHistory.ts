@@ -3,8 +3,35 @@ import {
   parseScheduledReminderPrompt,
   parseSimpleScheduledReminderText,
 } from '../../scheduledTask/reminderText';
+import { stripAssistantImageDiagnostic } from '../../shared/cowork/assistantImageDiagnostic';
+import { OpenClawToolSearchControlTool } from '../../shared/openclawEngine/constants';
 
 type GatewayHistoryRole = 'user' | 'assistant' | 'system';
+
+const isHistoryRecord = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value && typeof value === 'object' && !Array.isArray(value))
+);
+
+/**
+ * The tool an assistant `toolCall` block actually invoked. A deferred tool runs
+ * through Tool Search's `tool_call`, whose arguments carry the target as
+ * `{ id, args }`; `id` is a bare name or a catalog id like `openclaw:core:message`.
+ */
+export const resolveHistoryToolCallInvocation = (
+  block: unknown,
+): { name: string; arguments: Record<string, unknown> } | null => {
+  if (!isHistoryRecord(block) || block.type !== 'toolCall' || typeof block.name !== 'string') {
+    return null;
+  }
+  const args = isHistoryRecord(block.arguments) ? block.arguments : {};
+  if (block.name !== OpenClawToolSearchControlTool.Call) {
+    return { name: block.name, arguments: args };
+  }
+  const id = typeof args.id === 'string' ? args.id.trim() : '';
+  const name = id.split(':').pop() ?? '';
+  if (!name) return null;
+  return { name, arguments: isHistoryRecord(args.args) ? args.args : {} };
+};
 
 export interface GatewayHistoryEntry {
   role: GatewayHistoryRole;
@@ -148,25 +175,26 @@ export const extractGatewayMessageText = (message: unknown): string => {
   if (!isRecord(message)) {
     return '';
   }
+  const visibleText = (text: string) => message.role === 'assistant' ? stripAssistantImageDiagnostic(text) : text;
 
   const content = message.content;
   if (typeof content === 'string') {
-    return content;
+    return visibleText(content);
   }
   if (Array.isArray(content)) {
     const chunks = collectTextChunks(content);
     if (chunks.length > 0) {
-      return chunks.join('\n');
+      return visibleText(chunks.join('\n'));
     }
   }
   if (isRecord(content)) {
     const chunks = collectTextChunks(content);
     if (chunks.length > 0) {
-      return chunks.join('\n');
+      return visibleText(chunks.join('\n'));
     }
   }
   if (typeof message.text === 'string') {
-    return message.text;
+    return visibleText(message.text);
   }
   return '';
 };

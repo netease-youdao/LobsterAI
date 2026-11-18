@@ -23,7 +23,7 @@ export const paper: ThemeDefinition = {
     'surface-foreground': '#18181b',
     'surface-raised':     '#f4f4f5',
     'surface-overlay':    'rgba(244,244,245,0.92)',
-    'chat-user':          '#e8e8ec',
+    'chat-user':          '#ffffff',
     'chat-user-foreground': '#18181b',
     'chat-bot':           '#fafaf9',
     'chat-bot-foreground': '#18181b',

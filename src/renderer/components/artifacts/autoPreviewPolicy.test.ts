@@ -67,6 +67,7 @@ describe('autoPreviewPolicy', () => {
       }),
       category: ArtifactAutoPreviewCategory.Image,
       openTarget: ArtifactAutoPreviewOpenTarget.PreviewTab,
+      autoPreview: false,
     },
     {
       label: 'svg image',
@@ -92,10 +93,19 @@ describe('autoPreviewPolicy', () => {
       category: ArtifactAutoPreviewCategory.Document,
       openTarget: ArtifactAutoPreviewOpenTarget.PreviewTab,
     },
-  ])('classifies and routes $label preview', ({ artifact, category, openTarget }) => {
+  ])('classifies and routes $label preview', ({ artifact, category, openTarget, autoPreview = true }) => {
     expect(getAutoPreviewCategory(artifact)).toBe(category);
     expect(getAutoPreviewOpenTarget(artifact)).toBe(openTarget);
-    expect(selectAutoPreviewArtifact([artifact])?.id).toBe(artifact.id);
+    expect(selectAutoPreviewArtifact([artifact])?.id).toBe(autoPreview ? artifact.id : undefined);
+  });
+
+  test('leaves raster images to the inline gallery but still previews svg', () => {
+    const selected = selectAutoPreviewArtifact([
+      makeArtifact('image', ArtifactTypeValue.Image, { filePath: '/Users/admin/project/cover.png' }),
+      makeArtifact('svg', ArtifactTypeValue.Svg, { filePath: '/Users/admin/project/vector.svg' }),
+    ]);
+
+    expect(selected?.id).toBe('svg');
   });
 
   test('selects by priority before display order', () => {
@@ -148,6 +158,26 @@ describe('autoPreviewPolicy', () => {
     ]);
 
     expect(selected?.id).toBe('video-first');
+  });
+
+  test('within a category, prefers the file the turn replies link over an earlier one', () => {
+    const artifacts = [
+      makeArtifact('draft', ArtifactTypeValue.Document, {
+        messageId: 'tool-use-1',
+        filePath: '/Users/admin/project/draft.docx',
+      }),
+      makeArtifact('image', ArtifactTypeValue.Image, {
+        messageId: 'final-reply',
+        filePath: '/Users/admin/project/cover.png',
+      }),
+      makeArtifact('report', ArtifactTypeValue.Document, {
+        messageId: 'final-reply',
+        filePath: '/Users/admin/project/report.pdf',
+      }),
+    ];
+
+    expect(selectAutoPreviewArtifact(artifacts)?.id).toBe('draft');
+    expect(selectAutoPreviewArtifact(artifacts, { replyMessageIds: ['final-reply'] })?.id).toBe('report');
   });
 
   test('maps svg to image and markdown to document', () => {

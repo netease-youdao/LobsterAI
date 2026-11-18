@@ -1,0 +1,147 @@
+diff --git a/src/auto-reply/templating.ts b/src/auto-reply/templating.ts
+--- a/src/auto-reply/templating.ts
++++ b/src/auto-reply/templating.ts
+@@ -108,6 +108,8 @@
+ 
+ /** Raw inbound message context accepted from channels before finalization. */
+ export type MsgContext = Partial<CanonicalInboundText> & {
++  /** Original channel text, captured before media enrichment or prompt composition. */
++  UsageUserMessage?: string;
+   Body?: string;
+   InboundEventKind?: InboundEventKind;
+   /**
+diff --git a/src/auto-reply/reply/get-reply.ts b/src/auto-reply/reply/get-reply.ts
+--- a/src/auto-reply/reply/get-reply.ts
++++ b/src/auto-reply/reply/get-reply.ts
+@@ -340,6 +340,7 @@
+   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
+     finalizeInboundContext(ctx),
+   );
++  ctx.UsageUserMessage ??= finalized.rawText ?? "";
+   // Resolve legacy text-slash source lanes before any session-scoped work.
+   // The explicit steer command itself still flows through normal command and
+   // prepared-reply handling; this only gives that path the active owner's key.
+diff --git a/src/auto-reply/reply/queue/types.ts b/src/auto-reply/reply/queue/types.ts
+--- a/src/auto-reply/reply/queue/types.ts
++++ b/src/auto-reply/reply/queue/types.ts
+@@ -96,6 +96,8 @@
+   admissionSessionId?: string;
+   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
+   transcriptPrompt?: string;
++  /** Original inbound text for usage display; never the model prompt envelope. */
++  usageUserMessage?: string;
+   /** Shared lifecycle owner for the current user-turn transcript append. */
+   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+   currentInboundEventKind?: InboundEventKind;
+diff --git a/src/auto-reply/reply/get-reply-run-execute.ts b/src/auto-reply/reply/get-reply-run-execute.ts
+--- a/src/auto-reply/reply/get-reply-run-execute.ts
++++ b/src/auto-reply/reply/get-reply-run-execute.ts
+@@ -359,6 +359,7 @@
+   const followupRun = {
+     prompt: queuedBody,
+     transcriptPrompt: transcriptCommandBody,
++    usageUserMessage: ctx.UsageUserMessage ?? "",
+     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
+     currentInboundEventKind: inboundEventKind,
+     currentInboundAudio: hasInboundAudio(sessionCtx),
+diff --git a/src/auto-reply/reply/agent-runner-embedded-candidate.ts b/src/auto-reply/reply/agent-runner-embedded-candidate.ts
+--- a/src/auto-reply/reply/agent-runner-embedded-candidate.ts
++++ b/src/auto-reply/reply/agent-runner-embedded-candidate.ts
+@@ -190,6 +190,7 @@
+         sandboxSessionKey: turn.runtimePolicySessionKey,
+         prompt: turn.commandBody,
+         transcriptPrompt: turn.transcriptCommandBody,
++        usageUserMessage: turn.followupRun.usageUserMessage,
+         media: turn.followupRun.media,
+         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+         contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+diff --git a/src/auto-reply/reply/queue/drain.ts b/src/auto-reply/reply/queue/drain.ts
+--- a/src/auto-reply/reply/queue/drain.ts
++++ b/src/auto-reply/reply/queue/drain.ts
+@@ -490,6 +490,7 @@
+ 
+ type FollowupRuntimeMetadata = Pick<
+   FollowupRun,
++  | "usageUserMessage"
+   | "currentInboundEventKind"
+   | "currentInboundAudio"
+   | "currentInboundContext"
+@@ -743,6 +744,7 @@
+     ).values(),
+   ];
+   return {
++    usageUserMessage: items.map((item) => item.usageUserMessage ?? "").filter(Boolean).join("\n"),
+     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+     currentInboundAudio: currentTurnSource?.currentInboundAudio,
+     currentInboundContext: collectCurrentInboundContext(items),
+@@ -1115,6 +1117,7 @@
+     prompt: source.prompt,
+     queueAbortSignal: source.queueAbortSignal,
+     transcriptPrompt: source.transcriptPrompt,
++    usageUserMessage: source.usageUserMessage,
+     explicitSkillSelections: source.explicitSkillSelections,
+     toolsAllow: source.toolsAllow,
+     disableTools: source.disableTools,
+diff --git a/src/agents/embedded-agent-runner/run/params.ts b/src/agents/embedded-agent-runner/run/params.ts
+--- a/src/agents/embedded-agent-runner/run/params.ts
++++ b/src/agents/embedded-agent-runner/run/params.ts
+@@ -121,6 +121,9 @@
+   trigger?: EmbeddedRunTrigger;
+   /** Stable cron job identifier populated for cron-triggered runs. */
+   jobId?: string;
++  /** Display-only metadata captured by the run initiator, before prompt decoration. */
++  usageUserMessage?: string;
++  usageJobTitle?: string;
+   /** Store-private runtime authority forwarded only by the cron execution owner. */
+   scheduledRuntimeAuthority?: CronRuntimeAuthority;
+   /** A known runtime-specific authority envelope was explicitly cleared. */
+diff --git a/src/plugins/hook-types.ts b/src/plugins/hook-types.ts
+--- a/src/plugins/hook-types.ts
++++ b/src/plugins/hook-types.ts
+@@ -300,6 +300,9 @@
+ export type PluginHookAgentContext = {
+   runId?: string;
+   jobId?: string;
++  /** Display-only original input and cron title, supplied by the run initiator. */
++  usageUserMessage?: string;
++  usageJobTitle?: string;
+   trace?: DiagnosticTraceContext;
+   agentId?: string;
+   sessionKey?: string;
+diff --git a/src/cron/isolated-agent/run-executor.ts b/src/cron/isolated-agent/run-executor.ts
+--- a/src/cron/isolated-agent/run-executor.ts
++++ b/src/cron/isolated-agent/run-executor.ts
+@@ -726,6 +726,8 @@
+           agentId: params.agentId,
+           trigger: "cron",
+           jobId: params.job.id,
++          usageJobTitle: params.job.name,
++          usageUserMessage: params.job.payload.kind === "agentTurn" ? params.job.payload.message : "",
+           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession === true,
+           allowGatewaySubagentBinding: true,
+           messageChannel,
+diff --git a/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts b/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts
+--- a/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts
++++ b/src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts
+@@ -494,6 +494,8 @@
+     bootstrapContextMode: params.bootstrapContextMode,
+     bootstrapContextRunKind: params.bootstrapContextRunKind,
+     jobId: params.jobId,
++    usageUserMessage: params.usageUserMessage,
++    usageJobTitle: params.usageJobTitle,
+     scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
+     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
+     toolsAllow: params.toolsAllow,
+diff --git a/src/agents/embedded-agent-runner/run/attempt-prompt-build.ts b/src/agents/embedded-agent-runner/run/attempt-prompt-build.ts
+--- a/src/agents/embedded-agent-runner/run/attempt-prompt-build.ts
++++ b/src/agents/embedded-agent-runner/run/attempt-prompt-build.ts
+@@ -143,6 +143,9 @@
+   let effectivePrompt = attempt.prompt;
+   const hookCtx = {
+     runId: attempt.runId,
++    jobId: attempt.jobId,
++    usageUserMessage: attempt.usageUserMessage,
++    usageJobTitle: attempt.usageJobTitle,
+     trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
+     agentId: input.hookAgentId,
+     sessionKey: attempt.sessionKey,

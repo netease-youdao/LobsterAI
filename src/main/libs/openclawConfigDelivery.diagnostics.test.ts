@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
-  __resetOpenClawConfigDeliveryStateForTests, deliverOpenClawConfigToGateway,
+  deliverOpenClawConfigToGateway,
   OpenClawConfigRpcMethod,
 } from './openclawConfigDelivery';
 import {
@@ -19,7 +19,6 @@ type Scenario = typeof Scenario[keyof typeof Scenario];
 const RAW = '{"models":{"providers":{"fixture":{"apiKey":"synthetic-api-secret"}}}}';
 
 async function run(scenario: Scenario, onDiagnostic?: (event: ConfigDeliveryDiagnostic) => void) {
-  __resetOpenClawConfigDeliveryStateForTests();
   vi.setSystemTime(1_000_000);
   let setCount = 0;
   let readCount = 0;
@@ -33,7 +32,7 @@ async function run(scenario: Scenario, onDiagnostic?: (event: ConfigDeliveryDiag
         return { hash: 'private-raw-revision', configRevisionHash: 'old-resolved', appliedConfigHash: 'old-resolved' } as T;
       }
       setCount += 1;
-      if (scenario === Scenario.SetTimeout) throw new Error('config.set timeout');
+      if (scenario === Scenario.SetTimeout) throw new Error('config.apply timeout');
       if (scenario === Scenario.Invalid) throw new Error('invalid config');
       if (scenario === Scenario.HashRace && setCount < 3) throw new Error('config changed since last load');
       return { ok: true } as T;
@@ -62,31 +61,31 @@ test.each(Object.values(Scenario))('%s has identical RPCs, timing, file reads an
   expect(records.at(-1)?.stage).toBe(ConfigDiagnosticStage.Complete);
 });
 
-test('GET failure is identified as GET; SET is never reported sent', async () => {
+test('GET failure is identified as GET; APPLY is never reported sent', async () => {
   vi.useFakeTimers();
   const records: ConfigDeliveryDiagnostic[] = [];
   await run(Scenario.GetTimeout, event => records.push(event));
   expect(records).toContainEqual(expect.objectContaining({
     stage: ConfigDiagnosticStage.Get, outcome: ConfigDiagnosticOutcome.Failed, errorKind: ConfigDiagnosticErrorKind.Timeout, timeoutMs: 10_000,
   }));
-  expect(records.some(record => record.stage === ConfigDiagnosticStage.Set)).toBe(false);
+  expect(records.some(record => record.stage === ConfigDiagnosticStage.Apply)).toBe(false);
   expect(records.at(-1)?.evidence).toBe(ConfigRecoveryEvidence.Unconfirmed);
 });
 
-test('equal old revision tokens and a SET ACK are reported as accepted, never applied', async () => {
+test('equal old revision tokens and an APPLY ACK remain unconfirmed', async () => {
   vi.useFakeTimers();
   const records: ConfigDeliveryDiagnostic[] = [];
   await run(Scenario.Healthy, event => records.push(event));
   const revision = records.find(record => record.resolvedRevision);
   expect(revision?.resolvedRevision).toBe(revision?.appliedRevision);
-  expect(records.at(-1)?.evidence).toBe(ConfigRecoveryEvidence.Accepted);
+  expect(records.at(-1)?.evidence).toBe(ConfigRecoveryEvidence.Unconfirmed);
   const serialized = JSON.stringify(records);
   for (const privateValue of ['synthetic-api-secret', 'private-raw-revision', 'old-resolved', RAW]) {
     expect(serialized).not.toContain(privateValue);
   }
 });
 
-test('a later failure inside the existing cooldown only reports retain-pending evidence', async () => {
+test('a later unresolved delivery still schedules recovery instead of dropping its target', async () => {
   vi.useFakeTimers();
   await run(Scenario.GetTimeout);
   const records: ConfigDeliveryDiagnostic[] = [];
@@ -97,18 +96,17 @@ test('a later failure inside the existing cooldown only reports retain-pending e
     readConfigFile: () => RAW, ensureRpcClient: async () => null,
     scheduleDeferredRestart, onDiagnostic: event => records.push(event),
   });
-  expect(result.restartScheduled).toBe(false);
-  expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+  expect(result.restartScheduled).toBe(true);
+  expect(scheduleDeferredRestart).toHaveBeenCalledTimes(1);
   expect(vi.getTimerCount()).toBe(0);
   expect(records.at(-1)).toMatchObject({
-    evidence: ConfigRecoveryEvidence.Unconfirmed, actualAction: ConfigRecoveryAction.RateLimited,
+    evidence: ConfigRecoveryEvidence.Unconfirmed, actualAction: ConfigRecoveryAction.Scheduled,
   });
 });
 
 test('a reply after the client timeout cannot settle delivery again or run another recovery action', async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000_000);
-  __resetOpenClawConfigDeliveryStateForTests();
   const records: ConfigDeliveryDiagnostic[] = [];
   const scheduleDeferredRestart = vi.fn();
   const request = vi.fn(async <T,>(method: string, _params: unknown, options?: { timeoutMs?: number | null }): Promise<T> => {

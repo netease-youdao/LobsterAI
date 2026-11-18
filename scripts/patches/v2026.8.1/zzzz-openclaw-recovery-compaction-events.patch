@@ -1,0 +1,140 @@
+diff --git a/src/agents/embedded-agent-runner/run/overflow-context-recovery.ts b/src/agents/embedded-agent-runner/run/overflow-context-recovery.ts
+--- a/src/agents/embedded-agent-runner/run/overflow-context-recovery.ts
++++ b/src/agents/embedded-agent-runner/run/overflow-context-recovery.ts
+@@ -1,5 +1,6 @@
+ import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
++import { emitAgentEvent } from "../../../infra/agent-events.js";
+ import { formatErrorMessage } from "../../../infra/errors.js";
+ import type { AssistantMessage } from "../../../llm/types.js";
+ import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
+@@ -229,14 +230,31 @@ export async function recoverEmbeddedRunOverflow(
+     log.warn(
+       `context overflow detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.provider}/${input.modelId}`,
+     );
+-    const compaction = await compactEmbeddedRunForRecovery(input, {
+-      tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
+-      trigger: "overflow",
+-      diagId: overflowDiagId,
+-      attempt: input.state.overflowCompactionAttempts,
+-      maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+-      currentTokenCount: overflowTokenCountForCompaction,
+-    });
++    // Recovery runs outside the session subscriber that normally publishes
++    // compaction progress. Keep the same presentation lifecycle for this path.
++    input.assertRecoveryActive();
++    emitAgentEvent({ runId: runParams.runId, stream: "compaction", data: { phase: "start" } });
++    let compaction: Awaited<ReturnType<typeof compactEmbeddedRunForRecovery>> | undefined;
++    try {
++      compaction = await compactEmbeddedRunForRecovery(input, {
++        tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
++        trigger: "overflow",
++        diagId: overflowDiagId,
++        attempt: input.state.overflowCompactionAttempts,
++        maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
++        currentTokenCount: overflowTokenCountForCompaction,
++      });
++    } finally {
++      emitAgentEvent({
++        runId: runParams.runId,
++        stream: "compaction",
++        data: {
++          phase: "end",
++          completed: compaction?.result.compacted === true,
++          willRetry: false,
++        },
++      });
++    }
+     const { result: compactResult, previousSessionId } = compaction;
+     input.assertRecoveryActive();
+     if (compactResult.ok && compactResult.compacted) {
+diff --git a/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts b/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts
+--- a/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts
++++ b/src/agents/embedded-agent-runner/run.overflow-context-recovery.test.ts
+@@ -13,6 +13,7 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
+ 
+ const mocks = vi.hoisted(() => ({
+   compact: vi.fn(),
++  emitAgentEvent: vi.fn(),
+   debug: vi.fn(),
+   getProviderPromptState: vi.fn(),
+   info: vi.fn(),
+@@ -26,6 +27,11 @@ const mocks = vi.hoisted(() => ({
+   warn: vi.fn(),
+ }));
+ 
++vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
++  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
++  emitAgentEvent: mocks.emitAgentEvent,
++}));
++
+ vi.mock("./context-engine-maintenance.js", () => ({
+   runContextEngineMaintenance: mocks.maintenance,
+ }));
+@@ -226,6 +232,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
+ describe("recoverEmbeddedRunOverflow", () => {
+   beforeEach(() => {
+     mocks.compact.mockReset().mockResolvedValue(successfulCompaction());
++    mocks.emitAgentEvent.mockReset();
+     mocks.debug.mockReset();
+     mocks.getProviderPromptState.mockReset();
+     mocks.info.mockReset();
+@@ -243,6 +250,58 @@ describe("recoverEmbeddedRunOverflow", () => {
+     mocks.warn.mockReset();
+   });
+ 
++  it("keeps overflow compaction visible while the summary is pending", async () => {
++    let finish!: (result: CompactionResult) => void;
++    mocks.compact.mockImplementationOnce(
++      () =>
++        new Promise<CompactionResult>((resolve) => {
++          finish = resolve;
++        }),
++    );
++    const recovery = recoverEmbeddedRunOverflow(makeInput());
++    await vi.waitFor(() => expect(mocks.compact).toHaveBeenCalledOnce());
++    const pendingEvents = mocks.emitAgentEvent.mock.calls.map(([event]) => event);
++    finish(successfulCompaction());
++    await expect(recovery).resolves.toEqual({ action: "retry" });
++    expect(pendingEvents).toEqual([
++      { runId: "run-1", stream: "compaction", data: { phase: "start" } },
++    ]);
++    expect(mocks.emitAgentEvent).toHaveBeenLastCalledWith({
++      runId: "run-1",
++      stream: "compaction",
++      data: { phase: "end", completed: true, willRetry: false },
++    });
++    expect(mocks.emitAgentEvent).toHaveBeenCalledTimes(2);
++  });
++
++  it.each(["failure", "throw", "cancel"] as const)(
++    "clears overflow compaction presentation on %s without claiming success",
++    async (kind) => {
++      const controller = new AbortController();
++      mocks.compact.mockImplementationOnce(async () => {
++        if (kind === "cancel") {
++          controller.abort(new Error("stopped"));
++        }
++        if (kind === "throw") {
++          throw new Error("provider unavailable");
++        }
++        return { ok: false, compacted: false, reason: "summary rejected" };
++      });
++      const input = makeInput();
++      input.runParams.abortSignal = controller.signal;
++      const recovery = recoverEmbeddedRunOverflow(input);
++      if (kind === "cancel") {
++        await expect(recovery).rejects.toThrow("stopped");
++      } else {
++        await expect(recovery).resolves.toMatchObject({ action: "surface" });
++      }
++      expect(mocks.emitAgentEvent.mock.calls.map(([event]) => event.data)).toEqual([
++        { phase: "start" },
++        { phase: "end", completed: false, willRetry: false },
++      ]);
++    },
++  );
++
+   it("uses the canonical assistant classifier when the text heuristic misses", async () => {
+     const assistantOverflowCandidate = makeAssistantMessage({
+       stopReason: "error",

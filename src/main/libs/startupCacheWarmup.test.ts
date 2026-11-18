@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { updateServerModelMetadata } = vi.hoisted(() => ({
-  updateServerModelMetadata: vi.fn(),
+import {
+  LOBSTERAI_CLIENT_CAPABILITIES,
+  LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
+  LOBSTERAI_CLIENT_VERSION_HEADER,
+} from '../../shared/providers/modelRuntimeProfiles';
+
+const { updateServerModelMetadataFromResponse } = vi.hoisted(() => ({
+  updateServerModelMetadataFromResponse: vi.fn(),
 }));
 
 vi.mock('./claudeSettings', () => ({
-  updateServerModelMetadata,
+  updateServerModelMetadataFromResponse,
 }));
 
 import {
@@ -14,15 +20,15 @@ import {
 } from './startupCacheWarmup';
 
 beforeEach(() => {
-  updateServerModelMetadata.mockReset();
+  updateServerModelMetadataFromResponse.mockReset();
 });
 
 describe('startup server model warmup', () => {
-  test('sends the fixed K3 capability and client version', () => {
+  test('sends the fixed client capabilities and client version', () => {
     expect(buildServerModelCapabilityHeaders('2026.7.23')).toEqual({
       Accept: 'application/json',
-      'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1,thinking-level-control-v1',
-      'X-LobsterAI-Client-Version': '2026.7.23',
+      [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
+      [LOBSTERAI_CLIENT_VERSION_HEADER]: '2026.7.23',
     });
   });
 
@@ -64,14 +70,14 @@ describe('startup server model warmup', () => {
       t: key => key,
     });
 
-    expect(updateServerModelMetadata).toHaveBeenCalledWith(serverModels);
+    expect(updateServerModelMetadataFromResponse).toHaveBeenCalledWith(serverModels);
     expect(fetchWithAuth).toHaveBeenCalledWith(
       'https://lobster.test/api/models/available',
       expect.objectContaining({
         headers: {
           Accept: 'application/json',
-          'X-LobsterAI-Client-Capabilities': 'kimi-k3-agentic-v1,thinking-level-control-v1',
-          'X-LobsterAI-Client-Version': '2026.7.23',
+          [LOBSTERAI_CLIENT_CAPABILITIES_HEADER]: LOBSTERAI_CLIENT_CAPABILITIES,
+          [LOBSTERAI_CLIENT_VERSION_HEADER]: '2026.7.23',
         },
       }),
     );

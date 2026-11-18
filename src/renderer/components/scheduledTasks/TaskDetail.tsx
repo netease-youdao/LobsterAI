@@ -225,7 +225,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             type="button"
             onClick={() => void handleRunManually()}
             disabled={isRunning}
-            className="rounded-lg p-2 text-secondary transition-colors hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-secondary"
+            className="rounded-lg p-2 text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-secondary"
             title={runActionLabel}
             aria-label={runActionLabel}
           >

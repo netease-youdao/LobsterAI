@@ -101,12 +101,31 @@ export function withManagedOpenClawModelPolicy(
   };
 }
 
+/**
+ * Builds on OpenClaw before v2026.8.1, and those runtimes, stamped this on every
+ * config write. v2026.8.1 rejects it, so every startup check fails while it remains.
+ */
+const RETIRED_WRITE_METADATA_KEY = 'lastTouchedAt';
+
+export function hasRetiredOpenClawWriteMetadata(config: Record<string, unknown>): boolean {
+  const meta = asRecord(config.meta);
+  return meta !== undefined && Object.hasOwn(meta, RETIRED_WRITE_METADATA_KEY);
+}
+
+/** Drop only the retired stamp; the rest of `meta` stays with the runtime. */
+export function withoutRetiredOpenClawWriteMetadata(config: Record<string, unknown>): Record<string, unknown> {
+  if (!hasRetiredOpenClawWriteMetadata(config)) return config;
+  const meta = { ...asRecord(config.meta) };
+  delete meta[RETIRED_WRITE_METADATA_KEY];
+  return { ...config, meta };
+}
+
 /** Keep migration state in config comparisons; only write provenance is inert. */
 export function withoutOpenClawWriteMetadata(config: Record<string, unknown>): Record<string, unknown> {
   const comparable = { ...config };
   const meta = { ...asRecord(config.meta) };
   delete meta.lastTouchedVersion;
-  delete meta.lastTouchedAt; // Retired by OpenClaw v2026.8.1.
+  delete meta[RETIRED_WRITE_METADATA_KEY];
   delete comparable.meta;
   if (Object.keys(meta).length > 0) comparable.meta = meta;
   return comparable;

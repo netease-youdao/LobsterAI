@@ -35,9 +35,12 @@ export type PollMediaStatusOptions = {
   log?: PollLogger;
   now?: () => number;
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  waitForResult?: boolean;
 };
 
-const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'timeout']);
+const DURABLE_PROTOCOL_VERSION = 2;
+const FOREGROUND_WAIT_MS = 60_000;
 
 export const readMediaStatusPollCount = (value: unknown): number | undefined => (
   typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -113,13 +116,13 @@ const buildPollingTimeoutResponse = (
 ): MediaStatusResponse => ({
   content: [{
     type: 'text',
-    text: `${mediaType === 'image' ? 'Image' : 'Video'} generation timed out after ${Math.max(1, Math.round(elapsedMs / 60_000))} minutes.\nTask ID: ${upstreamTaskId || taskId}\nYou can check status later with action="status".`,
+    text: `${mediaType === 'image' ? 'Image' : 'Video'} foreground observation ended after ${Math.max(1, Math.round(elapsedMs / 60_000))} minutes. The server task may still be running.\nTask ID: ${upstreamTaskId || taskId}\nYou can check status later with action="status".`,
   }],
   isError: true,
   details: {
     taskId,
     ...(upstreamTaskId ? { upstreamTaskId } : {}),
-    status: 'timeout',
+    status: 'polling_stopped',
     pollCount,
   },
 });
@@ -206,6 +209,7 @@ export async function pollMediaStatus(
           text: firstStatusOutput || `Task ID: ${upstreamTaskId || options.taskId}`,
         }],
         details: {
+          ...statusDetails,
           taskId: options.taskId,
           ...(upstreamTaskId ? { upstreamTaskId } : {}),
           pollCount: latestReportedPollCount,
@@ -227,6 +231,14 @@ export async function pollMediaStatus(
             status: effectiveStatus,
             pollCount: latestReportedPollCount,
           },
+        };
+      }
+
+      if (statusDetails.protocolVersion === DURABLE_PROTOCOL_VERSION && !options.waitForResult
+        && now() - startedAt >= FOREGROUND_WAIT_MS) {
+        return {
+          content: [{ type: 'text', text: `Task ${options.taskId} continues in the background. Do not resubmit. The desktop will deliver the result. If subsequent work depends on the output, call status with waitForResult=true and wait for a saved file before continuing.` }],
+          details: { ...statusDetails, background: true, pollCount: latestReportedPollCount },
         };
       }
 

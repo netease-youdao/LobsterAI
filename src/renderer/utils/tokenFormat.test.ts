@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 
-import { formatMessageDateTime, formatMessageTime, formatTokenCount } from './tokenFormat';
+import { formatMessageDateTime, formatMessageShortDateTime, formatMessageTime, formatTokenCount } from './tokenFormat';
 
 test('formatTokenCount: values below 1000 returned as-is', () => {
   expect(formatTokenCount(0)).toBe('0');
@@ -60,7 +60,17 @@ test('formatMessageDateTime: always shows YYYY/MM/DD + time', () => {
   vi.useRealTimers();
 });
 
+test('formatMessageShortDateTime: keeps the date, drops only the current year', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 4, 7, 10, 0));
+  expect(formatMessageShortDateTime(new Date(2026, 4, 7, 0, 5).getTime())).toBe('05/07 00:05');
+  expect(formatMessageShortDateTime(new Date(2026, 0, 15, 9, 5).getTime())).toBe('01/15 09:05');
+  expect(formatMessageShortDateTime(new Date(2025, 11, 25, 20, 0).getTime())).toBe('2025/12/25 20:00');
+  vi.useRealTimers();
+});
+
 test('message time formatting returns empty string for invalid timestamps', () => {
   expect(formatMessageTime(Number.NaN)).toBe('');
   expect(formatMessageDateTime(Number.NaN)).toBe('');
+  expect(formatMessageShortDateTime(Number.NaN)).toBe('');
 });

@@ -11,7 +11,12 @@ interface OpenClawGatewaySpawnOptions {
   env: NodeJS.ProcessEnv;
 }
 
-const GATEWAY_STOP_GRACE_MS = 6_000;
+// A clean exit checkpoints every agent database and publishes its clean-close
+// seal; a SIGKILL makes the next start re-verify every file. With 25 agents and
+// 13 plugins a healthy shutdown measured 5.2-6.2 s, mostly plugin host cleanup.
+// Grace plus the SIGKILL exit must stay inside main.ts APP_CLEANUP_WATCHDOG_MS
+// (10 s), which also covers the cleanup steps that run before the gateway stop.
+export const GATEWAY_STOP_GRACE_MS = 8_000;
 const GATEWAY_STOP_FORCE_MS = 2_000;
 // Windows kernel teardown and exit notification can outlast the short POSIX
 // deadline. Keep waiting for confirmed exit before touching state or respawning.

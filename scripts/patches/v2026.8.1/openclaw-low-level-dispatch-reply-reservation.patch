@@ -1,0 +1,71 @@
+diff --git a/src/auto-reply/reply/dispatch-from-config.low-level-reservation.test.ts b/src/auto-reply/reply/dispatch-from-config.low-level-reservation.test.ts
+new file mode 100644
+index 00000000..c6d60bd4
+--- /dev/null
++++ b/src/auto-reply/reply/dispatch-from-config.low-level-reservation.test.ts
+@@ -0,0 +1,46 @@
++// Tests that low-level channel dispatches release the dispatcher restart reservation.
++import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  createHookCtx,
++  emptyConfig,
++  hookMocks,
++} from "./dispatch-from-config.shared.test-harness.js";
++import {
++  describe0BeforeEach0,
++  globalBeforeAll0,
++  setNoAbort,
++} from "./dispatch-from-config.test-harness.js";
++import { getTotalPendingReplies } from "./dispatcher-registry.js";
++import { createReplyDispatcher } from "./reply-dispatcher.js";
++
++beforeAll(globalBeforeAll0);
++
++describe("dispatchLowLevelChannelReplyFromConfig", () => {
++  beforeEach(() => {
++    describe0BeforeEach0();
++    setNoAbort();
++    hookMocks.runner.hasHooks.mockReturnValue(false);
++  });
++
++  it("releases the dispatcher reservation once the channel dispatch settles", async () => {
++    const { dispatchLowLevelChannelReplyFromConfig } = await import("./dispatch-from-config.js");
++    const pendingBefore = getTotalPendingReplies();
++    const deliver = vi.fn(async () => {});
++    const dispatcher = createReplyDispatcher({ deliver });
++    expect(getTotalPendingReplies()).toBe(pendingBefore + 1);
++
++    const result = await dispatchLowLevelChannelReplyFromConfig({
++      ctx: createHookCtx(),
++      cfg: emptyConfig,
++      dispatcher,
++      replyResolver: async () => ({ text: "hi" }),
++    });
++    await dispatcher.waitForIdle();
++
++    expect(result.queuedFinal).toBe(true);
++    expect(deliver).toHaveBeenCalledOnce();
++    await vi.waitFor(() => {
++      expect(getTotalPendingReplies()).toBe(pendingBefore);
++    });
++  });
++});
+diff --git a/src/auto-reply/reply/dispatch-from-config.ts b/src/auto-reply/reply/dispatch-from-config.ts
+index 629f083c..dbabf967 100644
+--- a/src/auto-reply/reply/dispatch-from-config.ts
++++ b/src/auto-reply/reply/dispatch-from-config.ts
+@@ -31,7 +31,13 @@ export async function dispatchReplyFromConfig(
+ export async function dispatchLowLevelChannelReplyFromConfig(
+   params: DispatchFromConfigParams,
+ ): Promise<DispatchFromConfigResult> {
+-  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
++  try {
++    return await dispatchReplyFromConfigWithQueuePolicy(params, true);
++  } finally {
++    // Channel plugins drive this dispatcher without withReplyDispatcher(); release its
++    // restart reservation so settled replies stop deferring config reloads forever.
++    params.dispatcher.markComplete();
++  }
+ }
+ 
+ async function dispatchReplyFromConfigWithQueuePolicy(

@@ -63,11 +63,13 @@ export interface CoworkPendingSteer {
 }
 
 export interface CoworkSteerAttachment {
+  imageEdit?: import('../imageEditing/types').ImageEditRequest;
   path: string;
   name: string;
   isImage?: boolean;
   isDirectory?: boolean;
   dataUrl?: string;
+  pastedText?: string;
 }
 
 export interface CoworkQueuedMediaSelection {

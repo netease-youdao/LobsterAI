@@ -1,351 +1,179 @@
-<h1 align="center">
-  <img src="public/logo.png" alt="LobsterAI" width="96"><br>
-  LobsterAI
-</h1>
+<div align="center">
 
-<p align="center">
-  <a href="https://github.com/netease-youdao/LobsterAI/stargazers"><img src="https://badgen.net/github/stars/netease-youdao/LobsterAI?label=%E2%98%85" alt="GitHub stars" /></a>
-  <a href="LICENSE"><img src="https://badgen.net/github/license/netease-youdao/LobsterAI" alt="License" /></a>
-  <a href="https://x.com/LobsterAIYoudao"><img src="https://img.shields.io/badge/-000000?logo=x&logoColor=white" alt="Follow LobsterAI on X" /></a>
-  <a href="https://shared.ydstatic.com/market/souti/fihserChatWeb/online/2.0.7/dist/assets/wechat_group-B34qRm1G.png"><img src="https://img.shields.io/badge/-000000?logo=wechat&logoColor=white" alt="Follow LobsterAI on X" /></a>
-  <br>
-  <img src="https://img.shields.io/badge/macOS%20%7C%20Windows-4493F8?style=flat-square" alt="Supported platforms: macOS and Windows" />
-  <img src="https://img.shields.io/badge/Electron-43-47848F?style=flat-square&logo=electron&logoColor=white" alt="Electron 43" />
-  <img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 18" />
+<img src="public/logo.png" alt="LobsterAI logo" width="88" />
+
+# LobsterAI
+
+**The open-source desktop AI agent that does real work on your computer.**
+
+Describe a task in plain language. LobsterAI reads your files, runs tools, drives a browser,<br/>
+edits Office documents, and hands back finished work — at your desk or from your phone.
+
+<p>
+  <a href="https://github.com/netease-youdao/LobsterAI/releases/latest"><img src="https://img.shields.io/github/v/release/netease-youdao/LobsterAI?style=flat-square&label=release&color=FF5A36" alt="Latest release" /></a>
+  <a href="https://github.com/netease-youdao/LobsterAI/stargazers"><img src="https://img.shields.io/github/stars/netease-youdao/LobsterAI?style=flat-square&color=FFB000" alt="GitHub stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/netease-youdao/LobsterAI?style=flat-square" alt="MIT license" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-4493F8?style=flat-square" alt="Platforms: macOS and Windows" />
+  <a href="https://x.com/LobsterAIYoudao"><img src="https://img.shields.io/badge/follow-%40LobsterAIYoudao-000000?style=flat-square&logo=x" alt="Follow LobsterAI on X" /></a>
+  <a href="#community"><img src="https://img.shields.io/badge/WeChat-community-07C160?style=flat-square&logo=wechat&logoColor=white" alt="Join the WeChat community" /></a>
 </p>
 
-<p align="center">
-  English · <a href="README_zh.md">中文</a>
-</p>
+**English** · [简体中文](README_zh.md)
 
-<p align="center">
-  <strong>All-scenario office assistant Agent.</strong><br/>
-  The first open-source desktop-grade Agent among major Chinese tech companies, built by NetEase Youdao.
-</p>
-
-<p align="center">
-  <a href="#features"><strong>Features</strong></a>
+<h3>
+  <a href="https://lobsterai.youdao.com/#/download-list">Download</a>
   &nbsp;·&nbsp;
-  <a href="#developing"><strong>Developing</strong></a>
+  <a href="#quick-start">Quick start</a>
   &nbsp;·&nbsp;
-  <a href="#community--support"><strong>Community</strong></a>
-</p>
+  <a href="#features">Features</a>
+  &nbsp;·&nbsp;
+  <a href="#build-from-source">Build from source</a>
+  &nbsp;·&nbsp;
+  <a href="#community">Community</a>
+</h3>
 
-<h3 align="center"><a href="https://lobsterai.youdao.com/#/download-list"><ins>Download LobsterAI</ins></a></h3>
+<img src="docs/res/screenshots/hero-en.png" alt="LobsterAI analyzing a spreadsheet and previewing the dashboard it built" width="100%" />
 
-<p align="center">
-  <img src="docs/res/mainpage_en.png" alt="main page" />
-</p>
+</div>
 
-LobsterAI is a desktop Agent that can operate in your real working environment: local files, terminal commands, browser workflows, documents, spreadsheets, slides, IM channels, scheduled jobs, and project workspaces.
+## Why LobsterAI
 
-Cowork is the LobsterAI product/session layer. OpenClaw is the runtime and gateway underneath it. That split lets LobsterAI keep local persistence, permissions, UI state, artifacts, agents, memory, and IM bindings in the desktop app while using OpenClaw for agent execution.
+Most AI assistants stop at an answer. LobsterAI is built to finish the job.
+
+- **It works where your work lives.** Point it at a folder and it reads spreadsheets, writes documents, runs scripts, and browses the web, asking before anything sensitive.
+- **You see the result, not just a reply.** Web pages, charts, images, videos, PDFs, and Word, Excel, and PowerPoint files open in a side panel, ready to edit or share.
+- **It keeps working when you step away.** Schedule recurring jobs, or message your desktop agent from WeChat, Feishu, DingTalk, Telegram, and more.
+- **It's yours.** MIT-licensed, with sessions stored locally. Sign in to use the built-in models, or bring your own API keys.
+
+Built by [NetEase Youdao](https://www.youdao.com/), LobsterAI is the first open-source desktop-grade agent from a major Chinese tech company.
 
 ## Features
 
-### Desktop Cowork Sessions
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/res/screenshots/office-en.png" alt="Editing an Excel workbook inside LobsterAI" />
+      <p><b>Native Office editing</b><br/>Open Word, Excel, and PowerPoint files right in the app. Edit by hand, or let the agent make changes live alongside you.</p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/res/screenshots/kits-en.png" alt="The kits marketplace" />
+      <p><b>Kits, skills, and connectors</b><br/>Install role-based kits for engineering, design, finance, sales, and more, pick individual skills, or connect MCP servers.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/res/screenshots/scheduled-tasks-en.png" alt="Scheduled task templates" />
+      <p><b>Scheduled tasks</b><br/>Turn any prompt into a recurring job: morning briefs, end-of-day wrap-ups, weekly reports, and health checks.</p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/res/screenshots/im-bots-en.png" alt="IM bot settings" />
+      <p><b>Message it from anywhere</b><br/>Connect a chat app once, then send tasks to your desktop agent from your phone.</p>
+    </td>
+  </tr>
+</table>
 
-Run long-form Agent tasks against local projects and files. LobsterAI streams progress, keeps session history, renders tool output, and asks for approval before sensitive actions such as file operations, terminal commands, or network access.
+### Everything in the box
 
-### Multi-Agent Workflows
+| Capability | What you get |
+| --- | --- |
+| **Cowork sessions** | Long-running tasks on local projects with streaming progress, a tool timeline, session forks, and approval prompts before file, shell, or network actions. |
+| **Artifacts and sharing** | Live previews for HTML, SVG, Mermaid, images, video, Markdown, code, PDF, and Office files. Edit images in place and share results as a link. |
+| **Built-in browser** | An in-app browser the agent can drive, with tabs, saved logins, and passkey support, for research and web workflows. |
+| **Computer use** | Let the agent operate desktop apps on Windows x64 and macOS 13 or later. |
+| **Multiple agents** | Create agents with their own identity, model, skills, and working folder, add ready-made experts from the Expert Plaza, and bind agents to chat channels. |
+| **Skills** | Built-in skills for documents, spreadsheets, slides, PDFs, web search, browser automation, image and video generation, stock research, writing, email, and more. See [`SKILLs/`](SKILLs). |
+| **MCP connectors** | Add local or remote MCP servers from the marketplace, sign in with OAuth, and choose which tools each server exposes. |
+| **IM channels** | WeChat, WeCom, DingTalk, Feishu/Lark, QQ, NetEase IM, NetEase Bee, POPO, Telegram, Discord, and email. Multi-instance platforms can route each bot to a different agent. |
+| **Desktop companion** | A floating orb for quick tasks, screenshots, and actions on selected text, such as translating or reading aloud. |
+| **Memory and Dreaming** | Durable memory files, plus optional scheduled "Dreaming" runs that consolidate what the agent learned, so preferences carry across sessions. |
+| **Models** | Built-in models (DeepSeek, GLM, Kimi, Qwen, MiniMax, and more) after sign-in, or your own keys for OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible endpoint. |
+| **Library** | Every file your agents create, collected in one place across sessions, both local and shared. |
 
-Create custom Agents with their own identity, model choice, skills, working directory, enabled state, and IM bindings. Keep the Main Agent for general work and use specialized Agents for repeatable roles.
-
-### Expert Kits
-
-Install scenario-oriented Expert Kits that package capability selections and references for common workflows. Kits are selected independently from direct skills, so a workflow can combine curated kits with individual tools.
-
-### Skills
-
-LobsterAI ships with 28 built-in skills configured in `SKILLs/skills.config.json`, including web search, Word documents, spreadsheets, PowerPoint, PDF processing, Remotion video generation, browser automation, image/video generation, stock research, content writing, email, weather, and skill creation.
-
-### MCP Servers
-
-Connect external tools and data sources through Model Context Protocol servers. LobsterAI stores user-configured servers locally and syncs enabled servers into OpenClaw.
-
-### Scheduled Tasks
-
-Create recurring work either by conversation or through the scheduled task UI. Use it for daily news digests, inbox summaries, website monitoring, weekly reports, and other repeatable work.
-
-### IM Remote Control
-
-Reach your desktop Agent from WeChat, WeCom, DingTalk, Feishu/Lark, QQ, Telegram, Discord, NetEase IM, NetEase Bee, POPO, and email. Multi-instance platforms can bind different accounts or channels to different Agents.
-
-### Rich Artifacts
-
-Preview and manage generated HTML, SVG, images, video, Mermaid diagrams, code, Markdown, text, documents, and local service artifacts inside the desktop app.
-
-### Local Memory And Data
-
-Sessions and app data live locally in SQLite. OpenClaw workspace memory uses files such as `MEMORY.md`, `USER.md`, `SOUL.md`, and daily notes, so durable preferences and project context can carry across sessions.
-
-## Real-World Prompts
+## Things to try
 
 | Scenario | Example prompt |
 | --- | --- |
-| Build a local system | "I still track inventory and sales in Excel. Build a local inventory system that records purchases and sales, calculates stock and profit, and opens in my browser." |
+| Build a local tool | "I still track inventory and sales in Excel. Build a local inventory system that records purchases and sales, calculates stock and profit, and opens in my browser." |
 | Analyze local data | "Use `product-growth.xlsx` to build a visual dashboard and summarize the main growth drivers." |
-| Generate a deck | "Research the AI Agent market and turn the findings into a presentation." |
-| Automate browser checks | "Open the ads dashboard every morning, check spend and conversion anomalies, and summarize likely causes." |
+| Make a deck | "Research the AI agent market and turn the findings into a presentation." |
+| Check a web dashboard | "Open the ads dashboard every morning, check spend and conversion anomalies, and summarize likely causes." |
 | Screen documents | "Turn the resumes in this folder into a screening sheet and shortlist the strongest candidates against the JD." |
 | Run scheduled work | "Every weekday at 9 AM, collect yesterday's AI news and send me a concise digest." |
 
-## How It Works
+## Quick start
 
-<p align="center">
-  <img src="docs/res/architecture_v2_en.png" alt="LobsterAI architecture" width="640">
-</p>
+1. **Install LobsterAI.** Download it from the [official website](https://lobsterai.youdao.com/#/download-list), or get the latest release directly:
+   [macOS (Apple Silicon)](https://github.com/netease-youdao/LobsterAI/releases/latest/download/LobsterAI--mac-arm64.dmg) ·
+   [macOS (Intel)](https://github.com/netease-youdao/LobsterAI/releases/latest/download/LobsterAI--mac-x64.dmg) ·
+   [Windows x64](https://github.com/netease-youdao/LobsterAI/releases/latest/download/LobsterAI--win-x64.exe)
+2. **Choose a model.** Sign in to use the built-in models, or add your own API key under **Settings → Custom Model**.
+3. **Give it a task.** Pick a working folder, describe what you want, and approve actions as it works. Generated files open in the side panel.
+4. **Go further.** Install kits from **Kits · Skills · Connectors**, set up recurring work in **Scheduled Tasks**, or connect a chat app under **Settings → IM Bot**.
 
-- **Renderer**: React, Redux Toolkit, Tailwind, artifact renderers, settings, agent/session UI, skills, MCP, scheduled tasks, and IM configuration.
-- **Main process**: Electron lifecycle, IPC, SQLite persistence, auth, logging, OpenClaw startup, runtime repair, skill sync, IM gateways, and artifact services.
-- **OpenClaw integration**: `openclawEngineManager`, `openclawConfigSync`, `openclawRuntimeAdapter`, and `coworkEngineRouter` translate LobsterAI state into OpenClaw runtime behavior.
+## How it works
 
-## Install
+```mermaid
+flowchart LR
+  subgraph App["LobsterAI desktop app (Electron)"]
+    UI["Renderer<br/>React · Redux · Tailwind<br/>sessions · artifacts · Office editors"]
+    Main["Main process<br/>Cowork sessions · permissions · SQLite<br/>skills · MCP · IM · scheduler"]
+    UI <-->|"preload IPC"| Main
+  end
+  Main <-->|"config sync · events"| Gateway["OpenClaw gateway<br/>bundled agent runtime"]
+  Gateway --> Models["LLM providers"]
+  Gateway --> Tools["Local tools<br/>files · shell · browser<br/>computer use · MCP servers"]
+  Chat["Chat apps<br/>WeChat · Feishu · DingTalk · Telegram …"] <--> Gateway
+```
 
-### Desktop
+- **Cowork** is LobsterAI's product layer. It owns sessions, messages, permissions, artifacts, agents, and IM bindings, and stores them locally in SQLite.
+- **[OpenClaw](https://github.com/openclaw/openclaw)** is the agent runtime underneath. LobsterAI ships a pinned build, renders its config from app state, and translates its events into the Cowork stream.
+- The renderer is sandboxed with context isolation and talks to the main process only through the preload IPC bridge.
 
-Download the latest macOS and Windows installers from [Official Website](https://lobsterai.youdao.com/) or [GitHub Releases](https://github.com/netease-youdao/LobsterAI/releases).
+## Build from source
 
-### Run From Source
-
-Requirements:
-
-- Node.js `>=24.15.0 <25`
-- npm `>=11.17.0 <12` (older versions: `npm install -g npm@11.17.0`)
-- git and pnpm, needed on the first run to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout
-
-`better-sqlite3@13.0.3` includes prebuilt N-API binaries for Windows, macOS,
-and Linux on x64/arm64. The `allowScripts` entry in `package.json` skips npm's
-unnecessary implicit rebuild for this version, so installing it does not require
-Visual Studio C++ Build Tools on Windows. Other dependencies' install scripts
-still run. Recheck this entry when upgrading `better-sqlite3`.
+Requirements: Node.js `>=24.15.0 <25`, npm `>=11.17.0 <12`, git, and pnpm.
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
 cd LobsterAI
 npm install
-```
 
-First development run:
-
-```bash
+# First run: fetches the pinned OpenClaw version into ../openclaw, builds the runtime, and starts the app
 npm run electron:dev:openclaw
-```
 
-Daily development after the pinned OpenClaw runtime exists:
-
-```bash
+# Later runs, once the runtime exists
 npm run electron:dev
 ```
 
-The renderer dev server runs at `http://localhost:5175`.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers tests, linting, runtime options, packaging installers, and the project layout.
 
-## Developing
+## Security and privacy
 
-```bash
-# Production renderer bundle
-npm run build
+- Sessions, messages, and settings are stored locally in `lobsterai.sqlite` under the app's user data directory. Agent memory and runtime state live alongside it under `openclaw/`.
+- File operations, shell commands, and network access are permission-gated, and the agent asks before it acts.
+- Renderer windows run with context isolation, sandboxing, and no Node.js integration.
 
-# Electron main/preload TypeScript build
-npm run compile:electron
+## Community
 
-# Official Vitest entry used by CI
-npm test
+Join the WeChat group for help, feedback, and release news. You can also follow [@LobsterAIYoudao](https://x.com/LobsterAIYoudao) on X.
 
-# Full ESLint across src; may expose existing legacy debt
-npm run lint
+<img src="docs/res/wechat-group.png" alt="WeChat community QR code" width="180" />
 
-# CI-style lint for touched TypeScript files
-npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 <files>
-```
+Report bugs and request features through [GitHub Issues](https://github.com/netease-youdao/LobsterAI/issues/new/choose).
 
-### OpenClaw Runtime
+## Contributing
 
-The pinned OpenClaw version and third-party plugin list live in `package.json` under `openclaw`.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to set up your environment, and look for [good first issues](https://github.com/netease-youdao/LobsterAI/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) to get started.
 
-```bash
-# Build the current-platform runtime manually
-npm run openclaw:runtime:host
+## Star history
 
-# Use a custom OpenClaw source checkout
-OPENCLAW_SRC=/path/to/openclaw npm run electron:dev:openclaw
-
-# Force runtime rebuild
-OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
-
-# Keep a local OpenClaw checkout on its current branch/tag
-OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
-```
-
-### DeepSeek Harness Runtime
-
-The pinned dsh version and one archive descriptor per platform live in `package.json` under `dsh`. Development reads `vendor/dsh-runtime/current`; shipped apps download the archive on first use and verify it against the digest they carry.
-
-```bash
-# Build and activate the current-platform runtime
-npm run dsh:runtime:host
-
-# Boot it once and assert the web UI answers
-npm run dsh:runtime:verify
-
-# Full gate: build, pack, install over HTTP, boot, assert provider/model over RPC
-npm run dsh:e2e
-```
-
-<details>
-<summary>Publish a runtime archive (per platform)</summary>
-
-Each target must be built on a matching machine: native dependencies install for the host, so a cross-architecture build produces an archive that packs cleanly and only fails on users' machines. The build refuses to run on a mismatched host.
-
-| Target | Build on |
-| --- | --- |
-| `mac-arm64` | Apple Silicon mac |
-| `mac-x64` | Intel mac |
-| `win-x64` | Windows 10 1803+ (ships `tar.exe`) |
-
-Run these on that machine, substituting the target:
-
-```bash
-# 1. Build (applies the pinned patches, prunes to ~160 MB)
-npm run dsh:runtime:mac-arm64
-
-# 2. Pack; prints the sha256 and size
-npm run dsh:runtime:pack mac-arm64
-
-# 3. Upload vendor/dsh-dist/dsh-runtime-<version>-mac-arm64.tar.gz to the CDN,
-#    then record where it landed. Digest and size come from the local manifest,
-#    so they cannot drift from the bytes that were packed.
-npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<uploaded>"
-
-# 4. Confirm the URL serves exactly those bytes
-npm run dsh:runtime:verify-urls mac-arm64
-```
-
-Step 3 writes `dsh.runtimes[target]` into `package.json`; commit that hunk so every platform's descriptor ships in one build. Each target holds one absolute URL and nothing is appended to it, so a CDN that mints an unrelated URL per file needs no shared directory.
-
-</details>
-
-<details>
-<summary>Update to a newer dsh version</summary>
-
-1. Bump `dsh.version` in `package.json`.
-2. Copy the patch directory to the new version before that directory exists: `cp -R scripts/dsh-patches/<old> scripts/dsh-patches/<new>` (if `<new>` already exists, `cp` nests the copy one level down and the build finds no patches). Patches are found by version, and a missing directory applies **no** patches without failing — the Windows console-hiding fix would vanish silently. After copying, the build's sentinels re-verify each patch still lands, and fail if upstream moved the code: retarget the patch and add its sentinel to `PATCH_SENTINELS` in `scripts/build-dsh-runtime.cjs`, or drop it once upstream carries the fix (the directory-picker fix is upstream from 0.1.5, the console-hiding fix from 0.1.6-alpha.2).
-3. Empty `dsh.runtimes`. A descriptor left pointing at the previous archive still passes its digest check, so the old runtime would install under the new version's name.
-4. Rebuild, upload, and record all three targets as above.
-5. Re-run `npm run dsh:runtime:verify-urls` and `npm run dsh:e2e`.
-
-Known gap: existing users keep the runtime they already installed. `ensureRuntimeInstalled` returns early whenever any runtime is present and never compares it with the pinned version, so only fresh installs pick up a new dsh. Selection among installed versions is also a lexical sort, which puts `rc.6` ahead of `rc.10`.
-
-</details>
-
-## Packaging
-
-<details>
-<summary>Build desktop installers</summary>
-
-The CI workflow builds each installer on its own OS (macOS, Windows, Linux). Do the same locally: native modules are compiled for the host, and the `dist:*` scripts build the OpenClaw runtime for the requested target only.
-
-Build machine prerequisites:
-
-- Node.js `>=24.15.0 <25`. `.npmrc` sets `engine-strict`, so npm refuses other versions.
-- npm `>=11.17.0 <12`, required for the dependency install-script policy.
-- git and pnpm, used to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout (override with `OPENCLAW_SRC`).
-- Windows: Git for Windows. The runtime build runs in its Git Bash. Without it, run `npm run setup:mingit` once to prepare a portable Git under `resources/mingit`.
-
-Clean build:
-
-```bash
-# 1. Install dependencies exactly as pinned in package-lock.json.
-#    npm ci removes node_modules itself, so do not delete it by hand and do not
-#    run npm install first: that installs everything twice and may rewrite the
-#    lock file. postinstall applies patches/. better-sqlite3 uses its bundled
-#    N-API binaries in both Node.js and Electron.
-npm ci
-
-# 2. Remove stale build output. dist-electron is compiled by tsc, which keeps
-#    files whose sources were deleted.
-npx rimraf dist dist-electron
-
-# 3. Build the installer. Output goes to release/.
-npm run dist:mac            # macOS, host architecture
-npm run dist:mac:x64
-npm run dist:mac:arm64
-npm run dist:mac:universal
-npm run dist:win            # Windows x64
-npm run dist:linux
-```
-
-`vendor/` does not need to be deleted between builds. The OpenClaw runtime under `vendor/openclaw-runtime/<target>` is cached by pinned version and patch hash and is rebuilt automatically when either changes. Set `OPENCLAW_FORCE_BUILD=1` to rebuild it after changing the build scripts themselves, and `OPENCLAW_FORCE_PLUGIN_INSTALL=1` to re-download the bundled plugins. Optional plugins (POPO, NIM) are skipped with a warning when their registry is unreachable, so check the build log before shipping.
-
-The `dist:*` scripts also run these steps for you:
-
-- `openclaw:runtime:<target>`: build, patch, bundle, and prune the OpenClaw runtime, shipped under `Resources/cfmind`.
-- Windows only, `verify:installer-patches`: re-applies `patches/app-builder-lib+*.patch` to `node_modules` and runs the installer contract tests. It fails when `node_modules` still carries an older version of the patch, for example after `git pull` without reinstalling; run `npm ci` and retry. Never ship an installer from a tree where it fails.
-- Windows only, `setup:python-runtime`: prepares a portable Python under `resources/python-win`, so end users do not need to install Python. cfmind, `SKILLs`, and python-win are shipped as a single `win-resources.tar` and extracted after install.
-
-Windows channel and web-installer builds wrap the same `dist:win` chain:
-
-```bash
-# Full installer for a distribution channel
-npm run dist:win:channel -- --keyfrom <channel> [--silent]
-
-# Web installer: a small stub that downloads the package from your CDN
-npm run dist:win:web -- --keyfrom <channel> [--silent] [--pkg-base-url <cdn-dir> | --pkg-url <package-url>]
-```
-
-Offline or private-source packaging can use:
-
-- `LOBSTERAI_PORTABLE_PYTHON_ARCHIVE`
-- `LOBSTERAI_PORTABLE_PYTHON_URL`
-- `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION`
-- `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL`
-- `LOBSTERAI_WINDOWS_GET_PIP_URL`
-- `LOBSTERAI_PORTABLE_GIT_ARCHIVE`
-- `LOBSTERAI_PORTABLE_GIT_URL`
-
-</details>
-
-## Project Map
-
-| Path | Purpose |
-| --- | --- |
-| `src/main/main.ts` | Electron lifecycle, IPC registration, auth, logging, runtime startup, and service wiring |
-| `src/main/libs/openclawEngineManager.ts` | OpenClaw gateway process, runtime state, ports, logs, restart, and repair |
-| `src/main/libs/openclawConfigSync.ts` | Renders LobsterAI providers, models, agents, IM bindings, skills, MCP, and workspace instructions into OpenClaw config |
-| `src/main/libs/agentEngine/openclawRuntimeAdapter.ts` | Translates OpenClaw gateway events into Cowork stream events |
-| `src/main/coworkStore.ts` | Cowork sessions, messages, config, agents, memory metadata, and SQLite CRUD |
-| `src/renderer/components/cowork/` | Main Cowork UI, prompt input, session detail, permissions, thinking/tool display, media, and voice input |
-| `src/renderer/components/agent/` | Agent creation and settings UI |
-| `src/renderer/components/skills/` | Skill management UI |
-| `src/renderer/components/mcp/` | MCP server management UI |
-| `src/renderer/components/scheduledTasks/` | Scheduled task list, form, detail, run history, and templates |
-| `src/renderer/services/i18n.ts` | Renderer i18n dictionary and `t()` helper |
-| `SKILLs/` | Bundled LobsterAI skills |
-
-## Security And Data
-
-- Renderer windows use context isolation, disabled Node integration, and sandboxing.
-- Renderer-to-main access goes through preload IPC APIs.
-- Sensitive tool actions are permission-gated and logged.
-- App data is stored locally in `lobsterai.sqlite` under Electron `userData`.
-- OpenClaw state, workspace memory, generated config, and gateway logs live under `userData/openclaw`.
-
-## Community & Support
-
-Join the WeChat group for help, feedback, and release updates:
-
-<p align="center">
-  <img src="https://shared.ydstatic.com/market/souti/fihserChatWeb/online/2.1.5/dist/assets/wechat_group-C529RDAy.png" alt="WeChat Community QR Code" width="200">
-</p>
-
-Please use the repository issue templates for bugs and feature requests. For pull requests, include a short summary, linked issue when relevant, screenshots for UI changes, and notes for Electron-specific behavior such as IPC, storage, runtime, or windowing changes.
-
-## Star History
-
-[![Star History Chart](docs/res/star-history-2026828.png)](https://www.star-history.com/?repos=netease-youdao%2Flobsterai&type=date&legend=bottom-right)
+<a href="https://www.star-history.com/#netease-youdao/lobsterai&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=netease-youdao/lobsterai&type=Date&theme=dark" />
+    <img src="https://api.star-history.com/svg?repos=netease-youdao/lobsterai&type=Date" alt="Star history chart" width="600" />
+  </picture>
+</a>
 
 ## License
 
-[MIT License](LICENSE)
-
-Built and maintained by [NetEase Youdao](https://www.youdao.com/).
+[MIT](LICENSE) © NetEase Youdao

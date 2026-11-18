@@ -29,6 +29,17 @@ export function formatMessageDateTime(timestamp: number): string {
   return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** Compact form for narrow layouts: drops the year only within the current year. */
+export function formatMessageShortDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (!isValidDate(date)) return '';
+  if (date.getFullYear() !== new Date().getFullYear()) return formatMessageDateTime(timestamp);
+
+  const pad = (value: number): string => String(value).padStart(2, '0');
+
+  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) {
     return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;

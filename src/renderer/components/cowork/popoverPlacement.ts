@@ -53,15 +53,13 @@ export function choosePopoverPlacement(
 }
 
 /**
- * Anchored popovers are clipped by the nearest overflow ancestor (message
- * list, panel body): flip below the anchor when the space above cannot fit
- * the popover, flip the anchored side when the preferred side would be cut
- * off horizontally, and cap the width when neither side can fully fit it.
+ * The edges of the nearest ancestors that clip `root` vertically and
+ * horizontally, falling back to the viewport.
  */
-export function resolvePopoverPlacement(
-  root: HTMLElement,
-  options: PopoverPlacementOptions,
-): PopoverPlacement {
+export function resolvePopoverClipBounds(root: HTMLElement): {
+  vertical: { top: number; bottom: number };
+  horizontal: { left: number; right: number };
+} {
   let vertical = { top: 0, bottom: window.innerHeight };
   let horizontal = { left: 0, right: window.innerWidth };
   let verticalFound = false;
@@ -81,5 +79,19 @@ export function resolvePopoverPlacement(
       horizontal = { left: rect.left, right: rect.right };
     }
   }
+  return { vertical, horizontal };
+}
+
+/**
+ * Anchored popovers are clipped by the nearest overflow ancestor (message
+ * list, panel body): flip below the anchor when the space above cannot fit
+ * the popover, flip the anchored side when the preferred side would be cut
+ * off horizontally, and cap the width when neither side can fully fit it.
+ */
+export function resolvePopoverPlacement(
+  root: HTMLElement,
+  options: PopoverPlacementOptions,
+): PopoverPlacement {
+  const { vertical, horizontal } = resolvePopoverClipBounds(root);
   return choosePopoverPlacement(root.getBoundingClientRect(), vertical, horizontal, options);
 }

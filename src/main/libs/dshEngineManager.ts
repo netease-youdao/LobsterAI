@@ -10,7 +10,9 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import * as readline from 'readline';
+import { pathToFileURL } from 'url';
 
+import { DshRuntimeEndReason } from '../../shared/dshEngine/analytics';
 import {
   DSH_STATE_DIR_NAME,
   DshEngineErrorCode,
@@ -21,12 +23,18 @@ import {
 import { DshManagedSettings, writeDshManagedSettings } from './dshConfigSync';
 import { spawnDshProcess } from './dshProcessLauncher';
 import {
+  buildDshLauncherSource,
+  buildDshPackageManager,
   buildDshSpawnEnv,
   buildDshWebArgs,
   classifyDshStartupError,
+  DSH_LAUNCHER_DIR_NAME,
+  DSH_LAUNCHER_FILENAME,
+  DSH_PNPM_PACKAGE_RELPATH,
   DSH_RUNTIME_ENTRY_RELPATH,
   dshInstallPercent,
   DshRuntimeBuildInfo,
+  parseDshPnpmBinRelPath,
   parseDshRuntimeBuildInfo,
   resolveDshRuntimeCandidates,
   resolveDshWorkingDirectory,
@@ -42,6 +50,7 @@ import {
   resolveDshArtifactFromConfig,
   resolveInstalledDshRuntime,
 } from './dshRuntimeInstaller';
+import type { DshRuntimeObservation, DshUsageTelemetry } from './dshUsageTelemetry';
 import { exchangeDshLaunchToken, parseDshWebLaunchUrl, probeDshWebIndex, redactDshWebToken } from './dshWebAuth';
 
 // The pinned version and the per-target archive descriptors travel inside the
@@ -119,6 +128,7 @@ export interface DshResolvedRuntime {
 }
 
 export interface DshEngineState {
+  dshInstanceId?: string;
   phase: DshEnginePhase;
   port: number | null;
   version: string | null;
@@ -137,6 +147,15 @@ export interface DshEngineState {
 }
 
 type DshChild = ChildProcess;
+
+/** Tools the host supplies for pnpm and Git-sourced plugin installs. */
+export interface DshNodeToolchain {
+  electronPath: string;
+  /** Directory with node/npm/npx shims, or null when it could not be made. */
+  nodeShimDir: string | null;
+  npmBinDir: string | null;
+  gitBinDir: string | null;
+}
 
 export class DshEngineManager {
   private child: DshChild | null = null;
@@ -159,6 +178,20 @@ export class DshEngineManager {
   private workingDirectorySource: (() => string) | null = null;
   private sharedHomeLock: { claim: (port: number) => void; release: () => void } | null = null;
   private homeDirectorySource: (() => string | null) | null = null;
+  private nodeToolchainSource: (() => DshNodeToolchain | null) | null = null;
+  private usageTelemetry: DshUsageTelemetry | null = null;
+  private runtimeObservation: DshRuntimeObservation | null = null;
+
+  setUsageTelemetry(telemetry: DshUsageTelemetry | null): void {
+    this.usageTelemetry = telemetry;
+  }
+
+  // The kit registers its Electron-as-Node toolchain so the bundled pnpm runs
+  // with a `node` on PATH for dependency build scripts. Without a source, pnpm
+  // still runs on this process's executable, just without the shims.
+  setNodeToolchainSource(source: (() => DshNodeToolchain | null) | null): void {
+    this.nodeToolchainSource = source;
+  }
 
   // DSH_HOME for the child. The kit points this at the machine's dsh home so
   // plugins, credentials, and presets match a standalone install; returning
@@ -194,7 +227,7 @@ export class DshEngineManager {
   }
 
   getState(): DshEngineState {
-    return { ...this.state };
+    return { ...this.state, dshInstanceId: this.runtimeObservation?.instanceId };
   }
 
   onStateChange(listener: (state: DshEngineState) => void): () => void {
@@ -345,6 +378,8 @@ export class DshEngineManager {
 
   async stop(): Promise<void> {
     const child = this.child;
+    this.runtimeObservation?.finish(DshRuntimeEndReason.Stop);
+    this.runtimeObservation = null;
     this.generation += 1;
     this.child = null;
     this.webLaunchUrl = null;
@@ -399,12 +434,21 @@ export class DshEngineManager {
     }
 
     const port = await allocateLoopbackPort();
+    // A stop that landed during the awaits above (app quit, for one) has
+    // already run; a child spawned now would outlive the app untracked.
+    if (this.generation !== generation) return this.getState();
     const env = buildDshSpawnEnv({
       baseEnv: { ...process.env, ...managedEnv },
       dshHome,
       timeZone: resolveTimeZone(),
     });
-    const args = buildDshWebArgs(runtime.entry, port);
+    const launchEntry = this.resolveLaunchEntry(runtime);
+    this.runtimeObservation = this.usageTelemetry?.startRuntime({
+      directory: path.join(app.getPath('userData'), 'dsh-observation'),
+      version: runtime.buildInfo?.dshVersion ?? null,
+      sessionStoreShared: this.state.sessionStoreShared,
+    }) ?? null;
+    const args = buildDshWebArgs(launchEntry, port, this.runtimeObservation?.patchPath);
 
     const workingDirectory = this.resolveWorkingDirectory(runtime.root);
     console.log(
@@ -420,6 +464,8 @@ export class DshEngineManager {
       });
     } catch (error) {
       console.error('[DSH] Failed to spawn runtime', error);
+      this.runtimeObservation?.finish(DshRuntimeEndReason.SpawnFailed, DshEngineErrorCode.SpawnFailed);
+      this.runtimeObservation = null;
       this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: DshEngineErrorCode.SpawnFailed });
       return this.getState();
     }
@@ -437,6 +483,7 @@ export class DshEngineManager {
       // wedged one is still running and has not, so carry the tail here.
       const tail = this.child ? `. Recent output:\n${this.logRing.slice(-20).join('\n')}` : '';
       console.error(`[DSH] Runtime did not become ready: ${startupError}${tail}`);
+      this.runtimeObservation?.finish(DshRuntimeEndReason.StartupFailed, startupError);
       await this.stop();
       this.setState({ phase: DshEnginePhase.Failed, port: null, errorCode: startupError });
       return this.getState();
@@ -444,8 +491,50 @@ export class DshEngineManager {
 
     console.log(`[DSH] Ready at http://127.0.0.1:${port}`);
     this.setState({ phase: DshEnginePhase.Ready, port, errorCode: null });
+    this.runtimeObservation?.ready();
     this.pruneSupersededInstalledRuntimes(runtime);
     return this.getState();
+  }
+
+  // dsh's plugin manager installs plugins with pnpm. Started directly, `dsh web`
+  // leaves pnpm to PATH, and a GUI-launched app has none (macOS hands it only
+  // /usr/bin:/bin:/usr/sbin:/sbin), so installs fail with "pnpm was not found"
+  // for anyone without a terminal-installed pnpm. When the runtime bundles
+  // pnpm, start through a generated launcher that hands it to runCli instead.
+  // Any failure here falls back to the direct entry: dsh still runs, only
+  // plugin installs go back to looking on PATH.
+  private resolveLaunchEntry(runtime: DshResolvedRuntime): string {
+    const pnpmEntry = resolveBundledPnpmEntry(runtime.root);
+    if (!pnpmEntry) {
+      console.warn(`[DSH] Runtime at ${runtime.root} bundles no pnpm; plugin installs will look for pnpm on PATH`);
+      return runtime.entry;
+    }
+
+    let toolchain: DshNodeToolchain | null = null;
+    try {
+      toolchain = this.nodeToolchainSource?.() ?? null;
+    } catch (error) {
+      console.warn('[DSH] Could not prepare the node shims for pnpm; installs that run build scripts may fail', error);
+    }
+    const packageManager = buildDshPackageManager({
+      electronPath: toolchain?.electronPath ?? process.execPath,
+      pnpmEntry,
+      nodeShimDir: toolchain?.nodeShimDir ?? null,
+      npmBinDir: toolchain?.npmBinDir ?? null,
+      gitBinDir: toolchain?.gitBinDir ?? null,
+      baseEnv: process.env,
+      delimiter: path.delimiter,
+    });
+
+    const launcherPath = path.join(app.getPath('userData'), DSH_LAUNCHER_DIR_NAME, DSH_LAUNCHER_FILENAME);
+    try {
+      writeFileIfChanged(launcherPath, buildDshLauncherSource(pathToFileURL(runtime.entry).href, packageManager));
+    } catch (error) {
+      console.error('[DSH] Could not write the launcher; plugin installs will look for pnpm on PATH', error);
+      return runtime.entry;
+    }
+    console.log(`[DSH] Plugin installs use the bundled pnpm ${runtime.buildInfo?.pnpmVersion ?? '(unknown version)'}`);
+    return launcherPath;
   }
 
   private pruneSupersededInstalledRuntimes(runtime: DshResolvedRuntime): void {
@@ -474,6 +563,7 @@ export class DshEngineManager {
     // would hide the URL from the parser and split its token past the redaction.
     const onLine = (line: string) => {
       if (line.length === 0) return;
+      if (this.generation === generation) this.runtimeObservation?.observeOutput(line);
       if (this.generation === generation && !this.webLaunchUrl) {
         this.webLaunchUrl = parseDshWebLaunchUrl(line, port);
       }
@@ -496,6 +586,8 @@ export class DshEngineManager {
       }
       if (this.state.phase === DshEnginePhase.Ready) {
         console.warn(`[DSH] Runtime exited unexpectedly (code=${code ?? 'null'})`);
+        this.runtimeObservation?.finish(DshRuntimeEndReason.Exit);
+        this.runtimeObservation = null;
         this.setState({ phase: DshEnginePhase.Stopped, port: null, errorCode: null });
       }
     });
@@ -561,11 +653,15 @@ export class DshEngineManager {
     }
   }
 
+  // Backstop for a plain app.quit() only: the app's own quit path ends in
+  // app.exit(), which never emits `will-quit`, so its cleanup calls stop().
   private installQuitHook(): void {
     if (this.quitHookInstalled) return;
     this.quitHookInstalled = true;
     app.on('will-quit', () => {
       const child = this.child;
+      this.runtimeObservation?.finish(DshRuntimeEndReason.Quit);
+      this.runtimeObservation = null;
       this.generation += 1;
       this.child = null;
       if (child) {
@@ -603,6 +699,35 @@ function readBuildInfo(runtimeRoot: string): DshRuntimeBuildInfo | null {
   const buildInfoPath = path.join(runtimeRoot, 'runtime-build-info.json');
   if (!fs.existsSync(buildInfoPath)) return null;
   return parseDshRuntimeBuildInfo(fs.readFileSync(buildInfoPath, 'utf8'));
+}
+
+function resolveBundledPnpmEntry(runtimeRoot: string): string | null {
+  const packageRoot = path.join(runtimeRoot, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
+  } catch {
+    return null;
+  }
+  const binRelPath = parseDshPnpmBinRelPath(raw);
+  if (!binRelPath) {
+    console.warn(`[DSH] Bundled pnpm at ${packageRoot} declares no usable bin entry`);
+    return null;
+  }
+  const entry = path.join(packageRoot, ...binRelPath.split('/'));
+  return fs.existsSync(entry) ? entry : null;
+}
+
+// The launcher is rewritten on every start; skipping identical writes keeps
+// its mtime stable so nothing watching userData sees churn.
+function writeFileIfChanged(filePath: string, content: string): void {
+  try {
+    if (fs.readFileSync(filePath, 'utf8') === content) return;
+  } catch {
+    // Missing or unreadable: write it below.
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf8');
 }
 
 function allocateLoopbackPort(): Promise<number> {

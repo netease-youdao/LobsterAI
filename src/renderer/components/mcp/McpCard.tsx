@@ -125,7 +125,7 @@ const McpCard: React.FC<McpCardProps> = ({
         onOpenDetail();
       }
     })}
-    className={`group flex flex-col rounded-2xl border border-border bg-surface p-4 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card focus-within:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+    className={`group flex flex-col rounded-2xl border border-border bg-surface p-4 transition-colors hover:bg-surface-raised/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
       onOpenDetail ? 'cursor-pointer' : ''
     }`}
   >

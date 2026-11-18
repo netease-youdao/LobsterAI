@@ -1,5 +1,6 @@
 import type { CoworkMessage } from '../../../coworkStore';
 import { shouldSuppressHeartbeatText } from '../../openclawHistory';
+import { stripOpenClawLocalTimeContextFooter } from '../../openclawLocalTimeContextPrompt';
 import { parseSubagentGatewayHistoryMessages } from './historyParser';
 
 export type SubagentChildHistorySyncPlan = {
@@ -45,31 +46,19 @@ const isSameHistoryMessage = (
   && stableJson(left.metadata ?? null) === stableJson(right.metadata ?? null)
 );
 
-const buildLocalEntries = (localMessages: CoworkMessage[]): {
-  entries: SubagentChildHistoryEntry[];
-  normalizedLocalUserContent: boolean;
-} => {
-  let normalizedLocalUserContent = false;
-  const entries = localMessages
+// Existing local user text is authoritative. Only project newly recovered
+// gateway messages; never migrate/rewrite already stored user content.
+const buildLocalEntries = (localMessages: CoworkMessage[]): SubagentChildHistoryEntry[] => (
+  localMessages
     .filter((message) => message.type !== 'system')
-    .map((message) => {
-      const content = message.type === 'user'
-        ? normalizeSubagentVisibleUserText(message.content)
-        : message.content;
-      if (message.type === 'user' && content !== message.content) {
-        normalizedLocalUserContent = true;
-      }
-      return {
-        type: message.type,
-        content,
-        timestamp: message.timestamp,
-        metadata: normalizeMetadata(message.metadata),
-      };
-    })
-    .filter((entry) => entry.type === 'tool_use' || entry.content.trim());
-
-  return { entries, normalizedLocalUserContent };
-};
+    .map((message) => ({
+      type: message.type,
+      content: message.content,
+      timestamp: message.timestamp,
+      metadata: normalizeMetadata(message.metadata),
+    }))
+    .filter((entry) => entry.type === 'tool_use' || entry.content.trim())
+);
 
 const toStoredEntry = (message: CoworkMessage): SubagentChildHistoryEntry | null => {
   if (message.type !== 'tool_use' && !message.content.trim()) {
@@ -120,7 +109,9 @@ export const normalizeSubagentVisibleUserText = (text: string): string => {
   const currentRequestMarker = '[Current user request]';
   const currentRequestIndex = text.lastIndexOf(currentRequestMarker);
   if (currentRequestIndex >= 0) {
-    const visible = text.slice(currentRequestIndex + currentRequestMarker.length).trim();
+    const visible = stripOpenClawLocalTimeContextFooter(
+      text.slice(currentRequestIndex + currentRequestMarker.length),
+    ).trim();
     if (visible) return visible;
   }
 
@@ -141,7 +132,7 @@ export const buildSubagentChildHistorySyncPlan = (
   localMessages: CoworkMessage[],
   historyMessages: unknown[],
 ): SubagentChildHistorySyncPlan => {
-  const { entries: localEntries, normalizedLocalUserContent } = buildLocalEntries(localMessages);
+  const localEntries = buildLocalEntries(localMessages);
   const localUsers = localEntries.filter((entry) => entry.type === 'user');
   let localUserIndex = 0;
   const mergedEntries: SubagentChildHistoryEntry[] = [];
@@ -182,8 +173,7 @@ export const buildSubagentChildHistorySyncPlan = (
     };
   }
 
-  const isInSync = !normalizedLocalUserContent
-    && localEntries.length === mergedEntries.length
+  const isInSync = localEntries.length === mergedEntries.length
     && localEntries.every((entry, index) =>
       isSameHistoryMessage(entry, mergedEntries[index]),
     );

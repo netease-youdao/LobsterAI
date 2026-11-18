@@ -1,4 +1,8 @@
-import { afterEach, expect, test, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const nodeRuntimeMocks = vi.hoisted(() => ({
   resolveNodeRuntimeForSpawn: vi.fn(),
@@ -12,9 +16,21 @@ vi.mock('electron', () => ({
 
 vi.mock('../libs/nodeRuntime', () => nodeRuntimeMocks);
 
+import { SkillLoadIssue } from '../../shared/skills/constants';
 import { __skillManagerTestUtils } from './skillManager';
 
-const { parseFrontmatter, isTruthy, extractDescription, getSkillScriptRuntimeCandidates } = __skillManagerTestUtils;
+const {
+  parseFrontmatter,
+  resolveSkillLoadIssue,
+  isTruthy,
+  extractDescription,
+  getSkillScriptRuntimeCandidates,
+  SkillTempDirPrefix,
+  resolveInstallFolderName,
+  resolveInstallTarget,
+  deriveNpmPackageBaseName,
+  deriveZipUrlBaseName,
+} = __skillManagerTestUtils;
 
 afterEach(() => {
   nodeRuntimeMocks.resolveNodeRuntimeForSpawn.mockReset();
@@ -106,6 +122,76 @@ test('parseFrontmatter: invalid YAML returns empty frontmatter gracefully', () =
   expect(frontmatter).toEqual({});
   expect(content).toMatch(/# Content/);
 });
+
+test('parseFrontmatter: recovers a free-form description the way OpenClaw does', () => {
+  // Unquoted ": " in the description makes the block invalid YAML as written.
+  const raw = '---\nname: demo\ndescription: Use when: the user asks\nversion: "1.2.3"\n---\n# Content\n';
+  const { frontmatter, content, invalidFrontmatter } = parseFrontmatter(raw);
+  expect(frontmatter).toEqual({ name: 'demo', description: 'Use when: the user asks', version: '1.2.3' });
+  expect(invalidFrontmatter).toBe(false);
+  expect(content).toMatch(/# Content/);
+});
+
+test('parseFrontmatter: flags unrecoverable YAML and names the file in the warning', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const raw = '---\nname: demo\ndescription: ok\nwhen_to_use: Use when: x\n---\n# Content\n';
+    const { frontmatter, invalidFrontmatter } = parseFrontmatter(raw, '/skills/demo/SKILL.md');
+    expect(frontmatter).toEqual({});
+    expect(invalidFrontmatter).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('/skills/demo/SKILL.md');
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('parseFrontmatter: flags a frontmatter block that is not a mapping', () => {
+  const { frontmatter, invalidFrontmatter } = parseFrontmatter('---\nUse this skill for demos\n---\n# Content\n');
+  expect(frontmatter).toEqual({});
+  expect(invalidFrontmatter).toBe(true);
+});
+
+test('parseFrontmatter: a missing or empty block is not invalid', () => {
+  expect(parseFrontmatter('# Content\n').invalidFrontmatter).toBe(false);
+  expect(parseFrontmatter('---\n\n---\n# Content\n').invalidFrontmatter).toBe(false);
+});
+
+// ==================== resolveSkillLoadIssue ====================
+
+test('resolveSkillLoadIssue: matches the checks OpenClaw runs before loading a skill', () => {
+  expect(resolveSkillLoadIssue({ description: 'Does things' }, false)).toBeUndefined();
+  expect(resolveSkillLoadIssue({ description: 'Does things' }, true)).toBe(SkillLoadIssue.InvalidFrontmatter);
+  expect(resolveSkillLoadIssue({}, true)).toBe(SkillLoadIssue.InvalidFrontmatter);
+  expect(resolveSkillLoadIssue({}, false)).toBe(SkillLoadIssue.MissingDescription);
+  expect(resolveSkillLoadIssue({ description: null }, false)).toBe(SkillLoadIssue.MissingDescription);
+  expect(resolveSkillLoadIssue({ description: '   ' }, false)).toBe(SkillLoadIssue.MissingDescription);
+});
+
+// ==================== bundled SKILL.md files ====================
+
+// Version-based sync of bundled skills needs every bundled SKILL.md to parse,
+// and OpenClaw skips a skill whose frontmatter is invalid or has no description.
+const BUNDLED_SKILLS_ROOT = path.join(process.cwd(), 'SKILLs');
+const bundledSkillFiles = fs.readdirSync(BUNDLED_SKILLS_ROOT, { withFileTypes: true })
+  .filter(entry => entry.isDirectory())
+  .map(entry => path.join(BUNDLED_SKILLS_ROOT, entry.name, 'SKILL.md'))
+  .filter(file => fs.existsSync(file));
+
+test('bundled skills: SKILL.md files are found', () => {
+  expect(bundledSkillFiles.length).toBeGreaterThan(0);
+});
+
+test.each(bundledSkillFiles.map(file => [path.basename(path.dirname(file)), file]))(
+  'bundled skills: %s has frontmatter OpenClaw can load',
+  (_id, file) => {
+    const { frontmatter, invalidFrontmatter } = parseFrontmatter(fs.readFileSync(file, 'utf8'), file);
+    expect(resolveSkillLoadIssue(frontmatter, invalidFrontmatter)).toBeUndefined();
+    const metadata = frontmatter.metadata as Record<string, unknown> | undefined;
+    // An unquoted `version: 1.10` loads as the number 1.1 and breaks version comparison.
+    expect(['undefined', 'string']).toContain(typeof (frontmatter.version ?? metadata?.version));
+  },
+);
 
 // ==================== isTruthy ====================
 
@@ -342,4 +428,201 @@ test('clawhub: invalid URL returns null', () => {
 
 test('clawhub: empty string returns null', () => {
   expect(parseClawhubUrl('')).toBeNull();
+});
+
+// ==================== install folder naming ====================
+
+const writeSkillFixture = (dir: string, options: { skillMd?: string; meta?: unknown } = {}): string => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), options.skillMd ?? '# Untitled skill\n');
+  if (options.meta !== undefined) {
+    const meta = typeof options.meta === 'string' ? options.meta : JSON.stringify(options.meta);
+    fs.writeFileSync(path.join(dir, '_meta.json'), meta);
+  }
+  return dir;
+};
+
+const skillMdNamed = (name: string): string => `---\nname: ${name}\ndescription: test skill\n---\n# Body\n`;
+
+describe('skill install naming', () => {
+  let fixtureRoot = '';
+
+  beforeEach(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-skill-install-name-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
+  const makeTempRoot = (prefix: string): string => fs.mkdtempSync(path.join(fixtureRoot, prefix));
+
+  describe('resolveInstallFolderName', () => {
+    test('keeps the name of a skill directory wrapped inside the extraction root', () => {
+      const tempRoot = makeTempRoot(SkillTempDirPrefix.Zip);
+      const skillDir = writeSkillFixture(path.join(tempRoot, 'skill-vetter'), {
+        skillMd: skillMdNamed('Skill Vetter'),
+        meta: { slug: 'other-slug' },
+      });
+
+      expect(resolveInstallFolderName(skillDir, { extractionRoots: [tempRoot], sourceName: 'download' }))
+        .toBe('skill-vetter');
+    });
+
+    test('uses the _meta.json slug for a skill at the zip root', () => {
+      const tempRoot = writeSkillFixture(makeTempRoot(SkillTempDirPrefix.Zip), {
+        skillMd: skillMdNamed('desktop-computer-automation'),
+        meta: { ownerId: 'owner-1', slug: 'midscene-computer-automation', version: '1.0.3' },
+      });
+
+      expect(resolveInstallFolderName(tempRoot, { extractionRoots: [tempRoot], sourceName: 'download' }))
+        .toBe('midscene-computer-automation');
+    });
+
+    test.each([
+      ['no _meta.json', undefined],
+      ['_meta.json without slug', { version: '1.0.0' }],
+      ['blank slug', { slug: '  ' }],
+      ['malformed _meta.json', '{ not json'],
+    ])('falls back to the frontmatter name with %s', (_label, meta) => {
+      const tempRoot = writeSkillFixture(makeTempRoot(SkillTempDirPrefix.Zip), {
+        skillMd: skillMdNamed('notebooklm'),
+        meta,
+      });
+
+      expect(resolveInstallFolderName(tempRoot, { extractionRoots: [tempRoot], sourceName: 'download' }))
+        .toBe('notebooklm');
+    });
+
+    test.each([
+      ['no frontmatter', '# Just a heading\n'],
+      ['invalid YAML frontmatter', '---\n: invalid\n  bad:\n    - [\n---\n# Body\n'],
+      ['a name with no folder-safe characters', skillMdNamed('数据分析')],
+    ])('falls back to the source name with %s', (_label, skillMd) => {
+      const tempRoot = writeSkillFixture(makeTempRoot(SkillTempDirPrefix.Zip), { skillMd });
+
+      expect(resolveInstallFolderName(tempRoot, { extractionRoots: [tempRoot], sourceName: 'data-tools v2' }))
+        .toBe('data-tools-v2');
+    });
+
+    test('falls back to "skill" when no candidate is usable', () => {
+      const tempRoot = writeSkillFixture(makeTempRoot(SkillTempDirPrefix.Zip));
+
+      expect(resolveInstallFolderName(tempRoot, { extractionRoots: [tempRoot] })).toBe('skill');
+    });
+
+    test('normalizes the chosen candidate like any other folder name', () => {
+      const tempRoot = writeSkillFixture(makeTempRoot(SkillTempDirPrefix.Zip), { meta: { slug: ' My Skill! ' } });
+
+      expect(resolveInstallFolderName(tempRoot, { extractionRoots: [] })).toBe('My-Skill');
+    });
+
+    test.each(Object.values(SkillTempDirPrefix))('recognizes a %s temp root by its prefix alone', (prefix) => {
+      const tempRoot = writeSkillFixture(makeTempRoot(prefix), { meta: { slug: 'skill-vetter' } });
+
+      expect(resolveInstallFolderName(tempRoot, { extractionRoots: [] })).toBe('skill-vetter');
+    });
+
+    test.each([
+      ['remote zip', path.join('remote-skill')],
+      ['npm package', path.join('npm-extracted', 'package')],
+    ])('treats a listed %s extraction root as unnamed', (_label, relativeDir) => {
+      const tempRoot = makeTempRoot(SkillTempDirPrefix.Zip);
+      const skillDir = writeSkillFixture(path.join(tempRoot, relativeDir), { skillMd: skillMdNamed('weather') });
+
+      expect(resolveInstallFolderName(skillDir, { extractionRoots: [tempRoot, skillDir] })).toBe('weather');
+    });
+
+    test('keeps the name of an unlisted directory even if it looks like a layout folder', () => {
+      const skillDir = writeSkillFixture(path.join(fixtureRoot, 'package'), { skillMd: skillMdNamed('weather') });
+
+      expect(resolveInstallFolderName(skillDir, { extractionRoots: [] })).toBe('package');
+    });
+  });
+
+  describe('resolveInstallTarget', () => {
+    const release = { ownerId: 'owner-1', slug: 'skill-vetter', version: '1.0.0', publishedAt: 1769863429632 };
+    let skillsRoot = '';
+    let incoming = '';
+
+    beforeEach(() => {
+      skillsRoot = path.join(fixtureRoot, 'SKILLs');
+      fs.mkdirSync(skillsRoot);
+      incoming = writeSkillFixture(path.join(fixtureRoot, 'incoming'), { meta: release });
+    });
+
+    test('uses the folder name when it is free', () => {
+      expect(resolveInstallTarget(skillsRoot, 'skill-vetter', incoming)).toEqual({
+        targetDir: path.join(skillsRoot, 'skill-vetter'),
+        alreadyInstalled: false,
+      });
+    });
+
+    test('reports the same release as already installed instead of duplicating it', () => {
+      writeSkillFixture(path.join(skillsRoot, 'skill-vetter'), { meta: { ...release, publishedAt: 1 } });
+
+      expect(resolveInstallTarget(skillsRoot, 'skill-vetter', incoming)).toEqual({
+        targetDir: path.join(skillsRoot, 'skill-vetter'),
+        alreadyInstalled: true,
+      });
+    });
+
+    test.each([
+      ['has no _meta.json', undefined],
+      ['is another version', { ...release, version: '1.0.1' }],
+      ['has another owner', { ...release, ownerId: 'owner-2' }],
+      ['has another slug', { ...release, slug: 'other-skill' }],
+    ])('adds a suffix when the existing skill %s', (_label, existingMeta) => {
+      writeSkillFixture(path.join(skillsRoot, 'skill-vetter'), { meta: existingMeta });
+
+      expect(resolveInstallTarget(skillsRoot, 'skill-vetter', incoming)).toEqual({
+        targetDir: path.join(skillsRoot, 'skill-vetter-1'),
+        alreadyInstalled: false,
+      });
+    });
+
+    test('adds a suffix when the incoming skill has no version to compare', () => {
+      const unversioned = writeSkillFixture(path.join(fixtureRoot, 'unversioned'), {
+        meta: { ownerId: release.ownerId, slug: release.slug },
+      });
+      writeSkillFixture(path.join(skillsRoot, 'skill-vetter'), {
+        meta: { ownerId: release.ownerId, slug: release.slug },
+      });
+
+      expect(resolveInstallTarget(skillsRoot, 'skill-vetter', unversioned)).toEqual({
+        targetDir: path.join(skillsRoot, 'skill-vetter-1'),
+        alreadyInstalled: false,
+      });
+    });
+
+    test('finds the same release behind a suffixed name', () => {
+      writeSkillFixture(path.join(skillsRoot, 'skill-vetter'));
+      writeSkillFixture(path.join(skillsRoot, 'skill-vetter-1'), { meta: release });
+
+      expect(resolveInstallTarget(skillsRoot, 'skill-vetter', incoming)).toEqual({
+        targetDir: path.join(skillsRoot, 'skill-vetter-1'),
+        alreadyInstalled: true,
+      });
+    });
+  });
+});
+
+describe('install source names', () => {
+  test.each([
+    ['my-skill', 'my-skill'],
+    ['my-skill@1.2.0', 'my-skill'],
+    ['@scope/my-skill', 'my-skill'],
+    ['@scope/my-skill@^1.2.0', 'my-skill'],
+  ])('deriveNpmPackageBaseName(%s) → %s', (spec, expected) => {
+    expect(deriveNpmPackageBaseName(spec)).toBe(expected);
+  });
+
+  test.each([
+    ['https://example.com/skills/my-skill.zip', 'my-skill'],
+    ['https://example.com/a/My%20Skill.ZIP?token=1#x', 'My Skill'],
+    ['https://example.com/a/bad%E0.zip', 'bad%E0'],
+    ['not a url', ''],
+  ])('deriveZipUrlBaseName(%s) → %s', (url, expected) => {
+    expect(deriveZipUrlBaseName(url)).toBe(expected);
+  });
 });

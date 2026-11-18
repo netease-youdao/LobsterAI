@@ -26,6 +26,8 @@ const TEXT_SIZE_BASE = {
   markdownH4: 15,
   promptLarge: 15,
   sidebarCompact: 13,
+  // Task titles nested under an agent sit one step below the agent name.
+  sidebarTask: 12,
 } as const;
 
 const LINE_HEIGHT_BASE = {

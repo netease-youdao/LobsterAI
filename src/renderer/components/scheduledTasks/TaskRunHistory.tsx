@@ -40,13 +40,6 @@ const statusLabelKeys: Record<TaskStatus, string> = {
   [TaskStatus.Running]: 'scheduledTasksStatusRunning',
 };
 
-const statusPillColors: Record<TaskStatus, string> = {
-  [TaskStatus.Success]: 'bg-green-500/10 border-green-500/30 text-green-600 dark:text-green-400',
-  [TaskStatus.Error]: 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400',
-  [TaskStatus.Skipped]: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-600 dark:text-yellow-400',
-  [TaskStatus.Running]: 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400',
-};
-
 const RunStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
   if (status === TaskStatus.Running) {
     return (
@@ -165,7 +158,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
                 onClick={() => handleStatusToggle(s)}
                 className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
                   isActive
-                    ? statusPillColors[s]
+                    ? 'bg-surface-raised border-secondary/40 text-foreground'
                     : 'border-transparent text-secondary hover:bg-surface-raised'
                 }`}
               >
@@ -267,7 +260,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
         <button
           type="button"
           onClick={handleLoadMore}
-          className="w-full py-2 mt-2 text-sm text-primary hover:text-primary-hover transition-colors"
+          className="w-full py-2 mt-2 text-sm text-foreground hover:underline underline-offset-4 transition-colors"
         >
           {i18nService.t('scheduledTasksLoadMore')}
         </button>

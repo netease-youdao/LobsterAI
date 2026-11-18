@@ -1,0 +1,96 @@
+diff --git a/src/config/types.models.ts b/src/config/types.models.ts
+--- a/src/config/types.models.ts
++++ b/src/config/types.models.ts
+@@ -186,6 +186,9 @@
+   };
+   /** Provider/native maximum context window in tokens. */
+   contextWindow?: number;
++  /** Selectable session windows; the default preserves the native model limit. */
++  contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
++  contextWindowDefault?: string;
+   /**
+    * Optional effective runtime cap used for compaction/session budgeting.
+    * Keeps provider/native contextWindow metadata intact while letting configs
+diff --git a/src/config/zod-schema.core.ts b/src/config/zod-schema.core.ts
+--- a/src/config/zod-schema.core.ts
++++ b/src/config/zod-schema.core.ts
+@@ -511,6 +511,14 @@
+       .strict()
+       .optional(),
+     contextWindow: z.number().positive().optional(),
++    contextWindows: z
++      .array(z.object({
++        id: z.string().trim().min(1),
++        label: z.string().trim().min(1),
++        contextWindow: z.number().int().positive(),
++      }).strict())
++      .min(1).max(16).optional(),
++    contextWindowDefault: z.string().trim().min(1).optional(),
+     contextTokens: z.number().int().positive().optional(),
+     maxTokens: z.number().positive().optional(),
+     thinkingLevelMap: ThinkingLevelMapSchema.optional(),
+diff --git a/src/agents/embedded-agent-runner/run/setup.ts b/src/agents/embedded-agent-runner/run/setup.ts
+--- a/src/agents/embedded-agent-runner/run/setup.ts
++++ b/src/agents/embedded-agent-runner/run/setup.ts
+@@ -223,6 +223,11 @@
+     catalogEntry: params.runtimeModel,
+     selected: params.contextWindow,
+   });
++  // Admin preset windows are isolated from the ordinary model's default.
++  const isLobsterAIPreset =
++    params.provider === "lobsterai-server" &&
++    (params.contextWindow === "model-preset:balanced" ||
++      params.contextWindow === "model-preset:ultimate");
+   const resolvedCtxInfo = resolveContextWindowInfo({
+     cfg: params.cfg,
+     provider: params.contextConfigProvider ?? params.provider,
+@@ -238,6 +243,6 @@
+   const ctxInfo =
+     contextWindowProfile.contextWindow &&
+     contextWindowProfile.contextTokens !== undefined &&
+-    resolvedCtxInfo.tokens > contextWindowProfile.contextTokens
++    (isLobsterAIPreset || resolvedCtxInfo.tokens > contextWindowProfile.contextTokens)
+       ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
+       : resolvedCtxInfo;
+@@ -245,7 +250,7 @@
+   // Apply contextTokens cap to model so session runtime's auto-compaction
+   // threshold uses the effective limit, not the native context window.
+   const effectiveModel =
+-    ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
++    isLobsterAIPreset || ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
+       ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
+       : params.runtimeModel;
+   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
+diff --git a/src/gateway/session-utils-row.ts b/src/gateway/session-utils-row.ts
+--- a/src/gateway/session-utils-row.ts
++++ b/src/gateway/session-utils-row.ts
+@@ -405,14 +405,21 @@
+       model: rowModel,
+     }),
+   );
+-  const contextTokens = resolveProjectedSessionContextTokens({
+-    entry,
+-    provider: rowModelProvider,
+-    model: rowModel,
+-    agentHarnessId: thinkingProjection.agentRuntime.id,
+-    resolvedContextTokens: resolvedCurrentContextTokens,
+-    authoredContextTokens,
+-  });
++  const isLobsterAIPreset =
++    rowModelProvider === "lobsterai-server" &&
++    (entry?.contextWindow === "model-preset:balanced" ||
++      entry?.contextWindow === "model-preset:ultimate");
++  const contextTokens =
++    isLobsterAIPreset && contextWindowProfile.contextTokens !== undefined
++      ? contextWindowProfile.contextTokens
++      : resolveProjectedSessionContextTokens({
++          entry,
++          provider: rowModelProvider,
++          model: rowModel,
++          agentHarnessId: thinkingProjection.agentRuntime.id,
++          resolvedContextTokens: resolvedCurrentContextTokens,
++          authoredContextTokens,
++        });
+   const fastModeState = resolveFastModeState({
+     cfg,
+     provider: selectedModelProvider,

@@ -42,3 +42,38 @@ export const copyTextToClipboard = async (text: string): Promise<boolean> => {
     return false;
   }
 };
+
+/**
+ * Writes plain text alongside HTML, so rich editors (and LobsterAI's own input)
+ * can pick up content such as images that plain text cannot carry. Falls back
+ * to copying the text alone.
+ */
+export const copyTextAndHtmlToClipboard = async (content: { text: string; html: string }): Promise<boolean> => {
+  const electronClipboard = window.electron?.clipboard;
+  if (electronClipboard?.writeTextAndHtml) {
+    try {
+      const result = await electronClipboard.writeTextAndHtml(content);
+      if (result.success) return true;
+      console.warn('[Clipboard] text and HTML clipboard IPC failed:', result.error ?? 'Unknown error');
+    } catch (error) {
+      console.warn('[Clipboard] text and HTML clipboard IPC failed:', error);
+    }
+  }
+
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([content.text], { type: 'text/plain' }),
+          'text/html': new Blob([content.html], { type: 'text/html' }),
+        }),
+      ]);
+      return true;
+    } catch (error) {
+      console.warn('[Clipboard] navigator clipboard HTML write failed:', error);
+    }
+  }
+
+  console.warn('[Clipboard] falling back to a text-only copy.');
+  return copyTextToClipboard(content.text);
+};

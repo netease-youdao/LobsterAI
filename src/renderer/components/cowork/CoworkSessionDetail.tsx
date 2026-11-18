@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { isModelStreamInterruptedError } from '../../../common/coworkSystemMessages';
 import { stripGoalCommandPrefixForDisplay } from '../../../common/sessionTitle';
 import {
   BrowserDisplayMode,
@@ -25,9 +26,8 @@ import {
   normalizeCoworkBtwQuestion,
   resolveCoworkBtwSelectedTextSnippets,
 } from '../../../shared/cowork/btw';
-import { CoworkOnboardingMessageKind } from '../../../shared/cowork/constants';
+import { COWORK_TEMP_SESSION_ID_PREFIX, CoworkOnboardingMessageKind } from '../../../shared/cowork/constants';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
-import type { CoworkImageAttachmentPreview } from '../../../shared/cowork/imageAttachments';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
@@ -42,6 +42,7 @@ import {
   type CoworkSelectedTextValidationError,
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
+import { isChatPresetSession } from '../../../shared/modelPresets/constants';
 import { classifyWaitingNotificationKind, WaitingNotificationKind } from '../../../shared/notifications/constants';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
 import { resolveArtifactAutoPreviewEnabled } from '../../config';
@@ -58,6 +59,7 @@ import {
   normalizeLocalServiceOrigin,
   normalizeProjectDirectoryForDedup,
   parseMediaTokensFromText,
+  resolveArtifactIdForDisplay,
 } from '../../services/artifactParser';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -109,8 +111,6 @@ import {
   setPlanConfirmationAwaiting,
   setPlanConfirmationHandled,
 } from '../../store/slices/coworkSlice';
-import { setActiveKitIds } from '../../store/slices/kitSlice';
-import { setActiveSkillIds } from '../../store/slices/skillSlice';
 import type { Artifact } from '../../types/artifact';
 import { ArtifactTypeValue, PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
 import type {
@@ -143,15 +143,19 @@ import {
   getAutoPreviewOpenTarget,
   selectAutoPreviewArtifact,
 } from '../artifacts/autoPreviewPolicy';
+import ImageStudioHost from '../artifacts/imageEditor/ImageStudioHost';
+import { preloadInlineImages } from '../artifacts/imageEditor/InlineImageGallery';
 import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarSearchIcon from '../icons/SidebarSearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
+import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
 import { type ToastEventDetail } from '../Toast';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
+import { type ArtifactTabActionTarget, artifactTabMenuActions } from './artifactTabActions';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import type { BrowserAnnotationAttachmentOpenPayload } from './BrowserAnnotationMessageAttachments';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
@@ -167,6 +171,7 @@ import {
   isAtConversationSessionBottom,
   isWheelScrollingAwayFromBottom,
   shouldAutoScrollForPosition,
+  shouldKeepBottomOnViewportResize,
   shouldLoadNewerConversationMessages,
 } from './conversationScrollPolicy';
 import {
@@ -186,7 +191,9 @@ import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import QuestionDock from './interactions/QuestionDock';
+import { isQuestionDockRequest } from './interactions/questionDockModel';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
+import { buildMediaTaskPresentations } from './mediaTaskPresentation';
 import {
   buildConversationTurns,
   buildDisplayItems,
@@ -194,9 +201,13 @@ import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   getTurnMessageIds,
+  getTurnReplyMessageIds,
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
 } from './messageDisplayUtils';
+import { getLastMessageSpeechTurnIndex, isMessageSpeechTurnCompleted } from './messageSpeech/eligibility';
+import MessageSpeechSession from './messageSpeech/MessageSpeechSession';
+import { takePendingConversationSearch } from './pendingConversationSearch';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -209,9 +220,17 @@ import {
   mergeCoworkTextExportMessages,
 } from './sessionExport';
 import SubagentSpawnCard from './SubagentSpawnCard';
+import { getConversationTurnUsage } from './turnUsageDisplay';
+import { useConversationEntrySettle } from './useConversationEntrySettle';
+import { useConversationScrollAnchor } from './useConversationScrollAnchor';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
+import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
+import { expandCollapsedUserMessage } from './userMessageCollapse';
 import UserMessageContent from './UserMessageContent';
+import UserMessageInlineEditor from './UserMessageInlineEditor';
 import UserMessageItem from './UserMessageItem';
+import { resolveTurnKey, useTurnEntryAnimation } from './useTurnEntryAnimation';
+import { useUserMessageEdit } from './useUserMessageEdit';
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
   onManageKits?: () => void;
@@ -223,6 +242,7 @@ interface CoworkSessionDetailProps {
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
     browserAnnotations?: import('@shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[],
     collaborationMode?: CoworkCollaborationModeType,
+    titleInput?: string,
   ) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
   isSidebarCollapsed?: boolean;
@@ -293,7 +313,24 @@ const SCROLL_TO_BOTTOM_SETTLE_DELAYS_MS = [600, 1200, 1800] as const;
 const AutoScrollDetachSource = {
   ConversationWheel: 'conversation_wheel',
   ScrollToBottomControlWheel: 'scroll_to_bottom_control_wheel',
+  MessageVersionSwitch: 'message_version_switch',
 } as const;
+const MessageVersionSwitchPhase = {
+  /** Requested; a quick switch finishes here and simply replaces the content. */
+  Waiting: 'waiting',
+  /** Taking long enough that the part being replaced is dimmed. */
+  Dimmed: 'dimmed',
+  /** Replaced after dimming; fading back to full opacity. */
+  Settling: 'settling',
+} as const;
+type MessageVersionSwitchPhase = typeof MessageVersionSwitchPhase[keyof typeof MessageVersionSwitchPhase];
+const MESSAGE_VERSION_DIM_DELAY_MS = 180;
+const MESSAGE_VERSION_SETTLE_MS = 250;
+const MESSAGE_VERSION_PHASE_CLASS: Record<MessageVersionSwitchPhase, string | undefined> = {
+  [MessageVersionSwitchPhase.Waiting]: undefined,
+  [MessageVersionSwitchPhase.Dimmed]: 'opacity-40 transition-opacity duration-200',
+  [MessageVersionSwitchPhase.Settling]: 'transition-opacity duration-200',
+};
 type AutoScrollDetachSource = typeof AutoScrollDetachSource[keyof typeof AutoScrollDetachSource];
 const AUTO_PREVIEW_ARTIFACT_SETTLE_MS = 600;
 const MAX_AUTO_PREVIEW_HANDLED_TURNS = 128;
@@ -752,11 +789,6 @@ const SELECTED_TEXT_ERROR_I18N_KEYS: Record<CoworkSelectedTextValidationError, s
   duplicate: 'coworkSelectedTextDuplicate',
 };
 
-const extractBase64FromDataUrl = (dataUrl: string): { mimeType: string; base64Data: string } | null => {
-  const match = /^data:(.+);base64,(.*)$/s.exec(dataUrl);
-  if (!match) return null;
-  return { mimeType: match[1], base64Data: match[2] };
-};
 
 const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
@@ -1398,6 +1430,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
+  const [modelSwitchNotice, setModelSwitchNotice] = useState<{ sessionId: string; messageId: string } | null>(null);
+  useEffect(() => {
+    if (!modelSwitchNotice) return;
+    if (modelSwitchNotice.sessionId !== currentSession?.id) {
+      setModelSwitchNotice(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setModelSwitchNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [modelSwitchNotice, currentSession?.id]);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
@@ -1417,6 +1459,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const currentAgentSelectedModel = useAgentSelectedModel(
     currentAgentId,
     currentAgent?.model ?? '',
+    !currentSession || isChatPresetSession(currentSession),
   );
   const selectedDraftSnippets = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.draftSelectedTextSnippets[currentSession.id] ?? [] : []
@@ -1462,7 +1505,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const shouldAutoScrollRef = useRef(true);
   const userDetachedFromBottomRef = useRef(false);
   const [isViewportAtSessionBottom, setIsViewportAtSessionBottom] = useState(true);
-  const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
   const [showCompactConfirm, setShowCompactConfirm] = useState(false);
   const [selectedTextAction, setSelectedTextAction] = useState<{
     text: string;
@@ -1470,10 +1512,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     left: number;
     top: number;
   } | null>(null);
-  const isLoadingMoreMessagesRef = useRef(false);
   const isLoadingNewerMessagesRef = useRef(false);
   const newerMessagesLoadRequestRef = useRef(0);
-  const prevScrollHeightRef = useRef<number | null>(null);
   const scrollToBottomIntentRef = useRef(false);
   const scrollToBottomSettleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const suppressSelectedTextActionUntilRef = useRef(0);
@@ -1705,6 +1745,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const conversationSearchActiveMatchKeyRef = useRef<string | null>(null);
   const conversationSearchLastNavigatedMatchKeyRef = useRef<string | null>(null);
   const conversationSearchManualViewportMatchKeyRef = useRef<string | null>(null);
+  // Bumped when a task-search hit is picked, so picking the hit the search already shows still
+  // scrolls back to it after the user scrolled away.
+  const [conversationSearchRevealRequestKey, setConversationSearchRevealRequestKey] = useState(0);
+  const conversationSearchHandledRevealRequestKeyRef = useRef(0);
   const scrollToBottomRequestRef = useRef(0);
   const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
   const [isRailHovered, setIsRailHovered] = useState(false);
@@ -1757,6 +1801,38 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsViewportAtSessionBottom(true);
     updateShouldAutoScroll(true);
   }, [currentSession?.id, updateShouldAutoScroll]);
+
+  const {
+    loadOlderMessages,
+    isLoadingMoreMessages,
+    isLoadingMoreMessagesRef,
+    anchorMessageId,
+    setContentElement: setAnchorContentElement,
+  } = useConversationScrollAnchor({
+    sessionId,
+    messagesOffset: currentSession?.messagesOffset ?? 0,
+    scrollContainerRef,
+    canRestore: () => !shouldAutoScrollRef.current
+      && !scrollToBottomIntentRef.current
+      && !isNavigatingRef.current
+      && !isExportingImageRef.current
+      && !conversationSearchViewportLockedRef.current,
+    loadMessages: beforePrepend => sessionId
+      ? coworkService.loadMoreMessages(sessionId, beforePrepend)
+      : Promise.resolve(false),
+  });
+  const setEntryContentElement = useConversationEntrySettle({
+    sessionId: currentSession?.id,
+    scrollContainerRef,
+    canHoldBottom: () => shouldAutoScrollRef.current
+      && !isNavigatingRef.current
+      && !isExportingImageRef.current
+      && !conversationSearchViewportLockedRef.current,
+  });
+  const setConversationContentElement = useCallback((element: HTMLElement | null) => {
+    setAnchorContentElement(element);
+    setEntryContentElement(element);
+  }, [setAnchorContentElement, setEntryContentElement]);
 
   const handleCompactContext = useCallback(() => {
     if (!currentSession?.id) {
@@ -1891,6 +1967,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }));
   }, [confirmExecutionSkillPrompt, currentSession?.id, currentSession?.status, dispatch, isSessionBusy, latestProposedPlan, onContinue]);
 
+  const handleContinueAfterStreamInterruption = useCallback(async () => {
+    if (!currentSession?.id) return;
+    if (isSessionBusy || currentSession.status === CoworkSessionStatusValue.Running) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkSessionStillRunning'),
+      }));
+      return;
+    }
+    window.electron?.log?.fromRenderer?.(
+      'debug',
+      'CoworkSessionDetail',
+      `Continuing session ${currentSession.id} after a dropped model stream.`,
+    );
+    await onContinue(i18nService.t('coworkModelReconnectContinuePrompt'));
+  }, [currentSession?.id, currentSession?.status, isSessionBusy, onContinue]);
+
   const handleAdjustPlan = useCallback((messageId: string) => {
     if (!currentSession?.id || !latestProposedPlan || latestProposedPlan.messageId !== messageId) return;
     dispatch(setPlanConfirmationHandled({
@@ -1962,7 +2054,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       + `source type is ${sourceType}, source is ${sourceLabel}; `
       + `${result.snippets.length} excerpts now contain ${result.snippets.reduce((total, item) => total + item.text.length, 0)} characters`,
     );
-    promptInputRef.current?.focus();
+    // Focus after selection cleanup so it cannot clear the textarea caret.
+    requestAnimationFrame(() => promptInputRef.current?.focus());
   }, [currentSession?.id, dispatch, getConversationControlAnalyticsParams, selectedDraftSnippets]);
 
   const handleAddSelectedText = useCallback(() => {
@@ -2164,6 +2257,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       : subagentWaitPhase === SubagentWaitPhase.Summary
         ? i18nService.t('coworkActivityWaitSubagentSummary')
         : null;
+  // The optimistic session exists only until its start request returns.
+  const isAwaitingRunStart = currentSession?.id.startsWith(COWORK_TEMP_SESSION_ID_PREFIX) ?? false;
   const [subagentsLoading, setSubagentsLoading] = useState(false);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentSessionSummary | null>(null);
   const [contentRowWidth, setContentRowWidth] = useState(0);
@@ -2220,6 +2315,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       .map(tab => ({ tab, artifact: artifactsById.get(tab.artifactId) }))
       .filter((item): item is { tab: typeof artifactPreviewTabs[number]; artifact: Artifact } => Boolean(item.artifact));
   }, [artifactPreviewTabs, sessionArtifacts]);
+  // A later reply that rewrites the HTML file replaces its artifact in the
+  // display list; follow it so the browser tab keeps watching the file and
+  // offers HTML sharing instead of deploying the internal preview server.
+  const browserHtmlPreviewDisplayArtifactId = useMemo(() => (
+    browserHtmlPreviewArtifactId
+      ? resolveArtifactIdForDisplay(
+          rawSessionArtifacts,
+          browserHtmlPreviewArtifactId,
+          { defaultProjectDirectory: currentSession?.cwd },
+        )
+      : null
+  ), [browserHtmlPreviewArtifactId, currentSession?.cwd, rawSessionArtifacts]);
   const shouldPinArtifactAddTab = artifactTabsIsOverflowing || artifactTabsCanScrollLeft || artifactTabsCanScrollRight;
   const browserPreviewTabTitle = browserPreviewTitle.trim() || i18nService.t('artifactBrowserTab');
   const fetchSubagents = useCallback(async (targetSessionId: string, options: { showLoading?: boolean } = {}) => {
@@ -3019,6 +3126,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionBrowserLocalServiceContext,
   ]);
 
+  const markdownLinkOpener = useCoworkMarkdownLinkOpener({
+    sessionId,
+    cwd: currentSession?.cwd,
+    sessionArtifacts,
+    onOpenHtmlFile: handleOpenHtmlFileInBrowser,
+    onOpenLocalService: handleOpenLocalServiceArtifact,
+  });
+
   const handleDeployLocalServiceArtifact = useCallback((artifact: Artifact) => {
     if (!sessionId || artifact.type !== ArtifactTypeValue.LocalService) return;
     const url = (artifact.url || artifact.content || '').trim();
@@ -3513,6 +3628,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       && !isBrowserPreviewTabOpen
       && !isAgentBrowserPreviewTabOpen
       && !isSubagentPreviewTabOpen
+      && !isUserAttachmentPreviewTabOpen
     ) {
       dispatch(closePanel({ sessionId }));
     }
@@ -3523,8 +3639,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
     isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
     sessionId,
   ]);
+
+  const artifactTabActionTargets: ArtifactTabActionTarget[] = [
+    ...([
+      [ArtifactSpecialTab.FileList, isFileListPreviewTabOpen, handleActivateArtifactFileListTab, handleCloseArtifactFileListTab],
+      [ArtifactSpecialTab.Browser, isBrowserPreviewTabOpen, handleActivateArtifactBrowserTab, handleCloseArtifactBrowserTab],
+      [ArtifactSpecialTab.AgentBrowser, isAgentBrowserPreviewTabOpen, handleActivateArtifactAgentBrowserTab, handleCloseArtifactAgentBrowserTab],
+      [ArtifactSpecialTab.Subagents, isSubagentPreviewTabOpen, handleActivateArtifactSubagentTab, handleCloseArtifactSubagentTab],
+      [ArtifactSpecialTab.UserAttachment, isUserAttachmentPreviewTabOpen, handleActivateArtifactUserAttachmentTab, handleCloseArtifactUserAttachmentTab],
+    ] as const).filter(([, open]) => open).map(([id, , activate, close]) => ({
+      id, active: !activeArtifactPreviewTab && activeSpecialPreviewTab === id, activate, close,
+    })),
+    ...artifactTabsWithArtifacts.map(({ tab }) => ({
+      id: tab.id, active: tab.id === activeArtifactPreviewTab?.id,
+      activate: () => handleActivateArtifactTab(tab.id), close: () => handleCloseArtifactTab(tab.id),
+    })),
+  ];
 
   const handleToggleArtifactPanel = useCallback(() => {
     reportArtifactPreviewAction({
@@ -3765,14 +3898,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const toLoad = detected.filter(a => a.filePath && !loadedFileIdsRef.current.has(a.id));
       if (toLoad.length === 0) return;
 
+      // Load in parallel and add everything in one pass: one re-render instead of one per
+      // file, and an image gallery that appears complete and at its final size instead of
+      // growing tile by tile (which shifts the conversation while a task is being opened).
       const loadFiles = async () => {
-        for (const artifact of toLoad) {
+        const loadedArtifacts = await Promise.all(toLoad.map(async (artifact) => {
           const loaded = await loadDetectedFileArtifact(artifact, cwd);
           // Mark as loaded either way to avoid retrying missing files.
           loadedFileIdsRef.current.add(artifact.id);
-          if (loaded) {
-            dispatch(addArtifact({ sessionId, artifact: loaded }));
-          }
+          return loaded;
+        }));
+        const artifactsToAdd = loadedArtifacts.filter((artifact): artifact is Artifact => artifact !== null);
+        await preloadInlineImages(artifactsToAdd);
+        for (const artifact of artifactsToAdd) {
+          dispatch(addArtifact({ sessionId, artifact }));
         }
       };
       loadFiles();
@@ -4518,15 +4657,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const sessionId = currentSession?.id;
       const offset = currentSession?.messagesOffset ?? 0;
       if (sessionId && offset > 0) {
-        isLoadingMoreMessagesRef.current = true;
-        setIsLoadingMoreMessages(true);
-        prevScrollHeightRef.current = container.scrollHeight;
         logDetailDiagnostic(`loading older messages after scrolling near the top for session ${sessionId}; current offset is ${offset}.`);
-        coworkService.loadMoreMessages(sessionId).catch(() => {
-          prevScrollHeightRef.current = null;
-          isLoadingMoreMessagesRef.current = false;
-          setIsLoadingMoreMessages(false);
-        });
+        void loadOlderMessages();
       }
     }
 
@@ -4589,6 +4721,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentSession?.messages.length,
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
+    isLoadingMoreMessagesRef,
+    loadOlderMessages,
     updateShouldAutoScroll,
   ]);
 
@@ -4773,24 +4907,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // no scroll event can reach either pagination edge in that state.
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container) return;
+    if (!container || isLoadingMoreMessages) return;
     const sessionId = currentSession?.id;
     const offset = currentSession?.messagesOffset ?? 0;
     const loadedCount = currentSession?.messages.length ?? 0;
     const totalMessages = currentSession?.totalMessages ?? loadedCount;
     if (!sessionId || container.scrollHeight > container.clientHeight) return;
     if (offset > 0 && !isLoadingMoreMessagesRef.current) {
-      isLoadingMoreMessagesRef.current = true;
-      setIsLoadingMoreMessages(true);
-      prevScrollHeightRef.current = container.scrollHeight;
       logDetailDiagnostic(
         `auto-loading older messages because session ${sessionId} content height ${container.scrollHeight} does not exceed viewport height ${container.clientHeight}; current offset is ${offset}.`,
       );
-      coworkService.loadMoreMessages(sessionId).catch(() => {
-        prevScrollHeightRef.current = null;
-        isLoadingMoreMessagesRef.current = false;
-        setIsLoadingMoreMessages(false);
-      });
+      void loadOlderMessages({ automatic: true });
       return;
     }
     if (offset + loadedCount < totalMessages && !isLoadingNewerMessagesRef.current) {
@@ -4813,28 +4940,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentSession?.messages.length,
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
+    isLoadingMoreMessages,
+    isLoadingMoreMessagesRef,
+    loadOlderMessages,
   ]);
-
-  // Restore scroll position synchronously before browser paint when messages are prepended
-  useLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container || prevScrollHeightRef.current === null) return;
-    const newScrollHeight = container.scrollHeight;
-    container.scrollTop += newScrollHeight - prevScrollHeightRef.current;
-    prevScrollHeightRef.current = null;
-    isLoadingMoreMessagesRef.current = false;
-    setIsLoadingMoreMessages(false);
-    if (scrollToBottomIntentRef.current) {
-      requestAnimationFrame(() => {
-        const latestContainer = scrollContainerRef.current;
-        if (!latestContainer || !scrollToBottomIntentRef.current) return;
-        latestContainer.scrollTo({
-          top: latestContainer.scrollHeight,
-          behavior: 'auto',
-        });
-      });
-    }
-  }, [currentSession?.messages.length]);
 
   const navigateToRailItem = useCallback((
     railIndex: number,
@@ -5038,66 +5147,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return value;
   }, []);
 
-  const handleReEdit = useCallback((message: CoworkMessage) => {
-    const ref = promptInputRef.current;
-    if (!ref) return;
-    void (async () => {
-      const metadata = message.metadata as CoworkMessageMetadata | undefined;
-      const imagePreviews = Array.isArray(metadata?.imageAttachmentPreviews)
-        ? metadata.imageAttachmentPreviews as CoworkImageAttachmentPreview[]
-        : [];
-      let imageAttachments = ((metadata?.imageAttachments ?? []) as CoworkImageAttachment[]);
-
-      if (imagePreviews.length > 0 && imageAttachments.length === 0) {
-        const restoredImages: CoworkImageAttachment[] = [];
-        for (const preview of imagePreviews) {
-          if (!preview.localPath) {
-            showToast(i18nService.t('coworkImageAttachmentOriginalMissing'));
-            return;
-          }
-          try {
-            const readResult = await window.electron.dialog.readFileAsDataUrl(preview.localPath);
-            if (!readResult.success || !readResult.dataUrl) {
-              showToast(i18nService.t('coworkImageAttachmentOriginalMissing'));
-              return;
-            }
-            const extracted = extractBase64FromDataUrl(readResult.dataUrl);
-            if (!extracted) {
-              showToast(i18nService.t('coworkImageAttachmentOriginalMissing'));
-              return;
-            }
-            restoredImages.push({
-              name: preview.name,
-              mimeType: extracted.mimeType,
-              base64Data: extracted.base64Data,
-              localPath: preview.localPath,
-            });
-          } catch (error) {
-            console.warn('[CoworkSessionDetail] failed to restore image attachment for re-edit:', error);
-            showToast(i18nService.t('coworkImageAttachmentOriginalMissing'));
-            return;
-          }
-        }
-        imageAttachments = restoredImages;
-      }
-
-      // Set text content
-      if (message.content?.trim()) {
-        ref.setValue(message.content);
-      }
-      // Restore image attachments (always call to clear previous attachments)
-      ref.setImageAttachments(imageAttachments);
-      const selectedTextSnippets = (metadata?.selectedTextSnippets ?? []) as CoworkSelectedTextSnippet[];
-      ref.setSelectedTextSnippets(selectedTextSnippets);
-      // Restore active skills
-      const skillIds = metadata?.skillIds ?? [];
-      dispatch(setActiveSkillIds(skillIds));
-      const kitIds = metadata?.kitIds ?? [];
-      dispatch(setActiveKitIds(kitIds));
-      // Focus the input
-      ref.focus();
-    })();
-  }, [dispatch]);
+  const messageEdit = useUserMessageEdit(currentSession, isSessionBusy || remoteManaged);
+  const handleReEdit = messageEdit.begin;
 
 
   const messages = currentSession?.messages;
@@ -5106,16 +5157,87 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   ), [messages]);
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const leadingTurnStartTimestamp = currentSession?.leadingTurnStartTimestamp ?? null;
+  const leadingTurnUsage = currentSession?.leadingTurnUsage ?? null;
   const turns = useMemo(
-    () => buildConversationTurns(displayItems, { leadingTurnStartTimestamp }),
-    [displayItems, leadingTurnStartTimestamp],
+    () => buildConversationTurns(displayItems, { leadingTurnStartTimestamp, leadingTurnUsage }),
+    [displayItems, leadingTurnStartTimestamp, leadingTurnUsage],
   );
+
+  // ─── Message version switching ──────────────────────────────────────
+  // The conversation below the switched message is replaced in place. The
+  // switcher is held at the same spot on screen so it can be clicked again.
+  // A quick switch just replaces the content; only a slow one dims the part
+  // being replaced, so nothing flickers for a response that is already there.
+  const [messageVersionSwitch, setMessageVersionSwitch] = useState<{ turnIndex: number; phase: MessageVersionSwitchPhase } | null>(null);
+  const messageVersionAnchorRef = useRef<{ fromMessageId: string; absoluteIndex: number; bottom: number } | null>(null);
+  const messageVersionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const switchMessageVersion = messageEdit.switchVersion;
+  const handleSwitchMessageVersion = useCallback((message: CoworkMessage, targetIndex: number) => {
+    const container = scrollContainerRef.current;
+    const windowIndex = currentSession?.messages.findIndex(item => item.id === message.id) ?? -1;
+    const element = container?.querySelector<HTMLElement>(`[data-rail-message-id="${CSS.escape(message.id)}"]`);
+    if (!currentSession || !container || !element || windowIndex < 0) return;
+    // The other version can be longer or shorter, so following the end would move the switcher away.
+    detachAutoScrollForUserIntent(AutoScrollDetachSource.MessageVersionSwitch);
+    messageVersionAnchorRef.current = {
+      fromMessageId: message.id,
+      absoluteIndex: currentSession.messagesOffset + windowIndex,
+      bottom: element.getBoundingClientRect().bottom - container.getBoundingClientRect().top,
+    };
+    if (messageVersionTimerRef.current) clearTimeout(messageVersionTimerRef.current);
+    setMessageVersionSwitch({
+      turnIndex: turns.findIndex(turn => turn.userMessage?.id === message.id),
+      phase: MessageVersionSwitchPhase.Waiting,
+    });
+    messageVersionTimerRef.current = setTimeout(() => {
+      setMessageVersionSwitch(current => current && { ...current, phase: MessageVersionSwitchPhase.Dimmed });
+    }, MESSAGE_VERSION_DIM_DELAY_MS);
+    void switchMessageVersion(message, targetIndex).then(switched => {
+      messageVersionAnchorRef.current = null;
+      if (messageVersionTimerRef.current) clearTimeout(messageVersionTimerRef.current);
+      // Only content that was dimmed has anything to fade back from.
+      setMessageVersionSwitch(current => switched && current?.phase === MessageVersionSwitchPhase.Dimmed
+        ? { ...current, phase: MessageVersionSwitchPhase.Settling }
+        : null);
+      messageVersionTimerRef.current = setTimeout(() => setMessageVersionSwitch(null), MESSAGE_VERSION_SETTLE_MS);
+    });
+  }, [currentSession, detachAutoScrollForUserIntent, switchMessageVersion, turns]);
+
+  // Runs before paint, so the replaced conversation never shows at the wrong scroll position.
+  useLayoutEffect(() => {
+    const anchor = messageVersionAnchorRef.current;
+    const container = scrollContainerRef.current;
+    if (!anchor || !container || !currentSession) return;
+    if (currentSession.messages.some(item => item.id === anchor.fromMessageId)) return;
+    messageVersionAnchorRef.current = null;
+    const head = currentSession.messages[anchor.absoluteIndex - currentSession.messagesOffset];
+    const element = head
+      ? container.querySelector<HTMLElement>(`[data-rail-message-id="${CSS.escape(head.id)}"]`)
+      : null;
+    if (!element) return;
+    container.scrollTop += element.getBoundingClientRect().bottom - container.getBoundingClientRect().top - anchor.bottom;
+  }, [currentSession]);
+
+  useEffect(() => () => {
+    if (messageVersionTimerRef.current) clearTimeout(messageVersionTimerRef.current);
+  }, []);
+
+  const entryAnimation = useTurnEntryAnimation(
+    currentSession?.id,
+    turns[turns.length - 1]?.id,
+    // Prepending can remount a partial turn. Its entry transform would shift
+    // the reading anchor again after the pagination layout has settled.
+    Boolean(messageVersionSwitch || messageEdit.editing || isLoadingMoreMessages),
+  );
+
+  const mediaTaskPresentations = useMemo(() => buildMediaTaskPresentations(turns), [turns]);
   const enterpriseQuotaSignal = useMemo(
     () => findCurrentEnterpriseQuotaSignal(currentSession, currentMessagesWithDetachedTail),
     [currentMessagesWithDetachedTail, currentSession],
   );
   const sessionModelSelection = useMemo(() => resolveAgentModelSelection({
     sessionModel: currentSession?.modelOverride,
+    sessionPresetId: currentSession?.modelPresetId,
     agentModel: currentAgent?.model ?? '',
     availableModels,
     fallbackModel: currentAgentSelectedModel,
@@ -5126,6 +5248,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentAgent?.model,
     currentAgentSelectedModel,
     currentSession?.modelOverride,
+    currentSession?.modelPresetId,
   ]);
   const activeEnterpriseQuotaSignal = useMemo(
     () => resolveActiveEnterpriseQuotaSignal(
@@ -5280,6 +5403,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     };
   }, [handleOpenConversationSearch]);
 
+  // The task search can open a session on a content hit; pre-fill the
+  // conversation search so it jumps to the match. Runs after the search hook's
+  // own session-change reset, so the query is not cleared again.
+  const applyPendingConversationSearch = useCallback(() => {
+    if (!sessionId) return;
+    const pendingQuery = takePendingConversationSearch(sessionId);
+    if (!pendingQuery) return;
+    handleOpenConversationSearch();
+    setConversationSearchQuery(pendingQuery);
+    setConversationSearchRevealRequestKey(value => value + 1);
+  }, [handleOpenConversationSearch, sessionId, setConversationSearchQuery]);
+
+  useEffect(() => {
+    applyPendingConversationSearch();
+    window.addEventListener(CoworkUiEvent.PendingConversationSearch, applyPendingConversationSearch);
+    return () => {
+      window.removeEventListener(CoworkUiEvent.PendingConversationSearch, applyPendingConversationSearch);
+    };
+  }, [applyPendingConversationSearch]);
+
   useEffect(() => {
     if (isConversationSearchOpen) return undefined;
     clearConversationSearchPresentation();
@@ -5321,6 +5464,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       'cowork-conversation-search-fallback',
     );
     conversationSearchFallbackElementRef.current = null;
+
+    // A fresh reveal request drops the "user scrolled away", "already scrolled here" and
+    // "loading it failed" guards so the active match is brought into view again.
+    if (conversationSearchHandledRevealRequestKeyRef.current !== conversationSearchRevealRequestKey) {
+      conversationSearchHandledRevealRequestKeyRef.current = conversationSearchRevealRequestKey;
+      conversationSearchManualViewportMatchKeyRef.current = null;
+      conversationSearchLastNavigatedMatchKeyRef.current = null;
+      conversationSearchFailedTargetRef.current = null;
+    }
 
     if (
       !isConversationSearchOpen
@@ -5519,6 +5671,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         activeConversationSearchMatchKey,
       );
 
+      // A match clipped by a collapsed long user message is measurable but
+      // hidden; open the message and measure again on the next frame.
+      if (
+        result.activeRange
+        && result.activeElement
+        && attempt < 10
+        && expandCollapsedUserMessage(result.activeElement)
+      ) {
+        frameId = window.requestAnimationFrame(() => locateTarget(attempt + 1));
+        return;
+      }
+
       const rangeRect = result.activeRange?.getBoundingClientRect();
       const hasUsableRange = Boolean(rangeRect && isUsableConversationSearchRect(rangeRect));
       if ((!result.activeElement || (result.activeRange && !hasUsableRange)) && attempt < 10) {
@@ -5612,6 +5776,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     conversationSearchLoadVersion,
     conversationSearchMatches,
     conversationSearchQuery,
+    conversationSearchRevealRequestKey,
     isActiveConversationSearchMessageLoaded,
     isConversationSearchOpen,
     updateShouldAutoScroll,
@@ -5693,7 +5858,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     );
     const artifact = selectAutoPreviewArtifact(
       turnArtifacts,
-      { defaultProjectDirectory: currentSession.cwd },
+      {
+        defaultProjectDirectory: currentSession.cwd,
+        replyMessageIds: getTurnReplyMessageIds(pendingTurn),
+      },
     );
     if (!artifact) return;
 
@@ -5856,6 +6024,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [messagesLength, lastMessageContent, isContextCompacting, isStreaming, shouldAutoScroll, turns.length]);
 
+  // A shorter viewport (the question dock or a taller prompt input taking room
+  // below it) fires no scroll event of its own, so keep a reader who follows the
+  // conversation at its newest content instead of letting it slide out of view.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let viewportHeight = container.clientHeight;
+    const resizeObserver = new ResizeObserver(() => {
+      const previousHeight = viewportHeight;
+      viewportHeight = container.clientHeight;
+      if (viewportHeight === previousHeight || isExportingImageRef.current || isNavigatingRef.current) return;
+      if (!shouldKeepBottomOnViewportResize(
+        shouldAutoScrollRef.current,
+        container.scrollHeight - container.scrollTop - previousHeight,
+        userDetachedFromBottomRef.current,
+        conversationSearchViewportLockedRef.current,
+      )) return;
+      container.scrollTop = container.scrollHeight;
+    });
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, [currentSession?.id]);
+
 
   if (!currentSession) {
     return null;
@@ -5899,6 +6090,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     !isViewportAtSessionBottom
     || (!shouldAutoScroll && !isConversationSearchOpen)
   );
+  // The question dock already separates the conversation from the prompt, so a
+  // short trailing spacer keeps the newest lines in the smaller viewport.
+  const hasDockedQuestion = pendingPermissions.some((permission) => (
+    permission.sessionId === currentSession.id && isQuestionDockRequest(permission)
+  ));
   const expandedConversationPreview = getExpandedConversationPreview(currentSession.messages);
   const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= railItems.length
     ? railItems.length - 1
@@ -5913,8 +6109,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   )
     ? latestProposedPlan.messageId
     : null;
+  // Continuing only makes sense right after the failed turn, while nothing runs.
+  const lastSessionMessage = currentSession.messages[currentSession.messages.length - 1];
+  const streamInterruptedErrorMessageId = (
+    !isSessionBusy
+    && !remoteManaged
+    && lastSessionMessage?.type === 'system'
+    && isModelStreamInterruptedError(lastSessionMessage.metadata)
+  )
+    ? lastSessionMessage.id
+    : null;
 
   const renderConversationTurns = () => {
+    // Guard the no-edit case explicitly: turns without a user message (e.g. the
+    // first turn of a paged history window) would otherwise match `undefined`
+    // and dim everything after them.
+    const editingMessageId = messageEdit.editing?.message.id;
+    const editingTurnIndex = editingMessageId
+      ? turns.findIndex(turn => turn.userMessage?.id === editingMessageId)
+      : -1;
     let railCounter = 0;
     if (turns.length === 0) {
       if (!isSessionBusy) return null;
@@ -5948,18 +6161,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
     }
 
+    const lastMessageSpeechTurnIndex = getLastMessageSpeechTurnIndex(turns);
     return turns.map((turn, index) => {
       const isLastTurn = index === turns.length - 1;
+      const turnMessageIds = getTurnMessageIds(turn);
       // Persistent busy-state indicator at the insertion point of the
       // running turn (Codex/ChatGPT style: visible for the whole run).
       const showActivityIndicator = isSessionBusy && isLastTurn;
-      const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator;
+      const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator || Boolean(getConversationTurnUsage(turn));
       // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX).
       // While exporting the conversation image, force-render every turn:
       // lazy placeholders have no export anchors and capture as blank blocks.
       const alwaysRender = index >= turns.length - 3
         || index === forcedRailTurnIndex
+        || index === editingTurnIndex
+        || index === messageVersionSwitch?.turnIndex
+        || (anchorMessageId !== null && turnMessageIds.has(anchorMessageId))
         || isExportingImage;
+      const messageVersionClass = messageVersionSwitch
+        ? MESSAGE_VERSION_PHASE_CLASS[messageVersionSwitch.phase]
+        : undefined;
 
       // Compute one rail index per conversation turn (must match grouped rail item logic).
       const hasAssistantContent = turn.assistantItems.some(
@@ -5968,7 +6189,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const turnRailIdx = turn.userMessage || hasAssistantContent ? railCounter++ : -1;
       const assistantRailMessageId = getAssistantRailMessageId(turn);
 
-      const turnMessageIds = getTurnMessageIds(turn);
       const turnArtifacts = rawSessionArtifacts.filter(
         a => turnMessageIds.has(a.messageId) && PREVIEWABLE_ARTIFACT_TYPES.has(a.type)
       );
@@ -5980,34 +6200,59 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
 
       return (
-        <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
+        <LazyRenderTurn key={resolveTurnKey(entryAnimation, turn.id)} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}
+          scrollContainerRef={scrollContainerRef} lastMessageId={Array.from(turnMessageIds).pop()}
+          className={editingTurnIndex >= 0 && index > editingTurnIndex
+            ? 'opacity-40 transition-opacity'
+            : messageVersionSwitch && index > messageVersionSwitch.turnIndex ? messageVersionClass : undefined}>
           {turn.userMessage && (
             <div
               data-export-role="user-message"
               data-rail-message-id={turn.userMessage.id}
-              className={isLastTurn ? 'animate-message-in' : undefined}
+              className={isLastTurn && turn.id !== entryAnimation.skipTurnId ? 'animate-message-in' : undefined}
               {...(turnRailIdx >= 0 ? { 'data-rail-index': turnRailIdx } : undefined)}
             >
-              <UserMessageItem
+              {index === editingTurnIndex && messageEdit.editing ? (
+                <UserMessageInlineEditor
+                  key={messageEdit.editing.message.id}
+                  message={messageEdit.editing.message}
+                  initialPrompt={messageEdit.editing.initialPrompt}
+                  initialRemovedImageIndexes={messageEdit.editing.initialRemovedImageIndexes}
+                  busy={messageEdit.busy}
+                  disabled={isSessionBusy || Boolean(messageEdit.pending)}
+                  recoveryPending={Boolean(messageEdit.pending)}
+                  error={messageEdit.error}
+                  onCancel={messageEdit.cancel}
+                  onSubmit={(prompt, removed) => void messageEdit.submit(prompt, removed)}
+                />
+              ) : <UserMessageItem
                 message={turn.userMessage}
                 skills={skills}
                 marketplaceKits={marketplaceKits}
                 sessionId={sessionId}
                 onReEdit={remoteManaged ? undefined : handleReEdit}
+                reEditDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending) || Boolean(messageEdit.editing)}
+                onSwitchVersion={remoteManaged ? undefined : handleSwitchMessageVersion}
+                versionSwitchDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending) || Boolean(messageEdit.editing)}
                 onLocateSelectedText={handleLocateSelectedText}
                 onOpenAnnotation={handleOpenMessageAnnotation}
-              />
+              />}
             </div>
           )}
           {showAssistantBlock && (
             <div
               data-export-role="assistant-block"
               {...(assistantRailMessageId ? { 'data-rail-message-id': assistantRailMessageId } : undefined)}
-              className={isLastTurn ? 'animate-message-in' : undefined}
+              className={index === editingTurnIndex
+                ? 'opacity-40 transition-opacity'
+                : messageVersionSwitch && index === messageVersionSwitch.turnIndex
+                  ? messageVersionClass
+                  : isLastTurn && turn.id !== entryAnimation.skipTurnId ? 'animate-message-in' : undefined}
               {...(turnRailIdx >= 0 ? { 'data-rail-index': turnRailIdx } : undefined)}
             >
               <AssistantTurnBlock
                 turn={turn}
+                mediaTaskPresentations={mediaTaskPresentations}
                 artifacts={turnArtifacts}
                 resolveLocalFilePath={resolveLocalFilePath}
                 mapDisplayText={mapDisplayText}
@@ -6030,8 +6275,21 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 activityStatusOverride={
                   activityStatusOverride
                 }
+                awaitingRunStart={isAwaitingRunStart}
                 showCopyButtons={!isStreaming || !isLastTurn}
+                enableMessageSpeech={!remoteManaged && !isExportingImage && isMessageSpeechTurnCompleted(turn, {
+                  isLastTurn: index === lastMessageSpeechTurnIndex,
+                  sessionStatus: currentSession.status,
+                  isStreaming,
+                  hasRunningSubagents: turnHasRunningSubagents,
+                })}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
+                modelSwitchNoticeMessageId={
+                  !isExportingImage && modelSwitchNotice?.sessionId === currentSession.id
+                    ? modelSwitchNotice.messageId
+                    : null
+                }
+                onDismissModelSwitchNotice={() => setModelSwitchNotice(null)}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
                     ? currentSession.goal
@@ -6043,6 +6301,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 searchTargetMessageId={activeConversationSearchMatch?.messageId}
                 isStreamingTurn={isStreaming && isLastTurn}
                 hasRunningSubagents={turnHasRunningSubagents}
+                streamInterruptedErrorMessageId={streamInterruptedErrorMessageId}
+                onContinueAfterStreamInterruption={handleContinueAfterStreamInterruption}
               />
             </div>
           )}
@@ -6053,11 +6313,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   return (
     <ArtifactFileShareProvider sessionId={currentSession.id}>
+    <MarkdownLinkOpenerContext.Provider value={markdownLinkOpener}>
       <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Header — spans full width */}
       <div
         data-skin-session-titlebar="true"
-        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible border-b border-border bg-background ${
+        className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible bg-background ${
+          isArtifactPanelVisible ? 'border-b border-border' : ''
+        } ${
           isArtifactPanelExpanded ? 'pl-0 pr-4' : 'px-4'
         }`}
       >
@@ -6131,6 +6394,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactFileListTab}
                       onClose={handleCloseArtifactFileListTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList)}
                     />
                   )}
                   {isBrowserPreviewTabOpen && (
@@ -6141,6 +6405,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactBrowserTab}
                       onClose={handleCloseArtifactBrowserTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Browser)}
                     />
                   )}
                   {isAgentBrowserPreviewTabOpen && (
@@ -6157,6 +6422,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       ) : undefined}
                       onActivate={handleActivateArtifactAgentBrowserTab}
                       onClose={handleCloseArtifactAgentBrowserTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.AgentBrowser)}
                     />
                   )}
                   {isSubagentPreviewTabOpen && (
@@ -6167,6 +6433,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactSubagentTab}
                       onClose={handleCloseArtifactSubagentTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Subagents)}
                     />
                   )}
                   {isUserAttachmentPreviewTabOpen && (
@@ -6177,6 +6444,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactUserAttachmentTab}
                       onClose={handleCloseArtifactUserAttachmentTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment)}
                     />
                   )}
                   {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
@@ -6190,6 +6458,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                         closeLabel={i18nService.t('artifactCloseTab')}
                         onActivate={() => handleActivateArtifactTab(tab.id)}
                         onClose={() => handleCloseArtifactTab(tab.id)}
+                        {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
                       />
                     );
                   })}
@@ -6444,6 +6713,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         style={{ minWidth: isArtifactPanelExpanded ? 0 : COWORK_DETAIL_MIN_WIDTH }}
       >
       <div className="relative z-10 flex-1 min-h-0">
+        {isLoadingMoreMessages && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 py-2 text-center text-xs text-secondary" role="status">
+            <span className="rounded-full bg-background px-3 py-1">{i18nService.t('loading')}</span>
+          </div>
+        )}
         <div
           ref={scrollContainerRef}
           onScroll={handleMessagesScroll}
@@ -6460,23 +6734,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               onAskInSideChat={handleOpenSelectedTextInSideChat}
             />
           )}
-          {isLoadingMoreMessages && (
-            <div className="py-2 text-center text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-              {i18nService.t('loading')}
-            </div>
-          )}
-          {renderConversationTurns()}
-          {isContextCompacting && (
-            <div className={`${COWORK_DETAIL_GUTTER_CLASS} animate-message-in`}>
-              <div className={COWORK_DETAIL_CONTENT_CLASS}>
-                <ContextCompactionDivider
-                  label={i18nService.t('coworkContextCompacting')}
-                  active
-                />
+          <div ref={setConversationContentElement}>
+            {messageEdit.pending && (
+              <div className={`${COWORK_DETAIL_GUTTER_CLASS} py-3`} role="status">
+                <div className={`${COWORK_DETAIL_CONTENT_CLASS} rounded-xl border border-border bg-surface-raised p-4 text-sm`}>
+                  <p>{i18nService.t('coworkEditRecoveryNeeded')}</p>
+                  {messageEdit.error && <p role="alert" className="mt-2 text-red-500">{messageEdit.error}</p>}
+                  <button type="button" disabled={messageEdit.busy} onClick={() => void messageEdit.recover()}
+                    className="mt-3 rounded-lg bg-primary px-3 py-2 text-white disabled:opacity-50">
+                    {i18nService.t(messageEdit.busy ? 'coworkEditWorking' : 'coworkEditRecover')}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-          <div className="h-20" />
+            )}
+            {renderConversationTurns()}
+            {isContextCompacting && (
+              <div className={`${COWORK_DETAIL_GUTTER_CLASS} animate-message-in`}>
+                <div className={COWORK_DETAIL_CONTENT_CLASS}>
+                  <ContextCompactionDivider
+                    label={i18nService.t('coworkContextCompacting')}
+                    active
+                  />
+                </div>
+              </div>
+            )}
+            <div className={hasDockedQuestion ? 'h-4' : 'h-20'} />
+          </div>
         </div>
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
@@ -6868,13 +7151,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             isStreaming={isSessionBusy}
             canSteer={isStreaming && !isContextBusy}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
-            disabled={remoteManaged}
+            disabled={remoteManaged || Boolean(messageEdit.editing) || Boolean(messageEdit.pending) || messageEdit.busy}
             submitDisabled={Boolean(activeEnterpriseQuotaSignal)}
             size={isArtifactPanelExpanded ? 'compact' : 'large'}
             remoteManaged={remoteManaged}
             onManageSkills={remoteManaged ? undefined : onManageSkills}
             onManageKits={remoteManaged ? undefined : onManageKits}
             showModelSelector={true}
+            onModelSwitch={(noticeSessionId, messageId) => setModelSwitchNotice({ sessionId: noticeSessionId, messageId })}
             showReadOnlyContext={!isArtifactPanelExpanded}
             showNewUserWelcomeLoginOverlay={isNewUserWelcomeSession}
             readOnlyContextTrailingText={isArtifactPanelExpanded ? undefined : i18nService.t('aiGeneratedDisclaimer')}
@@ -6975,7 +7259,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               browserUrl={browserPreviewUrl}
               browserLocalServiceContext={browserLocalServiceContext}
               localServiceDeploymentRequest={localServiceDeploymentRequest}
-              browserHtmlArtifactId={browserHtmlPreviewArtifactId}
+              browserHtmlArtifactId={browserHtmlPreviewDisplayArtifactId}
               onBrowserAddressChange={handleBrowserPreviewAddressChange}
               onBrowserUrlChange={handleBrowserPreviewUrlChange}
               onBrowserTitleChange={handleBrowserPreviewTitleChange}
@@ -7020,6 +7304,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     )}
       </div>
       </div>
+      <ImageStudioHost sessionId={currentSession.id} />
+      <MessageSpeechSession sessionId={currentSession.id} />
+    </MarkdownLinkOpenerContext.Provider>
     </ArtifactFileShareProvider>
   );
 };

@@ -21,7 +21,11 @@ const report = {
   sourceCount: 0,
   sourceCounts: Object.fromEntries(Object.values(OpenClawStartupMigrationOwner).map(owner => [owner, 0])),
   changes: [], notices: [], warnings: [], remainingPaths: [],
+  // Legacy locations each owner inspects, present or not. The host skips this
+  // helper on later starts only while all of them keep their recorded state.
+  probePaths: [],
 };
+const DOCTOR_CLAIM_SUFFIX = '.doctor-importing';
 
 function pathMayExist(filePath) {
   try { fs.lstatSync(filePath); return true; }
@@ -30,10 +34,11 @@ function pathMayExist(filePath) {
 
 // Each owner holds its own stopped-Gateway lease and verifies its SQLite write.
 // Inspect every owner even after a failure, so a retry need not reveal one blocker at a time.
-async function migrateOwner(owner, detect, migrate, paths, isReadable) {
+async function migrateOwner(owner, detect, migrate, paths, isReadable, probes = paths) {
   try {
     const detected = detect();
     report.sourceCounts[owner] = paths(detected).length;
+    report.probePaths.push(...probes(detected));
     const result = await migrate(detected);
     report.changes.push(...result.changes.map(value => `[${owner}] ${value}`));
     report.notices.push(...(result.notices ?? []).map(value => `[${owner}] ${value}`));
@@ -66,9 +71,10 @@ try {
   const options = { stateDir, env: process.env };
   const doctorDetection = { stateDir, doctorOnlyStateMigrations: true };
   const sourcePaths = detected => detected.hasLegacy ? [detected.sourcePath] : [];
+  const claimProbes = detected => [detected.sourcePath, `${detected.sourcePath}${DOCTOR_CLAIM_SUFFIX}`];
   await migrateOwner(OpenClawStartupMigrationOwner.DeviceAuth,
     () => detectLegacyDeviceAuth(doctorDetection),
-    detected => migrateLegacyDeviceAuth({ ...options, detected }), sourcePaths);
+    detected => migrateLegacyDeviceAuth({ ...options, detected }), sourcePaths, undefined, claimProbes);
 
   // Import the original keys under the owner's conflict/verification rules.
   // Do not authorize Doctor to generate replacement keys for damaged SQLite-only state.
@@ -80,10 +86,11 @@ try {
     // The owner can retain valid divergent JSON while SQLite stays authoritative,
     // including identities originally created without a legacy import receipt.
     // Respect the canonical runtime reader instead of making that notice a fatal error.
-    () => Boolean(loadDeviceIdentityIfPresent({ env: process.env })));
+    () => Boolean(loadDeviceIdentityIfPresent({ env: process.env })),
+    detected => [detected.sourcePath, detected.claimPath, detected.nativeClaimPath].filter(Boolean));
   await migrateOwner(OpenClawStartupMigrationOwner.ExecApprovals,
     () => detectLegacyExecApprovals(doctorDetection),
-    detected => migrateLegacyExecApprovals({ ...options, detected }), sourcePaths);
+    detected => migrateLegacyExecApprovals({ ...options, detected }), sourcePaths, undefined, claimProbes);
 
   const workspaceOptions = { ...options, cfg, homedir: () => homeDir, doctorOnlyStateMigrations: true };
   await migrateOwner(OpenClawStartupMigrationOwner.Workspace,
@@ -94,6 +101,7 @@ try {
   const authProfiles = await migrateAuthProfilesBeforeStartup({ stateDir, configPath, env: process.env });
   const authOwner = OpenClawStartupMigrationOwner.AuthProfiles;
   report.sourceCounts[authOwner] = authProfiles.sourceCount;
+  report.probePaths.push(...authProfiles.probePaths);
   report.changes.push(...authProfiles.changes.map(value => `[${authOwner}] ${value}`));
   report.notices.push(...authProfiles.notices.map(value => `[${authOwner}] ${value}`));
   report.warnings.push(...authProfiles.warnings.map(value => `[${authOwner}] ${value}`));

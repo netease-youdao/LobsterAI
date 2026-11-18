@@ -6,6 +6,7 @@ import {
   isCoworkSessionBoundToIm,
   resolveCoworkSessionIdByOpenClawSessionKey,
   resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey,
+  resolveSubagentRequesterCoworkSessionId,
 } from './openclawLocalSessionResolver';
 
 const dbs: Database.Database[] = [];
@@ -21,6 +22,12 @@ const createDb = (): Database.Database => {
     );
     CREATE TABLE im_session_mappings (
       cowork_session_id TEXT
+    );
+    CREATE TABLE subagent_runs (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL,
+      session_key TEXT,
+      created_at INTEGER NOT NULL
     );
   `);
   return db;
@@ -76,5 +83,33 @@ describe('openclaw local session resolver', () => {
       db,
       'agent:qa-reviewer:subagent:run-2',
     )).toBe(null);
+  });
+});
+
+describe('resolveSubagentRequesterCoworkSessionId', () => {
+  const childKey = 'agent:main:dashboard:child-uuid';
+  const insertRun = (db: Database.Database, id: string, parentSessionId: string, createdAt: number) => {
+    db.prepare('INSERT INTO subagent_runs (id, parent_session_id, session_key, created_at) VALUES (?, ?, ?, ?)')
+      .run(id, parentSessionId, childKey, createdAt);
+  };
+
+  test('maps a spawned child without a Cowork row to its latest requester session', () => {
+    const db = createDb();
+    insertSession(db, 'old-parent', 'agent:main:lobsterai:old-parent');
+    insertSession(db, 'parent', 'agent:main:lobsterai:parent');
+    insertRun(db, 'run-old', 'old-parent', 1);
+    insertRun(db, 'run-new', 'parent', 2);
+
+    expect(resolveCoworkSessionIdByOpenClawSessionKey(db, childKey)).toBeNull();
+    expect(resolveSubagentRequesterCoworkSessionId(db, childKey)).toBe('parent');
+  });
+
+  test('ignores unknown keys and requester sessions that no longer exist', () => {
+    const db = createDb();
+    insertRun(db, 'run-deleted', 'deleted-parent', 1);
+
+    expect(resolveSubagentRequesterCoworkSessionId(db, childKey)).toBeNull();
+    expect(resolveSubagentRequesterCoworkSessionId(db, 'agent:main:dashboard:unknown')).toBeNull();
+    expect(resolveSubagentRequesterCoworkSessionId(db, '  ')).toBeNull();
   });
 });

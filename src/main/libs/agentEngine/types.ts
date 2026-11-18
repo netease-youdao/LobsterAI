@@ -1,4 +1,5 @@
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type { UsageContext } from '../../../shared/analytics/usage';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortResponse,
@@ -7,12 +8,14 @@ import type {
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkImageAttachmentPayload } from '../../../shared/cowork/imageAttachments';
+import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
 import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
+import type { MediaSelection } from '../../../shared/media/defaultPolicy';
 import type { SkinWorkflowKind } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 
@@ -41,6 +44,14 @@ export interface PermissionRequest {
   toolUseId?: string | null;
 }
 
+/** Captured before stop clears the active turn and its gateway run ids. */
+export type CoworkStoppedTurn = {
+  userMessageId?: string;
+  traceId?: string;
+  runIds: string[];
+  startedAt?: number;
+};
+
 export interface CoworkRuntimeEvents {
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
@@ -53,7 +64,7 @@ export interface CoworkRuntimeEvents {
   permissionResolved: (sessionId: string, requestId: string) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
-  sessionStopped: (sessionId: string) => void;
+  sessionStopped: (sessionId: string, turn?: CoworkStoppedTurn) => void;
 }
 
 export type CoworkContextUsage = {
@@ -85,6 +96,7 @@ export type CoworkForkCompactionSummary = {
 export type CoworkImageAttachment = CoworkImageAttachmentPayload;
 
 export type CoworkMediaAttachmentRef = {
+  imageEdit?: import('../../../shared/imageEditing/types').ImageEditRequest;
   token: string;
   mediaType: 'image' | 'video' | 'audio';
   index: number;
@@ -97,15 +109,10 @@ export type CoworkMediaAttachmentRef = {
   role?: 'first_frame' | 'last_frame' | 'reference_image' | 'reference_video' | 'reference_audio';
 };
 
-export type CoworkMediaSelection = {
-  mode: 'auto' | 'image' | 'video' | 'none';
-  modelId?: string;
-  modelName?: string;
-  imageModelId?: string;
-  videoModelId?: string;
-};
+export type CoworkMediaSelection = MediaSelection;
 
 export type CoworkStartOptions = {
+  analytics?: UsageContext;
   skipInitialUserMessage?: boolean;
   skillIds?: string[];
   messageSkillIds?: string[];
@@ -126,6 +133,11 @@ export type CoworkStartOptions = {
 };
 
 export type CoworkContinueOptions = {
+  /** Internal edit coordinator fields; never accepted from renderer IPC. */
+  messageEditOperationId?: string;
+  requestId?: string;
+  onAccepted?: () => void;
+  analytics?: UsageContext;
   skipInitialUserMessage?: boolean;
   systemPrompt?: string;
   skillIds?: string[];
@@ -143,6 +155,7 @@ export type CoworkContinueOptions = {
 
 export interface CoworkSessionPatchResult {
   modelOverride?: string;
+  resolvedModelRef?: string;
   thinkingLevel?: string;
 }
 
@@ -157,6 +170,11 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  editMessage?(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void>;
+  recoverMessageEdit?(sessionId: string, operationId: string): Promise<void>;
+  hasPendingMessageEdit?(sessionId: string): boolean;
+  switchMessageVersion?(request: CoworkMessageVersionSwitchRequest): Promise<string | undefined>;
+  reconcileMessageVersionSwitch?(sessionId: string): Promise<void>;
   submitBtw?(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse>;
   abortBtw?(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse>;
   submitSteer?(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse>;
@@ -170,6 +188,8 @@ export interface CoworkRuntime {
   respondToPermission(requestId: string, result: PermissionResult): void | Promise<void>;
   getPendingQuestions?(): Array<PermissionRequest & { sessionId: string }>;
   isSessionActive(sessionId: string): boolean;
+  /** OpenClaw run ids of the session's current turn; empty when no turn is active. */
+  getTurnRunIds?(sessionId: string): string[];
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null;
   deleteSubagentSession?(parentSessionId: string, runId: string): Promise<boolean>;
   onSessionDeleted?(sessionId: string): void;

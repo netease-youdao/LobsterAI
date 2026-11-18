@@ -26,6 +26,22 @@ const renderCard = (permission: CoworkPermissionRequest, props: Record<string, u
   renderToStaticMarkup(createElement(QuestionDockCard, { request: permissionDockRequest(permission)!, ...props }));
 
 describe('QuestionDockCard', () => {
+  test('keeps a short heading and puts the full request in the scrollable body', () => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{
+      title: 'Generate?', question: 'Full scene description', subtitle: '200 credits', options,
+    }] } });
+    expect(html).toContain('<h2>Generate?</h2>');
+    expect(html).toContain('<p class="cowork-question-description">Full scene description</p>');
+    expect(html.indexOf('200 credits')).toBeLessThan(html.indexOf('class="cowork-question-page"'));
+  });
+
+  test('shows the pricing subtitle in a video confirmation', () => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{
+      question: 'Confirm video generation?', subtitle: 'Video price depends on model, duration and resolution.', options,
+    }] } });
+    expect(html).toContain('Video price depends on model, duration and resolution.');
+  });
+
   test('renders one plugin question at a time with numbered options, free text and skip', () => {
     const html = renderCard(plugin, { queueCount: 2 });
     expect(html).toContain('<h2>Which?</h2>');
@@ -47,6 +63,33 @@ describe('QuestionDockCard', () => {
     const other = renderCard(native({ questionId: 'style', header: 'Style', question: 'Which style?', options, isOther: true }));
     expect(other).toContain('<textarea');
     expect(other).not.toContain('cowork-question-skip');
+  });
+
+  test('collapses through a toggle rather than a close button', () => {
+    const html = renderCard(plugin);
+    expect(html).toContain('class="cowork-question-collapse"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-label="coworkQuestionDockCollapse"');
+  });
+
+  test('a collapsed card keeps the current question on one row', () => {
+    const storage = new Map([['cowork:interaction-draft:question-dock:s:r', JSON.stringify({
+      step: 1, answers: {}, freeText: {}, skipped: [], collapsed: true,
+    })]]);
+    vi.stubGlobal('window', {
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
+    });
+    try {
+      const html = renderCard(plugin);
+      expect(html).toContain('class="cowork-question-dock is-collapsed"');
+      expect(html).toContain('aria-expanded="false"');
+      expect(html).toContain('title="coworkQuestionDockExpand"');
+      expect(html).toContain('<strong>When?</strong><span>2 / 2</span>');
+      expect(html).not.toContain('cowork-question-option');
+      expect(html).not.toContain('<textarea');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   test('is not rendered while hidden', () => {

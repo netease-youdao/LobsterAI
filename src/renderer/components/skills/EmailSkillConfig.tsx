@@ -17,6 +17,12 @@ import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { type EmailSkillAccountConfig, type EmailSkillAccountsConfig, skillService } from '../../services/skill';
 import Modal from '../common/Modal';
+import {
+  SETTINGS_DESCRIPTION_TEXT,
+  SETTINGS_ITEM_TITLE_TEXT,
+  SETTINGS_META_TEXT,
+  SETTINGS_SECTION_TITLE_TEXT,
+} from '../settings/settingsTypography';
 
 const SKILL_ID = 'imap-smtp-email';
 const EMAIL_ANALYTICS_SOURCE = 'settings_email';
@@ -564,11 +570,11 @@ const EmailSkillConfig: React.FC = () => {
           <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
             <EnvelopeIcon className="h-6 w-6 text-primary" />
           </span>
-          <p className="mt-3 text-sm text-foreground">{i18nService.t('emailNoAccounts')}</p>
+          <p className={`mt-3 ${SETTINGS_ITEM_TITLE_TEXT} text-foreground`}>{i18nService.t('emailNoAccounts')}</p>
           <button
             type="button"
             onClick={() => void handleAddAccount()}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
           >
             <PlusIcon className="h-4 w-4" />
             {i18nService.t('emailAddAccount')}
@@ -597,11 +603,11 @@ const EmailSkillConfig: React.FC = () => {
                     <EnvelopeIcon className="h-5 w-5 text-primary" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium leading-5 text-foreground">
+                    <div className={`truncate ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
                       {getAccountDisplayName(account)}
                     </div>
                     {subtitle && (
-                      <div className="mt-0.5 truncate text-xs text-secondary">{subtitle}</div>
+                      <div className={`mt-0.5 truncate ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{subtitle}</div>
                     )}
                     <div className={`mt-0.5 flex items-center gap-1 text-xs ${
                       account.enabled ? 'text-green-600 dark:text-green-400' : 'text-secondary'
@@ -643,7 +649,7 @@ const EmailSkillConfig: React.FC = () => {
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-raised">
               <PlusIcon className="h-4 w-4" />
             </span>
-            <span className="mt-2 text-sm font-medium">
+            <span className={`mt-2 ${SETTINGS_ITEM_TITLE_TEXT} font-medium`}>
               {i18nService.t('emailAddAccount')}
             </span>
           </button>
@@ -666,7 +672,7 @@ const EmailSkillConfig: React.FC = () => {
             <span>{i18nService.t('back')}</span>
           </button>
           <h3
-            className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
+            className={`min-w-0 flex-1 truncate ${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}
             title={getAccountDisplayName(account)}
           >
             {getAccountDisplayName(account)}
@@ -937,7 +943,7 @@ const EmailSkillConfig: React.FC = () => {
               <div className={`flex items-center gap-1 text-xs ${connectivityPassed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                 {connectivityPassed ? <CheckCircleIcon className="h-4 w-4" /> : <XCircleIcon className="h-4 w-4" />}
                 <span>{connectivityPassed ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}</span>
-                <span className="text-[11px] text-secondary">{new Date(activeResult.testedAt).toLocaleString()}</span>
+                <span className={`${SETTINGS_META_TEXT} text-secondary`}>{new Date(activeResult.testedAt).toLocaleString()}</span>
               </div>
             )}
           </div>
@@ -969,7 +975,7 @@ const EmailSkillConfig: React.FC = () => {
                           {checkPassed ? <CheckCircleIcon className="h-3.5 w-3.5" /> : <XCircleIcon className="h-3.5 w-3.5" />}
                           <span>{checkLabel}</span>
                         </div>
-                        <span className="text-[11px] text-secondary">{`${check.durationMs}ms`}</span>
+                        <span className={`${SETTINGS_META_TEXT} text-secondary`}>{`${check.durationMs}ms`}</span>
                       </div>
                       <div className="mt-1 break-words text-xs text-secondary">{check.message}</div>
                     </div>

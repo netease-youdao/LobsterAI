@@ -5,6 +5,19 @@ import { classifyErrorKey, CoworkErrorI18nKey, isLobsterAIQuotaExhaustedError } 
 
 const classifyError = (error: string) => classifyErrorKey(error) ?? error;
 
+test('context: preserves the session when automatic compaction cannot recover', () => {
+  const error = '⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.';
+  expect(classifyErrorKey(error)).toBe(CoworkErrorI18nKey.ContextRecoveryFailed);
+  expect(classifyErrorKey('Compaction failed: fetch failed')).toBe(CoworkErrorI18nKey.NetworkError);
+});
+
+test.each([
+  "This model's maximum context length is 1048576 tokens. However, you requested 1240758 tokens.",
+  '{"error":{"code":50206,"category":"context_window_exceeded","message":"Request rejected"}}',
+])('context: recognizes the retained upstream rejection: %s', (error) => {
+  expect(classifyErrorKey(error)).toBe('coworkErrorInputTooLong');
+});
+
 // ==================== Auth errors ====================
 
 test('auth: Anthropic authentication_error', () => {
@@ -57,6 +70,19 @@ test('auth: provider model access denied', () => {
 
 test('auth: auth scope maps to model access denied', () => {
   expect(classifyError('providerRuntimeFailureKind=auth_scope')).toBe('coworkErrorModelAccessDenied');
+});
+
+test.each([
+  "EACCES: permission denied, mkdir '/Volumes/Elements'",
+  "Error: EPERM: operation not permitted, open 'C:\\Users\\me\\report.docx'",
+  "ENOENT: no such file or directory, scandir '/Users/me/missing'",
+  "EROFS: read-only file system, open '/Volumes/Backup/out.txt'",
+])('local file system errors keep their own text: %s', (error) => {
+  expect(classifyErrorKey(error)).toBeNull();
+});
+
+test('auth: provider permission denied still maps to model access denied', () => {
+  expect(classifyError('Permission denied: this API key cannot use model gpt-x')).toBe('coworkErrorModelAccessDenied');
 });
 
 // ==================== Billing errors ====================
@@ -213,6 +239,17 @@ test('gateway: heap OOM is not classified as a generic disconnect', () => {
   )).toBe('coworkErrorGatewayHeapOutOfMemory');
 });
 
+test('gateway: a repointed workspace folder has a dedicated recovery message', () => {
+  for (const error of [
+    'Error: Error: workspace path alias points to a different current target',
+    'workspace path aliases resolve to conflicting state',
+    'workspace path alias conflicts with canonical state',
+  ]) {
+    expect(classifyError(error)).toBe(CoworkErrorI18nKey.WorkspaceAliasRepointed);
+  }
+  expect(classifyError('workspace path alias key collision')).toBe('workspace path alias key collision');
+});
+
 test('gateway: session patch timeout before send', () => {
   expect(classifyError('gateway request timeout for sessions.patch')).toBe('coworkGatewaySessionSyncTimeout');
 });
@@ -319,6 +356,21 @@ test('network: provider network request failed', () => {
 
 test('network: socket hang up', () => {
   expect(classifyError('request failed: socket hang up')).toBe('coworkErrorNetworkError');
+});
+
+test('network: Chromium net error relayed by the token proxy as HTTP 502', () => {
+  expect(classifyError(
+    'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_HTTP2_PING_FAILED',
+  )).toBe('coworkErrorNetworkError');
+  expect(classifyError(
+    '502 LobsterAI proxy upstream request failed: net::ERR_PROXY_CONNECTION_FAILED',
+  )).toBe('coworkErrorNetworkError');
+});
+
+test('network: Chromium certificate error is not mistaken for an invalid credential', () => {
+  expect(classifyError(
+    'HTTP 502: LobsterAI proxy upstream request failed: net::ERR_CERT_AUTHORITY_INVALID',
+  )).toBe('coworkErrorNetworkError');
 });
 
 // ==================== Server errors ====================

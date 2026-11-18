@@ -3,6 +3,7 @@ name: xlsx
 description: "Comprehensive spreadsheet creation, editing, and analysis with support for formulas, formatting, data analysis, and visualization. When Claude needs to work with spreadsheets (.xlsx, .xlsm, .csv, .tsv, etc) for: (1) Creating new spreadsheets with formulas and formatting, (2) Reading or analyzing data, (3) Modify existing spreadsheets while preserving formulas, (4) Data analysis and visualization in spreadsheets, or (5) Recalculating formulas"
 license: Proprietary. LICENSE.txt has complete terms
 official: true
+version: 1.0.1
 ---
 
 # Requirements for Outputs
@@ -69,7 +70,7 @@ A user may ask you to create, edit, or analyze the contents of an .xlsx file. Yo
 
 ## Important Requirements
 
-**LibreOffice Required for Formula Recalculation**: You can assume LibreOffice is installed for recalculating formula values using the `recalc.py` script. The script automatically configures LibreOffice on first run
+**Formula Recalculation**: Use `recalc.py` when LibreOffice is available; check the returned result instead of assuming success. Windows `.xlsx` files use an isolated headless profile with a timeout, without installing macros or interacting with an open Office window. If the tool is unavailable or times out, report the limitation, use another available calculation engine when possible, and never claim that unverified formulas were checked.
 
 ## Reading and analyzing data
 
@@ -216,11 +217,11 @@ python recalc.py output.xlsx 30
 ```
 
 The script:
-- Automatically sets up LibreOffice macro on first run
+- Automatically sets up the LibreOffice macro on Linux/macOS; Windows uses isolated headless conversion without macros
 - Recalculates all formulas in all sheets
 - Scans ALL cells for Excel errors (#REF!, #DIV/0!, etc.)
 - Returns JSON with detailed error locations and counts
-- Works on both Linux and macOS
+- Works on Linux and macOS; Windows supports `.xlsx` using isolated headless conversion (other formats are left unchanged)
 
 ## Formula Verification Checklist
 

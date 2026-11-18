@@ -1,4 +1,5 @@
 import {
+  type DecisionModelApiKeys,
   type DecisionModelConfigView,
   DecisionModelProvider,
 } from '../../shared/decisionModel/constants';
@@ -8,7 +9,12 @@ export interface DecisionModelConfig {
   provider: DecisionModelProvider;
   /** Full POST URL; only the compatible provider uses it. */
   endpoint: string;
+  /**
+   * Key of the selected provider, derived from apiKeys. Also stored, so builds
+   * from before per-provider keys still find the active key.
+   */
   apiKey: string;
+  apiKeys: DecisionModelApiKeys;
 }
 
 export const DEFAULT_DECISION_MODEL_CONFIG: DecisionModelConfig = {
@@ -16,9 +22,11 @@ export const DEFAULT_DECISION_MODEL_CONFIG: DecisionModelConfig = {
   provider: DecisionModelProvider.TypeSafe,
   endpoint: '',
   apiKey: '',
+  apiKeys: {},
 };
 
-const PROVIDERS = new Set<string>(Object.values(DecisionModelProvider));
+const PROVIDER_LIST = Object.values(DecisionModelProvider);
+const PROVIDERS = new Set<string>(PROVIDER_LIST);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -26,13 +34,30 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isProvider = (value: unknown): value is DecisionModelProvider =>
   typeof value === 'string' && PROVIDERS.has(value);
 
+/** Keeps trimmed, non-empty string keys of known providers. */
+function normalizeApiKeys(raw: unknown): DecisionModelApiKeys {
+  const value = isRecord(raw) ? raw : {};
+  const apiKeys: DecisionModelApiKeys = {};
+  for (const provider of PROVIDER_LIST) {
+    const key = value[provider];
+    if (typeof key === 'string' && key.trim()) apiKeys[provider] = key.trim();
+  }
+  return apiKeys;
+}
+
 export function normalizeDecisionModelConfig(raw: unknown): DecisionModelConfig {
   const value = isRecord(raw) ? raw : {};
+  const provider = isProvider(value.provider) ? value.provider : DEFAULT_DECISION_MODEL_CONFIG.provider;
+  // Older builds stored one apiKey, saved together with the provider it was for.
+  const apiKeys = isRecord(value.apiKeys)
+    ? normalizeApiKeys(value.apiKeys)
+    : normalizeApiKeys({ [provider]: value.apiKey });
   return {
     enabled: value.enabled === true,
-    provider: isProvider(value.provider) ? value.provider : DEFAULT_DECISION_MODEL_CONFIG.provider,
+    provider,
     endpoint: typeof value.endpoint === 'string' ? value.endpoint.trim() : '',
-    apiKey: typeof value.apiKey === 'string' ? value.apiKey.trim() : '',
+    apiKey: apiKeys[provider] ?? '',
+    apiKeys,
   };
 }
 
@@ -42,12 +67,20 @@ export function applyDecisionModelConfigUpdate(
   update: unknown,
 ): DecisionModelConfig {
   const patch = isRecord(update) ? update : {};
+  const provider = isProvider(patch.provider) ? patch.provider : current.provider;
+  const apiKeys: Record<string, unknown> = { ...current.apiKeys };
+  if (isRecord(patch.apiKeys)) {
+    for (const keyProvider of PROVIDER_LIST) {
+      const key = patch.apiKeys[keyProvider];
+      if (typeof key === 'string') apiKeys[keyProvider] = key;
+    }
+  }
+  if (typeof patch.apiKey === 'string') apiKeys[provider] = patch.apiKey;
   return normalizeDecisionModelConfig({
-    ...current,
-    ...(typeof patch.enabled === 'boolean' ? { enabled: patch.enabled } : {}),
-    ...(isProvider(patch.provider) ? { provider: patch.provider } : {}),
-    ...(typeof patch.endpoint === 'string' ? { endpoint: patch.endpoint } : {}),
-    ...(typeof patch.apiKey === 'string' ? { apiKey: patch.apiKey } : {}),
+    enabled: typeof patch.enabled === 'boolean' ? patch.enabled : current.enabled,
+    provider,
+    endpoint: typeof patch.endpoint === 'string' ? patch.endpoint : current.endpoint,
+    apiKeys,
   });
 }
 
@@ -76,6 +109,7 @@ export function toDecisionModelConfigView(config: DecisionModelConfig): Decision
     provider: config.provider,
     endpoint: config.endpoint,
     apiKey: config.apiKey,
+    apiKeys: { ...config.apiKeys },
     active: isDecisionModelActive(config),
   };
 }

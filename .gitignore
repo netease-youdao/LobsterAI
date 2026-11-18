@@ -27,6 +27,7 @@ resources/MinGit-*.zip
 resources/PortableGit-*.7z.exe
 resources/python-win/
 resources/python-*.zip
+resources/computer-use/*.zip
 
 # SKILLs runtime files
 SKILLs/**/.connection
@@ -34,7 +35,9 @@ SKILLs/**/.server.log
 SKILLs/**/.server.pid
 SKILLs/**/.venv/
 
-package-lock.json
+# Track the root dependency lock; generated skill lockfiles remain local.
+**/package-lock.json
+!/package-lock.json
 
 nul
 .work.env
@@ -56,3 +59,8 @@ sandbox/
 openspec/
 .superpowers/
 .diagram/
+output
+logs/
+
+# Local build, verification, and acceptance evidence
+/artifacts/

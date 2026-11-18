@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const tar = require('tar');
 const { createOpenClawWindowsPayload } = require('./openclaw-windows-payload.cjs');
+const { createSkillsPayloadFilter } = require('./skill-payload.cjs');
 
 // ── File/dir exclusion rules (same as electron-builder.json filters) ─────────
 
@@ -217,7 +218,7 @@ function main() {
     if (!target?.startsWith('win-')) throw new Error(`Expected a Windows runtime, found ${target}.`);
     const sources = [
       { dir: runtimeRoot, prefix: 'cfmind', ...createOpenClawWindowsPayload(runtimeRoot, target) },
-      { dir: path.join(projectRoot, 'SKILLs'), prefix: 'SKILLs' },
+      { dir: path.join(projectRoot, 'SKILLs'), prefix: 'SKILLs', filter: createSkillsPayloadFilter(path.join(projectRoot, 'SKILLs')) },
       { dir: path.join(projectRoot, 'resources', 'python-win'), prefix: 'python-win' },
     ];
 

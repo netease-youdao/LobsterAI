@@ -1,5 +1,292 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Batch missing executable checks during chat metadata refresh
+
+`openclaw-chat-metadata-binary-batch.patch` avoids repeating the same missing
+skill-dependency PATH scan for every agent in a chat metadata generation.
+Repeated synchronous checks delay the hot reload after agent deletion,
+particularly on Windows. A publication-scoped cache shares misses across
+the generation, expires on success or failure (including inherited asynchronous
+work), and invalidates on PATH/PATHEXT changes. Independent refreshes and normal
+skill installation checks still discover newly installed tools immediately.
+Unset and empty PATHEXT remain distinct, matching Windows extension resolution.
+
+This internal metadata refresh has no LobsterAI adapter hook. Rebuild the
+runtime after applying the patch. Remove it when upstream deduplicates these
+checks without retaining stale misses between generations. Regression coverage
+lives in `chat-metadata-binary-batch.test.ts` and `config-eval-batch.test.ts`;
+run those alongside `chat-metadata-runtime.test.ts` and `config-eval.test.ts`.
+
+## Skip deleted agents during automatic session maintenance
+
+`openclaw-deleted-agent-session-scan.patch` fixes gateway startup and plugin
+cleanup after deleting an agent with `deleteFiles: false`. Its database remains
+on disk for recovery, but the persisted deletion journal still fences writable
+access. Runtime discovery previously returned that retained database and startup
+transcript reconciliation failed with `agent ... is deleted`.
+
+The runtime all-store scanner reads deletion IDs once per scan without opening a
+write transaction, creating state, or migrating the schema. It excludes both
+pending and completed deletions, filtering logical claimants before collision
+resolution and checking the physical SQLite owner afterward. Explicit identity
+recreation becomes visible on the next scan. Registry rows, deletion fences, retained files, and
+Doctor candidate discovery remain intact. Invalid journal state still reports
+an error.
+
+The six bug regression cases cover pending/completed deletion, both directions
+of shared-store ownership, real SQLite gateway startup, and plugin cleanup.
+Each reproduced its corresponding failure before the repair. Four additional
+cases cover missing state/table and invalid journal schemas. Run in
+the patched OpenClaw checkout with Node 24:
+
+```sh
+node scripts/run-vitest.mjs run src/config/sessions/targets-discovery.test.ts src/gateway/session-startup-migration.test.ts src/plugins/host-hook-cleanup.session-store.test.ts src/state/agent-deletion-journal.discovery.test.ts
+```
+
+This belongs in OpenClaw's shared maintenance scanner; a LobsterAI adapter cannot
+filter its internal startup and plugin cleanup targets. Rebuild the bundled
+runtime to ship the fix. Remove this patch when upstream runtime discovery
+honors the deletion journal with the same retention and recovery guarantees.
+
+## Preserve deleted-agent media during background cleanup
+
+`openclaw-managed-media-deleted-agent-gc.patch` closes the separate background
+media-GC path left after the startup scan fix above. Its history reader acquires
+a writable database lease, which rejects retained deleted agents. Missing session
+rows are also insufficient evidence to discard their retained attachments.
+
+GC now checks deletion lifecycle eligibility before every cleanup branch and
+again after asynchronous reads. It preserves media records, cleanup claims and
+original files for pending/completed logical owners, retired fixed-store owners,
+shared physical owners, and databases inside pending deletion path fences. The
+journal snapshot is read without creating or migrating state. A read failure is
+treated as retained only if a fresh snapshot confirms deletion; unrelated errors
+still surface. Normal live-agent orphan cleanup continues. This is cooperative
+lifecycle protection, not an atomic filesystem transaction across processes.
+
+Thirteen new cases cover real SQLite cold starts, purged sessions, transient and
+claimed records, forced cleanup, shared stores, legacy global ownership, pending
+path fences and asynchronous deletion races. The twelve defect cases were
+observed failing before their corresponding repair; the unrelated-error control
+already passed. Existing read-only discovery checks also cover the full journal
+reader. Run in the patched OpenClaw checkout with Node 24:
+
+```sh
+node scripts/run-vitest.mjs src/gateway/managed-outgoing-gc-deleted-agents.test.ts src/gateway/managed-outgoing-gc-availability.test.ts src/gateway/managed-image-attachments.test.ts src/gateway/session-startup-migration.test.ts src/state/agent-deletion-journal.discovery.test.ts --maxWorkers=1
+```
+
+This is an internal OpenClaw GC decision, so it has no clean LobsterAI adapter
+hook. It intentionally keeps the general history reader and database deletion
+guards unchanged. Remove this patch when upstream GC honors these retention
+boundaries, and rebuild the bundled runtime when applying it.
+
+## Stable timestamps for assistant-first history bootstraps
+
+`zzzz-openclaw-bootstrap-prefix-cache.patch` fixes a prompt-cache miss when
+replaying the same assistant-first history. The turn-order repair prepends a
+synthetic user message, `(session bootstrap)`. Its old `Date.now()` timestamp
+was stamped into the model-visible text by `normalizeMessagesForLlmBoundary`,
+so reopening unchanged history in a later minute changed the request prefix.
+This affects both Google and strict OpenAI-compatible replay paths.
+
+The bootstrap now inherits the first retained assistant message's persisted
+timestamp. The repair stays idempotent, and real user messages retain their
+own timestamps. Changing the retained history can still change the prefix;
+this patch removes only the variation caused by the time of replay.
+
+Regression coverage exercises:
+
+- The real OpenAI completions serializer with identical history reconstructed
+  at two different wall-clock times, including a real user message.
+- SQLite byte truncation of a long turn, followed by reopening the same
+  assistant-first tail at different times.
+- Failed byte-triggered preflight compaction, both a failure result and an
+  exception, followed by bounded-history fallback and a retry under backoff.
+
+Apply the complete patch set, then run in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts src/config/sessions/session-accessor.sqlite-bounded-context.test.ts
+node scripts/run-vitest.mjs run src/auto-reply/reply/agent-runner-memory.test.ts -t "model-context byte bound"
+```
+
+Windows acceptance also exercised the real Electron client through Playwright/CDP
+against a recording localhost provider. The common request prefix stayed
+byte-identical across minute boundaries and a full client/gateway restart, while
+real user timestamps remained intact. A separate long-history scenario verified
+that failed byte-triggered summarization still completed the user turn without
+installing a compaction boundary. This checks request bytes, not provider billing.
+
+The patch sorts after the bounded-history and session-prefix patches whose
+test coverage it extends. The patch applier verifies both the production fix
+and the regression tests. Rebuild the bundled runtime to ship the fix. Remove
+this patch when the pinned upstream derives bootstrap time from retained
+history rather than the clock.
+
+## Sign-out without a config clobber restart
+
+`openclaw-config-apply-size-drop-allowance.patch` lets the full-config owner
+declare an intended shrink. Signing out removes the `lobsterai-server` plan
+catalog (most of `openclaw.json`), so the file drops below half its size.
+OpenClaw treats that as a clobber (`size-drop:` in `io.write-safety.ts`) and
+rejects `config.apply`. LobsterAI then fell back to a gateway restart, and the
+restarted gateway "restored" the same bytes from `.bak`
+(`size-drop-vs-last-good:`). Each sign-out cost a 12–60 s restart on Windows.
+
+The patch makes two changes:
+
+- `config.apply` accepts an optional boolean `allowConfigSizeDrop`, passed
+  through as the existing `ConfigWriteOptions.allowConfigSizeDrop`. It waives
+  only the size check: `gateway-mode-removed` and unreadable-baseline writes
+  are still rejected. Writers that omit it (Control UI, CLI, doctor, agent
+  mutations) keep the full guard. The gateway promotes the accepted write to
+  last-known-good, so the next start does not flag it.
+- Read-time recovery skips a `.bak` byte-identical to the current file.
+  Restoring it would only rewrite the same bytes, record a `.clobbered.*` copy
+  and warn. OpenClaw's own writes rotate the previous file into `.bak`, so
+  clobbers by other writers still restore. LobsterAI aligns `.bak` with each
+  config it persists while the gateway is stopped (`alignOpenClawConfigBackup`).
+  A sign-out persisted that way now starts without a restore, and the startup
+  promotion updates last-known-good.
+
+LobsterAI claims the waiver only when the shrink would trip the guard and
+everything outside `models` still passes it
+(`src/main/libs/openclawConfigSizeDrop.ts`). Unexpected large drops elsewhere,
+including from LobsterAI bugs, still meet OpenClaw's protection. A gateway built
+without this patch rejects the unknown param, and LobsterAI then falls back to
+the restart path it used before.
+
+Regression coverage:
+
+```sh
+pnpm test src/gateway/server-methods/config.test.ts src/config/io.observe-recovery.test.ts
+```
+
+On Windows the four existing `config.openFile` cases in `config.test.ts` fail
+with or without this patch (POSIX path expectations). LobsterAI side:
+`npm test -- openclawConfigSizeDrop openclawConfigDelivery`. Rebuild the runtime
+(`npm run electron:dev:openclaw`) before checking a sign-out in the desktop app:
+the main log should show `claiming the size-drop waiver` with no
+`Config write rejected`, `.rejected.*` file or `config-delivery-fallback`
+restart. Remove the patch when upstream lets `config.apply` callers waive the
+size check and skips identical-backup restores.
+
+## Recover compaction after context overflow
+
+`zzzz-openclaw-compaction-context-overflow-retry.patch` subdivides a failed
+summary chunk when the provider rejects its context length. It preserves tool
+groups and can split a single long user text in the temporary summary input.
+Completed chunks are reused; the original session history stays intact.
+Subdivision is bounded and cancellation stops further work. Every fragment
+must succeed before recovery can use the summary. Recovery lives in the shared
+core summary path, covering default and safeguard compaction; it has no clean
+LobsterAI adapter hook.
+
+Regression coverage checks text completeness, Unicode boundaries, bounded
+failure, incomplete-summary rejection, transient recovery, and cancellation.
+
+Rebuild the runtime after applying the patch. Remove it when the pinned upstream
+supports bounded subdivision with the same completeness guarantees.
+
+## Show compaction progress during overflow recovery
+
+`zzzz-openclaw-recovery-compaction-events.patch` publishes the existing
+compaction start/end events around overflow recovery. This path runs outside
+the session subscriber, so the adapter otherwise cannot show its existing
+progress indicator. The end event is also emitted on failure or cancellation;
+completion is reported only after the recovered transcript is accepted.
+The following model retry still owns the task's final result.
+
+Regression coverage checks pending work, success, failure, exceptions, and
+cancellation. Rebuild the runtime after applying it. Remove the patch when the
+pinned upstream emits this lifecycle from the recovery owner. There is no
+adapter hook for the missing start event; log parsing is intentionally avoided.
+
+## Stable prefixes across LobsterAI tasks
+
+`zzz-openclaw-session-prefix-cache.patch` moves sessionKey/sessionId/sessionUrl
+out of the actual system prompt for full-mode managed chats
+(`agent:<agent>:lobsterai:<task>` and legacy `lobsterai:<task>`). It also moves the
+current date out of system; the client's per-turn Local Time Context retains
+local date/time, timezone, UTC offset, ISO time and millisecond timestamp.
+Fixed time/cron rules stay in system. Native tool identity, authorization,
+tool catalogs, model routing and session headers are unchanged.
+
+Session identity is omitted only when rendering the final Runtime line through
+`omitRuntimeSessionIdentity`. The original `runtimeInfo` must reach the configured
+prompt builder unchanged: memory preparation/validation and delegation policy
+resolve against its real session key. Clearing that key before assembly causes
+`prepared memory prompt section does not match the current run` before the first
+provider request. The session-cache prompt regression test exercises the real
+preparation/assembly chain and retains rejection of memory from another session.
+
+The runtime builds identity facts from resolved session objects, never by
+parsing user text. It appends a hidden `lobsterai.session-identity.v1` custom
+message after the current user message, using the normal transcript writer.
+Only missing/changed identity is appended. The original bytes and message order
+survive replay, retries and subsequent turns. Forked identities are superseded
+by a new snapshot; pre-prompt and in-turn compaction restore missing facts.
+This message is intentionally distinct from transient `openclaw.runtime-context`.
+Raw probes, minimal/none prompts and non-managed sessions retain existing system
+behavior. The client retains the previous time rules in its per-turn snapshot
+as well, so minimal/raw modes and older runtimes do not lose cron guidance.
+
+The client captures time once after gateway startup, workspace rehydration and
+history probing, immediately before returning the assembled outbound prompt.
+It appends that snapshot after the user request and other context; turn-start
+timing is used only for latency telemetry. Tool loops and gateway/provider retries reuse that persisted string;
+old history is not regenerated. Long-running tasks can still query
+`session_status` for fresh time.
+
+A replayed keyed user followed by an identity snapshot is acknowledged through
+the guarded session manager before invoking the provider. The acknowledgement
+consumes both prepared-user correlation and one-shot persistence suppression,
+without appending a duplicate, moving the user, or rewriting historical rows.
+Subsequent steering and follow-up messages therefore persist normally. Both
+runtime-only and normal prompt submission forward this acknowledgement.
+
+The generated time footer has versioned comment boundaries. History recovery
+removes only the complete generated trailing block from newly imported gateway
+user messages (including the complete pre-marker legacy format). Existing local
+user text stays authoritative and unchanged; source gateway history is never
+modified. Ordinary headings, partial quotes and non-trailing text are preserved.
+
+Rebuild and ship the runtime together with the client changes; installing only
+the TypeScript prompt change does not apply the system-prompt fix. Patch source
+sentinels enforce the complete producer/dispatch/persistence chain, and the
+runtime's `runtime-build-info.json.patchHash` must match the versioned patch set.
+No server API, database or admin changes are required. Cache benefits require
+the same upstream source and unchanged tool/workspace configuration; cache
+eviction, fallback and compaction can still require warming a new prefix.
+
+Remove this patch only when upstream provides equivalent stable system input,
+persistent identity facts and compaction restoration. Check cross-session system
+and tool equality, first-send versus replay order, retries, fork, compaction,
+time-sensitive cron behavior and old session restoration on upgrades.
+
+## Config candidate revision cache (upstream backport)
+
+`openclaw-config-candidate-cache-invalidation.patch` backports the production
+changes from [OpenClaw #142169](https://github.com/openclaw/openclaw/pull/142169),
+merged as `37dbd0aac6556ea9a63f045cabec91963d0571b3` on 2026-09-08.
+It invalidates `config.get` at candidate observation for every writer, including
+agent mutations and watched edits, instead of only config RPC persistence.
+Application revisions and committed notifications still advance at acceptance.
+
+The patch adapts context to v2026.8.1, with no new reload policy. The upstream
+test file uses a newer server harness, so its fixture rewrite is not backported.
+Validate the cache/reloader tests and the real Electron/Gateway config lifecycle
+flow described in `specs/bugfixes/openclaw-config-hot-reload-delivery/2026-09-23-config-lifecycle-design.md`.
+Rebuild the Gateway bundle from patched source; changing the source alone does
+not update the bundled runtime.
+
+Removal: upstream v2026.9.5 contains this commit (v2026.8.1 does not). On an
+upgrade that contains equivalent candidate-observation invalidation, remove this
+patch and rerun agent-mutation/watched-edit freshness, genuine stale-CAS rejection,
+and delayed-application checks. Do not remove LobsterAI's application barrier or
+pending recovery: persistence and runtime application remain different states.
+The broader reload changes in #138112 and #154792 are not part of this backport.
+
 ## Device identity conflicts without an import receipt
 
 `openclaw-device-identity-preservation.patch` aligns the identity migration owner
@@ -489,3 +776,1121 @@ Verify with upstream `runtime-facts-prompt.test.ts`,
 while a background `exec` is running and that the gateway log no longer reports
 `[prompt-cache] cache read dropped` at run boundaries. Remove this patch when
 the pinned upstream includes `#140799`.
+
+## Gateway client request traceparent
+
+`openclaw-gateway-client-request-traceparent.patch` lets a Gateway client put an
+optional W3C `traceparent` on a request frame. The frame schema and the
+authenticated request dispatcher already accept it and run the handler in a
+child of that trace; only the client could not send it: `GatewayClient.request`
+rebuilt its options without the field and the pending request writer never put
+it on the frame. The patch forwards the option through both.
+
+LobsterAI creates one trace per Cowork turn and sends it with `chat.send`
+(including plan-mode recovery sends). The command queue restores the request's
+async context for the agent run, and each model call's diagnostic wrapper adds a
+child `traceparent` header, so every model request of the turn reaches the local
+token proxy and lobsterai-server with the turn's trace id. The server stores it
+in the usage ledger, which lets the client show the turn's credits and lets
+support follow one request from client logs to server logs.
+
+Checked on the pinned source with a real Gateway and a mock
+`openai-completions` provider: a `chat.send` carrying
+`00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01` produced a model HTTP
+request with `traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-<new span>-01`,
+while a `chat.send` without it got an unrelated root trace. The Anthropic
+transport merges the same request headers.
+
+Omitting the option keeps the previous frame bytes. Verify with a rebuilt runtime:
+send a turn on a LobsterAI package model and confirm that the main log's
+`[OpenClawTokenProxy] LLM request started trace=...` lines carry the trace id
+logged by `[OpenClawRuntime] chat.send params`. Remove this patch when the pinned
+upstream Gateway client accepts `traceparent` request options.
+
+## Malformed provider tool calls
+
+`openclaw-openai-completions-tool-call-repair.patch` and
+`openclaw-malformed-tool-call-continuation.patch` keep one malformed tool call
+from ending a whole agent turn.
+
+Why: v2026.8.1 parses OpenAI-compatible terminal tool arguments with plain
+`JSON.parse`. When the model writes a complete call whose strings contain a
+raw line break, an invalid escape (`\'`, `\|`), or an unescaped quote, the
+transport rejects the whole assistant message ("Provider returned an incomplete
+or malformed tool call") and drops the call. The runner's own argument-repair
+wrapper never sees it, and every existing retry is off after earlier tools ran,
+so the user got "Agent couldn't generate a response. Note: some tool actions may
+have already been executed". On 2026-09-23 a deepseek-flash run ended this way
+after seven tools; replying "继续" finished the same edit on the next try.
+v2026.6.1 parsed these buffers leniently, so this failure is new with 8.1.
+
+The repair patch backports upstream v2026.9.5 `repairStringLiterals` and applies
+it to OpenAI-compatible completions (upstream only uses it for Anthropic). Only
+raw control characters and invalid escapes inside string values are repaired;
+valid escapes are preserved as written. Truncated, non-object, empty, or unnamed
+calls stay rejected so a cut-off write never runs. A rejection appends a
+`malformed_tool_call_arguments` message diagnostic with shape facts only
+(reason, mapped provider stop reason, argument length and hash, JSON failure
+class and position). The error class keeps these facts off `code`, `cause`, and
+`errorBody`, so Anthropic-lane error projection and failover classification do
+not change.
+
+The continuation patch gives such a turn up to two internal continuations
+(`activateInternalPrompt`, not persisted as a user turn). The rejected call
+never ran and the turn resumes after the committed transcript, so this is the
+one retry that may follow side-effecting tools. It skips aborted, timed-out,
+failed, yielded, client-tool, approval, and already-finalized attempts. A
+settled-tool final-answer pass is not requested for a rejected call; it would
+drop the action the model was taking. After two failures the existing
+incomplete-turn error is shown. Logs record `malformed tool call rejected
+before execution` or `malformed tool call continuations exhausted` with the
+diagnostic summary.
+
+Verify with upstream `transport-stream-shared.test.ts`,
+`openai-completions.legacy-function-call.test.ts`,
+`malformed-tool-call-recovery.test.ts`,
+`terminal-resolution.malformed-tool-call.test.ts`, and the full-entry
+`run.malformed-tool-call-continuation.integration.test.ts`. Then run LobsterAI's
+`malformedToolCallRecovery` test and rebuild the runtime. Remove the repair
+patch when the pinned upstream applies terminal string-literal repair to
+OpenAI-compatible completions. Remove the continuation patch when upstream
+recovers rejected tool calls after side effects.
+
+## Whole-turn replay after a started model call
+
+`openclaw-skip-turn-replay-after-model-call.patch` stops the reply runner from
+replaying a whole turn once that turn has started a model call. This applies to
+both outer replays in `agent-runner-error-handler.ts`: the one-shot transient
+HTTP retry and the overload retry.
+
+Why: v2026.8.1 still has both replays, and it adds keyed user admission to the
+session transcript. A started model call has already committed the turn's
+`<runId>:user` message and, when the call fails, its error reply. The replay
+admits the same keyed user again, behind that reply, and `SessionManager`
+rejects it with "Session transcript keyed user is outside the current turn"
+(or "Transcript idempotency key ... conflicts with the admitted message"). The
+user then sees "LLM request failed." with that internal text 2.5s later,
+instead of the real provider error. The existing replay guard only reacts to
+tool execution and CLI output; the embedded runner never emits
+`assistant_output_started`, so streamed text or reasoning did not stop the
+replay. On 2026-09-24 a Windows user hit this 6 times out of 6. Each case
+followed a mid-stream `net::ERR_SSL_PROTOCOL_ERROR` in the token proxy, which
+OpenClaw reports as `LLM request timed out.` with `terminated`. v2026.6.1 had
+the replay but not the keyed guard, so this failure is new with 8.1.
+
+The patch adds `OverloadRetryState.modelCallStarted`. The embedded runner's
+`model_call_started` phase sets it, and both replay branches require it to be
+false. Failures before any model call (for example an auth-profile cooldown
+classified as overloaded) still replay as before, with the delayed overload
+notice. After a started call, the first failure is surfaced directly with its
+own classification: LobsterAI maps `providerRuntimeFailureKind: timeout` to its
+response-timeout message. CLI backends (`process_spawned`) are unchanged.
+
+Verify with the upstream suites. The new cases in the provider-failures suite
+check that overloaded, HTTP 503 and interrupted-stream failures are not
+replayed after `model_call_started`. The existing pre-call 503 and overload
+retry cases must still pass:
+
+```sh
+node_modules/.bin/vitest run src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
+node_modules/.bin/vitest run --config test/vitest/vitest.e2e.config.ts src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
+```
+
+These files already fail in 16 cases before this patch: failure copy and trace
+segments changed by other LobsterAI patches. The failing set must stay the
+same. Then run LobsterAI's `turnReplayAfterModelCall` test and rebuild the
+runtime. Remove this patch when the pinned upstream contains
+[OpenClaw #134281](https://github.com/openclaw/openclaw/pull/134281) (v2026.9.1
+and later). That change deletes both outer replays and budgets transient
+retries inside the embedded runner, before any visible output.
+
+## Replaced thinking catalog owner (upstream backport)
+
+`openclaw-tolerate-replaced-thinking-catalog-owner.patch` backports the agents
+half of [OpenClaw #127284](https://github.com/openclaw/openclaw/pull/127284),
+merged as `bf599a721784849e350c18ff703c9e75de939e0d` on 2026-09-01. When the
+provider-scoped read-only catalog finds a published owner prepared for another
+config generation, it skips that owner and builds the scoped catalog from the
+turn's own config instead of throwing `PreparedModelCatalogConfigReplacedError`.
+
+Why: before every embedded run, `resolveRunModelHasVision`
+(`agent-runner-run-params.ts`) decides whether the selected model accepts
+images. When the running `openclaw.json` gives that model no `input`, it calls
+`loadProviderScopedThinkingCatalog`, which reaches
+`loadScopedReadOnlyModelCatalog`. In v2026.8.1 a config mismatch there throws.
+The error is not retried and is not a failover reason, and only startup or a
+reload republishes the owner. Every later turn then fails before reply with
+"prepared model catalog owner config was replaced during the read
+(<agentDir>)", `/new` included, until the gateway restarts. On 2026-10-07 a
+Windows QQ user hit this three turns in a row after sending an image. The
+running config carried incomplete plan-model entries (the restart diff changed
+`models`, `agents` and `plugins`), so every turn took this read, and the image
+turn spent almost two minutes loading provider plugins for media understanding.
+The logs do not show which publication replaced the owner; the patch removes
+the failure mode either way.
+
+The upstream wizard half (`setup.finalize`) is omitted because LobsterAI does
+not run onboarding. The read-only owner path in
+`resolvePreparedModelCatalogOwnerSnapshotWithPolicy` keeps its `throw`, as
+upstream does.
+
+Verify with the upstream suite. The new case fails with the user's error
+without the source change:
+
+```sh
+node_modules/.bin/vitest run src/agents/prepared-model-catalog.scoped-thinking.test.ts src/agents/prepared-model-catalog.test.ts
+```
+
+Then run LobsterAI's `replacedThinkingCatalogOwner` test and rebuild the
+runtime. Remove this patch when the pinned upstream reaches v2026.9.1. Later
+releases harden the same reload window: v2026.9.5 (#147001) keeps channel
+replies on the committed publication, and v2026.9.7 (#154462) keeps active
+turns on their admitted generation.
+
+## Unfinished progress-card plans (upstream backport)
+
+`zz-openclaw-plan-completion-check.patch` backports
+[OpenClaw #160297](https://github.com/openclaw/openclaw/pull/160297), merged as
+`3ba0a0b23761ef8209827f7f3dd0f82713c33bbe` on 2026-09-28. It also takes the
+`progress_card` description sentence from
+[#162903](https://github.com/openclaw/openclaw/pull/162903). A run can save an
+unfinished `progress_card` plan and then stop with an ordinary visible reply.
+The embedded runner now sends one hidden `openclaw.plan-completion-check`
+follow-up in the same run. The model then continues feasible work, reconciles
+the plan, or reports the concrete limitation.
+
+Why: on 2026-10-10 users reported the composer card stuck on
+"第 3/10 步 · 本轮已结束" with MiniMax-M3.1-Flash-Preview. The model had written a
+progress report ("评测尚未收尾，我会继续…") without a tool call. v2026.8.1 only
+recovers empty or reasoning-only turns, so the run completed with seven steps
+pending and nothing resumed it. The desktop card showed that label for a
+`completed` session whose card still had unfinished steps; LobsterAI has since
+removed that card, but a run that stops halfway still leaves the work undone.
+
+Scope: the check runs at most once per run and replays no completed tool call.
+It applies only when the run still owes a visible reply and the model stopped
+with `stop`. The following keep their existing behavior:
+
+- old cards;
+- cancellation, timeouts, yields, refusals and length stops;
+- approval prompts, async tasks and accepted child sessions;
+- queued user messages and plugin `finalize` decisions.
+
+The check does not guarantee that the model finishes. A run can still end on
+"本轮已结束" when the model reports a genuine blocker.
+
+Adaptations for v2026.8.1:
+
+- The NO_REPLY clause from [#164896](https://github.com/openclaw/openclaw/pull/164896)
+  is left out. v2026.8.1 builds the final payload from the last assistant message
+  and has no kept-answer delivery, and LobsterAI's silent-final handling deletes
+  the turn's current assistant message. A blocked model restates its limitation
+  instead.
+- `deferTerminalDelivery` is ported. In v2026.8.1 any `onBeforeTerminalDelivery`
+  holds every assistant event until the run ends. With the patch, events are
+  held only when a `before_agent_finalize` hook exists, so LobsterAI keeps live
+  streaming.
+- Any accepted `sessions_spawn` child counts as pending work: v2026.8.1 has no
+  `expectsCompletionMessage` marker.
+- The upstream steering-admission object does not exist here. The check is
+  skipped when the subscription was unsubscribed during the finalize hook or the
+  attempt no longer owns the active run.
+- Refusals are read from the `provider_refusal` diagnostic.
+- LobsterAI addition: when the check continues the run, the runtime emits a
+  `checkpoint` agent event after the finished answer is flushed.
+  `OpenClawRuntimeAdapter` closes that assistant segment on it
+  (`AgentEventStream.Checkpoint`). Without the event, the adapter splits only on
+  a large stream reset, so a short answer followed by text was overwritten, and
+  the final history sync then kept only the last message. Other clients ignore
+  the unknown stream.
+
+Status: LobsterAI now writes `tools.updatePlan: false`, so `progress_card` is not
+registered and this check does not run. The desktop card is gone, most calls
+spent a model request of their own, and the tool description told the model the
+user watches the card instead of the transcript. The patch stays inert; remove it
+with the next upgrade unless `progress_card` comes back.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts src/agents/tools/progress-card-tool.test.ts src/agents/harness/selection.test.ts
+```
+
+Then run LobsterAI's `planCompletionCheck` test and the adapter test
+"a run checkpoint keeps a finished answer that the same run follows with more
+text", and rebuild the runtime. In the desktop app, a run that saves an
+unfinished plan and stops should continue in the same turn. The hidden check
+must not appear in chat, and assistant text must still stream live. When a short
+answer is followed by more text, both messages must remain after a reload.
+
+Removal: #160297 ships in v2026.9.7, while #162903 and #164896 ship in
+v2026.10.1. Remove this patch when the pinned upstream reaches v2026.10.1. An
+upgrade to v2026.9.7–v2026.9.9 also replaces it, but loses the paused-checklist
+guidance. Blocked runs still restate their limitation until v2026.10.1.
+
+Upstream does not emit the `checkpoint` event, so after the upgrade the
+adapter's checkpoint handling is dormant. Recheck the short-answer case: a model
+can still follow a finished answer with more text. If the overwrite returns,
+carry the event emission as its own small patch.
+
+## Relinked managed workspaces
+
+`openclaw-managed-workspace-alias-follow.patch` lets a LobsterAI-managed
+workspace follow its current target after it is replaced by a link. OpenClaw
+records each configured workspace path and the real directory it resolved to in
+`workspace_path_aliases`. When the path later resolves somewhere else, v2026.8.1
+fails every message with `workspace path alias points to a different current
+target`. Users hit this by linking `workspace-main` to a synced folder (for
+example OneDrive) after the app had already initialized it. A data-migration
+restore does not copy links, so restoring brings back the empty template and the
+user or agent links it again.
+
+LobsterAI sets `LOBSTERAI_MANAGED_WORKSPACE_ROOT` to its OpenClaw state
+directory for the Gateway. For a workspace path strictly below that root that
+still exists, alias rows pointing at an older target are ignored, the current
+target's own records are used, and the next state write repoints the rows with a
+`workspace` warning that names both paths. The previous target's records are not
+moved or deleted: a link usually points at a different workspace, and copying
+its file attestation would make OpenClaw report the new folder as vanished. A
+missing path keeps its stored owner, so vanished-workspace protection still
+applies. Paths outside the root, and runs without the variable, keep upstream's
+fail-closed behavior.
+
+Run the upstream store tests and the end-to-end relink test:
+
+```sh
+node_modules/.bin/vitest run src/agents/workspace-state-store.test.ts src/agents/workspace.managed-relink.test.ts
+```
+
+Then rebuild the runtime. In the desktop app, initialize the main agent, quit,
+replace `openclaw/state/workspace-main` with a link to a folder that already
+holds agent files, and restart. Messages must succeed, `BOOTSTRAP.md` must not be
+created in the linked folder, and the Gateway log must show the alias warning
+once.
+
+Removal: upstream #133198 (v2026.9.4) only improves the error and adds a
+confirmed `openclaw doctor --fix` rebind that moves records. It does not follow
+the new target on its own, so keep an equivalent of this patch after upgrading,
+adapted to the renamed store helpers.
+
+## Managed image attachments during replay
+
+`openclaw-managed-image-replay.patch` excludes managed outgoing image display
+blocks from the assistant's in-memory model replay. These blocks contain an
+`artifact_managed_image_` ID and a local `/api/chat/media/outgoing/` URL, without
+base64 data. Passing them to the image sanitizer creates the misleading
+`[session:history] omitted image payload: missing data or mimeType` text, which
+models can echo in subsequent answers.
+
+The patch retains persisted attachments, user images, tool image results, and
+assistant images that actually contain data. It also removes standalone echoes
+of that exact diagnostic from old assistant replay text while preserving quoted
+and fenced examples. LobsterAI's assistant display and history extraction apply
+the same narrow cleanup to existing local messages; the stored records remain
+available for diagnosis.
+
+This belongs at OpenClaw's replay boundary: LobsterAI's adapter receives output
+after the sanitizer has already supplied the erroneous text to the model, and
+the prompt-building hook does not provide a message replacement result.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/embedded-agent-runner/managed-image-replay.test.ts src/agents/embedded-agent-runner/replay-history.test.ts --maxWorkers=2
+```
+
+Then rebuild the runtime and check a conversation containing previously returned
+images. Existing image cards and regular replies must remain visible, without
+the runtime diagnostic appearing as answer text. Remove this patch when
+upstream handles managed display images before sanitizing model replay at all
+relevant boundaries.
+
+## Browser process cleanup recovery
+
+`openclaw-chrome-mcp-process-recovery.patch` retains a live Chrome MCP transport
+when OS process enumeration or identity revalidation fails. Closing the SDK
+client at that point discards its PID, leaving cleanup permanently uncertain
+even after Windows process enumeration recovers. A later browser command now
+retries verified cleanup before creating a replacement connection. PID identity,
+unrelated-process protection, and the existing enumeration timeout stay intact.
+First-time identity capture also rejects a snapshot if the transport has closed
+while enumeration was pending, retaining uncertainty instead of adopting a reused PID.
+The diagnostic identifies process inspection instead of recommending unrelated
+Chrome remote-debugging setup.
+
+Verify `extensions/browser/src/browser/chrome-mcp.test.ts`,
+`server-context.tab-ownership.test.ts`, and `server-context.list-profiles.test.ts` in the
+OpenClaw checkout, then rebuild the runtime. Desktop acceptance should inject
+latency into two real process-enumeration commands, restore normal timing, and
+confirm recovery on the next browser command without restarting the gateway.
+Remove when upstream preserves a verifiable cleanup handle across discovery
+failures and provides equivalent recovery coverage.
+
+## Native Chrome MCP process snapshots on Windows
+
+`openclaw-chrome-mcp-windows-native-snapshot.patch` stops the browser tool from
+depending on PowerShell to prove which processes a Chrome MCP session owns.
+Upstream lists every process with `powershell.exe Get-CimInstance Win32_Process`
+under a 2 s timeout. The in-app browser (the default display mode, an
+`existing-session` profile) runs that list twice during every attach and at
+least three times while closing a session. Loading CimCmdlets and enumerating
+about 420 processes took 1.65-2.3 s per call on an ordinary Windows 11 machine
+(up to 3.1 s while other work ran), against about 0.33 s for a bare PowerShell
+start, so most attaches failed with `Chrome MCP process inspection failed`. Each
+failure also left the session retained as `uncertain` by
+`openclaw-chrome-mcp-process-recovery.patch`. Every later browser command
+re-ran the same list before attaching and failed the same way, so the browser
+stayed unavailable until the gateway restarted.
+
+`chrome-mcp-windows-processes.ts` reads the table through koffi instead:
+`CreateToolhelp32Snapshot` gives pid and parent pid, and
+`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, `GetProcessTimes` and
+`QueryFullProcessImageNameW` give each row the identity
+`win32:<creation FILETIME ticks>|<image path>`. The same machine lists all
+processes in 12-19 ms. koffi is the package Windows runtimes already keep for
+`openclaw-windows-private-directory-native.patch`, and the bundled browser
+chunk resolves it through `createRequire` the way it loads `playwright-core`.
+
+Rows that cannot be opened are dropped, as the PowerShell list already dropped
+rows without an `ExecutablePath`. So are rows whose exit time is set. A Chrome
+MCP subtree belongs to the gateway's user, so it is always readable. A child is
+detached from its reported parent pid when that pid now belongs to a process
+created after the child. That keeps a recycled pid from pulling an unrelated
+tree into `taskkill /t`.
+
+The identity source never changes once native rows have been issued. A
+PowerShell row has a different identity string, so mixing the two would make a
+live owned process look exited (skipping its cleanup) or a tracked root look
+replaced. If koffi cannot load, or the first native read fails, the gateway
+uses PowerShell for its whole lifetime. A native failure after that throws the
+existing `ChromeMcpProcessSnapshotError`. The PowerShell fallback timeout rises
+from 2 s to 10 s, so two attach-time lists still fit the 30 s handshake budget.
+The `ps` path on macOS keeps 2 s.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run extensions/browser/src/browser/chrome-mcp-windows-processes.test.ts extensions/browser/src/browser/chrome-mcp.test.ts extensions/browser/src/browser/server-context.tab-ownership.test.ts extensions/browser/src/browser/server-context.list-profiles.test.ts
+```
+
+On Windows the suite reads this process, a spawned child and the child's exit
+through the real kernel32. The Windows e2e drives a real attach through a `.cmd`
+launcher (like LobsterAI's), a stdio MCP server and its long-lived grandchild:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts --silent=false extensions/browser/src/browser/chrome-mcp-windows-processes.e2e.test.ts
+```
+
+It runs five attach, list and close rounds with 2.5 s injected into every
+PowerShell list, and requires no PowerShell, one `taskkill` per root and the
+whole tree gone after each close. Measured: attach 0.40-0.52 s, close 1.0-1.8 s.
+It also forces the PowerShell fallback with the same latency. All five lists
+there took 4.7-5.2 s, every one over the former 2 s limit, and the browser still
+attached and cleaned up. Set back to 2 s, that case fails with the reported
+`Command timed out after 2000 milliseconds`. `OPENCLAW_E2E_SKIP_BUILD=1` skips
+the e2e build step when `dist` is current.
+
+Rebuild the runtime, then in the desktop app with the
+in-app browser use the browser tool once and close the session. The gateway log
+should have no `Chrome MCP process inspection failed`, the attach should start
+no `powershell.exe`, and the bridge subprocess should be gone after close.
+Remove when upstream enumerates Windows process trees without PowerShell.
+
+## Native plugin loading on Windows
+
+`openclaw-windows-native-plugin-require.patch` makes Windows load compiled
+plugins with native `require` like macOS and Linux. The plugin loader passes
+`toSafeImportPath(modulePath)`, which on Windows is a `file:///` URL (the form
+ESM imports need), to `tryNativeRequireJavaScriptModule`. `require()` rejects
+URLs with `MODULE_NOT_FOUND`, the loader read that as a missing target, and every
+plugin, bundled `dist/extensions/*` included, fell back to jiti with
+`tryNative: false`: Babel transforms of the plugin and OpenClaw's whole SDK graph.
+The patch converts `file:` URLs to paths for `require()` and for
+`clearPluginModuleRequireCache`'s `require.resolve`, whose failure had also
+skipped eviction of URL-keyed modules. The URL stays the cache key.
+
+End to end on a 360 machine: runtime built with this patch and
+`openclaw-plugin-realpath-parent-cache.patch`, copied to `%LOCALAPPDATA%`, gateway
+run by `LobsterAI.exe` with the same scratch config as the installed v2026.8.1
+runtime (built 2026-10-30). 7 plugins: `[plugins] loaded` 124.5 s -> 16.0 s,
+HTTP listening 129.8 s -> 18.0 s, lstat 138,504 -> 13,919. All 16 allowed
+plugins enabled: 270.2 s -> 44.7 s with the same plugin list and no load errors.
+`tools.catalog` lists the same plugin tools, and jiti is no longer called at
+startup (the installed runtime made 6,508 jiti cache calls for 16 plugins).
+
+A plugin hot reload re-registers from the same module generation; a running
+gateway does not retire it, so eviction applies to restarts and CLI flows.
+Plugin staging during the runtime build now logs `failed to load` for
+openclaw-lark, nim-channel and netease-bee: their `node_modules/openclaw` host
+peer does not export `./plugin-sdk`. The packaging step removes that peer, as on
+macOS, where these plugins always load natively.
+
+Verify with `node_modules/.bin/vitest run src/plugins/native-module-require.test.ts`.
+Remove when upstream converts loader URLs before native `require`.
+
+## Plugin realpaths through cached parent directories
+
+`openclaw-plugin-realpath-parent-cache.patch` targets the realpath calls that
+remain once plugins load natively. `pluginCacheRealpathSync` and the
+installed-plugin index staleness checks in `plugin-registry-snapshot.ts` already
+cache realpaths, but only by exact path, so each new file still paid a full
+`fs.realpathSync` walk (one lstat per component) under the same few directories.
+
+`realpath-through-parent.ts` resolves a path as its parent's cached realpath
+plus its basename after one lstat, and falls back to `fs.realpathSync` for
+links and roots. `pluginCacheRealpathSync` (non-native) uses its own per-path
+facts for the parent, and the staleness checks use
+`safeRealpathWithParentsSync` with the Map they already create per check. Cache
+lifetimes do not change: plugin cache generation and one check respectively.
+Missing paths still return null and are not cached. The native realpath variant
+and other `safeRealpathSync` callers are unchanged. Two tests that counted
+`fs.realpathSync` calls to prove one lookup per path now count the lstat too.
+
+Measured on the same 360 machine in the runtime built with this patch set,
+copied to `%LOCALAPPDATA%` and run by `LobsterAI.exe` with 7 plugins, reverting
+only this patch in the loaded bundle for comparison: lstat 32,851 -> 13,919 and
+time inside lstat about 19 s -> 9 s per startup; the process reached
+`[plugins] loaded` after 64-75 s without it and 50-51 s with it. Most of the
+saving lands before plugin loading, in discovery and index checks.
+
+Verify with `node_modules/.bin/vitest run src/plugins/realpath-through-parent.test.ts
+src/plugins/discovery.test.ts src/plugins/manifest-registry.test.ts
+src/plugins/plugin-registry-snapshot.test.ts`, then rebuild the runtime. Remove
+when upstream resolves plugin paths through cached parents itself.
+
+## Native Windows process start times
+
+`zz-openclaw-windows-process-start-native.patch` lets
+`readWindowsProcessStartTimeSync` (added by
+`openclaw-windows-process-identity.patch`, switched to .NET `Process.StartTime`
+by `zz-openclaw-lock-owner-recovery.patch`) read the creation time through
+koffi and `kernel32!GetProcessTimes` before it starts PowerShell. Gateway lock
+acquisition, the state lock and the agent database lease all ask for the
+gateway's own start time; each call was a synchronous `powershell.exe -Command`
+spawn of 0.4-1 s on the startup path, six per Windows gateway start (five before
+`ready`). A non-Microsoft process launching PowerShell with `-Command` is also a
+common EDR rule, and AMSI scans every one.
+
+`GetProcessTimes` is the source .NET reads for `Process.StartTime`, and the value
+is truncated to milliseconds the way `Date.parse` truncates PowerShell's 7-digit
+fraction, so stored lock identities compare equal across versions and with
+LobsterAI's own lock-recovery inspection. The gateway's own pid uses the
+`GetCurrentProcess` pseudo handle and is cached; other pids use
+`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`. A pid that does not exist
+(`ERROR_INVALID_PARAMETER`) or whose exit time is set returns `null`, as
+`GetProcessById` and WMIC already did. Any other outcome (koffi unavailable,
+access denied, a native error) falls through to the unchanged PowerShell/WMIC
+chain. koffi is the same package Windows runtimes keep for
+`openclaw-windows-private-directory-native.patch`.
+
+Measured end to end with the dev app on the production renderer, warm start,
+same machine and state, runtime rebuilt with only this patch added: PowerShell
+spawns per start 6 (2.5 s synchronous) -> 0, gateway spawn to `ready`
+18.9 s -> 16.8 s, LobsterAI seeing the gateway ready 23.4 s -> 21.6 s. A second
+gateway started on the same state directory still identifies the live owner by
+pid and start time and refuses to run, without PowerShell or WMIC.
+
+Verify with `node_modules/.bin/vitest run src/infra/windows-process-start.test.ts
+src/infra/gateway-lock.test.ts src/shared/pid-alive.test.ts`; on Windows the
+suite compares the native value with a real `Process.StartTime` for this process
+and its parent. Remove when upstream reads Windows process times natively.
+
+## Native Windows registry reads and console code page
+
+`openclaw-windows-registry-codepage-native.patch` removes the synchronous child
+processes the gateway started on Windows right after `ready`. Resolving the
+trusted install roots (`getWindowsInstallRoots`, used for every System32 tool
+path) ran `reg.exe query` four times (`SystemRoot`, `ProgramFilesDir`,
+`ProgramFilesDir (x86)`, `ProgramW6432Dir`, 50-60 ms each). The first decode of
+child output then ran `cmd.exe /d /s /c chcp` (about 100 ms). A non-Microsoft
+process starting `reg.exe` or `cmd.exe` is also a common EDR heuristic.
+
+Registry values now come from koffi and `advapi32!RegGetValueW`, still from HKLM
+and never from environment variables, which upstream deliberately distrusts for
+these roots. The read follows reg.exe's order (64-bit view, then the default
+view) and returns what reg.exe printed: string data unexpanded and trimmed,
+`REG_DWORD` as lowercase `0x` hex, `null` when the value is missing from both
+views. Any other outcome (koffi unavailable, an unsupported root or type, access
+denied) falls through to the unchanged reg.exe path.
+
+The console encoding comes from `kernel32`. `chcp` printed the code page of the
+console it ran in: the gateway's own when one is attached
+(`GetConsoleOutputCP`), otherwise the new console Windows created for `cmd.exe`.
+LobsterAI starts the gateway through Electron, a GUI-subsystem binary with no
+console, so the second case is the normal one. A new console starts on a valid
+`HKCU\Console` `CodePage` override, otherwise on the OEM code page (`GetOEMCP`).
+Per-executable console subkeys are not consulted. When the helper cannot load,
+the `chcp` probe runs as before.
+
+Measured on a warm gateway start with the same machine and state, comparing
+runtimes built from `release/2026.11.2` with and without this patch (four
+interleaved runs each after a warm-up). Child processes per start dropped from
+8 to 3. Only the two SQLite read-only workers and an async `git rev-parse`
+remain, and `reg.exe`/`cmd.exe` went from 5 to 0. Synchronous child-process
+time after `ready` went from a median 466 ms to 0. Timed directly from the
+shipped dist chunks in a console-less Electron process, the first
+`getWindowsInstallRoots()` dropped from 197-291 ms to 1.2-2.3 ms (9-17 ms when
+koffi is not loaded yet). The first `resolveWindowsConsoleEncoding()` dropped
+from 69-129 ms to under 1 ms. Both versions return the same roots and encoding.
+Without the dreaming-scrub patch below, the main thread stays saturated for the
+first 3 s after `ready` either way, so the freed time only lets the remaining
+startup work run sooner.
+
+With both patches (the merged release runtime), "before" was produced by making
+only these two koffi bindings fail, so the unchanged fallback ran. That gave
+the same 8 child processes and 435-485 ms of synchronous time as a separately
+built runtime without the patch. Idle time in the first 1.8 s after `ready` went
+from a median 277 ms to 490 ms. Those medians cover the runs whose startup was
+not swamped by other load on the shared machine; the spread is large.
+
+Verify with `node_modules/.bin/vitest run src/infra/windows-install-roots.test.ts
+src/infra/windows-encoding.test.ts src/infra/detect-binary.test.ts`. On Windows
+the suite compares the native values with real `reg.exe` and `chcp` output.
+`detect-binary.test.ts` now disables the native reader explicitly, because hiding
+`reg.exe` no longer turns off registry lookups. Remove when upstream reads these
+values without starting child processes. As of 2026-11, upstream `main` still
+uses `reg.exe` and `chcp`.
+
+## Dreaming startup scrub only when dreaming is enabled
+
+`zz-openclaw-dreaming-cleanup-only-when-enabled.patch` makes memory-core's
+`gateway_start` hook skip `startDreamingSessionCleanup` when the startup
+dreaming config resolves to disabled. The scrub reclaims `dreaming-narrative-*`
+session entries and transcripts that an interrupted dreaming run left behind.
+It runs once right after `gateway_start` and again five minutes later, for every
+configured agent, whether or not dreaming is enabled. Even with nothing to
+remove, its planning step opens each agent database for writing: the lease,
+integrity check, schema contract, index verification and deletion path fence.
+That is about 130 ms per agent of synchronous work right after the gateway
+reports ready. Requests wait behind it, including the desktop client's first
+handshake.
+
+LobsterAI defaults dreaming to off and always writes
+`plugins.entries.memory-core.config.dreaming.enabled`, so for most users the
+scrub never finds anything. The enabled check uses the same startup plugin-config
+fallback as cron reconciliation. It is resolved independently, so a failed cron
+reconciliation still cleans up when dreaming is enabled. If the config cannot be
+resolved, the scrub runs as before. Leftovers from an earlier period with
+dreaming enabled stay until the first gateway start after dreaming is enabled
+again; changing the memory-core plugin config restarts the gateway.
+
+Measured on Windows with the same state (4 agents, dreaming disabled), runtime
+rebuilt with only this patch added. Gateway CPU profile, 1.8 s after `ready`:
+idle 160 ms -> 851 ms, and the scrub and its SQLite checks (about 560 ms) are
+gone. Dev app on the production renderer, warm starts: `ready` to the desktop
+client's handshake went from 1.16-1.21 s to 0.67-0.71 s, and to 1.01 s in one
+run that was slower throughout.
+
+Verify with `node_modules/.bin/vitest run
+extensions/memory-core/src/dreaming-startup-cleanup.test.ts`. Remove when
+upstream gates the startup scrub on dreaming itself.
+
+## Web fetch follows the desktop proxy preference
+
+`openclaw-web-fetch-proxy.patch` lets LobsterAI enable the existing
+`tools.web.fetch.useTrustedEnvProxy` setting while retaining web_fetch's local
+DNS checks and binding proxy CONNECT targets to the validated addresses.
+LobsterAI emits this setting only when both the global proxy switch and the
+web_fetch follow-proxy switch are enabled. Host headers and TLS SNI retain the
+original hostname; NO_PROXY and the SSRF policy are checked on every redirect.
+Global proxy use grants no new access to private addresses. Local DNS must still
+resolve the destination. Provider-specific trusted-proxy behavior is unchanged.
+
+This requires a runtime patch because the original web_fetch option delegates
+DNS resolution to the proxy and bypasses local address validation. The desktop
+configuration boundary alone cannot preserve that validation.
+
+Verify `src/agents/tools/web-fetch.proxy.integration.test.ts`, the neighboring
+web-fetch tests, and `src/infra/net/fetch-guard.test.ts`; then rebuild and test a
+real HTTPS tunnel with the generated desktop config. Remove when upstream
+supports an equivalent proxy transport with validated, pinned destination IPs.
+
+## Tool Search pins hot tools and skips small catalogs
+
+`openclaw-tool-search-direct-tools.patch` adds two `tools.toolSearch` keys.
+
+- `direct`: tool names that stay in the model's tool array while Tool Search
+  defers the rest. Entries are exact names or a trailing `*` prefix such as
+  `lobster-word__*` (one MCP server). Upstream keeps only core file/shell tools
+  direct and has no configuration hook. A pin may name an MCP tool, but only
+  when that name is unique in the run, so a lookalike from another server
+  cannot take its place. Implicitly required names (`message` as the sole reply
+  path) stay OpenClaw-only. Code Mode ignores the list.
+- `minDeferredChars`: skip compaction for a run when the schemas it would hide
+  total fewer characters. Measuring stops once the threshold is reached, and
+  without a threshold nothing extra is serialized.
+
+Why: cached input is billed at 1/50 of uncached input, so shrinking a warm
+prefix saves little, while every deferred tool costs one or two extra model
+requests (search, describe) the first time it is used. A desktop A/B on
+deepseek-flash measured Excel/Word 4 → 6 requests and browser 9.5 → 11.5 when
+those tools were deferred, which made them 35–79% more expensive. LobsterAI
+therefore pins the tools a session is likely to use (by local usage share:
+browser, `web_fetch`, memory, the Word and Excel editors), the interaction and
+safety tools (`AskUserQuestion` — the delete policy skips confirmation when it
+is missing — `ask_user`, `progress_card`), and defers only the long tail. A
+plugin tool's `catalogMode: "direct-only"` is not enough: plugin tool
+descriptors are cached without that field.
+
+Verify `src/agents/tool-surface-plan.test.ts` and `src/config/schema.test.ts`,
+then rebuild the runtime and check a desktop session's `systemPromptReport`.
+A runtime built without this patch rejects the unknown keys, so rebuild before
+running the desktop app. Remove when upstream offers operator-pinned direct
+tools and a deferral threshold.
+
+## Tool Search calls keep native images and drop the catalog echo
+
+`openclaw-tool-call-result-projection.patch` reshapes the model-visible result
+of the structured `tool_call` control:
+
+- Upstream returns `{ tool, result }` with the full catalog entry, so every call
+  repeats the tool's description and input hint (1.1k–5.2k characters per call
+  measured). The model now sees `{ tool: { id, name }, result }`.
+- Upstream serializes the whole result with `jsonResult`, so an image block
+  became base64 text truncated at 20,000 characters: a deferred browser
+  screenshot cost ~13k uncached tokens and the model still had to call
+  `view_image`. Images now stay native blocks appended after the JSON text, as
+  a direct call returns them; the text keeps a short placeholder per image.
+
+The untrusted-content wrapper for network and MCP text, failure `details`
+(which keep the full entry), and Code Mode's `openclaw.tools.call` shape are
+unchanged.
+
+Verify `src/agents/tool-search.test.ts` and
+`src/agents/tool-search.mcp-error.test.ts`. On Windows,
+`code-mode.bridge.host-denial.test.ts` and
+`attempt.code-mode-reconciliation.test.ts` fail with or without this patch.
+Remove when upstream projects `tool_call` results the same way.
+
+## ChatGPT OAuth token requests honor the gateway proxy (upstream backport)
+
+`openclaw-openai-oauth-token-proxy.patch` backports the production change from
+[OpenClaw #131161](https://github.com/openclaw/openclaw/pull/131161), merged as
+`056202190` on 2026-09-04. The OpenAI ChatGPT/Codex token exchange and refresh
+POSTs to `auth.openai.com` now use `trusted_env_proxy` mode, so they follow the
+`HTTPS_PROXY`/`HTTP_PROXY` that LobsterAI injects into the Gateway environment.
+Before this patch the guard used strict mode: local DNS pinning and a direct
+connection, ignoring the proxy. Users in regions OpenAI does not serve saw a
+working desktop login (the Electron code exchange uses Chromium's proxy) followed
+by `OpenAI Codex token refresh failed (403): unsupported_country_region_territory`
+once the access token expired.
+
+The exact-host `auth.openai.com` allowlist, fake-IP ranges, NO_PROXY bypass,
+direct DNS pinning when no proxy applies, the managed proxy, abort handling and
+the response size limit are unchanged. ALL_PROXY alone still does not select a
+proxy, matching undici's EnvHttpProxyAgent.
+
+The upstream proxy test is adapted to the v2026.8.1 token result shape
+(`{ type, message }`); the newer `assertCurrent` owner check and its "retired
+owner" case do not exist in this version. The upstream callback-test DNS family
+tweak in `openai-chatgpt-oauth-flow.runtime.test.ts` is unrelated to the fix and
+is not backported.
+
+Verify `extensions/openai/openai-chatgpt-oauth-token.proxy.test.ts` and
+`openai-chatgpt-oauth-flow.runtime.test.ts`. Without the production line, the
+HTTPS_PROXY and HTTP_PROXY cases fail for both exchange and refresh. Rebuild the
+runtime; the bundled `dist/extensions/openai` output must contain the new mode.
+
+Removal: upstream v2026.9.2 and later contain this commit (v2026.8.1 does not).
+On an upgrade that contains it, remove this patch and rerun the proxy test.
+
+## Tool payloads keep their text in transcripts (upstream backport)
+
+`openclaw-tool-payload-transcript-fidelity.patch` backports the agents half of
+[OpenClaw #169063](https://github.com/openclaw/openclaw/pull/169063), merged as
+`f956a1874137ca41764d32930aedafc0a8b9272e` on 2026-10-12. Tool arguments, tool
+results and conversation text are persisted to transcripts, and emitted as live
+tool events, exactly as the model saw them. Masking stays at the logging,
+diagnostic, telemetry and config boundaries. Image payload stripping, replay
+state sanitizing and the persisted detail size caps are unchanged.
+
+Why: v2026.8.1 masks secret-shaped text only in the persisted copy
+(`redactTranscriptMessage`, the tool-result guard's detail capping). The live
+run keeps the original text, so the next run replays different bytes than the
+previous provider request. Provider prefix caches stop at the first masked
+string. The bare AWS secret value pattern also matches ordinary 40-character
+relative paths (`[A-Za-z0-9/+=]{40}` containing upper case, lower case and a
+digit or `/`), so heavy code-reading turns were masked many times. On
+2026-10-22 an external user's follow-ups on a large audit session cost several
+times more credits after the upgrade. A local reproduction with the TokenProxy
+prompt-prefix diagnostics showed a follow-up reading only about 15% of its
+prompt from cache. The prefix broke at the first masked tool payload, not at the
+system prompt or tools.
+
+The upstream preparation, source-exception and history-worker removals are not
+backported because v2026.8.1 does not have the live tool-result preparer. The
+code-mode source append path stays in place; it now copies text that is already
+identical. Tests that asserted persisted masking are flipped to assert that the
+next provider context, the transcript and the live events match the original
+text. `keeps 40-character relative paths in tool results unchanged` and the
+code-mode replay cases fail without the source change.
+
+Verify in the OpenClaw checkout:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/transcript-redact.test.ts src/agents/session-tool-result-guard.test.ts src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts src/agents/embedded-agent-subscribe.tools.test.ts src/agents/embedded-agent-subscribe.handlers.tools.test.ts src/agents/embedded-agent-runner.guard.test.ts src/agents/sessions/agent-session-code-mode-source.test.ts src/agents/sessions/agent-session-runtime-projection.test.ts src/config/sessions/transcript-append-redact.test.ts src/config/sessions/session-accessor.test.ts src/config/sessions/transcript.test.ts src/gateway/cli-session-history.test.ts src/gateway/server-methods/chat.inject.parentid.test.ts src/gateway/worker-environments/transcript-commit.test.ts
+```
+
+Then rebuild the runtime and run a heavy code-reading task with follow-ups.
+The `[OpenClawTokenProxy] prompt prefix` log should report `change=append`
+for follow-ups, and their cached tokens should cover the previous turn's
+prompt. Transcripts written before this patch keep their masked text; that
+history stays a cache miss once and later turns append to it normally.
+
+Removal: v2026.10.10-beta.3 and later main contain #169063; stable v2026.10.6
+does not. Remove this patch when the pinned upstream contains it, and rerun the
+follow-up cache check above.
+
+## Heartbeat trace ownership and exec-event cost
+
+`openclaw-heartbeat-cost-isolation.patch` discards the ambient trace inherited by
+heartbeat timers. Local exec snapshots its originating trace at spawn and carries
+that explicit provenance on its completion event. The resulting heartbeat uses
+a new span/run under the originating trace, so its model costs stay on that exact
+user turn in both the desktop and Portal. Generic heartbeats without an originating
+exec retain a fresh root; they never borrow the latest user turn.
+
+Queued exec completions are partitioned by originating trace before prompt and
+delivery selection. After consumption, remaining completions receive another wake;
+if polling invalidates a selected batch during preparation, pending batches are
+reawakened without invoking the model for the stale selection. Scheduled task
+wakes retain their own root. The desktop refreshes the persisted originating turn
+after a late model request finishes, using server display totals (sum of individually
+rounded ledger rows). It recovers exact trace bindings from the current account's
+store and never reassigns an already registered desktop trace.
+
+After asynchronous routing/session/runtime preparation, an exec-completion wake
+rechecks the identities of its inspected completion events. If process polling
+has already acknowledged all of them, the wake skips model invocation with
+`no-pending-event`. New/replacement events and unrelated queue entries remain
+untouched. The existing early preflight check stays in place.
+
+Only isolated exec-completion acknowledgements with no user delivery, scheduled
+tick/tasks, cron events or attached monitor instructions use an empty skill
+filter and a per-run tool allowlist (only `heartbeat_respond` when required).
+Normal turns, scheduled work, alerts and actionable continuations retain their
+capabilities. This uses the existing reply options rather than global tool or
+skill configuration. Lightweight bootstrap mode alone does not remove skills
+or tool schemas.
+
+Build the patched OpenClaw source and the Electron client together, and package
+the updated `lobster-model-routing` extension before release. A running Gateway
+keeps its old runtime until restarted. Historical usage rows are unchanged;
+actual token savings require a new execution against the rebuilt runtime.
+Remove the patch when upstream provides equivalent trace ownership, late
+completion checks and scoped context reduction.
+
+## Model streams that drop before delivering output
+
+`zzz-openclaw-stream-drop-reconnect.patch` resumes a turn whose model stream
+was cut off before it delivered any visible text or tool call. Before this
+patch the turn simply ended.
+
+Why: the LobsterAI token proxy aborts its downstream response when the
+upstream SSE stream fails (for example `net::ERR_HTTP2_PROTOCOL_ERROR` or
+`net::ERR_NETWORK_CHANGED`) or ends without a terminal packet. undici then
+reports `TypeError: terminated`. v2026.8.1 has two problems with this:
+
+- It already resumes such drops after a settled tool batch, but only when the
+  errored assistant carries a `provider_transport_failure` diagnostic, and
+  only the ChatGPT Responses transport records one. OpenAI-compatible
+  completions, which LobsterAI's own models use, never resumed.
+- A drop on the first model call of a turn is never resumed either, because
+  `openclaw-skip-turn-replay-after-model-call.patch` closes the outer replay
+  once a model call has started.
+
+Users saw "Agent couldn't generate a response. Note: some tool actions may have
+already been executed" when the drop came after tools, and "LLM request timed
+out." (shown as a response timeout) when it came on the first call. One user's
+logs from 2026-10-30 show six such drops in 30 minutes, all
+`ERR_HTTP2_PROTOCOL_ERROR`. Replying "continue" finished each turn.
+
+What the patch changes:
+
+- The shared `assignTransportErrorDetails` records the diagnostic for any
+  transport that fails through it. It does so when the error, or one of its
+  causes, is a transient socket failure (undici `terminated`,
+  `UND_ERR_SOCKET`, `ECONNRESET`, and similar) and the output has no visible
+  text or tool call. Reasoning that already streamed does not count, because
+  errored assistant turns are dropped from replay. The diagnostic reuses the
+  redacted terminal message and adds `transportErrorCode`.
+- `attempt-recovery.ts` resumes the drop from the committed transcript with a
+  model-only continuation prompt. Nothing from the failed call is resubmitted
+  and no tool reruns. This also covers:
+  - a drop before any tool batch of the turn, once the user request is
+    persisted;
+  - a resumed attempt that drops again before running tools. A recovery-state
+    flag marks the resume, because that attempt has no lifecycle evidence of
+    its own for the batch.
+- While a resumed attempt is still recovering (it ran no tools), any
+  retryable failure before output also continues the chain, for example the
+  proxy's `502 ... net::ERR_NETWORK_CHANGED` while the network settles.
+  Non-retryable failures (auth, quota, bad request) still end the turn.
+- Retries: up to 5 consecutive continuations, with backoff of about
+  1, 2, 4, 8 and 16 s (±20% jitter). A stop during the backoff aborts the run.
+  A completed tool batch restarts the budget.
+- Each continuation emits a `model_retry` agent event with
+  `{ phase: "retrying", attempt, maxAttempts, delayMs, error, errorCode }`.
+  When the budget runs out it emits `{ phase: "exhausted" }`. LobsterAI shows
+  these as a reconnect row, and a turn that ends after an exhausted reconnect
+  gets a localized error with a Continue button. Once the budget runs out, the
+  existing incomplete-turn or timeout error still ends the run.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run packages/ai/src/transports/transport-drop-evidence.test.ts packages/ai/src/transports/transport-stream-shared.test.ts src/agents/embedded-agent-runner/run/attempt-recovery.test.ts src/agents/embedded-agent-runner/run.transport-drop-continuation.integration.test.ts src/agents/embedded-agent-runner/run.malformed-tool-call-continuation.integration.test.ts
+```
+
+Then rebuild the runtime. After a drop, the gateway log shows
+`provider transport dropped before the model reply was delivered; continuing
+from the transcript attempt=N/5`. Remove this patch when the pinned upstream
+records transport failures for reasoning-only output and resumes first-call
+drops.
+
+## Byte-bounded model history
+
+Two patches handle sessions whose stored history outgrows the embedded
+runner's model-context byte bound. Upstream tracks the problem as
+[openclaw/openclaw#159799](https://github.com/openclaw/openclaw/issues/159799),
+which is still open.
+
+Background: every attempt hydrates its history with
+`SessionManager.open(..., { maxBytes: contextTokenBudget * 8, maxEvents: 10000 })`,
+so a 1M-token model loads at most 8 MB. The bound counts stored event JSON,
+including inline base64 from `view_image` results, tool payload mirrors and
+metadata. Image-heavy sessions therefore run at 12 to 20 bytes per prompt
+token. They hit the byte bound long before the token compaction threshold
+(980k for a 1M window). Compaction then never runs, and the newest-first
+reader drops the oldest events on every turn. On 2026-11-03 one WeChat DM
+session crossed 8 MB at 16:08 (`activeTranscriptBytes=8.04MB`). From then on,
+almost every new turn's first request cached only the system prompt and
+tools, about 32k of roughly 650k prompt tokens, and was billed about 60
+credits off-peak and 130 at peak. The dropped history was never summarized.
+
+### Stable window start
+
+`openclaw-bounded-history-chunked-window.patch` ports the policy of upstream
+[#168157](https://github.com/openclaw/openclaw/pull/168157), merged after
+v2026.8.1, into the v2026.8.1 reader
+`session-accessor.sqlite-active-context.ts`:
+
+- The latest compaction or reset boundary is reserved before the tail is
+  sized. Its summary no longer appears or disappears depending on how much
+  room the newest events leave.
+- Byte pressure is measured from the boundary's retained start
+  (`firstKeptEntryId`), not from history that a compaction already replaced.
+- When that model-visible tail exceeds the capacity, the omitted bytes are
+  rounded up to a quarter-capacity step, measured from the retained start. The
+  cut then moves forward to the next user message. The first model message
+  stays the same until the tail grows by another step.
+- If the newest turn alone exceeds one step, the reader falls back to the old
+  newest-first selection. Sessions that fit, and event-count limits, behave as
+  before.
+
+This patch does not summarize omitted history. That is the next patch.
+
+### Compaction before the bound
+
+`openclaw-bounded-history-compaction.patch` makes preflight compaction
+(`runSessionCompactionIfNeeded`) compact before the bounded load would omit
+anything:
+
+- `run/session-context-limits.ts` owns the hydration limits. The attempt and
+  preflight now read the same byte bound.
+- The new `model_context_bytes` trigger fires when the active model-context
+  bytes (`readSessionTranscriptActiveStats`, the same bytes the reader counts)
+  reach 80% of the bound. At least a quarter of the bound must lie after the
+  latest boundary's retained tail
+  (`readSessionTranscriptRetainedPrefixBytes`). A fresh boundary whose kept
+  tail is already large therefore cannot cause a compaction every turn.
+- Compaction loads the full transcript, so history already dropped from the
+  prompt is summarized instead of lost.
+- The trigger is optional. A skip or a failure, including a thrown error
+  before the compaction commits, keeps the turn running on the bounded tail.
+  Retries for that session wait until its bytes grow by another quarter of the
+  bound. The token and `maxActiveTranscriptBytes` triggers keep their existing
+  fail-closed behavior, and Codex native compaction is untouched.
+- The verbose `preflightCompaction check` log now includes
+  `contextHydrationMaxBytes` and `contextBytesTrigger`.
+
+One existing test,
+`estimates Codex tool-result mirrors through the provider projection`, stored
+64 duplicated 8 KB mirrors. That is 1.1 MB, above its 128k model's 1 MB
+hydration bound, so the new trigger fired. The fixture now uses 5 KB mirrors
+and still fails if mirrors are double-counted.
+
+Verify with:
+
+```sh
+node scripts/run-vitest.mjs run src/config/sessions/session-accessor.sqlite-bounded-context.test.ts src/auto-reply/reply/agent-runner-memory.test.ts
+```
+
+After rebuilding the runtime, a session over the bound logs
+`preflightCompaction triggered: ... trigger=model_context_bytes` once. Its later
+turns' first requests should read most of the history from cache again
+(TokenProxy `prompt prefix ... boundary=turn` with a high `cachedTokens`). Drop
+the first patch when the pinned upstream includes #168157. Drop the second when
+upstream #159799 summarizes byte-bounded history itself.
+
+## Preflight compaction against the session window
+
+`openclaw-session-window-preflight-compaction.patch` makes preflight compaction
+honor the session's selected context-window option (`SessionEntry.contextWindow`).
+
+Background: 快速 (`yd-fast`) sessions select a 400k window, but the real model
+behind them (for example `deepseek-flash`) accepts 1M. On 2026-11-05 a user
+pasted a document of about 400k tokens with "reply only: 收到", then asked
+about the weather. The context indicator stayed at 100%, usage kept growing,
+and no compaction ran. Every request succeeded, so overflow recovery never
+started either.
+
+Cause: the embedded run caps its budget at the selected option
+(`resolveEmbeddedRuntimeModelPolicy` gives `contextTokenBudget=400000`), and
+the session row reports `contextTokens=400000`. Preflight compaction
+(`resolveMemoryFlushContextWindowTokens`) resolved only the provider and model,
+so it used the native 1M window and compacted at 980k instead of 380k. Embedded
+runs disable the session's own threshold compaction
+(`getCompactionSettings().enabled === false`), so preflight is the only
+automatic trigger. The `model_context_bytes` trigger from the byte-bounded
+history patch had the same mismatch: it watched 6.4 MB while the run hydrates
+at most 3.2 MB.
+
+Change:
+- Both preflight callers (`runSessionCompactionIfNeeded` and
+  `runMemoryFlushIfNeeded`) pass the entry's selection. The option is resolved
+  from the configured model's `contextWindows`, with the same rule as the run:
+  it never exceeds a known native window, and a model that declares no native
+  window uses the selection instead of the generic 200k default. An unknown
+  option keeps the native value, as do windows declared only by a plugin
+  catalog. Across all 37 server models and the `yd-fast`, `yd-ultra` and empty
+  selections, preflight and run budgets now match.
+- Preflight compaction uses the manual planner, which already falls back to the
+  smallest valid tail. A single oversized turn is therefore summarized as a
+  split-turn prefix instead of being skipped as too small.
+
+Verify with:
+
+```sh
+node scripts/run-vitest.mjs run src/auto-reply/reply/memory-flush.test.ts src/auto-reply/reply/agent-runner-memory.test.ts
+```
+
+An isolated gateway against a mock 1M-window model reproduced the report on
+the previous runtime: a ~410k-token paste kept the session at 439k/400k (110%)
+on every later turn. With this patch the next turn's preflight logs
+`[compaction-diag] ... trigger=budget ... outcome=compacted`, and the session
+drops to about 30k/400k. The first turn still ends above 100%, because nothing
+older exists to compact before a single oversized prompt is sent. Drop this
+patch when upstream preflight reads the session's context-window option.
+
+## Clean-close seal for agent database integrity checks (upstream backport)
+
+`openclaw-agent-db-clean-close-seal.patch` backports the idea of upstream
+v2026.10.10 `src/infra/sqlite-clean-close-seal.ts`, reduced to agent databases.
+In v2026.8.1 every physical open of `agents/<id>/agent/openclaw-agent.sqlite`
+runs a whole-file `PRAGMA integrity_check` plus `foreign_key_check`. That cost
+grows with the file, and startup pays it more than once per agent:
+`runStartupSessionMigration` opens, closes and reopens every agent database.
+
+Why: on 2026-11-04 a macOS user with a 616 MB main agent database (428 MB of
+`transcript_events`) measured gateway readiness at 19-27 s, against 4 s for an
+empty profile on the same build. `OPENCLAW_GATEWAY_STARTUP_TRACE=1` put 6.5 s in
+`startup.maintenance`. On an isolated copy of that file the check took about
+0.5 s with a warm page cache and 2.3-3.4 s cold. The machine was swapping, so
+the host-side prewarm (`openclawStateDbPrewarm.ts`) did not keep the file cached.
+
+How it works:
+- A clean close writes `<db>.seal`. The seal records the file's dev, inode,
+  birth time, size and mtime in ns, plus the schema identity (agent schema
+  version and a hash of the schema SQL), the time of the last full check and a
+  checksum. It is written only after the handle closes and only when no `-wal`
+  or `-journal` content remains.
+- An open consumes the seal before SQLite touches the file. A valid seal lets
+  `verifyAndRepairCanonicalSqliteIndexes` skip the whole-file pass for that one
+  connection. Canonical index checks, owner and version gates and the schema
+  assertions still run. Only the current-schema branch can reuse a seal;
+  pending migrations always run the full check.
+- Any mismatch, a missing seal (crash, SIGKILL, or a first run with this patch),
+  a seal older than 7 days or a schema change falls back to the full check. A
+  reused seal keeps its original check time, so a full check still runs at
+  least weekly.
+- Disposal, integrity reconfirmation and recorded open failures revoke the
+  proof, so no seal is ever left on a suspect or deleted file.
+
+Differences from upstream: no worker-thread admission, no lease-class gating,
+and the seal is consumed (deleted) at open rather than validated against
+retained generation facts. A seal left beside a database that was later
+replaced cannot match the new inode and birth time.
+
+The seal only pays off when the gateway exits cleanly. In the same logs every
+quit with this profile hit LobsterAI's 6 s stop grace and ended in SIGKILL,
+because the Weixin channel waited on its 35 s `getUpdates` long-poll. The
+plugin patch `scripts/openclaw-plugin-patches/weixin-long-poll-abort.cjs`
+(a backport from plugin 2.4.10) fixes that. Ship them together.
+
+Verify with:
+
+```sh
+node_modules/.bin/vitest run src/infra/sqlite-clean-close-seal.test.ts src/state/openclaw-agent-db.clean-close-seal.test.ts src/state/openclaw-agent-db.test.ts src/state/openclaw-agent-db.cache-eviction.test.ts src/infra/sqlite-index-schema.test.ts
+```
+
+After rebuilding the runtime, quit the app once normally so the seals are
+written. On the next start the gateway log should show `reused clean-close
+integrity proof` (debug) instead of `slow OpenClaw agent database open`, and the
+startup trace should show a much shorter `startup.maintenance`. Remove this patch
+when the pinned upstream reaches v2026.10.10, which ships its own seal.
+
+## Explicit user context windows
+
+`openclaw-user-context-window-selection.patch` allows a declared, explicitly
+selected LobsterAI window to exceed the model's server-controlled default budget.
+The existing scalar `contextWindow` still owns the direct model's default. Managed
+mode IDs `yd-fast` / `yd-ultra` and their legacy `model-preset:balanced` /
+`model-preset:ultimate` equivalents use their current declared profile budget.
+For example, a direct model can default to 400,000 tokens while a mode defaults
+to 500,000 and offers a 1,000,000-token session choice.
+
+The `user-context:` option namespace is a LobsterAI integration contract. A
+selection must exactly match a catalog option on `lobsterai-server`, and its
+resolved budget must be an integer from 400,000 through 1,000,000 tokens. Unknown
+or removed user options fall back to the current declared default. Mode selections
+use their current server profile without becoming a manual window preference.
+Other providers retain their existing behavior. Configured options must only be
+advertised after the model and all of its fallback routes are verified to support
+the corresponding context length.
+
+The same resolver is used by embedded runtime setup, preflight/memory-flush
+budgeting, fork admission, and session-row projection. This avoids a 1M UI selection still
+compacting at 400K, and prevents older 400K telemetry from masking an active 1M
+choice. Output limits and upstream request protocols are unchanged. Clearing the
+selection returns to the current server default; the patch does not persist a
+resolved default as a user preference. Managed session rows use the current
+budget even if older locked/runtime telemetry recorded 1M or a previous default.
+Other providers keep their existing context-token provenance rules.
+
+LobsterAI currently keeps `contextWindowDefault: model-default` and sends the
+mode ID (for example `yd-fast`) for a mode with no manual window preference.
+Resetting a manual mode window must restore that mode ID. If its explicit option
+is withdrawn, the gateway falls back to `model-default` until LobsterAI patches
+the session back to the current mode ID; a 400K direct default and 500K mode
+default therefore remain distinguishable during that interval.
+
+An explicit fork may carry its parent's user selection and copy history up to
+that budget. An automatically parented non-fork session does not inherit a
+`user-context:` choice; it follows its own default unless its create request
+explicitly selected a window. Legacy window options retain their inheritance.
+
+Verify in the pinned source after applying patches:
+
+```sh
+node scripts/run-vitest.mjs run src/agents/model-user-context-window.test.ts src/gateway/session-utils.user-context-window.test.ts src/gateway/server.sessions.user-context-window.test.ts src/agents/embedded-agent-runner/run/setup.test.ts src/auto-reply/reply/memory-flush.test.ts src/agents/model-preset-context-window.test.ts
+```
+
+The new regression cases fail against the previous 400K runtime policy and cover
+400K -> explicit 1M -> default 400K, preset selections, default changes, missing
+options, unrelated providers, session projection, and unchanged output caps. Mode
+regressions additionally cover a fixed 400K direct scalar with a 400K -> 500K
+mode default, resetting explicit 1M to that 500K default, and fork admission.
+Rebuild the bundled runtime before desktop acceptance. Remove this patch when
+the pinned runtime can distinguish the managed default budget from a validated
+explicit session budget across these paths.

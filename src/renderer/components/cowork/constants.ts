@@ -4,6 +4,7 @@ export const CoworkUiEvent = {
   FocusInput: 'cowork:focus-input',
   ShortcutSearch: 'cowork:shortcut:search',
   ShortcutConversationSearch: 'cowork:shortcut:conversation-search',
+  PendingConversationSearch: 'cowork:pending-conversation-search',
   ShortcutNewSession: 'cowork:shortcut:new-session',
   ShortcutStopSession: 'cowork:shortcut:stop-session',
   ShortcutToggleArtifacts: 'cowork:shortcut:toggle-artifacts',

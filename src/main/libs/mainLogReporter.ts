@@ -26,6 +26,7 @@ type MainLogReporterResponse = {
 
 export interface MainLogReporterOptions {
   appVersion: string;
+  environment?: string;
   fetch: (url: string, signal: AbortSignal) => Promise<MainLogReporterResponse>;
   store: MainLogReporterStore;
   arch?: string;
@@ -37,6 +38,7 @@ export interface MainLogReporterOptions {
 }
 
 export interface MainLogUrlContext {
+  environment?: string;
   appVersion: string;
   arch: string;
   firstKeyfrom: string;
@@ -46,6 +48,11 @@ export interface MainLogUrlContext {
   platform: string;
   timestamp: number;
   userId: string;
+}
+
+export interface MainLogReportSnapshot {
+  context: MainLogUrlContext;
+  eventId: string;
 }
 
 const logCommons = {
@@ -68,12 +75,15 @@ const getErrorName = (error: unknown): string => {
 export const buildMainLogUrl = (
   params: MainLogEventParams,
   context: MainLogUrlContext,
+  eventId: string = randomUUID(),
 ): string => {
   const url = new URL(LogReporterEndpoint.YoudaoAnalyzer);
   const logParams: Record<string, LogParamValue> = {
     ...params,
     ...logCommons,
     app_version: context.appVersion,
+    eventId,
+    environment: context.environment ?? 'production',
     os_platform: context.platform,
     os_arch: context.arch,
     language: context.language,
@@ -104,7 +114,14 @@ export class MainLogReporter {
     this.options = options;
   }
 
-  async report(params: MainLogEventParams): Promise<boolean> {
+  // Queued observations can retain their original account and event identity.
+  // No token or auth-session key is included in this public snapshot.
+  captureContext(): MainLogUrlContext | null {
+    if (!this.isUsageAnalyticsEnabled()) return null;
+    return this.buildContext();
+  }
+
+  async report(params: MainLogEventParams, snapshot?: MainLogReportSnapshot): Promise<boolean> {
     if (!this.isUsageAnalyticsEnabled()) {
       console.debug(`[MainLogReporter] skipped event ${params.action} because usage analytics is disabled`);
       return false;
@@ -127,7 +144,7 @@ export class MainLogReporter {
 
     this.activeRequestCount += 1;
     try {
-      const context = this.buildContext();
+      const context = snapshot?.context ?? this.buildContext();
       const requestTimeoutMs = this.getRequestTimeoutMs();
       const abortController = new AbortController();
       const timeout = setTimeout(() => abortController.abort(), requestTimeoutMs);
@@ -135,7 +152,7 @@ export class MainLogReporter {
       let response: MainLogReporterResponse;
       try {
         response = await this.options.fetch(
-          buildMainLogUrl(params, context),
+          buildMainLogUrl(params, context, snapshot?.eventId),
           abortController.signal,
         );
       } finally {
@@ -188,13 +205,14 @@ export class MainLogReporter {
   }
 
   private buildContext(): MainLogUrlContext {
-    const config = this.options.store.get<{ language?: string }>(LogReporterStoreKey.AppConfig);
+    const config = this.options.store.get<{ language?: string; app?: { testMode?: boolean } }>(LogReporterStoreKey.AppConfig);
     const authUser = this.options.store.get<Record<string, unknown>>(LogReporterStoreKey.AuthUser);
     const userId = getTrimmedString(authUser?.yid) || getTrimmedString(authUser?.userId);
     const { firstKeyfrom, latestKeyfrom } = getKeyfromAttribution(this.options.store);
 
     return {
       appVersion: this.options.appVersion,
+      environment: config?.app?.testMode ? 'test' : this.options.environment ?? 'production',
       arch: this.options.arch ?? process.arch,
       firstKeyfrom,
       installationId: this.getOrCreateInstallationId(),

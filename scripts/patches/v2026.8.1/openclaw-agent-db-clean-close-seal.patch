@@ -1,0 +1,603 @@
+diff --git a/src/infra/sqlite-index-schema.ts b/src/infra/sqlite-index-schema.ts
+index 1181794dbe6..9226bd9adf9 100644
+--- a/src/infra/sqlite-index-schema.ts
++++ b/src/infra/sqlite-index-schema.ts
+@@ -30,6 +30,26 @@ type RepairCanonicalSqliteIndexesOptions = {
+   verifyPhysicalIntegrity?: boolean;
+ };
+ 
++// LobsterAI clean-close seal backport: the scope names the one connection whose file a
++// seal proved unchanged since its last full check. Opens are synchronous, so the scope
++// cannot leak into another database's verification.
++let verifiedIntegrityReuse: { db: DatabaseSync; reused: boolean } | undefined;
++
++/** Run an open-time check that may skip `db`'s whole-file pass; reports whether it did. */
++export function withVerifiedSqliteIntegrityReuse<T>(
++  db: DatabaseSync,
++  check: () => T,
++): { result: T; reused: boolean } {
++  const previous = verifiedIntegrityReuse;
++  const scope = { db, reused: false };
++  verifiedIntegrityReuse = scope;
++  try {
++    return { result: check(), reused: scope.reused };
++  } finally {
++    verifiedIntegrityReuse = previous;
++  }
++}
++
+ /**
+  * Verify the whole file once, then use table scans only to locate repairable
+  * index damage. Healthy opens must not multiply integrity work by table count.
+@@ -41,13 +61,18 @@ export function verifyAndRepairCanonicalSqliteIndexes(
+   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
+ ): string[] {
+   let integrityFailure: Error | undefined;
+-  try {
+-    assertSqliteIntegrity(db, databaseLabel);
+-  } catch (error) {
+-    if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
+-      throw error;
++  if (verifiedIntegrityReuse?.db === db) {
++    // Only current schemas reach this pass; pending migrations always run the full check.
++    verifiedIntegrityReuse.reused = true;
++  } else {
++    try {
++      assertSqliteIntegrity(db, databaseLabel);
++    } catch (error) {
++      if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
++        throw error;
++      }
++      integrityFailure = error;
+     }
+-    integrityFailure = error;
+   }
+ 
+   const repairedIndexes = repairCanonicalSqliteIndexes(db, databaseLabel, schemaSql, {
+diff --git a/src/state/openclaw-agent-db.ts b/src/state/openclaw-agent-db.ts
+index 799117a018f..1ed5a75693d 100644
+--- a/src/state/openclaw-agent-db.ts
++++ b/src/state/openclaw-agent-db.ts
+@@ -1,12 +1,20 @@
+ // OpenClaw agent database stores agent-scoped persisted runtime state.
++import { createHash } from "node:crypto";
+ import { existsSync } from "node:fs";
+ import path from "node:path";
+ import type { DatabaseSync } from "node:sqlite";
+ import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
+ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+ import { isPathInside } from "../infra/path-guards.js";
++import {
++  invalidateSqliteCleanCloseSeal,
++  readSqliteCleanCloseSeal,
++  type SqliteCleanCloseProof,
++  writeSqliteCleanCloseSeal,
++} from "../infra/sqlite-clean-close-seal.js";
+ import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+ import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
++import { withVerifiedSqliteIntegrityReuse } from "../infra/sqlite-index-schema.js";
+ import {
+   confirmSqliteFileIntegrity,
+   isTerminalSqliteIntegrityError,
+@@ -30,10 +38,11 @@ import {
+ } from "../infra/sqlite-wal.js";
+ import { createSubsystemLogger } from "../logging/subsystem.js";
+ import { normalizeAgentId } from "../routing/session-key.js";
+-import type {
+-  OpenClawAgentDatabase,
+-  OpenClawAgentDatabaseOptions,
+-  OpenClawAgentDatabaseOwnerInspection,
++import {
++  OPENCLAW_AGENT_SCHEMA_VERSION,
++  type OpenClawAgentDatabase,
++  type OpenClawAgentDatabaseOptions,
++  type OpenClawAgentDatabaseOwnerInspection,
+ } from "./openclaw-agent-db-contract.js";
+ import {
+   AGENT_DATABASE_MAINTENANCE_LEASE,
+@@ -62,6 +71,7 @@ import {
+   isIncognitoOpenClawAgentSqlitePath,
+   resolveOpenClawAgentSqlitePath,
+ } from "./openclaw-agent-db.paths.js";
++import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+ import {
+   clearOpenClawDatabaseQuarantine,
+   readOpenClawDatabaseQuarantine,
+@@ -131,6 +141,40 @@ const cachedDatabaseLeases = new Map<
+ // External schema changes under a live process are unsupported: doctor migrations
+ // require restart, so successful owner/schema validation is process-stable.
+ const validatedAgentDatabasePaths = new Map<string, string>();
++// When each cached handle's file last passed a full integrity_check; published as a
++// clean-close seal so an unchanged file can skip that check on its next open.
++const integrityVerifiedAt = new Map<string, number>();
++let agentSchemaIdentity: string | undefined;
++
++function resolveAgentSchemaIdentity(): string {
++  agentSchemaIdentity ??= `agent:${OPENCLAW_AGENT_SCHEMA_VERSION}:${createHash("sha256")
++    .update(OPENCLAW_AGENT_SCHEMA_SQL)
++    .digest("hex")
++    .slice(0, 16)}`;
++  return agentSchemaIdentity;
++}
++
++/** Read and consume the seal: the handle about to open may change the file. */
++function takeAgentDatabaseCleanCloseProof(pathname: string): SqliteCleanCloseProof | undefined {
++  const proof = readSqliteCleanCloseSeal(pathname, resolveAgentSchemaIdentity());
++  try {
++    invalidateSqliteCleanCloseSeal(pathname);
++  } catch {
++    // A seal that cannot be removed must not authorize skipping the check either.
++    return undefined;
++  }
++  return proof;
++}
++
++/** Forget this process's proof and drop any published seal for a suspect file. */
++function revokeAgentDatabaseCleanCloseProof(pathname: string): void {
++  integrityVerifiedAt.delete(pathname);
++  try {
++    invalidateSqliteCleanCloseSeal(pathname);
++  } catch {
++    // The next open still re-verifies: the seal no longer matches a changed file.
++  }
++}
+ const terminalOpenLatch = createSqliteTerminalOpenLatch({
+   closeByPath: closeOpenClawAgentDatabaseByPath,
+ });
+@@ -140,6 +184,8 @@ export function confirmOpenClawAgentDatabaseIntegrity(
+   pathname: string,
+ ): SqliteIntegrityConfirmation {
+   const resolvedPath = path.resolve(pathname);
++  // A suspect file must not be sealed by the close below.
++  revokeAgentDatabaseCleanCloseProof(resolvedPath);
+   closeOpenClawAgentDatabaseByPath(resolvedPath);
+   // Closing breaks process ownership of the pathname. A replacement must
+   // revalidate and claim its schema before the path can become trusted again.
+@@ -157,6 +203,7 @@ export function recordOpenClawAgentDatabaseOpenFailure(
+   if (recorded) {
+     // Quarantine revokes this process's trust because doctor may replace the file.
+     validatedAgentDatabasePaths.delete(path.resolve(pathname));
++    revokeAgentDatabaseCleanCloseProof(path.resolve(pathname));
+   }
+   return recorded;
+ }
+@@ -323,6 +370,9 @@ export function openOpenClawAgentDatabase(
+     // Free a slot before constructing the new handle: under real descriptor
+     // pressure the 65th open would otherwise fail before eviction could run.
+     evictLruAgentDatabaseHandles();
++    // Consume the seal before SQLite opens the file: this handle may change it.
++    const cleanCloseProof = takeAgentDatabaseCleanCloseProof(pathname);
++    let integrityReused = false;
+     const db = openNodeSqliteDatabase(pathname);
+     enableNodeSqliteKyselyStatementCache(db);
+     openedDb = db;
+@@ -336,12 +386,18 @@ export function openOpenClawAgentDatabase(
+         assertSupportedAgentSchemaVersion(db, pathname);
+         assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
+         // Integrity is not process-stable: the file can be damaged while evicted.
+-        // This guard is read-only (no busy waits), so every physical open pays it.
+-        const requiresCurrentVersionConvergence = assertAgentDatabaseIntegrityBeforeMutation(
+-          db,
+-          agentId,
+-          pathname,
+-        );
++        // This guard is read-only (no busy waits), so every physical open pays it,
++        // unless a clean-close seal proves the file is unchanged since its last check.
++        const integrityGate = () =>
++          assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
++        let requiresCurrentVersionConvergence: boolean;
++        if (cleanCloseProof) {
++          const gated = withVerifiedSqliteIntegrityReuse(db, integrityGate);
++          requiresCurrentVersionConvergence = gated.result;
++          integrityReused = gated.reused;
++        } else {
++          requiresCurrentVersionConvergence = integrityGate();
++        }
+         if (isValidatedReopen && requiresCurrentVersionConvergence) {
+           // Same-version replacement can preserve owner/version while dropping additive schema.
+           // Demote trust so the existing full path repairs atomically before exposure.
+@@ -393,6 +449,18 @@ export function openOpenClawAgentDatabase(
+       elapsedMs: Date.now() - openStartedAt,
+       path: pathname,
+     });
++    if (integrityReused && cleanCloseProof) {
++      // Keep the original check time so a full integrity_check still runs every 7 days.
++      integrityVerifiedAt.set(pathname, cleanCloseProof.verifiedAt);
++      agentDbLog.debug("reused clean-close integrity proof", {
++        agentId,
++        elapsedMs: Date.now() - openStartedAt,
++        path: pathname,
++        verifiedAt: cleanCloseProof.verifiedAt,
++      });
++    } else {
++      integrityVerifiedAt.set(pathname, Date.now());
++    }
+     cachedDatabaseLeases.set(pathname, { leaseId, env: options.env });
+     cachedDatabases.set(pathname, database);
+     return database;
+@@ -481,9 +549,16 @@ function closeCachedOpenClawAgentDatabase(
+   // Eviction must stay cheap: PASSIVE skips waiting on concurrent readers,
+   // whose drained TRUNCATE checkpoints blocked the event loop for seconds.
+   database.walMaintenance.close(options.eviction ? { checkpointMode: "PASSIVE" } : undefined);
++  const verifiedAt = integrityVerifiedAt.get(database.path);
++  integrityVerifiedAt.delete(database.path);
+   if (database.db.isOpen) {
+     database.db.close();
+   }
++  // Seal while still holding the lease. The writer refuses when another connection
++  // left WAL frames behind, so only a fully folded file can skip its next check.
++  if (verifiedAt !== undefined && !incognitoDatabases.has(database)) {
++    writeSqliteCleanCloseSeal(database.path, resolveAgentSchemaIdentity(), { verifiedAt });
++  }
+   const lease = cachedDatabaseLeases.get(database.path);
+   if (lease) {
+     releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env });
+@@ -648,6 +723,8 @@ export function disposeOpenClawAgentDatabaseByPath(
+       ...(options.env ? { env: options.env } : {}),
+     });
+   } finally {
++    // Disposed files are usually deleted next; never leave a seal file behind them.
++    revokeAgentDatabaseCleanCloseProof(database.path);
+     // Secret-bearing transient DBs must close even when registry maintenance
+     // fails; Windows otherwise cannot remove the file during caller cleanup.
+     closeOpenClawAgentDatabaseByPath(database.path);
+diff --git a/src/infra/sqlite-clean-close-seal.ts b/src/infra/sqlite-clean-close-seal.ts
+new file mode 100644
+index 00000000000..780ff8be662
+--- /dev/null
++++ b/src/infra/sqlite-clean-close-seal.ts
+@@ -0,0 +1,135 @@
++import { createHash } from "node:crypto";
++import fs, { type BigIntStats } from "node:fs";
++import { hasErrnoCode } from "./errno.js";
++
++// LobsterAI backport of the v2026.10.10 clean-close seal, reduced to agent databases.
++// A database closed after a verified open records its file identity next to it. The
++// next open may skip the full integrity_check only while that identity, size and
++// mtime are unchanged, no journal is pending, and the last full check is under 7 days.
++export const SQLITE_CLEAN_CLOSE_FULL_VERIFICATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1_000;
++
++const SEAL_VERSION = 1;
++
++export type SqliteCleanCloseProof = { verifiedAt: number };
++
++function sealPathFor(pathname: string): string {
++  return `${pathname}.seal`;
++}
++
++function fileFields(file: BigIntStats) {
++  return {
++    dev: file.dev.toString(),
++    ino: file.ino.toString(),
++    birthtimeNs: file.birthtimeNs.toString(),
++    size: file.size.toString(),
++    mtimeNs: file.mtimeNs.toString(),
++  };
++}
++
++function checksum(payload: string): string {
++  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
++}
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++function hasNoJournal(pathname: string): boolean {
++  return ["-wal", "-journal"].every((suffix) => {
++    const file = fs.statSync(`${pathname}${suffix}`, { bigint: true, throwIfNoEntry: false });
++    return file === undefined || (file.isFile() && file.size === 0n);
++  });
++}
++
++/** Return the clean-close proof when the database file is exactly as it was sealed. */
++export function readSqliteCleanCloseSeal(
++  pathname: string,
++  schemaIdentity: string,
++  now = Date.now(),
++): SqliteCleanCloseProof | undefined {
++  try {
++    const sealPath = sealPathFor(pathname);
++    if (!fs.lstatSync(sealPath, { throwIfNoEntry: false })?.isFile()) {
++      return undefined;
++    }
++    const file = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
++    if (!file?.isFile()) {
++      return undefined;
++    }
++    const envelope: unknown = JSON.parse(fs.readFileSync(sealPath, "utf8"));
++    if (
++      !isRecord(envelope) ||
++      typeof envelope.payload !== "string" ||
++      envelope.checksum !== checksum(envelope.payload)
++    ) {
++      return undefined;
++    }
++    const payload: unknown = JSON.parse(envelope.payload);
++    if (
++      !isRecord(payload) ||
++      payload.version !== SEAL_VERSION ||
++      payload.schemaIdentity !== schemaIdentity ||
++      typeof payload.verifiedAt !== "number" ||
++      !Number.isSafeInteger(payload.verifiedAt)
++    ) {
++      return undefined;
++    }
++    const age = now - payload.verifiedAt;
++    if (
++      age < 0 ||
++      age > SQLITE_CLEAN_CLOSE_FULL_VERIFICATION_INTERVAL_MS ||
++      !Object.entries(fileFields(file)).every(([key, value]) => payload[key] === value) ||
++      !hasNoJournal(pathname)
++    ) {
++      return undefined;
++    }
++    return { verifiedAt: payload.verifiedAt };
++  } catch {
++    // Torn writes and unreadable seals fall back to the ordinary full validation.
++    return undefined;
++  }
++}
++
++/** Remove any seal; a database that may change must never keep an old proof. */
++export function invalidateSqliteCleanCloseSeal(pathname: string): void {
++  try {
++    fs.unlinkSync(sealPathFor(pathname));
++  } catch (error) {
++    if (!hasErrnoCode(error, "ENOENT")) {
++      throw error;
++    }
++  }
++}
++
++/** Publish a proof after the last handle closed and its WAL was folded into the file. */
++export function writeSqliteCleanCloseSeal(
++  pathname: string,
++  schemaIdentity: string,
++  proof: SqliteCleanCloseProof,
++): boolean {
++  try {
++    const sealPath = sealPathFor(pathname);
++    const existing = fs.lstatSync(sealPath, { throwIfNoEntry: false });
++    const file = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
++    if (!file?.isFile() || (existing && !existing.isFile()) || !hasNoJournal(pathname)) {
++      invalidateSqliteCleanCloseSeal(pathname);
++      return false;
++    }
++    const payload = JSON.stringify({
++      version: SEAL_VERSION,
++      schemaIdentity,
++      ...fileFields(file),
++      verifiedAt: proof.verifiedAt,
++    });
++    // No rename/fsync is needed: a partial write cannot pass the checksum and file-state checks.
++    fs.writeFileSync(sealPath, JSON.stringify({ payload, checksum: checksum(payload) }));
++    return true;
++  } catch {
++    try {
++      invalidateSqliteCleanCloseSeal(pathname);
++    } catch {
++      // Publication is best effort; a failed invalidation still cannot authorize a skip.
++    }
++    return false;
++  }
++}
+diff --git a/src/infra/sqlite-clean-close-seal.test.ts b/src/infra/sqlite-clean-close-seal.test.ts
+new file mode 100644
+index 00000000000..dbe0537844b
+--- /dev/null
++++ b/src/infra/sqlite-clean-close-seal.test.ts
+@@ -0,0 +1,103 @@
++// LobsterAI clean-close seal tests: a seal proves only the exact file state it recorded.
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { afterEach, describe, expect, it } from "vitest";
++import {
++  invalidateSqliteCleanCloseSeal,
++  readSqliteCleanCloseSeal,
++  SQLITE_CLEAN_CLOSE_FULL_VERIFICATION_INTERVAL_MS,
++  writeSqliteCleanCloseSeal,
++} from "./sqlite-clean-close-seal.js";
++
++const SCHEMA = "agent:19:fixture";
++const tempDirs: string[] = [];
++
++function fixtureDatabase(): string {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clean-close-seal-"));
++  tempDirs.push(dir);
++  const pathname = path.join(dir, "openclaw-agent.sqlite");
++  fs.writeFileSync(pathname, "database bytes");
++  return pathname;
++}
++
++afterEach(() => {
++  for (const dir of tempDirs.splice(0)) {
++    fs.rmSync(dir, { force: true, recursive: true });
++  }
++});
++
++describe("sqlite clean-close seal", () => {
++  it("returns the recorded proof while the file is unchanged", () => {
++    const pathname = fixtureDatabase();
++    const verifiedAt = Date.now() - 1_000;
++
++    expect(writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt })).toBe(true);
++
++    expect(readSqliteCleanCloseSeal(pathname, SCHEMA)).toEqual({ verifiedAt });
++  });
++
++  it("rejects a seal after the file changes", () => {
++    const pathname = fixtureDatabase();
++    writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt: Date.now() });
++
++    fs.appendFileSync(pathname, "more");
++
++    expect(readSqliteCleanCloseSeal(pathname, SCHEMA)).toBeUndefined();
++  });
++
++  it("rejects a seal from another schema", () => {
++    const pathname = fixtureDatabase();
++    writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt: Date.now() });
++
++    expect(readSqliteCleanCloseSeal(pathname, "agent:20:fixture")).toBeUndefined();
++  });
++
++  it("forces a full check once the last one is older than the interval", () => {
++    const pathname = fixtureDatabase();
++    const verifiedAt = Date.now() - SQLITE_CLEAN_CLOSE_FULL_VERIFICATION_INTERVAL_MS - 1;
++    writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt });
++
++    expect(readSqliteCleanCloseSeal(pathname, SCHEMA)).toBeUndefined();
++  });
++
++  it("neither writes nor honors a seal while WAL frames are pending", () => {
++    const pathname = fixtureDatabase();
++    fs.writeFileSync(`${pathname}-wal`, "frames");
++
++    expect(writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt: Date.now() })).toBe(false);
++    expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
++
++    fs.writeFileSync(`${pathname}-wal`, "");
++    writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt: Date.now() });
++    fs.writeFileSync(`${pathname}-wal`, "frames");
++    expect(readSqliteCleanCloseSeal(pathname, SCHEMA)).toBeUndefined();
++  });
++
++  it("rejects a torn or tampered seal", () => {
++    const pathname = fixtureDatabase();
++    writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt: Date.now() });
++    const sealPath = `${pathname}.seal`;
++    const envelope = JSON.parse(fs.readFileSync(sealPath, "utf8"));
++    const payload = JSON.parse(envelope.payload);
++    fs.writeFileSync(
++      sealPath,
++      JSON.stringify({ ...envelope, payload: JSON.stringify({ ...payload, verifiedAt: 1 }) }),
++    );
++
++    expect(readSqliteCleanCloseSeal(pathname, SCHEMA)).toBeUndefined();
++
++    fs.writeFileSync(sealPath, "{");
++    expect(readSqliteCleanCloseSeal(pathname, SCHEMA)).toBeUndefined();
++  });
++
++  it("invalidates idempotently", () => {
++    const pathname = fixtureDatabase();
++    writeSqliteCleanCloseSeal(pathname, SCHEMA, { verifiedAt: Date.now() });
++
++    invalidateSqliteCleanCloseSeal(pathname);
++    invalidateSqliteCleanCloseSeal(pathname);
++
++    expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
++  });
++});
+diff --git a/src/state/openclaw-agent-db.clean-close-seal.test.ts b/src/state/openclaw-agent-db.clean-close-seal.test.ts
+new file mode 100644
+index 00000000000..da1affeb2df
+--- /dev/null
++++ b/src/state/openclaw-agent-db.clean-close-seal.test.ts
+@@ -0,0 +1,104 @@
++// LobsterAI: an unchanged agent database closed cleanly skips its next whole-file check.
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  closeOpenClawAgentDatabaseByPath,
++  closeOpenClawAgentDatabasesForTest,
++  disposeOpenClawAgentDatabaseByPath,
++  openOpenClawAgentDatabase,
++} from "./openclaw-agent-db.js";
++import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
++
++const integrityChecks = vi.hoisted(() => ({ count: 0 }));
++
++vi.mock("../infra/sqlite-integrity.js", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("../infra/sqlite-integrity.js")>();
++  return {
++    ...actual,
++    assertSqliteIntegrity: (...args: Parameters<typeof actual.assertSqliteIntegrity>) => {
++      integrityChecks.count += 1;
++      return actual.assertSqliteIntegrity(...args);
++    },
++  };
++});
++
++let stateDir: string | undefined;
++let env: NodeJS.ProcessEnv = {};
++
++function readSealVerifiedAt(databasePath: string): number {
++  const envelope = JSON.parse(fs.readFileSync(`${databasePath}.seal`, "utf8"));
++  return JSON.parse(envelope.payload).verifiedAt;
++}
++
++beforeAll(() => {
++  closeOpenClawAgentDatabasesForTest();
++  stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-seal-")));
++  env = { OPENCLAW_STATE_DIR: stateDir };
++});
++
++beforeEach(() => {
++  closeOpenClawAgentDatabasesForTest();
++  integrityChecks.count = 0;
++});
++
++afterAll(() => {
++  closeOpenClawAgentDatabasesForTest();
++  closeOpenClawStateDatabaseForTest();
++  if (stateDir) {
++    fs.rmSync(stateDir, { force: true, recursive: true });
++  }
++});
++
++describe("openclaw agent database clean-close seal", () => {
++  it("skips the whole-file check after a clean close and keeps the original check time", () => {
++    const first = openOpenClawAgentDatabase({ agentId: "seal-reuse", env });
++    expect(integrityChecks.count).toBeGreaterThan(0);
++    closeOpenClawAgentDatabaseByPath(first.path);
++    const verifiedAt = readSealVerifiedAt(first.path);
++
++    integrityChecks.count = 0;
++    const second = openOpenClawAgentDatabase({ agentId: "seal-reuse", env });
++
++    expect(integrityChecks.count).toBe(0);
++    // The open handle owns the file now; no seal may survive while it can change.
++    expect(fs.existsSync(`${second.path}.seal`)).toBe(false);
++    closeOpenClawAgentDatabaseByPath(second.path);
++    expect(readSealVerifiedAt(second.path)).toBe(verifiedAt);
++  });
++
++  it("re-verifies a file that changed after it was sealed", () => {
++    const first = openOpenClawAgentDatabase({ agentId: "seal-changed", env });
++    closeOpenClawAgentDatabaseByPath(first.path);
++    const later = new Date(Date.now() + 60_000);
++    fs.utimesSync(first.path, later, later);
++
++    integrityChecks.count = 0;
++    const second = openOpenClawAgentDatabase({ agentId: "seal-changed", env });
++
++    expect(integrityChecks.count).toBeGreaterThan(0);
++    closeOpenClawAgentDatabaseByPath(second.path);
++    expect(readSealVerifiedAt(second.path)).toBeGreaterThanOrEqual(later.getTime() - 60_000);
++  });
++
++  it("re-verifies after an unclean exit left no seal", () => {
++    const first = openOpenClawAgentDatabase({ agentId: "seal-crash", env });
++    closeOpenClawAgentDatabaseByPath(first.path);
++    // A process killed while the handle was open never republishes the consumed seal.
++    fs.rmSync(`${first.path}.seal`);
++
++    integrityChecks.count = 0;
++    openOpenClawAgentDatabase({ agentId: "seal-crash", env });
++
++    expect(integrityChecks.count).toBeGreaterThan(0);
++  });
++
++  it("leaves no seal behind a disposed database", () => {
++    const database = openOpenClawAgentDatabase({ agentId: "seal-dispose", env });
++
++    disposeOpenClawAgentDatabaseByPath(database.path, { env });
++
++    expect(fs.existsSync(`${database.path}.seal`)).toBe(false);
++  });
++});

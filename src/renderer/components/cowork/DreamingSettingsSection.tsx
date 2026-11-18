@@ -3,6 +3,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import dreamingLobsterSrc from '../../assets/dreaming-lobster.png';
 import { i18nService } from '../../services/i18n';
 import type { DreamDiaryData, DreamingEntry, DreamingPhaseInfo, DreamingStatusData } from '../../types/cowork';
+import {
+  SETTINGS_DESCRIPTION_TEXT,
+  SETTINGS_ITEM_TITLE_TEXT,
+  SETTINGS_META_TEXT,
+} from '../settings/settingsTypography';
 
 interface DreamingSettingsSectionProps {
   dreamingEnabled: boolean;
@@ -300,8 +305,8 @@ function DiaryTab({ diary, loading, onRefresh }: {
   if (!diary?.content || entries.length === 0) {
     return (
       <div className="flex min-h-[260px] flex-col items-center justify-center space-y-2 rounded-xl border border-border bg-surface text-center">
-        <div className="text-sm font-medium text-foreground">{i18nService.t('coworkDreamingDiaryEmpty')}</div>
-        <div className="text-xs text-secondary">{i18nService.t('coworkDreamingDiaryEmptyHint')}</div>
+        <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{i18nService.t('coworkDreamingDiaryEmpty')}</div>
+        <div className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingDiaryEmptyHint')}</div>
       </div>
     );
   }
@@ -312,7 +317,7 @@ function DiaryTab({ diary, loading, onRefresh }: {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-xl text-xs text-secondary">{i18nService.t('coworkDreamingDiaryHint')}</p>
+        <p className={`max-w-xl ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingDiaryHint')}</p>
         <button
           type="button"
           onClick={onRefresh}
@@ -367,27 +372,27 @@ function AdvancedEntryList({ title, description, emptyText, entries, badge }: {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <div className="text-sm font-medium text-foreground">{title}</div>
-          <div className="mt-1 text-xs text-secondary">{description}</div>
+          <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{title}</div>
+          <div className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{description}</div>
         </div>
         <span className="rounded-full border border-border bg-surface-raised px-2 py-1 text-xs text-secondary">{entries.length}</span>
       </div>
       {entries.length === 0 ? (
-        <div className="rounded-xl border border-border bg-surface px-4 py-4 text-sm text-secondary">{emptyText}</div>
+        <div className={`rounded-xl border border-border bg-surface px-4 py-4 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{emptyText}</div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-surface">
           {entries.map((entry, index) => (
             <div key={entry.key} className={`space-y-2 px-4 py-3 text-xs ${index > 0 ? 'border-t border-border' : ''}`}>
               {badge && (
-                <span className="inline-block rounded-full bg-surface-raised px-2 py-0.5 text-[10px] text-secondary">
+                <span className={`inline-block rounded-full bg-surface-raised px-2 py-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                   {badge(entry)}
                 </span>
               )}
-              <div className="text-sm leading-5 text-foreground">{entry.snippet}</div>
-              <div className="font-mono text-[10px] text-secondary">
+              <div className={`${SETTINGS_ITEM_TITLE_TEXT} text-foreground`}>{entry.snippet}</div>
+              <div className={`font-mono ${SETTINGS_META_TEXT} text-secondary`}>
                 {formatRange(entry.path, entry.startLine, entry.endLine)}
               </div>
-              <div className="text-[10px] text-secondary">
+              <div className={`${SETTINGS_META_TEXT} text-secondary`}>
                 {[
                   entry.totalSignalCount > 0 ? `${entry.totalSignalCount} signals` : '',
                   entry.recallCount > 0 ? `${entry.recallCount} recall` : '',
@@ -440,8 +445,8 @@ function AdvancedMemorySignals({ status }: { status: DreamingStatusData }) {
   return (
     <div className="space-y-5">
       <div>
-        <p className="text-xs text-secondary">{i18nService.t('coworkDreamingAdvancedHint')}</p>
-        <div className="mt-1 text-xs text-secondary">{summary}</div>
+        <p className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingAdvancedHint')}</p>
+        <div className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{summary}</div>
       </div>
 
       <AdvancedEntryList
@@ -455,8 +460,8 @@ function AdvancedMemorySignals({ status }: { status: DreamingStatusData }) {
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-foreground">{i18nService.t('coworkDreamingAdvancedWaitingTitle')}</div>
-            <div className="mt-1 text-xs text-secondary">{i18nService.t('coworkDreamingAdvancedWaitingDesc')}</div>
+            <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{i18nService.t('coworkDreamingAdvancedWaitingTitle')}</div>
+            <div className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingAdvancedWaitingDesc')}</div>
           </div>
           <div className="flex items-center gap-1 rounded-lg border border-border bg-surface p-1">
             <button
@@ -480,19 +485,19 @@ function AdvancedMemorySignals({ status }: { status: DreamingStatusData }) {
           </div>
         </div>
         {waitingEntries.length === 0 ? (
-          <div className="rounded-xl border border-border bg-surface px-4 py-4 text-sm text-secondary">{i18nService.t('coworkDreamingAdvancedWaitingEmpty')}</div>
+          <div className={`rounded-xl border border-border bg-surface px-4 py-4 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingAdvancedWaitingEmpty')}</div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-border bg-surface">
             {waitingEntries.map((entry, index) => (
               <div key={entry.key} className={`space-y-2 px-4 py-3 text-xs ${index > 0 ? 'border-t border-border' : ''}`}>
-                <span className="inline-block rounded-full bg-surface-raised px-2 py-0.5 text-[10px] text-secondary">
+                <span className={`inline-block rounded-full bg-surface-raised px-2 py-0.5 ${SETTINGS_META_TEXT} text-secondary`}>
                   {describeEntryOrigin(entry)}
                 </span>
-                <div className="text-sm leading-5 text-foreground">{entry.snippet}</div>
-                <div className="font-mono text-[10px] text-secondary">
+                <div className={`${SETTINGS_ITEM_TITLE_TEXT} text-foreground`}>{entry.snippet}</div>
+                <div className={`font-mono ${SETTINGS_META_TEXT} text-secondary`}>
                   {formatRange(entry.path, entry.startLine, entry.endLine)}
                 </div>
-                <div className="text-[10px] text-secondary">
+                <div className={`${SETTINGS_META_TEXT} text-secondary`}>
                   {[
                     entry.totalSignalCount > 0 ? `${entry.totalSignalCount} signals` : '',
                     entry.recallCount > 0 ? `${entry.recallCount} recall` : '',
@@ -532,8 +537,8 @@ function AdvancedSettingsPanel({
   return (
     <div className="rounded-xl border border-border bg-surface px-4 py-4">
       <div className="mb-4">
-        <h3 className="text-sm font-medium text-foreground">{i18nService.t('coworkDreamingSettingsTitle')}</h3>
-        <p className="mt-1 text-xs text-secondary">{i18nService.t('coworkMemoryDreamingEnabledHint')}</p>
+        <h3 className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>{i18nService.t('coworkDreamingSettingsTitle')}</h3>
+        <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkMemoryDreamingEnabledHint')}</p>
       </div>
 
       <div className="space-y-4">
@@ -712,7 +717,7 @@ const DreamingSettingsSection: React.FC<DreamingSettingsSectionProps> = ({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3">
-        <p className="text-sm text-secondary">{i18nService.t('coworkDreamingHeaderSubtitle')}</p>
+        <p className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{i18nService.t('coworkDreamingHeaderSubtitle')}</p>
 
         <button
           type="button"

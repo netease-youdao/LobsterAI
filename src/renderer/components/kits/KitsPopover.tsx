@@ -1,5 +1,5 @@
 import { CheckIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
@@ -8,11 +8,17 @@ import { resolveLocalizedText } from '../../services/skill';
 import { RootState } from '../../store';
 import { setInstalledKits, setMarketplaceKits } from '../../store/slices/kitSlice';
 import type { MarketplaceKit } from '../../types/kit';
+import { PROMPT_SUBMENU_POSITION_CLASS, PromptSubmenuSide } from '../common/promptSubmenu';
 import SearchIcon from '../icons/SearchIcon';
 import ExpertKitsEmptyIcon from './ExpertKitsEmptyIcon';
 import KitIcon from './KitIcon';
 
 const MIN_SEARCHABLE_KIT_COUNT = 3;
+
+// Set once any kits popover has loaded the catalog. Later opens show the kits
+// already in the store and refresh them quietly, instead of blanking the list
+// to a loading line and resizing the popover on every open.
+let hasLoadedKitData = false;
 
 interface KitsPopoverProps {
   isOpen: boolean;
@@ -20,6 +26,9 @@ interface KitsPopoverProps {
   onSelectKit: (kitId: string) => void;
   onManageKits: () => void;
   anchorRef: React.RefObject<HTMLElement>;
+  /** Opens beside the prompt's add menu on `side` instead of above the toolbar button. */
+  asSubmenu?: boolean;
+  side?: PromptSubmenuSide;
 }
 
 const KitsPopover: React.FC<KitsPopoverProps> = ({
@@ -28,12 +37,19 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
   onSelectKit,
   onManageKits,
   anchorRef,
+  asSubmenu = false,
+  side = PromptSubmenuSide.Right,
 }) => {
   const dispatch = useDispatch();
   const [searchQuery, setSearchQuery] = useState('');
   const [maxListHeight, setMaxListHeight] = useState(300);
   const [isLoading, setIsLoading] = useState(false);
+  // The popover grows upward from the toolbar, so a list that shrinks while
+  // searching would pull the search box down under the caret: hold the list at
+  // its unfiltered height until the popover closes.
+  const [listMinHeight, setListMinHeight] = useState<number | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const installedKits = useSelector((state: RootState) => state.kit.installedKits);
@@ -61,11 +77,11 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    const loadData = async () => {
-      setIsLoading(true);
+    const loadData = async (forceRefresh = false) => {
+      if (!hasLoadedKitData) setIsLoading(true);
       try {
         const [mkKits, installed] = await Promise.all([
-          kitService.fetchMarketplaceKits(),
+          kitService.fetchMarketplaceKits({ forceRefresh }),
           kitService.getInstalledKits(),
         ]);
         dispatch(setMarketplaceKits(mkKits));
@@ -73,30 +89,37 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
       } catch (error) {
         console.error('[KitsPopover] Failed to load kit data:', error);
       } finally {
+        hasLoadedKitData = true;
         setIsLoading(false);
       }
     };
 
-    loadData();
+    void loadData();
+    const handleOnline = () => { void loadData(true); };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
   }, [isOpen, dispatch]);
 
-  // Calculate available height and focus search input when popover opens
-  useEffect(() => {
+  // Calculate available height before paint, and focus search input when popover opens
+  useLayoutEffect(() => {
     if (isOpen) {
       if (anchorRef.current) {
         const anchorRect = anchorRef.current.getBoundingClientRect();
-        // Reserve room above the popover plus the search bar and footer chrome
-        const availableHeight = anchorRect.top - 120 - 104;
+        // Reserve room above the popover plus the search bar and footer chrome; a
+        // submenu grows up from the bottom of the add menu, just below its row.
+        const availableHeight = asSubmenu ? anchorRect.bottom - 72 - 86 : anchorRect.top - 120 - 104;
         setMaxListHeight(Math.max(120, Math.min(300, availableHeight)));
       }
-      if (shouldShowSearch && searchInputRef.current) {
+      // A submenu opens on hover, so it leaves the caret in the prompt.
+      if (shouldShowSearch && !asSubmenu && searchInputRef.current) {
         setTimeout(() => searchInputRef.current?.focus(), 0);
       }
     }
     if (!isOpen) {
       setSearchQuery('');
+      setListMinHeight(null);
     }
-  }, [isOpen, anchorRef, shouldShowSearch]);
+  }, [isOpen, anchorRef, asSubmenu, shouldShowSearch]);
 
   useEffect(() => {
     if (!shouldShowSearch && searchQuery) {
@@ -146,14 +169,25 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
     onManageKits();
   };
 
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (listMinHeight === null && listRef.current) {
+      setListMinHeight(listRef.current.offsetHeight);
+    }
+    setSearchQuery(event.target.value);
+  };
+
   if (!isOpen) return null;
 
-  const shouldShowInstallGuide = !isLoading && installedKitIds.length === 0;
+  const showLoading = isLoading || !hasLoadedKitData;
+  const shouldShowInstallGuide = !showLoading && installedKitIds.length === 0;
+  const enterAnimationClass = asSubmenu
+    ? ''
+    : 'origin-bottom-left animate-scale-in';
 
   return (
     <div
       ref={popoverRef}
-      className={`absolute bottom-full left-0 z-50 mb-1 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover ${
+      className={`${asSubmenu ? `${PROMPT_SUBMENU_POSITION_CLASS[side]} z-[60]` : 'absolute bottom-full left-0 z-50 mb-2'} max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-popover ${enterAnimationClass} ${
         shouldShowInstallGuide ? 'w-60' : 'w-80'
       }`}
       role="menu"
@@ -167,7 +201,7 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
               type="text"
               placeholder={i18nService.t('searchKits')}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={handleSearchChange}
               className="w-full rounded-md bg-transparent py-1.5 pl-8 pr-2 text-[13px] leading-5 text-foreground placeholder-secondary focus:bg-surface-raised/70 focus:outline-none"
             />
           </div>
@@ -176,10 +210,14 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
 
       {/* Kits list */}
       <div
-        className={shouldShowInstallGuide ? 'px-4 py-5' : 'overflow-y-auto px-2 py-1.5'}
-        style={shouldShowInstallGuide ? undefined : { maxHeight: `${maxListHeight}px` }}
+        ref={listRef}
+        className={shouldShowInstallGuide ? 'px-4 py-5' : 'flex flex-col overflow-y-auto px-2 py-1.5'}
+        style={shouldShowInstallGuide ? undefined : {
+          maxHeight: `${maxListHeight}px`,
+          minHeight: listMinHeight === null ? undefined : `${Math.min(listMinHeight, maxListHeight)}px`,
+        }}
       >
-        {isLoading ? (
+        {showLoading ? (
           <div className="px-3 py-5 text-center text-[13px] text-secondary">
             {i18nService.t('kitLoading')}
           </div>
@@ -203,7 +241,7 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
             </button>
           </div>
         ) : filteredKits.length === 0 ? (
-          <div className="px-3 py-5 text-center text-[13px] text-secondary">
+          <div className="my-auto px-3 py-5 text-center text-[13px] text-secondary">
             {i18nService.t('kitSearchNoResults')}
           </div>
         ) : (
@@ -240,9 +278,10 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
                     {resolveLocalizedText(kit.description)}
                   </p>
                 </div>
-                {isActive && (
-                  <CheckIcon className="mt-1 h-3.5 w-3.5 flex-shrink-0 text-primary" />
-                )}
+                {/* A fixed check slot keeps the name from reflowing when a kit is toggled. */}
+                <span className="mt-1 flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center">
+                  {isActive && <CheckIcon className="h-3.5 w-3.5 text-primary" />}
+                </span>
               </button>
             );
           })
@@ -250,7 +289,7 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
       </div>
 
       {/* Footer: marketplace entry */}
-      {!isLoading && !shouldShowInstallGuide && (
+      {!showLoading && !shouldShowInstallGuide && (
         <div className="border-t border-border p-1.5">
           <button
             type="button"

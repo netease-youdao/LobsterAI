@@ -1,4 +1,3 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
 import Lottie from 'lottie-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -6,14 +5,17 @@ import { useSelector } from 'react-redux';
 import mediaGeneratingAnimation from '../../assets/lottie/media-generating.json';
 import { i18nService } from '../../services/i18n';
 import { selectIsStreaming } from '../../store/selectors/coworkSelectors';
+import { ActivityPlanDetail } from './ActivityPlanDetail';
 import { ActivityLiveDetailLine, ActivityStepLine } from './ActivityStepLine';
-import { ActivityEntryVariant, ActivityStepKind } from './constants';
+import { ActivityEntryVariant } from './constants';
 import {
   bucketLength,
   getMessageLineCount,
   reportConversationBlockAction,
 } from './conversationAnalytics';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
+import MediaTaskCard from './MediaTaskCard';
+import type { MediaTaskPresentation } from './mediaTaskPresentation';
 import {
   type ConsolidatedItem,
   formatElapsedDuration,
@@ -35,63 +37,23 @@ import {
   isMediaGenerateRunning,
   isMediaStatusPoll,
   isMediaStatusPollRunning,
+  isPlanToolName,
   isTodoWriteToolName,
   isToolGroupSettled,
   normalizeToolName,
-  type ParsedTodoItem,
+  parseActivityPlan,
   parseMediaStreamingInfo,
-  parseTodoWriteItems,
-  type TodoStatus,
   type ToolGroupItem,
   truncatePreview,
 } from './messageDisplayUtils';
 import { DiffStatsBadge, getToolGroupDiffStats } from './toolDiffStats';
 
-// ── TodoWriteInputView ───────────────────────────────────────────────────────
-
-const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) => {
-  const getStatusCheckboxClass = (status: TodoStatus): string => {
-    switch (status) {
-      case 'completed':
-        return 'bg-green-500/10 border-green-500 text-green-500';
-      case 'in_progress':
-        return 'bg-transparent border-blue-500';
-      case 'pending':
-      case 'unknown':
-      default:
-        return 'bg-transparent border-border';
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      {items.map((item, index) => (
-        <div
-          key={`todo-item-${index}`}
-          className="flex items-start gap-2"
-        >
-          <span className={`mt-0.5 h-4 w-4 rounded-[4px] border flex-shrink-0 inline-flex items-center justify-center ${getStatusCheckboxClass(item.status)}`}>
-            {item.status === 'completed' && <CheckIcon className="h-3 w-3 stroke-[2.5]" />}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className={`text-xs whitespace-pre-wrap break-words leading-5 ${
-              item.status === 'completed'
-                ? 'text-muted'
-                : 'text-foreground'
-            }`}>
-              {item.primaryText}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 // ── ToolCallGroup ────────────────────────────────────────────────────────────
 
-// Live elapsed time for a running tool call; appears after a short delay so
-// quick calls don't flash a counter.
+// Live elapsed time for a running command, shown only inside its opened
+// detail: the turn's status line owns the one clock that is always ticking,
+// and a second counter on the step line read as a competing total. Appears
+// after a short delay so quick calls don't flash a counter.
 const TOOL_ELAPSED_APPEAR_DELAY_MS = 2000;
 
 const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimestamp }) => {
@@ -109,6 +71,7 @@ const ToolRunningElapsed: React.FC<{ startTimestamp: number }> = ({ startTimesta
 
 const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
+  mediaTaskPresentation?: MediaTaskPresentation;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
   retainedMediaPollCounts?: Map<string, number>;
@@ -123,6 +86,7 @@ const ToolCallGroup: React.FC<{
   isLive?: boolean;
 }> = ({
   group,
+  mediaTaskPresentation,
   isLastInSequence = true,
   mapDisplayText,
   retainedMediaPollCounts,
@@ -131,14 +95,21 @@ const ToolCallGroup: React.FC<{
   isLive,
 }) => {
   const { toolUse, toolResult } = group;
-  const shouldExpandByDefault = isMediaStatusPoll(group);
+  const shouldExpandByDefault = isMediaStatusPoll(group) && !mediaTaskPresentation;
   const isSessionStreaming = useSelector(selectIsStreaming);
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  // Later calls on a task whose card is already shown are progress checks.
+  const getMediaCallLabel = (live: boolean): string | null => {
+    if (!mediaTaskPresentation || mediaTaskPresentation.showCard) return null;
+    const isVideo = normalizeToolName(rawToolName) === 'lobsteraivideogenerate';
+    if (live) return i18nService.t(isVideo ? 'mediaTaskCheckingVideo' : 'mediaTaskCheckingImage');
+    return i18nService.t(isVideo ? 'mediaTaskCheckedVideo' : 'mediaTaskCheckedImage');
+  };
   const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
   const isTodoWriteTool = isTodoWriteToolName(rawToolName);
-  const todoItems = isTodoWriteTool ? parseTodoWriteItems(toolInput) : null;
+  const activityPlan = isPlanToolName(rawToolName) ? parseActivityPlan(rawToolName, toolInput) : null;
   const mapText = mapDisplayText ?? ((value: string) => value);
   const toolInputDisplayRaw = formatToolInput(rawToolName, toolInput);
   const toolInputDisplay = toolInputDisplayRaw ? mapText(toolInputDisplayRaw) : null;
@@ -220,10 +191,11 @@ const ToolCallGroup: React.FC<{
     setIsExpanded(nextExpanded);
   };
 
-  const renderMediaRunningIndicators = (containerClass: string) => (
+  const renderMediaRunningIndicators = (containerClass: string) => mediaTaskPresentation ? null : (
     <>
       {isMediaGenerateRunning(group) && isSessionStreaming && (() => {
         const streamingInfo = parseMediaStreamingInfo(group);
+        if (!streamingInfo.taskId) return null;
         const pollCount = streamingInfo.pollCount ?? getRetainedMediaPollCount(streamingInfo, retainedMediaPollCounts);
         return (
           <div className={`${containerClass} flex items-center gap-2`}>
@@ -309,12 +281,13 @@ const ToolCallGroup: React.FC<{
                 {!toolResult && (
                   <div className="text-muted mt-1.5 italic">
                     {i18nService.t('coworkToolRunning')}
+                    {isRunning && <ToolRunningElapsed startTimestamp={toolUse.timestamp} />}
                   </div>
                 )}
               </div>
             </div>
-          ) : isTodoWriteTool && todoItems ? (
-            <TodoWriteInputView items={todoItems} />
+          ) : activityPlan ? (
+            <ActivityPlanDetail plan={activityPlan} mapDisplayText={mapDisplayText} />
           ) : isEditWithDiff && diffDataList ? (
             <div className="space-y-2">
               {diffDataList.map((diff, idx) => (
@@ -381,14 +354,16 @@ const ToolCallGroup: React.FC<{
     </>
   );
 
+  if (mediaTaskPresentation?.showCard) {
+    return <MediaTaskCard details={mediaTaskPresentation.details} startedAt={mediaTaskPresentation.startedAt}
+      input={toolInput && typeof toolInput === 'object' ? toolInput as Record<string, unknown> : undefined} />;
+  }
+
   if (variant === ActivityEntryVariant.Row) {
     const stepItem: ConsolidatedItem = { type: 'tool_group', group };
     const isRowLive = isLive ?? isRunning;
     const stepKind = getActivityStepKind(stepItem);
     const rowLiveDetail = isRowLive && !isExpanded ? getActivityLiveDetail(stepItem) : null;
-    // A file being written already shows its growing +N/-M count; a timer
-    // beside it says nothing more. Commands keep theirs.
-    const showRunningElapsed = isRunning && stepKind !== ActivityStepKind.Edit;
     // Terminal output and diffs carry their own frame; anything else gets one
     // so it does not float loose under the step line.
     const hasOwnFrame = isBashTool || isEditWithDiff;
@@ -396,21 +371,12 @@ const ToolCallGroup: React.FC<{
       <div>
         <ActivityStepLine
           kind={stepKind}
-          label={mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
+          label={getMediaCallLabel(isRowLive) ?? mapText(isRowLive ? getActivityCurrentActionText(stepItem) : getActivityStepDoneLabel(stepItem))}
           isLive={isRowLive}
           hasError={isToolError}
           isExpanded={isExpanded}
           onToggle={handleToggle}
-          trailing={(
-            <>
-              {diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
-              {showRunningElapsed && (
-                <span className="flex-shrink-0 text-xs text-muted">
-                  <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
-                </span>
-              )}
-            </>
-          )}
+          trailing={diffStats && <DiffStatsBadge stats={diffStats} className="text-sm" />}
         />
         {rowLiveDetail && (
           <ActivityLiveDetailLine
@@ -454,7 +420,7 @@ const ToolCallGroup: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-sm font-medium text-secondary ${isRunning ? 'shimmer-text' : ''}`}>
-              {toolName}
+              {getMediaCallLabel(isRunning) ?? toolName}
             </span>
             {toolInputSummary && (
               <code className="text-code text-muted font-mono truncate max-w-full">
@@ -487,9 +453,6 @@ const ToolCallGroup: React.FC<{
                   {i18nService.t(isGenerating ? 'coworkActivityLiveGenerating' : 'coworkToolRunning')}
                 </span>
               )}
-              <span className="flex-shrink-0 whitespace-pre">
-                <ToolRunningElapsed startTimestamp={toolUse.timestamp} />
-              </span>
             </div>
           )}
         </div>

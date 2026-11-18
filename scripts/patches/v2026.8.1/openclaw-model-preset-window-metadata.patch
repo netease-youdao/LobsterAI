@@ -1,0 +1,239 @@
+diff --git a/src/agents/model-selection-shared.ts b/src/agents/model-selection-shared.ts
+--- a/src/agents/model-selection-shared.ts
++++ b/src/agents/model-selection-shared.ts
+@@ -698,6 +698,12 @@
+     name: configuredEntry?.name ?? params.entry.name,
+     ...(nextAlias ? { alias: nextAlias } : {}),
+     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
++    ...(configuredEntry?.contextWindows
++      ? {
++          contextWindows: configuredEntry.contextWindows.map((option) => ({ ...option })),
++          contextWindowDefault: configuredEntry.contextWindowDefault,
++        }
++      : {}),
+     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
+     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
+     ...(configuredReasoning !== undefined ? { configuredReasoning } : {}),
+@@ -728,6 +734,12 @@
+     provider: params.parsed.provider,
+     ...(alias ? { alias } : {}),
+     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
++    ...(configuredEntry?.contextWindows
++      ? {
++          contextWindows: configuredEntry.contextWindows.map((option) => ({ ...option })),
++          contextWindowDefault: configuredEntry.contextWindowDefault,
++        }
++      : {}),
+     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
+     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
+     ...(configuredReasoning !== undefined ? { configuredReasoning } : {}),
+@@ -1416,6 +1428,12 @@
+           ? { baseUrl: model.baseUrl ?? provider.baseUrl }
+           : {}),
+         contextWindow,
++        ...(model.contextWindows
++          ? {
++              contextWindows: model.contextWindows.map((option) => ({ ...option })),
++              contextWindowDefault: model.contextWindowDefault,
++            }
++          : {}),
+         contextTokens,
+         reasoning,
+         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
+diff --git a/src/agents/embedded-agent-runner/model.configured-overrides.ts b/src/agents/embedded-agent-runner/model.configured-overrides.ts
+--- a/src/agents/embedded-agent-runner/model.configured-overrides.ts
++++ b/src/agents/embedded-agent-runner/model.configured-overrides.ts
+@@ -576,6 +576,12 @@
+           input: normalizedInput,
+           cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
+           contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
++          ...(metadataOverrideModel?.contextWindows
++            ? {
++                contextWindows: metadataOverrideModel.contextWindows.map((option) => ({ ...option })),
++                contextWindowDefault: metadataOverrideModel.contextWindowDefault,
++              }
++            : {}),
+           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
+           ...(normalizedResolvedMaxTokens !== undefined
+             ? {
+diff --git a/src/agents/embedded-agent-runner/model.configured-fallback.ts b/src/agents/embedded-agent-runner/model.configured-fallback.ts
+--- a/src/agents/embedded-agent-runner/model.configured-fallback.ts
++++ b/src/agents/embedded-agent-runner/model.configured-fallback.ts
+@@ -55,6 +55,7 @@
+   }
+   const staticCatalogModel = params.getStaticCatalogModel?.();
+   const metadataModel = configuredModel ?? staticCatalogModel;
++  const windowMetadata = configuredModel?.contextWindows ? configuredModel : staticCatalogModel;
+   const fallbackMediaInput = mergeModelMediaInput(
+     staticCatalogModel?.mediaInput,
+     configuredModel?.mediaInput,
+@@ -186,6 +187,12 @@
+               : {}),
+             cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+             contextWindow: resolvedFallbackContextWindow,
++            ...(windowMetadata?.contextWindows
++              ? {
++                  contextWindows: windowMetadata.contextWindows.map((option) => ({ ...option })),
++                  contextWindowDefault: windowMetadata.contextWindowDefault,
++                }
++              : {}),
+             contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
+             // maxTokens is a wire-level output cap, not a context-budget fallback.
+             // Omit an unknown cap so strict providers can apply their own limit.
+diff --git a/src/agents/model-preset-context-window.test.ts b/src/agents/model-preset-context-window.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/agents/model-preset-context-window.test.ts
+@@ -0,0 +1,152 @@
++import { describe, expect, it } from "vitest";
++import type { ModelDefinitionConfig } from "../config/types.models.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import { applySessionContextWindowPatch } from "../gateway/sessions-patch-context-window.js";
++import { buildConfiguredFallbackModel } from "./embedded-agent-runner/model.configured-fallback.js";
++import { applyConfiguredProviderOverrides } from "./embedded-agent-runner/model.configured-overrides.js";
++import { resolveRuntimeHooks } from "./embedded-agent-runner/model.provider-hooks.js";
++import { resolveModelContextWindowProfile } from "./model-context-window.js";
++import { buildAllowedModelSet, buildConfiguredModelCatalog } from "./model-selection-shared.js";
++
++const provider = "lobsterai-server";
++const modelId = "MiniMax-M3.1-Flash-Preview";
++const options = [
++  { id: "model-default", label: "1M", contextWindow: 1_000_000 },
++  { id: "model-preset:balanced", label: "400k", contextWindow: 400_000 },
++  { id: "model-preset:ultimate", label: "2M", contextWindow: 2_000_000 },
++];
++const model: ModelDefinitionConfig = {
++  id: modelId,
++  name: modelId,
++  api: "openai-completions",
++  reasoning: false,
++  input: ["text"],
++  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++  contextWindow: 1_000_000,
++  maxTokens: 16_000,
++  contextWindows: options,
++  contextWindowDefault: "model-default",
++};
++const providerConfig = { baseUrl: "http://127.0.0.1:9999/v1", models: [model] };
++const cfg: OpenClawConfig = { models: { providers: { [provider]: providerConfig } } };
++const runtimeHooks = resolveRuntimeHooks({ skipProviderRuntimeHooks: true });
++
++function expectWindows(
++  entry: Parameters<typeof resolveModelContextWindowProfile>[0]["catalogEntry"],
++) {
++  expect(
++    resolveModelContextWindowProfile({ catalogEntry: entry, selected: options[1].id })
++      .contextTokens,
++  ).toBe(400_000);
++  expect(
++    resolveModelContextWindowProfile({ catalogEntry: entry, selected: options[2].id })
++      .contextTokens,
++  ).toBe(2_000_000);
++  expect(resolveModelContextWindowProfile({ catalogEntry: entry }).contextTokens).toBe(1_000_000);
++  expect(entry?.contextWindow).toBe(1_000_000);
++}
++
++describe("configured preset context windows", () => {
++  it("keeps configured choices through catalog projection and session validation", async () => {
++    const catalog = buildConfiguredModelCatalog({ cfg, manifestPlugins: [] });
++    for (const selected of [options[1].id, options[2].id]) {
++      const next = {
++        sessionId: "test",
++        updatedAt: 0,
++        providerOverride: provider,
++        modelOverride: modelId,
++      };
++      const result = await applySessionContextWindowPatch({
++        defaultProvider: provider,
++        defaultModel: modelId,
++        next,
++        patch: { key: "test", contextWindow: selected },
++        loadModelCatalog: async () => catalog,
++      });
++      expect(result).toEqual({ ok: true });
++    }
++    expectWindows(catalog[0]);
++  });
++
++  it("keeps choices when configured metadata overlays a discovered catalog row", () => {
++    const allowed = buildAllowedModelSet({
++      cfg,
++      manifestPlugins: [],
++      defaultProvider: provider,
++      defaultModel: modelId,
++      catalog: [{ provider, id: modelId, name: modelId, contextWindow: 200_000 }],
++    });
++    expectWindows(allowed.allowedCatalog.find((entry) => entry.id === modelId));
++  });
++
++  it("keeps choices when a discovered runtime model receives configured overrides", () => {
++    const resolved = applyConfiguredProviderOverrides({
++      provider,
++      modelId,
++      cfg,
++      providerConfig,
++      manifestAlias: { provider },
++      runtimeHooks,
++      discoveredModel: {
++        id: modelId,
++        name: modelId,
++        provider,
++        api: "openai-completions",
++        baseUrl: providerConfig.baseUrl,
++        contextWindow: 200_000,
++        maxTokens: 16_000,
++        reasoning: false,
++        input: ["text"],
++        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++      },
++    });
++    expectWindows(resolved);
++  });
++
++  it("keeps choices for configured-only models without a discovered model", () => {
++    const resolved = buildConfiguredFallbackModel({
++      provider,
++      modelId,
++      cfg,
++      manifestAlias: { provider },
++      runtimeHooks,
++    });
++    expectWindows(resolved);
++  });
++
++  it("does not accept preset choices for ordinary unconfigured models", async () => {
++    const directConfig: OpenClawConfig = {
++      models: {
++        providers: {
++          deepseek: {
++            baseUrl: providerConfig.baseUrl,
++            models: [
++              {
++                ...model,
++                id: "deepseek",
++                name: "DeepSeek",
++                contextWindow: 128_000,
++                maxTokens: 8192,
++                contextWindows: undefined,
++                contextWindowDefault: undefined,
++              },
++            ],
++          },
++        },
++      },
++    };
++    const catalog = buildConfiguredModelCatalog({ cfg: directConfig, manifestPlugins: [] });
++    expect(catalog[0]).not.toHaveProperty("contextWindows");
++    expect(resolveModelContextWindowProfile({ catalogEntry: catalog[0] }).contextTokens).toBe(
++      128_000,
++    );
++    const result = await applySessionContextWindowPatch({
++      defaultProvider: "deepseek",
++      defaultModel: "deepseek",
++      next: { sessionId: "test", updatedAt: 0 },
++      patch: { key: "test", contextWindow: options[1].id },
++      loadModelCatalog: async () => catalog,
++    });
++    expect(result.ok).toBe(false);
++  });
++});

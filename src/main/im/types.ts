@@ -247,9 +247,6 @@ export interface DiscordMultiInstanceStatus {
 
 // ==================== NIM (NetEase IM) Types ====================
 
-export type NimTeamPolicy = 'open' | 'allowlist' | 'disabled';
-export type NimSessionType = 'p2p' | 'team' | 'superTeam';
-
 export interface NimP2pConfig {
   policy: 'open' | 'allowlist' | 'disabled';
   allowFrom?: (string | number)[];
@@ -602,8 +599,6 @@ export interface IMGatewayConfig {
 }
 
 export interface IMSettings {
-  systemPrompt?: string;
-  skillsEnabled: boolean;
   /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
   platformAgentBindings?: Record<string, string>;
 }
@@ -907,10 +902,7 @@ export const DEFAULT_WEIXIN_CONFIG: WeixinOpenClawConfig = {
   debug: true,
 };
 
-export const DEFAULT_IM_SETTINGS: IMSettings = {
-  systemPrompt: '',
-  skillsEnabled: true,
-};
+export const DEFAULT_IM_SETTINGS: IMSettings = {};
 
 export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   dingtalk: DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
@@ -950,15 +942,6 @@ export const DEFAULT_DISCORD_STATUS: DiscordGatewayStatus = {
   startedAt: null,
   lastError: null,
   botUsername: null,
-  lastInboundAt: null,
-  lastOutboundAt: null,
-};
-
-export const DEFAULT_NIM_STATUS: NimGatewayStatus = {
-  connected: false,
-  startedAt: null,
-  lastError: null,
-  botAccount: null,
   lastInboundAt: null,
   lastOutboundAt: null,
 };

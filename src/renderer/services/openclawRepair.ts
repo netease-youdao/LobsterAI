@@ -1,6 +1,6 @@
-import { OpenClawGatewayRepairErrorCode } from '../../shared/openclawEngine/constants';
+import { OpenClawGatewayRepairErrorCode, OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
 import { OpenClawRepairStage } from '../../shared/openclawEngine/repair';
-import type { OpenClawGatewayRepairResult } from '../types/cowork';
+import type { OpenClawGatewayRepairResult, OpenClawLoopbackRepairResult } from '../types/cowork';
 import { i18nService } from './i18n';
 
 const stageMessages: Record<OpenClawRepairStage, string> = {
@@ -29,5 +29,18 @@ export function resolveOpenClawRepairError(result: OpenClawGatewayRepairResult, 
     result.failurePath ? i18nService.t('openClawRepairFailurePath').replace('{path}', () => result.failurePath!) : undefined,
     resolveOpenClawRepairHistoryWarning(result),
     includeBackupPath && result.backupPath ? i18nService.t('openClawRepairFilesPath').replace('{path}', () => result.backupPath!) : undefined,
+  ].filter(Boolean).join('\n');
+}
+
+/** Undefined once the rule works: the gateway status reports what follows. */
+export function resolveOpenClawLoopbackRepairMessage(result: OpenClawLoopbackRepairResult): string | undefined {
+  if (result.outcome === OpenClawLoopbackRepairOutcome.Repaired) return undefined;
+  if (result.outcome === OpenClawLoopbackRepairOutcome.Cancelled) return i18nService.t('coworkOpenClawAllowLoopbackCancelled');
+  if (result.outcome === OpenClawLoopbackRepairOutcome.StillBlocked) return i18nService.t('coworkOpenClawAllowLoopbackStillBlocked');
+  return [
+    i18nService.t('coworkOpenClawAllowLoopbackFailed'),
+    result.detail?.trim() || undefined,
+    result.manualCommand ? i18nService.t('coworkOpenClawAllowLoopbackManual') : undefined,
+    result.manualCommand,
   ].filter(Boolean).join('\n');
 }

@@ -1,0 +1,106 @@
+diff --git a/src/plugins/native-module-require.test.ts b/src/plugins/native-module-require.test.ts
+index 643268fd..97de0b83 100644
+--- a/src/plugins/native-module-require.test.ts
++++ b/src/plugins/native-module-require.test.ts
+@@ -31,6 +31,18 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     expect(result).toEqual({ ok: true, moduleExport: { marker: "native" } });
+   });
+ 
++  it("loads file URL targets, the form Windows plugin loaders pass", () => {
++    const dir = tempDirs.make("openclaw-native-require-");
++    const modulePath = path.join(dir, "plugin.mjs");
++    fs.writeFileSync(modulePath, 'export const marker = "esm-from-url";\n', "utf8");
++
++    const result = tryNativeRequireJavaScriptModule(pathToFileURL(modulePath).href, {
++      allowWindows: true,
++    });
++
++    expect(result).toMatchObject({ ok: true, moduleExport: { marker: "esm-from-url" } });
++  });
++
+   it("declines modules that need source-transform fallback", () => {
+     const dir = tempDirs.make("openclaw-native-require-");
+     const modulePath = path.join(dir, "plugin.mjs");
+@@ -215,6 +227,25 @@ describe("tryNativeRequireJavaScriptModule", () => {
+     });
+   });
+ 
++  it("clears modules loaded through file URL targets", () => {
++    const dir = tempDirs.make("openclaw-native-require-");
++    const modulePath = path.join(dir, "plugin.cjs");
++    const moduleUrl = pathToFileURL(modulePath).href;
++    fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\n', "utf8");
++    expect(tryNativeRequireJavaScriptModule(moduleUrl, { allowWindows: true })).toEqual({
++      ok: true,
++      moduleExport: { marker: "before" },
++    });
++
++    fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\n', "utf8");
++    clearPluginModuleRequireCache(moduleUrl);
++
++    expect(tryNativeRequireJavaScriptModule(moduleUrl, { allowWindows: true })).toEqual({
++      ok: true,
++      moduleExport: { marker: "after" },
++    });
++  });
++
+   it("clears local dependencies loaded by a native JavaScript module", () => {
+     const dir = tempDirs.make("openclaw-native-require-");
+     const modulePath = path.join(dir, "plugin.cjs");
+diff --git a/src/plugins/native-module-require.ts b/src/plugins/native-module-require.ts
+index aba83231..e2fac555 100644
+--- a/src/plugins/native-module-require.ts
++++ b/src/plugins/native-module-require.ts
+@@ -2,7 +2,7 @@
+ import fs from "node:fs";
+ import Module, { createRequire } from "node:module";
+ import path from "node:path";
+-import { pathToFileURL } from "node:url";
++import { fileURLToPath, pathToFileURL } from "node:url";
+ import { isPathInside } from "../infra/path-guards.js";
+ 
+ const nodeRequire = createRequire(import.meta.url);
+@@ -58,6 +58,13 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
+   );
+ }
+ 
++// Windows loaders pass file:// URLs, the form ESM imports need. require() and
++// require.resolve() take paths: a URL always failed as a missing target, which
++// sent every plugin through the source transform and skipped cache eviction.
++function toRequirePath(modulePath: string): string {
++  return modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
++}
++
+ /** Attempts native require before falling back to source transform paths. */
+ export function tryNativeRequireJavaScriptModule(
+   modulePath: string,
+@@ -71,16 +78,17 @@ export function tryNativeRequireJavaScriptModule(
+   if (process.platform === "win32" && options.allowWindows !== true) {
+     return { ok: false };
+   }
+-  if (!isJavaScriptModulePath(modulePath)) {
++  const requirePath = toRequirePath(modulePath);
++  if (!isJavaScriptModulePath(requirePath)) {
+     return { ok: false };
+   }
+   try {
+-    return { ok: true, moduleExport: requireWithOptionalAliases(modulePath, options.aliasMap) };
++    return { ok: true, moduleExport: requireWithOptionalAliases(requirePath, options.aliasMap) };
+   } catch (error) {
+     const code =
+       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+     if (
+-      isSourceTransformFallbackError(error, modulePath) ||
++      isSourceTransformFallbackError(error, requirePath) ||
+       options.fallbackOnNativeError ||
+       (options.fallbackOnMissingDependency === true &&
+         (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
+@@ -97,7 +105,7 @@ export function clearPluginModuleRequireCache(
+   options: { dependencyRoot?: string } = {},
+ ): void {
+   try {
+-    const resolved = nodeRequire.resolve(modulePath);
++    const resolved = nodeRequire.resolve(toRequirePath(modulePath));
+     clearRequireCacheSubtree(
+       resolved,
+       resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),

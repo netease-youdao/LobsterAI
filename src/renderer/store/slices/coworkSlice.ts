@@ -9,7 +9,9 @@ import {
   CoworkBtwStatus,
   type CoworkBtwThread,
 } from '../../../shared/cowork/btw';
+import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
@@ -25,6 +27,7 @@ import {
   type CoworkSteerStatus as CoworkSteerStatusType,
 } from '../../../shared/cowork/steer';
 import { stripNullChars } from '../../../shared/cowork/text';
+import { readMediaConfirmationState } from '../../../shared/media/confirmation';
 import {
   CoworkCollaborationMode,
   type CoworkCollaborationMode as CoworkCollaborationModeType,
@@ -41,11 +44,14 @@ import type { MediaGenerationSelection, MediaModel } from '../../types/mediaGene
 import { removeSessionFromState, removeSessionsFromState } from './coworkDeleteState';
 
 export interface DraftAttachment {
+  imageEdit?: import('../../../shared/imageEditing/types').ImageEditRequest;
   path: string;
   name: string;
   isImage?: boolean;
   isDirectory?: boolean;
   dataUrl?: string;
+  /** Full text of a large paste shown as a card; path is `pasted:<id>`. */
+  pastedText?: string;
 }
 
 export const PlanConfirmationState = {
@@ -81,6 +87,8 @@ interface CoworkState {
   draftKitIds: Record<string, string[]>;
   /** Keyed by draftKey, stores active skill IDs per draft so they survive view switches */
   draftSkillIds: Record<string, string[]>;
+  /** Expert-provided selections are availability, not a manual override of media defaults. */
+  draftInheritedSkillIds: Record<string, string[]>;
   /** Keyed by draftKey, stores the active collaboration mode for the draft/session. */
   draftCollaborationModes: Record<string, CoworkCollaborationModeType>;
   /** Keyed by sessionId, stores the latest proposed plan confirmation UI state. */
@@ -132,6 +140,7 @@ const initialState: CoworkState = {
   draftBrowserAnnotationBatches: {},
   draftKitIds: {},
   draftSkillIds: {},
+  draftInheritedSkillIds: {},
   draftCollaborationModes: {},
   planConfirmations: {},
   btwThreadsBySessionId: {},
@@ -568,7 +577,7 @@ const coworkSlice = createSlice({
       }
       if (action.payload) {
         state.currentSessionId = action.payload.id;
-        if (!action.payload.id.startsWith('temp-')) {
+        if (!action.payload.id.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) {
           const summary = toSessionSummary(action.payload);
           const sessionIndex = state.sessions.findIndex((session) => session.id === summary.id);
           if (sessionIndex !== -1) {
@@ -759,6 +768,23 @@ const coworkSlice = createSlice({
       } else {
         clearCompletedSessionUnread(state, sessionId);
       }
+    },
+
+    setMessageTurnUsage(
+      state,
+      action: PayloadAction<{ sessionId: string; messageId: string; turnUsage: CoworkTurnUsage }>,
+    ) {
+      const { sessionId, messageId, turnUsage } = action.payload;
+      if (state.currentSession?.id !== sessionId) return;
+      const message = state.currentSession.messages.find(item => item.id === messageId)
+        ?? state.detachedTailMessagesBySessionId[sessionId]?.find(item => item.id === messageId);
+      if (!message) {
+        if (state.currentSession.leadingTurnUsage?.userMessageId === messageId) {
+          state.currentSession.leadingTurnUsage.turnUsage = turnUsage;
+        }
+        return;
+      }
+      message.metadata = { ...message.metadata, turnUsage };
     },
 
     updateSessionGoal(state, action: PayloadAction<{ sessionId: string; goal: CoworkGoal | null }>) {
@@ -1005,6 +1031,7 @@ const coworkSlice = createSlice({
         messagesOffset: number;
         totalMessages: number;
         leadingTurnStartTimestamp?: number | null;
+        leadingTurnUsage?: CoworkTurnUsageAnchor | null;
         /** Keep a newer live total when this window request started before it changed. */
         preserveCurrentTotal?: boolean;
       }>,
@@ -1015,6 +1042,7 @@ const coworkSlice = createSlice({
         messagesOffset,
         totalMessages,
         leadingTurnStartTimestamp = null,
+        leadingTurnUsage = null,
         preserveCurrentTotal = false,
       } = action.payload;
       if (state.currentSession?.id !== sessionId) return;
@@ -1039,6 +1067,7 @@ const coworkSlice = createSlice({
       state.currentSession.messagesOffset = messagesOffset;
       state.currentSession.totalMessages = nextTotalMessages;
       state.currentSession.leadingTurnStartTimestamp = leadingTurnStartTimestamp;
+      state.currentSession.leadingTurnUsage = leadingTurnUsage;
       removeLoadedDetachedTailMessages(state, sessionId, messages);
       for (const message of state.currentSession.messages) {
         applyPendingMediaStatusUpdates(state, sessionId, message);
@@ -1117,8 +1146,9 @@ const coworkSlice = createSlice({
       messages: CoworkMessage[];
       newOffset: number;
       leadingTurnStartTimestamp?: number | null;
+      leadingTurnUsage?: CoworkTurnUsageAnchor | null;
     }>) {
-      const { sessionId, messages, newOffset, leadingTurnStartTimestamp = null } = action.payload;
+      const { sessionId, messages, newOffset, leadingTurnStartTimestamp = null, leadingTurnUsage = null } = action.payload;
       if (state.currentSession?.id !== sessionId) return;
       if (messages.length === 0) return;
       const existingIds = new Set(state.currentSession.messages.map(m => m.id));
@@ -1126,6 +1156,7 @@ const coworkSlice = createSlice({
       state.currentSession.messages = [...toInsert, ...state.currentSession.messages];
       state.currentSession.messagesOffset = newOffset;
       state.currentSession.leadingTurnStartTimestamp = leadingTurnStartTimestamp;
+      state.currentSession.leadingTurnUsage = leadingTurnUsage;
       for (const message of toInsert) {
         applyPendingMediaStatusUpdates(state, sessionId, message);
       }
@@ -1296,10 +1327,16 @@ const coworkSlice = createSlice({
     },
 
     enqueuePendingPermission(state, action: PayloadAction<CoworkPermissionRequest>) {
-      const alreadyQueued = state.pendingPermissions.some(
-        (permission) => permission.requestId === action.payload.requestId
+      const index = state.pendingPermissions.findIndex(
+        permission => permission.requestId === action.payload.requestId
       );
-      if (alreadyQueued) return;
+      if (index >= 0) {
+        const incoming = readMediaConfirmationState(action.payload.toolInput?.mediaConfirmation);
+        const existing = readMediaConfirmationState(state.pendingPermissions[index].toolInput?.mediaConfirmation);
+        // A reload snapshot must not replace a newer confirmation state.
+        if (incoming && (!existing || incoming.sequence > existing.sequence)) state.pendingPermissions[index] = action.payload;
+        return;
+      }
       state.pendingPermissions.push(action.payload);
     },
 
@@ -1312,6 +1349,19 @@ const coworkSlice = createSlice({
       state.pendingPermissions = state.pendingPermissions.filter(
         (permission) => permission.requestId !== requestId
       );
+    },
+
+    invalidateEditedHistory(state, action: PayloadAction<string>) {
+      const sessionId = action.payload;
+      delete state.detachedTailMessagesBySessionId[sessionId];
+      delete state.messageRailIndexBySessionId[sessionId];
+      delete state.messageRailIndexLoadingBySessionId[sessionId];
+      delete state.contextUsageBySessionId[sessionId];
+      delete state.notifiedCompactionBySessionId[sessionId];
+      delete state.planConfirmations[sessionId];
+      delete state.pendingSteers[sessionId];
+      delete state.rejectedSteers[sessionId];
+      state.pendingPermissions = state.pendingPermissions.filter(permission => permission.sessionId !== sessionId);
     },
 
     clearPendingPermissions(state) {
@@ -1478,8 +1528,15 @@ const coworkSlice = createSlice({
       }
     },
 
-    setDraftSkillIds(state, action: PayloadAction<{ draftKey: string; skillIds: string[] }>) {
-      const { draftKey, skillIds } = action.payload;
+    setDraftSkillIds(state, action: PayloadAction<{ draftKey: string; skillIds: string[]; inheritedSkillIds?: string[] }>) {
+      const { draftKey, skillIds, inheritedSkillIds } = action.payload;
+      const inherited = (inheritedSkillIds ?? state.draftInheritedSkillIds[draftKey] ?? [])
+        .filter(id => skillIds.includes(id));
+      if (inherited.length > 0) {
+        state.draftInheritedSkillIds[draftKey] = inherited;
+      } else {
+        delete state.draftInheritedSkillIds[draftKey];
+      }
       if (skillIds.length === 0) {
         delete state.draftSkillIds[draftKey];
       } else {
@@ -1510,11 +1567,7 @@ const coworkSlice = createSlice({
 
     setMediaSelection(state, action: PayloadAction<{ draftKey: string; selection: MediaGenerationSelection }>) {
       const { draftKey, selection } = action.payload;
-      if (selection.mode === 'none') {
-        delete state.mediaSelection[draftKey];
-      } else {
-        state.mediaSelection[draftKey] = selection;
-      }
+      state.mediaSelection[draftKey] = selection;
     },
 
     clearMediaAccountState(state) {
@@ -1529,6 +1582,7 @@ const coworkSlice = createSlice({
 });
 
 export const {
+  invalidateEditedHistory,
   setCoworkActive,
   setSessions,
   setAgentSessions,
@@ -1557,6 +1611,7 @@ export const {
   clearDraftBrowserAnnotationBatches,
   addSession,
   updateSessionStatus,
+  setMessageTurnUsage,
   updateSessionGoal,
   openBtwThread,
   closeBtwThread,

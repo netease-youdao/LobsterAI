@@ -2,19 +2,21 @@ import './questionDock.css';
 
 import {
   ArrowRightIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronUpIcon,
   PencilIcon,
-  QuestionMarkCircleIcon,
-  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { readMediaConfirmationState } from '../../../../shared/media/confirmation';
 import { coworkService } from '../../../services/cowork';
 import { i18nService } from '../../../services/i18n';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../../types/cowork';
 import { stripQuestionRecommendation } from '../questionOptionLabel';
 import { readInteractionDraft, saveInteractionDraft } from './interactionDraft';
+import MediaConfirmationCard from './MediaConfirmationCard';
 import {
   type DockRequest,
   emptyQuestionDraft,
@@ -76,7 +78,13 @@ interface QuestionDockCardProps {
   hidden?: boolean;
 }
 
-export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimize, hidden = false }: QuestionDockCardProps) {
+export function QuestionDockCard(props: QuestionDockCardProps) {
+  return readMediaConfirmationState(props.request.permission.toolInput?.mediaConfirmation)
+    ? <MediaConfirmationCard request={props.request} queueCount={props.queueCount} hidden={props.hidden} />
+    : <StandardQuestionDockCard {...props} />;
+}
+
+function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimize, hidden = false }: QuestionDockCardProps) {
   const storageKey = `question-dock:${request.key}`;
   const [draft, setDraft] = useState<QuestionDraft>(() => readInteractionDraft<QuestionDraft>(storageKey) ?? emptyQuestionDraft());
   const [busy, setBusy] = useState(false);
@@ -89,7 +97,9 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const card = useRef<HTMLElement>(null);
   const freeAnswer = useRef<HTMLTextAreaElement>(null);
+  const expandButton = useRef<HTMLButtonElement>(null);
   const focusNextQuestion = useRef(false);
+  const focusExpandButton = useRef(false);
   const canSkip = request.source === QuestionSource.Plugin;
 
   useEffect(() => { saveInteractionDraft(storageKey, draft); }, [storageKey, draft]);
@@ -121,6 +131,11 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
       ?? freeAnswer.current;
     target?.focus({ preventScroll: true });
   }, [question.id, hidden, draft.collapsed, recommendedIndex]);
+  useLayoutEffect(() => {
+    if (!focusExpandButton.current || hidden || !draft.collapsed) return;
+    focusExpandButton.current = false;
+    expandButton.current?.focus({ preventScroll: true });
+  }, [hidden, draft.collapsed]);
   useLayoutEffect(() => {
     const input = freeAnswer.current;
     if (!input) return;
@@ -227,8 +242,13 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
   };
   const collapse = () => {
     cancelAdvance();
+    focusExpandButton.current = Boolean(card.current?.contains(document.activeElement));
     update({ ...draftRef.current, collapsed: true });
     onMinimize?.();
+  };
+  const expand = () => {
+    focusNextQuestion.current = true;
+    update({ ...draftRef.current, collapsed: false });
   };
 
   useEffect(() => {
@@ -249,19 +269,23 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
 
   if (hidden) return null;
   if (draft.collapsed) {
+    // Collapsed in place: the question stays readable on one line and the
+    // conversation above gets the space back.
     return (
-      <button
-        type="button"
-        className="cowork-question-restore"
-        onClick={() => {
-          focusNextQuestion.current = true;
-          update({ ...draft, collapsed: false });
-        }}
-      >
-        <QuestionMarkCircleIcon aria-hidden="true" />
-        {t('coworkQuestionDockWaiting')}
-        {queueCount > 1 && ` · ${queueCount}`}
-      </button>
+      <section ref={card} className="cowork-question-dock is-collapsed" aria-label={t('coworkQuestionDockWaiting')}>
+        <button
+          ref={expandButton}
+          type="button"
+          className="cowork-question-expand"
+          aria-expanded={false}
+          title={t('coworkQuestionDockExpand')}
+          onClick={expand}
+        >
+          <strong>{question.heading ?? question.title}</strong>
+          {request.questions.length > 1 && <span>{index + 1} / {request.questions.length}</span>}
+          <ChevronUpIcon aria-hidden="true" />
+        </button>
+      </section>
     );
   }
 
@@ -314,7 +338,7 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
       }}
     >
       <header>
-        <h2>{question.title}</h2>
+        <h2>{question.heading ?? question.title}</h2>
         <nav aria-label={t('coworkQuestionDockNavigation')}>
           <button
             type="button"
@@ -333,12 +357,22 @@ export function QuestionDockCard({ request, queueCount = 1, onRespond, onMinimiz
           >
             <ChevronRightIcon />
           </button>
-          <button type="button" disabled={busy} aria-label={t('coworkQuestionDockClose')} onClick={collapse}>
-            <XMarkIcon />
+          <button
+            type="button"
+            className="cowork-question-collapse"
+            disabled={busy}
+            aria-expanded={true}
+            aria-label={t('coworkQuestionDockCollapse')}
+            title={t('coworkQuestionDockCollapse')}
+            onClick={collapse}
+          >
+            <ChevronDownIcon />
           </button>
         </nav>
       </header>
+      {question.subtitle && <p className="cowork-question-hint cowork-question-subtitle">{question.subtitle}</p>}
       <div className="cowork-question-page" key={question.id}>
+        {question.heading && <p className="cowork-question-description">{question.title}</p>}
         {question.multiSelect && <p className="cowork-question-hint">{t('coworkQuestionWizardMultiSelectHint')}</p>}
         <div role="group" aria-label={question.title}>
           {question.options.map((option, optionIndex) => {

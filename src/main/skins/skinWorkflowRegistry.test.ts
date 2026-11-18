@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import type { InstalledKitRecord } from '../../shared/kit/constants';
+import { MediaPreferenceMode, MediaSelectionSource } from '../../shared/media/defaultPolicy';
 import { SkinWorkflowKind } from '../../shared/skin/constants';
 import { SkinPackKitId } from '../../shared/skin/kit';
 import { MediaSelectionMode } from '../mediaGenerationPolicy';
@@ -155,4 +156,24 @@ describe('skin workflow registry', () => {
     registry.handleSessionDeleted('deleted-session');
     expect(registry.resolve('deleted-session')).toBeUndefined();
   });
+});
+
+
+test('trusted skin budget preserves system-default provenance and never mutates the account preference', () => {
+  const registry = createRegistry();
+  const defaults = { enabled: true as const, modelId: 'image', modelName: 'Image',
+    params: { size: '2K', n: 1 }, maxOutputsPerTurn: 1 };
+  const turn = registry.prepareTurn({ sessionId: 'skin', kitIds: [SkinPackKitId.BuiltIn],
+    mediaGenerationEntitled: true, mediaSelection: { mode: MediaSelectionMode.Image,
+      imageModelId: 'image', imageSource: MediaSelectionSource.Default, imageDefault: defaults } });
+  expect(turn.mediaSelection?.imageDefault?.maxOutputsPerTurn).toBe(2);
+  expect(turn.mediaSelection?.imageSource).toBe(MediaSelectionSource.Default);
+  expect(defaults.maxOutputsPerTurn).toBe(1);
+});
+
+test('trusted skin invocation respects the persisted off sentinel', () => {
+  const registry = createRegistry();
+  const selection = { mode: MediaSelectionMode.None, imagePreference: MediaPreferenceMode.Off, preferencesRevision: 1 };
+  expect(registry.prepareTurn({ sessionId: 'skin', kitIds: [SkinPackKitId.BuiltIn],
+    mediaGenerationEntitled: true, mediaSelection: selection }).mediaSelection).toEqual(selection);
 });

@@ -1,3 +1,4 @@
+import { extractPastedTextBlocks } from '../../../shared/cowork/pastedText';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { splitMarkdownCodeSegments } from '../../utils/markdownCodeSegments';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
@@ -82,7 +83,8 @@ export function getVisibleMarkdownSearchText(content: string): string {
 export function getConversationSearchMessageText(message: CoworkMessage): string | null {
   if (message.type === 'user') {
     const metadata = message.metadata as CoworkMessageMetadata | undefined;
-    const displayContent = parseUserMessageForDisplay(message.content || '', {
+    const { text, blocks } = extractPastedTextBlocks(message.content || '');
+    const displayContent = parseUserMessageForDisplay(text, {
       localMediaAttachments: Array.isArray(metadata?.localMediaAttachments)
         ? metadata.localMediaAttachments
         : [],
@@ -90,7 +92,10 @@ export function getConversationSearchMessageText(message: CoworkMessage): string
     // UserMessageContent renders ordinary user text verbatim and only treats
     // standalone image lines as Markdown, so retain punctuation that is
     // genuinely visible in the user bubble.
-    return displayContent.replace(/\r\n?/g, '\n').replace(MARKDOWN_IMAGE_RE, '');
+    const visibleText = displayContent.replace(/\r\n?/g, '\n').replace(MARKDOWN_IMAGE_RE, '');
+    // Pasted text renders as cards, so its matches come after the visible
+    // ones and fall back to highlighting the whole message.
+    return [visibleText, ...blocks.map(block => block.text)].filter(Boolean).join('\n\n');
   }
 
   if (

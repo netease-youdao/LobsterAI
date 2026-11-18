@@ -68,4 +68,63 @@ describe('EngineFailureOverlay', () => {
     expect(html).toContain('openclaw-weixin-a74391227cd8-im-bot-allowFrom.json');
     expect(html).toContain('coworkOpenClawQuickRepair');
   });
+
+  test('offers the loopback firewall rule instead of config repair when local connections are dropped', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Error,
+      version: '2026.9.23',
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+      message: 'Local connection self-test failed (ETIMEDOUT). AI engine startup is paused.',
+      canRetry: true,
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    expect(html).toContain('coworkOpenClawLoopbackBlockedTitle');
+    expect(html).toContain('coworkOpenClawLoopbackBlockedHint');
+    expect(html).toContain('ETIMEDOUT');
+    expect(html).toContain('coworkOpenClawAllowLoopback');
+    expect(html).toContain('coworkOpenClawLoopbackRecheck');
+    expect(html).not.toContain('coworkOpenClawQuickRepair');
+    expect(html).not.toContain('coworkOpenClawRestartGateway');
+  });
+
+  test('shows a stalled config apply as a compact notice that leads with Quick Repair', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Running,
+      version: '2026.8.1',
+      message: 'OpenClaw gateway is running on loopback:18789.',
+      canRetry: false,
+      configApplyStalled: { detail: 'config.apply failed: gateway request timeout for config.apply' },
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    // Tasks keep running during a stall, so nothing modal covers the app.
+    expect(html).not.toContain('role="dialog"');
+    expect(html).toContain('coworkOpenClawConfigStalledShort');
+    expect(html).not.toContain('coworkOpenClawErrorShort');
+    expect(html).toContain('coworkOpenClawQuickRepair');
+  });
+
+  test('stays hidden while the gateway runs without a stalled config', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Running,
+      version: '2026.8.1',
+      message: 'OpenClaw gateway is running on loopback:18789.',
+      canRetry: false,
+    };
+    expect(renderToStaticMarkup(React.createElement(EngineFailureOverlay))).toBe('');
+  });
+
+  test('lets an engine failure take precedence over a stalled config', () => {
+    snapshot.status = {
+      phase: OpenClawEnginePhase.Error,
+      version: '2026.8.1',
+      message: 'OpenClaw gateway failed to become healthy in time.',
+      canRetry: true,
+      configApplyStalled: { detail: 'config.apply failed: gateway request timeout for config.apply' },
+    };
+    const html = renderToStaticMarkup(React.createElement(EngineFailureOverlay));
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('coworkOpenClawError');
+    expect(html).not.toContain('coworkOpenClawConfigStalledTitle');
+    expect(html).toContain('failed to become healthy in time');
+  });
 });

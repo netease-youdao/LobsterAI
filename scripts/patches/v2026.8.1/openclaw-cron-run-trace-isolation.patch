@@ -1,0 +1,133 @@
+diff --git a/src/cron/isolated-agent/run.ts b/src/cron/isolated-agent/run.ts
+--- a/src/cron/isolated-agent/run.ts
++++ b/src/cron/isolated-agent/run.ts
+@@ -17,6 +17,10 @@
+   releaseAgentRunContext,
+ } from "../../infra/agent-run-registry.js";
+ import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
++import {
++  createDiagnosticTraceContext,
++  runWithDiagnosticTraceContext,
++} from "../../infra/diagnostic-trace-context.js";
+ import { isFastTestRuntimeEnv } from "../../infra/env.js";
+ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+@@ -80,7 +84,17 @@
+ }
+ 
+ /** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
+-export async function runCronIsolatedAgentTurn(params: {
++export async function runCronIsolatedAgentTurn(
++  params: Parameters<typeof runCronIsolatedAgentTurnInTrace>[0],
++): Promise<RunCronAgentTurnResult> {
++  // A timer can inherit the async trace of the request or prior run that armed it.
++  // Every cron execution owns a fresh root; model retries within it share that root.
++  return runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
++    runCronIsolatedAgentTurnInTrace(params),
++  );
++}
++
++async function runCronIsolatedAgentTurnInTrace(params: {
+   cfg: OpenClawConfig;
+   deps: CliDeps;
+   job: CronStoredJob;
+diff --git a/src/cron/isolated-agent/run.diagnostic-trace.test.ts b/src/cron/isolated-agent/run.diagnostic-trace.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/cron/isolated-agent/run.diagnostic-trace.test.ts
+@@ -0,0 +1,95 @@
++import { beforeEach, describe, expect, it } from "vitest";
++import {
++  createDiagnosticTraceContext,
++  getActiveDiagnosticTraceContext,
++  runWithDiagnosticTraceContext,
++} from "../../infra/diagnostic-trace-context.js";
++import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
++import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
++import {
++  loadRunCronIsolatedAgentTurn,
++  makeCronSession,
++  makeCronSessionEntry,
++  mockRunCronFallbackPassthrough,
++  resolveCronSessionMock,
++  runEmbeddedAgentMock,
++  runWithModelFallbackMock,
++} from "./run.test-harness.js";
++
++const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
++
++describe("cron execution diagnostic traces", () => {
++  setupRunCronIsolatedAgentTurnSuite({ fast: true });
++  beforeEach(() => {
++    let execution = 0;
++    resolveCronSessionMock.mockImplementation(() =>
++      makeCronSession({
++        sessionEntry: makeCronSessionEntry({ sessionId: `execution-${++execution}` }),
++      }),
++    );
++  });
++
++  it("isolates automatic executions from the manual request that armed their timer", async () => {
++    const parent = createDiagnosticTraceContext();
++    const traces: string[] = [];
++    mockRunCronFallbackPassthrough();
++    runEmbeddedAgentMock.mockImplementation(async () => {
++      const trace = getActiveDiagnosticTraceContext();
++      expect(trace).toBeDefined();
++      traces.push(trace!.traceId);
++      await Promise.resolve();
++      expect(getActiveDiagnosticTraceContext()?.traceId).toBe(trace!.traceId);
++      return { payloads: [{ text: "done" }], meta: { agentMeta: {} } };
++    });
++
++    await runWithDiagnosticTraceContext(parent, async () => {
++      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
++      expect(result.status, JSON.stringify(result)).toBe("ok");
++      // cron.run re-arms the timer in its inbound request's async scope.
++      const automatic = new Promise((resolve, reject) => {
++        setTimeout(() => {
++          runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture()).then(resolve, reject);
++        }, 0);
++      });
++      await expect(automatic).resolves.toMatchObject({ status: "ok" });
++      expect(getActiveDiagnosticTraceContext()).toEqual(parent);
++    });
++    expect(traces).toHaveLength(2);
++    expect(new Set([...traces, parent.traceId]).size).toBe(3);
++    expect(getActiveDiagnosticTraceContext()).toBeUndefined();
++  });
++
++  it("gives consecutive background executions independent roots with no inbound trace", async () => {
++    const traces: Array<string | undefined> = [];
++    mockRunCronFallbackPassthrough();
++    runEmbeddedAgentMock.mockImplementation(async () => {
++      traces.push(getActiveDiagnosticTraceContext()?.traceId);
++      return { payloads: [{ text: "done" }], meta: { agentMeta: {} } };
++    });
++    for (let i = 0; i < 2; i++) {
++      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
++      expect(result.status, JSON.stringify(result)).toBe("ok");
++    }
++    expect(traces.every((trace) => /^[a-f0-9]{32}$/.test(trace ?? ""))).toBe(true);
++    expect(new Set(traces).size).toBe(2);
++    expect(getActiveDiagnosticTraceContext()).toBeUndefined();
++  });
++
++  it("retains one trace across model fallback attempts within an execution", async () => {
++    const traces: Array<string | undefined> = [];
++    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
++      await run(provider, model);
++      await Promise.resolve();
++      const result = await run(provider, model);
++      return { result, provider, model, attempts: [] };
++    });
++    runEmbeddedAgentMock.mockImplementation(async () => {
++      traces.push(getActiveDiagnosticTraceContext()?.traceId);
++      return { payloads: [{ text: "done" }], meta: { agentMeta: {} } };
++    });
++    expect((await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).status).toBe("ok");
++    expect(traces).toHaveLength(2);
++    expect(traces[0]).toMatch(/^[a-f0-9]{32}$/);
++    expect(traces[1]).toBe(traces[0]);
++  });
++});

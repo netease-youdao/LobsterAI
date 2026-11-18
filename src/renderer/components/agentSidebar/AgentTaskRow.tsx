@@ -208,6 +208,13 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
     onSelect();
   };
 
+  const handleRowMouseClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    // The first click already opened the task; later clicks of a double click
+    // belong to the rename gesture. Batch mode keeps every click as a toggle.
+    if (event.detail > 1 && !isBatchMode) return;
+    handleRowClick();
+  };
+
   const handleRowKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     if (event.key === 'Enter' || event.key === ' ') {
@@ -234,6 +241,20 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           ? (currentIndex + 1 + menuItems.length) % menuItems.length
           : (currentIndex - 1 + menuItems.length) % menuItems.length;
     menuItems[nextIndex]?.focus();
+  };
+
+  const startRename = (actionType: 'task_rename_start' | 'task_rename_double_click') => {
+    onSidebarAction?.(actionType, analyticsParams);
+    setIsRenaming(true);
+  };
+
+  const handleTitleDoubleClick = (event: React.MouseEvent<HTMLSpanElement>) => {
+    // Batch mode uses clicks to toggle selection, so a double click there must
+    // not open the editor on top of two selection toggles.
+    if (isBatchMode || isSelectionDisabled) return;
+    event.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    startRename('task_rename_double_click');
   };
 
   const handleRenameSave = async () => {
@@ -263,21 +284,28 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
   const isActivityRow = !!contextLabel;
   const scheduledTaskLabel = i18nService.t('myAgentSidebarScheduledTask');
+  // Rows nested under an agent are a level below it: denser, one font step smaller
+  // and muted until hovered or selected. Activity rows stand on their own.
+  const textSizeClassName = isActivityRow
+    ? 'text-[length:var(--lobster-text-sidebarCompact)]'
+    : 'text-[length:var(--lobster-text-sidebarTask)]';
 
   return (
     <div
-      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-md ${
+      className={`group relative -ml-[6px] flex w-[calc(100%+12px)] items-center gap-2 rounded-[18px] ${
         isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
       } ${
-        isBatchMode ? 'pl-4' : isActivityRow ? 'pl-3.5' : 'pl-[38px]'
-      } pr-2.5 text-sm font-normal transition-colors ${
+        isBatchMode ? 'pl-2' : isActivityRow ? 'pl-1.5' : 'pl-9'
+      } pr-2.5 ${textSizeClassName} font-normal transition-colors ${
         isSelectionDisabled
           ? 'cursor-default text-foreground/30'
           : task.isSelected && !hasActiveSubagent
-          ? 'cursor-pointer bg-black/[0.06] font-medium text-foreground dark:bg-white/[0.07]'
-          : 'cursor-pointer text-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+          ? 'cursor-pointer bg-black/[0.05] text-foreground dark:bg-white/[0.07]'
+          : `cursor-pointer hover:bg-black/[0.03] hover:text-foreground dark:hover:bg-white/[0.04] ${
+            isActivityRow ? 'text-foreground' : 'text-foreground/75'
+          }`
       }`}
-      onClick={handleRowClick}
+      onClick={handleRowMouseClick}
       onKeyDown={handleRowKeyDown}
       onMouseMove={() => setSuppressPinHover(false)}
       onMouseLeave={() => setSuppressPinHover(false)}
@@ -297,7 +325,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
             event.currentTarget.blur();
             void onTogglePin(nextPinned);
           }}
-          className={`absolute left-[13px] top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-foreground transition-opacity hover:opacity-[0.46] focus:outline-none ${
+          className={`absolute left-[7px] top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-foreground transition-opacity hover:opacity-[0.46] focus:outline-none ${
             suppressPinHover
               ? 'pointer-events-none opacity-0'
               : task.pinned
@@ -339,7 +367,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               handleRenameCancel();
             }
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-sm font-normal text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className={`min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 py-0.5 ${textSizeClassName} font-normal text-foreground focus:outline-none focus:ring-1 focus:ring-primary`}
         />
       ) : (
         <>
@@ -370,7 +398,10 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
               />
             </span>
           )}
-          <span className={`min-w-0 flex-1 ${isActivityRow ? 'flex flex-col gap-0.5' : 'truncate'}`}>
+          <span
+            className={`min-w-0 flex-1 ${isActivityRow ? 'flex flex-col gap-0.5' : 'truncate'}`}
+            onDoubleClick={handleTitleDoubleClick}
+          >
             <span className="truncate">{displayTitle}</span>
             {contextLabel && (
               <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal leading-4 text-secondary">
@@ -462,8 +493,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
             onClick={(event) => {
               event.stopPropagation();
               closeMenu();
-              onSidebarAction?.('task_rename_start', analyticsParams);
-              setIsRenaming(true);
+              startRename('task_rename_start');
             }}
             className={menuItemClassName}
             role="menuitem"

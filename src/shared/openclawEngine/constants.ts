@@ -4,6 +4,7 @@ export const OpenClawEngineIpc = {
   RetryInstall: 'openclaw:engine:retryInstall',
   RestartGateway: 'openclaw:engine:restartGateway',
   RepairGatewayState: 'openclaw:engine:repairGatewayState',
+  RepairLoopbackFirewall: 'openclaw:engine:repairLoopbackFirewall',
   OnProgress: 'openclaw:engine:onProgress',
 } as const;
 
@@ -55,6 +56,47 @@ export type OpenClawGatewayRepairErrorCode =
  */
 export const OPENCLAW_PLUGIN_INDEX_MANAGED_KEYS = ['installs'] as const;
 
+/** Bundled plugin that owns model compatibility and thinking profiles. */
+export const OPENCLAW_MODEL_COMPAT_PLUGIN_ID = 'lobsterai-model-compat';
+
+/** OpenClaw's scheduled-task tool (gateway `cron.*` methods). */
+export const OPENCLAW_AUTOMATIONS_TOOL_NAME = 'automations';
+
+/** OpenClaw names an MCP tool `<server>__<tool>`, e.g. `lobster-excel__excel_edit`. */
+export const OPENCLAW_MCP_TOOL_NAME_SEPARATOR = '__';
+
+/**
+ * Tool Search control tools. A deferred tool invoked through them runs as a
+ * nested call that emits its own tool events under the real tool name.
+ */
+export const OpenClawToolSearchControlTool = {
+  Search: 'tool_search',
+  Describe: 'tool_describe',
+  Call: 'tool_call',
+  SearchCode: 'tool_search_code',
+} as const;
+export type OpenClawToolSearchControlTool =
+  typeof OpenClawToolSearchControlTool[keyof typeof OpenClawToolSearchControlTool];
+
+const OPENCLAW_TOOL_SEARCH_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set(
+  Object.values(OpenClawToolSearchControlTool),
+);
+
+export const isOpenClawToolSearchControlTool = (toolName: string): boolean => (
+  OPENCLAW_TOOL_SEARCH_CONTROL_TOOL_NAMES.has(toolName.trim())
+);
+
+/** Why a task was refused while a config change is still unapplied. */
+export const OpenClawConfigApplyPendingReason = {
+  /** The change is still being applied, or its effect on the task is unknown. */
+  Applying: 'applying',
+  /** The task's model runs on settings the running gateway has not applied yet. */
+  ModelSettings: 'model_settings',
+} as const;
+
+export type OpenClawConfigApplyPendingReason =
+  typeof OpenClawConfigApplyPendingReason[keyof typeof OpenClawConfigApplyPendingReason];
+
 export const OpenClawEngineErrorCode = {
   /**
    * resources/cfmind has no runtime entry file. On packaged Windows builds
@@ -76,10 +118,45 @@ export const OpenClawEngineErrorCode = {
    * listed sources must be handled first.
    */
   StartupMigrationRefused: 'startup_migration_refused',
+  /**
+   * Connections to a listening 127.0.0.1 port of this executable are dropped
+   * (Windows Defender Firewall's "Query user" default block). The gateway is
+   * the same executable, so it would be unreachable; startup stops until the
+   * loopback firewall rule is added or the user retries.
+   */
+  LoopbackBlocked: 'loopback_blocked',
 } as const;
 
 export type OpenClawEngineErrorCode =
   typeof OpenClawEngineErrorCode[keyof typeof OpenClawEngineErrorCode];
+
+/** Result of the elevated "allow local connections" firewall repair. */
+export const OpenClawLoopbackRepairOutcome = {
+  /** The rule is in place and the loopback self-test passes. */
+  Repaired: 'repaired',
+  /** The rule is in place, but something else still drops loopback. */
+  StillBlocked: 'still_blocked',
+  /** The UAC prompt was declined (or no administrator approved it). */
+  Cancelled: 'cancelled',
+  Failed: 'failed',
+  Unsupported: 'unsupported',
+} as const;
+
+export type OpenClawLoopbackRepairOutcome =
+  typeof OpenClawLoopbackRepairOutcome[keyof typeof OpenClawLoopbackRepairOutcome];
+
+/**
+ * OpenClaw lets workspaces below this root follow their current link target
+ * instead of failing closed (openclaw-managed-workspace-alias-follow.patch).
+ */
+export const OPENCLAW_MANAGED_WORKSPACE_ROOT_ENV = 'LOBSTERAI_MANAGED_WORKSPACE_ROOT';
+
+/**
+ * OpenClaw's session→SQLite import moves imported legacy transcripts into this
+ * directory beside each sessions directory: `<state>/` for the legacy root
+ * store, `<state>/agents/<id>/` per agent (v2026.8.1 doctor-session-sqlite.ts).
+ */
+export const OPENCLAW_SESSION_IMPORT_ARCHIVE_DIRECTORY = 'session-sqlite-import-archive';
 
 export const OpenClawGatewayFailureKind = {
   HeapOutOfMemory: 'heap_out_of_memory',

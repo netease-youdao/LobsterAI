@@ -1,0 +1,19 @@
+/* Assistant reply meta row. A narrow conversation column (e.g. with the side
+   panel open) shows the compact date; the full one stays in the hover title. */
+.cowork-message-meta {
+  container-type: inline-size;
+}
+
+.cowork-message-meta-short-date {
+  display: none;
+}
+
+@container (max-width: 459px) {
+  .cowork-message-meta-full-date {
+    display: none;
+  }
+
+  .cowork-message-meta-short-date {
+    display: inline;
+  }
+}

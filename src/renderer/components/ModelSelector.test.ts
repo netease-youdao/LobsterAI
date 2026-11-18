@@ -6,16 +6,25 @@ import {
   canConfigureModelThinking,
   CascadeSide,
   countVisibleModelSelectorRows,
+  hasModelHoverDetails,
   isModelAgenticBlocked,
   partitionModelSelectorModels,
   resolveCascadePlacement,
+  resolveCustomModelProviderName,
   resolveDropdownListMaxHeight,
   resolveHoverCardTop,
   resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
+  shouldRenderPlanModelLoginPrompt,
   shouldRenderSelectedModelUnavailableFallback,
   supportsConfigurableModelThinkingProtocol,
 } from './ModelSelector';
+
+test('prompts login instead of custom model setup when logged out with nothing to list', () => {
+  expect(shouldRenderPlanModelLoginPrompt(0, false)).toBe(true);
+  expect(shouldRenderPlanModelLoginPrompt(3, false)).toBe(false);
+  expect(shouldRenderPlanModelLoginPrompt(0, true)).toBe(false);
+});
 
 test('keeps a logged-in stale server model visible only while the model list is empty', () => {
   const selectedModel = {
@@ -60,6 +69,20 @@ test('counts a collapsed more-model section as one row until expanded', () => {
 
   expect(countVisibleModelSelectorRows(models, false)).toBe(2);
   expect(countVisibleModelSelectorRows(models, true)).toBe(4);
+});
+
+test('opens the hover card only for models that have details to show', () => {
+  // Rows without details fall back to a native tooltip for the full name.
+  expect(hasModelHoverDetails({})).toBe(false);
+  expect(hasModelHoverDetails({ costMultiplier: 0 })).toBe(false);
+  expect(hasModelHoverDetails({ costMultiplier: 0.05 })).toBe(true);
+  expect(hasModelHoverDetails({ supportsImage: true })).toBe(true);
+  expect(hasModelHoverDetails({ description: 'Fast model' })).toBe(true);
+  expect(hasModelHoverDetails({
+    isServerModel: true,
+    runtimeProfile: 'moonshot-kimi-k3',
+    agenticReady: false,
+  })).toBe(true);
 });
 
 test('keeps model hover card above the viewport bottom', () => {
@@ -128,7 +151,7 @@ test('clamps a cascaded popover inside the viewport when neither side fits', () 
   })).toEqual({ left: 62, side: CascadeSide.Right });
 });
 
-test('overlays the hover card instead of flipping a third panel into the dropdown', () => {
+test('opens a third panel beside the card when the outward side has no room', () => {
   expect(resolveNestedCascadePlacement({
     anchorLeft: 572,
     anchorRight: 792,
@@ -136,9 +159,8 @@ test('overlays the hover card instead of flipping a third panel into the dropdow
     viewportWidth: 800,
     preferredSide: CascadeSide.Right,
   })).toEqual({
-    left: 572,
-    side: CascadeSide.Right,
-    overlaysAnchor: true,
+    left: 362,
+    side: CascadeSide.Left,
   });
 });
 
@@ -152,7 +174,6 @@ test('keeps a third panel cascading outward when the viewport has room', () => {
   })).toEqual({
     left: 740,
     side: CascadeSide.Right,
-    overlaysAnchor: false,
   });
 });
 
@@ -304,4 +325,12 @@ test('hides the thinking protocol entry when request-options support is absent',
     thinkingConfig,
     requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
   })).toBe(true);
+});
+
+test('prefers the live provider name for the custom-model badge', () => {
+  expect(resolveCustomModelProviderName({ provider: 'Old Gateway' }, { provider: ' Renamed Gateway ' }))
+    .toBe('Renamed Gateway');
+  expect(resolveCustomModelProviderName({ provider: 'OpenRouter' }, undefined)).toBe('OpenRouter');
+  expect(resolveCustomModelProviderName({}, undefined)).toBe('');
+  expect(resolveCustomModelProviderName(null, undefined)).toBe('');
 });

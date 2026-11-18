@@ -99,6 +99,25 @@ describe('channel installer build flags', () => {
 });
 
 describe('web installer build flags', () => {
+  test('builds codown web installers in one pass with the final payload URL', () => {
+    const result = runWebDryRun(['--keyfrom', 'dictbind', '--codown', '--silent'], {
+      CODOWN_PUBLIC_BASE_URL: 'https://downloads.example.test/lobsterai',
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('mode=full-build-with-codown-url');
+    expect(result.stdout).toMatch(/https:\/\/downloads\.example\.test\/lobsterai\/dictbind\/lobsterai-[^/\s]+-silent\.nsis\.7z/);
+    expect(result.stdout).toContain('would execute `npm run dist:win`');
+    expect(result.stdout).not.toContain('next: upload');
+    expect(result.stdout).not.toContain('stub-only');
+  });
+
+  test('requires a valid codown base and rejects conflicting URL flags', () => {
+    expect(runWebDryRun(['--keyfrom', 'dictbind', '--codown'], { CODOWN_PUBLIC_BASE_URL: '' }).status).toBe(1);
+    const result = runWebDryRun(['--keyfrom', 'dictbind', '--codown', '--pkg-url', 'https://downloads.example.test/file.7z']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('cannot be combined');
+  });
+
   test('keeps web installers interactive unless the silent flag is explicit', () => {
     const plain = runWebDryRun([
       '--keyfrom',

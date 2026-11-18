@@ -1,3 +1,5 @@
+import type { AgentSource } from '@shared/agent/constants';
+
 import type { Platform } from '../../../shared/platform';
 import type { CoworkSessionStatus } from '../../types/cowork';
 import type { AgentSidebarIndicator } from './constants';
@@ -6,6 +8,8 @@ export interface AgentSidebarAgentSummary {
   id: string;
   name: string;
   icon: string;
+  iconCustomized?: boolean;
+  source?: AgentSource;
   enabled: boolean;
   pinned: boolean;
   pinOrder?: number | null;

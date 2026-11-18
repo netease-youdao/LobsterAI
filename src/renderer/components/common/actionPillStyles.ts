@@ -14,3 +14,13 @@ export const DETAIL_ACTION_PILL_CLASS =
   'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-primary px-5 '
   + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-primary-hover `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
+
+// Secondary capsules for the slot while its primary action is running (e.g.
+// Cancel during a sign-in): same footprint, so nothing shifts, but no accent.
+export const CARD_SECONDARY_PILL_CLASS =
+  'inline-flex h-[26px] flex-shrink-0 items-center gap-1 rounded-full bg-surface-raised px-3 '
+  + `${MANAGEMENT_META_TEXT} font-semibold text-secondary transition-colors hover:text-foreground`;
+
+export const DETAIL_SECONDARY_PILL_CLASS =
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-surface-raised px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-secondary transition-colors hover:text-foreground`;

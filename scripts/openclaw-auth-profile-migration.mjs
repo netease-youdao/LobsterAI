@@ -77,7 +77,8 @@ export async function migrateAuthProfilesBeforeStartup({ stateDir, configPath, e
       }
       // Empty legacy files can be archived with a warning. They no longer block
       // requests; verify the actual runtime reader instead of matching messages.
-      for (const candidate of listAuthProfileRepairCandidates(cfg, migrationEnv)) {
+      const candidates = listAuthProfileRepairCandidates(cfg, migrationEnv);
+      for (const candidate of candidates) {
         try {
           assertAuthProfileMigrationReady(candidate.agentDir, migrationEnv);
           const store = candidate.agentDir === undefined
@@ -95,8 +96,15 @@ export async function migrateAuthProfilesBeforeStartup({ stateDir, configPath, e
         sourceCount: new Set([...sidecars.detected, ...migrated.detected]).size,
         changes, warnings,
         notices: [...sidecars.warnings, ...migrated.warnings],
+        // Every legacy location this owner reads, present or not, so the host
+        // can tell when a legacy store (re)appears after a clean run.
+        probePaths: [...new Set([
+          ...candidates.map(candidate => candidate.authPath),
+          ...sidecars.detected,
+          ...migrated.detected,
+        ])],
       };
     },
   });
-  return { sourceCount: 0, notices: [], ...result };
+  return { sourceCount: 0, notices: [], probePaths: [], ...result };
 }

@@ -1,8 +1,21 @@
-import { type ApiFormat,type ProviderConfig, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
+import type { ModelPresetId } from '../../shared/modelPresets/constants';
+import {
+  type ApiFormat,
+  type ModelCapabilityOverrides,
+  normalizeGeminiApiBaseUrl,
+  type OpenAIApiMode,
+  type ProviderConfig,
+  ProviderName,
+  ProviderRegistry,
+  resolveCodingPlanBaseUrl,
+  resolveProviderOpenAIApiMode,
+  usesCustomGeminiApiFormat,
+} from '../../shared/providers';
 import {
   type LobsterAIRequestCapability,
   parseLobsterAIRequestCapabilities,
 } from '../../shared/providers/lobsterAIRequestOptions';
+import { parseContextWindowOptions } from '../../shared/providers/modelContextWindow';
 import {
   applyModelRuntimeProfileMetadata,
   ModelRuntimeProfile,
@@ -15,17 +28,22 @@ import {
   parseModelThinkingConfig,
 } from '../../shared/providers/modelThinking';
 import type { SqliteStore } from '../sqliteStore';
-import type { CoworkApiConfig } from './coworkConfigStore';
-import { type AnthropicApiFormat,normalizeProviderApiFormat } from './coworkFormatTransform';
-import {
-  configureCoworkOpenAICompatProxy,
-  getCoworkOpenAICompatProxyBaseURL,
-  getCoworkOpenAICompatProxyStatus,
-  type OpenAICompatProxyTarget,
-} from './coworkOpenAICompatProxy';
 import { readOpenAICodexAuthFile } from './openaiCodexAuth';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
 import { hasXaiOAuthCredential } from './xaiAuth';
+
+type AnthropicApiFormat = 'anthropic' | 'openai';
+
+function normalizeProviderApiFormat(format: unknown): AnthropicApiFormat {
+  return format === 'openai' ? 'openai' : 'anthropic';
+}
+
+export type CoworkApiConfig = {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  apiType?: 'anthropic' | 'openai';
+};
 
 type LocalProviderConfig = Omit<ProviderConfig, 'apiFormat'> & { apiFormat?: ApiFormat | 'native' };
 
@@ -55,6 +73,7 @@ type ProviderModelConfig = {
   contextWindow?: number;
   maxTokens?: number;
   customParams?: Record<string, unknown>;
+  capabilityOverrides?: ModelCapabilityOverrides;
 };
 
 type ProviderModelInputConfig = {
@@ -66,9 +85,12 @@ type ProviderModelInputConfig = {
   contextWindow?: number;
   maxTokens?: number;
   customParams?: Record<string, unknown>;
+  capabilityOverrides?: ModelCapabilityOverrides;
 };
 
 export type ServerModelMetadata = {
+  contextWindowOptions?: number[];
+  presetContextWindowOptions?: Partial<Record<ModelPresetId, number[]>>;
   modelId: string;
   modelName?: string;
   provider?: string;
@@ -82,6 +104,7 @@ export type ServerModelMetadata = {
   supportsToolCalling?: boolean;
   agenticReady?: boolean;
   contextWindow?: number;
+  presetContextWindows?: Partial<Record<ModelPresetId, number | null>>;
   maxTokens?: number;
   explicitContextCache?: boolean;
 };
@@ -140,13 +163,23 @@ export type ApiConfigResolution = {
     supportsImage?: boolean;
     supportsVideo?: boolean;
     supportsThinking?: boolean;
+    capabilityOverrides?: ModelCapabilityOverrides;
     thinkingConfig?: ModelThinkingConfig;
     requestCapabilities?: LobsterAIRequestCapability[];
     modelName?: string;
     contextWindow?: number;
     maxTokens?: number;
+    openaiApiMode?: OpenAIApiMode;
+    /** Custom provider speaking native Gemini generateContent. */
+    geminiNative?: boolean;
   };
 };
+
+/** Whether the resolved provider should be called with the native Gemini protocol. */
+export function usesGeminiNativeApi(resolution: ApiConfigResolution): boolean {
+  return resolution.providerMetadata?.providerName === ProviderName.Gemini
+    || resolution.providerMetadata?.geminiNative === true;
+}
 
 // Store getter function injected from main.ts
 let storeGetter: (() => SqliteStore | null) | null = null;
@@ -195,6 +228,9 @@ const serializeServerModelMetadata = (
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
       contextWindow: model.contextWindow,
+      presetContextWindows: model.presetContextWindows,
+      contextWindowOptions: parseContextWindowOptions(model.contextWindowOptions),
+      presetContextWindowOptions: model.presetContextWindowOptions,
       maxTokens: model.maxTokens,
       explicitContextCache: model.explicitContextCache,
     }))
@@ -217,6 +253,9 @@ const getComparableServerModelMetadata = (
   supportsToolCalling: meta.supportsToolCalling,
   agenticReady: meta.agenticReady,
   contextWindow: meta.contextWindow,
+  presetContextWindows: meta.presetContextWindows,
+  contextWindowOptions: parseContextWindowOptions(meta.contextWindowOptions),
+  presetContextWindowOptions: meta.presetContextWindowOptions,
   maxTokens: meta.maxTokens,
   explicitContextCache: meta.explicitContextCache,
 }));
@@ -251,6 +290,7 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       ? parseModelThinkingConfig(model.thinkingConfig)
       : undefined;
     const requestCapabilities = parseLobsterAIRequestCapabilities(model.requestCapabilities);
+    const contextWindowOptions = parseContextWindowOptions(model.contextWindowOptions);
 
     nextCache.set(modelId, {
       modelName: model.modelName,
@@ -267,7 +307,10 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
       requestCapabilities,
       supportsToolCalling: model.supportsToolCalling,
       agenticReady: model.agenticReady,
-      contextWindow: runtimeMetadata.contextWindow,
+      contextWindow: contextWindowOptions && model.contextWindow ? model.contextWindow : runtimeMetadata.contextWindow,
+      presetContextWindows: model.presetContextWindows,
+      contextWindowOptions,
+      presetContextWindowOptions: model.presetContextWindowOptions,
       maxTokens: runtimeMetadata.maxTokens,
       explicitContextCache: model.explicitContextCache,
     });
@@ -275,6 +318,25 @@ export function updateServerModelMetadata(models: ServerModelMetadataInput[]): b
   const next = serializeServerModelMetadata(getComparableServerModelMetadata(nextCache));
   serverModelMetadataCache = nextCache;
   return previous !== next;
+}
+
+/** One `/api/models/available` row; a preset row carries the context window of that preset. */
+export type ServerModelResponseEntry = ServerModelMetadataInput & { presetId?: ModelPresetId | null };
+
+/**
+ * Cache a `/api/models/available` response. Every reader of that endpoint must
+ * come through here: a cache built without the derived preset windows renders a
+ * different OpenClaw config, so the next identical response looks changed and
+ * restages the gateway config during startup.
+ */
+export function updateServerModelMetadataFromResponse(models: ServerModelResponseEntry[]): boolean {
+  const presetContextWindows = Object.fromEntries(models
+    .filter(model => model.presetId)
+    .map(model => [model.presetId!, model.contextWindow]));
+  const presetContextWindowOptions = Object.fromEntries(models
+    .filter(model => model.presetId)
+    .map(model => [model.presetId!, parseContextWindowOptions(model.contextWindowOptions)]));
+  return updateServerModelMetadata(models.map(model => ({ ...model, presetContextWindows, presetContextWindowOptions })));
 }
 
 export function clearServerModelMetadata(): void {
@@ -296,6 +358,9 @@ export function getAllServerModelMetadata(): ServerModelMetadata[] {
     supportsToolCalling: meta.supportsToolCalling,
     agenticReady: meta.agenticReady,
     contextWindow: meta.contextWindow,
+    presetContextWindows: meta.presetContextWindows,
+    contextWindowOptions: parseContextWindowOptions(meta.contextWindowOptions),
+    presetContextWindowOptions: meta.presetContextWindowOptions,
     maxTokens: meta.maxTokens,
     explicitContextCache: meta.explicitContextCache,
   }));
@@ -320,6 +385,9 @@ export function getServerModelMetadata(modelId: string): ServerModelMetadata | n
     supportsToolCalling: metadata.supportsToolCalling,
     agenticReady: metadata.agenticReady,
     contextWindow: metadata.contextWindow,
+    presetContextWindows: metadata.presetContextWindows,
+    contextWindowOptions: parseContextWindowOptions(metadata.contextWindowOptions),
+    presetContextWindowOptions: metadata.presetContextWindowOptions,
     maxTokens: metadata.maxTokens,
     explicitContextCache: metadata.explicitContextCache,
   };
@@ -411,6 +479,7 @@ function normalizeProviderModels(providerName: string, models?: ProviderModelInp
         providerName,
         model.id,
         model.supportsThinking,
+        model.capabilityOverrides?.thinking,
       );
       const supportsVideo = ProviderRegistry.resolveModelSupportsVideo(
         providerName,
@@ -429,6 +498,7 @@ function normalizeProviderModels(providerName: string, models?: ProviderModelInp
           providerName,
           model.id,
           model.supportsImage,
+          model.capabilityOverrides?.image,
         ),
         ...(supportsVideo ? { supportsVideo } : {}),
         ...(supportsThinking ? { supportsThinking } : {}),
@@ -455,15 +525,22 @@ type MatchedProvider = {
   supportsImage?: boolean;
   supportsVideo?: boolean;
   supportsThinking?: boolean;
+  capabilityOverrides?: ModelCapabilityOverrides;
   thinkingConfig?: ModelThinkingConfig;
   requestCapabilities?: LobsterAIRequestCapability[];
   modelName?: string;
   contextWindow?: number;
   maxTokens?: number;
+  geminiNative?: boolean;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
   if (providerName === ProviderName.OpenAI || providerName === ProviderName.Gemini || providerName === ProviderName.Xai || providerName === ProviderName.StepFun || providerName === ProviderName.Youdaozhiyun || providerName === ProviderName.Copilot) {
+    return 'openai';
+  }
+  // Like the built-in Gemini provider: not Anthropic; native routing is
+  // carried separately as geminiNative.
+  if (usesCustomGeminiApiFormat(providerName, apiFormat)) {
     return 'openai';
   }
   if (providerName === ProviderName.Anthropic) {
@@ -639,7 +716,10 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   }
 
   let apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
-  let baseURL = providerConfig.baseUrl?.trim();
+  const geminiNative = usesCustomGeminiApiFormat(providerName, providerConfig.apiFormat);
+  let baseURL = geminiNative
+    ? normalizeGeminiApiBaseUrl(providerConfig.baseUrl ?? '')
+    : providerConfig.baseUrl?.trim();
 
   if (providerConfig.codingPlanEnabled) {
     const resolved = resolveCodingPlanBaseUrl(providerName, true, apiFormat, baseURL ?? '');
@@ -680,119 +760,15 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       supportsImage: matchedModel?.supportsImage,
       supportsVideo: matchedModel?.supportsVideo,
       supportsThinking: matchedModel?.supportsThinking,
+      ...(matchedModel?.capabilityOverrides
+        ? { capabilityOverrides: matchedModel.capabilityOverrides }
+        : {}),
       modelName: matchedModel?.name,
       contextWindow: matchedModel?.contextWindow,
       maxTokens: matchedModel?.maxTokens,
+      ...(geminiNative ? { geminiNative } : {}),
     },
   };
-}
-
-export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): ApiConfigResolution {
-  const sqliteStore = getStore();
-  if (!sqliteStore) {
-    return {
-      config: null,
-      error: 'Store is not initialized.',
-    };
-  }
-
-  const appConfig = sqliteStore.get<AppConfig>('app_config');
-  if (!appConfig) {
-    return {
-      config: null,
-      error: 'Application config not found.',
-    };
-  }
-
-  const { matched, error } = resolveMatchedProvider(appConfig);
-  if (!matched) {
-    return {
-      config: null,
-      error,
-    };
-  }
-
-  const resolvedBaseURL = matched.baseURL;
-  let resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
-
-  // Providers that don't require auth (e.g. Ollama) still need a non-empty
-  // placeholder so downstream components (OpenClaw gateway, compat proxy)
-  // don't reject the request with "No API key found for provider".
-  const effectiveApiKey = resolvedApiKey
-    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
-
-  if (matched.apiFormat === 'anthropic') {
-    return {
-      config: {
-        apiKey: effectiveApiKey,
-        baseURL: resolvedBaseURL,
-        model: matched.modelId,
-        apiType: 'anthropic',
-      },
-      providerMetadata: {
-        providerName: matched.providerName,
-        codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
-        runtimeProfile: matched.runtimeProfile,
-        supportsImage: matched.supportsImage,
-        supportsVideo: matched.supportsVideo,
-        supportsThinking: matched.supportsThinking,
-        thinkingConfig: matched.thinkingConfig,
-        requestCapabilities: matched.requestCapabilities,
-        modelName: matched.modelName,
-        contextWindow: matched.contextWindow,
-        maxTokens: matched.maxTokens,
-      },
-    };
-  }
-
-  const proxyStatus = getCoworkOpenAICompatProxyStatus();
-  if (!proxyStatus.running) {
-    return {
-      config: null,
-      error: 'OpenAI compatibility proxy is not running.',
-    };
-  }
-
-  configureCoworkOpenAICompatProxy({
-    baseURL: resolvedBaseURL,
-    apiKey: resolvedApiKey || undefined,
-    model: matched.modelId,
-    provider: matched.providerName,
-  });
-
-  const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL(target);
-  if (!proxyBaseURL) {
-    return {
-      config: null,
-      error: 'OpenAI compatibility proxy base URL is unavailable.',
-    };
-  }
-
-  return {
-    config: {
-      apiKey: resolvedApiKey || 'lobsterai-openai-compat',
-      baseURL: proxyBaseURL,
-      model: matched.modelId,
-      apiType: 'openai',
-    },
-    providerMetadata: {
-      providerName: matched.providerName,
-      codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
-      runtimeProfile: matched.runtimeProfile,
-      supportsImage: matched.supportsImage,
-      supportsVideo: matched.supportsVideo,
-      supportsThinking: matched.supportsThinking,
-      thinkingConfig: matched.thinkingConfig,
-      requestCapabilities: matched.requestCapabilities,
-      modelName: matched.modelName,
-      contextWindow: matched.contextWindow,
-      maxTokens: matched.maxTokens,
-    },
-  };
-}
-
-export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): CoworkApiConfig | null {
-  return resolveCurrentApiConfig(target).config;
 }
 
 /**
@@ -853,6 +829,10 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   // the request with "No API key found for provider".
   const effectiveApiKey = apiKey
     || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
+  const openaiApiMode = resolveProviderOpenAIApiMode(matched.providerName, {
+    ...matched.providerConfig,
+    apiFormat: effectiveApiFormat,
+  });
   return {
     config: {
       apiKey: effectiveApiKey,
@@ -868,11 +848,14 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       supportsImage: matched.supportsImage,
       supportsVideo: matched.supportsVideo,
       supportsThinking: matched.supportsThinking,
+      ...(matched.capabilityOverrides ? { capabilityOverrides: matched.capabilityOverrides } : {}),
       thinkingConfig: matched.thinkingConfig,
       requestCapabilities: matched.requestCapabilities,
       modelName: matched.modelName,
       contextWindow: matched.contextWindow,
       maxTokens: matched.maxTokens,
+      ...(openaiApiMode ? { openaiApiMode } : {}),
+      ...(matched.geminiNative ? { geminiNative: true } : {}),
     },
   };
 }
@@ -933,21 +916,13 @@ export function resolveAllProviderApiKeys(): Record<string, string> {
 }
 
 
-export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {
-  const baseEnv = { ...process.env } as Record<string, string>;
-
-  baseEnv.ANTHROPIC_AUTH_TOKEN = config.apiKey;
-  baseEnv.ANTHROPIC_API_KEY = config.apiKey;
-  baseEnv.ANTHROPIC_BASE_URL = config.baseURL;
-  baseEnv.ANTHROPIC_MODEL = config.model;
-  return baseEnv;
-}
-
 export type ProviderRawConfig = {
   providerName: string;
   baseURL: string;
   apiKey: string;
   apiType: 'anthropic' | 'openai';
+  openaiApiMode?: OpenAIApiMode;
+  geminiNative?: boolean;
   authType?: ProviderConfig['authType'];
   codingPlanEnabled: boolean;
   models: ProviderModelConfig[];
@@ -1054,7 +1029,10 @@ export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
     const apiKey = providerConfig.apiKey?.trim() || '';
     if (!apiKey && providerRequiresApiKey(providerName)) continue;
 
-    const baseURL = providerConfig.baseUrl?.trim() || '';
+    const geminiNative = usesCustomGeminiApiFormat(providerName, providerConfig.apiFormat);
+    const baseURL = geminiNative
+      ? normalizeGeminiApiBaseUrl(providerConfig.baseUrl ?? '')
+      : providerConfig.baseUrl?.trim() || '';
 
     let effectiveBaseURL = baseURL;
     let effectiveApiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
@@ -1070,11 +1048,17 @@ export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
     const models = normalizeProviderModels(providerName, providerConfig.models);
     if (models.length === 0) continue;
 
+    const openaiApiMode = resolveProviderOpenAIApiMode(providerName, {
+      ...providerConfig,
+      apiFormat: effectiveApiFormat,
+    });
     result.push({
       providerName,
       baseURL: effectiveBaseURL,
       apiKey: apiKey || 'sk-lobsterai-local',
       apiType: effectiveApiFormat === 'anthropic' ? 'anthropic' : 'openai',
+      ...(openaiApiMode ? { openaiApiMode } : {}),
+      ...(geminiNative ? { geminiNative } : {}),
       authType: providerConfig.authType,
       codingPlanEnabled: !!providerConfig.codingPlanEnabled,
       models,

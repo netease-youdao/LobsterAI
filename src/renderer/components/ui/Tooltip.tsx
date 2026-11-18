@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+
+const TOOLTIP_SHOW_EVENT = 'lobster:tooltip-show';
 
 export const TooltipPosition = {
   Top: 'top',
@@ -23,6 +25,8 @@ interface TooltipProps {
   maxWidth?: string;
   disabled?: boolean;
   multiline?: boolean;
+  // Replaces the default border, background and text colour of the bubble.
+  bubbleClassName?: string;
 }
 
 const Tooltip: React.FC<TooltipProps> = ({
@@ -35,9 +39,12 @@ const Tooltip: React.FC<TooltipProps> = ({
   maxWidth = '18rem',
   disabled = false,
   multiline = false,
+  bubbleClassName = 'border border-border bg-surface-overlay text-foreground',
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const tooltipId = useId();
+  const showContent = isVisible && !disabled && Boolean(content);
 
   const positionClassName = position === TooltipPosition.Top
     ? 'bottom-full mb-2'
@@ -55,9 +62,10 @@ const Tooltip: React.FC<TooltipProps> = ({
     }
     timeoutRef.current = setTimeout(() => {
       timeoutRef.current = null;
+      window.dispatchEvent(new CustomEvent(TOOLTIP_SHOW_EVENT, { detail: tooltipId }));
       setIsVisible(true);
     }, delay);
-  }, [delay, disabled]);
+  }, [delay, disabled, tooltipId]);
 
   const hideTooltip = useCallback(() => {
     if (timeoutRef.current) {
@@ -66,6 +74,18 @@ const Tooltip: React.FC<TooltipProps> = ({
     }
     setIsVisible(false);
   }, []);
+
+  useEffect(() => {
+    if (disabled) hideTooltip();
+  }, [disabled, hideTooltip]);
+
+  useEffect(() => {
+    const onTooltipShow = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== tooltipId) hideTooltip();
+    };
+    window.addEventListener(TOOLTIP_SHOW_EVENT, onTooltipShow);
+    return () => window.removeEventListener(TOOLTIP_SHOW_EVENT, onTooltipShow);
+  }, [hideTooltip, tooltipId]);
 
   useEffect(() => () => {
     if (timeoutRef.current) {
@@ -80,19 +100,28 @@ const Tooltip: React.FC<TooltipProps> = ({
       onMouseLeave={hideTooltip}
       onFocusCapture={showTooltip}
       onBlurCapture={hideTooltip}
+      onPointerDownCapture={hideTooltip}
+      onClickCapture={hideTooltip}
       onKeyDownCapture={(event) => {
-        if (event.key === 'Escape') {
+        if (event.key === 'Escape' && showContent) {
+          event.preventDefault();
+          event.stopPropagation();
           hideTooltip();
         }
       }}
     >
-      {children}
-      {isVisible && content && (
+      {showContent && React.isValidElement<{ 'aria-describedby'?: string }>(children)
+        ? React.cloneElement(children, {
+          'aria-describedby': [children.props['aria-describedby'], tooltipId].filter(Boolean).join(' '),
+        })
+        : children}
+      {showContent && (
         <div
+          id={tooltipId}
           role="tooltip"
           style={{ maxWidth }}
-          className={`absolute z-[100] pointer-events-none rounded-md border border-border
-            bg-surface-overlay px-2 py-1 text-[11px] leading-4 text-foreground shadow-lg
+          className={`absolute z-[100] pointer-events-none rounded-md ${bubbleClassName}
+            px-2 py-1 text-[11px] leading-4 shadow-lg
             ${multiline ? 'w-max whitespace-pre-wrap break-words text-left' : 'whitespace-nowrap'}
             backdrop-blur-sm ${positionClassName} ${alignClassName}`}
         >

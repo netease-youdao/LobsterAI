@@ -7,7 +7,9 @@ export const DEFAULT_APP_WINDOW_HEIGHT = 800;
 export const MIN_APP_WINDOW_WIDTH = 800;
 export const MIN_APP_WINDOW_HEIGHT = 600;
 
-const DEFAULT_WINDOW_SCREEN_MARGIN = 24;
+// Side gutters keep a window from reading as maximized. There is no vertical gutter:
+// on laptop screens the dock/taskbar already makes height the tight dimension.
+const DEFAULT_WINDOW_SIDE_MARGIN = 24;
 
 export type WindowRectangle = {
   x: number;
@@ -87,18 +89,18 @@ const centerBounds = (
   height: size.height,
 });
 
-const resolveDefaultBounds = (workArea: WindowRectangle): WindowRectangle => {
-  const maxWidth = Math.max(MIN_APP_WINDOW_WIDTH, workArea.width - DEFAULT_WINDOW_SCREEN_MARGIN * 2);
-  const maxHeight = Math.max(MIN_APP_WINDOW_HEIGHT, workArea.height - DEFAULT_WINDOW_SCREEN_MARGIN * 2);
-  const scale = Math.min(
-    1,
-    maxWidth / DEFAULT_APP_WINDOW_WIDTH,
-    maxHeight / DEFAULT_APP_WINDOW_HEIGHT,
-  );
+const resolveMaxWindowSize = (workArea: WindowRectangle): { width: number; height: number } => ({
+  width: workArea.width - DEFAULT_WINDOW_SIDE_MARGIN * 2,
+  height: workArea.height,
+});
 
+const resolveDefaultBounds = (workArea: WindowRectangle): WindowRectangle => {
+  const maxSize = resolveMaxWindowSize(workArea);
+  // Fit each dimension on its own: scaling proportionally would also narrow the
+  // window whenever only the height is short.
   const size = {
-    width: Math.max(MIN_APP_WINDOW_WIDTH, Math.round(DEFAULT_APP_WINDOW_WIDTH * scale)),
-    height: Math.max(MIN_APP_WINDOW_HEIGHT, Math.round(DEFAULT_APP_WINDOW_HEIGHT * scale)),
+    width: clamp(DEFAULT_APP_WINDOW_WIDTH, MIN_APP_WINDOW_WIDTH, maxSize.width),
+    height: clamp(DEFAULT_APP_WINDOW_HEIGHT, MIN_APP_WINDOW_HEIGHT, maxSize.height),
   };
 
   return centerBounds(size, workArea);
@@ -155,21 +157,13 @@ const fitStoredBounds = (
     width: Math.max(MIN_APP_WINDOW_WIDTH, Math.round(stored.width)),
     height: Math.max(MIN_APP_WINDOW_HEIGHT, Math.round(stored.height)),
   };
-  const maxWidth = Math.max(MIN_APP_WINDOW_WIDTH, workArea.width - DEFAULT_WINDOW_SCREEN_MARGIN * 2);
-  const maxHeight = Math.max(MIN_APP_WINDOW_HEIGHT, workArea.height - DEFAULT_WINDOW_SCREEN_MARGIN * 2);
-  const scale = Math.min(
-    1,
-    maxWidth / originalBounds.width,
-    maxHeight / originalBounds.height,
-  );
-  const width = Math.min(
-    Math.max(MIN_APP_WINDOW_WIDTH, Math.round(originalBounds.width * scale)),
-    Math.max(MIN_APP_WINDOW_WIDTH, workArea.width),
-  );
-  const height = Math.min(
-    Math.max(MIN_APP_WINDOW_HEIGHT, Math.round(originalBounds.height * scale)),
-    Math.max(MIN_APP_WINDOW_HEIGHT, workArea.height),
-  );
+  const maxSize = resolveMaxWindowSize(workArea);
+  // Keep a size that already fits. Only a dimension that overflows the work area
+  // (e.g. bounds saved on a larger display) is fitted the way a fresh window is.
+  const width = originalBounds.width <= workArea.width
+    ? originalBounds.width
+    : clamp(originalBounds.width, MIN_APP_WINDOW_WIDTH, maxSize.width);
+  const height = clamp(originalBounds.height, MIN_APP_WINDOW_HEIGHT, maxSize.height);
   const fallback = centerBounds({ width, height }, workArea);
   const hasVisiblePosition = typeof stored.x === 'number'
     && typeof stored.y === 'number'

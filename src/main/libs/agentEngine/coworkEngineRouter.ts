@@ -1,13 +1,16 @@
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import { UsageOutcome } from '../../../shared/analytics/usage';
 import type {
   CoworkBtwAbortResponse,
   CoworkBtwSubmitResponse,
 } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
+import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
+import type { TaskUsageAnalytics } from '../usageAnalytics';
 import type {
   CoworkAgentEngine,
   CoworkContextUsage,
@@ -24,6 +27,7 @@ import { ENGINE_SWITCHED_CODE } from './types';
 type RouterDeps = {
   getCurrentEngine: () => CoworkAgentEngine;
   openclawRuntime: CoworkRuntime;
+  analytics?: TaskUsageAnalytics;
 };
 
 export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
@@ -33,9 +37,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   private readonly requestEngine = new Map<string, CoworkAgentEngine>();
   private readonly requestSession = new Map<string, string>();
   private currentEngine: CoworkAgentEngine;
+  private readonly analytics?: TaskUsageAnalytics;
 
   constructor(deps: RouterDeps) {
     super();
+    this.analytics = deps.analytics;
     this.getCurrentEngine = deps.getCurrentEngine;
     this.runtime = deps.openclawRuntime;
     this.currentEngine = this.safeResolveEngine();
@@ -60,9 +66,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   async startSession(sessionId: string, prompt: string, options: CoworkStartOptions = {}): Promise<void> {
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
+    const analyticsStarted = this.analytics?.begin(sessionId, options, false);
     try {
       await this.runtime.startSession(sessionId, prompt, options);
     } catch (error) {
+      if (analyticsStarted) this.analytics?.end(sessionId, UsageOutcome.Failed, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       throw error;
@@ -72,9 +80,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
+    const analyticsStarted = this.analytics?.begin(sessionId, options, true);
     try {
       await this.runtime.continueSession(sessionId, prompt, options);
     } catch (error) {
+      if (analyticsStarted) this.analytics?.end(sessionId, UsageOutcome.Failed, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       throw error;
@@ -88,6 +98,35 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Steer is not supported by engine: ${engine}`);
     }
     return this.runtime.submitSteer(sessionId, text, clientSteerId);
+  }
+
+  async editMessage(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void> {
+    if (!this.runtime.editMessage) throw new Error('Message editing is unavailable.');
+    const started = this.analytics?.begin(request.sessionId, options, true);
+    try {
+      await this.runtime.editMessage(request, options);
+    } catch (error) {
+      if (started) this.analytics?.end(request.sessionId, UsageOutcome.Failed, error);
+      throw error;
+    }
+  }
+
+  async recoverMessageEdit(sessionId: string, operationId: string): Promise<void> {
+    if (!this.runtime.recoverMessageEdit) throw new Error('Message edit recovery is unavailable.');
+    await this.runtime.recoverMessageEdit(sessionId, operationId);
+  }
+
+  async switchMessageVersion(request: CoworkMessageVersionSwitchRequest): Promise<string | undefined> {
+    if (!this.runtime.switchMessageVersion) throw new Error('Message versions are unavailable.');
+    return this.runtime.switchMessageVersion(request);
+  }
+
+  async reconcileMessageVersionSwitch(sessionId: string): Promise<void> {
+    await this.runtime.reconcileMessageVersionSwitch?.(sessionId);
+  }
+
+  hasPendingMessageEdit(sessionId: string): boolean {
+    return this.runtime.hasPendingMessageEdit?.(sessionId) ?? false;
   }
 
   async submitBtw(sessionId: string, question: string, runId: string): Promise<CoworkBtwSubmitResponse> {
@@ -150,12 +189,14 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   stopSession(sessionId: string): void {
+    this.analytics?.end(sessionId, UsageOutcome.Cancelled);
     this.runtime.stopSession(sessionId);
     this.sessionEngine.delete(sessionId);
     this.clearRequestEngineBySession(sessionId);
   }
 
   stopAllSessions(): void {
+    this.analytics?.stopAll();
     this.runtime.stopAllSessions();
     this.sessionEngine.clear();
     this.requestEngine.clear();
@@ -163,6 +204,8 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   respondToPermission(requestId: string, result: PermissionResult): void | Promise<void> {
+    const analyticsSession = this.requestSession.get(requestId);
+    if (analyticsSession) this.analytics?.permissionResolved(analyticsSession, requestId, result.behavior);
     if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
       // Native answers must be acknowledged before the renderer dismisses the question.
       return this.runtime.respondToPermission(requestId, result);
@@ -182,6 +225,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   isSessionActive(sessionId: string): boolean {
     return this.runtime.isSessionActive(sessionId);
+  }
+
+  getTurnRunIds(sessionId: string): string[] {
+    return this.runtime.getTurnRunIds?.(sessionId) ?? [];
   }
 
   getPendingQuestions() {
@@ -227,11 +274,13 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   private bindRuntimeEvents(engine: CoworkAgentEngine, runtime: CoworkRuntime): void {
     runtime.on('message', (sessionId, message, beforeMessageId) => {
+      this.analytics?.message(sessionId, message);
       this.sessionEngine.set(sessionId, engine);
       this.emit('message', sessionId, message, beforeMessageId);
     });
 
     runtime.on('messageUpdate', (sessionId, messageId, content, metadata) => {
+      this.analytics?.update(sessionId, messageId, metadata);
       this.sessionEngine.set(sessionId, engine);
       this.emit('messageUpdate', sessionId, messageId, content, metadata);
     });
@@ -259,6 +308,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     });
 
     runtime.on('permissionRequest', (sessionId, request) => {
+      this.analytics?.permission(sessionId, request);
       this.sessionEngine.set(sessionId, engine);
       this.requestEngine.set(request.requestId, engine);
       this.requestSession.set(request.requestId, sessionId);
@@ -266,25 +316,29 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     });
 
     runtime.on('permissionResolved', (sessionId, requestId) => {
+      this.analytics?.permissionResolved(sessionId, requestId);
       this.requestEngine.delete(requestId);
       this.requestSession.delete(requestId);
       this.emit('permissionResolved', sessionId, requestId);
     });
 
     runtime.on('complete', (sessionId, claudeSessionId) => {
+      this.analytics?.end(sessionId, UsageOutcome.Completed);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       this.emit('complete', sessionId, claudeSessionId);
     });
 
     runtime.on('error', (sessionId, error) => {
+      this.analytics?.end(sessionId, UsageOutcome.Failed, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       this.emit('error', sessionId, error);
     });
 
-    runtime.on('sessionStopped', (sessionId) => {
-      this.emit('sessionStopped', sessionId);
+    runtime.on('sessionStopped', (sessionId, turn) => {
+      this.analytics?.end(sessionId, UsageOutcome.Cancelled);
+      this.emit('sessionStopped', sessionId, turn);
     });
   }
 

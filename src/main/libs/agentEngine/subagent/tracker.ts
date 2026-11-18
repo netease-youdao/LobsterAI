@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import type { SubagentMessageStore } from '../../../subagentMessageStore';
 import type { SubagentRunStore, SubagentRunWithParent } from '../../../subagentRunStore';
+import { parseStoredMessageMetadata } from '../../storedMessageMetadata';
 import {
   parseSubagentGatewayHistoryMessages,
   type SubagentCoworkMessage,
@@ -299,6 +300,16 @@ export class SubagentTracker {
   }
 
   // ── Public query API ───────────────────────────────────────────────────
+
+  /**
+   * Whether a Cowork session was materialized for a spawn. Visible spawns get
+   * a dashboard session key rather than a `:subagent:` one, so the key alone
+   * does not identify a child session.
+   */
+  isChildSession(coworkSessionId: string): boolean {
+    if (typeof this.store?.hasChildSession !== 'function') return false;
+    return this.store.hasChildSession(coworkSessionId);
+  }
 
   /**
    * Returns persisted subagent runs for a parent session.
@@ -788,7 +799,11 @@ export class SubagentTracker {
       type: row.type as SubagentCoworkMessage['type'],
       content: row.content,
       timestamp: row.createdAt,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+      metadata: parseStoredMessageMetadata(row.metadata, () => {
+        console.warn(
+          `[SubagentTracker] corrupt metadata detected for message ${row.id} in run ${runId}, discarding metadata`,
+        );
+      }),
     }));
 
     // Populate in-memory cache so subsequent reads skip the DB

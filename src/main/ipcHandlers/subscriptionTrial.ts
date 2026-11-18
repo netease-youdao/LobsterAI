@@ -7,6 +7,8 @@ import {
 } from '../../shared/subscriptionTrial/constants';
 import type { ActivityIpcHandlerDeps } from './activity/handlers';
 
+export const SUBSCRIPTION_TRIAL_REQUEST_TIMEOUT_MS = 5_000;
+
 export function registerSubscriptionTrialIpcHandlers(deps: ActivityIpcHandlerDeps): void {
   const lastFailure = new Map<string, string>();
   const warnOnce = (path: string, detail: string): void => {
@@ -23,12 +25,28 @@ export function registerSubscriptionTrialIpcHandlers(deps: ActivityIpcHandlerDep
     const authenticated = deps.hasAuthTokens();
     const fetcher = authenticated ? deps.fetchWithAuth : deps.fetchPublic;
     const server = deps.getServerBaseUrl();
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        const error = new Error('Subscription trial request timed out');
+        error.name = 'TimeoutError';
+        reject(error);
+        controller.abort();
+      }, SUBSCRIPTION_TRIAL_REQUEST_TIMEOUT_MS);
+    });
     try {
-      const response = await fetcher(`${server}${path}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-      });
-      const result = await response.json() as { code: number; data?: SubscriptionTrialState };
+      // Bound the whole lookup, including auth refresh and response-body reads.
+      const lookup = async () => {
+        const response = await fetcher(`${server}${path}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+          signal: controller.signal,
+        });
+        const result = await response.json() as { code: number; data?: SubscriptionTrialState };
+        return { response, result };
+      };
+      const { response, result } = await Promise.race([lookup(), timeout]);
       if (!response.ok || result.code !== 0 || !result.data) {
         warnOnce(path, `server=${server}, authenticated=${authenticated}, http=${response.status}, code=${result.code}`);
         return null;
@@ -38,6 +56,8 @@ export function registerSubscriptionTrialIpcHandlers(deps: ActivityIpcHandlerDep
     } catch (error) {
       warnOnce(path, `server=${server}, authenticated=${authenticated}, failure=${error instanceof Error ? error.name : 'unknown'}`);
       return null;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
   deps.ipcMain.handle(SubscriptionTrialIpc.Status, (event) => {

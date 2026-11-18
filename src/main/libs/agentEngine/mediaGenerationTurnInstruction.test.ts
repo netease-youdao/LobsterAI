@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'vitest';
 
+import { MediaPreferenceMode, MediaSelectionSource } from '../../../shared/media/defaultPolicy';
 import { SkinAssetSlot, SkinWorkflowKind } from '../../../shared/skin/constants';
-import { buildMediaGenerationTurnInstruction } from './mediaGenerationTurnInstruction';
+import {
+  buildMediaGenerationTurnInstruction,
+  MANAGED_MEDIA_GENERATION_POLICY_PROMPT,
+} from './mediaGenerationTurnInstruction';
 
 describe('buildMediaGenerationTurnInstruction', () => {
   test('keeps an ordinary image request to exactly one generation call', () => {
@@ -71,4 +75,36 @@ describe('buildMediaGenerationTurnInstruction', () => {
     expect(instruction).toContain('LobsterAI media generation tools - NOT AVAILABLE');
     expect(instruction).toContain('You may use it');
   });
+});
+
+
+test('system defaults do not claim user authorization and point at the cached policy', () => {
+  const instruction = buildMediaGenerationTurnInstruction({
+    mode: 'auto', imageModelId: 'image', videoModelId: 'video',
+    imageSource: MediaSelectionSource.Default, videoSource: MediaSelectionSource.Default,
+  });
+  expect(instruction).toContain('NOT user authorization');
+  expect(instruction).toContain('"Media Generation Policy" in AGENTS.md');
+  expect(instruction).toContain('lobsterai_image_generate with model "image"');
+  expect(instruction).toContain('lobsterai_video_generate with model "video"');
+  expect(instruction).not.toContain('The user selected');
+  // The static rules travel in the cached AGENTS.md section, not this per-session message.
+  expect(instruction).not.toContain('mind maps');
+  expect(instruction.length).toBeLessThan(700);
+});
+
+test('the managed media policy keeps the charts, editing and confirmation rules', () => {
+  expect(MANAGED_MEDIA_GENERATION_POLICY_PROMPT).toContain('## Media Generation Policy');
+  expect(MANAGED_MEDIA_GENERATION_POLICY_PROMPT).toContain('NOT user authorization');
+  expect(MANAGED_MEDIA_GENERATION_POLICY_PROMPT).toContain('mind maps');
+  expect(MANAGED_MEDIA_GENERATION_POLICY_PROMPT).toContain('editing existing footage');
+  expect(MANAGED_MEDIA_GENERATION_POLICY_PROMPT).toContain('explicit user confirmation');
+});
+
+test('a skin workflow cannot bypass a persistent image off preference', () => {
+  const instruction = buildMediaGenerationTurnInstruction(
+    { mode: 'none', imagePreference: MediaPreferenceMode.Off, preferencesRevision: 1 }, false, SkinWorkflowKind.SkinPack,
+  );
+  expect(instruction).toContain('disabled by the user');
+  expect(instruction).not.toContain('locked to the OpenClaw-native');
 });

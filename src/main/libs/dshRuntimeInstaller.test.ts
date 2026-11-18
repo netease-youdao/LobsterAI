@@ -17,6 +17,7 @@ import {
   resolveDshArtifactFromManifest,
   resolveInstalledDshRuntime,
   resolveTarCommand,
+  retryWhileBusy,
 } from './dshRuntimeInstaller';
 
 const tempRoots: string[] = [];
@@ -141,6 +142,68 @@ describe('resolveTarCommand', () => {
   test('uses PATH on macOS and Linux', () => {
     expect(resolveTarCommand('darwin', () => true, undefined)).toBe('tar');
     expect(resolveTarCommand('linux', () => true, '/usr')).toBe('tar');
+  });
+});
+
+describe('retryWhileBusy', () => {
+  function errorWithCode(code: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`${code}: busy`), { code });
+  }
+
+  // A clock that only moves when the retry loop sleeps, so budgets are exact.
+  function fakeClock() {
+    let time = 0;
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      now: () => time,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        time += ms;
+      },
+    };
+  }
+
+  // Windows reports a directory a scanner still holds as EBUSY or EPERM.
+  test('waits out Windows busy errors with growing delays', async () => {
+    const clock = fakeClock();
+    const failures = ['EBUSY', 'EPERM', 'EACCES', 'EBUSY', 'EBUSY', 'EBUSY'];
+    const result = await retryWhileBusy(
+      async () => {
+        const code = failures.shift();
+        if (code) throw errorWithCode(code);
+        return 'moved';
+      },
+      { platform: 'win32', ...clock }
+    );
+    expect(result).toBe('moved');
+    expect(clock.sleeps).toEqual([100, 200, 400, 800, 1600, 2000]);
+  });
+
+  test('gives up with the last error once the budget is spent', async () => {
+    const clock = fakeClock();
+    let attempts = 0;
+    const attempt = retryWhileBusy(
+      async () => {
+        attempts += 1;
+        throw errorWithCode('EBUSY');
+      },
+      { platform: 'win32', budgetMs: 10_000, ...clock }
+    );
+    await expect(attempt).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(clock.now()).toBeLessThanOrEqual(10_000);
+    expect(attempts).toBe(clock.sleeps.length + 1);
+  });
+
+  test('fails at once on other platforms and on errors that are not about a busy path', async () => {
+    const clock = fakeClock();
+    await expect(
+      retryWhileBusy(() => Promise.reject(errorWithCode('EACCES')), { platform: 'darwin', ...clock })
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    await expect(
+      retryWhileBusy(() => Promise.reject(errorWithCode('ENOENT')), { platform: 'win32', ...clock })
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(clock.sleeps).toEqual([]);
   });
 });
 

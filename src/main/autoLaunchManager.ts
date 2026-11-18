@@ -22,6 +22,7 @@ const getLoginItemSettings = () => {
     // otherwise openAtLogin defaults to comparing against [] which
     // won't match the registered ['--auto-launched'] and returns false.
     return app.getLoginItemSettings({
+      path: `"${process.execPath}"`,
       args: AUTO_LAUNCH_ARGS,
     });
   }

@@ -3,6 +3,7 @@
  * 后续新增的业务接口也应在此文件中配置。
  */
 
+import { isValidLlmTraceId } from '../../shared/cowork/llmTurnUsage';
 import { configService } from './config';
 
 export const isTestModeEnabled = () => {
@@ -105,9 +106,15 @@ export const getClientBannerTargetUrl = (linkUrl: string, description: string): 
 };
 
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
+export const getPortalTurnUsageUrl = (traceId: string) => {
+  const query = new URLSearchParams({ tab: 'used' });
+  if (isValidLlmTraceId(traceId)) query.set('usageTrace', traceId);
+  return `${getPortalProfileUrl()}?${query}`;
+};
 export const getPortalCreditsDetailUrl = () => `${getPortalBase()}/profile/detail`;
 export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;
+export const getPortalPennyActivityUrl = () => `${getPortalBase()}/activity/penny?keyfrom=client_menu`;
 export const getPortalCreditsResetActivityUrl = (campaignCode?: string) => (
   `${getPortalBase()}/profile?activity=credits_reset${campaignCode ? `&campaignCode=${encodeURIComponent(campaignCode)}` : ''}`
 );

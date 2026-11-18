@@ -16,6 +16,10 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('./appQuitDialog', () => ({
+  showAppQuitDialog: mocks.showMessageBox,
+}));
+
 import {
   APP_QUIT_CANCEL_BUTTON_INDEX,
   APP_QUIT_CONFIRM_BUTTON_INDEX,
@@ -52,6 +56,31 @@ describe('AppQuitConfirmationGate', () => {
     expect(gate.resolveQuitRequest()).toBe(AppQuitRequestVerdict.Prompt);
   });
 
+  test('skips the prompt when it is not required, without opening it', () => {
+    const gate = new AppQuitConfirmationGate();
+
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Bypass);
+    expect(gate.isPromptOpen()).toBe(false);
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Bypass);
+    expect(gate.resolveQuitRequest(true)).toBe(AppQuitRequestVerdict.Prompt);
+  });
+
+  test('ignores a quit that needs no prompt while an earlier prompt is open', () => {
+    const gate = new AppQuitConfirmationGate();
+    expect(gate.resolveQuitRequest(true)).toBe(AppQuitRequestVerdict.Prompt);
+
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Ignore);
+    expect(gate.isPromptOpen()).toBe(true);
+  });
+
+  test('a quit that needs no prompt still consumes an armed bypass', () => {
+    const gate = new AppQuitConfirmationGate();
+    gate.armBypass();
+
+    expect(gate.resolveQuitRequest(false)).toBe(AppQuitRequestVerdict.Bypass);
+    expect(gate.isBypassArmed()).toBe(false);
+  });
+
   test('a programmatic quit during an open prompt is deferred until the prompt closes', () => {
     const gate = new AppQuitConfirmationGate();
     expect(gate.resolveQuitRequest()).toBe(AppQuitRequestVerdict.Prompt);
@@ -70,14 +99,14 @@ describe('AppQuitConfirmationGate', () => {
 });
 
 describe('buildAppQuitConfirmationOptions', () => {
-  test('builds a warning alert with Quit as default and Cancel as escape', () => {
+  test('builds an app-icon alert with Quit as default and Cancel as escape', () => {
     const options = buildAppQuitConfirmationOptions({
       appName: 'LobsterAI',
       translate: key => `<${key}>`,
     });
 
     expect(options).toEqual({
-      type: 'warning',
+      type: 'none',
       title: 'LobsterAI',
       message: '<appQuitConfirmTitle>',
       detail: '<appQuitConfirmDetail>',
@@ -127,7 +156,7 @@ describe('showAppQuitConfirmation', () => {
     expect(mocks.focus).toHaveBeenCalledWith({ steal: true });
     expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
     const [options] = mocks.showMessageBox.mock.calls[0];
-    expect(options).toMatchObject({ type: 'warning', title: 'LobsterAI', noLink: true });
+    expect(options).toMatchObject({ type: 'none', title: 'LobsterAI', noLink: true });
     expect(options.buttons).toHaveLength(2);
     expect(options.message).not.toBe('appQuitConfirmTitle');
     expect(options.detail).not.toBe('appQuitConfirmDetail');

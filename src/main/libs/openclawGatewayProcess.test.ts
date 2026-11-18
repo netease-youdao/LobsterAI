@@ -9,6 +9,7 @@ import { runInNewContext } from 'vm';
 import { OpenClawGatewayProcessControl } from '../../shared/openclawEngine/constants';
 import {
   buildOpenClawGatewayShutdownBridge,
+  GATEWAY_STOP_GRACE_MS,
   OpenClawGatewaySignal,
   spawnOpenClawGatewayProcess,
   stopOpenClawGatewayProcess,
@@ -67,7 +68,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const stopped = vi.fn();
     const pending = stopOpenClawGatewayProcess(child).then(stopped);
 
-    await vi.advanceTimersByTimeAsync(5_300);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS - 700);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith(OpenClawGatewaySignal.Terminate);
     expect(stopped).not.toHaveBeenCalled();
     child.emit('exit', 0, null);
@@ -83,7 +84,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const stopped = vi.fn();
     const pending = stopOpenClawGatewayProcess(child).then(stopped);
 
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS);
     expect(child.kill).toHaveBeenNthCalledWith(2, OpenClawGatewaySignal.Kill);
     expect(stopped).not.toHaveBeenCalled();
     child.emit('exit', null, OpenClawGatewaySignal.Kill);
@@ -101,7 +102,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child);
     const rejected = expect(pending).rejects.toThrow('did not exit after SIGKILL');
 
-    await vi.advanceTimersByTimeAsync(6_000 + forceWaitMs);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS + forceWaitMs);
     await rejected;
     expect(vi.getTimerCount()).toBe(0);
     expect(child.listenerCount('exit')).toBe(0);
@@ -119,7 +120,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child);
     const rejected = expect(pending).rejects.toThrow('EPERM');
 
-    await vi.advanceTimersByTimeAsync(6_000 + forceWaitMs);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS + forceWaitMs);
     await rejected;
     expect(child.kill).toHaveBeenCalledTimes(2);
   });
@@ -140,7 +141,7 @@ describe('stopOpenClawGatewayProcess', () => {
     expect(child.send).toHaveBeenCalledExactlyOnceWith(
       { type: OpenClawGatewayProcessControl.Shutdown }, expect.any(Function),
     );
-    await vi.advanceTimersByTimeAsync(5_300);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS - 700);
     expect(child.kill).not.toHaveBeenCalled();
     expect(stopped).not.toHaveBeenCalled();
     child.emit('exit', 0, null);
@@ -164,7 +165,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const pending = stopOpenClawGatewayProcess(child);
     const rejected = expect(pending).rejects.toThrow(ipcError.message);
     expect(child.kill).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith(OpenClawGatewaySignal.Kill);
     await vi.advanceTimersByTimeAsync(forceWaitMs);
     await rejected;
@@ -194,7 +195,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const child = makeChild();
     const stopped = vi.fn();
     const pending = stopOpenClawGatewayProcess(child).then(stopped);
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS);
     expect(child.kill).toHaveBeenLastCalledWith(OpenClawGatewaySignal.Kill);
     vi.mocked(process.kill).mockImplementation(() => {
       throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
@@ -213,7 +214,7 @@ describe('stopOpenClawGatewayProcess', () => {
     const child = makeChild();
     const settled = vi.fn();
     const pending = stopOpenClawGatewayProcess(child).then(settled, settled);
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS + 5_000);
     expect(settled).not.toHaveBeenCalled();
     expect(child.kill).toHaveBeenCalledTimes(2);
     child.emit('exit', null, OpenClawGatewaySignal.Kill);
@@ -231,7 +232,7 @@ describe('stopOpenClawGatewayProcess', () => {
     });
     const pending = stopOpenClawGatewayProcess(child);
     const rejected = expect(pending).rejects.toThrow('did not exit after SIGKILL');
-    await vi.advanceTimersByTimeAsync(36_000);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS + 30_000);
     await rejected;
     expect(child.kill).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
@@ -296,7 +297,7 @@ describe('Windows gateway shutdown bridge', () => {
     vi.useFakeTimers();
     const childProcess = Object.assign(new EventEmitter(), { send: vi.fn(), connected: false, exit: vi.fn() });
     runInNewContext(buildOpenClawGatewayShutdownBridge(), { process: childProcess, queueMicrotask, setTimeout });
-    await vi.advanceTimersByTimeAsync(5_999);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STOP_GRACE_MS - 1);
     expect(childProcess.exit).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(childProcess.exit).toHaveBeenCalledExactlyOnceWith(1);

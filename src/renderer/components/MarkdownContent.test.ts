@@ -11,6 +11,13 @@ import MarkdownContent, {
   shouldUseLargeMarkdownPreview,
 } from './MarkdownContent';
 
+const renderMarkdown = (content: string): string =>
+  renderToStaticMarkup(React.createElement(MarkdownContent, { content }));
+
+const countKatex = (html: string): number => html.split('class="katex"').length - 1;
+
+const texAnnotation = (tex: string): string => `<annotation encoding="application/x-tex">${tex}</annotation>`;
+
 test('normalizes macOS, Windows drive, and UNC file links for local actions', () => {
   expect(normalizeMarkdownLocalFilePath('file:///Users/test/My%20File.md'))
     .toBe('/Users/test/My File.md');
@@ -162,6 +169,55 @@ test('latex math renders through katex in markdown output', () => {
   expect(html).toContain('katex-display');
   expect(html).toContain('class="katex"');
   expect(html).not.toContain('\\[');
+});
+
+test.each([
+  ['2. 一眼看懂 —— 日期、价格 $3/$15、200K 上下文、全平台', '一眼看懂 —— 日期、价格 $3/$15、200K 上下文、全平台'],
+  ['价格 $3/$15', '价格 $3/$15'],
+  ['$3–$15', '$3–$15'],
+  ['$5 and $10', '$5 and $10'],
+])('currency dollars render as plain text: %s', (content, text) => {
+  const html = renderMarkdown(content);
+
+  expect(html).not.toContain('class="katex"');
+  expect(html).toContain(text);
+});
+
+test.each([
+  ['$x^2$', 'x^2'],
+  ['$E=mc^2$', 'E=mc^2'],
+  ['$\\frac{a}{b}$', '\\frac{a}{b}'],
+])('single-dollar inline math still renders next to currency: %s', (math, tex) => {
+  const html = renderMarkdown(`其中 ${math} 成立，价格 $3/$15。`);
+
+  expect(countKatex(html)).toBe(1);
+  expect(html).toContain(texAnnotation(tex));
+  expect(html).toContain('价格 $3/$15。');
+});
+
+test('a currency dollar does not pair with the opening dollar of a later formula', () => {
+  const html = renderMarkdown('It costs $5, where $x$ is the count.');
+
+  expect(countKatex(html)).toBe(1);
+  expect(html).toContain('It costs $5, where ');
+  expect(html).toContain(texAnnotation('x'));
+});
+
+test('display and double-dollar math still render next to currency', () => {
+  const html = renderMarkdown(['价格 $5 and $10', '', '$$', 'E=mc^2', '$$', '', '行内 $$a+b$$ 公式'].join('\n'));
+
+  expect(html).toContain('katex-display');
+  expect(countKatex(html)).toBe(2);
+  expect(html).toContain(texAnnotation('E=mc^2'));
+  expect(html).toContain(texAnnotation('a+b'));
+  expect(html).toContain('价格 $5 and $10');
+});
+
+test.each(['$ x$', '$x $', '$x$1'])('single-dollar math follows Pandoc delimiter rules: %s', content => {
+  const html = renderMarkdown(content);
+
+  expect(html).not.toContain('class="katex"');
+  expect(html).toContain(content);
 });
 
 test('kit links are treated as safe internal links', () => {

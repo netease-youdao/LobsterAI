@@ -21,7 +21,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const { removeTree } = require('./dsh-remove-tree.cjs');
 
@@ -61,6 +61,39 @@ if (!fs.existsSync(entryPath)) {
 const electronPath = require('electron');
 if (typeof electronPath !== 'string' || !fs.existsSync(electronPath)) {
   fail('Could not resolve the Electron executable from node_modules.');
+}
+
+verifyBundledPnpm();
+
+// Plugin installs run the runtime's bundled pnpm on Electron in Node mode (the
+// app hands it to runCli; see resolveLaunchEntry in dshEngineManager.ts). Run
+// it that way with a PATH that holds no pnpm or node, as a Dock-launched app
+// has, so a pnpm that only worked thanks to the build machine fails here.
+function verifyBundledPnpm() {
+  const pnpmDir = path.join(runtimeDir, 'package-manager', 'pnpm');
+  const manifestPath = path.join(pnpmDir, 'package.json');
+  if (!fs.existsSync(manifestPath)) {
+    fail(`Runtime bundles no pnpm (${manifestPath}); plugin installs would need pnpm on PATH. Rebuild the runtime.`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const binRelPath = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin && manifest.bin.pnpm;
+  if (typeof binRelPath !== 'string') fail(`Bundled pnpm at ${pnpmDir} declares no pnpm bin entry`);
+  const bareEnv = {
+    ELECTRON_RUN_AS_NODE: '1',
+    PATH: process.platform === 'win32' ? process.env.SystemRoot || 'C:\\Windows' : '/usr/bin:/bin:/usr/sbin:/sbin',
+    HOME: os.homedir(),
+    ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot || 'C:\\Windows' } : {}),
+  };
+  const result = spawnSync(electronPath, [path.join(pnpmDir, binRelPath), '--version'], {
+    cwd: os.tmpdir(),
+    env: bareEnv,
+    encoding: 'utf8',
+  });
+  const reported = (result.stdout || '').trim();
+  if (result.status !== 0 || reported !== manifest.version) {
+    fail(`Bundled pnpm did not run under Electron (exit ${result.status}, got "${reported}"): ${(result.stderr || '').trim()}`);
+  }
+  log(`Bundled pnpm ${reported} runs under Electron with no pnpm or node on PATH`);
 }
 
 const dshHomeArg = readArgValue('--dsh-home');

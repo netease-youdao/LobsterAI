@@ -13,6 +13,38 @@ export const SESSION_AGNOSTIC_PERMISSION_SESSION_ID = '__askuser__';
  */
 export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
 
+/**
+ * How long an AskUserQuestion request waits for the user, matching OpenClaw's
+ * native ask_user default (900 s): it carries choice questions as well as
+ * delete confirmations, and a user who steps away must not read as a refusal.
+ * The plugin (openclaw-extensions/ask-user-question) mirrors this value.
+ */
+export const ASK_USER_QUESTION_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * Id prefix of the optimistic session the renderer shows while a new task's
+ * start request is in flight. It is never stored: the started session
+ * replaces it, so a session carrying it has not reached the runtime yet.
+ */
+export const COWORK_TEMP_SESSION_ID_PREFIX = 'temp-';
+
+export const CoworkSessionStatusValue = {
+  Idle: 'idle',
+  Running: 'running',
+  Completed: 'completed',
+  Error: 'error',
+} as const;
+export type CoworkSessionStatus = typeof CoworkSessionStatusValue[keyof typeof CoworkSessionStatusValue];
+
+/**
+ * Machine-readable codes on failed session start/continue IPC results. The
+ * paired `error` text is already localized and must be shown as-is.
+ */
+export const CoworkSessionErrorCode = {
+  WorkingDirectoryUnavailable: 'WORKING_DIRECTORY_UNAVAILABLE',
+} as const;
+export type CoworkSessionErrorCode = typeof CoworkSessionErrorCode[keyof typeof CoworkSessionErrorCode];
+
 /** Default page size for session list pagination. */
 export const COWORK_SESSION_PAGE_SIZE = 50;
 
@@ -57,12 +89,25 @@ export const COWORK_TEMP_DIR_NAME = '.cowork-temp';
 export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
 
 export const CoworkIpcChannel = {
+  SessionStart: 'cowork:session:start',
+  SessionContinue: 'cowork:session:continue',
+  EditMessage: 'cowork:message:edit',
+  CheckMessageEdit: 'cowork:message:checkEdit',
+  GetMessageEdit: 'cowork:message:editState',
+  RecoverMessageEdit: 'cowork:message:recoverEdit',
+  SwitchMessageVersion: 'cowork:message:switchVersion',
+  GetSession: 'cowork:session:get',
+  GenerateSessionTitle: 'cowork:session:generateTitle',
+  RenameSession: 'cowork:session:rename',
   ConfigSet: 'cowork:config:set',
   PermissionRespond: 'cowork:permission:respond',
+  MediaConfirmation: 'cowork:media:confirmation',
   GetPendingQuestions: 'cowork:question:pending',
   StreamPermissionDismiss: 'cowork:stream:permissionDismiss',
   CancelMediaTask: 'cowork:media:cancel',
   GetMediaModels: 'media:getModels',
+  GetMediaPreferences: 'media:getPreferences',
+  SetMediaPreference: 'media:setPreference',
   MediaStatusPollUpdate: 'cowork:media:statusPollUpdate',
   ForkSession: 'cowork:session:fork',
   DeleteSession: 'cowork:session:delete',
@@ -78,6 +123,8 @@ export const CoworkIpcChannel = {
   ExportSessionDiagnostics: 'cowork:session:exportDiagnostics',
   GetSessionMessageRailIndex: 'cowork:session:getMessageRailIndex',
   GetSessionSearchMessages: 'cowork:session:getSearchMessages',
+  SearchSessionContent: 'cowork:session:searchContent',
+  ListFilteredSessions: 'cowork:session:listFiltered',
   OpenSessionFromNotification: 'cowork:session:openFromNotification',
   OpenSessionFromNotificationReady: 'cowork:session:openFromNotificationReady',
   GoalCommand: 'cowork:session:goalCommand',
@@ -88,6 +135,8 @@ export const CoworkIpcChannel = {
   SessionsChanged: 'cowork:sessions:changed',
   StreamBtwResult: 'cowork:stream:btwResult',
   StreamGoal: 'cowork:stream:goal',
+  StreamTurnUsage: 'cowork:stream:turnUsage',
+  RefreshTurnUsage: 'cowork:turnUsage:refresh',
   MemoryReadRaw: 'cowork:memory:readRaw',
   MemoryWriteRaw: 'cowork:memory:writeRaw',
   BootstrapRead: 'cowork:bootstrap:read',

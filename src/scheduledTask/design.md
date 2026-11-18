@@ -26,7 +26,7 @@ graph TB
     subgraph Main["Main Process (Electron)"]
         IPC["IPC Handlers<br/>scheduledTask:*"]
         CronSvc["CronJobService"]
-        IMHandler["imScheduledTaskHandler"]
+        IMHandler["imScheduledTaskHandler<br/>(isReminderSystemTurn)"]
         IMCowork["imCoworkHandler"]
         ChannelSync["OpenClawChannelSessionSync"]
         IMHandler --> IMCowork
@@ -47,7 +47,6 @@ graph TB
     CronSvc -->|"Gateway RPC"| CronEngine
     CronSvc -->|"polling 15s"| CronEngine
     CronSvc -->|"statusUpdate / runUpdate"| Slice
-    IMCowork -->|"createScheduledTask callback"| IPC
     ChannelAdapter -->|"Feishu/DingTalk API"| IMTarget["IM 用户/群组"]
 ```
 
@@ -564,49 +563,13 @@ CronJobService 在 LobsterAI 前端类型和 OpenClaw Gateway 类型之间进行
 
 ---
 
-### 9. IM 定时任务检测 (`src/main/im/imScheduledTaskHandler.ts`)
+### 9. IM 提醒回传判断 (`src/main/im/imScheduledTaskHandler.ts`)
 
-#### 9.1 检测流程
+IM 消息都经 OpenClaw 渠道插件进入 Agent，提醒由 Agent 按 `buildScheduledTaskEnginePrompt()` 的规则调用原生 `automations` 工具（网关 `cron.add`）创建，LobsterAI 主进程不再预先识别提醒请求。
 
-当用户通过 IM 发送消息时，系统会自动检测是否包含定时提醒请求：
+原来的 LLM 识别管道（`looksLikeIMScheduledTaskCandidate` → `detectScheduledTaskRequest` → `normalizeDetectedScheduledTaskRequest`，以及 `imCoworkHandler` 直接调用 `createScheduledTask` 写入 USER/TOOL_USE/TOOL_RESULT/ASSISTANT 消息序列）只挂在 `IMCoworkHandler.processMessage()` 上。该入口随旧 NIM 直连网关一起失去调用方，这套管道已于 2026-10-17 删除。随后 `processMessage()` 本身以及只供它使用的代码（会话创建、系统提示词拼装、`analyzeIMReply` 回复守卫）也一并删除。
 
-```mermaid
-sequenceDiagram
-    participant User as IM 用户
-    participant IMH as imCoworkHandler
-    participant Det as ScheduledTaskDetector
-    participant LLM as LLM API
-    participant IPC as create IPC handler
-
-    User->>IMH: "明天上午9点提醒我查收邮件"
-    IMH->>Det: looksLikeIMScheduledTaskCandidate(text)
-    Det-->>IMH: true (正则匹配到关键词)
-    IMH->>Det: detectScheduledTaskRequest(message)
-    Det->>LLM: 提取结构化提醒请求
-    LLM-->>Det: { shouldCreateTask: true, scheduleAt, reminderBody, taskName }
-    Det->>Det: normalizeDetectedScheduledTaskRequest()
-    Det-->>IMH: ParsedIMScheduledTaskRequest
-    IMH->>IPC: createScheduledTask({ sessionId, message, request })
-    IPC-->>IMH: { success: true, taskId }
-    IMH->>User: "好的，已设置好提醒！1天后（09:00）会提醒你..."
-```
-
-#### 9.2 检测管道
-
-1. **正则预过滤** (`looksLikeIMScheduledTaskCandidate`)：检查消息是否包含时间相关关键词（`提醒`, `定时`, `闹钟`, `remind`, `schedule`, `tomorrow` 等）
-2. **LLM 结构化提取**：调用 LLM 将自然语言解析为 `{ shouldCreateTask, scheduleAt, reminderBody, taskName }`
-3. **归一化** (`normalizeDetectedScheduledTaskRequest`)：验证时间有效性、生成任务名称、格式化确认文本
-
-#### 9.3 IM 创建的消息序列
-
-直接检测到定时提醒请求后，`imCoworkHandler` 会记录以下消息序列到 Cowork 会话中：
-
-```
-[USER]       "明天上午9点提醒我查收邮件"
-[TOOL_USE]   { toolName: "cron", action: "add", job: { name, schedule, payload } }
-[TOOL_RESULT] { id, name, agentId, sessionKey, payloadText, scheduleAt }
-[ASSISTANT]  "好的，已设置好提醒！1天后（09:00）会提醒你..."
-```
+这个文件现在只保留 `isReminderSystemTurn()`：`imCoworkHandler` 在会话完成时用它判断本轮是否由提醒触发，是则把回复异步回传到原 IM 会话。
 
 ---
 
@@ -799,47 +762,7 @@ sequenceDiagram
 
 ### 场景二：飞书消息创建定时提醒
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant FS as 飞书 App
-    participant IMH as imCoworkHandler
-    participant Det as ScheduledTaskDetector
-    participant LLM as LLM
-    participant CB as createScheduledTask callback
-    participant Cron as CronJobService
-    participant GW as OpenClaw Gateway
-
-    User->>FS: "明天上午9点提醒我查收邮件"
-    FS->>IMH: processMessage(message)
-    IMH->>Det: looksLikeIMScheduledTaskCandidate(text)
-    Det-->>IMH: true
-    IMH->>Det: detectScheduledTaskRequest(message)
-    Det->>LLM: 结构化提取
-    LLM-->>Det: { shouldCreateTask: true, scheduleAt: '2026-03-22T09:00:00+08:00', reminderBody: '查收邮件', taskName: '查收邮件提醒' }
-    Det-->>IMH: ParsedIMScheduledTaskRequest
-
-    IMH->>CB: createScheduledTask({ sessionId, message, request })
-    Note over CB: 检测 IM 通道信息
-    CB->>CB: hasChannel = true (feishu + conversationId)
-    CB->>CB: sessionTarget = 'isolated'
-    CB->>CB: delivery = { mode: 'announce', channel: 'feishu', to: 'ou_xxx' }
-    CB->>CB: payload = { kind: 'agentTurn', message: '...' }
-    CB->>Cron: addJob(input)
-    Cron->>GW: cron.add(...)
-    GW-->>Cron: GatewayJob
-    Cron-->>CB: ScheduledTask
-    CB-->>IMH: { success: true, taskId }
-
-    IMH->>IMH: 记录消息序列 (USER/TOOL_USE/TOOL_RESULT/ASSISTANT)
-    IMH->>FS: 确认消息: "好的，已设置好提醒！1天后（09:00）会提醒你查收邮件"
-    FS->>User: 显示确认消息
-
-    Note over GW: === 次日 9:00 触发 ===
-    GW->>GW: 创建隔离会话 + Agent 执行
-    GW->>FS: announce 投递提醒消息
-    FS->>User: "⏰ 提醒：查收邮件"
-```
+飞书消息经 OpenClaw 飞书渠道进入 Agent，Agent 调用原生 `automations` 工具（`cron.add`）创建任务，触发和投递都由 OpenClaw 完成，LobsterAI 主进程不参与识别和创建（见第 9 节）。
 
 ---
 

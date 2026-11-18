@@ -1,4 +1,6 @@
-export type MediaGenerationMode = 'auto' | 'image' | 'video' | 'none';
+import type { MediaSelection, MediaSelectionMode } from '../../shared/media/defaultPolicy';
+
+export type MediaGenerationMode = MediaSelectionMode;
 
 export interface MediaModel {
   modelId: string;
@@ -22,13 +24,7 @@ export interface MediaQuotaStatus {
   totalAvailableCredits: number;
 }
 
-export interface MediaGenerationSelection {
-  mode: MediaGenerationMode;
-  modelId?: string;
-  modelName?: string;
-  imageModelId?: string;
-  videoModelId?: string;
-}
+export type MediaGenerationSelection = MediaSelection;
 
 export interface MediaTaskStatus {
   taskId: number;
@@ -46,6 +42,7 @@ export interface MediaTaskStatus {
 }
 
 export interface MediaAttachmentRef {
+  imageEdit?: import('../../shared/imageEditing/types').ImageEditRequest;
   token: string;
   mediaType: 'image' | 'video' | 'audio';
   index: number;

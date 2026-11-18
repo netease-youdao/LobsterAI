@@ -1,6 +1,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Do not infer ownership just from the final directory name: users can link
+// arbitrary custom plugin directories with the same name.
+const RUNTIME_THIRD_PARTY_EXTENSIONS_DIR = /[/\\](?:resources[/\\]cfmind|vendor[/\\]openclaw-runtime[/\\][^/\\]+)[/\\]third-party-extensions[/\\]*$/i;
+
+/**
+ * The third-party extensions directory bundled with a LobsterAI runtime: a
+ * packaged app's `resources/cfmind` or a dev checkout's `vendor/openclaw-runtime/<name>`.
+ */
+export function isRuntimeThirdPartyExtensionsDir(loadPath: string): boolean {
+  return RUNTIME_THIRD_PARTY_EXTENSIONS_DIR.test(loadPath);
+}
+
+/**
+ * Point `plugins.load.paths` entries for a LobsterAI runtime's extensions at
+ * `currentDir`, or drop them when this install has none. Profiles are shared
+ * between installs (a dev build, a reinstall elsewhere, a moved macOS app), so
+ * an inherited entry may name another install's runtime. Other entries, such
+ * as user-linked plugin directories, are kept in place.
+ */
+export function rebaseRuntimeExtensionLoadPaths(paths: readonly unknown[], currentDir: string | null): unknown[] {
+  const rebased: unknown[] = [];
+  for (const entry of paths) {
+    const owned = typeof entry === 'string' && isRuntimeThirdPartyExtensionsDir(entry);
+    const next = owned ? currentDir : entry;
+    if (owned && next === null) continue;
+    if (currentDir !== null && next === currentDir && rebased.includes(next)) continue;
+    rebased.push(next);
+  }
+  return rebased;
+}
+
 /** Recognize only the managed layouts used before a profile/state-directory move. */
 export function isPreviousManagedPluginPath(options: {
   stateDir: string;
@@ -34,12 +65,23 @@ export function isPreviousManagedPluginPath(options: {
   return false;
 }
 
-/** Probe without following links; permission errors are not evidence of a missing install. */
-export function isMissingUnaliasedPluginPath(installPath: string): boolean {
+function isSameOrAncestorPath(directory: string, target: string): boolean {
+  const relative = path.relative(directory, target);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/**
+ * Probe without following links; permission errors are not evidence of a missing install.
+ * The active state directory and its ancestors are not probed: the running profile
+ * already resolves through any link there, such as macOS /var or a relocated AppData.
+ */
+export function isMissingUnaliasedPluginPath(installPath: string, activeStateDir?: string): boolean {
   const resolved = path.resolve(installPath);
+  const trustedRoot = activeStateDir ? path.resolve(activeStateDir) : undefined;
   let current = path.parse(resolved).root;
   for (const part of resolved.slice(current.length).split(path.sep)) {
     current = path.join(current, part);
+    if (trustedRoot && isSameOrAncestorPath(current, trustedRoot)) continue;
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
