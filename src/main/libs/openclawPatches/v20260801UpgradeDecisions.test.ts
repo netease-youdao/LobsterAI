@@ -35,6 +35,7 @@ const RETAINED_PATCHES = [
   'openclaw-exec-command-description.patch',
   'openclaw-gateway-client-request-traceparent.patch',
   'openclaw-gateway-fast-path-rejection-handler.patch',
+  'openclaw-grouped-skill-catalog.patch',
   'openclaw-heartbeat-cost-isolation.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-inferred-plugin-install-allowlist.patch',

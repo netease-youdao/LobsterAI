@@ -4677,6 +4677,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     const [userContent, managedContent] = fs.readFileSync(agentsMdPath, 'utf8').split(marker);
     expect(userContent).toBe(`# AGENTS.md - Your Workspace\n\n${userSection}\n\n`);
     expect(managedContent).not.toContain('Stale managed section');
+    expect(managedContent.match(/exact filename and path the user requested/g)).toHaveLength(1);
     // Every request carries this file: the Office rules are stated once, not once per format.
     expect(managedContent.match(/^## Editing Existing/gm)).toHaveLength(1);
     expect(managedContent).toContain('`.xlsx`: `excel_read` / `excel_edit`');
