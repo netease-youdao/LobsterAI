@@ -63,7 +63,7 @@ import {
   supportsLobsterAIRequestOptionsV1,
 } from '../../shared/providers/lobsterAIRequestOptions';
 import type { ModelThinkingConfig } from '../../shared/providers/modelThinking';
-import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
+import type { Agent, CoworkConfig } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
 import { DiscordDmPolicy } from '../im/types';
@@ -137,21 +137,9 @@ export type AskUserCallbackConfig = {
   secret: string;
 };
 
-const mapExecutionModeToSandboxMode = (
-  mode: CoworkExecutionMode,
-  isEnterprise: boolean,
-): 'off' | 'non-main' | 'all' => {
-  if (!isEnterprise) return 'off';
-  switch (mode) {
-    case 'sandbox':
-      return 'all';
-    case 'auto':
-      return 'non-main';
-    case 'local':
-    default:
-      return 'off';
-  }
-};
+// Explicit user and enterprise OpenClaw settings are applied after rendering.
+// A legacy Cowork preference alone must not activate the Docker backend.
+const DEFAULT_OPENCLAW_SANDBOX_MODE = 'off';
 
 /**
  * Drop `plugins` keys that OpenClaw owns through its plugin index (currently
@@ -2636,17 +2624,10 @@ export class OpenClawConfigSync {
     const hasModelCompatConfig = Object.keys(finalizedCompatibility.modelProfiles).length > 0
       || Object.keys(finalizedThinkingProfiles).length > 0;
 
-    const sandboxMode = mapExecutionModeToSandboxMode(
-      coworkConfig.executionMode || 'local',
-      this.isEnterprise(),
-    );
     const availableProviders = buildProviderModelCatalog(allProvidersMap);
     const agentModelDefaults = Object.keys(perModelCustomDefaults).length > 0
       ? buildCompleteAgentModelDefaults(allProvidersMap, perModelCustomDefaults)
       : {};
-    console.log(
-      `[OpenClawConfigSync] sandbox mode: ${sandboxMode} (executionMode: ${coworkConfig.executionMode || 'local'}, enterprise: ${this.isEnterprise()})`,
-    );
 
     const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
     const agents = this.getAgents?.() ?? [];
@@ -2825,7 +2806,7 @@ export class OpenClawConfigSync {
             primary: primaryModel,
           },
           sandbox: {
-            mode: sandboxMode,
+            mode: DEFAULT_OPENCLAW_SANDBOX_MODE,
           },
           workspace: path.resolve(mainWorkspacePath),
           bootstrapMaxChars: OPENCLAW_BOOTSTRAP_MAX_CHARS,
@@ -4538,10 +4519,15 @@ export class OpenClawConfigSync {
     const agents = asConfigRecord(mergedConfig.agents);
     const agentDefaults = asConfigRecord(agents?.defaults);
     const compaction = asConfigRecord(agentDefaults?.compaction);
+    const previousSandbox = asConfigRecord(agentDefaults?.sandbox);
     mergedConfig.agents = {
       ...agents,
       defaults: {
         ...agentDefaults,
+        // A removed enterprise package may have supplied the previous mode.
+        ...(previousSandbox?.mode !== undefined ? {
+          sandbox: { ...previousSandbox, mode: DEFAULT_OPENCLAW_SANDBOX_MODE },
+        } : {}),
         compaction: {
           ...compaction,
           memoryFlush: {
