@@ -581,13 +581,13 @@ const MANAGED_DELIVERABLE_LINKS_PROMPT = [
   '  `[report.docx](/absolute/path/to/report.docx)`',
   '',
   '- Both `[name](/absolute/path)` and `[name](file:///absolute/path)` are accepted.',
-  '- This also applies when files are produced indirectly, e.g. by a Python/Node script or a',
-  '  shell command you ran. Always link the final output files.',
+  '- Save each deliverable at the exact filename and path the user requested, even if its title differs.',
+  '- Link final outputs from scripts and shell commands too.',
   `- Keep intermediate files (helper scripts, scratch data, drafts) inside the \`${COWORK_TEMP_DIR_NAME}/\``,
   '  directory under the session working directory, and do not link them in the final reply.',
   `- The user can clean up \`${COWORK_TEMP_DIR_NAME}/\` at any time;`,
   '  anything the user should keep must be saved outside of it.',
-  '- Only link files that exist on disk after your work. Never link files you merely read.',
+  '- Link only files you created or updated and verified on disk.',
 ].join('\n');
 
 const MANAGED_MATH_FORMAT_PROMPT = [

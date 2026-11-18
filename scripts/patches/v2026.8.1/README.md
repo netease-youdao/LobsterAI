@@ -1,5 +1,42 @@
 # OpenClaw v2026.8.1 patch notes
 
+## Compact the model-facing skills catalog
+
+`openclaw-grouped-skill-catalog.patch` renders a second catalog for the
+LobsterAI gateway from the same eligible skills, ordering and character limits as
+the native snapshot. Shared directory roots are listed once. Entries with an
+unusual path or a remote URI retain their exact locator and loading notes.
+Descriptions stay complete when the catalog fits. On overflow the existing
+budget algorithm keeps identities first and allows up to 60 characters per
+description. When distinct descriptions would have the same prefix preview,
+each row keeps its opening and an excerpt around the first difference with its
+closest matching description. Other rows keep their normal prefix preview.
+
+The runtime-only `modelPrompt` travels with the resolved skills across session
+copies. Session persistence strips both fields. Doctor and harnesses that read
+snapshot XML directly retain the native representation. Restored snapshots
+reuse the compact catalog when the rebuilt XML and all skill identities match.
+Credential revocation uses OpenClaw's
+existing filtered snapshot path. Code Mode and the context report read the
+same catalog as the model. The LobsterAI adapter has no hook before OpenClaw
+applies its skill budget. Remove the patch when the runtime provides this
+format at that boundary.
+
+The focused tests run in the patched OpenClaw checkout.
+
+```sh
+node scripts/run-vitest.mjs run src/skills/loading/grouped-skill-catalog.test.ts src/skills/loading/workspace-skill-prompt{,-resolution}.test.ts src/skills/runtime/snapshot-hydration.test.ts
+```
+
+For the desktop filename regression, copy the contents of
+`tests/fixtures/cowork-docx-delivery/input/` into a fresh session directory and
+submit the adjacent `prompt.txt`. From the LobsterAI checkout, grade the file
+the model actually delivered:
+
+```sh
+LOBSTERAI_DOCX_DELIVERY_DIR="$session_dir" npm test -- tests/coworkDocxDelivery.test.ts -t 'delivered memo'
+```
+
 ## Batch missing executable checks during chat metadata refresh
 
 `openclaw-chat-metadata-binary-batch.patch` avoids repeating the same missing
