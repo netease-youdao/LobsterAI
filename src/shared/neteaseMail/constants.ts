@@ -17,6 +17,8 @@ export const NeteaseMailTool = {
   ListDrafts: 'netease_mail_list_drafts',
   CreateDraft: 'netease_mail_create_draft',
   UpdateDraft: 'netease_mail_update_draft',
+  UpdateMessageReadState: 'netease_mail_update_message_read_state',
+  UpdateMessageFlagState: 'netease_mail_update_message_flag_state',
   SendMessage: 'netease_mail_send_message',
   ReplyMessage: 'netease_mail_reply_message',
   ForwardMessage: 'netease_mail_forward_message',
@@ -29,9 +31,21 @@ export const NeteaseMailError = {
   AttachmentSizeMismatch: 40002,
   AttachmentHashMismatch: 40003,
   ConfirmationChanged: 40004,
+  ConfirmationExpired: 40005,
+  AttachmentInvalid: 40006,
+  CursorInvalid: 40007,
+  CursorExpired: 40008,
   Unauthorized: 40101,
   InsufficientScope: 40301,
+  MessageNotFound: 40401,
+  PartNotFound: 40402,
+  IdempotencyConflict: 40901,
+  OperationInProgress: 40902,
+  IdempotencyRecordExpired: 40903,
   OutcomeUnknown: 40904,
+  AttachmentTooLarge: 41301,
+  AttachmentSizeUnknown: 41302,
+  MtaRejected: 42201,
   ConfirmationRequired: 42801,
   RateLimited: 42901,
 } as const;
@@ -63,6 +77,7 @@ export type NeteaseMailAction = typeof NeteaseMailAction[keyof typeof NeteaseMai
 export const NeteaseMailOutcome = { Connected: 'connected', Disconnected: 'disconnected', Submitted: 'submitted', Cancelled: 'cancelled' } as const;
 export type NeteaseMailOutcome = typeof NeteaseMailOutcome[keyof typeof NeteaseMailOutcome];
 export const NeteaseMailOperationStatus = {
+  InProgress: 'in_progress',
   Submitted: 'submitted', Sent: 'sent', Trashed: 'trashed', Cancelled: 'cancelled', Expired: 'expired', Unknown: 'unknown', Failed: 'failed',
 } as const;
 export type NeteaseMailOperationStatus = typeof NeteaseMailOperationStatus[keyof typeof NeteaseMailOperationStatus];

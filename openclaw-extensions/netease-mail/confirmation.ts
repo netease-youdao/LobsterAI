@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
-  failureCode, MAIL_CONFIRMATION_MS, MAIL_FAILURE_CODES, MailAction, MailCode, type MailResult, mailResult, MailStatus, MailTool, payload, record, responseCode, responseData,
+  failureCode, MAIL_CONFIRMATION_MS, MAIL_FAILURE_CODES, MailAction, MailCode, type MailResult, mailResult, MailStatus, MailTool, operationErrorInstruction, operationErrorStatus, payload, record, responseCode, responseData,
 } from './protocol';
 
 interface Pending {
@@ -53,18 +53,20 @@ export class MailConfirmations {
     operation.assertGrant();
     let prepared: Record<string, unknown>;
     try { prepared = payload(await operation.call(operation.tool, args, operation.signal)); }
-    catch (error) { return mailResult({ code: failureCode(error), status: MailStatus.Failed,
-      instruction: 'Mail service unavailable. Do not automatically retry.' }, true); }
+    catch (error) {
+      const code = failureCode(error);
+      return mailResult({ code, status: operationErrorStatus(code), operation_summary: operation.summary,
+        request_id: args.request_id, instruction: operationErrorInstruction(code) }, true);
+    }
     const data = responseData(prepared);
     const code = responseCode(prepared);
     if (code !== MailCode.Confirmation) {
-      // A service that no longer implements prepare/confirm is incompatible.
-      // Do not perform another call, and never assume a write did not happen.
-      const knownFailure = MAIL_FAILURE_CODES.has(code);
-      return mailResult({ ...(knownFailure || code === MailCode.OutcomeUnknown ? { code } : {}), status: knownFailure ? MailStatus.Failed : MailStatus.Unknown,
+      // Only a confirmation challenge permits a second call. Treat an
+      // unrecognized preflight response as ambiguous.
+      return mailResult({ code, status: operationErrorStatus(code),
         operation_summary: operation.summary, request_id: args.request_id,
         operation_id: typeof data.operation_id === 'string' ? data.operation_id : undefined,
-        ...(!knownFailure ? { instruction: 'Outcome unknown. Do not retry or create a new request. Reconcile the original request with the email service.' } : {}) }, true);
+        instruction: operationErrorInstruction(code) }, true);
     }
     const token = data.confirmation_token;
     if (typeof token !== 'string' || !token || !operation.onUpdate) {
@@ -111,22 +113,19 @@ export class MailConfirmations {
         // message_id or proof of delivery. Preserve it and report submission.
         // Return only receipt metadata; unknown or malformed responses after a
         // write must not invite a retry or claim success.
-        return mailResult({ ...(failed || resultCode === MailCode.OutcomeUnknown ? { code: resultCode } : {}), message_id: messageId,
+        return mailResult({ ...(!accepted ? { code: resultCode } : {}), message_id: messageId,
           saved_sent_mid: sendsMail ? savedSentMid : undefined,
           operation_id: typeof resultData.operation_id === 'string' ? resultData.operation_id : undefined,
-          status: failed ? MailStatus.Failed : accepted ? trashesMail ? MailStatus.Trashed : MailStatus.Submitted : MailStatus.Unknown,
+          status: accepted ? trashesMail ? MailStatus.Trashed : MailStatus.Submitted : operationErrorStatus(resultCode),
           ...(accepted ? { instruction: trashesMail
             ? 'The user already clicked the confirmation card and the email service moved this message to Trash. Report that it was moved to Trash, not permanently deleted. No further confirmation or execution is needed. Recovery is available in the email client for 30 days.'
             : 'The user already clicked the confirmation card and the email service accepted the execution. Report that it was submitted. No further approval or send call is needed. Delivery requires separate verification.' } : {}),
-          ...(!failed && !accepted ? { instruction: 'The user already approved and execution was attempted. The outcome is unknown. Do not ask for another confirmation or repeat the operation. Report uncertainty even if a mailbox search is empty.' } : {}),
+          ...(!accepted ? { instruction: operationErrorInstruction(resultCode) } : {}),
           operation_summary: operation.summary, request_id: args.request_id }, failed);
       } catch (error) {
         const code = failureCode(error);
-        if (code !== undefined) return mailResult({ code, status: MailStatus.Failed }, true);
-        return mailResult({ status: MailStatus.Unknown, operation_summary: operation.summary, request_id: args.request_id,
-          instruction: operation.tool === MailTool.Trash
-            ? 'Do not repeat the operation. Check the original folder and Trash or ask the user to verify the outcome.'
-            : 'Do not resend. Check the Sent folder or ask the user to verify the outcome.' }, true);
+        return mailResult({ code, status: operationErrorStatus(code), operation_summary: operation.summary,
+          request_id: args.request_id, instruction: operationErrorInstruction(code) }, true);
       }
     } catch {
       return mailResult({ code: MailCode.Unauthorized, status: MailStatus.Failed, operation_summary: operation.summary }, true);

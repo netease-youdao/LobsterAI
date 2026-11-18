@@ -24,6 +24,7 @@ interface NeteaseMailCardProps {
 const frameClass = 'min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-foreground';
 const buttonClass = 'rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45';
 const operationStatusKeys: Record<NeteaseMailOperationStatus, string> = {
+  [NeteaseMailOperationStatus.InProgress]: 'neteaseMailInProgress',
   [NeteaseMailOperationStatus.Submitted]: 'neteaseMailServerSubmitted',
   [NeteaseMailOperationStatus.Sent]: 'neteaseMailSent',
   [NeteaseMailOperationStatus.Trashed]: 'neteaseMailTrashed',
@@ -142,6 +143,7 @@ function MessageCard({ presentation, actionsAvailable = false, onAction }: Netea
   return <article className={frameClass} aria-label={title} data-netease-mail-card={mode}>
     <MailHeader label={title} />
     {mode === NeteaseMailMessageMode.Draft && <p className="mx-5 mt-3 text-xs text-secondary">{t('neteaseMailDraftSaved')}</p>}
+    {presentation.status === NeteaseMailOperationStatus.InProgress && <p role="status" className="mx-5 mt-3 text-sm text-secondary">{t('neteaseMailInProgressHelp')}</p>}
     {presentation.status === NeteaseMailOperationStatus.Unknown && <p role="alert" className="mx-5 mt-3 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">{t('neteaseMailUnknownHelp')}</p>}
     <div className="px-5 pb-4 pt-3">
       <dl>

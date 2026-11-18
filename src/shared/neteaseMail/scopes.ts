@@ -16,6 +16,9 @@ export function getNeteaseMailNativeTools(scopes: readonly string[]): NeteaseMai
   return [
     ...(scopes.includes(NeteaseMailScope.Read) ? NeteaseMailReadTools : []),
     ...(scopes.includes(NeteaseMailScope.Profile) ? [NeteaseMailTool.GetProfile] : []),
-    ...(scopes.includes(NeteaseMailScope.Compose) ? [NeteaseMailTool.CreateDraft, NeteaseMailTool.UpdateDraft] : []),
+    ...(scopes.includes(NeteaseMailScope.Compose) ? [
+      NeteaseMailTool.CreateDraft, NeteaseMailTool.UpdateDraft,
+      NeteaseMailTool.UpdateMessageReadState, NeteaseMailTool.UpdateMessageFlagState,
+    ] : []),
   ];
 }

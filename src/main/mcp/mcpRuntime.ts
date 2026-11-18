@@ -7,7 +7,7 @@ import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
-import { NeteaseMail, NeteaseMailAuth, NeteaseMailReadTools, NeteaseMailScope } from '../../shared/neteaseMail/constants';
+import { NeteaseMail, NeteaseMailAuth, NeteaseMailScope } from '../../shared/neteaseMail/constants';
 import { getNeteaseMailNativeTools } from '../../shared/neteaseMail/scopes';
 import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
@@ -38,6 +38,7 @@ import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus } from './m
 import { McpLaunchResolverManager } from './mcpLaunchResolverManager';
 import { type McpServerRecord, McpStore } from './mcpStore';
 import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
+import { readNeteaseMailAuthorization } from './neteaseMailAuthorizationState';
 import { getNeteaseMailOAuthConfig } from './neteaseMailConfig';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
@@ -506,11 +507,16 @@ export class McpRuntime {
       } else {
         if (server.registryId === NeteaseMail.RegistryId) {
           const mail = getNeteaseMailOAuthConfig(app.isPackaged);
-          if (mail) resolved.push({
+          if (!mail) continue;
+          // The saved grant, not a tool list frozen by an older app version,
+          // determines which managed tools are available after an upgrade.
+          const grant = readNeteaseMailAuthorization(path.join(app.getPath('userData'), 'openclaw', 'state'), mail.clientId);
+          const tools = getNeteaseMailNativeTools(grant?.scopes ?? [NeteaseMailScope.Read]);
+          // An empty include list would be omitted and expose every remote tool.
+          if (tools.length > 0) resolved.push({
             name: NeteaseMail.RegistryId, transportType: 'http', url: mail.mcpUrl,
             auth: McpAuthMode.OAuth, oauth: { authProfileId: NeteaseMailAuth.ProfileId },
-            toolFilter: { include: getNeteaseMailNativeTools(Object.values(NeteaseMailScope))
-              .filter(tool => new Set<string>(server.toolFilter?.include ?? NeteaseMailReadTools).has(tool)) },
+            toolFilter: { include: tools },
           });
           continue;
         }

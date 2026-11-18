@@ -5,11 +5,43 @@ import {
   NeteaseMailMessageMode, NeteaseMailOperationStatus, NeteaseMailTool, NeteaseMailView,
 } from '../../shared/neteaseMail/constants';
 import type { NeteaseMailMessage } from '../../shared/neteaseMail/types';
-import { getNeteaseMailLimitKeys, getNeteaseMailPresentation, resolveNeteaseMailTool } from './neteaseMailPresentation';
+import { getNeteaseMailErrorKey, getNeteaseMailLimitKeys, getNeteaseMailPresentation, resolveNeteaseMailTool } from './neteaseMailPresentation';
 
 const summary = { from: { name: 'Sender', email: 'sender@example.com' }, to: ['to@example.com'], cc: ['cc@example.com'], bcc: ['bcc@example.com'], subject: 'Review', body: 'Body', attachments: [{ att_id: 'a', filename: 'notes.pdf', size: 1024 }] };
 
 describe('mail result presentation', () => {
+  test.each([
+    [NeteaseMailError.ConfirmationExpired, 'neteaseMailExpired'],
+    [NeteaseMailError.AttachmentInvalid, 'neteaseMailAttachmentInvalid'],
+    [NeteaseMailError.CursorInvalid, 'neteaseMailCursorInvalid'],
+    [NeteaseMailError.CursorExpired, 'neteaseMailCursorExpired'],
+    [NeteaseMailError.MessageNotFound, 'neteaseMailMessageNotFound'],
+    [NeteaseMailError.PartNotFound, 'neteaseMailPartNotFound'],
+    [NeteaseMailError.IdempotencyConflict, 'neteaseMailIdempotencyConflict'],
+    [NeteaseMailError.OperationInProgress, 'neteaseMailInProgressHelp'],
+    [NeteaseMailError.IdempotencyRecordExpired, 'neteaseMailIdempotencyRecordExpired'],
+    [NeteaseMailError.OutcomeUnknown, 'neteaseMailOperationUnknownHelp'],
+    [NeteaseMailError.AttachmentTooLarge, 'neteaseMailAttachmentLimit'],
+    [NeteaseMailError.AttachmentSizeUnknown, 'neteaseMailAttachmentSizeUnknown'],
+    [NeteaseMailError.MtaRejected, 'neteaseMailMtaRejected'],
+  ] as const)('service error %s has a specific notice for native and confirmation tools', (code, key) => {
+    for (const toolName of [NeteaseMailTool.UpdateMessageReadState, NeteaseMailTool.UpdateMessageFlagState, NeteaseMailTool.GetMessage, NeteaseMailTool.ReplyMessage]) {
+      for (const details of [{ error: { code: String(code) } }, { structuredContent: { error: { code } } }]) {
+        expect(getNeteaseMailPresentation({ toolName, details, isError: true })).toEqual({ kind: NeteaseMailView.Notice, code });
+      }
+    }
+    expect(getNeteaseMailErrorKey(code)).toBe(key);
+  });
+
+  test('an executing receipt replaces streaming confirmation and remains distinct from unknown', () => {
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.SendMessage, details: {
+      code: NeteaseMailError.OperationInProgress, data: { confirmation_id: 'old', operation_summary: summary },
+      status: NeteaseMailOperationStatus.InProgress, operation_summary: summary,
+    } })).toMatchObject({ mode: NeteaseMailMessageMode.Result, status: NeteaseMailOperationStatus.InProgress });
+    expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.ReplyMessage, details: {
+      code: NeteaseMailError.MessageNotFound, status: NeteaseMailOperationStatus.Failed, operation_summary: summary,
+    } })).toEqual({ kind: NeteaseMailView.Notice, code: NeteaseMailError.MessageNotFound });
+  });
   test('renders the real nested header schema and millisecond dates without inventing read status', () => {
     const date = Date.parse('2026-11-04T06:00:00Z');
     expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.GetMessage, details: {

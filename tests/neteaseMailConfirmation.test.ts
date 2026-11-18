@@ -197,5 +197,57 @@ test('deployed plugin wire values match the desktop boundary', () => {
   expect(MailScope.Send).toBe(NeteaseMailScope.Send);
   expect(MailForwardMode).toEqual(NeteaseMailForwardMode);
   expect(MailCode.OutcomeUnknown).toBe(NeteaseMailError.OutcomeUnknown);
+  expect(Object.values(MailCode).sort()).toEqual(Object.values(NeteaseMailError).sort());
   expect(manifest.contracts.tools).toEqual([MailTool.Send, MailTool.Reply, MailTool.Forward, MailTool.Trash]);
+});
+
+const serviceErrors = [
+  [MailCode.ConfirmationExpired, MailStatus.Failed],
+  [MailCode.AttachmentInvalid, MailStatus.Failed],
+  [MailCode.CursorInvalid, MailStatus.Failed],
+  [MailCode.CursorExpired, MailStatus.Failed],
+  [MailCode.MessageNotFound, MailStatus.Failed],
+  [MailCode.PartNotFound, MailStatus.Failed],
+  [MailCode.IdempotencyConflict, MailStatus.Failed],
+  [MailCode.OperationInProgress, MailStatus.InProgress],
+  [MailCode.IdempotencyRecordExpired, MailStatus.Failed],
+  [MailCode.OutcomeUnknown, MailStatus.Unknown],
+  [MailCode.AttachmentTooLarge, MailStatus.Failed],
+  [MailCode.AttachmentSizeUnknown, MailStatus.Failed],
+  [MailCode.MtaRejected, MailStatus.Failed],
+  // The partner has not defined this code yet. Never infer non-execution.
+  [99999, MailStatus.Unknown],
+] as const;
+
+test.each(serviceErrors)('service code %s preserves its outcome and IDs during preflight and execution', async (code, status) => {
+  for (const afterApproval of [false, true]) {
+    const f = fixture();
+    const response = { isError: true, structuredContent: { error: {
+      code: String(code), details: { operation_id: 'original-operation' },
+    } } };
+    if (!afterApproval) f.call.mockReset().mockResolvedValue(response);
+    const result = f.pending.execute(f.operation);
+    if (afterApproval) {
+      await vi.waitFor(() => expect(f.onUpdate).toHaveBeenCalledOnce());
+      f.call.mockResolvedValueOnce(response);
+      f.pending.resolve(f.onUpdate.mock.calls[0][0].details.data.confirmation_id, 'call', MailAction.Confirm, 'grant');
+    }
+    const receipt = await result;
+    expect(receipt.details).toMatchObject({ code, status, operation_id: 'original-operation',
+      request_id: f.call.mock.calls[0][1].request_id });
+    expect(f.call).toHaveBeenCalledTimes(afterApproval ? 2 : 1);
+    if (!afterApproval) expect(f.onUpdate).not.toHaveBeenCalled();
+    if (code === MailCode.MessageNotFound) expect(receipt.details.instruction).toContain('Do not retry or reconcile');
+    if (code === MailCode.OperationInProgress) expect(receipt.details.instruction).toContain('original request_id');
+  }
+});
+
+test.each(serviceErrors.slice(0, -1))('thrown service code %s is classified without a retry', async (code, status) => {
+  const f = fixture();
+  const result = f.pending.execute(f.operation);
+  await vi.waitFor(() => expect(f.onUpdate).toHaveBeenCalledOnce());
+  f.call.mockRejectedValueOnce(Object.assign(new Error('service error'), { code: String(code) }));
+  f.pending.resolve(f.onUpdate.mock.calls[0][0].details.data.confirmation_id, 'call', MailAction.Confirm, 'grant');
+  expect((await result).details).toMatchObject({ code, status, request_id: f.call.mock.calls[0][1].request_id });
+  expect(f.call).toHaveBeenCalledTimes(2);
 });

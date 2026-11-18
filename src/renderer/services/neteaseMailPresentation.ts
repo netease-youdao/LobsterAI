@@ -102,7 +102,7 @@ function payloadOf(details: unknown, text?: string): Record<string, unknown> | u
   const data = record(details);
   const structured = record(data?.structuredContent);
   if (structured) return structured;
-  if (data && ('code' in data || 'data' in data || 'status' in data || 'subject' in data || 'message_id' in data || 'draft_message_id' in data || 'draft_id' in data || 'messages' in data || 'header' in data || 'drafts' in data || 'operation_summary' in data)) return data;
+  if (data && ('error' in data || 'code' in data || 'data' in data || 'status' in data || 'subject' in data || 'message_id' in data || 'draft_message_id' in data || 'draft_id' in data || 'messages' in data || 'header' in data || 'drafts' in data || 'operation_summary' in data)) return data;
   // Tool text is a fallback for runtimes that do not forward structuredContent.
   if (!text || text.length > 2_000_000) return undefined;
   try {
@@ -195,8 +195,20 @@ export function getNeteaseMailErrorKey(code: NeteaseMailError | NeteaseMailFailu
     case NeteaseMailError.AttachmentSizeMismatch:
     case NeteaseMailError.AttachmentHashMismatch: return 'neteaseMailAttachmentMismatch';
     case NeteaseMailError.ConfirmationChanged: return 'neteaseMailChanged';
+    case NeteaseMailError.ConfirmationExpired: return 'neteaseMailExpired';
+    case NeteaseMailError.AttachmentInvalid: return 'neteaseMailAttachmentInvalid';
+    case NeteaseMailError.CursorInvalid: return 'neteaseMailCursorInvalid';
+    case NeteaseMailError.CursorExpired: return 'neteaseMailCursorExpired';
     case NeteaseMailError.Unauthorized: return 'neteaseMailUnauthorized';
     case NeteaseMailError.InsufficientScope: return 'neteaseMailInsufficientScope';
+    case NeteaseMailError.MessageNotFound: return 'neteaseMailMessageNotFound';
+    case NeteaseMailError.PartNotFound: return 'neteaseMailPartNotFound';
+    case NeteaseMailError.IdempotencyConflict: return 'neteaseMailIdempotencyConflict';
+    case NeteaseMailError.OperationInProgress: return 'neteaseMailInProgressHelp';
+    case NeteaseMailError.IdempotencyRecordExpired: return 'neteaseMailIdempotencyRecordExpired';
+    case NeteaseMailError.AttachmentTooLarge: return 'neteaseMailAttachmentLimit';
+    case NeteaseMailError.AttachmentSizeUnknown: return 'neteaseMailAttachmentSizeUnknown';
+    case NeteaseMailError.MtaRejected: return 'neteaseMailMtaRejected';
     case NeteaseMailError.RateLimited: return 'neteaseMailRateLimited';
     case NeteaseMailError.OutcomeUnknown: return 'neteaseMailOperationUnknownHelp';
     case NeteaseMailFailure.NotReady: return 'neteaseMailSendPending';
