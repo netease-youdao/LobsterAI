@@ -177,11 +177,14 @@ const normalizeDisplayMath = (content: string): string => {
   });
 };
 
+// Markdown's URI normalization percent-encodes backslashes before link rendering.
+const isWindowsAbsoluteFileHref = (href: string): boolean => /^[A-Za-z]:(?:[\\/]|%5c|%2f)/i.test(href);
+
 export const safeUrlTransform = (url: string): string => {
   const trimmed = url.trim();
   if (!trimmed) return trimmed;
 
-  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+  if (isWindowsAbsoluteFileHref(trimmed)) {
     return trimmed;
   }
 
@@ -200,6 +203,8 @@ export const safeUrlTransform = (url: string): string => {
 
 const getHrefProtocol = (href: string): string | null => {
   const trimmed = href.trim();
+  // A Windows drive letter is a local path, not an external URL scheme.
+  if (isWindowsAbsoluteFileHref(trimmed)) return null;
   const match = trimmed.match(/^([a-z][a-z0-9+.-]*):/i);
   if (!match) return null;
   return match[1].toLowerCase();
@@ -277,7 +282,7 @@ const isLikelyLocalFilePath = (href: string): boolean => {
   if (!href) return false;
   if (/^file:\/\//i.test(href)) return true;
   if (/^localfile:\/\//i.test(href)) return true;
-  if (/^[A-Za-z]:[\\/]/.test(href)) return true;
+  if (isWindowsAbsoluteFileHref(href)) return true;
   if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return true;
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
 
