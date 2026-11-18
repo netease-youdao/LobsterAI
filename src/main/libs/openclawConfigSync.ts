@@ -21,6 +21,10 @@ import {
 import { ComputerUseMcpServerName } from '../../shared/computerUse/constants';
 import { ASK_USER_QUESTION_TOOL_NAME, COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { CoworkErrorModelSource } from '../../shared/cowork/errorDetail';
+import {
+  getStdioCommandValidationMessage,
+  validateStdioCommand,
+} from '../../shared/mcp/stdio';
 import { OpenClawQuestion } from '../../shared/cowork/openclawQuestion';
 import { DECISION_MODEL_PLUGIN_ID } from '../../shared/decisionModel/constants';
 import { WeixinPlugin } from '../../shared/im/weixin';
@@ -1971,7 +1975,14 @@ export function buildOpenClawMcpServers(
     // Only explicitly declared internal gateway env references may expand.
     switch (server.transportType) {
       case 'stdio': {
-        if (server.command) entry.command = escapeOpenClawEnvTemplate(server.command);
+        const stdioValidation = validateStdioCommand(server.command, server.args);
+        if (!stdioValidation.ok) {
+          console.warn(
+            `[OpenClawConfigSync] skipped MCP server "${server.name}" because its stdio command is invalid: ${getStdioCommandValidationMessage(stdioValidation)}`,
+          );
+          continue;
+        }
+        entry.command = escapeOpenClawEnvTemplate(stdioValidation.command);
         if (server.args?.length) entry.args = server.args.map(escapeOpenClawEnvTemplate);
         if (server.cwd) entry.cwd = escapeOpenClawEnvTemplate(server.cwd);
         const env = escapeOpenClawEnvTemplateRecord(server.env ?? {});

@@ -430,15 +430,21 @@ export class McpRuntime {
       ...(server.connectionTimeoutMs ? { connectionTimeoutMs: server.connectionTimeoutMs } : {}),
     });
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
-      const r = await resolveStdioCommand(server);
-      resolved.push({
-        name: server.name,
-        transportType: 'stdio',
-        command: r.command,
-        args: r.args,
-        env: buildMcpShimEnv(r.env),
-        ...passthroughFields(server),
-      });
+      try {
+        const r = await resolveStdioCommand(server);
+        resolved.push({
+          name: server.name,
+          transportType: 'stdio',
+          command: r.command,
+          args: r.args,
+          env: buildMcpShimEnv(r.env),
+          ...passthroughFields(server),
+        });
+      } catch (error) {
+        console.warn(
+          `[MCP] skipped raw stdio server "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     };
 
     for (const server of enabledServers) {

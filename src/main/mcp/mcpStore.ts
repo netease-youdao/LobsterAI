@@ -1,6 +1,10 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
+import {
+  getStdioCommandValidationMessage,
+  validateStdioCommand,
+} from '../../shared/mcp/stdio';
 import { type McpAuthMode, normalizeMcpAuthMode } from '../../shared/mcp/auth';
 import type { McpLaunchResolution } from './mcpLaunchResolution';
 
@@ -129,6 +133,16 @@ interface McpLaunchResolutionRow {
   last_probe_at: number | null;
   last_probe_status: string | null;
   updated_at: number;
+}
+
+function assertValidStdioConfig(
+  data: Pick<McpServerFormData, 'transportType' | 'command' | 'args'>,
+): void {
+  if (data.transportType !== 'stdio') return;
+  const validation = validateStdioCommand(data.command, data.args);
+  if (!validation.ok) {
+    throw new Error(getStdioCommandValidationMessage(validation));
+  }
 }
 
 export class McpStore {
@@ -334,6 +348,7 @@ export class McpStore {
     const id = crypto.randomUUID();
     const now = Date.now();
     const normalized = this.normalizeTransportConfig(data);
+    assertValidStdioConfig(normalized);
     const configJson = this.serializeConfig(normalized);
 
     this.db
@@ -375,6 +390,7 @@ export class McpStore {
       registryId: data.registryId !== undefined ? data.registryId : existing.registryId,
     });
 
+    assertValidStdioConfig(merged);
     const configJson = this.serializeConfig(merged);
 
     this.db
@@ -412,6 +428,16 @@ export class McpStore {
         'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers WHERE enabled = 1 ORDER BY created_at ASC',
       )
       .all() as McpServerRow[];
-    return rows.map((row) => this.deserializeRow(row));
+    return rows
+      .map((row) => this.deserializeRow(row))
+      .filter(server => {
+        if (server.transportType !== 'stdio') return true;
+        const validation = validateStdioCommand(server.command, server.args);
+        if (validation.ok) return true;
+        console.warn(
+          `[McpStore] skipped enabled stdio MCP server "${server.name}" because its command is invalid: ${getStdioCommandValidationMessage(validation)}`,
+        );
+        return false;
+      });
   }
 }

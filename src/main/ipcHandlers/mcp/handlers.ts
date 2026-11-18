@@ -12,6 +12,10 @@ import {
 } from '../../../shared/mcp/auth';
 import { McpIpcChannel } from '../../../shared/mcp/constants';
 import {
+  getStdioCommandValidationMessage,
+  validateStdioCommand,
+} from '../../../shared/mcp/stdio';
+import {
   McpToolDiscoveryErrorCode,
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
@@ -137,6 +141,13 @@ const sessionFetch: FetchLike = (url, init) =>
   session.defaultSession.fetch(url instanceof URL ? url.href : url, init);
 
 function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpServerFormData> {
+  if (data.command !== undefined && (data.transportType === 'stdio' || data.transportType === undefined)) {
+    const validation = validateStdioCommand(data.command, data.args);
+    if (!validation.ok) {
+      throw new Error(getStdioCommandValidationMessage(validation));
+    }
+  }
+
   if (
     (data.transportType === 'sse' || data.transportType === 'http')
     && data.url !== undefined
