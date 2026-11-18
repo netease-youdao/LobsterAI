@@ -11,6 +11,8 @@ import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
 /** Admin-configured tag shown next to a server model's name. */
 export interface ModelCustomTag {
   text: string;
+  /** English text; English UIs fall back to the icon (or text) when absent. */
+  textEn?: string;
   iconUrl?: string;
   /** #RRGGBB; the selector falls back to its default tag color. */
   color?: string;
