@@ -2846,16 +2846,25 @@ const getCoworkStore = () => {
   return coworkStore;
 };
 
-let agentManager: AgentManager | null = null;
-const getAgentManager = () => {
-  if (!agentManager) {
-    const expertStore = new ExpertStore({
+let remoteBridge: RemoteBridge | null = null;
+let expertStore: ExpertStore | null = null;
+const getExpertStore = (): ExpertStore => {
+  if (!expertStore) {
+    expertStore = new ExpertStore({
       getEndpoint: getExpertStoreUrl,
       cacheDirectory: path.join(app.getPath('userData'), 'expert-store'),
+      onRemoteAvatarKeysChanged: () => remoteBridge?.agentCatalogChanged(),
       onLoad: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
         schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.CatalogRefresh, ...fields }); },
     });
-    agentManager = new AgentManager(getCoworkStore(), () => expertStore.getCatalog(), () => getCoworkStore().remoteCreationOwner());
+  }
+  return expertStore;
+};
+
+let agentManager: AgentManager | null = null;
+const getAgentManager = () => {
+  if (!agentManager) {
+    agentManager = new AgentManager(getCoworkStore(), () => getExpertStore().getCatalog(), () => getCoworkStore().remoteCreationOwner());
   }
   return agentManager;
 };
@@ -6164,7 +6173,6 @@ if (!gotTheLock) {
 
   // ── Auth IPC handlers ──
 
-  let remoteBridge: RemoteBridge | null = null;
   remoteAgentSettingsAvailable = () => remoteBridge?.agentSettingsProtocol()?.available() === true;
   let remoteTelemetryRuntime: ReturnType<typeof initializeRemoteTelemetry> | null = null;
   prepareRemoteFileRun = async (sessionId, cwd) => {
@@ -6681,6 +6689,10 @@ if (!gotTheLock) {
         } catch { return { modelRef: null, modelVersion: null, thinkingLevel: null }; }
       },
       agentOwnership: getCoworkStore().agentOwnership,
+      expertAvatars: {
+        getEndpoint: getExpertStoreUrl,
+        resolveIcon: url => getExpertStore().getRemoteAvatarKeys()?.get(url) ?? null,
+      },
       registrationIdentities: new RemoteRegistrationIdentityStore(app.getPath('appData'), app.getPath('userData'), safeStorage, identity),
       store: getCoworkStore().remote, identity, getOwner: getCurrentRemoteOwner, getDisplayOwner: () => remoteDisplayOwner, getApiBaseUrl: getServerApiBaseUrl,
       getRouteEpoch: getRemoteRouteEpoch,

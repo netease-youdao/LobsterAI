@@ -7,6 +7,7 @@ import os from 'os';
 import path from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { RemoteExpertAvatar } from '../../shared/agent/avatar';
 import { initializeLibraryTables } from '../library/libraryMigrations';
 import { RemoteImportSnapshots } from './remoteImportSnapshots';
 import { isTransientProjectionFailure, RemoteProjectionFailure } from './remoteProjectionCoordinator';
@@ -51,6 +52,26 @@ function addArtifact(db: Database.Database, id: string, sessionId: string, messa
 }
 
 describe('desktop core and remote projection isolation', () => {
+  it('preserves dirty work when an Agent changes before the history worker opens its snapshot', async () => {
+    const f = fixture();
+    const agent = { agentId: 'owned', name: 'Expert', kind: 'owned' as const, state: 'available' as const,
+      version: '1', icon: null as string | null };
+    f.store.setAgentSummaryResolver(() => ({ ...agent }));
+    const capture = f.store.nextProjectionWork.bind(f.store);
+    vi.spyOn(f.store, 'nextProjectionWork').mockImplementationOnce(() => {
+      const work = capture();
+      expect(work?.agent?.version).toBe('1');
+      agent.version = '2';
+      agent.icon = RemoteExpertAvatar.Default;
+      f.db.prepare("UPDATE remote_session_revisions SET revision=revision+1 WHERE session_id='task'").run();
+      return work;
+    });
+    await f.store.flushProjections();
+    expect(f.store.sync('task')?.source_seq).toBe(0);
+    expect(f.db.prepare("SELECT 1 FROM remote_dirty WHERE session_id='task'").get()).toBeDefined();
+    await f.store.flushProjections();
+    expect(f.store.snapshot('task').records.find(record => record.eventType === 'session.upsert')?.payload.session.agent).toEqual(agent);
+  });
   it('treats only known context and worker cancellation failures as retryable', () => {
     expect(isTransientProjectionFailure(RemoteProjectionFailure.ContextChanged)).toBe(true);
     expect(isTransientProjectionFailure(RemoteProjectionFailure.WorkerExit)).toBe(true);

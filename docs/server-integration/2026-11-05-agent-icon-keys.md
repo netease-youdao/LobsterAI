@@ -1,5 +1,7 @@
 # Agent 内置头像标识接入（2026-11-05）
 
+2026-11-18 起，新版桌面在 Agent 目录和会话摘要中发布已安装专家的图片键 `expert_url_v1_<sha256>` 或默认键 `expert_default_v1`。手机通过已校验的同环境专家目录解析图片。下文记录 11 月 5 日内置 SVG 协议。专家图片的请求、回退和联调规则见服务端仓库的 `docs/integration/2026-11-18-expert-agent-sync.md`。
+
 ## 变更摘要
 
 远控 Agent 目录与会话摘要的既有 `icon: string | null` 支持桌面原始内置标识，例如 `agent-avatar-svg:code`。App 内置同一套资源，以完整字符串查表即可显示。沿用原字段，不新增 URL、资源服务或服务端数据库结构；本轮不修改手机 App 源码，专家 CDN 图片继续为 null，由 App 默认头像兜底。此前模型 `modelId` 变更独立保留。

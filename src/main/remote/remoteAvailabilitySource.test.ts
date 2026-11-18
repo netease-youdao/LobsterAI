@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, test } from 'vitest';
 
+import { RemoteExpertAvatar } from '../../shared/agent/avatar';
+import { RemoteAgentState } from '../../shared/remote/constants';
 import { availabilityControlSnapshot } from './remoteAvailabilitySource';
 import { RemoteStore } from './remoteStore';
 
@@ -19,6 +21,40 @@ function fixture() {
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
 describe('target-scoped control facts', () => {
+  test('bounds the escaped preview for expert session snapshots and preserves sealed and legacy facts', () => {
+    const { db, store } = fixture();
+    // A protocol-valid error at the 1000-byte desktop limit expands to 6000 bytes as JSON.
+    store.put('run:task', { runId: 'run', status: 'failed', statusVersion: '1', startedAt: null, finishedAt: null,
+      error: { code: 1, reason: 'FAILED', message: '\u0001'.repeat(1000), retryable: false, retryAfterMs: null, reasonDetail: null } });
+    const text = '\u0002🦞'.repeat(1024);
+    store.transaction(() => db.prepare("INSERT INTO cowork_messages VALUES('m','task','user',?,NULL,1,1)").run(text));
+    let icon: string | null = null;
+    store.setAgentSummaryResolver(() => ({ agentId: 'preset', name: 'Expert', kind: 'owned', version: '1',
+      state: RemoteAgentState.Available, icon }));
+    const getControl = () => availabilityControlSnapshot(store, 'task').records[0].payload.session;
+    const getHistory = () => {
+      store.project('task');
+      return store.pending('task').filter(event => event.eventType === 'session.upsert').at(-1)!.payload.session;
+    };
+    const bytes = (summary: Record<string, unknown>) => Buffer.byteLength(JSON.stringify({ ...summary, deviceId: 'd'.repeat(64) }));
+    const oldControl = getControl(), oldHistory = getHistory();
+    expect(bytes(oldHistory)).toBeGreaterThan(8192);
+    for (const expertIcon of [RemoteExpertAvatar.Default, RemoteExpertAvatar.UrlPrefix + 'a'.repeat(64)]) {
+      icon = expertIcon;
+      const histories = [getControl(), getHistory()];
+      for (const [index, old] of [oldControl, oldHistory].entries()) {
+        const current = histories[index];
+        expect(bytes(current)).toBeLessThanOrEqual(8192);
+        expect(current.preview.length).toBeLessThan(old.preview.length);
+        expect(text.startsWith(current.preview)).toBe(true);
+        expect(/[\uD800-\uDBFF]$/u.test(current.preview)).toBe(false);
+        expect({ ...current, preview: '', agent: null }).toEqual({ ...old, preview: '', agent: null });
+        expect(current.agent.icon).toBe(expertIcon);
+      }
+    }
+    expect(store.pending('task').filter(event => event.eventType === 'session.upsert')[0].payload.session).toEqual(oldHistory);
+  });
+
   test('ignores valid foreign runs and decisions before checking required current evidence', () => {
     const { store } = fixture();
     store.put('syncTargetHistory:task', { targetId: 'target-a', runIds: ['foreign-run'] });

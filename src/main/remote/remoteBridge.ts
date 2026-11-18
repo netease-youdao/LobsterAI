@@ -26,7 +26,7 @@ import type { PublicationTarget } from '../ownershipPublication';
 import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
 import { type InputPreparationService,RemoteAttachmentError } from './inputPreparationService';
 import type { RemoteIdentity } from './installationIdentity';
-import { type AgentWorkspace,RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
+import { type AgentWorkspace, RemoteAgentCatalog, RemoteAgentError, type RemoteExpertAvatars } from './remoteAgentCatalog';
 import type { RemoteAgentSettingsConnection } from './remoteAgentSettingsAccess';
 import { type RemoteAgentSettingsDependencies,RemoteAgentSettingsProtocol } from './remoteAgentSettingsProtocol';
 import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
@@ -99,6 +99,7 @@ export interface BridgeDependencies {
   input?: { models: RemoteModelCatalog; preparations: InputPreparationService; refreshSessionModel?(sessionId: string): void };
   files?: Pick<RemoteFileSyncDependencies, 'cacheRoot' | 'access' | 'recordArtifact'>;
   getAgentDefaultInput?(owner: RemoteOwner, deviceId: string, agentId: string): RemoteAgentCatalogItem['defaultInput'];
+  expertAvatars?: RemoteExpertAvatars;
   store: RemoteStore; identity: RemoteIdentity;
   /** Session creation and inbox persistence share the outer commit/notification boundary. */
   runSessionTransaction<T>(operation: () => T): T;
@@ -230,6 +231,7 @@ export class RemoteBridge {
   private agentCatalogRevision = 0;
   private publishedCatalogRevision = -1;
   private lastAgentCatalogCheck = 0;
+  private nextAgentSummaryCheck = 0;
   private lastCatalogConnection: string | null = null;
   private agentLimits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES };
   private lastCapabilityCheck = 0;
@@ -413,8 +415,14 @@ export class RemoteBridge {
     deps.store.setWake((urgent?: boolean) => { this.availability.wake(); this.schedule(urgent || this.shuttingDown ? 0 : this.replySupported ? REMOTE_REPLY_SYNC_DELAY_MS : 1000); });
     this.agentCatalog = deps.agentOwnership && deps.getAgentWorkspace ? new RemoteAgentCatalog(deps.store, deps.agentOwnership, deps.getAgentWorkspace,
       (owner, deviceId, agentId) => this.inputCapabilities.includes(RemoteInputCapability.Schema) ? deps.getAgentDefaultInput?.(owner, deviceId, agentId) : undefined,
-      () => this.getSyncTargetId()) : null;
-    deps.agentOwnership?.subscribe(() => { this.agentCatalogRevision++; this.schedule(300); });
+      () => this.accountRoute === deps.getApiBaseUrl() && this.accountRouteEpoch === (deps.getRouteEpoch?.() ?? 0)
+        ? this.getSyncTargetId() : null, deps.expertAvatars) : null;
+    deps.agentOwnership?.subscribe(() => this.agentCatalogChanged());
+  }
+  agentCatalogChanged(): void {
+    this.agentCatalogRevision++;
+    this.nextAgentSummaryCheck = 0;
+    this.schedule(300);
   }
   telemetryIdentity(): { ready: boolean; targetId: string | null; dataSpaceId?: string; dataGeneration?: string; connectionAttemptId: string } {
     const target = this.registration?.syncTarget ?? this.discoveredTarget;
@@ -1002,6 +1010,13 @@ export class RemoteBridge {
     const current = (): boolean => targetId === this.targetId && !this.stopped && accountGeneration === this.accountGeneration && connection === this.generation
       && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner());
     const work = (async (): Promise<void> => {
+      // A server may support session summaries while its selectable Agent catalog is disabled.
+      if (this.deps.expertAvatars && this.agentCatalog && targetId && current()
+        && this.agentCapabilities.includes(RemoteCapability.SessionAgent) && !this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
+        && Date.now() >= this.nextAgentSummaryCheck) {
+        this.nextAgentSummaryCheck = Date.now() + CATALOG_RECHECK_MS;
+        this.agentCatalog.refreshSummaries(owner);
+      }
       if (this.generation && this.agentCatalog && this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
         && Date.now() >= this.agentCatalogRetryAt
         && (this.agentCatalogRevision !== this.publishedCatalogRevision || this.lastCatalogConnection !== this.generation || Date.now() - this.lastAgentCatalogCheck > CATALOG_RECHECK_MS)) {

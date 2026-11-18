@@ -996,6 +996,29 @@ describe('temporary rollout unavailability', () => {
 });
 
 describe('Agent protocol negotiation and lost claim recovery', () => {
+  it('refreshes historical Agent avatars after the plaza loads with only session summary support', async () => {
+    const { bridge, requestApi } = fixture();
+    bridge.stopped = false;
+    bridge.targetId = 'target-a';
+    bridge.agentCapabilities = [RemoteCapability.SessionAgent];
+    bridge.deps.expertAvatars = { getEndpoint: () => 'test', resolveIcon: () => null };
+    const refreshSummaries = vi.fn();
+    bridge.agentCatalog = { refreshSummaries };
+    vi.spyOn(bridge, 'schedule').mockImplementation(() => undefined);
+    const publish = async () => {
+      bridge.startOptionalPublications(owner, bridge.accountGeneration);
+      await bridge.optionalPublishWork;
+    };
+    await publish();
+    await publish();
+    expect(refreshSummaries).toHaveBeenCalledTimes(1);
+    bridge.agentCatalogChanged();
+    await publish();
+    expect(refreshSummaries).toHaveBeenCalledTimes(2);
+    expect(refreshSummaries).toHaveBeenLastCalledWith(owner);
+    expect(requestApi).not.toHaveBeenCalled();
+    bridge.stop();
+  });
   it('declares selection before the first catalog is ready and preserves protocol support when admission flags close', async () => {
     const { bridge, store, requestApi } = fixture();
     let capabilities = [RemoteCapability.SameAccountAccess, RemoteCapability.SessionAgent, RemoteCapability.AgentCatalog, RemoteCapability.AgentSelection];

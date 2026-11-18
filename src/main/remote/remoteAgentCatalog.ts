@@ -2,8 +2,9 @@ import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 import { resolve } from 'path';
 
-import { parseAgentAvatarIcon } from '../../shared/agent/avatar';
-import { AgentId, AgentOwnerKind } from '../../shared/agent/constants';
+import { isRemoteExpertImageKey, parseAgentAvatarIcon, RemoteExpertAvatar } from '../../shared/agent/avatar';
+import { AgentId, AgentOwnerKind, AgentSource } from '../../shared/agent/constants';
+import { usesManagedPresetAvatar } from '../../shared/agent/presetAvatar';
 import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, type RemoteAgentCatalogItem, RemoteAgentReason, RemoteAgentState, type RemoteAgentSummary, type RemoteOwner } from '../../shared/remote/constants';
 import type { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash, sameOwner } from './canonical';
@@ -12,12 +13,22 @@ import type { RemoteStore } from './remoteStore';
 import { SyncTelemetry } from './remoteSyncTelemetry';
 import { captureRemoteTelemetry } from './remoteTelemetry';
 
-interface AgentRow { id: string; name: string; icon: string; enabled: number }
-interface IconProjection { sourceIcon: string | null; icon: string | null; version: string; supported: boolean }
+interface AgentRow {
+  id: string; name: string; icon: string; enabled: number;
+  source?: AgentSource; presetId?: string; iconCustomized?: number | null;
+}
+interface IconProjection {
+  sourceIcon: string | null; icon: string | null; version: string; supported: boolean;
+  expertIcon?: string; registeredUrl?: string; registeredEndpoint?: string; useLegacyIcon?: boolean;
+}
 interface WorkspaceBinding { agentId: string; workspaceId: string; path: string; available: boolean }
 interface Publication { publicationId: string; expectedCatalogVersion: string; items: RemoteAgentCatalogItem[] }
 const AGENT_VERSION_CONFLICT = 47029;
 interface CatalogState { catalogVersion: string; syncedHash: string | null; syncedItems?: RemoteAgentCatalogItem[]; pending: Publication | null }
+export interface RemoteExpertAvatars {
+  getEndpoint(): string;
+  resolveIcon(sourceUrl: string): string | null;
+}
 export interface AgentWorkspace { path: string; name: string; available?: boolean }
 export class RemoteAgentError extends Error {
   constructor(readonly code: number, readonly reason: string, readonly reasonDetail: string) { super(reason); }
@@ -26,8 +37,10 @@ const safeName = (name: string): string => Array.from(name.replace(/[\u0000-\u00
 const emojiBase = (cp: number): boolean => cp >= 0x1f000 && cp <= 0x1faff || cp >= 0x2190 && cp <= 0x23ff
   || cp >= 0x2600 && cp <= 0x27bf || cp >= 0x2b00 && cp <= 0x2bff
   || [0xa9, 0xae, 0x20e3, 0x2122, 0x2139, 0x3030, 0x303d, 0x3297, 0x3299].includes(cp);
+const reservedExpertIcon = (icon: string | null | undefined): boolean =>
+  !!icon && (icon === RemoteExpertAvatar.Default || isRemoteExpertImageKey(icon));
 const safeIcon = (icon: string, iconKeysSupported = false): string | null => {
-  if (!icon || Buffer.byteLength(icon) > 128) return null;
+  if (!icon || Buffer.byteLength(icon) > 128 || reservedExpertIcon(icon)) return null;
   if (iconKeysSupported && parseAgentAvatarIcon(icon) && icon === icon.trim()) return icon;
   if (/^[A-Za-z0-9_-]+$/u.test(icon)) return icon;
   const points = Array.from(icon, char => char.codePointAt(0)!);
@@ -43,7 +56,8 @@ export class RemoteAgentCatalog {
   constructor(private readonly store: RemoteStore, private readonly ownership: AgentOwnerStore,
     private readonly getWorkspace: (agentId: string) => Promise<AgentWorkspace> | AgentWorkspace,
     private readonly getDefaultInput?: (owner: RemoteOwner, deviceId: string, agentId: string) => RemoteAgentCatalogItem['defaultInput'],
-    private readonly getTargetId?: () => string | null) {}
+    private readonly getTargetId?: () => string | null,
+    private readonly expertAvatars?: RemoteExpertAvatars) {}
   reset(): void { this.operationEpoch++; this.iconContext = null; }
   private targetId(): string | undefined {
     const targetId = this.getTargetId?.();
@@ -57,7 +71,26 @@ export class RemoteAgentCatalog {
     const targetId = this.getTargetId?.();
     return !this.getTargetId || !!targetId && remotePublicationAllowed(this.store.db, RemotePublicationKind.Agent, agentId, owner, targetId);
   }
-  private row(agentId: string): AgentRow | undefined { return this.store.db.prepare('SELECT id,name,icon,enabled FROM agents WHERE id=?').get(agentId) as AgentRow | undefined; }
+  private row(agentId: string): AgentRow | undefined {
+    const columns = this.expertAvatars ? ',source,preset_id AS presetId,icon_customized AS iconCustomized' : '';
+    return this.store.db.prepare(`SELECT id,name,icon,enabled${columns} FROM agents WHERE id=?`).get(agentId) as AgentRow | undefined;
+  }
+  private iconProjectionKey(actor: RemoteOwner, agentId: string): string {
+    return `agentIconProjection:${this.scope([actor.userId, actor.scopeKey, agentId])}`;
+  }
+  private expertProjection(row: AgentRow, previous: IconProjection | null): Pick<IconProjection, 'expertIcon' | 'registeredUrl' | 'registeredEndpoint'> {
+    if (!this.expertAvatars || row.id === AgentId.Main || row.source !== AgentSource.Preset) return {};
+    const url = row.icon?.trim() ?? '';
+    const endpoint = this.expertAvatars.getEndpoint();
+    const registered = this.expertAvatars.resolveIcon(url);
+    if (registered && isRemoteExpertImageKey(registered)) return { expertIcon: registered, registeredUrl: url, registeredEndpoint: endpoint };
+    // Offline or delisted: retain proof only for the very same installed source and target.
+    if (url && previous?.registeredEndpoint === endpoint && previous.registeredUrl === url && previous.expertIcon && isRemoteExpertImageKey(previous.expertIcon)) {
+      return { expertIcon: previous.expertIcon, registeredUrl: url, registeredEndpoint: endpoint };
+    }
+    return usesManagedPresetAvatar({ ...row, iconCustomized: row.iconCustomized == null ? undefined : Boolean(row.iconCustomized) })
+      ? { expertIcon: RemoteExpertAvatar.Default } : {};
+  }
   summary(sessionId: string, actor: RemoteOwner): RemoteAgentSummary | null {
     if (!sameOwner(this.store.owner(sessionId), actor)) return null;
     const session = this.store.db.prepare('SELECT agent_id FROM cowork_sessions WHERE id=?').get(sessionId) as { agent_id: string } | undefined;
@@ -71,10 +104,13 @@ export class RemoteAgentCatalog {
     const previous = this.iconContext;
     this.iconContext = { key, supported };
     try {
-      this.ownership.transaction(() => {
-        for (const identity of this.ownership.list()) this.agentSummary(identity.agentId, actor);
-      });
+      this.refreshSummaries(actor);
     } catch (error) { this.iconContext = previous; throw error; }
+  }
+  refreshSummaries(actor: RemoteOwner): void {
+    this.ownership.transaction(() => {
+      for (const identity of this.ownership.list()) this.agentSummary(identity.agentId, actor);
+    });
   }
   private agentSummary(agentId: string, actor: RemoteOwner): RemoteAgentSummary | null {
     if (!this.canPublishHere(agentId, actor)) return null;
@@ -84,28 +120,37 @@ export class RemoteAgentCatalog {
     const row = this.row(agentId);
     const cached = this.store.get<RemoteAgentSummary>(`agentSummary:${agentId}`);
     if (!row && !cached) return null;
-    const projectionKey = `agentIconProjection:${this.scope([actor.userId, actor.scopeKey, agentId])}`;
+    const projectionKey = this.iconProjectionKey(actor, agentId);
     const previous = this.store.get<IconProjection>(projectionKey);
     const context = this.iconContext?.key === this.scope([actor.userId, actor.scopeKey]) ? this.iconContext : null;
     // Unknown negotiation state retains this target's last confirmed format; reset is not a downgrade.
     const supported = context?.supported ?? previous?.supported ?? false;
     // A newer legacy cache may represent an avatar edit made by an older desktop binary.
-    const cachedSource = previous && (!cached || BigInt(previous.version) >= BigInt(cached.version))
-      ? previous.sourceIcon : cached?.icon;
+    const latestScoped = previous && (!cached || BigInt(previous.version) >= BigInt(cached.version));
+    const cachedSource = latestScoped ? previous.sourceIcon : cached?.icon;
     const sourceIcon = safeIcon((row ? row.icon : cachedSource) ?? '', true);
-    const icon = !context && !previous && cached?.version === identity.version
-      ? cached.icon : safeIcon(sourceIcon ?? '', supported);
+    const legacyIcon = safeIcon(sourceIcon ?? '', supported);
+    let expert: Pick<IconProjection, 'expertIcon' | 'registeredUrl' | 'registeredEndpoint'> = {};
+    if (row && (context || previous)) expert = this.expertProjection(row, previous);
+    else if (!row && latestScoped && previous.expertIcon === RemoteExpertAvatar.Default) expert = { expertIcon: previous.expertIcon };
+    else if (!row && latestScoped && previous.expertIcon && previous.registeredUrl && previous.registeredEndpoint
+      && previous.registeredEndpoint === this.expertAvatars?.getEndpoint() && isRemoteExpertImageKey(previous.expertIcon)) {
+      expert = { expertIcon: previous.expertIcon, registeredUrl: previous.registeredUrl, registeredEndpoint: previous.registeredEndpoint };
+    }
+    const useLegacyIcon = previous?.useLegacyIcon === true;
+    let icon = useLegacyIcon ? legacyIcon : expert.expertIcon ?? legacyIcon;
+    if (!context && !previous && cached?.version === identity.version && !reservedExpertIcon(cached.icon)) icon = cached.icon;
     let version = identity.version;
     const kind = identity.ownerKind;
     return this.ownership.transaction(() => {
-      if (context || previous) {
+      if (context || previous || reservedExpertIcon(cached?.icon)) {
         if ([previous, cached].some(prior => prior && prior.version === version && prior.icon !== icon)
-          || !previous && !cached && supported && sourceIcon !== safeIcon(sourceIcon ?? '')) {
+          || !previous && !cached && icon !== safeIcon(sourceIcon ?? '')) {
           // Include tombstones only for display migration; ownership and deletion state stay unchanged.
           this.ownership.touch(agentId, true);
           version = this.ownership.get(agentId)!.version;
         }
-        this.store.put(projectionKey, { sourceIcon, icon, version, supported });
+        this.store.put(projectionKey, { sourceIcon, icon, version, supported, ...expert, ...(useLegacyIcon ? { useLegacyIcon } : {}) });
       }
       const summary: RemoteAgentSummary = row
         ? { agentId, name: safeName(row.name), icon, kind, version,
@@ -156,6 +201,40 @@ export class RemoteAgentCatalog {
         unavailableReason: !row.enabled ? RemoteAgentReason.Disabled : !available ? RemoteAgentReason.WorkspaceUnavailable : null });
     }
     return items.sort((a, b) => a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0);
+  }
+  /** Choose one display per Agent before sealing. A budget downgrade must also reach its sessions. */
+  private fitExpertIcons(owner: RemoteOwner, publication: Publication, generation: string, maxBytes: number): void {
+    const size = (items: RemoteAgentCatalogItem[]) =>
+      Buffer.byteLength(JSON.stringify({ ...publication, items, connectionGeneration: generation }));
+    const projections = new Map<string, IconProjection>();
+    if (this.expertAvatars) for (const item of publication.items) {
+      const projection = this.store.get<IconProjection>(this.iconProjectionKey(owner, item.agentId));
+      if (projection?.expertIcon) projections.set(item.agentId, projection);
+    }
+    const preview = (useLegacy: boolean) => publication.items.map(item => {
+      const projection = projections.get(item.agentId);
+      if (!projection) return item;
+      if (projection.version !== item.version) throw new Error('Agent changed while sizing the catalog');
+      const icon = useLegacy ? safeIcon(projection.sourceIcon ?? '', projection.supported) : projection.expertIcon!;
+      return icon === item.icon ? item : { ...item, icon, version: String(BigInt(item.version) + 1n) };
+    });
+    let chosen = preview(false);
+    const useLegacy = size(chosen) > maxBytes;
+    if (useLegacy) {
+      chosen = preview(true);
+      if (size(chosen) > maxBytes) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+    }
+    const changes = chosen.filter((item, index) => item !== publication.items[index]);
+    if (!changes.length) return;
+    this.ownership.transaction(() => {
+      for (const item of changes) {
+        const key = this.iconProjectionKey(owner, item.agentId);
+        this.store.put(key, { ...projections.get(item.agentId)!, useLegacyIcon: useLegacy });
+        const summary = this.agentSummary(item.agentId, owner);
+        if (summary?.icon !== item.icon || summary?.version !== item.version) throw new Error('Agent changed while sizing the catalog');
+      }
+    });
+    publication.items = chosen;
   }
   resolve(owner: RemoteOwner, deviceId: string, agentId: string, version: string, workspaceId: string): string {
     if (!this.ownership.canPublish(agentId, owner) || !this.canPublishHere(agentId, owner)) throw remoteAgentFailure('NOT_SELECTABLE');
@@ -231,16 +310,18 @@ export class RemoteAgentCatalog {
       this.store.put(key, state);
     } else if (!state.pending) state.catalogVersion = current.catalogVersion;
     if (!state.pending) {
-      const items = await this.refresh(owner, deviceId, isCurrent, canPublishAgent);
+      const publication = { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion,
+        items: await this.refresh(owner, deviceId, isCurrent, canPublishAgent) };
       if (!isCurrent()) throw new Error('Account changed');
-      if (items.length > limits.items || !items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+      if (publication.items.length > limits.items || !publication.items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+      this.fitExpertIcons(owner, publication, generation, limits.bytes);
+      const items = publication.items;
       if (state.syncedHash === payloadHash(items) && current.syncStatus === 'ready' && payloadHash(current.items) === state.syncedHash) {
         this.store.put(key, { ...state, syncedItems: items });
         telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Skipped, recordCount: items.length });
         return;
       }
-      state.pending = { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion, items };
-      if (Buffer.byteLength(JSON.stringify({ ...state.pending, connectionGeneration: generation })) > limits.bytes) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+      state.pending = publication;
       this.store.put(key, state);
       telemetry.emit(SyncTelemetry.Event.Sealed, { operationId: state.pending.publicationId, stage: SyncTelemetry.Stage.Sealed,
         phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, businessStatus: 'pending', recordCount: items.length });

@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import https from 'node:https';
 import path from 'node:path';
 
+import { parseAgentAvatarImageUrl, RemoteExpertAvatar } from '../../shared/agent/avatar';
 import { parseExpertCatalog, parseExpertStoreManifest } from '../../shared/agent/expertCatalogValidation';
 import type { ExpertCatalog, ExpertStoreManifest } from '../../shared/agent/presets';
 import { usageFailureCode, type UsageParams } from '../../shared/analytics/usage';
@@ -51,11 +52,13 @@ interface ExpertStoreOptions {
   fetchText?: typeof fetchExpertStoreText;
   now?: () => number;
   onLoad?: (fields: UsageParams) => void;
+  onRemoteAvatarKeysChanged?: () => void;
 }
 
 interface StoreEntry {
   cached?: CachedCatalog;
   catalog?: ExpertCatalog;
+  avatarKeys?: ReadonlyMap<string, string>;
   refreshAfter: number;
   pending?: Promise<ExpertCatalog>;
 }
@@ -68,6 +71,26 @@ function validateContent(manifest: ExpertStoreManifest, content: string): Expert
   const catalog = parseExpertCatalog(JSON.parse(content));
   if (catalog.version !== manifest.version) throw new Error('Expert catalog version mismatch');
   return catalog;
+}
+
+function remoteAvatarKeys(catalog: ExpertCatalog): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const expert of catalog.experts) {
+    const url = parseAgentAvatarImageUrl(expert.icon);
+    if (!url || keys.has(url)) continue;
+    // Inspect the original authority/path before the URL parser removes ports or dot segments.
+    const path = /^https:\/\/[a-z0-9.-]+\/(.+)$/iu.exec(url)?.[1];
+    if (!path || /[?#\\\s]/u.test(path)) continue;
+    try {
+      const segments = path.split('/').map(segment => decodeURIComponent(segment));
+      if (segments.some(segment => !segment || segment === '.' || segment === '..'
+        || /[%/\\?#\u0000-\u001f\u007f]/u.test(segment))) continue;
+    } catch {
+      continue; // Malformed percent encoding.
+    }
+    keys.set(url, RemoteExpertAvatar.UrlPrefix + createHash('sha256').update(url, 'utf8').digest('hex'));
+  }
+  return keys;
 }
 
 /** Overmind selects a versioned CDN catalog. Caches never cross environments. */
@@ -95,6 +118,28 @@ export class ExpertStore {
     return activeEntry.pending;
   }
 
+  /** Non-blocking lookup for desktop projection. Network and disk loads share the plaza's existing request. */
+  getRemoteAvatarKeys(): ReadonlyMap<string, string> | undefined {
+    const entry = this.entries.get(this.options.getEndpoint());
+    if (!entry?.pending && (!entry || this.now() >= entry.refreshAfter)) {
+      void this.getCatalog().catch(() => { /* load sets the retry deadline; the Agent remains usable. */ });
+    }
+    return entry?.avatarKeys;
+  }
+
+  private setCatalog(endpoint: string, entry: StoreEntry, catalog: ExpertCatalog): void {
+    entry.catalog = catalog;
+    const next = remoteAvatarKeys(catalog);
+    const previous = entry.avatarKeys;
+    if (previous && previous.size === next.size && [...next.keys()].every(url => previous.has(url))) return;
+    entry.avatarKeys = next;
+    if (endpoint === this.options.getEndpoint()) {
+      try { this.options.onRemoteAvatarKeysChanged?.(); } catch (error) {
+        console.warn('[ExpertStore] Failed to notify remote avatar change:', error);
+      }
+    }
+  }
+
   private async load(endpoint: string, entry: StoreEntry): Promise<ExpertCatalog> {
     const startedAt = this.now();
     let phase: ExpertCatalogLoadPhase = ExpertCatalogLoadPhase.Manifest;
@@ -107,7 +152,7 @@ export class ExpertStore {
         const cached = JSON.parse(serialized) as CachedCatalog;
         if (cached.endpoint !== endpoint || typeof cached.content !== 'string') throw new Error('Invalid expert cache');
         cached.manifest = parseExpertStoreManifest(cached.manifest);
-        entry.catalog = validateContent(cached.manifest, cached.content);
+        this.setCatalog(endpoint, entry, validateContent(cached.manifest, cached.content));
         entry.cached = cached;
       } catch {
         // A missing/corrupt cache is replaced only after a fully validated fetch.
@@ -131,7 +176,7 @@ export class ExpertStore {
         } catch (error) {
           console.warn('[ExpertStore] Failed to persist catalog:', error);
         }
-        entry.catalog = catalog;
+        this.setCatalog(endpoint, entry, catalog);
         entry.cached = cached;
       }
       entry.refreshAfter = this.now() + REFRESH_INTERVAL_MS;
@@ -140,8 +185,8 @@ export class ExpertStore {
     } catch (error) {
       this.reportLoad({ outcome: 'failed', failureStage: phase, failureCode: usageFailureCode(error),
         cacheFallback: Boolean(entry.catalog), catalogVersion: entry.catalog?.version, durationMs: this.now() - startedAt });
-      if (!entry.catalog) throw error;
       entry.refreshAfter = this.now() + RETRY_INTERVAL_MS;
+      if (!entry.catalog) throw error;
       console.warn('[ExpertStore] Using cached catalog after refresh failure:', error);
       return entry.catalog;
     }

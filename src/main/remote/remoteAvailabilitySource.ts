@@ -6,6 +6,7 @@ import { replaceCoreTrigger } from './remoteCoreTriggers';
 import { questionSessionSql, questionStatusSql } from './remoteQuestionEvidence';
 import { ReplyModelMetadataBytes } from './remoteReplyModel';
 import { redactReplyText } from './remoteReplyProjection';
+import { fitExpertSessionPreview } from './remoteSessionPreview';
 import type { ProjectionRecord, RemoteRun, RemoteStore } from './remoteStore';
 
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
@@ -170,13 +171,13 @@ export function availabilityControlSnapshot(store: RemoteStore, localId: string,
     // Refresh the independently persisted input version before sealing the core revision.
     const inputVersion = store.inputVersion(localId);
     const recent = store.db.prepare("SELECT substr(content,1,512) AS content FROM cowork_messages WHERE session_id=? AND type IN ('user','assistant') ORDER BY sequence DESC LIMIT 1").get(localId) as { content: string } | undefined;
-    const summary: Record<string, unknown> = {
+    const summary = fitExpertSessionPreview({
       sessionId: binding.session_id, title: String(session.title || '').slice(0, 128).replace(/[\uD800-\uDBFF]$/u, ''), origin: store.get(`origin:${localId}`) || 'desktop',
       workspaceId: store.get(`workspace:${localId}`), preview: redactReplyText(recent?.content || '').slice(0, 512), createdAt: new Date(session.created_at).toISOString(),
       updatedAt: new Date(session.updated_at).toISOString(), localStatus: session.status, controlVersion, run,
       ...(store.currentTaskUsage(localId) ? { taskUsage: store.currentTaskUsage(localId) } : {}),
       agent: store.currentAgentSummary(localId), deletionGuard: store.deletionGuard(localId), inputVersion, inputModel: store.get(`inputModel:${localId}`),
-    };
+    });
     const records: ProjectionRecord[] = [{ eventType: 'session.upsert', payload: { session: summary } }];
     // Closed decisions precede terminal runs. Pending decisions follow introduction of their run.
     const decisions: ProjectionRecord[] = approvals.map(item => {

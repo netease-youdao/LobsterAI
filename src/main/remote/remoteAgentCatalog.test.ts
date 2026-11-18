@@ -4,11 +4,11 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { AgentAvatarSvg, encodeAgentAvatarIcon } from '../../shared/agent/avatar';
+import { AgentAvatarSvg, encodeAgentAvatarIcon, RemoteExpertAvatar } from '../../shared/agent/avatar';
 import type { RemoteAgentCatalogItem } from '../../shared/remote/constants';
 import { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash } from './canonical';
-import { RemoteAgentCatalog, RemoteAgentError } from './remoteAgentCatalog';
+import { RemoteAgentCatalog, RemoteAgentError, type RemoteExpertAvatars } from './remoteAgentCatalog';
 import { RemoteStore } from './remoteStore';
 
 const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' } as const;
@@ -16,7 +16,7 @@ const owner = { userId: '1001', scopeKey: 'personal' };
 const other = { userId: '1002', scopeKey: 'personal' };
 const dispose: Array<() => void> = [];
 afterEach(() => { for (const cleanup of dispose.splice(0).reverse()) cleanup(); });
-function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'], getTargetId?: () => string | null, deferredProjection = false) {
+function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'], getTargetId?: () => string | null, deferredProjection = false, expertAvatars?: RemoteExpertAvatars) {
   const directory = mkdtempSync(join(tmpdir(), 'remote-agent-catalog-'));
   const db = new Database(':memory:');
   dispose.push(() => { db.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -30,8 +30,9 @@ function fixture(getDefaultInput?: () => RemoteAgentCatalogItem['defaultInput'],
     db.prepare('INSERT INTO agents VALUES(?,?,?,1,1,1)').run(id, id, 'https://private.invalid/icon');
     ownership.assignNew(id, actor);
   });
+  if (expertAvatars) db.exec('ALTER TABLE agents ADD COLUMN source TEXT; ALTER TABLE agents ADD COLUMN preset_id TEXT; ALTER TABLE agents ADD COLUMN icon_customized INTEGER');
   const paths: Record<string, string> = { main: directory, mine: directory };
-  const catalog = new RemoteAgentCatalog(store, ownership, agentId => ({ path: paths[agentId], name: 'Workspace' }), getDefaultInput, getTargetId);
+  const catalog = new RemoteAgentCatalog(store, ownership, agentId => ({ path: paths[agentId], name: 'Workspace' }), getDefaultInput, getTargetId, expertAvatars);
   return { db, store, ownership, catalog, directory, paths };
 }
 it('does not resolve or publish workspace references before a target is known', async () => {
@@ -539,4 +540,110 @@ it.each([
   ownership.transaction(() => db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(icon, 'mine'));
   const items = await catalog.refresh(owner, 'device', () => true);
   expect(items.find(item => item.agentId === 'mine')?.icon).toBe(expected);
+});
+
+const publishedUrl = 'https://ydhardwarecommon.nosdn.127.net/5b9dcdd34d648e2071c8998b2b09da22.webp';
+const publishedIcon = RemoteExpertAvatar.UrlPrefix + 'f63b0c786ed58b81bcfdb9b1b1c3ca2c9eac2ecedd2f7c20fca028c41371684d';
+
+function expertFixture() {
+  let endpoint = 'test';
+  const resolveIcon = vi.fn((url: string): string | null => url === publishedUrl ? publishedIcon : null);
+  const data = fixture(undefined, undefined, true, { getEndpoint: () => endpoint, resolveIcon });
+  const { db, ownership, store, catalog } = data;
+  const setAvatar = (url: string, customized: number | null, source = 'preset', id = 'mine') => ownership.transaction(() =>
+    db.prepare('UPDATE agents SET source=?,preset_id=?,icon_customized=?,icon=? WHERE id=?').run(source, 'app-builder', customized, url, id));
+  setAvatar(publishedUrl, null);
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_sessions VALUES('expert-task','Task',1,1,'idle','mine')").run();
+    store.assignNew('expert-task', owner, 'local_create');
+  });
+  store.setEnabledOwner(owner);
+  store.setAgentSummaryResolver((id, actor) => catalog.summary(id, actor));
+  const summary = () => catalog.summary('expert-task', owner)!;
+  return { ...data, resolveIcon, setAvatar, summary, setEndpoint: (value: string) => { endpoint = value; } };
+}
+
+it('migrates an installed expert and its existing session when the official URL becomes available', async () => {
+  const { catalog, db, store, summary, resolveIcon } = expertFixture();
+  resolveIcon.mockReturnValue(null);
+  catalog.configureIconKeys(owner, false); // Simple expert keys work without the SVG key capability.
+  const initial = summary();
+  expect(initial.icon).toBe(RemoteExpertAvatar.Default);
+  store.projectIsolatedForTest('expert-task');
+  const controlRevision = () => (db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='expert-task'").get() as {revision: number}).revision;
+  const before = controlRevision();
+  resolveIcon.mockImplementation(url => url === publishedUrl ? publishedIcon : null);
+  const item = (await catalog.refresh(owner, 'device', () => true)).find(row => row.agentId === 'mine')!;
+  expect(item).toMatchObject({ icon: publishedIcon, version: String(BigInt(initial.version) + 1n), kind: 'owned' });
+  expect(controlRevision()).toBe(before + 1);
+  store.projectIsolatedForTest('expert-task');
+  expect(store.pending('expert-task').at(-1)).toMatchObject({ eventType: 'session.upsert', payload: {
+    session: { agent: { agentId: 'mine', icon: publishedIcon, version: item.version } },
+  } });
+  expect(JSON.stringify(item)).not.toContain(publishedUrl);
+  expect(catalog.summary('expert-task', other)).toBeNull();
+  expect(summary().version).toBe(item.version);
+});
+
+it('retains the exact verified expert source offline without reusing it across endpoints or user overrides', async () => {
+  const { catalog, ownership, resolveIcon, summary, setAvatar, setEndpoint } = expertFixture();
+  catalog.configureIconKeys(owner, true);
+  const first = summary();
+  expect(first.icon).toBe(publishedIcon);
+  resolveIcon.mockReturnValue(null);
+  catalog.reset();
+  expect(summary()).toEqual(first);
+  setEndpoint('prod');
+  expect(summary().icon).toBe(RemoteExpertAvatar.Default);
+  setAvatar('https://shared.ydstatic.com/unregistered.webp', 1);
+  expect(summary().icon).toBeNull();
+  setAvatar('agent-avatar-svg:code', 1);
+  expect(summary()).toMatchObject({ icon: 'agent-avatar-svg:code', version: ownership.get('mine')!.version });
+  setAvatar('agent-avatar-svg:code', 0);
+  expect(summary().icon).toBe(RemoteExpertAvatar.Default);
+  setAvatar(publishedIcon, 1);
+  expect(summary().icon).toBeNull();
+  setAvatar(RemoteExpertAvatar.Default, 1, 'custom');
+  expect(summary().icon).toBeNull();
+  resolveIcon.mockReturnValue(publishedIcon);
+  setAvatar(publishedUrl, 1, 'custom');
+  expect(summary().icon).toBeNull();
+  setAvatar(publishedUrl, 1);
+  expect(summary().icon).toBe(publishedIcon);
+  setAvatar(publishedUrl, 0, 'preset', 'main');
+  expect((await catalog.refresh(owner, 'device', () => true)).find(item => item.agentId === 'main')?.icon).toBeNull();
+});
+
+it.each([false, true])('preserves the scoped historical expert display across deletion (image: %s)', async image => {
+  const { catalog, ownership, db, resolveIcon, summary } = expertFixture();
+  if (!image) resolveIcon.mockReturnValue(null);
+  catalog.configureIconKeys(owner, true);
+  const selected = summary().icon;
+  ownership.transaction(() => db.prepare("DELETE FROM agents WHERE id='mine'").run());
+  const first = summary();
+  expect(first).toMatchObject({ icon: selected, state: 'deleted' });
+  expect(summary()).toEqual(first);
+  expect((await catalog.refresh(owner, 'device', () => true)).some(item => item.agentId === 'mine')).toBe(false);
+});
+
+it('shrinks only expert display before sealing and restores it once the full catalog fits', async () => {
+  const { catalog, summary } = expertFixture();
+  catalog.configureIconKeys(owner, true);
+  const items = await catalog.refresh(owner, 'device', () => true);
+  const envelope = { publicationId: '0'.repeat(36), expectedCatalogVersion: '0', connectionGeneration: '1', items };
+  const maxBytes = Buffer.byteLength(JSON.stringify(envelope));
+  const api = vi.fn(async (_path: string, method?: string, body?: any) => method === 'PUT'
+    ? { publicationId: body.publicationId, deviceId: 'device', catalogVersion: '1' }
+    : { catalogVersion: '0', items: [], syncStatus: 'pending' });
+  const publish = (bytes: number) => catalog.publish(owner, 'device', '1', api, () => true, { items: 200, bytes });
+  await publish(maxBytes - 1);
+  const narrow = summary();
+  expect(narrow.icon).toBeNull();
+  const body = api.mock.calls.at(-1)![2];
+  expect(body.items.map((item: RemoteAgentCatalogItem) => item.agentId)).toEqual(items.map(item => item.agentId));
+  expect(body.items.find((item: RemoteAgentCatalogItem) => item.agentId === 'mine')).toMatchObject(summaryWithoutState(narrow));
+  await publish(maxBytes - 1);
+  expect(summary()).toEqual(narrow);
+  await publish(maxBytes + 10);
+  expect(summary()).toMatchObject({ icon: publishedIcon, version: String(BigInt(narrow.version) + 1n) });
 });

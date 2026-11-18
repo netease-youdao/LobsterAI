@@ -2,12 +2,13 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { remoteConnectionFailure, remoteTaskContentSummary } from '../../renderer/components/settings/remoteControlState';
+import { RemoteExpertAvatar } from '../../shared/agent/avatar';
 import { RemoteSyncHealthStatus, RemoteSyncLaneStatus } from '../../shared/remote/constants';
 import { RemoteEnvironment } from '../../shared/remote/environment';
 import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
 import { AgentOwnerStore } from '../agentOwnership';
 import { payloadHash } from './canonical';
-import { RemoteAgentCatalog } from './remoteAgentCatalog';
+import { RemoteAgentCatalog, type RemoteExpertAvatars } from './remoteAgentCatalog';
 import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
 import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
 import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
@@ -1594,17 +1595,39 @@ describe('acknowledged annotation display repair', () => {
 
 
 describe('Agent icon availability facts', () => {
-  function iconFixture(supported: boolean) {
+  function iconFixture(supported: boolean, expertAvatars?: RemoteExpertAvatars) {
     const f = fixture();
-    f.db.exec(`ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main';
+    f.db.exec(`ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT '${expertAvatars ? 'expert' : 'main'}';
       CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT,icon TEXT,enabled INTEGER,created_at INTEGER,updated_at INTEGER);
       INSERT INTO agents VALUES('main','Main','agent-avatar-svg:code',1,1,1);`);
+    if (expertAvatars) f.db.exec(`ALTER TABLE agents ADD COLUMN source TEXT;
+      ALTER TABLE agents ADD COLUMN preset_id TEXT; ALTER TABLE agents ADD COLUMN icon_customized INTEGER;`);
     const ownership = new AgentOwnerStore(f.db);
-    const catalog = new RemoteAgentCatalog(f.store, ownership, () => ({ path: '/tmp', name: 'Workspace' }));
+    if (expertAvatars) ownership.transaction(() => {
+      f.db.prepare("INSERT INTO agents VALUES('expert','Expert','https://shared.ydstatic.com/expert.webp',1,1,1,'preset','template',0)").run();
+      ownership.assignNew('expert', f.owner);
+    });
+    const catalog = new RemoteAgentCatalog(f.store, ownership, () => ({ path: '/tmp', name: 'Workspace' }), undefined, undefined, expertAvatars);
     catalog.configureIconKeys(f.owner, supported);
     f.store.setAgentSummaryResolver((sessionId, actor) => catalog.summary(sessionId, actor));
     return { ...f, ownership, catalog };
   }
+
+  it('publishes a directory-only expert icon update as a new fact on an already active session', async () => {
+    const resolveIcon = vi.fn((_url: string): string | null => null);
+    const f = iconFixture(false, { getEndpoint: () => 'test', resolveIcon });
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    const previous = f.catalog.summary('local', f.owner)!;
+    expect(previous.icon).toBe(RemoteExpertAvatar.Default);
+    const key = RemoteExpertAvatar.UrlPrefix + 'b'.repeat(64);
+    resolveIcon.mockReturnValue(key);
+    await f.catalog.refresh(f.owner, 'desktop', () => true);
+    await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.find((fact: any) => fact.eventType === 'session.upsert')?.payload.session.agent)
+      .toMatchObject({ agentId: 'expert', icon: key, version: String(BigInt(previous.version) + 1n) });
+  });
 
   it('publishes a later avatar edit without relying on Agent directory refresh', async () => {
     const f = iconFixture(true);

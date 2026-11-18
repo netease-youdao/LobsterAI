@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { payloadHash } from './canonical';
+import { payloadHash, stableJson } from './canonical';
 import { remoteDiagnostics } from './remoteDiagnostics';
 import { RemoteHistoryJob } from './remoteHistoryJob';
 import type { ProjectionWork } from './remoteProjectionWorker';
@@ -100,7 +100,10 @@ export class RemoteProjectionCoordinator {
       filename = path.join(directory, `${randomUUID()}.sqlite`);
       const result = await this.work({ ...work, database: this.store.db.name, target: filename }, () => this.store.projectionWorkCurrent(work));
       // No projected object can cross an owner, environment, capability or source-sequence change.
-      if (!this.store.projectionWorkCurrent(work) || this.store.sync(id)?.source_seq !== result.sourceSeq) {
+      // The main process captures the Agent before the worker opens its SQLite snapshot.
+      // An avatar change in that window must not be acknowledged using the newer source revision.
+      if (!this.store.projectionWorkCurrent(work) || this.store.sync(id)?.source_seq !== result.sourceSeq
+        || stableJson(work.agent) !== stableJson(this.store.currentAgentSummary(id))) {
         telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Projection, outcome: SyncTelemetry.Outcome.Deferred,
           reason: SyncTelemetry.Reason.ContextChanged });
         await fs.promises.rm(filename, { force: true }); return;

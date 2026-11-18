@@ -36,6 +36,7 @@ import { replyInputModel, replyMessageModelLabel, type ReplyModelPresetNames,rep
 import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState, replyUserText } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
+import { fitExpertSessionPreview } from './remoteSessionPreview';
 import { remoteDiagnosticLog, remoteLogMessage, remoteSyncErrorMetadata } from './remoteSyncLog';
 import { activeRemoteSyncTargetContext } from './remoteSyncTargetStore';
 import { hasTaskUsageRunOrigin, isInheritedTaskUsage, readTaskUsageState, remoteTaskUsage, remoteTurnUsage, taskUsageVisible } from './remoteTaskCredits';
@@ -1607,7 +1608,7 @@ export class RemoteStore {
     const deferTerminal = this.replyProjectionSupported && !summaryOnly && run && terminal.has(run.status) && publishedRunIds.has(run.runId);
     const deferred: Array<{ key: string; record: ProjectionRecord }> = [];
     const recordState = (key: string, record: ProjectionRecord): void => { if (deferTerminal) deferred.push({ key, record }); else this.record(sessionId, key, record); };
-    recordState('session', { eventType: 'session.upsert', payload: { session: {
+    const summary = fitExpertSessionPreview({
       sessionId: this.sync(sessionId)?.session_id, title: shortName(publicText(s.title)), origin: this.get(`origin:${sessionId}`) || 'desktop',
       workspaceId: this.get(`workspace:${sessionId}`), preview: summaryOnly ? JSON.parse(previous!.record_json).payload.session.preview : preview(publicText(latestText)), createdAt: iso(s.created_at), updatedAt: iso(s.updated_at),
       ...(this.deletionProjectionSupported ? { deletionGuard: this.deletionGuard(sessionId) } : {}),
@@ -1615,7 +1616,8 @@ export class RemoteStore {
       ...(this.currentTaskUsage(sessionId) ? { taskUsage: this.currentTaskUsage(sessionId) } : {}),
       ...(this.inputProjectionSupported ? { inputVersion: this.inputVersion(sessionId), inputModel: this.get(`inputModel:${sessionId}`) } : {}),
       ...(this.agentSummary && this.owner(sessionId) ? { agent: this.agentSummary(sessionId, this.owner(sessionId)!) } : {}),
-    } } });
+    });
+    recordState('session', { eventType: 'session.upsert', payload: { session: summary } });
     for (const { value: historicalRun } of this.entries<RemoteRun>(`runHistory:${sessionId}:`)) {
       if (foreignRuns.has(historicalRun.runId)) continue;
       const projectedRun = historicalRun.runId === run?.runId ? run : historicalRun;
