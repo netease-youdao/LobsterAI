@@ -16,6 +16,23 @@ export interface CompanionWindowOptions {
   focusable: boolean;
 }
 
+export const CompanionWindowLevel = {
+  Floating: 'floating',
+  PopUpMenu: 'pop-up-menu',
+  ScreenSaver: 'screen-saver',
+} as const;
+export type CompanionWindowLevel = typeof CompanionWindowLevel[keyof typeof CompanionWindowLevel];
+
+export function setCompanionWindowLevel(win: BrowserWindow, level: CompanionWindowLevel): void {
+  win.setAlwaysOnTop(true, level);
+  if (process.platform === 'darwin') {
+    win.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: level !== CompanionWindowLevel.Floating,
+      skipTransformProcessType: true,
+    });
+  }
+}
+
 const PANEL_BLUR_DELAY_MS = 120;
 /** Focus requests for a macOS panel that has not become key since it was shown. */
 const PANEL_REFOCUS_ATTEMPTS = 2;
@@ -139,10 +156,8 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
     win.setBounds(options.bounds);
   }
   // The selection toolbar sits above menus of the app it is attached to; the orb's menu above the other cards.
-  win.setAlwaysOnTop(true, isScreenshot ? 'screen-saver' : isSelection || isMenu ? 'pop-up-menu' : 'floating');
-  if (process.platform === 'darwin') {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: isSelection || isScreenshot || isMenu, skipTransformProcessType: true });
-  }
+  setCompanionWindowLevel(win, isScreenshot ? CompanionWindowLevel.ScreenSaver
+    : isSelection || isMenu ? CompanionWindowLevel.PopUpMenu : CompanionWindowLevel.Floating);
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // The quick panel runs the home page's composer, which needs the main renderer's styles and store.

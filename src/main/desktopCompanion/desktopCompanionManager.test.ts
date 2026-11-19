@@ -43,6 +43,7 @@ import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../sha
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { CompanionScreenPermissionError, CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
+import { CompanionWindowLevel } from './companionWindow';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
 import type { CompanionLanguageClient } from './languageToolClient';
@@ -89,8 +90,8 @@ vi.mock('electron', async () => {
     focus() { this.focused = true; this.emit('focus'); }
     blur() { this.focused = false; this.emit('blur'); }
     setMenu() {}
-    setAlwaysOnTop() {}
-    setVisibleOnAllWorkspaces() {}
+    setAlwaysOnTop = vi.fn();
+    setVisibleOnAllWorkspaces = vi.fn();
     loadURL() { return Promise.resolve(); }
     loadFile(_file: string, options?: { query?: { surface?: string } }) { this.surface = options?.query?.surface; return Promise.resolve(); }
     destroy() { this.destroyed = true; this.emit('closed'); }
@@ -2527,6 +2528,57 @@ describe('hover launcher', () => {
     expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
       action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.Open, stage: AnalyticsStage.Shown,
     }));
+  });
+
+  test('the first hover opens as soon as the renderer measures the menu, even while the page is loading', () => {
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    vi.spyOn(stage.webContents, 'isLoadingMainFrame').mockReturnValue(true);
+    vi.advanceTimersByTime(1_000);
+    expect(stage.visible).toBe(false);
+
+    emitFromStage(DesktopCompanionIpc.ResizeSurface, { width: 276, height: 221 });
+    expect(stage.visible).toBe(true);
+    expect(stage.focused).toBe(false);
+  });
+
+  test.each([true, false])('a late first load can reveal an unmeasured menu only while still hovered (left: %s)', left => {
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    const loading = vi.spyOn(stage.webContents, 'isLoadingMainFrame').mockReturnValue(true);
+    vi.advanceTimersByTime(1_000);
+    if (left) {
+      hoverOrb(false);
+      vi.mocked(screen.getCursorScreenPoint).mockReturnValue({ x: 0, y: 0 });
+      vi.advanceTimersByTime(LauncherCloseDelayMs + LauncherPollMs * 2);
+    }
+
+    loading.mockReturnValue(false);
+    stage.webContents.emit('did-finish-load');
+    expect(stage.visible).toBe(false);
+    vi.advanceTimersByTime(1_000);
+    expect(stage.visible).toBe(!left);
+  });
+
+  test('the macOS hover menu floats over full-screen apps and releases that level when a drop replaces it', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    expect(stage.setAlwaysOnTop).toHaveBeenLastCalledWith(true, CompanionWindowLevel.PopUpMenu);
+    expect(stage.setVisibleOnAllWorkspaces).toHaveBeenLastCalledWith(true, {
+      visibleOnFullScreen: true, skipTransformProcessType: true,
+    });
+
+    dragOverOrb(DesktopCompanionFileDragPhase.Enter, [CompanionFileKind.Pdf]);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Drop);
+    expect(stageWindow()).toBe(stage);
+    expect(stage.setAlwaysOnTop).toHaveBeenLastCalledWith(true, CompanionWindowLevel.Floating);
+    expect(stage.setVisibleOnAllWorkspaces).toHaveBeenLastCalledWith(true, {
+      visibleOnFullScreen: false, skipTransformProcessType: true,
+    });
   });
 
   test('stays while the pointer is on the orb or the card and closes once it has left both', () => {
