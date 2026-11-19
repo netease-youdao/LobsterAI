@@ -229,6 +229,7 @@ export class SqliteStore {
         working_directory TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
         icon_customized INTEGER,
+        preset_defaults TEXT,
         skill_ids TEXT NOT NULL DEFAULT '[]',
         subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
         enabled INTEGER NOT NULL DEFAULT 1,
@@ -656,9 +657,13 @@ export class SqliteStore {
     }
 
     // Null preserves legacy avatar ownership inference; explicit edits are recorded from now on.
-    const avatarColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
-    if (!avatarColumns.some(column => column.name.toLowerCase() === 'icon_customized')) {
+    const presetColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+    if (!presetColumns.some(column => column.name.toLowerCase() === 'icon_customized')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN icon_customized INTEGER;');
+      this.didRunMigration = true;
+    }
+    if (!presetColumns.some(column => column.name.toLowerCase() === 'preset_defaults')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN preset_defaults TEXT;');
       this.didRunMigration = true;
     }
 

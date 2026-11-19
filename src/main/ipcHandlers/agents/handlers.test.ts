@@ -5,9 +5,11 @@ import path from 'node:path';
 import { BrowserWindow, ipcMain } from 'electron';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
-import { AgentId, AgentIpcChannel } from '../../../shared/agent/constants';
-import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
+import { AgentId, AgentIpcChannel, AgentSource } from '../../../shared/agent/constants';
+import { createExpertCatalogFixture, ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
 import { ModelThinkingLevel } from '../../../shared/providers/modelThinking';
+import type { UpdateAgentRequest } from '../../coworkStore';
+import { PET_VLOG_PRESET_ID } from '../../libs/petVlogPresetUpgrade';
 import { type AgentHandlerDeps, registerAgentHandlers } from './handlers';
 
 vi.mock('electron', () => ({
@@ -169,6 +171,47 @@ test('summoning an existing preset keeps the persona its workspace already has',
 
   expect(await invoke()).toMatchObject({ success: true });
   expect(readPersonaFile(ExpertFixtureId.Data, 'SOUL.md')).toBe('soul edited by the agent\n');
+});
+
+test('summoning records fresh defaults and returns the upgraded instance on a later summon', async () => {
+  const catalog = createExpertCatalogFixture();
+  const preset = { ...catalog.experts[0], id: PET_VLOG_PRESET_ID };
+  catalog.experts = [preset];
+  const agent = { ...preset, id: 'installed-pet', presetId: preset.id, source: AgentSource.Preset, enabled: true };
+  let installed = false;
+  let snapshot: string | null = null;
+  const manager = {
+    listAgents: () => installed ? [agent] : [],
+    getAgent: () => agent,
+    addPresetAgent: () => { installed = true; return { ...agent }; },
+    getExpertCatalog: () => catalog,
+  };
+  registerAgentHandlers({
+    getAgentManager: () => manager,
+    getCoworkStore: () => ({
+      getPresetDefaultsSnapshot: () => snapshot,
+      savePresetDefaults: (_id: string, updates: UpdateAgentRequest, next: string) => {
+        Object.assign(agent, updates);
+        snapshot = next;
+      },
+    }),
+    resolveAgentWorkspacePath,
+    resolveDefaultAgentModelRef: () => '',
+    syncOpenClawConfig: () => ({ success: true }),
+  } as unknown as AgentHandlerDeps);
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+  const summon = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.AddPreset)![1];
+  const event = { sender: { id: 1, send: vi.fn() } } as unknown as Electron.IpcMainInvokeEvent;
+  expect(await summon(event, preset.id)).toMatchObject({ success: true, agent: { id: agent.id } });
+  expect(snapshot).not.toBeNull();
+
+  agent.name = 'My studio';
+  catalog.version = 'next-release';
+  preset.systemPrompt = 'Review the final frames before assembling the edit.';
+  expect(await summon(event, preset.id)).toMatchObject({
+    success: true, agent: { id: agent.id, name: 'My studio', systemPrompt: preset.systemPrompt },
+  });
+  expect(readPersonaFile(agent.id, 'SOUL.md')).toBe(preset.systemPrompt + '\n');
 });
 
 test('creating an agent writes its persona over files left by a deleted agent with the same ID', async () => {

@@ -3841,6 +3841,19 @@ export class CoworkStore {
     return this.getAgent(id);
   }
 
+  getPresetDefaultsSnapshot(id: string): string | null {
+    const row = this.db.prepare('SELECT preset_defaults FROM agents WHERE id = ?').get(id) as
+      { preset_defaults: string | null } | undefined;
+    return row?.preset_defaults ?? null;
+  }
+
+  savePresetDefaults(id: string, changes: UpdateAgentRequest, snapshot: string): void {
+    this.db.transaction(() => {
+      if (Object.keys(changes).length) this.updateAgent(id, changes);
+      this.db.prepare('UPDATE agents SET preset_defaults = ? WHERE id = ?').run(snapshot, id);
+    })();
+  }
+
   /** Cosmetic catalog refresh: never overwrite a user-owned avatar. */
   updatePresetAgentAvatar(id: string, icon: string): Agent | null {
     const existing = this.getAgent(id);

@@ -15,6 +15,7 @@ import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
 import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
+import { isPetVlogPreset, PET_VLOG_PRESET_ID, upgradePetVlogPreset } from '../../libs/petVlogPresetUpgrade';
 
 type SyncOpenClawConfig = (options: {
   reason: string;
@@ -111,8 +112,25 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     syncOpenClawConfig,
   } = deps;
 
+  async function refreshPetVlogDefaults(): Promise<void> {
+    const manager = getAgentManager();
+    if (!manager.listAgents().some(isPetVlogPreset)) return;
+    try {
+      const catalog = await manager.getExpertCatalog();
+      const preset = catalog.experts.find(item => item.id === PET_VLOG_PRESET_ID);
+      if (!preset) return;
+      // Re-read after the catalog fetch so edits made while it was in flight win.
+      for (const agent of manager.listAgents().filter(isPetVlogPreset)) {
+        upgradePetVlogPreset(agent, preset, catalog.version, resolveAgentWorkspacePath(agent.id), getCoworkStore());
+      }
+    } catch (error) {
+      console.warn('[Agents] Could not refresh Pet Vlog defaults:', error);
+    }
+  }
+
   ipcMain.handle(AgentIpcChannel.List, async () => {
     try {
+      await refreshPetVlogDefaults();
       const agents = getAgentManager().listAgents();
       return { success: true, agents };
     } catch (error) {
@@ -338,7 +356,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       const existing = getAgentManager().listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
       const modelSelection = parseAgentModelSelection(rawModelSelection);
-      const agent = await getAgentManager().addPresetAgent(
+      let agent = await getAgentManager().addPresetAgent(
         presetId,
         modelSelection ? modelSelection.model : resolveDefaultAgentModelRef(),
         modelSelection?.thinkingLevel,
@@ -346,6 +364,11 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       if (!agent) return fail(new Error(`Preset agent not found: ${presetId}`), 'preset_not_found');
       // A reused or re-enabled instance keeps the persona its workspace already has.
       if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
+      if (presetId === PET_VLOG_PRESET_ID) {
+        await refreshPetVlogDefaults();
+        agent = getAgentManager().getAgent(agent.id);
+        if (!agent) return fail(new Error(`Preset agent removed: ${presetId}`), 'preset_not_found');
+      }
       // The composer must not become ready before OpenClaw knows this agent.
       // If sync fails, a retry reuses the saved instance instead of duplicating it.
       failureStage = PresetPreparationStage.ConfigSync;
