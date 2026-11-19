@@ -7,7 +7,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
-import { AgentId, AgentModelSelectionMode, normalizeAgentAvatarIcon } from '../shared/agent';
+import { AgentId, AgentModelSelectionMode, AgentSource, normalizeAgentAvatarIcon } from '../shared/agent';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
@@ -19,6 +19,7 @@ import {
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
   type CoworkSessionStatus,
+  CoworkSessionStatusValue,
 } from '../shared/cowork/constants';
 import type { CoworkErrorDetail } from '../shared/cowork/errorDetail';
 import {
@@ -440,7 +441,7 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type CoworkAgentEngine = 'openclaw';
 
-export type AgentSource = 'custom' | 'preset';
+export type { AgentSource } from '../shared/agent';
 
 export interface Agent {
   id: string;
@@ -463,6 +464,8 @@ export interface Agent {
   isDefault: boolean;
   source: AgentSource;
   presetId: string;
+  presetRevision?: number;
+  dismissedPresetRevision?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -482,6 +485,7 @@ export interface CreateAgentRequest {
   subagentAllowAgentIds?: string[];
   source?: AgentSource;
   presetId?: string;
+  presetRevision?: number;
 }
 
 export interface UpdateAgentRequest {
@@ -3719,8 +3723,8 @@ export class CoworkStore {
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, preset_revision, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -3739,6 +3743,7 @@ export class CoworkStore {
           JSON.stringify(normalizeStringIdList(request.subagentAllowAgentIds)),
           request.source || 'custom',
           request.presetId || '',
+          request.presetRevision ?? null,
           this.getNextAgentSortOrder(),
           now,
           now,
@@ -3841,6 +3846,38 @@ export class CoworkStore {
     return this.getAgent(id);
   }
 
+  hasRunningExpertTask(agentId: string): boolean {
+    return Boolean(this.getOne(
+      'SELECT 1 FROM cowork_sessions WHERE agent_id = ? AND status = ? '
+      + 'UNION ALL SELECT 1 FROM subagent_runs WHERE status = ? '
+      + 'AND (agent_id = ? OR parent_session_id IN (SELECT id FROM cowork_sessions WHERE agent_id = ?)) LIMIT 1',
+      [agentId, CoworkSessionStatusValue.Running, CoworkSessionStatusValue.Running, agentId, agentId],
+    ));
+  }
+
+  /** Replace only the fields owned by the official expert, keeping its instance and sessions. */
+  saveExpertDefaults(agent: Pick<Agent, 'id' | 'name' | 'description' | 'systemPrompt' | 'identity' | 'icon'
+    | 'iconCustomized' | 'skillIds' | 'presetRevision'>): void {
+    this.db.prepare(`UPDATE agents SET name = ?, description = ?, system_prompt = ?, identity = ?,
+      icon = ?, icon_customized = ?, skill_ids = ?, preset_revision = ?, updated_at = ?
+      WHERE id = ? AND source = ?`).run(agent.name, agent.description, agent.systemPrompt, agent.identity,
+      agent.icon, agent.iconCustomized ? 1 : 0, JSON.stringify(agent.skillIds), agent.presetRevision ?? null,
+      Date.now(), agent.id, AgentSource.Preset);
+  }
+
+  dismissPresetUpdate(agentId: string, revision: number): boolean {
+    if (!Number.isSafeInteger(revision) || revision <= 0) return false;
+    return this.db.prepare(`UPDATE agents SET dismissed_preset_revision = ?
+      WHERE id = ? AND source = ? AND COALESCE(preset_revision, 0) < ?
+      AND COALESCE(dismissed_preset_revision, 0) <= ?`)
+      .run(revision, agentId, AgentSource.Preset, revision, revision).changes > 0;
+  }
+
+  setExpertRevision(agentId: string, revision: number): boolean {
+    return this.db.prepare('UPDATE agents SET preset_revision = ? WHERE id = ? AND source = ?')
+      .run(revision, agentId, AgentSource.Preset).changes > 0;
+  }
+
   /** Cosmetic catalog refresh: never overwrite a user-owned avatar. */
   updatePresetAgentAvatar(id: string, icon: string): Agent | null {
     const existing = this.getAgent(id);
@@ -3920,6 +3957,8 @@ export class CoworkStore {
     is_default: number;
     source: string;
     preset_id: string;
+    preset_revision?: number | null;
+    dismissed_preset_revision?: number | null;
     created_at: number;
     updated_at: number;
   }): Agent {
@@ -3950,6 +3989,8 @@ export class CoworkStore {
       isDefault: Boolean(row.is_default),
       source: row.source as AgentSource,
       presetId: row.preset_id,
+      presetRevision: row.preset_revision ?? undefined,
+      dismissedPresetRevision: row.dismissed_preset_revision ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

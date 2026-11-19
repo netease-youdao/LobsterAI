@@ -1,3 +1,5 @@
+import { AgentSource } from '@shared/agent/constants';
+import { expertReminderRevision } from '@shared/agent/presets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -206,6 +208,7 @@ export const removeAgentSidebarAgentTaskPreviews = (
 export const useAgentSidebarState = () => {
   const dispatch = useDispatch();
   const agents = useSelector((state: RootState) => state.agent.agents);
+  const revisions = useSelector((state: RootState) => state.agent.expertRevisions);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const sidebarRevealAgentId = useSelector((state: RootState) => state.agent.sidebarRevealAgentId);
   const currentSessionId = useSelector(selectCurrentSessionId);
@@ -246,12 +249,16 @@ export const useAgentSidebarState = () => {
         icon: agent.icon,
         iconCustomized: agent.iconCustomized,
         source: agent.source,
+        presetId: agent.presetId,
+        updateRevision: agent.source === AgentSource.Preset && agent.presetId
+          ? expertReminderRevision(agent.presetRevision, revisions[agent.presetId], agent.dismissedPresetRevision)
+          : undefined,
         enabled: agent.enabled,
         pinned: agent.pinned ?? false,
         pinOrder: agent.pinOrder ?? null,
         sortOrder: agent.sortOrder ?? null,
       }));
-  }, [agents]);
+  }, [agents, revisions]);
 
   const sortedEnabledAgents = useMemo(() => {
     return sortAgentSidebarAgents(enabledAgents);

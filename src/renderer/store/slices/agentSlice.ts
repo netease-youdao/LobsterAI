@@ -19,12 +19,15 @@ interface AgentSummary {
   isDefault: boolean;
   source: 'custom' | 'preset';
   presetId?: string;
+  presetRevision?: number;
+  dismissedPresetRevision?: number;
   skillIds: string[];
   subagentAllowAgentIds: string[];
 }
 
 interface AgentState {
   agents: AgentSummary[];
+  expertRevisions: Record<string, number>;
   currentAgentId: string;
   loading: boolean;
   sidebarRevealAgentId: string | null;
@@ -32,6 +35,7 @@ interface AgentState {
 
 const initialState: AgentState = {
   agents: [],
+  expertRevisions: {},
   currentAgentId: 'main',
   loading: false,
   sidebarRevealAgentId: null,
@@ -41,6 +45,10 @@ const agentSlice = createSlice({
   name: 'agent',
   initialState,
   reducers: {
+    setExpertRevisions(state, action: PayloadAction<Record<string, number>>) {
+      state.expertRevisions = action.payload;
+    },
+
     setAgents(state, action: PayloadAction<AgentSummary[]>) {
       state.agents = action.payload;
     },
@@ -87,6 +95,7 @@ const agentSlice = createSlice({
 
 export const {
   setAgents,
+  setExpertRevisions,
   setCurrentAgentId,
   setSidebarRevealAgentId,
   setLoading,

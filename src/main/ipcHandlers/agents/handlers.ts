@@ -8,6 +8,7 @@ import {
   AgentSource,
 } from '../../../shared/agent/constants';
 import { parseAgentModelSelection } from '../../../shared/agent/modelSelection';
+import { ExpertUpgradeStatus } from '../../../shared/agent/presets';
 import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
@@ -15,6 +16,7 @@ import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
 import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
+import { isExpertBusy, upgradePreset } from './upgradePreset';
 
 type SyncOpenClawConfig = (options: {
   reason: string;
@@ -30,6 +32,7 @@ export interface AgentHandlerDeps {
   getAgentManager: () => AgentManager;
   getCoworkStore: () => CoworkStore;
   getCoworkEngineRouter: () => CoworkEngineRouter;
+  hasPendingMediaTask?: (sessionId: string) => boolean;
   getIMGatewayManager: () => IMGatewayManager | null;
   refreshImSessionWorkingDirectoriesForAgent: (agentId: string) => number;
   resolveAgentWorkspacePath: (agentId: string) => string;
@@ -310,6 +313,33 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       return { success: true, catalog: await getAgentManager().getExpertCatalog() };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to get expert catalog' };
+    }
+  });
+
+  ipcMain.handle(AgentIpcChannel.IsExpertBusy, (_event, agentId: string) => isExpertBusy(agentId, deps));
+  ipcMain.handle(AgentIpcChannel.DismissPresetUpdate, async (event, agentId: string, revision: number) => {
+    const manager = getAgentManager();
+    const presetId = manager.getAgent(agentId)?.presetId;
+    if (!presetId) return false;
+    const preset = (await manager.getExpertCatalog()).experts.find(expert => expert.id === presetId);
+    if (!preset || preset.revision !== revision) return false;
+    const saved = deps.getCoworkStore().dismissPresetUpdate(agentId, revision);
+    if (saved) notifyAgentsChanged(event.sender);
+    return saved;
+  });
+
+  const upgrades = new Map<string, { revision: number; result: Promise<ExpertUpgradeStatus> }>();
+  ipcMain.handle(AgentIpcChannel.UpgradePreset, async (event, agentId: string, revision: number) => {
+    const pending = upgrades.get(agentId);
+    if (pending) return pending.revision === revision ? pending.result : ExpertUpgradeStatus.Unavailable;
+    const result = upgradePreset(agentId, revision, deps);
+    upgrades.set(agentId, { revision, result });
+    try {
+      const status = await result;
+      if (status === ExpertUpgradeStatus.Updated) notifyAgentsChanged(event.sender);
+      return status;
+    } finally {
+      upgrades.delete(agentId);
     }
   });
 
