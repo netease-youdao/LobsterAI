@@ -209,7 +209,7 @@ describe('authenticated server model mapping', () => {
     const [tagged, malformed, untagged] = mapAvailableServerModelsToModels([
       {
         modelId: 'tagged', modelName: 'Tagged', provider: 'LobsterAI', apiFormat: 'openai',
-        customTag: { text: ' 限时5折 ', iconUrl: 'https://cdn.example/tag.png', color: '#EF4444' },
+        customTag: { text: ' 限时5折 ', textEn: ' 50% off ', iconUrl: 'https://cdn.example/tag.png', color: '#EF4444' },
       },
       {
         modelId: 'malformed', modelName: 'Malformed', provider: 'LobsterAI', apiFormat: 'openai',
@@ -221,8 +221,8 @@ describe('authenticated server model mapping', () => {
       },
     ]);
 
-    expect(tagged.customTag).toEqual({ text: '限时5折', iconUrl: 'https://cdn.example/tag.png', color: '#EF4444' });
-    expect(malformed.customTag).toEqual({ text: '新品', iconUrl: undefined, color: undefined });
+    expect(tagged.customTag).toEqual({ text: '限时5折', textEn: '50% off', iconUrl: 'https://cdn.example/tag.png', color: '#EF4444' });
+    expect(malformed.customTag).toEqual({ text: '新品', textEn: undefined, iconUrl: undefined, color: undefined });
     expect(untagged.customTag).toBeUndefined();
   });
 });

@@ -172,10 +172,12 @@ export const parseModelCustomTag = (value: unknown): ModelCustomTag | undefined 
   const raw = value as Record<string, unknown>;
   const text = readString(raw.text);
   if (!text) return undefined;
+  const textEn = readString(raw.textEn);
   const iconUrl = readString(raw.iconUrl);
   const color = readString(raw.color);
   return {
     text,
+    textEn: textEn || undefined,
     iconUrl: /^https?:\/\//i.test(iconUrl) ? iconUrl : undefined,
     color: MODEL_CUSTOM_TAG_COLOR.test(color) ? color : undefined,
   };

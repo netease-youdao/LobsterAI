@@ -13,6 +13,8 @@ import {
   resolveCustomModelProviderName,
   resolveDropdownListMaxHeight,
   resolveHoverCardTop,
+  resolveModelCustomTagHint,
+  resolveModelCustomTagLabel,
   resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
   shouldRenderPlanModelLoginPrompt,
@@ -83,6 +85,22 @@ test('opens the hover card only for models that have details to show', () => {
     runtimeProfile: 'moonshot-kimi-k3',
     agenticReady: false,
   })).toBe(true);
+});
+
+test('picks the custom tag label by UI language', () => {
+  const full = { text: '限时5折', textEn: '50% off', iconUrl: 'https://cdn.example/tag.png' };
+  const iconOnly = { text: '限时5折', iconUrl: 'https://cdn.example/tag.png' };
+  const textOnly = { text: '限时5折' };
+
+  expect(resolveModelCustomTagLabel(full, 'zh')).toBe('限时5折');
+  expect(resolveModelCustomTagLabel(full, 'en')).toBe('50% off');
+  // English without textEn: show the icon alone rather than Chinese text.
+  expect(resolveModelCustomTagLabel(iconOnly, 'en')).toBeUndefined();
+  // ...unless there is no icon, so the tag never renders empty.
+  expect(resolveModelCustomTagLabel(textOnly, 'en')).toBe('限时5折');
+  expect(resolveModelCustomTagHint(iconOnly, 'en')).toBe('限时5折');
+  expect(resolveModelCustomTagHint(full, 'en')).toBe('50% off');
+  expect(hasModelHoverDetails({ customTag: textOnly })).toBe(true);
 });
 
 test('keeps model hover card above the viewport bottom', () => {
