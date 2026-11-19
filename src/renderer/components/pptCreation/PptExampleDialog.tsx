@@ -96,7 +96,8 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
     } finally { if (mounted.current) setBusy(false); }
   };
   const dismiss = () => { if (!busy) onClose(); };
-  return <Modal onClose={dismiss} onEscape={dismiss} className="w-[min(1080px,94vw)] overflow-hidden rounded-3xl border border-border bg-surface shadow-modal">
+  // The dialog can overlap the Electron window's draggable header.
+  return <Modal onClose={dismiss} onEscape={dismiss} className="non-draggable w-[min(1080px,94vw)] overflow-hidden rounded-3xl border border-border bg-surface shadow-modal">
     <div role="dialog" aria-modal="true" aria-labelledby="ppt-example-title" data-ppt-example-dialog className="flex h-[min(800px,92vh)] flex-col overflow-hidden"
       onKeyDown={event => {
         if (event.key !== 'Tab') return;
