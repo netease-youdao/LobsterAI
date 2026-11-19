@@ -1,6 +1,6 @@
-import { ArrowRightIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { AgentSource } from '@shared/agent/constants';
-import { type ExpertCatalog, ExpertUpgradeStatus, hasExpertUpdate, type PresetAgent } from '@shared/agent/presets';
+import { type ExpertCatalog, hasExpertUpdate, type PresetAgent } from '@shared/agent/presets';
 import { UsageEntry, usageFailureCode, UsageOutcome, UsageStage } from '@shared/analytics/usage';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -25,6 +25,7 @@ import { useScrollAffordance } from '../imageCreation/useScrollAffordance';
 import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { expertText, filterExperts } from './catalog';
 import ExpertFeaturedScenarios from './ExpertFeaturedScenarios';
+import ExpertUpdateAction from './ExpertUpdateAction';
 import { useExpertImpressions } from './useExpertImpressions';
 import { useExpertLoginGate } from './useExpertLoginGate';
 
@@ -158,9 +159,9 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialRequ
     setDetail(preset);
   };
 
-  const summon = async (preset: PresetAgent, prompt = expertText(preset.starterPrompts[0], language), starterIndex?: number, upgrade = false) => {
+  const summon = async (preset: PresetAgent, prompt = expertText(preset.starterPrompts[0], language), starterIndex?: number) => {
     if (summoningRef.current) return;
-    if (requestLogin(() => { void summon(preset, prompt, starterIndex, upgrade); })) return;
+    if (requestLogin(() => { void summon(preset, prompt, starterIndex); })) return;
     summoningRef.current = true;
     setSummoning(preset.id);
     setSummonError('');
@@ -170,20 +171,6 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialRequ
       starterIndex, wasInstalled: installed.has(preset.id) };
     reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Started });
     try {
-      if (upgrade) {
-        const instance = installed.get(preset.id);
-        const status = instance && preset.revision
-          ? await agentService.upgradePreset(instance.id, preset.revision) : ExpertUpgradeStatus.Unavailable;
-        if (status !== ExpertUpgradeStatus.Updated) {
-          reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Interrupted,
-            failureCode: status, durationMs: Date.now() - startedAt });
-          if (mountedRef.current) {
-            setSummonError(status === ExpertUpgradeStatus.Busy ? 'expertUpgradeBusy' : 'expertUpgradeUnavailable');
-            if (status === ExpertUpgradeStatus.Unavailable) void load();
-          }
-          return;
-        }
-      }
       const agent = await agentService.addPreset(preset.id);
       if (!agent) throw new Error('Expert preparation failed');
       reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Succeeded, durationMs: Date.now() - startedAt });
@@ -205,24 +192,21 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialRequ
   const summonButton = (preset: PresetAgent, large = false) => {
     const instance = installed.get(preset.id);
     const update = !!instance && hasExpertUpdate(instance.presetRevision, preset.revision);
-    const action = update ? (instance.presetRevision ? 'expertUpgradeAndUse' : 'expertSyncAndUse')
-      : instance ? 'expertUse' : 'expertSummon';
+    const action = update ? 'expertUpdate' : instance ? 'expertUse' : 'expertSummon';
     return (
-      <div className="pointer-events-auto relative z-10 flex shrink-0 flex-wrap items-center justify-end gap-2">
-        {large && update && <button type="button" disabled={summoning !== null} onClick={() => void summon(preset)}
-          className="rounded-lg px-2 py-1.5 text-xs text-secondary hover:text-foreground">{t('expertKeepUsing')}</button>}
-        <button type="button" disabled={summoning !== null} onClick={() => void summon(preset, undefined, undefined, update)}
-          aria-label={`${t(action)} ${name(preset)}`}
-          title={update && instance.presetRevision ? `v${instance.presetRevision} → v${preset.revision}` : undefined}
-          className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
-            ? 'h-8 px-5 text-sm'
-            : `h-7 px-3 ${MANAGEMENT_META_TEXT} ${summoning === preset.id || update ? '' : 'invisible group-hover:visible group-focus-within:visible'}`}`}>
-          {summoning === preset.id ? t('expertSummoning') : t(action)}
-        </button>
-      </div>
+      <button type="button" disabled={summoning !== null} onClick={() => update ? showDetail(preset) : void summon(preset)}
+        aria-label={`${t(action)} ${name(preset)}`}
+        className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
+          ? 'h-8 px-5 text-sm'
+          : `h-7 px-3 ${MANAGEMENT_META_TEXT} ${summoning === preset.id || update ? '' : 'invisible group-hover:visible group-focus-within:visible'}`}`}>
+        {summoning === preset.id ? t('expertSummoning') : t(action)}
+      </button>
     );
   };
 
+  const detailInstance = detail ? installed.get(detail.id) : undefined;
+  const detailRevision = detail?.revision;
+  const versionedDetail = !!detailInstance && detailRevision !== undefined;
   const closeDetail = () => setDetail(null);
   const errorNotice = summonError && <p role="alert" className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">{t(summonError)}</p>;
 
@@ -307,17 +291,26 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialRequ
       {detail && <Modal onClose={closeDetail} onEscape={closeDetail} className="mx-5 flex max-h-[85vh] w-full max-w-[600px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-xl">
         <div role="dialog" aria-modal="true" aria-labelledby="expert-detail-title" className="relative flex min-h-0 flex-col">
           <button type="button" autoFocus aria-label={t('close')} onClick={closeDetail} className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-secondary hover:bg-surface-raised hover:text-foreground"><XMarkIcon className="h-5 w-5" /></button>
-          {/* Identity + primary action stay pinned above the scrolling body, like the skill and kit detail headers. */}
-          <div className={`flex shrink-0 items-center gap-4 border-b px-7 pb-5 pr-16 pt-7 transition-colors ${detailCanScrollUp ? 'border-border' : 'border-transparent'}`}>
-            <AgentAvatarIcon value={detail.icon} expertFallback className="h-16 w-16" iconClassName="h-9 w-9" />
-            <div className="min-w-0 flex-1"><h2 id="expert-detail-title" className="break-words text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div>
-            {summonButton(detail, true)}
+          <div className={`shrink-0 border-b px-7 pb-4 pt-6 ${versionedDetail || detailCanScrollUp ? 'border-border' : 'border-transparent'}`}>
+            <div className="flex items-center gap-4 pr-9">
+              <AgentAvatarIcon value={detail.icon} expertFallback className="h-16 w-16 shrink-0" iconClassName="h-9 w-9" />
+              <div className="min-w-0 flex-1"><h2 id="expert-detail-title" className="break-words text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div>
+              {!versionedDetail && summonButton(detail, true)}
+            </div>
+            {versionedDetail && <div className="mt-4">
+              {hasExpertUpdate(detailInstance.presetRevision, detailRevision)
+                ? <ExpertUpdateAction key={`${detailInstance.id}-${detailRevision}`} agentId={detailInstance.id} revision={detailRevision} onCatalogChanged={() => { void load(); }} />
+                : <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-raised px-3 py-2">
+                  <p role="status" className="flex items-center gap-2 text-xs text-secondary"><CheckIcon aria-hidden="true" className="h-4 w-4" />{t('expertUpToDate')}</p>
+                  {summonButton(detail, true)}
+                </div>}
+            </div>}
           </div>
           {summonError && <div className="px-7 pt-4">{errorNotice}</div>}
           <div ref={detailScrollRef} id="expert-detail-content" data-expert-detail-scroll data-more-content={detailCanScrollDown}
             tabIndex={0} aria-labelledby="expert-detail-title"
             className="image-creation-scrollbar image-creation-detail-scroll min-h-0 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30">
-            <div className="px-7 pb-7">
+            <div className="px-7 pb-7 pt-4">
               <p className="mb-5 text-sm leading-6 text-secondary">{description(detail)}</p>
               <div className="mb-7 flex flex-wrap gap-2">{detail.tags.map(item => <button type="button" key={item.zh} title={t('expertFilterByTag').replace('{tag}', expertText(item, language))} onClick={() => { setTag(item.zh); setCategory(null); closeDetail(); }} className="rounded-md bg-surface-raised px-2.5 py-1 text-xs text-secondary hover:text-primary">{expertText(item, language)}</button>)}</div>
               {imageCatalog?.enabled && detail.id === imageCatalog.expertPresetId && <section className="mb-6">

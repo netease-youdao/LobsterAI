@@ -1,5 +1,5 @@
 import { AgentSource } from '@shared/agent/constants';
-import { hasExpertUpdate } from '@shared/agent/presets';
+import { expertReminderRevision } from '@shared/agent/presets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -250,9 +250,9 @@ export const useAgentSidebarState = () => {
         iconCustomized: agent.iconCustomized,
         source: agent.source,
         presetId: agent.presetId,
-        presetRevision: agent.presetRevision,
-        hasExpertUpdate: agent.source === AgentSource.Preset && !!agent.presetId
-          && hasExpertUpdate(agent.presetRevision, revisions[agent.presetId]),
+        updateRevision: agent.source === AgentSource.Preset && agent.presetId
+          ? expertReminderRevision(agent.presetRevision, revisions[agent.presetId], agent.dismissedPresetRevision)
+          : undefined,
         enabled: agent.enabled,
         pinned: agent.pinned ?? false,
         pinOrder: agent.pinOrder ?? null,

@@ -11,6 +11,13 @@ type UpgradeDeps = Pick<AgentHandlerDeps, 'getAgentManager' | 'getCoworkStore'
     getCoworkEngineRouter: () => Pick<ReturnType<AgentHandlerDeps['getCoworkEngineRouter']>, 'isSessionActive'>;
   };
 
+export function isExpertBusy(agentId: string, deps: Pick<UpgradeDeps, 'getCoworkStore' | 'getCoworkEngineRouter' | 'hasPendingMediaTask'>): boolean {
+  const store = deps.getCoworkStore();
+  if (store.hasRunningExpertTask(agentId)) return true;
+  const router = deps.getCoworkEngineRouter();
+  return store.listSessionIdsByAgent(agentId).some(id => router.isSessionActive(id) || deps.hasPendingMediaTask?.(id));
+}
+
 /** A revision is selected on the card. Never silently substitute a newer offer or another instance. */
 export async function upgradePreset(agentId: string, revision: number, deps: UpgradeDeps): Promise<ExpertUpgradeStatus> {
   const manager = deps.getAgentManager();
@@ -22,12 +29,8 @@ export async function upgradePreset(agentId: string, revision: number, deps: Upg
   if (agent.presetRevision === revision) return ExpertUpgradeStatus.Updated;
   if (!hasExpertUpdate(agent.presetRevision, revision)) return ExpertUpgradeStatus.Unavailable;
 
+  if (isExpertBusy(agentId, deps)) return ExpertUpgradeStatus.Busy;
   const store = deps.getCoworkStore();
-  const router = deps.getCoworkEngineRouter();
-  if (store.hasRunningExpertTask(agentId) || store.listSessionIdsByAgent(agentId).some(id =>
-    router.isSessionActive(id) || deps.hasPendingMediaTask?.(id))) {
-    return ExpertUpgradeStatus.Busy;
-  }
 
   const defaults = presetToCreateRequest(preset);
   const target = { ...defaults, id: agentId, iconCustomized: false, presetRevision: agent.presetRevision };

@@ -30,6 +30,8 @@ export const AgentIpcChannel = {
   ExpertCatalog: 'agents:expertCatalog',
   AddPreset: 'agents:addPreset',
   UpgradePreset: 'agents:upgradePreset',
+  DismissPresetUpdate: 'agents:dismissPresetUpdate',
+  IsExpertBusy: 'agents:isExpertBusy',
   /** Main to renderer: agents were changed by another window. */
   Changed: 'agents:changed',
 } as const;

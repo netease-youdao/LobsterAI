@@ -20,6 +20,7 @@ interface AgentSummary {
   source: 'custom' | 'preset';
   presetId?: string;
   presetRevision?: number;
+  dismissedPresetRevision?: number;
   skillIds: string[];
   subagentAllowAgentIds: string[];
 }

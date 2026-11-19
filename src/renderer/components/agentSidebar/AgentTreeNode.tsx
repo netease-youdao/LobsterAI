@@ -1,5 +1,4 @@
-import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
-import { ExpertUiEvent } from '@shared/agent/presets';
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -16,6 +15,7 @@ import TrashIcon from '../icons/TrashIcon';
 import AgentTaskRow from './AgentTaskRow';
 import { createSessionBatchKey } from './batchSelection';
 import ExpandAgentTasksRow from './ExpandAgentTasksRow';
+import ExpertUpdateBadge from './ExpertUpdateBadge';
 import type { AgentSidebarAgentNode, AgentSidebarTaskNode } from './types';
 
 interface AgentTreeNodeProps {
@@ -117,7 +117,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   const isBatchAgent = isBatchMode && batchAgentId === agent.id;
   const isOutsideBatchAgent = isBatchMode && batchAgentId !== null && batchAgentId !== agent.id;
   const agentName = getAgentDisplayName(agent);
-  const updateLabel = i18nService.t(agent.presetRevision ? 'expertUpdateAvailable' : 'expertSyncAvailable');
+  const rowButton = useRef<HTMLButtonElement>(null);
   const hasVisibleTasks = agent.tasks.length > 0;
   const visibleItems = [
     ...agent.tasks.map((task) => ({
@@ -301,8 +301,9 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
         <div className="flex h-full items-center gap-1 rounded-full pr-12 group-hover:bg-black/[0.03] dark:group-hover:bg-white/[0.04]">
           <button
             type="button"
+            ref={rowButton}
             onClick={handleAgentClick}
-            className={`flex h-full min-w-0 items-center gap-2.5 rounded-full pl-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground ${agent.hasExpertUpdate ? '' : 'flex-1'}`}
+            className={`flex h-full min-w-0 items-center gap-2.5 rounded-full pl-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground ${agent.updateRevision ? '' : 'flex-1'}`}
             role="treeitem"
             aria-level={1}
             aria-expanded={agent.isExpanded}
@@ -314,13 +315,8 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
               {agentName}
             </span>
           </button>
-          {agent.hasExpertUpdate && <button type="button"
-            title={updateLabel}
-            aria-label={`${updateLabel} · ${agentName}`}
-            onClick={() => window.dispatchEvent(new CustomEvent(ExpertUiEvent.OpenPlaza, { detail: { presetId: agent.presetId } }))}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary">
-            <ArrowPathIcon className="h-3.5 w-3.5" />
-          </button>}
+          {agent.updateRevision !== undefined && <ExpertUpdateBadge key={agent.updateRevision} agentId={agent.id}
+            name={agentName} revision={agent.updateRevision} focusRow={() => rowButton.current?.focus({ preventScroll: true })} />}
         </div>
 
         <button

@@ -239,6 +239,7 @@ export class SqliteStore {
         source TEXT NOT NULL DEFAULT 'custom',
         preset_id TEXT NOT NULL DEFAULT '',
         preset_revision INTEGER,
+        dismissed_preset_revision INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -652,6 +653,10 @@ export class SqliteStore {
     const modelColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
     if (!modelColumns.some(column => column.name === 'preset_revision')) {
       this.db.exec('ALTER TABLE agents ADD COLUMN preset_revision INTEGER;');
+      this.didRunMigration = true;
+    }
+    if (!modelColumns.some(column => column.name === 'dismissed_preset_revision')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN dismissed_preset_revision INTEGER;');
       this.didRunMigration = true;
     }
 

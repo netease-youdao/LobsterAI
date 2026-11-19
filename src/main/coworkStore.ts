@@ -465,6 +465,7 @@ export interface Agent {
   source: AgentSource;
   presetId: string;
   presetRevision?: number;
+  dismissedPresetRevision?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -3864,6 +3865,14 @@ export class CoworkStore {
       Date.now(), agent.id, AgentSource.Preset);
   }
 
+  dismissPresetUpdate(agentId: string, revision: number): boolean {
+    if (!Number.isSafeInteger(revision) || revision <= 0) return false;
+    return this.db.prepare(`UPDATE agents SET dismissed_preset_revision = ?
+      WHERE id = ? AND source = ? AND COALESCE(preset_revision, 0) < ?
+      AND COALESCE(dismissed_preset_revision, 0) <= ?`)
+      .run(revision, agentId, AgentSource.Preset, revision, revision).changes > 0;
+  }
+
   setExpertRevision(agentId: string, revision: number): boolean {
     return this.db.prepare('UPDATE agents SET preset_revision = ? WHERE id = ? AND source = ?')
       .run(revision, agentId, AgentSource.Preset).changes > 0;
@@ -3949,6 +3958,7 @@ export class CoworkStore {
     source: string;
     preset_id: string;
     preset_revision?: number | null;
+    dismissed_preset_revision?: number | null;
     created_at: number;
     updated_at: number;
   }): Agent {
@@ -3980,6 +3990,7 @@ export class CoworkStore {
       source: row.source as AgentSource,
       presetId: row.preset_id,
       presetRevision: row.preset_revision ?? undefined,
+      dismissedPresetRevision: row.dismissed_preset_revision ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

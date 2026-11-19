@@ -878,6 +878,8 @@ interface IElectronAPI {
     presetTemplates: () => Promise<PresetAgent[]>;
     expertCatalog: () => Promise<ExpertCatalog>;
     upgradePreset: (agentId: string, revision: number) => Promise<ExpertUpgradeStatus>;
+    dismissPresetUpdate: (agentId: string, revision: number) => Promise<boolean>;
+    isExpertBusy: (agentId: string) => Promise<boolean>;
     addPreset: (presetId: string, modelSelection?: AgentModelSelection) => Promise<Agent>;
     /** Another window changed agents; reload them. */
     onChanged?: (callback: () => void) => () => void;

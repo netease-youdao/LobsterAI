@@ -51,6 +51,16 @@ class AgentService {
     return status;
   }
 
+  isExpertBusy(agentId: string): Promise<boolean> {
+    return window.electron.agents.isExpertBusy(agentId);
+  }
+
+  async dismissPresetUpdate(agentId: string, revision: number): Promise<boolean> {
+    const dismissed = await window.electron.agents.dismissPresetUpdate(agentId, revision);
+    if (dismissed) await this.loadAgents();
+    return dismissed;
+  }
+
   async loadExpertCatalog(): Promise<ExpertCatalog> {
     const catalog = await window.electron.agents.expertCatalog();
     const revisions: Record<string, number> = {};
@@ -89,6 +99,7 @@ class AgentService {
           source: a.source,
           presetId: a.presetId,
           presetRevision: a.presetRevision,
+          dismissedPresetRevision: a.dismissedPresetRevision,
           skillIds: a.skillIds ?? [],
           subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
         }));

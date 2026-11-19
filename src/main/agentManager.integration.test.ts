@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
-import { ExpertUpgradeStatus } from '../shared/agent/presets';
+import { expertReminderRevision, ExpertUpgradeStatus, hasExpertUpdate } from '../shared/agent/presets';
 import { CoworkSessionStatusValue } from '../shared/cowork/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { AgentManager } from './agentManager';
@@ -155,6 +155,19 @@ test.each([undefined, 1])('explicit update keeps the same expert and history (in
   preset.revision = 1;
   expect(await upgradePreset(agent.id, 1, deps)).toBe(ExpertUpgradeStatus.Unavailable);
   expect(store.getAgent(agent.id)?.name).toBe('Edited after update');
+});
+
+test('dismissing a revision preserves the installed expert and the next release restores the reminder', async () => {
+  const manager = new AgentManager(store, async () => catalog);
+  const agent = (await manager.addPresetAgent(ExpertFixtureId.Data))!;
+  expect(store.dismissPresetUpdate(agent.id, 2)).toBe(true);
+  expect(store.dismissPresetUpdate(agent.id, 1)).toBe(false);
+  const saved = store.getAgent(agent.id)!;
+  expect(saved.dismissedPresetRevision).toBe(2);
+  expect(saved.presetRevision).toBe(agent.presetRevision);
+  expect(hasExpertUpdate(saved.presetRevision, 2)).toBe(true);
+  expect(expertReminderRevision(saved.presetRevision, 2, saved.dismissedPresetRevision)).toBeUndefined();
+  expect(expertReminderRevision(saved.presetRevision, 3, saved.dismissedPresetRevision)).toBe(3);
 });
 
 test('custom creation preserves an explicit caller-supplied identity', () => {

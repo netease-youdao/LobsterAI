@@ -16,7 +16,7 @@ import type { IMGatewayManager } from '../../im';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
 import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
-import { upgradePreset } from './upgradePreset';
+import { isExpertBusy, upgradePreset } from './upgradePreset';
 
 type SyncOpenClawConfig = (options: {
   reason: string;
@@ -314,6 +314,18 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to get expert catalog' };
     }
+  });
+
+  ipcMain.handle(AgentIpcChannel.IsExpertBusy, (_event, agentId: string) => isExpertBusy(agentId, deps));
+  ipcMain.handle(AgentIpcChannel.DismissPresetUpdate, async (event, agentId: string, revision: number) => {
+    const manager = getAgentManager();
+    const presetId = manager.getAgent(agentId)?.presetId;
+    if (!presetId) return false;
+    const preset = (await manager.getExpertCatalog()).experts.find(expert => expert.id === presetId);
+    if (!preset || preset.revision !== revision) return false;
+    const saved = deps.getCoworkStore().dismissPresetUpdate(agentId, revision);
+    if (saved) notifyAgentsChanged(event.sender);
+    return saved;
   });
 
   const upgrades = new Map<string, { revision: number; result: Promise<ExpertUpgradeStatus> }>();

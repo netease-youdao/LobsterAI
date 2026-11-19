@@ -39,6 +39,11 @@ export function hasExpertUpdate(installed: number | undefined, published: number
   return typeof published === 'number' && (installed === undefined || published > installed);
 }
 
+export function expertReminderRevision(installed?: number, published?: number, dismissed?: number): number | undefined {
+  return published !== undefined && hasExpertUpdate(installed, published) && published > (dismissed ?? 0)
+    ? published : undefined;
+}
+
 export const ExpertUpgradeStatus = {
   Updated: 'updated', Busy: 'busy', Unavailable: 'unavailable',
 } as const;
