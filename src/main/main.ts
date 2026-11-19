@@ -12124,6 +12124,7 @@ if (!gotTheLock) {
     getAgentManager,
     getCoworkStore,
     getCoworkEngineRouter,
+    hasPendingMediaTask: sessionId => [...pendingMediaTasks.values()].some(task => task.sessionId === sessionId),
     getIMGatewayManager,
     refreshImSessionWorkingDirectoriesForAgent,
     resolveAgentWorkspacePath,

@@ -10,6 +10,9 @@ export interface AgentSidebarAgentSummary {
   icon: string;
   iconCustomized?: boolean;
   source?: AgentSource;
+  presetId?: string;
+  presetRevision?: number;
+  hasExpertUpdate?: boolean;
   enabled: boolean;
   pinned: boolean;
   pinOrder?: number | null;

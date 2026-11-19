@@ -31,8 +31,18 @@ export interface PresetAgent {
   category: string;
   tags: LocalizedExpertText[];
   starterPrompts: LocalizedExpertText[];
+  revision?: number;
   installed?: boolean;
 }
+
+export function hasExpertUpdate(installed: number | undefined, published: number | undefined): boolean {
+  return typeof published === 'number' && (installed === undefined || published > installed);
+}
+
+export const ExpertUpgradeStatus = {
+  Updated: 'updated', Busy: 'busy', Unavailable: 'unavailable',
+} as const;
+export type ExpertUpgradeStatus = typeof ExpertUpgradeStatus[keyof typeof ExpertUpgradeStatus];
 
 export interface ExpertCategoryDefinition {
   id: string;

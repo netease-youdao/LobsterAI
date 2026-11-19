@@ -660,6 +660,7 @@ contextBridge.exposeInMainWorld('electron', {
       if (!result?.success) throw new Error(result?.error || 'Failed to load expert catalog');
       return result.catalog;
     },
+    upgradePreset: (agentId: string, revision: number) => ipcRenderer.invoke(AgentIpcChannel.UpgradePreset, agentId, revision),
     addPreset: async (presetId: string, modelSelection?: AgentModelSelection) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId, modelSelection);
       if (!result?.success) throw new Error(result?.error || 'Failed to add preset agent');

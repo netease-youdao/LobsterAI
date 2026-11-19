@@ -1,7 +1,9 @@
 import { ArrowRightIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import type { ExpertCatalog, PresetAgent } from '@shared/agent/presets';
-import { UsageEntry, usageFailureCode,UsageOutcome, UsageStage } from '@shared/analytics/usage';
+import { AgentSource } from '@shared/agent/constants';
+import { type ExpertCatalog, ExpertUpgradeStatus, hasExpertUpdate, type PresetAgent } from '@shared/agent/presets';
+import { UsageEntry, usageFailureCode, UsageOutcome, UsageStage } from '@shared/analytics/usage';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import type { ImageCreationExample } from '../../../shared/imageCreation/constants';
 import { agentService } from '../../services/agent';
@@ -9,6 +11,7 @@ import { i18nService } from '../../services/i18n';
 import { captureImageCreationDraft, type PreparedImageExampleReference, stageImageCreationReference } from '../../services/imageCreationDraft';
 import { beginLatestAsyncRequest, invalidateLatestAsyncRequest, isLatestAsyncRequest } from '../../services/latestAsyncRequest';
 import { prepareExpertAnalytics, reportExpertJourney } from '../../services/usageAnalytics';
+import type { RootState } from '../../store';
 import type { Agent } from '../../types/agent';
 import AgentAvatarIcon from '../agent/AgentAvatarIcon';
 import { MANAGEMENT_META_TEXT, MANAGEMENT_PAGE_TITLE_TEXT } from '../common/managementTypography';
@@ -27,18 +30,18 @@ import { useExpertLoginGate } from './useExpertLoginGate';
 
 interface ExpertPlazaViewProps {
   onSummon: (agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => void;
-  initialPresetId?: string;
+  initialRequest?: { presetId: string };
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
 }
 
-const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPresetId, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
+const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialRequest, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
   const { catalog: imageCatalog } = useImageCreationCatalog();
   const { requestLogin, loginPrompt } = useExpertLoginGate();
   const [imageExample, setImageExample] = useState<ImageCreationExample | null>(null);
-  const openedInitialPreset = useRef<string>();
+  const openedInitialPreset = useRef<ExpertPlazaViewProps['initialRequest']>();
   const [catalog, setCatalog] = useState<ExpertCatalog | null>(null);
   const presets = useMemo(() => catalog?.experts ?? [], [catalog]);
   const [loading, setLoading] = useState(true);
@@ -49,12 +52,15 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
   const [detail, setDetail] = useState<PresetAgent | null>(null);
   const { scrollRef: detailScrollRef, canScrollUp: detailCanScrollUp, canScrollDown: detailCanScrollDown, scrollNext: scrollDetailNext } = useScrollAffordance<HTMLDivElement>(detail?.id ?? '');
   useEffect(() => {
-    if (!initialPresetId || openedInitialPreset.current === initialPresetId) return;
-    const initial = presets.find(preset => preset.id === initialPresetId);
-    if (initial) { setDetail(initial); openedInitialPreset.current = initialPresetId; }
-  }, [initialPresetId, presets]);
+    if (!initialRequest || openedInitialPreset.current === initialRequest) return;
+    const initial = presets.find(preset => preset.id === initialRequest.presetId);
+    if (initial) { setDetail(initial); openedInitialPreset.current = initialRequest; }
+  }, [initialRequest, presets]);
   const [summoning, setSummoning] = useState<string | null>(null);
-  const [summonFailed, setSummonFailed] = useState(false);
+  const [summonError, setSummonError] = useState('');
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const installed = useMemo(() => new Map(agents.filter(agent => agent.source === AgentSource.Preset)
+    .map(agent => [agent.presetId, agent])), [agents]);
   const mountedRef = useRef(false);
   const loadRequestIdRef = useRef(0);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -88,11 +94,14 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
     setLoadFailed(false);
     const startedAt = Date.now();
     try {
-      const result = await window.electron.agents.expertCatalog();
+      const result = await agentService.loadExpertCatalog();
       if (!isLatestAsyncRequest(loadRequestIdRef, requestId)) return;
       await agentService.loadAgents();
       if (!isLatestAsyncRequest(loadRequestIdRef, requestId)) return;
-      if (mountedRef.current) setCatalog(result);
+      if (mountedRef.current) {
+        setCatalog(result);
+        setDetail(current => current ? result.experts.find(expert => expert.id === current.id) ?? null : null);
+      }
       reportExpertJourney(UsageStage.Load, { journeyId, outcome: UsageOutcome.Succeeded,
         catalogVersion: result.version, count: result.experts.length, durationMs: Date.now() - startedAt });
     } catch (error) {
@@ -145,21 +154,36 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
     detailEntry.current = scenarioId ? UsageEntry.Featured : UsageEntry.Plaza;
     reportExpertJourney(UsageStage.Detail, { journeyId, presetId: preset.id, catalogVersion: catalog?.version,
       entry: detailEntry.current, scenarioId });
+    setSummonError('');
     setDetail(preset);
   };
 
-  const summon = async (preset: PresetAgent, prompt = expertText(preset.starterPrompts[0], language), starterIndex?: number) => {
+  const summon = async (preset: PresetAgent, prompt = expertText(preset.starterPrompts[0], language), starterIndex?: number, upgrade = false) => {
     if (summoningRef.current) return;
-    if (requestLogin(() => { void summon(preset, prompt, starterIndex); })) return;
+    if (requestLogin(() => { void summon(preset, prompt, starterIndex, upgrade); })) return;
     summoningRef.current = true;
     setSummoning(preset.id);
-    setSummonFailed(false);
+    setSummonError('');
     const startedAt = Date.now();
     const entry = starterIndex !== undefined ? UsageEntry.Starter : detail ? UsageEntry.Detail : UsageEntry.Plaza;
     const fields = { journeyId, presetId: preset.id, catalogVersion: catalog?.version, entry,
-      starterIndex, wasInstalled: Boolean(preset.installed) };
+      starterIndex, wasInstalled: installed.has(preset.id) };
     reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Started });
     try {
+      if (upgrade) {
+        const instance = installed.get(preset.id);
+        const status = instance && preset.revision
+          ? await agentService.upgradePreset(instance.id, preset.revision) : ExpertUpgradeStatus.Unavailable;
+        if (status !== ExpertUpgradeStatus.Updated) {
+          reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Interrupted,
+            failureCode: status, durationMs: Date.now() - startedAt });
+          if (mountedRef.current) {
+            setSummonError(status === ExpertUpgradeStatus.Busy ? 'expertUpgradeBusy' : 'expertUpgradeUnavailable');
+            if (status === ExpertUpgradeStatus.Unavailable) void load();
+          }
+          return;
+        }
+      }
       const agent = await agentService.addPreset(preset.id);
       if (!agent) throw new Error('Expert preparation failed');
       reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Succeeded, durationMs: Date.now() - startedAt });
@@ -171,25 +195,36 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
       reportExpertJourney(UsageStage.Summon, { ...fields, outcome: UsageOutcome.Failed,
         failureCode: usageFailureCode(error), durationMs: Date.now() - startedAt });
       console.error('[ExpertPlaza] Failed to summon expert:', error);
-      if (mountedRef.current) setSummonFailed(true);
+      if (mountedRef.current) setSummonError('expertSummonFailed');
     } finally {
       summoningRef.current = false;
       if (mountedRef.current) setSummoning(null);
     }
   };
 
-  const summonButton = (preset: PresetAgent, large = false) => (
-    <button type="button" disabled={summoning !== null} onClick={() => void summon(preset)}
-      aria-label={`${t('expertSummon')} ${name(preset)}`}
-      className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
-        ? 'h-8 px-5 text-sm'
-        : `h-7 px-3 ${MANAGEMENT_META_TEXT} ${summoning === preset.id ? '' : 'invisible group-hover:visible group-focus-within:visible'}`}`}>
-      {summoning === preset.id ? t('expertSummoning') : t('expertSummon')}
-    </button>
-  );
+  const summonButton = (preset: PresetAgent, large = false) => {
+    const instance = installed.get(preset.id);
+    const update = !!instance && hasExpertUpdate(instance.presetRevision, preset.revision);
+    const action = update ? (instance.presetRevision ? 'expertUpgradeAndUse' : 'expertSyncAndUse')
+      : instance ? 'expertUse' : 'expertSummon';
+    return (
+      <div className="pointer-events-auto relative z-10 flex shrink-0 flex-wrap items-center justify-end gap-2">
+        {large && update && <button type="button" disabled={summoning !== null} onClick={() => void summon(preset)}
+          className="rounded-lg px-2 py-1.5 text-xs text-secondary hover:text-foreground">{t('expertKeepUsing')}</button>}
+        <button type="button" disabled={summoning !== null} onClick={() => void summon(preset, undefined, undefined, update)}
+          aria-label={`${t(action)} ${name(preset)}`}
+          title={update && instance.presetRevision ? `v${instance.presetRevision} → v${preset.revision}` : undefined}
+          className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
+            ? 'h-8 px-5 text-sm'
+            : `h-7 px-3 ${MANAGEMENT_META_TEXT} ${summoning === preset.id || update ? '' : 'invisible group-hover:visible group-focus-within:visible'}`}`}>
+          {summoning === preset.id ? t('expertSummoning') : t(action)}
+        </button>
+      </div>
+    );
+  };
 
   const closeDetail = () => setDetail(null);
-  const errorNotice = summonFailed && <p role="alert" className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">{t('expertSummonFailed')}</p>;
+  const errorNotice = summonError && <p role="alert" className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">{t(summonError)}</p>;
 
   return (
     <div ref={rootRef} data-skin-management-page="true" className="relative z-10 flex h-full min-w-0 flex-1 flex-col bg-background">
@@ -278,7 +313,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialPres
             <div className="min-w-0 flex-1"><h2 id="expert-detail-title" className="break-words text-xl font-semibold text-foreground">{name(detail)}</h2><p className="mt-1.5 text-xs text-muted">{categoryName(detail.category)}</p></div>
             {summonButton(detail, true)}
           </div>
-          {summonFailed && <div className="px-7 pt-4">{errorNotice}</div>}
+          {summonError && <div className="px-7 pt-4">{errorNotice}</div>}
           <div ref={detailScrollRef} id="expert-detail-content" data-expert-detail-scroll data-more-content={detailCanScrollDown}
             tabIndex={0} aria-labelledby="expert-detail-title"
             className="image-creation-scrollbar image-creation-detail-scroll min-h-0 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30">

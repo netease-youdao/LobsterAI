@@ -238,6 +238,7 @@ export class SqliteStore {
         is_default INTEGER NOT NULL DEFAULT 0,
         source TEXT NOT NULL DEFAULT 'custom',
         preset_id TEXT NOT NULL DEFAULT '',
+        preset_revision INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -648,9 +649,14 @@ export class SqliteStore {
       throw error;
     }
 
+    const modelColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+    if (!modelColumns.some(column => column.name === 'preset_revision')) {
+      this.db.exec('ALTER TABLE agents ADD COLUMN preset_revision INTEGER;');
+      this.didRunMigration = true;
+    }
+
     // Legacy model bindings have no provenance: preserve them until the user
     // explicitly opts into inheritance. New experts opt in when installed.
-    const modelColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
     if (!modelColumns.some(column => column.name.toLowerCase() === 'model_selection_mode')) {
       this.db.exec(`ALTER TABLE agents ADD COLUMN model_selection_mode TEXT NOT NULL DEFAULT '${AgentModelSelectionMode.Explicit}';`);
     }

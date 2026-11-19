@@ -12,7 +12,7 @@ import type {
 } from '../../shared/activity/constants';
 import type { AgentModelSelectionMode } from '../../shared/agent/constants';
 import type { AgentModelSelection } from '../../shared/agent/modelSelection';
-import type { ExpertCatalog } from '../../shared/agent/presets';
+import type { ExpertCatalog, ExpertUpgradeStatus } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
@@ -877,6 +877,7 @@ interface IElectronAPI {
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
     expertCatalog: () => Promise<ExpertCatalog>;
+    upgradePreset: (agentId: string, revision: number) => Promise<ExpertUpgradeStatus>;
     addPreset: (presetId: string, modelSelection?: AgentModelSelection) => Promise<Agent>;
     /** Another window changed agents; reload them. */
     onChanged?: (callback: () => void) => () => void;

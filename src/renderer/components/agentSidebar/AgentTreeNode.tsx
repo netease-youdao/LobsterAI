@@ -1,4 +1,5 @@
-import { ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ExpertUiEvent } from '@shared/agent/presets';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -116,6 +117,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   const isBatchAgent = isBatchMode && batchAgentId === agent.id;
   const isOutsideBatchAgent = isBatchMode && batchAgentId !== null && batchAgentId !== agent.id;
   const agentName = getAgentDisplayName(agent);
+  const updateLabel = i18nService.t(agent.presetRevision ? 'expertUpdateAvailable' : 'expertSyncAvailable');
   const hasVisibleTasks = agent.tasks.length > 0;
   const visibleItems = [
     ...agent.tasks.map((task) => ({
@@ -296,21 +298,30 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   return (
     <div className="space-y-0.5">
       <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-9 w-[calc(100%+12px)] bg-surface-raised`}>
-        <button
-          type="button"
-          onClick={handleAgentClick}
-          className="flex h-full w-full items-center gap-2.5 rounded-full py-0 pl-2 pr-12 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors group-hover:bg-black/[0.03] dark:group-hover:bg-white/[0.04]"
-          role="treeitem"
-          aria-level={1}
-          aria-expanded={agent.isExpanded}
-        >
-          <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none text-foreground transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0">
-            <AgentAvatar agent={agent} />
-          </span>
-          <span className="min-w-0 flex-1 truncate">
-            {agentName}
-          </span>
-        </button>
+        <div className="flex h-full items-center gap-1 rounded-full pr-12 group-hover:bg-black/[0.03] dark:group-hover:bg-white/[0.04]">
+          <button
+            type="button"
+            onClick={handleAgentClick}
+            className={`flex h-full min-w-0 items-center gap-2.5 rounded-full pl-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground ${agent.hasExpertUpdate ? '' : 'flex-1'}`}
+            role="treeitem"
+            aria-level={1}
+            aria-expanded={agent.isExpanded}
+          >
+            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none text-foreground transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0">
+              <AgentAvatar agent={agent} />
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+              {agentName}
+            </span>
+          </button>
+          {agent.hasExpertUpdate && <button type="button"
+            title={updateLabel}
+            aria-label={`${updateLabel} · ${agentName}`}
+            onClick={() => window.dispatchEvent(new CustomEvent(ExpertUiEvent.OpenPlaza, { detail: { presetId: agent.presetId } }))}
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-primary hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary">
+            <ArrowPathIcon className="h-3.5 w-3.5" />
+          </button>}
+        </div>
 
         <button
           type="button"

@@ -193,7 +193,7 @@ const App: React.FC = () => {
   const [showFeedback, setShowFeedback] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
   const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
-  const [initialExpertPresetId, setInitialExpertPresetId] = useState<string | undefined>();
+  const [expertRequest, setExpertRequest] = useState<{ presetId: string }>();
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
     requestId: number;
@@ -741,7 +741,7 @@ const App: React.FC = () => {
   const handleShowExperts = useCallback((event?: Event) => {
     if (!ENABLE_EXPERT_PLAZA_UI) return;
     const presetId = (event as CustomEvent<{ presetId?: unknown }> | undefined)?.detail?.presetId;
-    setInitialExpertPresetId(typeof presetId === 'string' ? presetId : undefined);
+    setExpertRequest(typeof presetId === 'string' ? { presetId } : undefined);
     setMainView(MainView.Experts);
   }, []);
 
@@ -2000,7 +2000,7 @@ const App: React.FC = () => {
               />
             ) : ENABLE_EXPERT_PLAZA_UI && mainView === MainView.Experts ? (
               <ExpertPlazaView
-                initialPresetId={initialExpertPresetId}
+                initialRequest={expertRequest}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
