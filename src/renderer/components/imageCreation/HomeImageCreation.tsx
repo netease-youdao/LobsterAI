@@ -10,7 +10,6 @@ import type { RootState } from '../../store';
 import type { LocalizedQuickAction } from '../../types/quickAction';
 import { CoworkUiEvent } from '../cowork/constants';
 import { QuickActionBar } from '../quick-actions';
-import { readHomeExamplesCollapsed, rememberHomeExamplesCollapsed } from './homeExamplesPreference';
 import ImageExampleDialog from './ImageExampleDialog';
 import ImageExampleShelf from './ImageExampleShelf';
 import { useImageCreationCatalog } from './useImageCreationCatalog';
@@ -27,19 +26,16 @@ interface Props {
 export default function HomeImageCreation({ actions, selectedActionId, onActionSelect, onDeselect, onDraftReady, children }: Props) {
   const t = (key: string) => i18nService.t(key);
   const { catalog, failed, retry } = useImageCreationCatalog();
-  const [expanded, setExpanded] = useState(() => !selectedActionId && !readHomeExamplesCollapsed());
+  const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState<ImageCreationExample | null>(null);
   const [backup, setBackup] = useState<ImageCreationDraftBackup | null>(null);
   const mounted = useRef(true);
   const preparation = useRef(0);
   const owner = useSelector((state: RootState) => `${state.auth.ownerAccountKey}:${state.auth.accountGeneration}`);
   const visible = expanded && !selectedActionId;
-  // Opening or closing the examples by hand is a preference; switching tabs or
-  // using an example is not, so those paths only change the local state.
-  const setExamplesOpen = (open: boolean) => { rememberHomeExamplesCollapsed(!open); setExpanded(open); };
   useEffect(() => {
     mounted.current = true;
-    const reset = () => { preparation.current++; setExpanded(!readHomeExamplesCollapsed()); setSelected(null); setBackup(null); };
+    const reset = () => { preparation.current++; setExpanded(false); setSelected(null); setBackup(null); };
     const onFocusInput = (event: Event) => { if ((event as CustomEvent<{ clear?: boolean }>).detail?.clear) reset(); };
     window.addEventListener(CoworkUiEvent.ShortcutNewSession, reset);
     window.addEventListener(CoworkUiEvent.FocusInput, onFocusInput);
@@ -49,7 +45,7 @@ export default function HomeImageCreation({ actions, selectedActionId, onActionS
       window.removeEventListener(CoworkUiEvent.FocusInput, onFocusInput);
     };
   }, []);
-  useEffect(() => { preparation.current++; setBackup(null); setSelected(null); }, [owner]);
+  useEffect(() => { preparation.current++; setExpanded(false); setBackup(null); setSelected(null); }, [owner]);
   useEffect(() => {
     if (!catalog?.enabled) { preparation.current++; setSelected(null); }
     else if (selected && !catalog.examples.some(example => example.id === selected.id)) setSelected(null);
@@ -68,7 +64,7 @@ export default function HomeImageCreation({ actions, selectedActionId, onActionS
   return <div className="w-full" data-image-creation-home>
     <QuickActionBar actions={actions} selectedActionId={selectedActionId} onActionSelect={id => { setExpanded(false); onActionSelect(id); }}>
       {(catalog?.enabled || (!catalog && !failed)) && <button type="button" aria-pressed={visible} aria-expanded={visible} aria-controls="image-creation-gallery"
-        data-image-creation-tab={ImageCreation.TabId} onClick={() => { if (selectedActionId) onDeselect(); setExamplesOpen(!visible); }}
+        data-image-creation-tab={ImageCreation.TabId} onClick={() => { if (selectedActionId) onDeselect(); setExpanded(!visible); }}
         className={`flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[length:var(--lobster-text-sidebarCompact)] leading-5 transition-colors ${visible ? 'border-transparent bg-surface-raised text-foreground' : 'border-border-subtle bg-surface text-secondary hover:border-primary/30 hover:text-foreground'}`}>
         <PhotoIcon className="h-3.5 w-3.5" /><span>{t('imageCreationTab')}</span><span className="rounded bg-amber-500/10 px-1 text-[10px] text-amber-600 dark:text-amber-400">{t('imageCreationNew')}</span>
       </button>}
@@ -91,7 +87,7 @@ export default function HomeImageCreation({ actions, selectedActionId, onActionS
         <button type="button" className="flex items-center gap-1 rounded transition-colors hover:text-foreground"
           onClick={() => window.dispatchEvent(new CustomEvent(ExpertUiEvent.OpenPlaza, { detail: { presetId: catalog.expertPresetId } }))}>{t('imageCreationMore')}<ArrowRightIcon className="h-3.5 w-3.5" /></button>
         <button type="button" className="flex shrink-0 items-center gap-1 rounded transition-colors hover:text-foreground"
-          onClick={() => setExamplesOpen(false)}>{t('coworkQuickActionCollapse')}<ChevronUpIcon className="h-3.5 w-3.5" /></button>
+          onClick={() => setExpanded(false)}>{t('coworkQuickActionCollapse')}<ChevronUpIcon className="h-3.5 w-3.5" /></button>
       </div>
     </section>}
     {visible && !catalog && !failed && <div className="absolute inset-x-0 top-full grid grid-cols-4 gap-x-4 pt-6" aria-label={t('loading')}>{Array.from({ length: 4 }, (_, index) => <div key={index} className="aspect-[8/5] animate-pulse rounded-xl bg-surface-raised" />)}</div>}
