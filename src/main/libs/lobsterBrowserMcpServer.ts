@@ -4,6 +4,7 @@ import path from 'path';
 import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
+  BrowserCredentialTimeout,
 } from '../../shared/browserCredentials/constants';
 
 const SERVER_FILE_NAME = 'lobster-browser-mcp-server.mjs';
@@ -137,7 +138,7 @@ function errorResult(message) {
   };
 }
 
-async function callBridge(name, args) {
+async function callBridge(name, args, signal) {
   if (!bridgeUrl || !bridgeSecret) {
     writeDiagnostic(
       'bridge-unavailable tool=' + JSON.stringify(name)
@@ -155,6 +156,7 @@ async function callBridge(name, args) {
         'x-mcp-bridge-secret': bridgeSecret,
       },
       body: JSON.stringify({ tool: name, args: args || {} }),
+      signal,
     });
   } catch (error) {
     writeDiagnostic(
@@ -187,8 +189,8 @@ async function callBridge(name, args) {
   return payload;
 }
 
-async function callTool(name, args) {
-  const result = await callBridge(name, args);
+async function callTool(name, args, signal) {
+  const result = await callBridge(name, args, signal);
   if (name !== 'take_screenshot' || result?.isError) {
     return result;
   }
@@ -206,8 +208,13 @@ async function callTool(name, args) {
   };
 }
 
+const activeCalls = new Map();
 async function handleRequest(message) {
   if (!message || message.jsonrpc !== '2.0' || !message.method) return;
+  if (message.method === 'notifications/cancelled') {
+    activeCalls.get(message.params?.requestId)?.abort();
+    return;
+  }
   if (message.method.startsWith('notifications/')) return;
 
   let result;
@@ -224,7 +231,16 @@ async function handleRequest(message) {
     if (typeof name !== 'string' || !tools.some((tool) => tool.name === name)) {
       result = errorResult('Unknown LobsterAI browser tool.');
     } else {
-      result = await callTool(name, message.params?.arguments || {});
+      const controller = new AbortController();
+      activeCalls.set(message.id, controller);
+      const timer = name === '${BrowserCredentialLoginTool.Name}'
+        ? setTimeout(() => controller.abort(), ${BrowserCredentialTimeout.Bridge}) : undefined;
+      try {
+        result = await callTool(name, message.params?.arguments || {}, controller.signal);
+      } finally {
+        clearTimeout(timer);
+        activeCalls.delete(message.id);
+      }
     }
   } else if (message.method === 'ping') {
     result = {};
@@ -243,6 +259,7 @@ async function handleRequest(message) {
 }
 
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('close', () => { for (const controller of activeCalls.values()) controller.abort(); });
 input.on('line', (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;

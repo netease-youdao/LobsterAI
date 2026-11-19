@@ -13,6 +13,7 @@ import {
   type BrowserCredentialLoginResult,
   type BrowserCredentialLoginState,
   BrowserCredentialLoginStatus,
+  BrowserCredentialTimeout,
   type BrowserCredentialUseMode,
 } from '../../shared/browserCredentials/constants';
 import type { BrowserCredentialApprovalService } from './browserCredentialApprovalService';
@@ -35,6 +36,7 @@ const GUEST_COMMAND_TIMEOUT_MS = 5_000;
 const POLL_INTERVAL_MS = 500;
 
 export interface AgentBrowserCredentialLoginRequest {
+  signal?: AbortSignal;
   url: string;
   sessionId?: string;
   accountHint?: string;
@@ -54,6 +56,13 @@ export interface AgentBrowserCredentialLoginDeps {
 
 const delay = (milliseconds: number): Promise<void> => new Promise(resolve => {
   setTimeout(resolve, milliseconds);
+});
+
+const abortable = <T>(work: Promise<T>, signal: AbortSignal): Promise<T> => new Promise((resolve, reject) => {
+  const abort = (): void => reject(signal.reason);
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
 });
 
 const readOrigin = (value: string): string | undefined => {
@@ -92,6 +101,7 @@ const outcomeMessage = (outcome: BrowserCredentialLoginOutcome): string => {
 export class AgentBrowserCredentialLogin {
   private secureView: WebContentsView | null = null;
   private active = false;
+  private activeController: AbortController | null = null;
   private crossOriginNavigationBlocked = false;
 
   constructor(private readonly deps: AgentBrowserCredentialLoginDeps) {}
@@ -104,6 +114,7 @@ export class AgentBrowserCredentialLogin {
     if (this.active) {
       return this.failedResult(request.url, 'Another saved-credential sign-in is already in progress.');
     }
+    if (request.signal?.aborted) return this.failedResult(request.url, 'Saved-credential sign-in was cancelled.');
 
     let origin: string;
     try {
@@ -125,9 +136,29 @@ export class AgentBrowserCredentialLogin {
     }
 
     this.active = true;
-    this.setState({ status: BrowserCredentialLoginStatus.AwaitingApproval, origin });
+    const startedAt = Date.now();
+    const diagnostic = { sessionId: request.sessionId };
+    console.debug('[BrowserCredentialLogin] Awaiting approval', diagnostic);
+    const controller = new AbortController();
+    this.activeController = controller;
+    const cancel = (): void => controller.abort(new Error('Saved-credential sign-in was cancelled.'));
+    const destroyView = (): void => {
+      const view = this.secureView;
+      this.secureView = null;
+      try {
+        this.deps.onViewChanged(null);
+      } catch {
+        console.warn('[BrowserCredentialLogin] Failed to detach cancelled login view', diagnostic);
+      }
+      this.closeView(view);
+    };
+    request.signal?.addEventListener('abort', cancel, { once: true });
+    controller.signal.addEventListener('abort', destroyView, { once: true });
+    let executionTimer: ReturnType<typeof setTimeout> | undefined;
     try {
+      this.setState({ status: BrowserCredentialLoginStatus.AwaitingApproval, origin });
       const approval = await this.deps.approvalService.requestApproval({
+        signal: controller.signal,
         sessionId: request.sessionId,
         sessionKey: this.deps.resolveSessionKey(request.sessionId),
         origin,
@@ -136,17 +167,25 @@ export class AgentBrowserCredentialLogin {
         reason: request.reason,
         useMode: this.deps.getUseMode(),
       });
+      controller.signal.throwIfAborted();
       if (!approval.approved || !approval.credential) {
+        console.debug('[BrowserCredentialLogin] Approval not granted', { ...diagnostic, elapsedMs: Date.now() - startedAt });
         return this.finishResult(BrowserCredentialLoginOutcome.Denied, origin);
       }
 
+      console.debug('[BrowserCredentialLogin] Approval granted; starting login', { ...diagnostic, approvalMs: Date.now() - startedAt });
+      executionTimer = setTimeout(() => {
+        console.warn('[BrowserCredentialLogin] Execution deadline reached', diagnostic);
+        controller.abort(new Error('Saved-credential sign-in execution timed out.'));
+      }, BrowserCredentialTimeout.Execution);
       const secret = this.deps.credentialService.getSecret(approval.credential.id, origin);
       this.setState({
         status: BrowserCredentialLoginStatus.SigningIn,
         origin,
         username: secret.summary.username,
       });
-      const outcome = await this.runSecureLogin(request.url, origin, secret);
+      const outcome = await abortable(this.runSecureLogin(request.url, origin, secret, controller.signal), controller.signal);
+      controller.signal.throwIfAborted();
       if (
         outcome === BrowserCredentialLoginOutcome.Authenticated
         || outcome === BrowserCredentialLoginOutcome.Submitted
@@ -154,37 +193,51 @@ export class AgentBrowserCredentialLogin {
       ) {
         this.deps.credentialService.markUsed(secret.summary.id);
         this.deps.browserSession.flushStorageData();
-        await this.deps.browserSession.cookies.flushStore();
+        await abortable(this.deps.browserSession.cookies.flushStore(), controller.signal);
       }
+      console.debug('[BrowserCredentialLogin] Login finished', { ...diagnostic, outcome, elapsedMs: Date.now() - startedAt });
       return this.finishResult(outcome, origin, secret.summary.username);
     } catch (error) {
+      // Page/navigation errors can include URLs; do not log their payloads or credentials.
+      console.warn('[BrowserCredentialLogin] Login interrupted', { ...diagnostic, aborted: controller.signal.aborted, elapsedMs: Date.now() - startedAt });
       return this.failedResult(
         origin,
         error instanceof Error ? error.message : 'Saved-credential sign-in failed.',
       );
     } finally {
-      await this.closeSecureView();
-      this.active = false;
+      clearTimeout(executionTimer);
+      try {
+        await this.closeSecureView();
+      } finally {
+        request.signal?.removeEventListener('abort', cancel);
+        controller.signal.removeEventListener('abort', destroyView);
+        this.activeController = null;
+        this.active = false;
+      }
     }
   }
 
   async dispose(): Promise<void> {
+    this.activeController?.abort(new Error('Saved-credential sign-in was cancelled.'));
     await this.closeSecureView();
-    this.active = false;
   }
 
   private async runSecureLogin(
     url: string,
     expectedOrigin: string,
     secret: BrowserCredentialSecret,
+    signal: AbortSignal,
   ): Promise<BrowserCredentialLoginOutcome> {
+    signal.throwIfAborted();
     const view = this.createSecureView(expectedOrigin);
     this.secureView = view;
     this.deps.onViewChanged(view);
     await view.webContents.loadURL(url);
+    signal.throwIfAborted();
     this.assertNoCrossOriginNavigation();
 
-    let inspection = await this.waitForLoginForm(view.webContents);
+    let inspection = await this.waitForLoginForm(view.webContents, signal);
+    signal.throwIfAborted();
     this.assertNoCrossOriginNavigation();
     if (inspection.kind === BrowserCredentialGuestResultKind.Captcha) {
       return BrowserCredentialLoginOutcome.NeedsCaptcha;
@@ -204,14 +257,16 @@ export class AgentBrowserCredentialLogin {
       type: BrowserCredentialGuestCommandType.FillAndSubmit,
       username: secret.summary.username,
       password: secret.password,
-    });
+    }, signal);
 
     if (submission.kind === BrowserCredentialGuestResultKind.SubmittedUsername) {
       inspection = await this.waitForLoginForm(
         view.webContents,
+        signal,
         LOGIN_TRANSITION_TIMEOUT_MS,
         BrowserCredentialGuestResultKind.UsernameForm,
       );
+      signal.throwIfAborted();
       this.assertNoCrossOriginNavigation();
       if (inspection.kind === BrowserCredentialGuestResultKind.Captcha) {
         return BrowserCredentialLoginOutcome.NeedsCaptcha;
@@ -229,7 +284,7 @@ export class AgentBrowserCredentialLogin {
         type: BrowserCredentialGuestCommandType.FillAndSubmit,
         username: secret.summary.username,
         password: secret.password,
-      });
+      }, signal);
     }
 
     if (submission.kind === BrowserCredentialGuestResultKind.Captcha) {
@@ -245,6 +300,7 @@ export class AgentBrowserCredentialLogin {
     const deadline = Date.now() + LOGIN_TRANSITION_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await delay(POLL_INTERVAL_MS);
+      signal.throwIfAborted();
       this.assertNoCrossOriginNavigation();
       const currentOrigin = readOrigin(view.webContents.getURL());
       if (currentOrigin && currentOrigin !== expectedOrigin) {
@@ -253,7 +309,7 @@ export class AgentBrowserCredentialLogin {
       const current = await this.sendGuestCommand(view.webContents, {
         requestId: crypto.randomUUID(),
         type: BrowserCredentialGuestCommandType.Inspect,
-      }).catch((): null => null);
+      }, signal).catch((): null => null);
       if (!current) continue;
       if (current.kind === BrowserCredentialGuestResultKind.Captcha) {
         return BrowserCredentialLoginOutcome.NeedsCaptcha;
@@ -302,12 +358,14 @@ export class AgentBrowserCredentialLogin {
 
   private async waitForLoginForm(
     webContents: WebContents,
+    signal: AbortSignal,
     timeoutMs = FORM_DISCOVERY_TIMEOUT_MS,
     ignoredKind?: BrowserCredentialGuestResultKind,
   ): Promise<BrowserCredentialGuestResult> {
     const deadline = Date.now() + timeoutMs;
     let lastResult: BrowserCredentialGuestResult | null = null;
     while (Date.now() < deadline) {
+      signal.throwIfAborted();
       if (webContents.isLoading()) {
         await delay(POLL_INTERVAL_MS);
         continue;
@@ -315,7 +373,7 @@ export class AgentBrowserCredentialLogin {
       lastResult = await this.sendGuestCommand(webContents, {
         requestId: crypto.randomUUID(),
         type: BrowserCredentialGuestCommandType.Inspect,
-      }).catch((): null => null);
+      }, signal).catch((): null => null);
       if (
         lastResult
         && lastResult.kind !== BrowserCredentialGuestResultKind.NoLoginForm
@@ -335,12 +393,15 @@ export class AgentBrowserCredentialLogin {
   private sendGuestCommand(
     webContents: WebContents,
     command: BrowserCredentialGuestCommand,
+    signal?: AbortSignal,
   ): Promise<BrowserCredentialGuestResult> {
+    signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
         reject(new Error('The secure login page did not respond.'));
-      }, GUEST_COMMAND_TIMEOUT_MS);
+      }, command.type === BrowserCredentialGuestCommandType.ClearPasswordFields ? BrowserCredentialTimeout.Cleanup : GUEST_COMMAND_TIMEOUT_MS);
+      const abort = (): void => { cleanup(); reject(signal?.reason); };
       const handler = (
         event: Electron.IpcMainEvent,
         result: BrowserCredentialGuestResult,
@@ -352,9 +413,12 @@ export class AgentBrowserCredentialLogin {
       const cleanup = (): void => {
         clearTimeout(timer);
         ipcMain.removeListener(BrowserCredentialGuestChannel.Result, handler);
+        signal?.removeEventListener('abort', abort);
       };
+      signal?.addEventListener('abort', abort, { once: true });
       ipcMain.on(BrowserCredentialGuestChannel.Result, handler);
-      webContents.send(BrowserCredentialGuestChannel.Command, command);
+      try { webContents.send(BrowserCredentialGuestChannel.Command, command); }
+      catch (error) { cleanup(); reject(error); }
     });
   }
 
@@ -362,17 +426,28 @@ export class AgentBrowserCredentialLogin {
     const view = this.secureView;
     if (!view) return;
     this.secureView = null;
-    this.deps.onViewChanged(null);
-    if (view.webContents.isDestroyed()) return;
     try {
+      this.deps.onViewChanged(null);
+      if (view.webContents.isDestroyed()) return;
       await this.sendGuestCommand(view.webContents, {
         requestId: crypto.randomUUID(),
         type: BrowserCredentialGuestCommandType.ClearPasswordFields,
       });
     } catch {
       // Navigation or shutdown can make the isolated preload unavailable.
+      console.debug('[BrowserCredentialLogin] Clearing the login view was unavailable');
+    } finally {
+      this.closeView(view);
     }
-    view.webContents.close();
+  }
+
+  private closeView(view: WebContentsView | null): void {
+    try {
+      if (view && !view.webContents.isDestroyed()) view.webContents.close();
+    } catch {
+      // Electron may tear down the WebContents between the check and close on quit.
+      console.warn('[BrowserCredentialLogin] Login view close failed during teardown');
+    }
   }
 
   private assertNoCrossOriginNavigation(): void {

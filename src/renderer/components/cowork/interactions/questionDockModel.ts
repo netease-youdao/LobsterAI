@@ -29,6 +29,8 @@ export interface DockQuestion {
   multiSelect: boolean;
   /** Whether a typed answer is accepted next to (or instead of) the options. */
   allowFreeText: boolean;
+  /** Legacy plugin questions allow skipping unless explicitly restricted. */
+  allowSkip?: boolean;
 }
 export interface QuestionDraft {
   step: number;
@@ -80,10 +82,11 @@ export function permissionDockRequest(permission: CoworkPermissionRequest): Dock
       ))
       .map((option) => ({ id: option.label, label: option.label, description: option.description }));
     if (options.some((option, optionIndex) => options.findIndex((other) => other.id === option.id) !== optionIndex)) return null;
-    const allowFreeText = native ? question.isOther === true || options.length === 0 : true;
+    const allowFreeText = native ? question.isOther === true || options.length === 0 : question.isOther !== false;
     if (!options.length && !allowFreeText) return null;
     questions.push({
       id, title: question.question, multiSelect: question.multiSelect === true, options, allowFreeText,
+      ...(native || question.allowSkip === false ? { allowSkip: false } : {}),
       ...(typeof question.title === 'string' && question.title.trim() ? { heading: question.title.trim() } : {}),
       ...(typeof question.subtitle === 'string' && question.subtitle.trim() ? { subtitle: question.subtitle } : {}),
     });
@@ -104,8 +107,9 @@ export function permissionDockRequest(permission: CoworkPermissionRequest): Dock
 export const isQuestionDockRequest = (permission: CoworkPermissionRequest): boolean =>
   permissionDockRequest(permission) !== null;
 
-export const questionResolved = (draft: QuestionDraft, id: string): boolean =>
-  Boolean(draft.skipped.includes(id) || draft.answers[id]?.length || draft.freeText[id]?.trim());
+export const questionResolved = (draft: QuestionDraft, id: string, question?: Pick<DockQuestion, 'allowFreeText' | 'allowSkip'>): boolean =>
+  Boolean((question?.allowSkip !== false && draft.skipped.includes(id)) || draft.answers[id]?.length
+    || (question?.allowFreeText !== false && draft.freeText[id]?.trim()));
 
 /** Translate the dock draft into the wire shape each source expects. */
 export function permissionDockAnswer(request: DockRequest, draft: QuestionDraft): CoworkPermissionResult {
@@ -113,7 +117,7 @@ export function permissionDockAnswer(request: DockRequest, draft: QuestionDraft)
     // Same payload as CoworkNativeQuestionModal: a typed answer is one more value.
     const answers: Record<string, string[]> = {};
     for (const question of request.questions) {
-      const extra = draft.freeText[question.id]?.trim();
+      const extra = question.allowFreeText ? draft.freeText[question.id]?.trim() : undefined;
       answers[question.id] = [...(draft.answers[question.id] ?? []), ...(extra ? [extra] : [])];
     }
     return { behavior: 'allow', updatedInput: { answers } };
@@ -121,11 +125,11 @@ export function permissionDockAnswer(request: DockRequest, draft: QuestionDraft)
   const answers: Record<string, string> = {};
   const skippedQuestionIds: string[] = [];
   for (const question of request.questions) {
-    if (draft.skipped.includes(question.id)) {
+    if (question.allowSkip !== false && draft.skipped.includes(question.id)) {
       skippedQuestionIds.push(question.id);
       continue;
     }
-    const extra = draft.freeText[question.id]?.trim();
+    const extra = question.allowFreeText ? draft.freeText[question.id]?.trim() : undefined;
     answers[question.title] = [...(draft.answers[question.id] ?? []), ...(extra ? [extra] : [])].join(MULTI_ANSWER_SEPARATOR);
   }
   return { behavior: 'allow', updatedInput: { ...request.permission.toolInput, answers, skippedQuestionIds } };

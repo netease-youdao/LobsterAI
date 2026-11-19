@@ -9,6 +9,7 @@ import { AgentId } from '../../shared/agent/constants';
 import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
+  BrowserCredentialTimeout,
 } from '../../shared/browserCredentials/constants';
 import { EmbeddingProvider } from '../../shared/cowork/embedding';
 import { WeixinPlugin } from '../../shared/im/weixin';
@@ -4982,6 +4983,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(inAppConfig.browser.extraArgs).toBeUndefined();
     expect(inAppConfig.browser.profiles[BrowserRuntimeProfile.InApp].color).toBeUndefined();
     expect(inAppConfig.mcp.servers[BrowserCredentialMcpServer.Name]).toEqual({
+      requestTimeoutMs: BrowserCredentialTimeout.McpRequest,
       command: 'C:/LobsterAI/LobsterAI.exe',
       args: [
         'C:/LobsterAI/lobster-browser-mcp-server.mjs',

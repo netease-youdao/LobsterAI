@@ -23,7 +23,7 @@
 .cowork-question-dock svg { width: 18px; height: 18px; flex-shrink: 0; }
 .cowork-question-page { min-height: 0; max-height: min(36vh, 360px); overflow-y: auto; animation: cowork-question-page-in 180ms ease-out; }
 .cowork-question-description { padding: 4px 12px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
-.cowork-question-subtitle { flex-shrink: 0; white-space: pre-wrap; }
+.cowork-question-subtitle { white-space: pre-wrap; overflow-wrap: anywhere; }
 .cowork-question-option { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; text-align: left; border-radius: 15px; margin-bottom: 2px; }
 .cowork-question-option:hover, .cowork-question-option.is-highlighted { background: var(--lobster-surface-raised); }
 .cowork-question-number, .cowork-question-pencil {

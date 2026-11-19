@@ -138,6 +138,19 @@ export const BrowserCredentialLoginTool = {
   Name: 'login_with_saved_credential',
 } as const;
 
+// Each outer deadline includes the inner work and a bounded cleanup/transport margin.
+const APPROVAL_TIMEOUT_MS = 120_000;
+const EXECUTION_TIMEOUT_MS = 60_000;
+const CLEANUP_TIMEOUT_MS = 5_000;
+const BRIDGE_TIMEOUT_MS = APPROVAL_TIMEOUT_MS + EXECUTION_TIMEOUT_MS + CLEANUP_TIMEOUT_MS + 5_000;
+export const BrowserCredentialTimeout = {
+  Approval: APPROVAL_TIMEOUT_MS,
+  Execution: EXECUTION_TIMEOUT_MS,
+  Cleanup: CLEANUP_TIMEOUT_MS,
+  Bridge: BRIDGE_TIMEOUT_MS,
+  McpRequest: BRIDGE_TIMEOUT_MS + 10_000,
+} as const;
+
 export const BrowserCredentialMcpServer = {
   Name: 'lobster-browser-credentials',
   ToolSetArgument: '--lobster-tool-set=credentials',

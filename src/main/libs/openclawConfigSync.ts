@@ -9,6 +9,7 @@ import { AgentId, DefaultAgentProfile } from '../../shared/agent';
 import {
   BrowserCredentialLoginTool,
   BrowserCredentialMcpServer,
+  BrowserCredentialTimeout,
 } from '../../shared/browserCredentials/constants';
 import {
   BrowserDisplayMode,
@@ -2294,6 +2295,7 @@ export class OpenClawConfigSync {
       const browserMcpLaunch = this.getLobsterBrowserMcpStdioLaunch?.();
       if (browserMcpLaunch) {
         nativeMcpServers[BrowserCredentialMcpServer.Name] = {
+          requestTimeoutMs: BrowserCredentialTimeout.McpRequest,
           command: browserMcpLaunch.command,
           args: [...browserMcpLaunch.args, BrowserCredentialMcpServer.ToolSetArgument],
           ...(Object.keys(browserMcpLaunch.env).length > 0

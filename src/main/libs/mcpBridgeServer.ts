@@ -53,6 +53,8 @@ export type AskUserRequest = {
     quoteKey?: string;
     options: Array<{ label: string; description?: string }>;
     multiSelect?: boolean;
+    isOther?: boolean;
+    allowSkip?: boolean;
     /** Video generation confirmations: what the desktop card lays out. */
     video?: VideoConfirmationDetails;
   }>;
@@ -67,6 +69,8 @@ export type AskUserResponse = Omit<MediaConfirmationResponse, 'reason'> & {
   reason?: MediaConfirmationResponse['reason'] | typeof AskUserResponseReason[keyof typeof AskUserResponseReason];
 };
 export interface AskUserOptions {
+  /** Local cancellation only; never deserialized from an HTTP body. */
+  signal?: AbortSignal;
   sessionKey?: string;
   localOnly?: boolean;
   recoverableMedia?: RecoverableMediaConfirmation;
@@ -98,6 +102,8 @@ export type MediaGenerationResponse = {
 };
 
 export type BrowserToolRequest = {
+  /** Lifetime of the authenticated local HTTP request, not tool arguments. */
+  signal?: AbortSignal;
   tool: string;
   args: Record<string, unknown>;
 };
@@ -322,6 +328,7 @@ export class McpBridgeServer {
     timeoutMs = 120_000,
     options: AskUserOptions = {},
   ): Promise<AskUserResponse> {
+    if (options.signal?.aborted) return { behavior: 'deny', reason: AskUserResponseReason.Unavailable };
     if (options.recoverableMedia) return this.mediaConfirmations.request(questions, options.sessionKey, options.recoverableMedia);
     const requestId = crypto.randomUUID();
     const sessionKey = options.sessionKey?.trim() || undefined;
@@ -335,7 +342,14 @@ export class McpBridgeServer {
         this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Timeout });
       }, timeoutMs);
 
-      this.pendingAskUser.set(requestId, { requestId, expiresAt, resolve, timer });
+      const cancel = (): void => {
+        this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+      };
+      this.pendingAskUser.set(requestId, { requestId, expiresAt, timer, resolve: response => {
+        options.signal?.removeEventListener('abort', cancel);
+        resolve(response);
+      } });
+      options.signal?.addEventListener('abort', cancel, { once: true });
 
       if (this.onAskUserCallback) {
         this.onAskUserCallback({ requestId, questions, sessionKey, createdAt, expiresAt,
@@ -611,6 +625,9 @@ export class McpBridgeServer {
 
   private async handleBrowserTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const startedAt = Date.now();
+    const controller = new AbortController();
+    const cancel = (): void => { if (!res.writableFinished) controller.abort(); };
+    res.on('close', cancel);
     try {
       const body = await this.readBody(req);
       const request = JSON.parse(body) as BrowserToolRequest;
@@ -632,24 +649,28 @@ export class McpBridgeServer {
       }
 
       const result = await this.onBrowserToolCallback({
+        signal: controller.signal,
         tool: request.tool,
         args: request.args && typeof request.args === 'object' && !Array.isArray(request.args)
           ? request.args
           : {},
       });
       log('DEBUG', `Browser tool "${request.tool}" completed in ${Date.now() - startedAt}ms`);
+      if (res.destroyed || res.writableEnded) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log('ERROR', `Browser tool request failed after ${Date.now() - startedAt}ms: ${message}`);
-      if (!res.writableEnded) {
+      if (!res.writableEnded && !res.destroyed) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           content: [{ type: 'text', text: `LobsterAI browser error: ${message}` }],
           isError: true,
         }));
       }
+    } finally {
+      res.removeListener('close', cancel);
     }
   }
 

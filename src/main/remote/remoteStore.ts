@@ -33,7 +33,7 @@ import { hasNoRemotePublicationAuthority } from './remotePublicationEvidence';
 import { RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
 import { type QuestionEvidenceAuthenticator,questionIdSql,questionSessionSql, RemoteQuestionEvidence, remoteQuestionEvidenceDigest } from './remoteQuestionEvidence';
 import { replyInputModel, replyMessageModelLabel, type ReplyModelPresetNames,replyModelPresetNames } from './remoteReplyModel';
-import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolState, replyUserText } from './remoteReplyProjection';
+import { isPublicReplyMessage, redactReplyText,replyAppendDelta, replyBlockId, replyBlocks, replyChunks, replyToolCallId, replyToolState, replyUserText } from './remoteReplyProjection';
 import { RemoteSyncStateError, retentionEventId, retentionSequence, safeSourceSequence } from './remoteRetention';
 import type { RemoteSecurityCommit } from './remoteSecurityJournal';
 import { fitExpertSessionPreview } from './remoteSessionPreview';
@@ -1602,9 +1602,10 @@ export class RemoteStore {
     const publishedRunIds = new Set((this.db.prepare("SELECT object_key FROM remote_projection WHERE session_id=? AND object_key LIKE 'run:%'").all(sessionId) as Array<{ object_key: string }>).map(row => row.object_key.slice(4)));
     // A run terminal event may be the last event in an HTTP batch. Publish the executor's
     // exact approval closure first, so the server does not invent a competing cancellation.
-    // Initial projections still begin with session.upsert and introduce the run normally.
-    for (const approval of approvals) if (approval.status !== 'pending' && publishedRunIds.has(approval.runId)) this.projectApproval(sessionId, approval);
-    for (const question of questions) if (question.status !== 'pending' && publishedRunIds.has(question.runId)) this.projectQuestion(sessionId, question);
+    // Only close decisions ahead of their own current run. Historical closures must follow
+    // the new summary, or they advance controlVersion before its run mapping is published.
+    for (const approval of approvals) if (approval.status !== 'pending' && approval.runId === run?.runId && publishedRunIds.has(approval.runId)) this.projectApproval(sessionId, approval);
+    for (const question of questions) if (question.status !== 'pending' && question.runId === run?.runId && publishedRunIds.has(question.runId)) this.projectQuestion(sessionId, question);
     const deferTerminal = this.replyProjectionSupported && !summaryOnly && run && terminal.has(run.status) && publishedRunIds.has(run.runId);
     const deferred: Array<{ key: string; record: ProjectionRecord }> = [];
     const recordState = (key: string, record: ProjectionRecord): void => { if (deferTerminal) deferred.push({ key, record }); else this.record(sessionId, key, record); };
@@ -1627,6 +1628,14 @@ export class RemoteStore {
     for (const question of questions) if (this.get<boolean>(`runPublished:${question.runId}`) !== false) this.projectQuestion(sessionId, question);
     // Agent metadata changes reuse the committed preview and never scan/re-upload conversation messages.
     if (summaryOnly) return;
+    // Old rejected IDs may remain in cached snapshots. Replace them atomically through
+    // a snapshot; never rewrite events that already have assigned source sequences.
+    const repairedTools = this.db.prepare(`DELETE FROM remote_projection WHERE session_id=? AND object_key LIKE 'tool:%'
+      AND (length(object_key) NOT BETWEEN 6 AND 69 OR substr(object_key,6) GLOB '*[^A-Za-z0-9_-]*')`).run(sessionId).changes;
+    if (repairedTools > 0) {
+      this.requireSnapshot(sessionId, 'tool_identity_changed');
+      console.warn('[RemoteStore] Rebuilding legacy tool identities through a snapshot', { sessionId, count: repairedTools });
+    }
     const liveKeys = new Set<string>();
     const tools = new Map<string, ProjectionRecord>();
     // Read catalog metadata only; never enumerate files or select file_path/path_key.
@@ -1642,7 +1651,7 @@ export class RemoteStore {
         || !!(targetHistory?.targetId && metadata.remoteCommandId && !metadata.remoteRunId && command?.targetId !== targetHistory.targetId);
       if (!foreignHistory && metadata.remoteRunId && this.get<boolean>(`runPublished:${metadata.remoteRunId}`) === false) continue;
       const isTool = m.type.startsWith('tool_');
-      const toolId = String(metadata.toolUseId || metadata.toolCallId || m.id);
+      const toolId = replyToolCallId(String(metadata.toolUseId || metadata.toolCallId || m.id));
       const inputRun = this.get<{ input: { text: string; attachments: Array<{ assetId: string; version: string; fileName: string; mimeType: string; sizeBytes: string; intent: string }> }; inputModel: unknown; modelPresetId?: unknown }>(`inputRun:${metadata.remoteRunId}`);
       const desktopInput = this.get<DesktopInputRun & { inputModel?: unknown }>(`desktopInputRun:${metadata.remoteRunId}`);
       const ownDesktopInput = desktopInput && sameOwner(desktopInput.owner, this.owner(sessionId))

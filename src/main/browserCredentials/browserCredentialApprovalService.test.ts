@@ -109,3 +109,14 @@ describe('BrowserCredentialApprovalService', () => {
     expect(askUser).not.toHaveBeenCalled();
   });
 });
+
+
+test.each([1, 2, 4, 5])('saved login with %i accounts uses the remote option budget without dropping accounts', async count => {
+  const askUser = vi.fn().mockResolvedValue({ behavior: 'deny' });
+  const service = new BrowserCredentialApprovalService({ askUser, translate: key => translations[key] ?? key });
+  await service.requestApproval({ sessionId: 'task-1', sessionKey: 'agent:main:lobsterai:task-1', origin: 'https://example.com',
+    candidates: Array.from({ length: count }, (_, index) => credential(String(index), `account-${index}`)), useMode: BrowserCredentialUseMode.AlwaysAsk });
+  expect(askUser.mock.calls[0][2].localOnly).toBe(count > 4);
+  expect(askUser.mock.calls[0][0][0].options).toHaveLength(count === 1 ? 2 : count);
+  expect(askUser.mock.calls[0][0][0]).toMatchObject({ isOther: false, allowSkip: true });
+});

@@ -328,6 +328,70 @@ describe('reply content v4 durable projection', () => {
     expect(projected(store, 'thinking').blocks[0]).toMatchObject({ type: 'thinking', text: 'reason' });
     expect(projected(store, 'notice').blocks[0]).toMatchObject({ type: 'notice', text: 'Compacting context' });
   });
+  it.each([false, true])('projects nested MCP tool IDs consistently with reply v4=%s', replyV4 => {
+    const store = fixture(); store.setEnabledOwner(owner); store.setReplyProjectionSupported(replyV4); create(store, 's');
+    const rawId = 'tool_search_code:call_00_h0rfOjThEYpTR05FyFD65133:lobster-browser-credentials__login_with_saved_credential:1';
+    insert(store, 'call', 'tool_use', 'Using tool', { toolUseId: rawId, toolName: 'login_with_saved_credential' }, 1);
+    insert(store, 'result', 'tool_result', 'Denied', { toolCallId: rawId, isError: true }, 2);
+    const records = store.snapshot('s').records;
+    const tools = records.filter(record => record.eventType === 'tool.upsert');
+    expect(tools).toHaveLength(1);
+    const tool = tools[0].payload.tool;
+    expect(tool.toolCallId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(tool).toMatchObject({ status: 'failed' });
+    for (const id of ['call', 'result']) {
+      expect(projected(store, id).blocks[0].toolCallId).toBe(tool.toolCallId);
+    }
+    const before = store.db.prepare("SELECT metadata FROM cowork_messages WHERE id='call'").get() as { metadata: string };
+    expect(JSON.parse(before.metadata).toolUseId).toBe(rawId);
+    for (const event of store.pending('s')) {
+      if (event.payload.tool) expect(event.payload.tool.toolCallId).toBe(tool.toolCallId);
+      for (const block of event.payload.message?.blocks || []) if (block.toolCallId) expect(block.toolCallId).toBe(tool.toolCallId);
+    }
+    expect(store.snapshot('s').records.filter(record => record.eventType === 'tool.upsert')).toEqual(tools);
+  });
+  it('repairs cached invalid tool IDs using a snapshot without rewriting queued events', () => {
+    const store = enabled(); const rawId = 'nested:credential:1';
+    insert(store, 'call', 'tool_use', 'Using tool', { toolUseId: rawId, toolName: 'login_with_saved_credential' }, 1);
+    const toolRecord = store.snapshot('s').records.find(record => record.eventType === 'tool.upsert')!;
+    const invalidRecord = { ...toolRecord, payload: { tool: { ...toolRecord.payload.tool, toolCallId: rawId } } };
+    store.db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', `tool:${rawId}`, payloadHash(invalidRecord), 1, stableJson(invalidRecord));
+    const sync = store.sync('s')!;
+    const event = { ...invalidRecord, sourceSeq: String(sync.source_seq + 1), eventId: 'old-event' };
+    store.db.prepare('INSERT INTO remote_outbox VALUES (?,?,?)').run('s', sync.source_seq + 1, stableJson(event));
+    store.db.prepare('UPDATE remote_sync SET source_seq=source_seq+1,needs_snapshot=0 WHERE local_id=?').run('s');
+    const snapshot = store.snapshot('s');
+    expect(snapshot.records.filter(record => record.eventType === 'tool.upsert')).toEqual([toolRecord]);
+    expect(store.sync('s')!.needs_snapshot).toBe(1);
+    expect(store.get('snapshotReason:s')).toBe('tool_identity_changed');
+    expect(store.pending('s').find(value => value.eventId === 'old-event')).toEqual(event);
+  });
+  it('repairs multiple legacy identities once after reopening an existing user database', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-upgrade-')); directories.push(dir);
+    const file = path.join(dir, 'db.sqlite');
+    const original = fixture(file); original.setEnabledOwner(owner); create(original, 's');
+    original.setReplyProjectionSupported(true);
+    insert(original, 'call', 'tool_use', 'Using tool', { toolUseId: 'valid-id_1', toolName: 'Browser' }, 1);
+    const validTool = original.snapshot('s').records.find(record => record.eventType === 'tool.upsert')!;
+    const queued = original.pending('s');
+    const metadata = original.db.prepare("SELECT metadata FROM cowork_messages WHERE id='call'").get();
+    const schema = original.db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").all();
+    for (const rawId of ['', 'nested:login', 'x'.repeat(65), '中文']) {
+      const invalid = { ...validTool, payload: { tool: { ...validTool.payload.tool, toolCallId: rawId } } };
+      original.db.prepare('INSERT INTO remote_projection VALUES (?,?,?,?,?)').run('s', `tool:${rawId}`, payloadHash(invalid), 1, stableJson(invalid));
+    }
+    original.db.close();
+    const reopened = fixture(file); reopened.setEnabledOwner(owner); reopened.setReplyProjectionSupported(true);
+    const before = reopened.get<number>('snapshotEpoch:s') || 0;
+    expect(reopened.snapshot('s').records.filter(record => record.eventType === 'tool.upsert')).toEqual([validTool]);
+    expect(reopened.get<number>('snapshotEpoch:s')).toBe(before + 1);
+    expect(reopened.owner('s')).toEqual(owner);
+    expect(reopened.db.prepare("SELECT metadata FROM cowork_messages WHERE id='call'").get()).toEqual(metadata);
+    expect(reopened.db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").all()).toEqual(schema);
+    for (const event of queued) expect(reopened.pending('s').find(item => item.eventId === event.eventId)).toEqual(event);
+    reopened.snapshot('s');
+    expect(reopened.get<number>('snapshotEpoch:s')).toBe(before + 1);
+  });
   it('does not mark partial tool results as success or lose the original tool name', () => {
     const store = enabled(); insert(store, 'call', 'tool_use', 'Using tool', { toolUseId: 'tool', toolName: 'Bash', toolInput: { command: 'pwd' } }, 1);
     insert(store, 'result', 'tool_result', '/tmp', { toolUseId: 'tool', isStreaming: true, isFinal: false }, 2);
