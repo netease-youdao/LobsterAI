@@ -1,8 +1,8 @@
-import { ArrowPathIcon, ArrowRightIcon, CheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, ArrowPathIcon, ArrowRightIcon, CheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useEffect, useRef, useState } from 'react';
 
 import type { PptCatalog, PptExample, PptPreparedFile } from '../../../shared/pptCreation/constants';
-import { CoverIllustration, CoverStep, CoverTaskState, layoutCoverText, PptCover, type PptCoverFields } from '../../../shared/pptCreation/cover';
+import { canNavigateToCoverStep, CoverIllustration, CoverStep, CoverTaskState, layoutCoverText, PptCover, type PptCoverFields, previousCoverStep } from '../../../shared/pptCreation/cover';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
@@ -11,36 +11,54 @@ import type { MediaModel } from '../../types/mediaGeneration';
 import Modal from '../common/Modal';
 
 export interface PptCoverSeed { file: PptPreparedFile; fields: PptCoverFields; previewBase64: string }
-interface Draft {
+export interface PptCoverDraft {
   fields: PptCoverFields; subject: string; illustration: CoverIllustration;
   sessionId?: string; pending?: boolean; imagePath?: string; taskId?: string; imageModel?: string; imageSubject?: string;
 }
+export interface PptCoverExported { file: PptPreparedFile; path: string; pngPath: string; previewBase64: string }
+export interface PptCoverSession {
+  draft: PptCoverDraft;
+  exported?: PptCoverExported;
+  step: CoverStep;
+  previewBase64?: string;
+}
+const COVER_STEPS = [
+  { step: CoverStep.Content, key: 'pptCoverContent' },
+  { step: CoverStep.Preview, key: 'pptCoverPreview' },
+  { step: CoverStep.Export, key: 'pptCoverExport' },
+] as const;
 const inputClass = 'scrollbar-hidden mt-2 min-h-11 w-full resize-none rounded-xl border border-border-input bg-background px-3 py-2.5 text-sm font-normal text-foreground placeholder:text-foreground/45 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50';
 const primaryButtonClass = 'flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
-export default function PptCoverWizard({ catalog, example, onClose, onContinue }: {
-  catalog: PptCatalog; example: PptExample; onClose: () => void; onContinue: (seed: PptCoverSeed) => void;
+export default function PptCoverWizard({ catalog, example, initialSession, onBack, onClose, onContinue }: {
+  catalog: PptCatalog; example: PptExample; initialSession?: PptCoverSession;
+  onBack?: (session?: PptCoverSession) => void;
+  onClose: () => void; onContinue: (seed: PptCoverSeed, session: PptCoverSession) => void;
 }) {
   const t = (key: string) => i18nService.t(key), language = i18nService.getLanguage();
   const recipe = example.cover!;
   const owner = coverOwner();
   const draftKey = `${PptCover.DraftKey}:${owner}:${catalog.version}:${example.id}`;
-  const defaultDraft = (): Draft => ({
+  const defaultDraft = (): PptCoverDraft => ({
     fields: { title: recipe.title[language], subtitle: recipe.subtitle[language], footer: recipe.footer[language] },
     subject: recipe.subject[language], illustration: CoverIllustration.Reuse,
   });
-  const [savedDraft, setSavedDraft] = useState<Draft | undefined>(() => {
+  const [savedDraft, setSavedDraft] = useState<PptCoverDraft | undefined>(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(draftKey) || 'null') as Draft | null;
+      const saved = JSON.parse(localStorage.getItem(draftKey) || 'null') as PptCoverDraft | null;
       if (saved && Object.values(CoverIllustration).includes(saved.illustration) && typeof saved.subject === 'string') {
         layoutCoverText(saved.fields); return saved;
       }
     } catch { /* An invalid draft cannot prevent opening a configured example. */ }
     return undefined;
   });
-  const [draft, setDraft] = useState<Draft>(defaultDraft);
-  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<PptCoverDraft>(() => initialSession?.draft ?? defaultDraft());
+  const [editing, setEditing] = useState(() => Boolean(initialSession));
   const [restored, setRestored] = useState(false);
-  const [step, setStep] = useState<number>(CoverStep.Content);
+  const [step, setStep] = useState<CoverStep>(() => (
+    initialSession?.step === CoverStep.Export && !initialSession.exported
+      ? CoverStep.Preview
+      : (initialSession?.step ?? CoverStep.Content)
+  ));
   const [background, setBackground] = useState('');
   const [generated, setGenerated] = useState('');
   const [rendered, setRendered] = useState<{ image: string; fields: PptCoverFields; base64: string }>();
@@ -48,15 +66,42 @@ export default function PptCoverWizard({ catalog, example, onClose, onContinue }
   const [modelError, setModelError] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [exported, setExported] = useState<{ file: PptPreparedFile; path: string; pngPath: string }>();
+  const [exported, setExported] = useState<PptCoverExported | undefined>(() => initialSession?.exported);
   const mounted = useRef(true), lock = useRef(false), close = useRef<HTMLButtonElement>(null);
   const current = () => mounted.current && owner === coverOwner();
   const image = draft.illustration === CoverIllustration.Generate ? generated : background;
   const preview = rendered?.image === image && rendered.fields === draft.fields ? rendered.base64 : '';
+  const initialPreview = initialSession?.previewBase64
+    && draft.fields === initialSession.draft.fields
+    && draft.illustration === initialSession.draft.illustration
+    && draft.imagePath === initialSession.draft.imagePath
+    ? initialSession.previewBase64
+    : '';
+  const activePreview = preview || (step === CoverStep.Export ? exported?.previewBase64 ?? '' : initialPreview);
   const matchingImage = generated && draft.imageSubject === draft.subject;
   const isGenerating = Boolean(draft.pending && draft.sessionId);
   const disabled = busy || isGenerating;
+  const navigationState = {
+    step,
+    disabled,
+    hasBackground: Boolean(background),
+    hasTitle: Boolean(draft.fields.title.trim()),
+    hasPreview: Boolean(preview),
+    illustration: draft.illustration,
+    hasMatchingImage: Boolean(matchingImage),
+    hasExported: Boolean(exported),
+  };
+  const backStep = previousCoverStep(step);
   const dismiss = () => { if (!busy) onClose(); };
+  const handleBackToExample = () => {
+    if (busy || !onBack) return;
+    onBack(editing ? { draft, exported, step, previewBase64: activePreview || undefined } : undefined);
+  };
+  const goToStep = (target: CoverStep) => {
+    if (!canNavigateToCoverStep(target, navigationState)) return;
+    setStep(target);
+    setError('');
+  };
 
   useEffect(() => {
     mounted.current = true;
@@ -141,11 +186,11 @@ export default function PptCoverWizard({ catalog, example, onClose, onContinue }
       if (!agent || !current()) return;
       const path = await saveCoverFile(file, agent.workingDirectory || undefined);
       const pngPath = await saveCoverFile({ name: 'cover.png', mimeType: 'image/png', base64Data: preview }, agent.workingDirectory || undefined);
-      if (current()) { setExported({ file, path, pngPath }); setStep(CoverStep.Export); }
+      if (current()) { setExported({ file, path, pngPath, previewBase64: preview }); setStep(CoverStep.Export); }
     } catch { if (current()) setError(t('pptCoverExportFailed')); }
     finally { lock.current = false; if (current()) setBusy(false); }
   };
-  const editDraft = (change: (value: Draft) => Draft) => { setEditing(true); setDraft(change); setExported(undefined); };
+  const editDraft = (change: (value: PptCoverDraft) => PptCoverDraft) => { setEditing(true); setDraft(change); setExported(undefined); };
   const update = (fields: Partial<PptCoverFields>) => editDraft(value => ({ ...value, fields: { ...value.fields, ...fields } }));
   const restoreDraft = () => {
     if (!savedDraft || disabled) return;
@@ -159,7 +204,8 @@ export default function PptCoverWizard({ catalog, example, onClose, onContinue }
   };
   const viewTask = async () => { if (draft.sessionId) { onClose(); await coworkService.loadSession(draft.sessionId); } };
 
-  return <Modal onClose={dismiss} onEscape={dismiss} className="w-[min(1100px,95vw)] overflow-hidden rounded-3xl border border-border bg-surface shadow-modal">
+  // The dialog can overlap the Electron window's draggable header.
+  return <Modal onClose={dismiss} onEscape={dismiss} className="non-draggable w-[min(1100px,95vw)] overflow-hidden rounded-3xl border border-border bg-surface shadow-modal">
     <div role="dialog" aria-modal="true" aria-labelledby="ppt-cover-title" data-ppt-cover-wizard className="flex h-[min(820px,92vh)] flex-col overflow-hidden"
       onKeyDown={event => {
         if (event.key !== 'Tab') return;
@@ -170,21 +216,51 @@ export default function PptCoverWizard({ catalog, example, onClose, onContinue }
       }}>
       <div className="shrink-0 border-b border-border px-5 py-5 md:px-7">
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0"><p className="mb-1.5 text-xs font-medium text-foreground/60">{example.title[language]}</p><h2 id="ppt-cover-title" className="text-xl font-semibold text-foreground">{t('pptCoverHeading')}</h2></div>
+          <div className="min-w-0">
+            {onBack ? (
+              <button type="button" onClick={handleBackToExample} disabled={busy}
+                className="group mb-2 inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-lg border border-border/80 bg-surface-raised/60 px-2.5 py-1 text-xs font-medium text-foreground/80 transition-colors hover:border-primary/40 hover:bg-primary-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40">
+                <ArrowLeftIcon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:-translate-x-0.5 motion-reduce:transition-none" />
+                <span className="shrink-0">{t('pptCoverBackToExample')}</span>
+                <span aria-hidden="true" className="text-foreground/30 group-hover:text-primary/40">·</span>
+                <span className="truncate text-foreground/60 group-hover:text-primary/80">{example.title[language]}</span>
+              </button>
+            ) : (
+              <p className="mb-1.5 text-xs font-medium text-foreground/60">{example.title[language]}</p>
+            )}
+            <h2 id="ppt-cover-title" className="text-xl font-semibold text-foreground">{t('pptCoverHeading')}</h2>
+          </div>
           <button ref={close} type="button" onClick={dismiss} disabled={busy} aria-label={t('close')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40"><XMarkIcon aria-hidden="true" className="h-5 w-5" /></button>
         </div>
-        <ol aria-label={t('pptCoverProgress')} className="mt-5 grid grid-cols-3 gap-2 text-xs">
-          {['pptCoverContent', 'pptCoverPreview', 'pptCoverExport'].map((key, i) => <li key={key} aria-current={step === i ? 'step' : undefined} className={`flex min-w-0 items-center gap-2 ${step === i ? 'font-medium text-foreground' : 'text-foreground/60'}`}>
-            <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${step === i ? 'bg-primary text-primary-foreground' : step > i ? 'bg-primary-muted text-primary' : 'bg-surface-raised text-secondary'}`}>{step > i ? <CheckIcon className="h-4 w-4" /> : i + 1}</span>
-            <span>{t(key)}</span>{i < 2 && <span aria-hidden="true" className={`ml-1 hidden h-px min-w-2 flex-1 sm:block ${step > i ? 'bg-primary/35' : 'bg-border'}`} />}
-          </li>)}
+        <ol aria-label={t('pptCoverProgress')} className="mt-4 grid grid-cols-3 gap-2 text-xs">
+          {COVER_STEPS.map(({ step: target, key }, i) => {
+            const isCurrent = step === target;
+            const isCompleted = target < step || (target === CoverStep.Export && Boolean(exported));
+            const canJump = canNavigateToCoverStep(target, navigationState);
+            const lineDone = target < step || Boolean(exported);
+            const badge = <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-shadow ${isCurrent ? 'bg-primary text-primary-foreground' : isCompleted ? 'bg-primary-muted text-primary' : 'bg-surface-raised text-secondary'} ${canJump ? 'group-hover:ring-2 group-hover:ring-primary/25' : ''}`}>{isCompleted && !isCurrent ? <CheckIcon className="h-4 w-4" /> : i + 1}</span>;
+            return <li key={key} aria-current={isCurrent ? 'step' : undefined} className={`flex min-w-0 items-center gap-2 ${isCurrent ? 'font-medium text-foreground' : 'text-foreground/60'}`}>
+              {canJump ? (
+                <button type="button" onClick={() => goToStep(target)} className="group -mx-1.5 flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                  {badge}
+                  <span className="truncate">{t(key)}</span>
+                </button>
+              ) : (
+                <div className="flex min-w-0 items-center gap-2 py-1">
+                  {badge}
+                  <span className="truncate">{t(key)}</span>
+                </div>
+              )}
+              {i < COVER_STEPS.length - 1 && <span aria-hidden="true" className={`ml-1 hidden h-px min-w-2 flex-1 sm:block ${lineDone ? 'bg-primary/35' : 'bg-border'}`} />}
+            </li>;
+          })}
         </ol>
       </div>
       <div className="scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-y-auto md:grid md:grid-cols-[1.15fr_1fr] md:overflow-hidden">
         <div className="scrollbar-hidden min-h-0 min-w-0 shrink-0 bg-surface-raised/60 p-5 md:overflow-y-auto md:overscroll-contain md:p-6">
           <p className="mb-3 text-xs font-medium text-foreground/70">{t('pptCoverLivePreview')}</p>
           <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-            {preview ? <img data-cover-preview src={`data:image/png;base64,${preview}`} alt={draft.fields.title} className="aspect-video w-full object-contain" />
+            {activePreview ? <img data-cover-preview src={`data:image/png;base64,${activePreview}`} alt={draft.fields.title} className="aspect-video w-full object-contain" />
               : <img src={example.previews[0].url} alt={example.title[language]} className="aspect-video w-full object-contain opacity-70" />}
           </div>
           <p className="mt-3 text-xs leading-5 text-foreground/65">{t('pptCoverPreviewHint')}</p>
@@ -231,10 +307,21 @@ export default function PptCoverWizard({ catalog, example, onClose, onContinue }
         </div>
       </div>
       <div data-ppt-cover-actions className="grid shrink-0 items-center gap-3 border-t border-border bg-surface px-5 py-4 md:grid-cols-[1.15fr_1fr] md:gap-12 md:px-6">
-        <div className="space-y-1 text-xs leading-5">
+        <div className="flex flex-wrap items-center gap-2 text-xs leading-5">
           {step === CoverStep.Content && <p className="text-foreground/65">{t(draft.illustration === CoverIllustration.Reuse ? 'pptCoverReuseHint' : 'pptCoverCost')}</p>}
-          {step !== CoverStep.Content && <button type="button" disabled={disabled} onClick={() => { setStep(CoverStep.Content); setExported(undefined); }} className="flex min-h-9 items-center gap-2 rounded-lg px-2 text-foreground/80 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"><ArrowRightIcon aria-hidden="true" className="h-4 w-4 rotate-180" />{t('pptCoverBack')}</button>}
-          {step === CoverStep.Preview && draft.illustration === CoverIllustration.Generate && <button type="button" disabled={disabled || !model} onClick={() => void generate()} className="min-h-9 rounded-lg px-2 text-primary hover:bg-primary-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50">{t('pptCoverRegenerate')}</button>}
+          {backStep !== null && (
+            <button type="button" disabled={disabled} onClick={() => goToStep(backStep)}
+              className="group inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-surface-raised/50 px-3.5 font-medium text-foreground/85 transition-colors hover:border-foreground/20 hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50">
+              <ArrowLeftIcon aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-0.5 motion-reduce:transition-none" />
+              {t(step === CoverStep.Export ? 'pptCoverBackToPreview' : 'pptCoverBack')}
+            </button>
+          )}
+          {step === CoverStep.Preview && draft.illustration === CoverIllustration.Generate && (
+            <button type="button" disabled={disabled || !model} onClick={() => void generate()}
+              className="min-h-10 rounded-xl px-3 font-medium text-primary transition-colors hover:bg-primary-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50">
+              {t('pptCoverRegenerate')}
+            </button>
+          )}
         </div>
         <div className="min-w-0 space-y-2">
           {error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">{error}</p>}
@@ -244,7 +331,10 @@ export default function PptCoverWizard({ catalog, example, onClose, onContinue }
             else if (preview) { setStep(CoverStep.Preview); setError(''); }
           }} className={primaryButtonClass}>{t(draft.illustration === CoverIllustration.Generate && !matchingImage ? 'pptCoverGenerateButton' : 'pptCoverNext')}<ArrowRightIcon aria-hidden="true" className="h-4 w-4 shrink-0" /></button>}
           {step === CoverStep.Preview && <button type="button" disabled={disabled || !preview} onClick={() => void exportCover()} className={primaryButtonClass}>{t(busy ? 'pptCoverPreparing' : 'pptCoverExportButton')}<ArrowRightIcon aria-hidden="true" className="h-4 w-4 shrink-0" /></button>}
-          {step === CoverStep.Export && exported && <button type="button" onClick={() => onContinue({ file: exported.file, fields: draft.fields, previewBase64: preview })} className={primaryButtonClass}>{t('pptCoverContinue')}<ArrowRightIcon aria-hidden="true" className="h-4 w-4 shrink-0" /></button>}
+          {step === CoverStep.Export && exported && <button type="button" onClick={() => {
+            const continuePreview = preview || exported.previewBase64;
+            onContinue({ file: exported.file, fields: draft.fields, previewBase64: continuePreview }, { draft, exported, step: CoverStep.Export, previewBase64: continuePreview });
+          }} className={primaryButtonClass}>{t('pptCoverContinue')}<ArrowRightIcon aria-hidden="true" className="h-4 w-4 shrink-0" /></button>}
         </div>
       </div>
     </div>
