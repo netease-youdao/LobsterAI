@@ -420,7 +420,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
       imageAttachments: options.imageAttachments,
-      mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences),
+      mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
       localMediaAttachments: options.localMediaAttachments,
       agentId: options.agentId,
       workspaceRoot: options.workspaceRoot,
@@ -444,7 +444,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
-      mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences),
+      mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
       localMediaAttachments: options.localMediaAttachments,
     });
   }

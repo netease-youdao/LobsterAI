@@ -1682,12 +1682,14 @@ export class SkillManager {
     }
   }
 
-  syncBundledSkillsToUserData(): void {
+  syncBundledSkillsToUserData(onlySkillId?: string): void {
     console.log('[skills] syncBundledSkillsToUserData: start', { packaged: app.isPackaged });
     const userRoot = this.ensureSkillsRoot();
-    removeRetiredBundledSkills(userRoot, path.join(userRoot, SKILLS_CONFIG_FILE));
-    const state = this.loadSkillStateMap();
-    if (removeRetiredSkillEntries(state)) this.saveSkillStateMap(state);
+    if (!onlySkillId) {
+      removeRetiredBundledSkills(userRoot, path.join(userRoot, SKILLS_CONFIG_FILE));
+      const state = this.loadSkillStateMap();
+      if (removeRetiredSkillEntries(state)) this.saveSkillStateMap(state);
+    }
     console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
     const bundledRoot = this.getBundledSkillsRoot();
     console.log('[skills] syncBundledSkillsToUserData: bundledRoot =', bundledRoot);
@@ -1719,7 +1721,7 @@ export class SkillManager {
       console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
       bundledSkillDirs.forEach((dir) => {
         const id = path.basename(dir);
-        if (RETIRED_BUNDLED_SKILL_IDS.has(id)) return;
+        if ((onlySkillId && onlySkillId !== id) || RETIRED_BUNDLED_SKILL_IDS.has(id)) return;
         if (bundledIds && !bundledIds.has(id)) {
           console.log(`[skills] syncBundledSkillsToUserData: skipping non-bundled "${id}"`);
           return;
@@ -1791,6 +1793,7 @@ export class SkillManager {
         }
       });
 
+      if (onlySkillId) return;
       const bundledConfig = path.join(bundledRoot, SKILLS_CONFIG_FILE);
       const targetConfig = path.join(userRoot, SKILLS_CONFIG_FILE);
       if (fs.existsSync(bundledConfig)) {

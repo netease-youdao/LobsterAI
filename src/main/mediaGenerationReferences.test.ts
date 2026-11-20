@@ -36,6 +36,17 @@ const makeVideoRef = (overrides: Partial<MediaAttachmentRefMain>): MediaAttachme
 });
 
 describe('applyMediaReferencesToGenerationParams', () => {
+  test('resolves explicit skin reference tokens and keeps the new backdrop selected for the emblem', () => {
+    const options = {
+      mediaType: MediaGenerationRequestType.Image,
+      refs: [makeImageRef({ localPath: '/old/coast.png' })],
+      preferExplicitImageInputs: true,
+    };
+    expect(applyMediaReferencesToGenerationParams({ ...options, params: { images: ['@图片2'] } }).images).toEqual(['/old/coast.png']);
+    expect(applyMediaReferencesToGenerationParams({ ...options, params: { image: '/new/backdrop.png' } }).image).toBe('/new/backdrop.png');
+    expect(applyMediaReferencesToGenerationParams({ ...options, params: {} }).images).toEqual(['/old/coast.png']);
+  });
+
   test('replaces a single image token with the referenced file path', () => {
     const params = applyMediaReferencesToGenerationParams({
       mediaType: MediaGenerationRequestType.Image,
