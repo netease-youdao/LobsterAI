@@ -34,7 +34,7 @@ import type {
   DshHostManager,
   DshHostSessionContext,
 } from '../dsh/dshHostManager';
-import { buildDshImageTurnInstruction } from '../dsh/dshImageGenerationTool';
+import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import type {
@@ -377,7 +377,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
       imageAttachments: options.imageAttachments,
-      mediaInstruction: buildDshImageTurnInstruction(options.mediaSelection, options.mediaReferences),
+      mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences),
       localMediaAttachments: options.localMediaAttachments,
       agentId: options.agentId,
       workspaceRoot: options.workspaceRoot,
@@ -399,7 +399,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
-      mediaInstruction: buildDshImageTurnInstruction(options.mediaSelection, options.mediaReferences),
+      mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences),
       localMediaAttachments: options.localMediaAttachments,
     });
   }
