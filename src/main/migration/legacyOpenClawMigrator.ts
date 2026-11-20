@@ -28,6 +28,7 @@ import type {
   ScheduledTaskPayload,
   TaskState,
 } from '../../scheduledTask/types';
+import { AgentId } from '../../shared/agent/constants';
 import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   RETAINED_IM_PLATFORM_LIST,
@@ -44,8 +45,10 @@ import {
   MigrationV2Status,
 } from '../../shared/migration/constants';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
+import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
 import {
   LobsterMemoryService,
+  sanitizeAgentId,
   stripManagedAgentsSection,
   WorkspaceFileName,
 } from '../memory/lobsterMemoryService';
@@ -1117,7 +1120,7 @@ function migrateLegacyWorkspaces(
         if (fileName === WorkspaceFileName.Agents) {
           content = stripManagedAgentsSection(content);
         }
-        if (content.trim().length > 0) {
+        if (fileName === WorkspaceFileName.Soul || fileName === WorkspaceFileName.Identity || content.trim()) {
           const dstFile = path.join(dstDir, fileName);
           if (!fs.existsSync(dstFile)) {
             fs.writeFileSync(dstFile, content, 'utf8');
@@ -1167,6 +1170,23 @@ function migrateLegacyWorkspaces(
     });
   }
   return migratedCount;
+}
+
+/** Legacy workspaces can have just one persona file. SQLite supplies only missing files. */
+function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string): void {
+  const marker = 'engine.migration.v2.expertPersonas';
+  if (getKv(db, marker)) return;
+  const columns = getTableColumns(db, 'agents');
+  if (columns.has('id') && columns.has('system_prompt') && columns.has('identity')) {
+    const experts = db.prepare(`
+      SELECT id, system_prompt AS systemPrompt, identity FROM agents
+      WHERE id != ? AND (system_prompt != '' OR identity != '')
+    `).all(AgentId.Main) as Array<{ id: string; systemPrompt: string; identity: string }>;
+    for (const expert of experts) {
+      seedAgentPersonaFiles(path.join(workspacesDir, sanitizeAgentId(expert.id)), expert);
+    }
+  }
+  setKv(db, marker, '1');
 }
 
 /**
@@ -1222,6 +1242,7 @@ export function runLegacyOpenClawMigration(
     // Idempotency guard: already migrated -> instant return.
     if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
       migrateLegacySubagentHistory(db, openclawStateDir);
+      backfillAgentPersonaFiles(db, workspacesDir);
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1229,6 +1250,7 @@ export function runLegacyOpenClawMigration(
     const hasOpenClawState = fs.existsSync(openclawStateDir);
     const hasLegacyEngineKv = getKv(db, 'cowork.agent_engine') === 'openclaw';
     if (!hasOpenClawState && !hasLegacyEngineKv) {
+      backfillAgentPersonaFiles(db, workspacesDir);
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
@@ -1267,6 +1289,7 @@ export function runLegacyOpenClawMigration(
         incompatibleEntries,
         archivedModules,
       );
+      backfillAgentPersonaFiles(db, workspacesDir);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
       const {
