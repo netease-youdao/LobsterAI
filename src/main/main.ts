@@ -434,8 +434,8 @@ import {
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
-import { createDshImageGenerationProvider } from './libs/dsh/dshImageGenerationTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
+import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
@@ -623,6 +623,7 @@ import { applyMediaDefaultParameters, MediaDefaultImageBudget } from './mediaDef
 import { MediaDefaultPolicyManager } from './mediaDefaultPolicyManager';
 import { imageConfirmationFailure, imageConfirmationQuestions, isMediaGenerationConfirmed } from './mediaGenerationConfirmation';
 import {
+  MediaGenerationAction,
   MediaGenerationGateReason,
   MediaGenerationTool,
   MediaSelectionMode,
@@ -2248,7 +2249,7 @@ const getDshBootstrap = (): DshBootstrap => {
     const userDataDir = app.getPath('userData');
     const storeInstance = getCoworkStore();
     dshBootstrap = new DshBootstrap({
-      toolProviders: [createDshImageGenerationProvider(request => getMcpRuntime().executeMediaGeneration(request))],
+      toolProviders: [createDshMediaGenerationProvider(request => getMcpRuntime().executeMediaGeneration(request))],
       userDataDir,
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
@@ -5825,7 +5826,7 @@ if (!gotTheLock) {
         };
       }
 
-      if (action === 'cancel' && tool === MediaGenerationTool.Video) {
+      if (action === MediaGenerationAction.Cancel && tool === MediaGenerationTool.Video) {
         const taskId = args.taskId as string;
         if (!taskId) {
           console.warn('[MediaGeneration] blocked cancel request because taskId was missing.');
@@ -14847,7 +14848,7 @@ if (!gotTheLock) {
     // Same for task records whose saved assets older builds kept as inline images.
     try { getMediaTaskStore().tasks(); }
     catch (error) { console.warn('[MediaGeneration] Media task index compaction failed:', error); }
-    // Restore legacy image preferences and artwork before the first window can read them.
+    // Restore legacy media preferences and files before the first window can read them.
     const database = getStore().getDatabase();
     const legacyKeys = database.prepare('SELECT key FROM kv WHERE key GLOB ?')
       .all(MediaDefaultsProtocol.LegacyKey + ':*') as Array<{ key: string }>;
@@ -14855,7 +14856,9 @@ if (!gotTheLock) {
     await migrateInlineMediaMetadata({
       db: database,
       kv: getStore(),
-      recoveryDirectory: sessionId => path.join(app.getPath('userData'), 'generated-images', sessionId),
+      recoveryDirectory: (sessionId, type) => path.join(
+        app.getPath('userData'), type === MediaType.Video ? 'generated-videos' : 'generated-images', sessionId,
+      ),
       pause: () => new Promise(resolve => setImmediate(resolve)),
     });
     let mediaRecoveryInFlight = false;
