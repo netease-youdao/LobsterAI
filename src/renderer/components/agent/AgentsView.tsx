@@ -9,6 +9,7 @@ import type { PresetAgent } from '../../types/agent';
 import { usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import AgentAvatarIcon from './AgentAvatarIcon';
 import AgentCreateModal from './AgentCreateModal';
 import AgentSettingsPanel from './AgentSettingsPanel';
@@ -67,7 +68,7 @@ const AgentsView: React.FC<AgentsViewProps> = ({
       <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
         <div className="flex items-center space-x-3 h-8">
           {isSidebarCollapsed && !isWindows && (
-            <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
+            <div className={`non-draggable flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
               <button
                 type="button"
                 onClick={onToggleSidebar}

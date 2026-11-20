@@ -16,9 +16,63 @@ export interface CompanionWindowOptions {
   focusable: boolean;
 }
 
+export const CompanionWindowLevel = {
+  Floating: 'floating',
+  PopUpMenu: 'pop-up-menu',
+  ScreenSaver: 'screen-saver',
+} as const;
+export type CompanionWindowLevel = typeof CompanionWindowLevel[keyof typeof CompanionWindowLevel];
+
+export function setCompanionWindowLevel(win: BrowserWindow, level: CompanionWindowLevel): void {
+  win.setAlwaysOnTop(true, level);
+  if (process.platform === 'darwin') {
+    win.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: level !== CompanionWindowLevel.Floating,
+      skipTransformProcessType: true,
+    });
+  }
+}
+
 const PANEL_BLUR_DELAY_MS = 120;
 /** Focus requests for a macOS panel that has not become key since it was shown. */
 const PANEL_REFOCUS_ATTEMPTS = 2;
+/** Fallback delay after `did-finish-load` if Chromium/Electron drops `ready-to-show` on a hidden window. */
+const READY_TO_SHOW_FALLBACK_MS = 250;
+
+/**
+ * Runs `onReady` once when a newly created hidden companion window paints (`ready-to-show`),
+ * falling back shortly after `did-finish-load` so a dropped `ready-to-show` cannot leave the
+ * window hidden permanently.
+ */
+export function onCompanionWindowReadyToShow(
+  win: BrowserWindow,
+  onReady: () => void,
+  fallbackMs = READY_TO_SHOW_FALLBACK_MS,
+): void {
+  let settled = false;
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(fallbackTimer);
+    win.removeListener('ready-to-show', finish);
+    win.removeListener('closed', cancel);
+    if (!win.isDestroyed()) onReady();
+  };
+  const cancel = () => {
+    settled = true;
+    clearTimeout(fallbackTimer);
+    win.removeListener('ready-to-show', finish);
+  };
+  const scheduleFallback = () => {
+    if (settled || win.isDestroyed()) return;
+    clearTimeout(fallbackTimer);
+    fallbackTimer = setTimeout(finish, fallbackMs);
+  };
+  win.once('ready-to-show', finish);
+  win.webContents.once('did-finish-load', scheduleFallback);
+  win.once('closed', cancel);
+}
 
 /** Dismiss interactive panels on blur, preserving passive notifications and native dialogs. */
 export function dismissCompanionPanelOnBlur(win: BrowserWindow, dismiss: () => void, shouldDismiss = () => true): void {
@@ -132,17 +186,14 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
     },
   });
   win.setMenu(null);
-  if (process.platform === 'win32' && isScreenshot) {
-    // Windows clamps initial bounds to the work area, even for frameless windows.
-    // Restore the full display before loading the image, otherwise it is squeezed
-    // above the real taskbar and both the preview and crop coordinates are wrong.
+  if (process.platform === 'win32' && (isScreenshot || options.surface === DesktopCompanionSurface.Mascot)) {
+    // Windows clamps initial bounds to the work area (affecting full-screen screenshots) and may
+    // scale frameless windows by the primary display's DPI when created on a secondary monitor.
     win.setBounds(options.bounds);
   }
   // The selection toolbar sits above menus of the app it is attached to; the orb's menu above the other cards.
-  win.setAlwaysOnTop(true, isScreenshot ? 'screen-saver' : isSelection || isMenu ? 'pop-up-menu' : 'floating');
-  if (process.platform === 'darwin') {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: isSelection || isScreenshot || isMenu, skipTransformProcessType: true });
-  }
+  setCompanionWindowLevel(win, isScreenshot ? CompanionWindowLevel.ScreenSaver
+    : isSelection || isMenu ? CompanionWindowLevel.PopUpMenu : CompanionWindowLevel.Floating);
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // The quick panel runs the home page's composer, which needs the main renderer's styles and store.

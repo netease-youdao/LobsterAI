@@ -35,6 +35,7 @@ const RETAINED_PATCHES = [
   'openclaw-exec-command-description.patch',
   'openclaw-gateway-client-request-traceparent.patch',
   'openclaw-gateway-fast-path-rejection-handler.patch',
+  'openclaw-grouped-skill-catalog.patch',
   'openclaw-heartbeat-cost-isolation.patch',
   'openclaw-im-bound-agent-run-cwd.patch',
   'openclaw-inferred-plugin-install-allowlist.patch',
@@ -252,7 +253,8 @@ describe('OpenClaw v2026.8.1 upgrade decisions', () => {
     ]);
     expectPatchContains('openclaw-plugin-archive-windows-timeout.patch', [
       'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
-      'process.platform === "win32" ? 900_000 : 120_000',
+      // 120s timed out unpacking @openclaw/discord (5.7k files) on an Intel Mac.
+      'DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS = 900_000;',
       'params.timeoutMs ?? DEFAULT_PLUGIN_ARCHIVE_TIMEOUT_MS',
     ]);
     expectPatchContains('openclaw-project-memory-negative-probe.patch', [

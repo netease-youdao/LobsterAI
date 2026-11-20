@@ -8,6 +8,16 @@ import type { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { defaultConfig, getProviderDisplayName } from '../../config';
 import { resolveOpenClawModelRef } from '../../utils/openclawModelRef';
 
+/** Admin-configured tag shown next to a server model's name. */
+export interface ModelCustomTag {
+  text: string;
+  /** English text; English UIs fall back to the icon (or text) when absent. */
+  textEn?: string;
+  iconUrl?: string;
+  /** #RRGGBB; the selector falls back to its default tag color. */
+  color?: string;
+}
+
 export interface Model {
   presetId?: ModelPresetId;
   presetThinkingLevel?: ModelThinkingLevel;
@@ -37,6 +47,7 @@ export interface Model {
   limitedFreeStartAt?: string | null;
   limitedFreeEndAt?: string | null;
   subscriptionPriority?: boolean;
+  customTag?: ModelCustomTag; // 服务端下发的自定义标签（Admin 配置）
   busy?: boolean;
   moreModel?: boolean; // 是否收起到“更多模型”分组
   accessible?: boolean; // false = 模型可见但用户无权使用（置灰）

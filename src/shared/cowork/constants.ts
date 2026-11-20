@@ -141,6 +141,8 @@ export const CoworkIpcChannel = {
   MemoryWriteRaw: 'cowork:memory:writeRaw',
   BootstrapRead: 'cowork:bootstrap:read',
   BootstrapWrite: 'cowork:bootstrap:write',
+  DreamingStatus: 'cowork:dreaming:status',
+  DreamingDiary: 'cowork:dreaming:diary',
   TempStorageUsage: 'cowork:tempStorage:usage',
   TempStorageClean: 'cowork:tempStorage:clean',
 } as const;

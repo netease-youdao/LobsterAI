@@ -1,21 +1,40 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 import { AgentIpcChannel } from '../shared/agent/constants';
 import { ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
+import { WindowIpcChannel } from '../shared/app/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
-  ipcRenderer: { invoke: vi.fn() },
+  ipcRenderer: { invoke: vi.fn(), on: vi.fn() },
+  webFrame: { setZoomFactor: vi.fn() },
   webUtils: {},
 }));
 
 await import('./preload');
 const agents = vi.mocked(contextBridge.exposeInMainWorld).mock.calls
   .find(([key]) => key === 'electron')![1].agents;
+const applyZoomListener = vi.mocked(ipcRenderer.on).mock.calls
+  .find(([channel]) => channel === WindowIpcChannel.ApplyZoom)?.[1];
 
 beforeEach(() => vi.mocked(ipcRenderer.invoke).mockReset());
+
+test('does not set zoom factor during preload so hidden windows still emit ready-to-show', () => {
+  expect(webFrame.setZoomFactor).not.toHaveBeenCalled();
+  expect(applyZoomListener).toBeTypeOf('function');
+
+  applyZoomListener?.({} as Electron.IpcRendererEvent, 1.25);
+  expect(webFrame.setZoomFactor).toHaveBeenCalledExactlyOnceWith(1.25);
+
+  vi.mocked(webFrame.setZoomFactor).mockClear();
+  applyZoomListener?.({} as Electron.IpcRendererEvent, 0);
+  applyZoomListener?.({} as Electron.IpcRendererEvent, -1);
+  applyZoomListener?.({} as Electron.IpcRendererEvent, Number.NaN);
+  applyZoomListener?.({} as Electron.IpcRendererEvent, '1.5');
+  expect(webFrame.setZoomFactor).not.toHaveBeenCalled();
+});
 
 test('preset preparation failures reach the renderer with the original main-process message', async () => {
   const message = 'SQLITE_ERROR: no such column: icon_customized';

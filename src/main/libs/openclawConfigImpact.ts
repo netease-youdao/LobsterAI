@@ -59,7 +59,6 @@ const PROVIDER_SECRET_FIELDS = new Set([
 ]);
 
 const COWORK_SYNC_FIELDS = new Set([
-  'executionMode',
   'agentEngine',
   'workingDirectory',
   'skipMissedJobs',

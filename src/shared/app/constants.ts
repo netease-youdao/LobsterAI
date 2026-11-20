@@ -13,9 +13,17 @@ export type AppIpcChannel = (typeof AppIpcChannel)[keyof typeof AppIpcChannel];
 export const WindowIpcChannel = {
   /** Renderer asks whether the main window is in full screen (macOS hides the traffic lights then). */
   IsFullscreen: 'window:isFullscreen',
+  /** Main → preload: apply a per-window zoom factor via webFrame after the window has painted. */
+  ApplyZoom: 'window:applyZoom',
+  /** Main → renderer: the main window zoom changed after a shortcut or Ctrl/Cmd + wheel. */
+  ZoomChanged: 'window:zoomChanged',
 } as const;
 
 export type WindowIpcChannel = (typeof WindowIpcChannel)[keyof typeof WindowIpcChannel];
+
+export interface WindowZoomChangedPayload {
+  zoomFactor: number;
+}
 
 /** Settings tabs the main process can open through AppIpcChannel.OpenSettings. */
 export const OpenSettingsTab = {

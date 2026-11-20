@@ -5,8 +5,8 @@ import { getLanguage } from './i18n';
 
 export type { PresetAgent } from '../shared/agent/presets';
 
-/** Create a localized agent snapshot; future catalog updates never overwrite it. */
-export function presetToCreateRequest(preset: PresetAgent): CreateAgentRequest {
+/** Resolve the official fields for an explicit installation or upgrade. */
+export function presetToCreateRequest(preset: PresetAgent) {
   const isEn = getLanguage() === 'en';
   return {
     id: preset.id,
@@ -18,5 +18,6 @@ export function presetToCreateRequest(preset: PresetAgent): CreateAgentRequest {
     skillIds: preset.skillIds,
     source: AgentSource.Preset,
     presetId: preset.id,
-  };
+    presetRevision: preset.revision,
+  } satisfies CreateAgentRequest;
 }

@@ -49,23 +49,35 @@ The renderer dev server runs at `http://localhost:5175`.
 ## Tests and lint
 
 ```bash
-# Production renderer bundle
+# Type-check renderer, common, and shared code, then build the Vite bundles
+# for renderer, main, and preload
 npm run build
 
-# Electron main/preload TypeScript build
+# Type-check and compile src/main with tsc
 npm run compile:electron
+
+# Type-check renderer, common, and shared code only; writes no files
+npx tsc
 
 # Official Vitest entry used by CI
 npm test
 
+# Run only the test files whose name matches
+npm test -- logger
+
 # Full ESLint across src; may expose existing legacy debt
 npm run lint
 
-# CI-style lint for touched TypeScript files
-npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 <files>
+# The lint CI runs, on the TypeScript files you touched
+npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 --no-warn-ignored <files>
 ```
 
 CI lints only the TypeScript files a pull request changes. Leave every file you touch free of ESLint errors and warnings under that command, and add colocated `*.test.ts` Vitest tests for new logic where practical.
+
+- `npm run build` does not type-check `src/main`. After changing main-process, IPC, or preload code, run `npm run compile:electron` as well. CI runs both.
+- Import order is an error-level lint rule; `eslint --fix` repairs it.
+- Vitest runs in a Node environment and collects only `*.test.ts` files. There is no DOM, so test renderer logic as plain functions rather than rendered components.
+- Do not run `npm run format` or Prettier on existing files. Most of the tree has never been formatted with it, so it rewrites whole files.
 
 ## OpenClaw runtime
 
@@ -85,7 +97,7 @@ OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
 OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
 ```
 
-When behavior has to change inside OpenClaw, prefer a LobsterAI-side integration point first. If a patch is unavoidable, add a small version-scoped patch under `scripts/patches/<openclaw.version>/` rather than leaving manual edits in the sibling checkout.
+When behavior has to change inside OpenClaw, prefer a LobsterAI-side integration point first. If a patch is unavoidable, add a small version-scoped patch under `scripts/patches/<openclaw.version>/` and describe it in that directory's `README.md`, rather than leaving manual edits in the sibling checkout.
 
 ## DeepSeek Harness runtime
 
@@ -219,11 +231,14 @@ Offline or private-source packaging can use:
 | Path | Purpose |
 | --- | --- |
 | `src/main/main.ts` | Electron lifecycle, IPC registration, auth, logging, runtime startup, and service wiring |
+| `src/main/ipcHandlers/` | IPC handlers grouped by domain; new handlers go here rather than in `main.ts` |
 | `src/main/libs/openclawEngineManager.ts` | OpenClaw gateway process, runtime state, ports, logs, restart, and repair |
 | `src/main/libs/openclawConfigSync.ts` | Renders LobsterAI providers, models, agents, IM bindings, skills, MCP, and workspace instructions into OpenClaw config |
 | `src/main/libs/agentEngine/openclawRuntimeAdapter.ts` | Translates OpenClaw gateway events into Cowork stream events |
 | `src/main/coworkStore.ts` | Cowork sessions, messages, config, agents, memory metadata, and SQLite CRUD |
+| `src/main/skills/skillManager.ts` | Skill sync, install/upgrade, security scan, and enable state |
 | `src/main/office/` | In-place Word, Excel, and PowerPoint editors: file store, agent tool bridge, and MCP servers |
+| `src/main/libs/dsh*.ts` | DeepSeek Harness runtime: install, process launch, and config sync. Independent of the Cowork agent runtime |
 | `src/renderer/components/cowork/` | Main Cowork UI, prompt input, session detail, permissions, thinking/tool display, media, and voice input |
 | `src/renderer/components/artifacts/` | Artifact panel, previews, and renderers |
 | `src/renderer/components/agent/` | Agent creation and settings UI |
@@ -232,15 +247,23 @@ Offline or private-source packaging can use:
 | `src/renderer/components/scheduledTasks/` | Scheduled task list, form, detail, run history, and templates |
 | `src/renderer/services/i18n.ts` | Renderer i18n dictionary and `t()` helper |
 | `src/shared/` | Constants and types shared by the main and renderer processes |
+| `src/common/` | Small pure helpers compiled into both processes |
+| `src/scheduledTask/` | Scheduled task model and policies; execution goes through OpenClaw cron |
 | `SKILLs/` | Bundled LobsterAI skills |
+| `openclaw-extensions/` | Local OpenClaw plugins |
+| `scripts/` | Runtime build, patch, and packaging scripts |
+| `specs/` | Design docs per feature, refactor, and bugfix, written in Chinese |
+| `tests/` | Packaging, runtime, and integration tests |
 
-[`AGENTS.md`](AGENTS.md) has a deeper architecture map and the conventions coding agents follow in this repository.
+[`AGENTS.md`](AGENTS.md) has the conventions coding agents follow in this repository. Deeper maps live beside the code: [`src/main/AGENTS.md`](src/main/AGENTS.md) covers the main process, IPC, SQLite tables, and data and log locations; [`src/renderer/AGENTS.md`](src/renderer/AGENTS.md) covers the renderer, artifacts, and the i18n dictionary; [`scripts/AGENTS.md`](scripts/AGENTS.md) covers runtime builds, patch mechanisms, and packaging.
 
 ## Submitting changes
 
-- Branch from `main` with a name like `feat/...` or `fix/...`.
-- Write commit messages in English following [Conventional Commits](https://www.conventionalcommits.org/), for example `fix(sqlite): prevent duplicate session insert on retry`.
+- Branch from the active `release/<date>` branch (the newest one on the remote), with a name like `feat/...` or `fix/...`, and open the pull request against that branch, not `main`. Release branches are merged into `main` when they ship. When no release branch is in progress, because the newest one has shipped and been merged into `main`, branch from `main` and open the pull request against it.
+- Write commit messages in English following [Conventional Commits](https://www.conventionalcommits.org/), for example `fix(sqlite): prevent duplicate session insert on retry`. The `commit-msg` hook runs commitlint: keep the header and every body line within 100 characters, and start the subject in lowercase.
+- Add new libraries to `devDependencies` (`npm install -D`). Vite bundles main and renderer code, so `dependencies` is only for modules loaded outside the bundles; `tests/electronBuilderAppFiles.test.ts` lists each one with its reason.
 - Don't hardcode user-visible strings. Use `t('key')` and add both `zh` and `en` translations.
 - Use shared `as const` objects instead of bare string literals for IPC channel names, statuses, and other discriminants.
+- Put new IPC handlers in `src/main/ipcHandlers/<domain>/` rather than `main.ts`. [`src/main/AGENTS.md`](src/main/AGENTS.md) lists the steps.
 - Keep changes focused. Avoid drive-by refactors and formatting churn in large legacy files.
 - Fill in the pull request template: a short summary, the linked issue, screenshots for UI changes, and notes on Electron-specific changes such as IPC, storage, runtime, or windowing.

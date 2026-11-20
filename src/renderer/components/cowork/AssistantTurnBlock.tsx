@@ -884,6 +884,7 @@ const AssistantTurnBlock: React.FC<{
     index: number,
     displayVariant: 'timeline' | ActivityEntryVariant = 'timeline',
     isLive?: boolean,
+    expandFileDetails?: boolean,
   ): React.ReactNode => {
     // A step line inside an activity run has no timeline connector to draw.
     const isGroupEntry = displayVariant !== 'timeline';
@@ -983,6 +984,7 @@ const AssistantTurnBlock: React.FC<{
           retainedMediaPollCounts={retainedMediaPollCounts}
           variant={displayVariant}
           isLive={isLive}
+          defaultExpanded={expandFileDetails}
         />
       );
     }
@@ -1027,11 +1029,12 @@ const AssistantTurnBlock: React.FC<{
         entries={chunk.entries}
         isLiveRun={isStreamingTurn && chunkIndex === renderChunks.length - 1}
         isTailStalled={isTailTextStalled}
-        renderEntry={(entry, isLive) => renderConsolidatedItem(
+        renderEntry={(entry, isLive, expandFileDetails) => renderConsolidatedItem(
           entry.item,
           entry.index,
           ActivityEntryVariant.Row,
           isLive,
+          expandFileDetails,
         )}
       />
     );

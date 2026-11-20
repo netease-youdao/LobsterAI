@@ -6,13 +6,18 @@ const electronMocks = vi.hoisted(() => {
   const createWebContents = () => {
     let currentUrl = '';
     let zoomFactor = 1;
+    let debuggerAttached = false;
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
     const webContents = {
       close: vi.fn(),
       debugger: {
-        attach: vi.fn(),
-        detach: vi.fn(),
-        isAttached: vi.fn(() => false),
+        attach: vi.fn(() => {
+          debuggerAttached = true;
+        }),
+        detach: vi.fn(() => {
+          debuggerAttached = false;
+        }),
+        isAttached: vi.fn(() => debuggerAttached),
         sendCommand: vi.fn(),
       },
       executeJavaScript: vi.fn(),
@@ -60,6 +65,7 @@ const electronMocks = vi.hoisted(() => {
     flushStorageData: vi.fn(),
     flushStore: vi.fn<() => Promise<void>>(),
     fromPartition: vi.fn(),
+    onBeforeSendHeaders: vi.fn(),
     getUserAgent: vi.fn<() => string>(),
     setPermissionCheckHandler: vi.fn(),
     setPermissionRequestHandler: vi.fn(),
@@ -106,8 +112,13 @@ import {
   BrowserCdpCommand,
   BrowserMcpTool,
   BrowserWindowOpenAction,
+  CHROME_USER_AGENT_URL_PATTERNS,
   toChromeUserAgent,
 } from './agentBrowserHost';
+import {
+  AGENT_BROWSER_MAX_PAGES,
+  AGENT_BROWSER_RECLAIM_MIN_IDLE_MS,
+} from './agentBrowserPageRetention';
 
 const ELECTRON_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) LobsterAI/2026.10.19 Chrome/150.0.7871.250 Electron/43.5.0 Safari/537.36';
@@ -150,6 +161,9 @@ beforeEach(() => {
     setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
     setProxy: electronMocks.setProxy,
     setUserAgent: electronMocks.setUserAgent,
+    webRequest: {
+      onBeforeSendHeaders: electronMocks.onBeforeSendHeaders,
+    },
     on: vi.fn(),
     removeListener: vi.fn(),
   });
@@ -895,12 +909,69 @@ describe('AgentBrowserHost script evaluation', () => {
 });
 
 describe('AgentBrowserHost browsing without a visible panel', () => {
-  test('presents the plain Chrome user agent', () => {
+  test('presents the plain Chrome user agent only to Google sign-in', () => {
     createHost();
 
     expect(toChromeUserAgent(ELECTRON_USER_AGENT)).toBe(CHROME_USER_AGENT);
     expect(toChromeUserAgent(CHROME_USER_AGENT)).toBe(CHROME_USER_AGENT);
-    expect(electronMocks.setUserAgent).toHaveBeenCalledWith(CHROME_USER_AGENT);
+    // A session-wide Chrome user agent makes Cloudflare challenges loop.
+    expect(electronMocks.setUserAgent).not.toHaveBeenCalled();
+    expect(electronMocks.onBeforeSendHeaders).toHaveBeenCalledTimes(1);
+
+    const [filter, listener] = electronMocks.onBeforeSendHeaders.mock.calls[0] as [
+      Electron.WebRequestFilter,
+      (
+        details: { requestHeaders: Record<string, string> },
+        callback: (response: { requestHeaders: Record<string, string> }) => void,
+      ) => void,
+    ];
+    expect(filter.urls).toEqual([...CHROME_USER_AGENT_URL_PATTERNS]);
+    const callback = vi.fn();
+    listener({ requestHeaders: { Accept: 'text/html', 'User-Agent': ELECTRON_USER_AGENT } }, callback);
+    expect(callback).toHaveBeenCalledWith({
+      requestHeaders: { Accept: 'text/html', 'User-Agent': CHROME_USER_AGENT },
+    });
+  });
+
+  test('allows passive storage-access checks while denying hardware and interactive permissions', () => {
+    createHost();
+
+    const checkHandler = electronMocks.setPermissionCheckHandler.mock.calls[0]?.[0] as
+      | ((webContents: unknown, permission: string) => boolean)
+      | undefined;
+    const requestHandler = electronMocks.setPermissionRequestHandler.mock.calls[0]?.[0] as
+      | ((webContents: unknown, permission: string, callback: (granted: boolean) => void) => void)
+      | undefined;
+    expect(checkHandler).toBeTypeOf('function');
+    expect(requestHandler).toBeTypeOf('function');
+
+    expect(checkHandler!(null, 'storage-access')).toBe(true);
+    expect(checkHandler!(null, 'notifications')).toBe(true);
+    expect(checkHandler!(null, 'media')).toBe(false);
+    expect(checkHandler!(null, 'geolocation')).toBe(false);
+    expect(checkHandler!(null, 'clipboard-read')).toBe(false);
+    expect(checkHandler!(null, 'openExternal')).toBe(false);
+
+    const requestCallback = vi.fn();
+    requestHandler!(null, 'notifications', requestCallback);
+    expect(requestCallback).toHaveBeenCalledWith(false);
+  });
+
+  test('detaches the CDP debugger after tool operations without enabling persistent DOM or Page domains', async () => {
+    const host = createHost();
+    await host.newPage();
+    const webContents = electronMocks.webContentsInstances[0];
+    webContents.debugger.sendCommand.mockResolvedValue({
+      nodes: [{ nodeId: 'root', backendDOMNodeId: 1, role: { value: 'RootWebArea' } }],
+    });
+
+    await host.handleToolRequest({ tool: BrowserMcpTool.TakeSnapshot, args: { pageId: 1 } });
+
+    expect(webContents.debugger.attach).toHaveBeenCalledWith('1.3');
+    expect(webContents.debugger.detach).toHaveBeenCalledTimes(1);
+    expect(webContents.debugger.isAttached()).toBe(false);
+    expect(webContents.debugger.sendCommand).not.toHaveBeenCalledWith('DOM.enable');
+    expect(webContents.debugger.sendCommand).not.toHaveBeenCalledWith('Page.enable');
   });
 
   test('gives pages a desktop viewport before the panel has ever been shown', async () => {
@@ -985,5 +1056,60 @@ describe('AgentBrowserHost browsing without a visible panel', () => {
     expect(electronMocks.webContentsInstances[1].loadURL).toHaveBeenLastCalledWith(
       'https://www.bing.com/search?q=lobster%20ai',
     );
+  });
+});
+
+describe('AgentBrowserHost background page limit', () => {
+  const openAgentPage = (host: AgentBrowserHost, index: number) => host.handleToolRequest({
+    tool: BrowserMcpTool.NewPage,
+    args: { url: `https://example.com/${index}` },
+  });
+
+  test('closes idle pages the user never saw once too many are open', async () => {
+    vi.useFakeTimers();
+    try {
+      const mainWindow = {
+        isVisible: () => true,
+        isDestroyed: () => false,
+        getContentBounds: () => ({ x: 0, y: 0, width: 1000, height: 700 }),
+        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      };
+      const host = createHost({ getMainWindow: () => mainWindow as unknown as Electron.BrowserWindow });
+      await openAgentPage(host, 1);
+      // The user saw page 1 in the panel, e.g. to sign in by hand.
+      host.setView({ visible: true });
+      host.setView({ visible: false });
+      for (let index = 2; index <= AGENT_BROWSER_MAX_PAGES; index += 1) {
+        await openAgentPage(host, index);
+      }
+      vi.advanceTimersByTime(AGENT_BROWSER_RECLAIM_MIN_IDLE_MS / 2);
+      await host.handleToolRequest({
+        tool: BrowserMcpTool.NavigatePage,
+        args: { pageId: 2, url: 'https://example.com/2/next' },
+      });
+      vi.advanceTimersByTime(AGENT_BROWSER_RECLAIM_MIN_IDLE_MS / 2);
+
+      await openAgentPage(host, AGENT_BROWSER_MAX_PAGES + 1);
+
+      const pageIds = host.getState().tabs.map(tab => tab.pageId);
+      expect(pageIds).toHaveLength(AGENT_BROWSER_MAX_PAGES);
+      expect(pageIds).toContain(1);
+      expect(pageIds).toContain(2);
+      expect(pageIds).not.toContain(3);
+      expect(electronMocks.webContentsInstances[2].close).toHaveBeenCalledOnce();
+      expect(host.getState().selectedPageId).toBe(AGENT_BROWSER_MAX_PAGES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps recently used pages above the limit', async () => {
+    const host = createHost();
+    for (let index = 1; index <= AGENT_BROWSER_MAX_PAGES + 1; index += 1) {
+      await openAgentPage(host, index);
+    }
+
+    expect(host.getState().tabs).toHaveLength(AGENT_BROWSER_MAX_PAGES + 1);
+    expect(electronMocks.webContentsInstances.every(webContents => !webContents.close.mock.calls.length)).toBe(true);
   });
 });

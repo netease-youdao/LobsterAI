@@ -1,5 +1,6 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type { GenerateSessionTitleRequest } from '../../common/sessionTitle';
+import type { AccountMenuMoreBridge } from '../../shared/accountMenuMore/constants';
 import type {
   ActivityActionResponse,
   ActivityContextResponse,
@@ -11,7 +12,7 @@ import type {
 } from '../../shared/activity/constants';
 import type { AgentModelSelectionMode } from '../../shared/agent/constants';
 import type { AgentModelSelection } from '../../shared/agent/modelSelection';
-import type { ExpertCatalog } from '../../shared/agent/presets';
+import type { ExpertCatalog, ExpertUpgradeStatus } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
@@ -163,6 +164,8 @@ import type {
   OpenClawUserConfigActionResult,
   OpenClawUserConfigStatus,
 } from '../../shared/openclawUserConfig/constants';
+import type { PptAssetRequest, PptCatalog, PptPreparedFile } from '../../shared/pptCreation/constants';
+import type { PptCoverExportRequest,PptCoverRequest } from '../../shared/pptCreation/cover';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -874,6 +877,9 @@ interface IElectronAPI {
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
     expertCatalog: () => Promise<ExpertCatalog>;
+    upgradePreset: (agentId: string, revision: number) => Promise<ExpertUpgradeStatus>;
+    dismissPresetUpdate: (agentId: string, revision: number) => Promise<boolean>;
+    isExpertBusy: (agentId: string) => Promise<boolean>;
     addPreset: (presetId: string, modelSelection?: AgentModelSelection) => Promise<Agent>;
     /** Another window changed agents; reload them. */
     onChanged?: (callback: () => void) => () => void;
@@ -1015,10 +1021,12 @@ interface IElectronAPI {
     isMaximized: () => Promise<boolean>;
     isFullscreen: () => Promise<boolean>;
     showSystemMenu: (position: { x: number; y: number }) => void;
+    onZoomChanged: (callback: (payload: import('../../shared/app/constants').WindowZoomChangedPayload) => void) => () => void;
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
     startSession: (options: {
+      pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
       cwd?: string;
@@ -2103,6 +2111,7 @@ interface IElectronAPI {
   };
   feedback: FeedbackBridge;
   subscriptionTrial: SubscriptionTrialBridge;
+  accountMenuMore: AccountMenuMoreBridge;
   activity: {
     getSlot: (
       input: ActivityHostGetSlotInput,
@@ -2186,6 +2195,7 @@ interface IElectronAPI {
         limitedFreeStartAt?: string | null;
         limitedFreeEndAt?: string | null;
         subscriptionPriority?: boolean;
+        customTag?: unknown;
         busy?: boolean;
         moreModel?: boolean;
         accessible?: boolean;
@@ -2255,6 +2265,12 @@ interface IElectronAPI {
   imageCreation: {
     getCatalog: () => Promise<ImageCreationCatalog>;
     getReference: (exampleId: string) => Promise<ImageExampleReference>;
+  };
+  pptCreation: {
+    getCoverTemplate: (request: PptCoverRequest) => Promise<{ imageBase64: string }>;
+    exportCover: (request: PptCoverExportRequest) => Promise<PptPreparedFile>;
+    getCatalog: () => Promise<PptCatalog>;
+    getAsset: (request: PptAssetRequest) => Promise<PptPreparedFile>;
   };
   media: {
     getPreferences: (owner: string) => Promise<MediaPreferenceResult>;

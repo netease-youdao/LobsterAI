@@ -14,7 +14,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { AgentId } from '@shared/agent';
+import { AgentId, AgentSource } from '@shared/agent';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -135,7 +135,7 @@ const SortableAgentNode: React.FC<{
         transition,
       }}
       className={`${disabled ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragging ? 'relative z-50 opacity-80' : ''}`}
-      {...attributes}
+      {...(disabled ? {} : attributes)}
       {...listeners}
     >
       {children}
@@ -158,6 +158,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   onEnterBatchMode,
   onBatchSelectableItemsChange,
 }) => {
+  const hasInstalledExperts = useSelector((state: RootState) => state.agent.agents.some(agent => agent.source === AgentSource.Preset));
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const dispatch = useDispatch();
   const currentSessionId = useSelector(selectCurrentSessionId);
@@ -240,6 +241,15 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   useEffect(() => {
     void agentService.loadAgents();
   }, []);
+
+  useEffect(() => {
+    if (!hasInstalledExperts) return undefined;
+    // ExpertStore coalesces requests and caches results across focus changes.
+    const refresh = () => { void agentService.loadExpertCatalog().catch(() => {}); };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [hasInstalledExperts]);
 
   const handleSelectTask = useCallback(async (task: AgentSidebarTaskNode) => {
     onTaskSelected?.({

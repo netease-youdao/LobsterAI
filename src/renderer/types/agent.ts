@@ -24,6 +24,8 @@ export interface Agent {
   isDefault: boolean;
   source: AgentSource;
   presetId: string;
+  presetRevision?: number;
+  dismissedPresetRevision?: number;
   createdAt: number;
   updatedAt: number;
 }

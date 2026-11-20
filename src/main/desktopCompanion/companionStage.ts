@@ -19,6 +19,7 @@ import { type CompanionSize, resolveCompanionStageBounds } from '../../shared/de
 import { type CompanionHintOutcome, CompanionHintOutcome as Outcome, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
 import { type CompanionLauncherAction, isCompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import type { CompanionAnalytics } from './companionAnalytics';
+import { CompanionWindowLevel, setCompanionWindowLevel } from './companionWindow';
 
 const NONE: DesktopCompanionStage = { kind: DesktopCompanionStageKind.None };
 const SHOW_FALLBACK_MS = 150;
@@ -175,6 +176,7 @@ export class CompanionStageController {
       height: Math.max(60, Math.min(Math.ceil(size.height), max.height)),
     };
     this.reposition();
+    // A measured card is ready to show even if other page resources are still loading.
     if (this.pendingShow) this.reveal();
   }
 
@@ -245,6 +247,9 @@ export class CompanionStageController {
   private ensureWindow(): BrowserWindow {
     if (this.window && !this.window.isDestroyed()) return this.window;
     const win = this.host.createWindow(DesktopCompanionSurface.Stage, false);
+    win.webContents.once('did-finish-load', () => {
+      if (this.window === win && this.pendingShow) this.scheduleShowFallback();
+    });
     win.on('closed', () => { if (this.window === win) this.window = null; });
     this.window = win;
     return win;
@@ -252,24 +257,34 @@ export class CompanionStageController {
 
   private present(): void {
     const win = this.ensureWindow();
+    const isLauncher = this.current.kind === DesktopCompanionStageKind.Launcher;
+    if (process.platform === 'darwin') {
+      // The hover menu must join the active full-screen Space above its floating panels.
+      // Hints and drops reuse this window, so restore their usual level on the next presentation.
+      setCompanionWindowLevel(win, isLauncher ? CompanionWindowLevel.PopUpMenu : CompanionWindowLevel.Floating);
+    }
     // The launcher opens under a pointer that is still on the orb; its card takes the mouse once the pointer reaches it.
-    win.setIgnoreMouseEvents(this.current.kind === DesktopCompanionStageKind.Launcher, { forward: true });
+    win.setIgnoreMouseEvents(isLauncher, { forward: true });
     this.reposition();
-    this.host.publish();
     this.pendingShow = true;
+    this.scheduleShowFallback();
+    this.host.publish();
+  }
+
+  private scheduleShowFallback(): void {
     clearTimeout(this.showTimer);
-    this.showTimer = setTimeout(() => this.reveal(), SHOW_FALLBACK_MS);
+    this.showTimer = setTimeout(() => {
+      const win = this.browserWindow;
+      if (win && !win.webContents.isLoadingMainFrame()) this.reveal();
+    }, SHOW_FALLBACK_MS);
   }
 
   private reveal(): void {
     clearTimeout(this.showTimer);
-    if (!this.pendingShow || this.current.kind === DesktopCompanionStageKind.None) return;
-    if (!this.window || this.window.isDestroyed() || this.window.webContents.isLoadingMainFrame()) {
-      // First use: the window shows itself once it has loaded and measured.
-      return;
-    }
+    const win = this.browserWindow;
+    if (!this.pendingShow || this.current.kind === DesktopCompanionStageKind.None || !win) return;
     this.pendingShow = false;
-    this.window.showInactive();
+    win.showInactive();
     if (this.current.kind === DesktopCompanionStageKind.Hint) {
       this.host.analytics?.report({ action: CompanionAnalyticsAction.Hint, source: CompanionAnalyticsSource.Hint,
         stage: CompanionAnalyticsStage.Shown, topic: this.current.topic });

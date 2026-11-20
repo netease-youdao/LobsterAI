@@ -217,6 +217,7 @@ import {
   OpenClawLoopbackRepairOutcome,
 } from '../shared/openclawEngine/constants';
 import { OpenClawRepairPhase, OpenClawRepairStage } from '../shared/openclawEngine/repair';
+import type { PptCoverRequest } from '../shared/pptCreation/cover';
 import type { ProviderConfig } from '../shared/providers';
 import {
   ModelRuntimeProfile,
@@ -299,6 +300,7 @@ import type {
   TelegramInstanceConfig,
   WecomInstanceConfig,
 } from './im/types';
+import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerAsrIpcHandlers } from './ipcHandlers/asr';
@@ -321,6 +323,7 @@ import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
 import { registerOpenClawUserConfigHandlers } from './ipcHandlers/openclawUserConfig/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPluginHandlers } from './ipcHandlers/plugins';
+import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -445,6 +448,7 @@ import {
   getImageCreationExamplesUrl,
   getKitStoreUrl,
   getPortalTasksUrl,
+  getPptCreationExamplesUrl,
   getServerApiBaseUrl,
   getSkillStoreUrl,
   refreshEndpointsTestMode,
@@ -512,6 +516,7 @@ import {
   type DevelopmentMainWindowLoadRecovery,
   MainWindowLoadErrorCode,
 } from './libs/mainWindowLoadRecovery';
+import { installMainWindowZoom, MAC_TRAFFIC_LIGHT_POSITION, scaleRendererCoordinates } from './libs/mainWindowZoom';
 import { formatPersistedImageLink, inferImageMimeTypeFromDataUrl, type PersistedGeneratedImageAsset, persistGeneratedImageAssets, type PersistGeneratedImageAssetsResult, persistGeneratedVideoAssets, type RemoteGeneratedMediaAsset } from './libs/mediaAssetPersistence';
 import { mediaConfirmationQuote } from './libs/mediaConfirmationRequests';
 import { MediaDownloadCoordinator } from './libs/mediaDownloadCoordinator';
@@ -628,6 +633,8 @@ import { OpenClawUserConfigFailureOutcome, OpenClawUserConfigOverlay } from './l
 import { runLegacyWeixinAllowFromMigration } from './libs/openclawWeixinPairingMigration';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { collectOpenWithArgv, findBundledPathArg, OpenWithPathQueue } from './libs/openWithPathQueue';
+import { applyCoverMediaPolicy } from './libs/pptCoverPolicy';
+import { PptCreationStore } from './libs/pptCreationStore';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
 import { recordSessionModelChange } from './libs/sessionModelChange';
@@ -744,6 +751,9 @@ import { createWindowStatePersistManager } from './windowStatePersist';
 
 protocol.registerSchemesAsPrivileged([
   {
+    // localfile:// serves media from anywhere on disk. Pages can show those files but not read
+    // their bytes only because the scheme is not CORS-enabled and does not bypass CSP: never add
+    // `corsEnabled` or `bypassCSP` here.
     scheme: ArtifactPreviewProtocol.LocalFile,
     privileges: {
       standard: true,
@@ -5813,8 +5823,8 @@ if (!gotTheLock) {
 
   ipcMain.on(
     'window:showSystemMenu',
-    (_event, position: { x?: number; y?: number } | undefined) => {
-      showSystemMenu(position);
+    (event, position: { x?: number; y?: number } | undefined) => {
+      showSystemMenu(scaleRendererCoordinates(position, event.sender.getZoomFactor()));
     },
   );
 
@@ -8335,6 +8345,13 @@ if (!gotTheLock) {
     fetchWithAuth,
   });
 
+  registerAccountMenuMoreHandlers({
+    ipcMain,
+    getMainWindow: () => mainWindow,
+    getServerBaseUrl: getServerApiBaseUrl,
+    fetchPublic: (url, options) => net.fetch(url, options),
+  });
+
   registerSubscriptionTrialIpcHandlers({
     ipcMain,
     getMainWindow: () => mainWindow,
@@ -10177,11 +10194,11 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     BrowserIpc.SetHostView,
-    (_event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
+    (event, request?: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
       runBrowserHostAction(() => getAgentBrowserHost().setView({
         sessionId: request?.sessionId,
         visible: request?.visible === true,
-        bounds: request?.bounds,
+        bounds: scaleRendererCoordinates(request?.bounds, event.sender.getZoomFactor()),
       })),
   );
 
@@ -10250,7 +10267,7 @@ if (!gotTheLock) {
       const selectedTab = hostState.tabs.find(tab => tab.pageId === hostState.selectedPageId);
       return showAgentBrowserHostMenu({
         targetWindow,
-        position: request,
+        position: scaleRendererCoordinates(request, event.sender.getZoomFactor()),
         hasPage: Boolean(selectedTab),
         zoomFactor: selectedTab?.zoomFactor,
         darkMode: request?.darkMode,
@@ -10584,6 +10601,7 @@ if (!gotTheLock) {
         modelPresetId?: ModelPresetId;
         thinkingLevel?: string;
         mediaSelection?: MediaSelectionState;
+        pptCover?: PptCoverRequest;
         mediaReferences?: MediaAttachmentRefMain[];
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
@@ -10687,12 +10705,13 @@ if (!gotTheLock) {
         }
 
         const turnIsPlan = containsPlanModePrompt(systemPrompt);
-        const turnMediaSelection = await mediaDefaults.turn({
+        let turnMediaSelection = await mediaDefaults.turn({
           selection: normalizeMediaSelectionState(options.mediaSelection),
           isPlan: turnIsPlan,
           explicitSkillIds: options.activeSkillIds,
           inheritedSkillIds: options.inheritedSkillIds,
         });
+        if (options.pptCover) turnMediaSelection = applyCoverMediaPolicy(await pptCreationStore.getCatalog(), options.pptCover, turnMediaSelection);
         if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
           return { success: false, error: t('authAccountChanged') };
         }
@@ -12094,12 +12113,18 @@ if (!gotTheLock) {
     getEndpoint: getImageCreationExamplesUrl,
     cacheDirectory: path.join(app.getPath('userData'), 'image-creation'),
   }));
+  const pptCreationStore = new PptCreationStore({
+    getEndpoint: getPptCreationExamplesUrl,
+    cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
+  });
+  registerPptCreationHandlers(pptCreationStore);
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },
     getAgentManager,
     getCoworkStore,
     getCoworkEngineRouter,
+    hasPendingMediaTask: sessionId => [...pendingMediaTasks.values()].some(task => task.sessionId === sessionId),
     getIMGatewayManager,
     refreshImSessionWorkingDirectoriesForAgent,
     resolveAgentWorkspacePath,
@@ -12130,7 +12155,7 @@ if (!gotTheLock) {
     ) => {
       try {
         const { rect, defaultFileName } = options || {};
-        const captureRect = normalizeCaptureRect(rect);
+        const captureRect = normalizeCaptureRect(scaleRendererCoordinates(rect, event.sender.getZoomFactor()));
         if (!captureRect) {
           return { success: false, error: 'Capture rect is required' };
         }
@@ -12155,7 +12180,7 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        const captureRect = normalizeCaptureRect(options?.rect);
+        const captureRect = normalizeCaptureRect(scaleRendererCoordinates(options?.rect, event.sender.getZoomFactor()));
         if (!captureRect) {
           return { success: false, error: 'Capture rect is required' };
         }
@@ -12686,15 +12711,21 @@ if (!gotTheLock) {
     }
   });
   // ── Dreaming content display ──────────────────────────────────────────
-  ipcMain.handle('cowork:dreaming:status', async () => {
+  // Explicit agent ownership gives doctor.memory.* no implicit owner once a
+  // second agent exists, so always name the agent whose dreams are shown.
+  ipcMain.handle(CoworkIpcChannel.DreamingStatus, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
     try {
       const gwClient = openClawRuntimeAdapter?.getGatewayClient();
       if (!gwClient) {
         return { success: false, error: 'Gateway client not available' };
       }
+      const agentId = options?.agentId?.trim() || AgentId.Main;
       const result = await gwClient.request<Record<string, unknown>>(
         'doctor.memory.status',
-        {},
+        { agentId },
         { timeoutMs: 10_000 },
       );
       const dreaming = (result as any)?.dreaming;
@@ -12709,15 +12740,19 @@ if (!gotTheLock) {
       };
     }
   });
-  ipcMain.handle('cowork:dreaming:diary', async () => {
+  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
     try {
       const gwClient = openClawRuntimeAdapter?.getGatewayClient();
       if (!gwClient) {
         return { success: false, error: 'Gateway client not available' };
       }
+      const agentId = options?.agentId?.trim() || AgentId.Main;
       const result = await gwClient.request<Record<string, unknown>>(
         'doctor.memory.dreamDiary',
-        {},
+        { agentId },
         { timeoutMs: 10_000 },
       );
       return { success: true, data: result };
@@ -15416,7 +15451,7 @@ if (!gotTheLock) {
       ...(isMac
         ? {
             titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 12, y: 20 },
+            trafficLightPosition: MAC_TRAFFIC_LIGHT_POSITION,
           }
         : isWindows
           ? {
@@ -15460,6 +15495,7 @@ if (!gotTheLock) {
     // 禁用窗口菜单
     mainWindow.setMenu(null);
     installEditContextMenu(mainWindow.webContents);
+    installMainWindowZoom(mainWindow, { isMac });
 
     // 处理 window.open 请求（企微 SDK 授权弹窗等）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -15573,9 +15609,23 @@ if (!gotTheLock) {
     // 兜底显示:首帧迟迟不来时,宁可让用户看到纯背景色的窗口,也不能看起来
     // "应用没打开"。开机自启保持仅托盘,不弹窗。
     const SHOW_FALLBACK_DELAY_MS = 10_000;
+    const READY_TO_SHOW_FALLBACK_DELAY_MS = 1_500;
+    const MainWindowReadySource = {
+      ReadyToShow: 'ready-to-show',
+      DidFinishLoadFallback: 'did-finish-load-fallback',
+    } as const;
+    type MainWindowReadySource = (typeof MainWindowReadySource)[keyof typeof MainWindowReadySource];
+    let hasCompletedInitialReady = false;
+    let readyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearReadyFallback = () => {
+      if (readyFallbackTimer) {
+        clearTimeout(readyFallbackTimer);
+        readyFallbackTimer = null;
+      }
+    };
     const showFallbackTimer = setTimeout(() => {
       if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
-      if (mainWindow.isVisible() || hasRenderedFirstFrame) return;
+      if (mainWindow.isVisible() || hasCompletedInitialReady) return;
       if (isAutoLaunched()) return;
       console.warn(
         `[Main] window not ready after ${SHOW_FALLBACK_DELAY_MS}ms, showing it before first paint`,
@@ -15583,6 +15633,65 @@ if (!gotTheLock) {
       pendingShowOnFirstFrame = false;
       mainWindow.show();
     }, SHOW_FALLBACK_DELAY_MS);
+
+    const completeInitialReady = (source: MainWindowReadySource) => {
+      if (hasCompletedInitialReady) return;
+      hasCompletedInitialReady = true;
+      clearTimeout(showFallbackTimer);
+      clearReadyFallback();
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
+      if (source !== MainWindowReadySource.ReadyToShow) {
+        console.warn(`[Main] ready-to-show did not fire after did-finish-load, completing startup via ${source}`);
+      }
+      // 开机自启时不显示窗口，仅显示托盘图标
+      if (!isAutoLaunched() && !mainWindow.isVisible()) {
+        mainWindow.show();
+      }
+      markFirstFrameRendered(source);
+      // Initialize main-process i18n from stored language before creating UI elements.
+      const initLang = getStore().get<{ language?: string }>('app_config')?.language;
+      setLanguage(initLang === 'en' ? 'en' : 'zh');
+      // 窗口就绪后创建系统托盘
+      createTray(() => isQuitting ? null : mainWindow, {
+        isEnabled: () => desktopCompanionManager?.getState().preferences.enabled ?? false,
+        toggleEnabled: () => desktopCompanionManager?.setPreferences({
+          enabled: !desktopCompanionManager.getState().preferences.enabled,
+        }, CompanionAnalyticsSource.Tray),
+        openPanel: () => desktopCompanionManager?.togglePanel(),
+      });
+
+      // Start cron polling after the window is ready.
+      (async () => {
+        try {
+          getCronJobService().startPolling();
+        } catch (err) {
+          console.warn(
+            '[Main] CronJobService not available yet, will start polling when OpenClaw is ready:',
+            err,
+          );
+        }
+
+        // One-time migration: move tasks from legacy SQLite tables to OpenClaw gateway.
+        migrateScheduledTasksToOpenclaw({
+          db: getStore().getDatabase(),
+          getKv: key => getStore().get(key),
+          setKv: (key, value) => getStore().set(key, value),
+          cronJobService: getCronJobService(),
+        }).catch(err => {
+          console.warn('[Main] Scheduled tasks migration failed:', err);
+        });
+
+        // One-time migration: copy legacy run history to OpenClaw cron/runs/ JSONL files.
+        migrateScheduledTaskRunsToOpenclaw({
+          db: getStore().getDatabase(),
+          getKv: key => getStore().get(key),
+          setKv: (key, value) => getStore().set(key, value),
+          openclawStateDir: getOpenClawEngineManager().getStateDir(),
+        }).catch(err => {
+          console.warn('[Main] Scheduled task run history migration failed:', err);
+        });
+      })();
+    };
 
     let hasOpenedDevelopmentTools = false;
     const developmentLoadRecovery: DevelopmentMainWindowLoadRecovery | null = isDev
@@ -15600,6 +15709,12 @@ if (!gotTheLock) {
       clearLoadWatchdog();
       loadRecoveryAttempts = 0;
       markFirstFrameRendered('did-finish-load');
+      if (!hasCompletedInitialReady && !readyFallbackTimer) {
+        readyFallbackTimer = setTimeout(() => {
+          readyFallbackTimer = null;
+          completeInitialReady(MainWindowReadySource.DidFinishLoadFallback);
+        }, READY_TO_SHOW_FALLBACK_DELAY_MS);
+      }
       if (
         shouldOpenDevTools
         && !hasOpenedDevelopmentTools
@@ -15706,6 +15821,7 @@ if (!gotTheLock) {
       developmentLoadRecovery?.dispose();
       clearLoadWatchdog();
       clearTimeout(showFallbackTimer);
+      clearReadyFallback();
       windowStatePersist.cleanup();
       authCallbackRouter.markRendererUnavailable();
       isOpenSessionFromNotificationReady = false;
@@ -15717,56 +15833,7 @@ if (!gotTheLock) {
 
     // 等待内容加载完成后再显示窗口
     mainWindow.once('ready-to-show', () => {
-      clearTimeout(showFallbackTimer);
-      if (isQuitting) return;
-      // 开机自启时不显示窗口，仅显示托盘图标
-      if (!isAutoLaunched()) {
-        mainWindow?.show();
-      }
-      markFirstFrameRendered('ready-to-show');
-      // Initialize main-process i18n from stored language before creating UI elements.
-      const initLang = getStore().get<{ language?: string }>('app_config')?.language;
-      setLanguage(initLang === 'en' ? 'en' : 'zh');
-      // 窗口就绪后创建系统托盘
-      createTray(() => isQuitting ? null : mainWindow, {
-        isEnabled: () => desktopCompanionManager?.getState().preferences.enabled ?? false,
-        toggleEnabled: () => desktopCompanionManager?.setPreferences({
-          enabled: !desktopCompanionManager.getState().preferences.enabled,
-        }, CompanionAnalyticsSource.Tray),
-        openPanel: () => desktopCompanionManager?.togglePanel(),
-      });
-
-      // Start cron polling after the window is ready.
-      (async () => {
-        try {
-          getCronJobService().startPolling();
-        } catch (err) {
-          console.warn(
-            '[Main] CronJobService not available yet, will start polling when OpenClaw is ready:',
-            err,
-          );
-        }
-
-        // One-time migration: move tasks from legacy SQLite tables to OpenClaw gateway.
-        migrateScheduledTasksToOpenclaw({
-          db: getStore().getDatabase(),
-          getKv: key => getStore().get(key),
-          setKv: (key, value) => getStore().set(key, value),
-          cronJobService: getCronJobService(),
-        }).catch(err => {
-          console.warn('[Main] Scheduled tasks migration failed:', err);
-        });
-
-        // One-time migration: copy legacy run history to OpenClaw cron/runs/ JSONL files.
-        migrateScheduledTaskRunsToOpenclaw({
-          db: getStore().getDatabase(),
-          getKv: key => getStore().get(key),
-          setKv: (key, value) => getStore().set(key, value),
-          openclawStateDir: getOpenClawEngineManager().getStateDir(),
-        }).catch(err => {
-          console.warn('[Main] Scheduled task run history migration failed:', err);
-        });
-      })();
+      completeInitialReady(MainWindowReadySource.ReadyToShow);
     });
   };
 

@@ -63,7 +63,7 @@ import {
   supportsLobsterAIRequestOptionsV1,
 } from '../../shared/providers/lobsterAIRequestOptions';
 import type { ModelThinkingConfig } from '../../shared/providers/modelThinking';
-import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
+import type { Agent, CoworkConfig } from '../coworkStore';
 import type { DiscordInstanceConfig, IMSettings, TelegramInstanceConfig } from '../im/types';
 import type { DingTalkInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimInstanceConfig, PopoInstanceConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
 import { DiscordDmPolicy } from '../im/types';
@@ -137,21 +137,9 @@ export type AskUserCallbackConfig = {
   secret: string;
 };
 
-const mapExecutionModeToSandboxMode = (
-  mode: CoworkExecutionMode,
-  isEnterprise: boolean,
-): 'off' | 'non-main' | 'all' => {
-  if (!isEnterprise) return 'off';
-  switch (mode) {
-    case 'sandbox':
-      return 'all';
-    case 'auto':
-      return 'non-main';
-    case 'local':
-    default:
-      return 'off';
-  }
-};
+// Explicit user and enterprise OpenClaw settings are applied after rendering.
+// A legacy Cowork preference alone must not activate the Docker backend.
+const DEFAULT_OPENCLAW_SANDBOX_MODE = 'off';
 
 /**
  * Drop `plugins` keys that OpenClaw owns through its plugin index (currently
@@ -514,6 +502,8 @@ const MANAGED_BROWSER_POLICY_PROMPT = [
   '- Do not use `target="sandbox"` or `target="node"` unless a future LobsterAI version explicitly enables it.',
   '- If a browser call fails because the sandbox browser is unavailable, retry the same action with `target="host"`.',
   '- The `lobster-in-app` profile is LobsterAI\'s own browser bridge. If it is unavailable, report an internal LobsterAI browser startup failure; never tell the user to enable Chrome remote debugging or launch Chrome with debugging flags.',
+  '- `lobster-in-app` is one browser shared by every chat, IM conversation and scheduled task, and it holds the user\'s sign-ins. Never call `action="stop"` on it, even when a task says to end, close or restart the browser session: stopping it interrupts other running tasks and invalidates their tab ids.',
+  '- To finish browser work, close only tabs you opened in this run. Leave tabs you reused or did not open, especially signed-in ones. Some sites keep sign-in per tab: if a new tab shows the site signed out, check `action="tabs"` for an existing tab of that site before asking the user to sign in again.',
   `- When a page requires a password and \`${BrowserCredentialMcpServer.ModelToolName}\` is available, call it before asking the user to sign in manually. The tool can use an encrypted saved login without revealing its password to you.`,
   '- If no saved login is available, ask the user to sign in directly in the visible LobsterAI browser. Never ask the user to send a password in chat, and never search files, memory, or logs for passwords.',
 ].join('\n');
@@ -579,13 +569,13 @@ const MANAGED_DELIVERABLE_LINKS_PROMPT = [
   '  `[report.docx](/absolute/path/to/report.docx)`',
   '',
   '- Both `[name](/absolute/path)` and `[name](file:///absolute/path)` are accepted.',
-  '- This also applies when files are produced indirectly, e.g. by a Python/Node script or a',
-  '  shell command you ran. Always link the final output files.',
+  '- Save each deliverable at the exact filename and path the user requested, even if its title differs.',
+  '- Link final outputs from scripts and shell commands too.',
   `- Keep intermediate files (helper scripts, scratch data, drafts) inside the \`${COWORK_TEMP_DIR_NAME}/\``,
   '  directory under the session working directory, and do not link them in the final reply.',
   `- The user can clean up \`${COWORK_TEMP_DIR_NAME}/\` at any time;`,
   '  anything the user should keep must be saved outside of it.',
-  '- Only link files that exist on disk after your work. Never link files you merely read.',
+  '- Link only files you created or updated and verified on disk.',
 ].join('\n');
 
 const MANAGED_MATH_FORMAT_PROMPT = [
@@ -2245,6 +2235,10 @@ export class OpenClawConfigSync {
         return {
           ...commonConfig,
           defaultProfile: BrowserRuntimeProfile.InApp,
+          // Every in-app tab is agent-opened, so OpenClaw's idle sweep would
+          // close tabs the user signed in to; some sites keep sign-in per tab.
+          // AgentBrowserHost owns in-app tab lifecycle instead.
+          tabCleanup: { enabled: false },
           profiles: {
             [BrowserRuntimeProfile.InApp]: {
               driver: 'existing-session',
@@ -2630,17 +2624,10 @@ export class OpenClawConfigSync {
     const hasModelCompatConfig = Object.keys(finalizedCompatibility.modelProfiles).length > 0
       || Object.keys(finalizedThinkingProfiles).length > 0;
 
-    const sandboxMode = mapExecutionModeToSandboxMode(
-      coworkConfig.executionMode || 'local',
-      this.isEnterprise(),
-    );
     const availableProviders = buildProviderModelCatalog(allProvidersMap);
     const agentModelDefaults = Object.keys(perModelCustomDefaults).length > 0
       ? buildCompleteAgentModelDefaults(allProvidersMap, perModelCustomDefaults)
       : {};
-    console.log(
-      `[OpenClawConfigSync] sandbox mode: ${sandboxMode} (executionMode: ${coworkConfig.executionMode || 'local'}, enterprise: ${this.isEnterprise()})`,
-    );
 
     const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
     const agents = this.getAgents?.() ?? [];
@@ -2819,7 +2806,7 @@ export class OpenClawConfigSync {
             primary: primaryModel,
           },
           sandbox: {
-            mode: sandboxMode,
+            mode: DEFAULT_OPENCLAW_SANDBOX_MODE,
           },
           workspace: path.resolve(mainWorkspacePath),
           bootstrapMaxChars: OPENCLAW_BOOTSTRAP_MAX_CHARS,
@@ -4532,10 +4519,15 @@ export class OpenClawConfigSync {
     const agents = asConfigRecord(mergedConfig.agents);
     const agentDefaults = asConfigRecord(agents?.defaults);
     const compaction = asConfigRecord(agentDefaults?.compaction);
+    const previousSandbox = asConfigRecord(agentDefaults?.sandbox);
     mergedConfig.agents = {
       ...agents,
       defaults: {
         ...agentDefaults,
+        // A removed enterprise package may have supplied the previous mode.
+        ...(previousSandbox?.mode !== undefined ? {
+          sandbox: { ...previousSandbox, mode: DEFAULT_OPENCLAW_SANDBOX_MODE },
+        } : {}),
         compaction: {
           ...compaction,
           memoryFlush: {

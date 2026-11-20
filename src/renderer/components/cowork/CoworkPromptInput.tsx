@@ -51,6 +51,7 @@ import {
 } from '../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
 import { isChatPresetSession, modelPresetModelId } from '../../../shared/modelPresets/constants';
+import { buildPptOutlineSystemPrompt, shouldUsePptOutlinePrompt } from '../../../shared/pptCreation/outline';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -192,6 +193,12 @@ import {
   reportPromptControlAction,
   reportPromptSubmit,
 } from './promptAnalytics';
+import {
+  collectPromptHistoryEntries,
+  type PromptHistoryBrowse,
+  PromptHistoryDirection,
+  resolvePromptHistoryStep,
+} from './promptHistory';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
 import SelectedTextSnippetBadge from './SelectedTextSnippetBadge';
@@ -623,6 +630,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const goalInputReturnDraftRef = useRef<string | null>(null);
     const draftStartedAnalyticsRef = useRef(false);
     const inputSourceOverrideRef = useRef<'template' | null>(null);
+    const promptHistoryBrowseRef = useRef<PromptHistoryBrowse | null>(null);
     // handleSubmit is declared later in this component; the ref lets the
     // imperative handle trigger it without depending on declaration order.
     const handleSubmitRef = useRef<((submitMethod?: 'button' | 'keyboard' | 'voice') => Promise<void>) | null>(null);
@@ -1936,8 +1944,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       .map(id => skills.find(s => s.id === id))
       .filter((s): s is Skill => s !== undefined);
     const kitPrompt = buildSelectedKitContextPrompt(activeKitIds, marketplaceKits, installedKits);
+    const planningSession = currentSession?.id === sessionId ? currentSession : null;
+    const planningAgent = agents.find(agent => agent.id === (planningSession?.agentId ?? currentAgentId));
+    const pptOutline = shouldUsePptOutlinePrompt(allSkillIds, planningAgent?.skillIds ?? [], planningSession?.systemPrompt);
     const skillPrompt = effectivePlanMode
-      ? buildPlanModeSystemPrompt()
+      ? (pptOutline ? buildPptOutlineSystemPrompt() : buildPlanModeSystemPrompt())
       : [
         kitPrompt,
         buildSelectedSkillRoutingPrompt(activeSkills),
@@ -2086,7 +2097,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     resetGoalInput(false);
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
-  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
+  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, currentSession, agents, currentAgentId, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
   handleSubmitRef.current = handleSubmit;
   useImageEditSubmission({ sessionId, onSubmit, isStreaming, modelSupportsImage,
     blocked: disabled || submitDisabled || isPatchingModel || remoteManaged || isVoiceRecording
@@ -2194,6 +2205,39 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           });
           return;
         }
+      }
+    }
+
+    if (
+      (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+      && !isComposing
+      && !event.defaultPrevented
+      && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+      && !mentionPickerOpen && !steerInputActive && !goalInputActive
+      && sessionId && currentSession?.id === sessionId
+    ) {
+      // Up in an empty composer recalls the prompts sent in this session; Down walks back to the draft.
+      const textarea = event.currentTarget;
+      const sessionMessages = currentSession.messages;
+      const step = resolvePromptHistoryStep({
+        direction: event.key === 'ArrowUp' ? PromptHistoryDirection.Older : PromptHistoryDirection.Newer,
+        draftKey,
+        value,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd,
+        browse: promptHistoryBrowseRef.current,
+        loadEntries: () => collectPromptHistoryEntries(sessionMessages),
+      });
+      if (step) {
+        event.preventDefault();
+        promptHistoryBrowseRef.current = step.browse;
+        setValue(step.value);
+        requestAnimationFrame(() => {
+          const end = step.value.length;
+          textarea.setSelectionRange(end, end);
+          textarea.scrollTop = textarea.scrollHeight;
+        });
+        return;
       }
     }
 
