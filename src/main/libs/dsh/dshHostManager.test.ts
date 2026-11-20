@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { DshHostPhase, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
 import {
@@ -52,6 +52,43 @@ describe('resolveBundledDshPaths', () => {
 });
 
 describe('DshHostManager', () => {
+  test('dispatches named tools and delegates provider tools only for valid names', async () => {
+    const temp = createTempDir();
+    const manager = new DshHostManager({
+      userDataDir: temp,
+      runtimeDir: path.join(temp, 'runtime'),
+      hostBundleDir: path.join(temp, 'bundle'),
+      skillsDir: path.join(temp, 'skills'),
+      executablePath: process.execPath,
+    });
+    const fallback = vi.fn(() => ({ via: 'provider' }));
+    const unregisterOld = manager.registerBridgeToolHandler('sample', () => ({ via: 'old' }));
+    const unregister = manager.registerBridgeToolHandler('sample', () => ({ via: 'registered' }));
+    unregisterOld();
+    manager.setFallbackBridgeToolHandler(fallback);
+    await manager['ensureBridgeServer']();
+    const execute = (toolName: unknown) => fetch(`${manager['bridgeUrl']}/dsh-bridge/tool-execute`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${manager['bridgeSecret']}` },
+      body: JSON.stringify({ toolName }),
+    });
+    try {
+      expect(await (await execute('sample')).json()).toEqual({ via: 'registered' });
+      expect((await execute(123)).status).toBe(400);
+      expect((await execute('   ')).status).toBe(400);
+      expect(fallback).not.toHaveBeenCalled();
+      expect(await (await execute('provider_tool')).json()).toEqual({ via: 'provider' });
+      expect(fallback).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'provider_tool', signal: expect.any(AbortSignal),
+      }));
+      unregister();
+      manager.setFallbackBridgeToolHandler(null);
+      expect((await execute('sample')).status).toBe(404);
+    } finally {
+      await manager.stop();
+    }
+  });
+
   test('reports initial stopped status and fails clearly when runtime binary is missing', async () => {
     const temp = createTempDir();
     const manager = new DshHostManager({
