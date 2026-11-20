@@ -1,4 +1,4 @@
-import { ArrowRightIcon, ArrowUpTrayIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, ArrowRightIcon, ArrowUpTrayIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -27,22 +27,36 @@ async function readMaterial(file: File): Promise<PptPreparedFile> {
   return { name: file.name, mimeType: file.type || 'application/octet-stream', base64Data: data };
 }
 
-export default function PptExampleDialog({ catalog, example, onClose, onUse, onCover, coverSeed }: {
+export interface PptExampleDialogState {
+  mode: PptExampleMode;
+  slide: number;
+  prompt: string;
+  topic: string;
+  audience: string;
+  slideCount: number;
+  useDemo: boolean;
+  templateId: string;
+  workflow: PptWorkflow;
+  files: PptPreparedFile[];
+}
+
+export default function PptExampleDialog({ catalog, example, onClose, onUse, onCover, onBack, backLabel, coverSeed, initialState }: {
   catalog: PptCatalog; example: PptExample; onClose: () => void; onUse: (example: PptExample, options: PptDraftOptions) => Promise<boolean>;
-  onCover?: () => void; coverSeed?: PptCoverSeed;
+  onCover?: (state: PptExampleDialogState) => void; onBack?: () => void; backLabel?: string;
+  coverSeed?: PptCoverSeed; initialState?: PptExampleDialogState;
 }) {
   const t = (key: string) => i18nService.t(key);
   const language = i18nService.getLanguage();
-  const [mode, setMode] = useState<PptExampleMode>(coverSeed ? PptExampleMode.Guided : example.defaultMode);
-  const [slide, setSlide] = useState(0);
-  const [prompt, setPrompt] = useState(example.prompt[language]);
-  const [topic, setTopic] = useState(coverSeed ? `${coverSeed.fields.title}\n${coverSeed.fields.subtitle}` : '');
-  const [audience, setAudience] = useState('');
-  const [slideCount, setSlideCount] = useState(example.slideCount);
-  const [useDemo, setUseDemo] = useState(false);
-  const [templateId, setTemplateId] = useState(coverSeed ? '' : example.templateId ?? '');
-  const [workflow, setWorkflow] = useState<PptWorkflow>(coverSeed ? PptWorkflow.Generate : example.defaultWorkflow);
-  const [files, setFiles] = useState<PptPreparedFile[]>(coverSeed ? [coverSeed.file] : []);
+  const [mode, setMode] = useState<PptExampleMode>(coverSeed ? PptExampleMode.Guided : (initialState?.mode ?? example.defaultMode));
+  const [slide, setSlide] = useState(() => Math.min(Math.max(initialState?.slide ?? 0, 0), Math.max(example.previews.length - 1, 0)));
+  const [prompt, setPrompt] = useState(initialState?.prompt ?? example.prompt[language]);
+  const [topic, setTopic] = useState(coverSeed ? `${coverSeed.fields.title}\n${coverSeed.fields.subtitle}` : (initialState?.topic ?? ''));
+  const [audience, setAudience] = useState(coverSeed ? '' : (initialState?.audience ?? ''));
+  const [slideCount, setSlideCount] = useState(coverSeed ? example.slideCount : (initialState?.slideCount ?? example.slideCount));
+  const [useDemo, setUseDemo] = useState(coverSeed ? false : (initialState?.useDemo ?? false));
+  const [templateId, setTemplateId] = useState(coverSeed ? '' : (initialState?.templateId ?? example.templateId ?? ''));
+  const [workflow, setWorkflow] = useState<PptWorkflow>(coverSeed ? PptWorkflow.Generate : (initialState?.workflow ?? example.defaultWorkflow));
+  const [files, setFiles] = useState<PptPreparedFile[]>(coverSeed ? [coverSeed.file] : (initialState?.files ?? []));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const mounted = useRef(true);
@@ -108,7 +122,15 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
       }}>
       <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-5 md:px-7">
         <div className="min-w-0">
-          <p className="mb-1.5 text-xs font-medium text-foreground/60">{t('pptCreationReal')}</p>
+          {onBack && backLabel ? (
+            <button type="button" disabled={busy} onClick={onBack}
+              className="group mb-2 inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-lg border border-border/80 bg-surface-raised/60 px-2.5 py-1 text-xs font-medium text-foreground/80 transition-colors hover:border-primary/40 hover:bg-primary-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40">
+              <ArrowLeftIcon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:-translate-x-0.5 motion-reduce:transition-none" />
+              <span className="truncate">{backLabel}</span>
+            </button>
+          ) : (
+            <p className="mb-1.5 text-xs font-medium text-foreground/60">{t('pptCreationReal')}</p>
+          )}
           <h2 id="ppt-example-title" className="text-xl font-semibold text-foreground">{example.title[language]}</h2>
           <p className="mt-1.5 max-w-3xl text-sm leading-6 text-foreground/70">{coverSeed ? t('pptCoverContinueHint') : example.description[language]}</p>
         </div>
@@ -119,7 +141,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
           <div data-ppt-example-preview className={coverSeed ? '' : 'md:flex md:h-full md:max-h-[calc(32vh+12rem)] md:flex-col'}>
             <div className="mb-3 flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-medium text-foreground/70">{t(coverSeed ? 'pptCoverConfirmed' : 'pptCreationExamplePreview')}</p>
-              {example.cover && onCover && !coverSeed && <button type="button" disabled={busy} onClick={onCover} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50">{t('pptCoverEntry')}<ArrowRightIcon aria-hidden="true" className="h-3.5 w-3.5" /></button>}
+              {example.cover && onCover && !coverSeed && <button type="button" disabled={busy} onClick={() => onCover({ mode, slide, prompt, topic, audience, slideCount, useDemo, templateId, workflow, files })} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50">{t('pptCoverEntry')}<ArrowRightIcon aria-hidden="true" className="h-3.5 w-3.5" /></button>}
             </div>
             <div className={coverSeed ? '' : 'md:flex md:min-h-0 md:max-h-[32vh] md:flex-1 md:items-center md:justify-center'}>
               <PptPreviewImage url={coverSeed ? `data:image/png;base64,${coverSeed.previewBase64}` : example.previews[slide].url} alt={coverSeed ? coverSeed.fields.title : `${example.title[language]} · ${t('pptCreationPage').replace('{page}', String(example.previews[slide].slide))}`} className={`mx-auto aspect-video max-h-[32vh] border border-border bg-surface shadow-card ${coverSeed ? '' : 'md:h-full md:max-h-full md:max-w-full'}`} />
