@@ -269,6 +269,7 @@ describe('DshRuntimeAdapter', () => {
     expect(messages[2].content).toBe('Hello world!');
     expect(messages[2].metadata?.isThinking).toBeUndefined();
     expect(messages[2].metadata?.isStreaming).toBe(false);
+    expect(messages[2].metadata).toMatchObject({ seq: 2, dshSessionId: session.claudeSessionId });
     expect(messages[3].metadata?.toolName).toBe('bash');
     expect(messages[4].content).toBe('file.txt');
     expect(events).toContain('complete');

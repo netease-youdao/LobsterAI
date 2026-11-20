@@ -251,6 +251,12 @@ export function formatStoredDshSessionId(dshSessionId: string): string {
     : `${DSH_SESSION_ID_PREFIX}${dshSessionId}`;
 }
 
+function assistantEventPosition(dshSessionId: string, seq?: number): { dshSessionId?: string; seq?: number } {
+  return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0
+    ? { dshSessionId: formatStoredDshSessionId(dshSessionId), seq }
+    : {};
+}
+
 const SKILL_TO_PROGRESSIVE_CAPABILITY: Readonly<Record<string, DshProgressiveCapability>> = {
   'computer-use': DshProgressiveCapability.ComputerUse,
   'web-search': DshProgressiveCapability.Browser,
@@ -1613,7 +1619,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           if (finalText !== turn.lastFinalizedAssistantText || (seq !== undefined && !alreadyAppliedSeq)) {
             const meta: Record<string, unknown> = {
               isStreaming: false,
-              ...(seq !== undefined ? { seq } : {}),
+              ...assistantEventPosition(turn.dshSessionId, seq),
             };
             this.store.updateMessageContent(coworkSessionId, msgId, finalText, meta);
             this.emit('messageUpdate', coworkSessionId, msgId, finalText, meta);
@@ -1624,7 +1630,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
             turn.reusableAssistantMessageId = null;
             const meta: Record<string, unknown> = {
               isStreaming: false,
-              ...(seq !== undefined ? { seq } : {}),
+              ...assistantEventPosition(turn.dshSessionId, seq),
             };
             this.store.updateMessageContent(coworkSessionId, msgId, text, meta);
             this.emit('messageUpdate', coworkSessionId, msgId, text, meta);
@@ -1632,9 +1638,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
             const msg = this.store.addMessage(coworkSessionId, {
               type: 'assistant',
               content: text,
-              metadata: {
-                ...(seq !== undefined ? { seq } : {}),
-              },
+              metadata: assistantEventPosition(turn.dshSessionId, seq),
             });
             this.emit('message', coworkSessionId, msg);
           }
@@ -1760,7 +1764,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const text = turn.currentAssistantText;
     const meta: Record<string, unknown> = {
       isStreaming: false,
-      ...(seq !== undefined ? { seq } : {}),
+      ...assistantEventPosition(turn.dshSessionId, seq),
     };
     this.store.updateMessageContent(turn.coworkSessionId, msgId, text, meta);
     this.emit('messageUpdate', turn.coworkSessionId, msgId, text, meta);
