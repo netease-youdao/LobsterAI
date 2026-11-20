@@ -2843,6 +2843,9 @@ interface PopoMultiInstanceStatus {
 interface WeixinOpenClawConfig {
   enabled: boolean;
   accountId: string;
+  botToken?: string;
+  baseUrl?: string;
+  userId?: string;
   dmPolicy: 'open' | 'pairing' | 'allowlist' | 'disabled';
   allowFrom: string[];
   groupPolicy: 'open' | 'allowlist' | 'disabled';

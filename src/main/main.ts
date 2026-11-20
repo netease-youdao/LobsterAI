@@ -51,6 +51,7 @@ import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol }
 import { ReviewIpc, ReviewScope, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
 import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
+import type { AsrRealtimeSessionRequest, AsrRealtimeSessionResult } from '../shared/asr/constants';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
   AuthIpcChannel,
@@ -195,7 +196,12 @@ import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
 import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
-import { isChatPresetSession, type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
+import {
+  isChatPresetSession,
+  type ModelPresetId,
+  parseModelPresetId,
+  parseModelPresetModelId,
+} from '../shared/modelPresets/constants';
 import {
   normalizeNotificationSettings,
   type NotificationSettings,
@@ -270,12 +276,17 @@ import {
 import { registerFeedbackIpc } from './feedback/feedbackIpc';
 import { getLanguage, setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
+import { DshImInboundHandler, parseDshImInboundEvent } from './im/dshImInboundHandler';
 import {
   approvePairingCode,
   listPairingRequests,
   readAllowFromStore,
   rejectPairingRequest,
 } from './im/imPairingStore';
+import {
+  buildBrowserWebAudioDecodeScript,
+  transcribeImVoiceAttachment,
+} from './im/imVoiceTranscription';
 import type {
   DingTalkInstanceConfig,
   DiscordInstanceConfig,
@@ -290,7 +301,7 @@ import type {
 import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
-import { registerAsrIpcHandlers } from './ipcHandlers/asr';
+import { createRealtimeAsrSession, registerAsrIpcHandlers } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
@@ -2150,6 +2161,13 @@ process.on('exit', code => {
 
 let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
+let resolveVirtualModelPresetForSession:
+  | ((sessionId: string, presetId: ModelPresetId) => Promise<string | null>)
+  | null = null;
+let createRealtimeAsrSessionForIm:
+  | ((options?: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>)
+  | null = null;
+
 let dshBootstrap: DshBootstrap | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let agentBrowserHost: AgentBrowserHost | null = null;
@@ -2247,19 +2265,42 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.createSession(title, cwd, systemPrompt, executionMode, activeSkillIds, agentId),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
-      resolveModelSelection: (sessionId, override) => {
-        const sessionModel = storeInstance.getSession(sessionId, 0)?.modelOverride;
-        const ref = override?.trim() || sessionModel?.trim() || resolveDefaultAgentModelRef();
+      resolveModelSelection: async (sessionId, override) => {
+        const session = storeInstance.getSession(sessionId, 0);
+        const sessionModel = session?.modelOverride;
+        const agentModel = session?.agentId ? storeInstance.getAgent(session.agentId)?.model : undefined;
+        const ref = override?.trim() || sessionModel?.trim() || agentModel?.trim() || resolveDefaultAgentModelRef();
         const normalized = normalizeOpenClawModelRef(ref);
         const parsed = parsePrimaryModelRef(normalized);
+        let selection: { provider: string; model: string } | null = null;
         if (parsed) {
-          return { provider: parsed.providerId, model: parsed.modelId };
+          selection = { provider: parsed.providerId, model: parsed.modelId };
+        } else {
+          const raw = resolveRawApiConfig();
+          if (raw.config?.model && raw.providerMetadata?.providerName) {
+            selection = { provider: raw.providerMetadata.providerName, model: raw.config.model };
+          }
         }
-        const raw = resolveRawApiConfig();
-        if (raw.config?.model && raw.providerMetadata?.providerName) {
-          return { provider: raw.providerMetadata.providerName, model: raw.config.model };
+        if (!selection) return null;
+
+        // Resolve virtual LobsterAI Plan presets (yd-fast / yd-ultra) to their
+        // concrete backing model via `/api/models/<id>/resolve`, matching
+        // desktop chat preset selection so IM and scheduled-task turns never
+        // send raw virtual model IDs to `/api/proxy/v1/chat/completions`.
+        if (selection.provider === OpenClawProviderId.LobsteraiServer) {
+          const presetId = parseModelPresetModelId(selection.model);
+          if (presetId && resolveVirtualModelPresetForSession) {
+            try {
+              const resolvedModelId = await resolveVirtualModelPresetForSession(sessionId, presetId);
+              if (resolvedModelId) {
+                return { provider: OpenClawProviderId.LobsteraiServer, model: resolvedModelId };
+              }
+            } catch (error) {
+              console.warn(`[DSH] Failed to resolve virtual model preset "${selection.model}" for session ${sessionId}:`, error);
+            }
+          }
         }
-        return null;
+        return selection;
       },
       resolveAllowedSkillIds: (_sessionId, agentId, optionSkillIds) => {
         if (optionSkillIds && optionSkillIds.length > 0) return optionSkillIds;
@@ -3162,6 +3203,7 @@ const getIMGatewayManager = () => {
         await ensureOpenClawRunningForCowork();
       },
       getOpenClawSessionKeysForCoworkSession: () => [],
+      getDshChannelsBridge: () => getDshBootstrap().channelsBridge,
     });
 
     // Forward IM events to renderer
@@ -3172,6 +3214,70 @@ const getIMGatewayManager = () => {
           win.webContents.send('im:status:change', status);
         }
       });
+    });
+
+    const dshImInboundHandler = new DshImInboundHandler({
+      coworkStore: store,
+      imStore: imGatewayManager.getIMStore(),
+      runtime,
+      sendReply: (params) => getDshBootstrap().channelsBridge.sendProactiveMessage(params),
+      getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
+      notifySessionsChanged: (sessionId: string) => {
+        BrowserWindow.getAllWindows().forEach(win => {
+          if (!win.isDestroyed()) {
+            win.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds: [sessionId] });
+          }
+        });
+      },
+      transcribeVoice: async (attachment) => {
+        if (!createRealtimeAsrSessionForIm) {
+          throw new Error('ASR service is not initialized');
+        }
+        return transcribeImVoiceAttachment(attachment, {
+          createRealtimeSession: createRealtimeAsrSessionForIm,
+          webAudioDecode: async (audioBuf: Uint8Array) => {
+            const win = mainWindow && !mainWindow.isDestroyed()
+              ? mainWindow
+              : BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+            if (!win) return null;
+            const b64 = Buffer.from(audioBuf.buffer, audioBuf.byteOffset, audioBuf.byteLength).toString('base64');
+            const pcmBase64 = await win.webContents.executeJavaScript(
+              buildBrowserWebAudioDecodeScript(b64),
+              true,
+            );
+            return typeof pcmBase64 === 'string' && pcmBase64
+              ? Buffer.from(pcmBase64, 'base64')
+              : null;
+          },
+        });
+      },
+      persistInboundImage: (sessionId, attachment) =>
+        getCoworkImageOriginals().persistInboundImage(sessionId, attachment),
+    });
+
+    let channelStatusBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+    getDshBootstrap().hostManager.setChannelEventHandler(async (payload) => {
+      if (payload?.type === 'inbound') {
+        const event = parseDshImInboundEvent(payload);
+        if (event) {
+          bindCoworkRuntimeForwarder();
+          void dshImInboundHandler.enqueue(event);
+          return { ok: true, handled: true };
+        }
+      }
+      if (payload?.type === 'status' && imGatewayManager) {
+        if (channelStatusBroadcastTimer) clearTimeout(channelStatusBroadcastTimer);
+        channelStatusBroadcastTimer = setTimeout(() => {
+          channelStatusBroadcastTimer = null;
+          const manager = imGatewayManager;
+          if (!manager) return;
+          void manager.getStatusWithOpenClawRuntime()
+            .then(status => manager.emit('statusChange', status))
+            .catch(() => {});
+        }, 150);
+        channelStatusBroadcastTimer.unref?.();
+      }
+      return { ok: true };
     });
 
     imGatewayManager.on('message', message => {
@@ -4956,6 +5062,25 @@ if (!gotTheLock) {
         && isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope());
     },
   });
+
+  resolveVirtualModelPresetForSession = async (sessionId, presetId) => {
+    const resolved = await modelPresetClient.resolve(sessionId, presetId, false);
+    const modelId = resolved.modelId?.trim();
+    if (!modelId || parseModelPresetModelId(modelId)) {
+      return null;
+    }
+    const modelRef = `${OpenClawProviderId.LobsteraiServer}/${modelId}`;
+    try {
+      getCoworkStore().updateSession(
+        sessionId,
+        { modelPresetId: presetId, modelOverride: modelRef },
+        { touchUpdatedAt: false },
+      );
+    } catch {
+      // Non-fatal when session is not persisted in cowork_sessions.
+    }
+    return modelId;
+  };
 
   type AvailableServerModel = ServerModelMetadataInput & {
     modelId: string;
@@ -11517,6 +11642,10 @@ if (!gotTheLock) {
       }
       lastSyncedImOpenClawConfigFingerprint = getCurrentImOpenClawConfigFingerprint();
       imConfigRestartOnNextSettingsSave = false;
+      void getIMGatewayManager()
+        .getStatusWithOpenClawRuntime()
+        .then(status => getIMGatewayManager().emit('statusChange', status))
+        .catch(() => {});
       return { success: true };
     } catch (error) {
       console.error('[IM] Config sync failed:', error);
@@ -13287,11 +13416,14 @@ if (!gotTheLock) {
     }
   });
 
-  registerAsrIpcHandlers({
+  const asrDeps = {
     getAuthTokens,
     fetchWithAuth,
     getServerApiBaseUrl,
-  });
+  };
+  createRealtimeAsrSessionForIm = (options?: AsrRealtimeSessionRequest) =>
+    createRealtimeAsrSession(asrDeps, options);
+  registerAsrIpcHandlers(asrDeps);
 
   const desktopLanguageClient = new CompanionLanguageClient({
     reportAnalytics: event => getMainLogReporter().report(event),

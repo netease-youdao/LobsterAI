@@ -157,14 +157,37 @@ export class ChannelManager {
     if (!entry) {
       throw new Error(`IM channel instance "${key}" is not running`);
     }
-    return entry.driver.sendMessage({ chatId: String(chatId), text: String(text || ''), replyContext });
+    return entry.driver.sendMessage({ chatId: String(chatId), text: String(text || ''), replyContext }).then((res) => {
+      entry.driver.markOutbound();
+      return res;
+    });
   }
 
   async handleInbound(msg, agentId, cwd) {
+    const key = instanceKey(String(msg.platform || '').toLowerCase(), String(msg.instanceId || 'default'));
+    this.instances.get(key)?.driver.markInbound();
+
+    // Prefer Electron host's Cowork/DshRuntimeAdapter pipeline when connected so
+    // IM conversations get sidebar sessions, virtual model resolution, agent
+    // persona/skills binding, and full credit/turn tracking.
+    const bridgeResult = await this.bridgeNotify?.({
+      type: 'inbound',
+      ...msg,
+      agentId,
+      cwd,
+    });
+    if (bridgeResult && bridgeResult.handled === true) {
+      return;
+    }
+
+    const fallbackPromptText = typeof msg.text === 'string' ? msg.text.trim() : '';
+    if (!fallbackPromptText) {
+      return;
+    }
+
     const chatKey = `${msg.platform}:${msg.instanceId}:${msg.chatId}`;
     const controller = this.ctx.get?.('sessionController');
     if (!controller) {
-      await this.bridgeNotify?.({ type: 'inbound', ...msg, agentId });
       return;
     }
 
@@ -197,8 +220,12 @@ export class ChannelManager {
     const collectTask = (async () => {
       for await (const frame of followStream) {
         if (frame.type === 'assistant-stream' && frame.frame?.type === 'chunk') {
-          if (frame.frame.chunk?.type === 'text-delta' && typeof frame.frame.chunk.delta === 'string') {
-            chunks.push(frame.frame.chunk.delta);
+          const chunk = frame.frame.chunk;
+          if (chunk?.type === 'text-delta') {
+            const delta = typeof chunk.text === 'string'
+              ? chunk.text
+              : (typeof chunk.delta === 'string' ? chunk.delta : '');
+            if (delta) chunks.push(delta);
           }
         } else if (frame.type === 'event' && frame.event?.type === 'turn/end') {
           break;
@@ -210,7 +237,7 @@ export class ChannelManager {
       {
         sessionId,
         requestId: randomUUID(),
-        content: [{ type: 'text', text: msg.text }],
+        content: [{ type: 'text', text: fallbackPromptText }],
         mode: 'queue',
       },
       abort.signal,

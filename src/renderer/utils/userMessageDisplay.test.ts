@@ -225,6 +225,18 @@ describe('Pattern B: 微信 (WeChat)', () => {
 
     expect(result).toBe(toFileUrl(imgPath));
   });
+
+  test('metadata image path with #, ?, and parentheses encodes safely for markdown', () => {
+    const imgPath = '/Users/demo/Library/Application Support/LobsterAI/shot (1)#a?b.png';
+
+    const result = parseUserMessageForDisplay('', {
+      localMediaAttachments: [{ localPath: imgPath, mimeType: 'image/png' }],
+    });
+
+    expect(result).toBe(
+      '![](file:///Users/demo/Library/Application%20Support/LobsterAI/shot%20%281%29%23a%3Fb.png)',
+    );
+  });
 });
 
 describe('Pattern B: 飞书 (Feishu) — full content', () => {

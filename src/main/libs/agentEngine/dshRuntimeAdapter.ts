@@ -15,7 +15,8 @@ import type {
 import { CoworkBtwStatus } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
-import { type CoworkSteerResponse,CoworkSteerStatus } from '../../../shared/cowork/steer';
+import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
+import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
@@ -160,6 +161,8 @@ interface ActiveTurnState {
   turnCompleted: boolean;
   turnError: string | null;
   turnAborted: boolean;
+  /** Ignore a trailing aborted `turn/end` leaked from a just-cancelled previous turn. */
+  ignoreStaleAbortedTurnEnd: boolean;
 }
 
 interface PendingInteraction {
@@ -283,6 +286,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
+  private readonly startingAbortControllers = new Map<string, AbortController>();
+  private readonly pendingCancels = new Map<string, Promise<void>>();
   private readonly dshToCoworkSession = new Map<string, string>();
   private readonly pendingInteractions = new Map<string, PendingInteraction>();
   private readonly btwAbortControllers = new Map<string, AbortController>();
@@ -366,10 +371,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     await this.runTurn(sessionId, prompt, {
       isContinue: false,
       skipInitialUserMessage: options.skipInitialUserMessage,
+      userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
       imageAttachments: options.imageAttachments,
+      localMediaAttachments: options.localMediaAttachments,
       agentId: options.agentId,
       workspaceRoot: options.workspaceRoot,
     });
@@ -385,10 +392,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       requestId: options.requestId,
       onAccepted: options.onAccepted,
       skipInitialUserMessage: options.skipInitialUserMessage,
+      userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
+      localMediaAttachments: options.localMediaAttachments,
     });
   }
 
@@ -701,14 +710,40 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 
   stopSession(sessionId: string): void {
+    const startingAbort = this.startingAbortControllers.get(sessionId);
+    if (startingAbort) {
+      this.startingAbortControllers.delete(sessionId);
+      startingAbort.abort(new Error('Session stopped by user'));
+    }
+
     const turn = this.activeTurns.get(sessionId);
-    if (!turn) return;
+    if (!turn) {
+      if (startingAbort) {
+        this.store.updateSession(sessionId, { status: 'idle' });
+        this.emit('sessionStatus', sessionId, 'idle');
+        this.emit('sessionStopped', sessionId, { runIds: [], startedAt: Date.now() });
+      }
+      return;
+    }
     this.activeTurns.delete(sessionId);
     turn.abortController.abort(new Error('Session stopped by user'));
+    this.finalizeActiveThinkingMessage(turn);
+    this.finalizeActiveAssistantMessage(turn);
+    this.discardReusableMessages(turn);
     this.cancelPendingInteractionsForSession(sessionId);
 
     if (this.hostManager.isReady()) {
-      void this.hostManager.getClient().cancelSession(turn.dshSessionId).catch((): void => undefined);
+      const cancelPromise = this.hostManager
+        .getClient()
+        .cancelSession(turn.dshSessionId)
+        .then((): void => undefined)
+        .catch((): void => undefined);
+      this.pendingCancels.set(sessionId, cancelPromise);
+      void cancelPromise.finally(() => {
+        if (this.pendingCancels.get(sessionId) === cancelPromise) {
+          this.pendingCancels.delete(sessionId);
+        }
+      });
     }
 
     const stopped: CoworkStoppedTurn = {
@@ -723,7 +758,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 
   stopAllSessions(): void {
-    for (const sessionId of [...this.activeTurns.keys()]) {
+    const ids = new Set([
+      ...this.activeTurns.keys(),
+      ...this.startingAbortControllers.keys(),
+    ]);
+    for (const sessionId of ids) {
       this.stopSession(sessionId);
     }
   }
@@ -994,10 +1033,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       requestId?: string;
       onAccepted?: () => void;
       skipInitialUserMessage?: boolean;
+      userMessageContent?: string;
       skillIds?: string[];
       systemPrompt?: string;
       confirmationMode: 'modal' | 'text';
       imageAttachments?: CoworkStartOptions['imageAttachments'];
+      localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
       agentId?: string;
       workspaceRoot?: string;
     },
@@ -1007,186 +1048,233 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Cowork session "${sessionId}" not found`);
     }
 
-    const client = await this.ensureReadyClient();
-
-    // Capture pre-existing messages BEFORE persisting the new prompt so fresh
-    // sessions are never mistaken for migrated OpenClaw sessions. When the caller
-    // already saved the current turn's initial user message (`skipInitialUserMessage`),
-    // exclude that trailing message from prior history.
-    const rawSessionMessages = [...(session.messages ?? [])];
-    const priorMessages = params.skipInitialUserMessage && rawSessionMessages.at(-1)?.type === 'user'
-      ? rawSessionMessages.slice(0, -1)
-      : rawSessionMessages;
-
-    // Create the per-turn W3C trace ID used by OpenClawTokenProxy and
-    // CoworkTurnUsageService to correlate every LLM request and settle credits.
-    const llmTrace = createCoworkLlmTrace();
-    let turnUserMessage: CoworkMessage | null = null;
-
-    if (!params.skipInitialUserMessage && prompt.trim().length > 0) {
-      turnUserMessage = this.store.addMessage(sessionId, {
-        type: 'user',
-        content: prompt,
-        metadata: { llmTrace },
-      });
-      this.emit('message', sessionId, turnUserMessage);
-    } else {
-      turnUserMessage = this.store.getLatestUserMessage?.(sessionId)
-        ?? [...rawSessionMessages].reverse().find((m) => m.type === 'user')
-        ?? null;
-      if (turnUserMessage) {
-        const mergedMetadata: Record<string, unknown> = {
-          ...(turnUserMessage.metadata ?? {}),
-          llmTrace,
-        };
-        this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, mergedMetadata);
-        turnUserMessage = { ...turnUserMessage, metadata: mergedMetadata };
-      }
-    }
-
-    // Resolve the target model before registering usage context so preset /
-    // resolvedModelId headers and DSH selectModel stay completely aligned.
-    const modelSelection = this.resolveModelSelection
-      ? await this.resolveModelSelection(sessionId, session.modelOverride)
-      : null;
-
-    registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
-      title: session.title,
-      modelPresetId: turnUserMessage?.metadata?.modelPresetId ?? session.modelPresetId ?? undefined,
-      resolvedModelId: (typeof turnUserMessage?.metadata?.resolvedModelId === 'string'
-        ? turnUserMessage.metadata.resolvedModelId
-        : undefined) ?? modelSelection?.model,
-    });
-
-    // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
-    // a legacy OpenClaw session for the first time.
-    let dshSessionId = this.resolveExistingDshSessionId(sessionId);
-    let lazyBridgePrefix = '';
-    if (!dshSessionId) {
-      const created = await client.createSession({
-        cwd: params.workspaceRoot || session.cwd,
-      });
-      dshSessionId = created.sessionId;
-      this.store.updateSession(sessionId, {
-        claudeSessionId: formatStoredDshSessionId(dshSessionId),
-      });
-
-      const hasLegacyHistory = Boolean(
-        priorMessages.length > 0
-        || (session.claudeSessionId && !isDshBackedSessionId(session.claudeSessionId)),
-      );
-      if (hasLegacyHistory) {
-        const capsule = this.store.getContinuityCapsule?.(sessionId) ?? null;
-        lazyBridgePrefix = buildLazyContextBridgePrefix(capsule, priorMessages);
-      }
-    }
-
-    this.dshToCoworkSession.set(dshSessionId, sessionId);
-
-    // Bind LobsterAI session context (agent persona, skills filter, executionMode, turn traceId).
-    const agentId = params.agentId || session.agentId || 'main';
-    const allowedSkillIds = this.resolveAllowedSkillIds
-      ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
-      : params.skillIds ?? null;
-    const contextPayload: DshHostSessionContext = {
-      sessionId: dshSessionId,
-      agentId,
-      coworkSessionId: sessionId,
-      traceId: llmTrace.traceId,
-      workspaceDir: params.workspaceRoot || session.cwd,
-      allowedSkillIds,
-      ...(params.systemPrompt || session.systemPrompt
-        ? { customSystemPrompt: params.systemPrompt || session.systemPrompt }
-        : {}),
-      ...(session.executionMode ? { executionMode: session.executionMode } : {}),
-      permissionPreset: this.getEffectivePermissionPreset(sessionId),
-    };
-    await this.hostManager.bindSessionContext(contextPayload);
-
-    // Ensure session uses the resolved LobsterAI model before sending prompt.
-    if (modelSelection) {
-      await selectModelWithReasoningFallback(client, {
-        sessionId: dshSessionId,
-        provider: modelSelection.provider,
-        model: modelSelection.model,
-        reasoningEffort: modelSelection.reasoningEffort,
-      });
-    }
-
-    // Cancel any previous turn watcher on this session before starting a fresh one.
-    const prevTurn = this.activeTurns.get(sessionId);
-    if (prevTurn) {
-      prevTurn.abortController.abort(new Error('Replaced by newer turn'));
-    }
-
     const abortController = new AbortController();
-    const turn: ActiveTurnState = {
-      coworkSessionId: sessionId,
-      dshSessionId,
-      userMessageId: turnUserMessage?.id,
-      traceId: llmTrace.traceId,
-      abortController,
-      confirmationMode: params.confirmationMode,
-      startedAt: Date.now(),
-      currentThinkingMessageId: null,
-      currentThinkingText: '',
-      attemptThinkingMessageId: null,
-      reusableThinkingMessageId: null,
-      lastFinalizedThinkingMessageId: null,
-      lastFinalizedThinkingText: '',
-      currentAssistantMessageId: null,
-      currentAssistantText: '',
-      attemptAssistantMessageId: null,
-      reusableAssistantMessageId: null,
-      lastFinalizedAssistantMessageId: null,
-      lastFinalizedAssistantText: '',
-      lastCommittedAssistantSeq: null,
-      toolCallMessageIds: new Map(),
-      subagentIdsByName: new Map(),
-      subagentTasksByCall: new Map(),
-      pendingSubagentResults: new Set(),
-      turnCompleted: false,
-      turnError: null,
-      turnAborted: false,
+    const prevStartingAbort = this.startingAbortControllers.get(sessionId);
+    if (prevStartingAbort) {
+      prevStartingAbort.abort(new Error('Replaced by newer turn'));
+    }
+    this.startingAbortControllers.set(sessionId, abortController);
+    const clearStartingAbort = () => {
+      if (this.startingAbortControllers.get(sessionId) === abortController) {
+        this.startingAbortControllers.delete(sessionId);
+      }
     };
-    this.activeTurns.set(sessionId, turn);
-
-    this.store.updateSession(sessionId, { status: 'running' });
-    this.emit('sessionStatus', sessionId, 'running');
-
-    // Open `session/follow` stream BEFORE calling `session/prompt` so zero
-    // live tokens or tool events are ever missed.
-    const followStream = client.followSession<Record<string, unknown>>(
-      {
-        address: { kind: 'session', sessionId: dshSessionId },
-        assistantStream: true,
-        activate: true,
-      },
-      abortController.signal,
-    );
-
-    const contentParts = buildPromptContentParts(prompt, lazyBridgePrefix, params.imageAttachments);
-    const streamTask = this.consumeFollowStream(turn, followStream);
 
     try {
-      await client.promptSession({
-        sessionId: dshSessionId,
-        requestId: params.requestId || randomUUID(),
-        content: contentParts,
-        mode: 'queue',
-      });
-      params.onAccepted?.();
-    } catch (error) {
-      abortController.abort(error);
-      this.activeTurns.delete(sessionId);
-      const msg = error instanceof Error ? error.message : String(error);
-      this.store.updateSession(sessionId, { status: 'error' });
-      this.emit('sessionStatus', sessionId, 'error');
-      this.emit('error', sessionId, msg);
-      throw error;
-    }
+      const pendingCancel = this.pendingCancels.get(sessionId);
+      const hadPriorCancel = Boolean(pendingCancel);
+      if (pendingCancel) {
+        await pendingCancel;
+      }
+      if (abortController.signal.aborted) return;
 
-    await streamTask;
+      const client = await this.ensureReadyClient();
+      if (abortController.signal.aborted) return;
+
+      // Capture pre-existing messages BEFORE persisting the new prompt so fresh
+      // sessions are never mistaken for migrated OpenClaw sessions. When the caller
+      // already saved the current turn's initial user message (`skipInitialUserMessage`),
+      // exclude that trailing message from prior history.
+      const rawSessionMessages = [...(session.messages ?? [])];
+      const priorMessages = params.skipInitialUserMessage && rawSessionMessages.at(-1)?.type === 'user'
+        ? rawSessionMessages.slice(0, -1)
+        : rawSessionMessages;
+
+      // Create the per-turn W3C trace ID used by OpenClawTokenProxy and
+      // CoworkTurnUsageService to correlate every LLM request and settle credits.
+      const llmTrace = createCoworkLlmTrace();
+      let turnUserMessage: CoworkMessage | null = null;
+
+      const persistedContent = params.userMessageContent !== undefined
+        ? params.userMessageContent
+        : prompt;
+      const localMediaAttachments = params.localMediaAttachments?.length
+        ? params.localMediaAttachments
+        : undefined;
+      const imageAttachmentPreviews = !localMediaAttachments && params.imageAttachments?.length
+        ? buildCoworkImageAttachmentPreviews(params.imageAttachments)
+        : undefined;
+      const hasPersistableUserMessage = persistedContent.trim().length > 0
+        || Boolean(localMediaAttachments?.length)
+        || Boolean(imageAttachmentPreviews?.length);
+
+      if (!params.skipInitialUserMessage && hasPersistableUserMessage) {
+        const userMetadata: Record<string, unknown> = {
+          llmTrace,
+          ...(localMediaAttachments ? { localMediaAttachments } : {}),
+          ...(imageAttachmentPreviews ? { imageAttachmentPreviews } : {}),
+        };
+        turnUserMessage = this.store.addMessage(sessionId, {
+          type: 'user',
+          content: persistedContent,
+          metadata: userMetadata,
+        });
+        this.emit('message', sessionId, turnUserMessage);
+      } else {
+        turnUserMessage = this.store.getLatestUserMessage?.(sessionId)
+          ?? [...rawSessionMessages].reverse().find((m) => m.type === 'user')
+          ?? null;
+        if (turnUserMessage) {
+          const mergedMetadata: Record<string, unknown> = {
+            ...(turnUserMessage.metadata ?? {}),
+            llmTrace,
+          };
+          this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, mergedMetadata);
+          turnUserMessage = { ...turnUserMessage, metadata: mergedMetadata };
+        }
+      }
+
+      // Resolve the target model before registering usage context so preset /
+      // resolvedModelId headers and DSH selectModel stay completely aligned.
+      const modelSelection = this.resolveModelSelection
+        ? await this.resolveModelSelection(sessionId, session.modelOverride)
+        : null;
+      if (abortController.signal.aborted) return;
+
+      registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
+        title: session.title,
+        modelPresetId: turnUserMessage?.metadata?.modelPresetId ?? session.modelPresetId ?? undefined,
+        resolvedModelId: (typeof turnUserMessage?.metadata?.resolvedModelId === 'string'
+          ? turnUserMessage.metadata.resolvedModelId
+          : undefined) ?? modelSelection?.model,
+      });
+
+      // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
+      // a legacy OpenClaw session for the first time.
+      let dshSessionId = this.resolveExistingDshSessionId(sessionId);
+      let lazyBridgePrefix = '';
+      if (!dshSessionId) {
+        const created = await client.createSession({
+          cwd: params.workspaceRoot || session.cwd,
+        });
+        if (abortController.signal.aborted) return;
+        dshSessionId = created.sessionId;
+        this.store.updateSession(sessionId, {
+          claudeSessionId: formatStoredDshSessionId(dshSessionId),
+        });
+
+        const hasLegacyHistory = Boolean(
+          priorMessages.length > 0
+          || (session.claudeSessionId && !isDshBackedSessionId(session.claudeSessionId)),
+        );
+        if (hasLegacyHistory) {
+          const capsule = this.store.getContinuityCapsule?.(sessionId) ?? null;
+          lazyBridgePrefix = buildLazyContextBridgePrefix(capsule, priorMessages);
+        }
+      }
+
+      this.dshToCoworkSession.set(dshSessionId, sessionId);
+
+      // Bind LobsterAI session context (agent persona, skills filter, executionMode, turn traceId).
+      const agentId = params.agentId || session.agentId || 'main';
+      const allowedSkillIds = this.resolveAllowedSkillIds
+        ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
+        : params.skillIds ?? null;
+      const contextPayload: DshHostSessionContext = {
+        sessionId: dshSessionId,
+        agentId,
+        coworkSessionId: sessionId,
+        traceId: llmTrace.traceId,
+        workspaceDir: params.workspaceRoot || session.cwd,
+        allowedSkillIds,
+        ...(params.systemPrompt || session.systemPrompt
+          ? { customSystemPrompt: params.systemPrompt || session.systemPrompt }
+          : {}),
+        ...(session.executionMode ? { executionMode: session.executionMode } : {}),
+        permissionPreset: this.getEffectivePermissionPreset(sessionId),
+      };
+      await this.hostManager.bindSessionContext(contextPayload);
+      if (abortController.signal.aborted) return;
+
+      // Ensure session uses the resolved LobsterAI model before sending prompt.
+      if (modelSelection) {
+        await selectModelWithReasoningFallback(client, {
+          sessionId: dshSessionId,
+          provider: modelSelection.provider,
+          model: modelSelection.model,
+          reasoningEffort: modelSelection.reasoningEffort,
+        });
+        if (abortController.signal.aborted) return;
+      }
+
+      // Cancel any previous turn watcher on this session before starting a fresh one.
+      const prevTurn = this.activeTurns.get(sessionId);
+      if (prevTurn) {
+        prevTurn.abortController.abort(new Error('Replaced by newer turn'));
+      }
+
+      const turn: ActiveTurnState = {
+        coworkSessionId: sessionId,
+        dshSessionId,
+        userMessageId: turnUserMessage?.id,
+        traceId: llmTrace.traceId,
+        abortController,
+        confirmationMode: params.confirmationMode,
+        startedAt: Date.now(),
+        currentThinkingMessageId: null,
+        currentThinkingText: '',
+        attemptThinkingMessageId: null,
+        reusableThinkingMessageId: null,
+        lastFinalizedThinkingMessageId: null,
+        lastFinalizedThinkingText: '',
+        currentAssistantMessageId: null,
+        currentAssistantText: '',
+        attemptAssistantMessageId: null,
+        reusableAssistantMessageId: null,
+        lastFinalizedAssistantMessageId: null,
+        lastFinalizedAssistantText: '',
+        lastCommittedAssistantSeq: null,
+        toolCallMessageIds: new Map(),
+        subagentIdsByName: new Map(),
+        subagentTasksByCall: new Map(),
+        pendingSubagentResults: new Set(),
+        turnCompleted: false,
+        turnError: null,
+        turnAborted: false,
+        ignoreStaleAbortedTurnEnd: hadPriorCancel,
+      };
+      clearStartingAbort();
+      this.activeTurns.set(sessionId, turn);
+
+      this.store.updateSession(sessionId, { status: 'running' });
+      this.emit('sessionStatus', sessionId, 'running');
+
+      // Open `session/follow` stream BEFORE calling `session/prompt` so zero
+      // live tokens or tool events are ever missed.
+      const followStream = client.followSession<Record<string, unknown>>(
+        {
+          address: { kind: 'session', sessionId: dshSessionId },
+          assistantStream: true,
+          activate: true,
+        },
+        abortController.signal,
+      );
+
+      const contentParts = buildPromptContentParts(prompt, lazyBridgePrefix, params.imageAttachments);
+      const streamTask = this.consumeFollowStream(turn, followStream);
+
+      try {
+        await client.promptSession({
+          sessionId: dshSessionId,
+          requestId: params.requestId || randomUUID(),
+          content: contentParts,
+          mode: 'queue',
+        });
+        params.onAccepted?.();
+      } catch (error) {
+        abortController.abort(error);
+        this.activeTurns.delete(sessionId);
+        const msg = error instanceof Error ? error.message : String(error);
+        this.store.updateSession(sessionId, { status: 'error' });
+        this.emit('sessionStatus', sessionId, 'error');
+        this.emit('error', sessionId, msg);
+        throw error;
+      }
+
+      await streamTask;
+    } finally {
+      clearStartingAbort();
+    }
   }
 
   private async consumeFollowStream(
@@ -1221,6 +1309,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       if (turn.turnAborted) {
         this.store.updateSession(coworkSessionId, { status: 'idle' });
         this.emit('sessionStatus', coworkSessionId, 'idle');
+        this.emit('sessionStopped', coworkSessionId, {
+          runIds: [dshSessionId],
+          startedAt: turn.startedAt,
+          ...(turn.userMessageId ? { userMessageId: turn.userMessageId } : {}),
+          traceId: turn.traceId,
+        });
         return;
       }
       this.store.updateSession(coworkSessionId, { status: 'completed' });
@@ -1249,6 +1343,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const { coworkSessionId } = turn;
 
     if (frame.type === 'assistant-stream') {
+      turn.ignoreStaleAbortedTurnEnd = false;
       const inner = frame.frame as Record<string, unknown> | undefined;
       if (!inner || typeof inner !== 'object') return false;
 
@@ -1312,6 +1407,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         return false;
       }
       if (evType === DshChildEvent.User) {
+        turn.ignoreStaleAbortedTurnEnd = false;
         this.subagentSessions?.observeNotice(coworkSessionId, data, ev.time);
         const source = record(data.source);
         if (source.kind === DshChildEvent.Settled && typeof source.senderSessionId === 'string') {
@@ -1320,7 +1416,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         return false;
       }
 
+      if (evType === 'turn/start') {
+        turn.ignoreStaleAbortedTurnEnd = false;
+        return false;
+      }
+
       if (evType === 'tool/call') {
+        turn.ignoreStaleAbortedTurnEnd = false;
         this.finalizeActiveThinkingMessage(turn);
         this.finalizeActiveAssistantMessage(turn);
         this.discardReusableMessages(turn);
@@ -1379,6 +1481,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       if (evType === 'assistant/message') {
+        turn.ignoreStaleAbortedTurnEnd = false;
         const messageObj = data.message as Record<string, unknown> | undefined;
         const rawContent = messageObj?.content ?? data.content;
         const text = extractTextFromContentBlocks(rawContent);
@@ -1489,13 +1592,19 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       if (evType === 'turn/end') {
         const turnError = extractTurnEndError(data.reason);
         if (turnError) {
+          turn.ignoreStaleAbortedTurnEnd = false;
           turn.turnError = turnError;
         } else if (isAbortedTurnEndReason(data.reason)) {
+          if (turn.ignoreStaleAbortedTurnEnd) {
+            turn.ignoreStaleAbortedTurnEnd = false;
+            return false;
+          }
           turn.turnAborted = true;
-        } else if (turn.pendingSubagentResults.size > 0) {
+        } else {
+          turn.ignoreStaleAbortedTurnEnd = false;
           // A model can yield the native turn after delegating. Each child's settlement
           // schedules another parent turn on this same stream.
-          return false;
+          if (turn.pendingSubagentResults.size > 0) return false;
         }
         return true;
       }

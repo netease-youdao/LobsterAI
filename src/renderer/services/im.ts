@@ -266,6 +266,9 @@ class IMService {
   async saveAndSyncConfig(): Promise<boolean> {
     try {
       const result: IMGatewayResult = await window.electron.im.syncConfig();
+      if (result.success) {
+        await this.loadStatus();
+      }
       return result.success;
     } catch (error) {
       console.error('[IM Service] Failed to sync IM config:', error);

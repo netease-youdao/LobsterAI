@@ -76,6 +76,19 @@ function pdfJsStaticAssetsPlugin(): Plugin {
   };
 }
 
+function silkWasmAssetPlugin(): Plugin {
+  const silkWasmSource = path.resolve(__dirname, 'node_modules/silk-wasm/lib/silk.wasm');
+  return {
+    name: 'silk-wasm-asset',
+    writeBundle(outputOptions) {
+      if (!fs.existsSync(silkWasmSource)) return;
+      const outputDir = outputOptions.dir || path.resolve(__dirname, 'dist-electron');
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.copyFileSync(silkWasmSource, path.join(outputDir, 'silk.wasm'));
+    },
+  };
+}
+
 export default defineConfig({
   define: {
     // KaTeX ESM bundle references this compile-time constant.
@@ -89,6 +102,18 @@ export default defineConfig({
         // 主进程入口文件
         entry: 'src/main/main.ts',
         vite: {
+          plugins: [silkWasmAssetPlugin()],
+          resolve: {
+            // Force Node/CJS entries for audio WASM decoders:
+            // - silk-wasm CJS avoids Vite rewriting `new URL("silk.wasm", import.meta.url)`
+            //   into a `data:` URI (which Node's fs.readFileSync cannot open).
+            // - @eshaz/web-worker Node CJS avoids its browser field evaluating
+            //   global `Worker` at module top level in Electron's main process.
+            alias: {
+              'silk-wasm': path.resolve(__dirname, 'node_modules/silk-wasm/lib/index.cjs'),
+              '@eshaz/web-worker': path.resolve(__dirname, 'node_modules/@eshaz/web-worker/cjs/node.js'),
+            },
+          },
           build: {
             sourcemap: true,
             outDir: 'dist-electron',

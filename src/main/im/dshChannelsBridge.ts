@@ -7,9 +7,12 @@
 
 import {
   DSH_CHANNELS_ROUTE_PATH,
+  DshChannelsAction,
   RETAINED_IM_PLATFORM_LIST,
   type RetainedImPlatform,
 } from '../../shared/dshEngine/hostConstants';
+import type { WeixinQrPollStatus } from '../../shared/im/weixin';
+import { PlatformRegistry } from '../../shared/platform';
 import type { DshHostManager } from '../libs/dsh/dshHostManager';
 import { defaultHttpRequester, type DshHttpRequester } from '../libs/dsh/dshTypertClient';
 
@@ -29,6 +32,24 @@ export interface DshChannelStatusItem {
   error: string | null;
   agentId?: string;
   botInfo?: Record<string, unknown> | null;
+  startedAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+}
+
+export interface DshWeixinQrStartResponse {
+  qrcode: string;
+  qrcode_img_content: string;
+  qrDataUrl?: string;
+}
+
+export interface DshWeixinQrPollResponse {
+  status: WeixinQrPollStatus | string;
+  bot_token?: string;
+  ilink_bot_id?: string;
+  baseurl?: string;
+  ilink_user_id?: string;
+  redirect_host?: string;
 }
 
 const RETAINED_SET = new Set<string>(RETAINED_IM_PLATFORM_LIST);
@@ -90,9 +111,14 @@ export class DshChannelsBridge {
     this.requester = options.requester ?? defaultHttpRequester;
   }
 
+  isReady(): boolean {
+    return this.hostManager.isReady();
+  }
+
   async callChannels<TResult = Record<string, unknown>>(
     action: string,
     payload?: unknown,
+    signal?: AbortSignal,
   ): Promise<TResult> {
     if (!this.hostManager.isReady()) {
       throw new Error('DSH host is not ready for IM channels operation');
@@ -111,16 +137,22 @@ export class DshChannelsBridge {
         ...(rawCookie ? { cookie: rawCookie } : {}),
       },
       body: JSON.stringify({ action, payload }),
+      signal,
     });
-    const parsed = JSON.parse(res.body) as { ok?: boolean; result?: TResult; error?: string };
-    if (res.status < 200 || res.status >= 300 || parsed.ok !== true) {
-      throw new Error(parsed.error || `DSH channels "${action}" failed with HTTP ${res.status}`);
+    let parsed: { ok?: boolean; result?: TResult; error?: string } | null = null;
+    try {
+      parsed = JSON.parse(res.body) as { ok?: boolean; result?: TResult; error?: string };
+    } catch {
+      parsed = null;
+    }
+    if (res.status < 200 || res.status >= 300 || parsed?.ok !== true) {
+      throw new Error(parsed?.error || `DSH channels "${action}" failed with HTTP ${res.status}`);
     }
     return parsed.result as TResult;
   }
 
   async listStatus(): Promise<{ supportedPlatforms: RetainedImPlatform[]; statuses: DshChannelStatusItem[] }> {
-    return this.callChannels('listStatus');
+    return this.callChannels(DshChannelsAction.ListStatus);
   }
 
   async syncInstances(
@@ -145,7 +177,7 @@ export class DshChannelsBridge {
       stopped: string[];
       errors: string[];
       statuses: DshChannelStatusItem[];
-    }>('syncInstances', { instances: retained });
+    }>(DshChannelsAction.SyncInstances, { instances: retained });
     return { ...res, skippedRetiredPlatforms };
   }
 
@@ -156,9 +188,30 @@ export class DshChannelsBridge {
     text: string;
     replyContext?: Record<string, unknown>;
   }): Promise<Record<string, unknown>> {
-    if (!isRetainedImPlatform(params.platform)) {
+    const rawPlatform = params.platform.trim().toLowerCase();
+    const resolvedPlatform = PlatformRegistry.platformOfChannel(rawPlatform) ?? rawPlatform;
+    if (!isRetainedImPlatform(resolvedPlatform)) {
       throw new Error(`Platform "${params.platform}" is retired and no longer supported`);
     }
-    return this.callChannels('send', params);
+    return this.callChannels(DshChannelsAction.Send, { ...params, platform: resolvedPlatform });
+  }
+
+  async weixinQrStart(params?: {
+    baseUrl?: string;
+    botType?: string;
+    localTokenList?: string[];
+  }): Promise<DshWeixinQrStartResponse> {
+    return this.callChannels<DshWeixinQrStartResponse>(DshChannelsAction.WeixinQrStart, params ?? {});
+  }
+
+  async weixinQrPoll(
+    params: {
+      qrcode: string;
+      baseUrl?: string;
+      timeoutMs?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<DshWeixinQrPollResponse> {
+    return this.callChannels<DshWeixinQrPollResponse>(DshChannelsAction.WeixinQrPoll, params, signal);
   }
 }

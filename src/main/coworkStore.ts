@@ -2512,7 +2512,19 @@ export class CoworkStore {
         ordered.message_offset
       FROM ordered
       JOIN cowork_messages m ON m.rowid = ordered.row_id
-      WHERE m.type IN ('user', 'assistant') AND TRIM(m.content) <> ''
+      WHERE m.type IN ('user', 'assistant')
+        AND (
+          TRIM(m.content) <> ''
+          OR (
+            m.type = 'user'
+            AND json_valid(m.metadata)
+            AND (
+              json_array_length(m.metadata, '$.localMediaAttachments') > 0
+              OR json_array_length(m.metadata, '$.imageAttachmentPreviews') > 0
+              OR json_array_length(m.metadata, '$.imageAttachments') > 0
+            )
+          )
+        )
       ORDER BY ordered.message_offset ASC
     `,
       [sessionId],

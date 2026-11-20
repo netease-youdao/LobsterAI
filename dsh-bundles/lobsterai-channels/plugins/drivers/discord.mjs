@@ -1,4 +1,10 @@
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import {
+  detectImageMime,
+  fetchBinaryWithLimit,
+  isAudioAttachment,
+  isImageAttachment,
+} from './media-utils.mjs';
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 
@@ -20,6 +26,79 @@ export class DiscordChannelDriver extends BaseChannelDriver {
       authorization: `Bot ${this.token}`,
       'content-type': 'application/json',
     };
+  }
+
+  async extractInboundPayload(d, signal) {
+    let text = String(d?.content || '').trim();
+    if (this.botUserId) {
+      text = text.replace(new RegExp(`<@!?${this.botUserId}>`, 'g'), '').trim();
+    }
+    const referencedText = String(d?.referenced_message?.content || '').trim();
+    if (referencedText) {
+      text = text ? `[引用: ${referencedText}]\n${text}` : `[引用: ${referencedText}]`;
+    }
+
+    const attachments = [];
+    const rawAttachments = Array.isArray(d?.attachments) ? d.attachments : [];
+    let imgIdx = 0;
+
+    const downloadImageAttachment = async (att) => {
+      try {
+        imgIdx += 1;
+        const contentType = String(att.content_type || '').toLowerCase();
+        const fileName = String(att.filename || '');
+        const { buffer, contentType: dlMime } = await fetchBinaryWithLimit(att.url, { signal });
+        const { mimeType, ext } = detectImageMime(buffer, dlMime || contentType);
+        attachments.push({
+          kind: 'image',
+          mimeType,
+          dataBase64: buffer.toString('base64'),
+          sizeBytes: buffer.byteLength,
+          name: fileName || `discord-image-${String(d?.id || Date.now())}-${imgIdx}.${ext}`,
+        });
+      } catch (err) {
+        console.warn('[DiscordChannelDriver] image download failed:', err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    for (const att of rawAttachments) {
+      if (!att || typeof att !== 'object' || !att.url) continue;
+      const contentType = String(att.content_type || '').toLowerCase();
+      const fileName = String(att.filename || '');
+
+      if (isAudioAttachment(contentType, fileName)) {
+        try {
+          const { buffer } = await fetchBinaryWithLimit(att.url, { signal });
+          attachments.push({
+            kind: 'voice',
+            dataBase64: buffer.toString('base64'),
+            playtimeMs: typeof att.duration_secs === 'number'
+              ? Math.round(att.duration_secs * 1000)
+              : undefined,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn('[DiscordChannelDriver] voice download failed:', message);
+          attachments.push({ kind: 'voice', error: message });
+        }
+      } else if (isImageAttachment(contentType, fileName || att.url)) {
+        await downloadImageAttachment(att);
+      }
+    }
+
+    // If the message itself had no images, include images from the replied-to message.
+    if (imgIdx === 0 && Array.isArray(d?.referenced_message?.attachments)) {
+      for (const att of d.referenced_message.attachments) {
+        if (!att || typeof att !== 'object' || !att.url) continue;
+        const contentType = String(att.content_type || '').toLowerCase();
+        const fileName = String(att.filename || '');
+        if (isImageAttachment(contentType, fileName || att.url)) {
+          await downloadImageAttachment(att);
+        }
+      }
+    }
+
+    return { text, attachments };
   }
 
   async connect(signal) {
@@ -71,6 +150,7 @@ export class DiscordChannelDriver extends BaseChannelDriver {
             this.heartbeatTimer = setInterval(() => {
               if (ws.readyState === 1) ws.send(JSON.stringify({ op: 1, d: this.lastSeq }));
             }, interval);
+            this.heartbeatTimer.unref?.();
             ws.send(JSON.stringify({
               op: 2,
               d: {
@@ -84,20 +164,28 @@ export class DiscordChannelDriver extends BaseChannelDriver {
           } else if (payload.t === 'MESSAGE_CREATE' && payload.d) {
             const d = payload.d;
             if (d.author?.bot || d.author?.id === this.botUserId) return;
-            const text = String(d.content || '').trim();
-            if (!text) return;
-            const senderId = String(d.author?.id || '');
-            if (!this.isSenderAllowed(senderId)) return;
-            void this.onInbound({
-              platform: 'discord',
-              instanceId: this.instanceId,
-              chatId: String(d.channel_id || ''),
-              senderId,
-              senderName: d.author?.username || senderId,
-              text,
-              messageId: String(d.id || ''),
-              chatType: d.guild_id ? 'group' : 'direct',
-            });
+            const senderId = String(d.author?.id || '').trim();
+            const chatId = String(d.channel_id || '').trim();
+            if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
+
+            void this.extractInboundPayload(d, signal)
+              .then(({ text, attachments }) => {
+                if (!text && attachments.length === 0) return;
+                return this.onInbound({
+                  platform: 'discord',
+                  instanceId: this.instanceId,
+                  chatId,
+                  senderId,
+                  senderName: d.author?.username || senderId,
+                  text,
+                  ...(attachments.length > 0 ? { attachments } : {}),
+                  messageId: String(d.id || ''),
+                  chatType: d.guild_id ? 'group' : 'direct',
+                });
+              })
+              .catch((err) => {
+                console.warn('[DiscordChannelDriver] inbound handling failed:', err);
+              });
           }
         });
 

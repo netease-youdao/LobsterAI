@@ -493,13 +493,32 @@ test('getSessionMessageRailIndex numbers visible messages by full message order'
   insertMessage('corrupt-4', sid, 'assistant', 'answer with corrupt metadata', '{broken', 5);
   insertMessage('blank-5', sid, 'assistant', '   ', null, 6);
   insertMessage('user-6', sid, 'user', 'follow up', null, 7);
+  insertMessage(
+    'user-image-only-7',
+    sid,
+    'user',
+    '',
+    JSON.stringify({ localMediaAttachments: [{ localPath: '/tmp/weixin.png', mimeType: 'image/png' }] }),
+    8,
+  );
 
   expect(store.getSessionMessageRailIndex(sid).map(item => [item.messageId, item.messageOffset, item.sequence]))
-    .toEqual([['user-0', 0, 1], ['assistant-3', 3, 4], ['corrupt-4', 4, 5], ['user-6', 6, 7]]);
+    .toEqual([
+      ['user-0', 0, 1],
+      ['assistant-3', 3, 4],
+      ['corrupt-4', 4, 5],
+      ['user-6', 6, 7],
+      ['user-image-only-7', 7, 8],
+    ]);
   expect(store.getSessionMessageRailIndex(sid)[1]).toMatchObject({
     type: 'assistant',
     preview: 'visible answer',
     contentLen: 'visible answer'.length,
+  });
+  expect(store.getSessionMessageRailIndex(sid)[4]).toMatchObject({
+    type: 'user',
+    preview: 'Turn 5',
+    contentLen: 0,
   });
 });
 

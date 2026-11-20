@@ -1,2 +1,2 @@
 export type { AsrHandlerDeps } from './handlers';
-export { registerAsrIpcHandlers } from './handlers';
+export { createRealtimeAsrSession, registerAsrIpcHandlers } from './handlers';

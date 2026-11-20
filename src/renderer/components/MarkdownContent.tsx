@@ -57,7 +57,12 @@ const formatContentSize = (bytes: number): string => {
 };
 
 const encodeFileUrl = (url: string): string => {
-  const encoded = encodeURI(url);
+  // Encode unescaped characters without double-encoding existing %XX sequences
+  // (e.g. file:///Users/.../Application%20Support/... from encodeURI / pathToFileURL).
+  const encoded = url
+    .split(/(%[0-9A-Fa-f]{2})/g)
+    .map((part, index) => (index % 2 === 1 ? part : encodeURI(part)))
+    .join('');
   return encoded.replace(/\(/g, '%28').replace(/\)/g, '%29');
 };
 

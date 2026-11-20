@@ -192,7 +192,7 @@ export interface DshHostManagerOptions {
 
 const DEFAULT_BOOT_TIMEOUT_MS = 35_000;
 const DEFAULT_MAX_AUTO_RESTARTS = 3;
-const MAX_BRIDGE_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
 
 /**

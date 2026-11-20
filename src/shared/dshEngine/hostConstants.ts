@@ -84,6 +84,24 @@ export const DshOpsAction = {
 } as const;
 export type DshOpsAction = typeof DshOpsAction[keyof typeof DshOpsAction];
 
+export const DshChannelsAction = {
+  ListStatus: 'listStatus',
+  SyncInstances: 'syncInstances',
+  Send: 'send',
+  WeixinQrStart: 'weixinQrStart',
+  WeixinQrPoll: 'weixinQrPoll',
+} as const;
+export type DshChannelsAction = typeof DshChannelsAction[keyof typeof DshChannelsAction];
+
+export const DshChannelState = {
+  Stopped: 'stopped',
+  Connecting: 'connecting',
+  Connected: 'connected',
+  Reconnecting: 'reconnecting',
+  Error: 'error',
+} as const;
+export type DshChannelState = typeof DshChannelState[keyof typeof DshChannelState];
+
 export const DshPermissionPreset = {
   ReadOnly: 'read-only',
   WorkspaceWrite: 'workspace-write',

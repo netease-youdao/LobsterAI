@@ -34,13 +34,52 @@ export class BaseChannelDriver {
     this.state = 'stopped';
     this.lastError = null;
     this.botInfo = null;
+    this.startedAt = null;
+    this.lastInboundAt = null;
+    this.lastOutboundAt = null;
   }
 
   setState(state, error = null, botInfo = undefined) {
     this.state = state;
     this.lastError = error;
     if (botInfo !== undefined) this.botInfo = botInfo;
-    this.onStatus?.({ state: this.state, error: this.lastError, botInfo: this.botInfo });
+    if (state === 'connected' && this.startedAt === null) {
+      this.startedAt = Date.now();
+    } else if (state === 'stopped') {
+      this.startedAt = null;
+    }
+    this.onStatus?.({
+      state: this.state,
+      error: this.lastError,
+      botInfo: this.botInfo,
+      startedAt: this.startedAt,
+      lastInboundAt: this.lastInboundAt,
+      lastOutboundAt: this.lastOutboundAt,
+    });
+  }
+
+  markInbound() {
+    this.lastInboundAt = Date.now();
+    this.onStatus?.({
+      state: this.state,
+      error: this.lastError,
+      botInfo: this.botInfo,
+      startedAt: this.startedAt,
+      lastInboundAt: this.lastInboundAt,
+      lastOutboundAt: this.lastOutboundAt,
+    });
+  }
+
+  markOutbound() {
+    this.lastOutboundAt = Date.now();
+    this.onStatus?.({
+      state: this.state,
+      error: this.lastError,
+      botInfo: this.botInfo,
+      startedAt: this.startedAt,
+      lastInboundAt: this.lastInboundAt,
+      lastOutboundAt: this.lastOutboundAt,
+    });
   }
 
   isSenderAllowed(senderId) {
@@ -60,6 +99,9 @@ export class BaseChannelDriver {
       state: this.state,
       error: this.lastError,
       botInfo: this.botInfo,
+      startedAt: this.startedAt,
+      lastInboundAt: this.lastInboundAt,
+      lastOutboundAt: this.lastOutboundAt,
     };
   }
 

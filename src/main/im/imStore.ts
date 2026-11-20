@@ -1605,7 +1605,13 @@ export class IMStore {
 
   setWeixinConfig(config: Partial<WeixinOpenClawConfig>): void {
     const current = this.getWeixinConfig();
-    this.setConfigValue('weixin', { ...current, ...config });
+    const next: WeixinOpenClawConfig = { ...current };
+    for (const [key, value] of Object.entries(config) as Array<[keyof WeixinOpenClawConfig, unknown]>) {
+      if (value !== undefined) {
+        (next as unknown as Record<string, unknown>)[key] = value;
+      }
+    }
+    this.setConfigValue('weixin', next);
   }
 
   // ==================== IM Settings ====================

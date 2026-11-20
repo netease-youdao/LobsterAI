@@ -1,7 +1,15 @@
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import {
+  detectImageMime,
+  fetchBinaryWithLimit,
+  isAudioAttachment,
+  isImageAttachment,
+  normalizeMediaUrl,
+} from './media-utils.mjs';
 
 const QQ_AUTH_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQ_API_BASE = 'https://api.sgroup.qq.com';
+const MAX_CACHED_MSG_SEQS = 512;
 
 export class QQChannelDriver extends BaseChannelDriver {
   constructor(options) {
@@ -11,6 +19,7 @@ export class QQChannelDriver extends BaseChannelDriver {
     this.ws = null;
     this.heartbeatTimer = null;
     this.lastSeq = null;
+    this.msgSeqCounters = new Map();
   }
 
   get appId() {
@@ -19,6 +28,20 @@ export class QQChannelDriver extends BaseChannelDriver {
 
   get clientSecret() {
     return String(this.config.clientSecret || this.config.appSecret || '').trim();
+  }
+
+  nextMsgSeq(msgId) {
+    const key = String(msgId || '').trim();
+    if (!key) return 1;
+    const next = (this.msgSeqCounters.get(key) || 0) + 1;
+    if (this.msgSeqCounters.has(key)) this.msgSeqCounters.delete(key);
+    this.msgSeqCounters.set(key, next);
+    while (this.msgSeqCounters.size > MAX_CACHED_MSG_SEQS) {
+      const oldest = this.msgSeqCounters.keys().next().value;
+      if (oldest === undefined) break;
+      this.msgSeqCounters.delete(oldest);
+    }
+    return next;
   }
 
   async getAccessToken(signal) {
@@ -40,6 +63,74 @@ export class QQChannelDriver extends BaseChannelDriver {
     return this.accessToken;
   }
 
+  async extractInboundPayload(d, signal) {
+    let text = String(d?.content || '')
+      .replace(/<@!?\w+>/g, '')
+      .trim();
+    const attachments = [];
+    const rawAttachments = Array.isArray(d?.attachments) ? d.attachments : [];
+
+    let imgIdx = 0;
+    for (const att of rawAttachments) {
+      if (!att || typeof att !== 'object') continue;
+      const contentType = String(att.content_type || '').toLowerCase();
+      const fileName = String(att.filename || '');
+      const hasVoiceFields = Boolean(att.voice_wav_url || att.asr_refer_text);
+
+      if (hasVoiceFields || isAudioAttachment(contentType, fileName)) {
+        const asrText = typeof att.asr_refer_text === 'string' ? att.asr_refer_text.trim() : '';
+        if (asrText && !text) {
+          text = asrText;
+          continue;
+        }
+        const audioUrl = normalizeMediaUrl(att.voice_wav_url) || normalizeMediaUrl(att.url);
+        if (!audioUrl) {
+          attachments.push({ kind: 'voice', error: 'QQ voice attachment missing URL' });
+          continue;
+        }
+        try {
+          const { buffer } = await fetchBinaryWithLimit(audioUrl, { signal });
+          attachments.push({
+            kind: 'voice',
+            dataBase64: buffer.toString('base64'),
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn('[QQChannelDriver] voice attachment download failed:', message);
+          attachments.push({ kind: 'voice', error: message });
+        }
+      } else if (
+        isImageAttachment(contentType, fileName || att.url) ||
+        (
+          !contentType.startsWith('video/') &&
+          typeof att.width === 'number' &&
+          att.width > 0 &&
+          typeof att.height === 'number' &&
+          att.height > 0
+        )
+      ) {
+        const imgUrl = normalizeMediaUrl(att.url);
+        if (!imgUrl) continue;
+        try {
+          imgIdx += 1;
+          const { buffer, contentType: dlMime } = await fetchBinaryWithLimit(imgUrl, { signal });
+          const { mimeType, ext } = detectImageMime(buffer, dlMime || contentType);
+          attachments.push({
+            kind: 'image',
+            mimeType,
+            dataBase64: buffer.toString('base64'),
+            sizeBytes: buffer.byteLength,
+            name: fileName || `qq-image-${String(d?.id || Date.now())}-${imgIdx}.${ext}`,
+          });
+        } catch (err) {
+          console.warn('[QQChannelDriver] image attachment download failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+
+    return { text, attachments };
+  }
+
   async connect(signal) {
     if (!this.appId || !this.clientSecret) {
       throw new Error('QQ appId and clientSecret are required');
@@ -58,7 +149,16 @@ export class QQChannelDriver extends BaseChannelDriver {
 
   async runGateway(wsUrl, signal) {
     while (!signal.aborted) {
-      const token = await this.getAccessToken(signal);
+      let token;
+      try {
+        token = await this.getAccessToken(signal);
+      } catch (err) {
+        if (signal.aborted) return;
+        this.setState('reconnecting', err instanceof Error ? err.message : String(err));
+        await sleepAbortable(5_000, signal);
+        continue;
+      }
+
       await new Promise((resolve) => {
         const ws = new WebSocket(wsUrl);
         this.ws = ws;
@@ -85,6 +185,7 @@ export class QQChannelDriver extends BaseChannelDriver {
             this.heartbeatTimer = setInterval(() => {
               if (ws.readyState === 1) ws.send(JSON.stringify({ op: 1, d: this.lastSeq }));
             }, interval);
+            this.heartbeatTimer.unref?.();
             ws.send(JSON.stringify({
               op: 2,
               d: {
@@ -96,21 +197,29 @@ export class QQChannelDriver extends BaseChannelDriver {
             this.setState('connected', null, { appId: this.appId, user: payload.d?.user });
           } else if (payload.t === 'C2C_MESSAGE_CREATE' || payload.t === 'GROUP_AT_MESSAGE_CREATE') {
             const d = payload.d || {};
-            const text = String(d.content || '').trim();
             const isGroup = payload.t === 'GROUP_AT_MESSAGE_CREATE';
-            const senderId = String(d.author?.user_openid || d.author?.member_openid || '');
-            const chatId = isGroup ? String(d.group_openid || '') : senderId;
-            if (!text || !chatId || !this.isSenderAllowed(senderId)) return;
-            void this.onInbound({
-              platform: 'qq',
-              instanceId: this.instanceId,
-              chatId,
-              senderId,
-              text,
-              messageId: String(d.id || ''),
-              chatType: isGroup ? 'group' : 'direct',
-              replyContext: { isGroup, msgId: d.id },
-            });
+            const senderId = String(d.author?.user_openid || d.author?.member_openid || '').trim();
+            const chatId = isGroup ? String(d.group_openid || '').trim() : senderId;
+            if (!chatId || !senderId || !this.isSenderAllowed(senderId)) return;
+
+            void this.extractInboundPayload(d, signal)
+              .then(({ text, attachments }) => {
+                if (!text && attachments.length === 0) return;
+                return this.onInbound({
+                  platform: 'qq',
+                  instanceId: this.instanceId,
+                  chatId,
+                  senderId,
+                  text,
+                  ...(attachments.length > 0 ? { attachments } : {}),
+                  messageId: String(d.id || ''),
+                  chatType: isGroup ? 'group' : 'direct',
+                  replyContext: { isGroup, msgId: d.id },
+                });
+              })
+              .catch((err) => {
+                console.warn('[QQChannelDriver] inbound handling failed:', err);
+              });
           }
         });
 
@@ -146,6 +255,7 @@ export class QQChannelDriver extends BaseChannelDriver {
     const endpoint = isGroup
       ? `${QQ_API_BASE}/v2/groups/${encodeURIComponent(chatId)}/messages`
       : `${QQ_API_BASE}/v2/users/${encodeURIComponent(chatId)}/messages`;
+    const msgId = replyContext?.msgId ? String(replyContext.msgId) : '';
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -155,7 +265,7 @@ export class QQChannelDriver extends BaseChannelDriver {
       body: JSON.stringify({
         content: String(text || ''),
         msg_type: 0,
-        ...(replyContext?.msgId ? { msg_id: String(replyContext.msgId) } : {}),
+        ...(msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {}),
       }),
     });
     if (!res.ok) {

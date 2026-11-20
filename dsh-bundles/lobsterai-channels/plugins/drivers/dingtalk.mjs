@@ -1,11 +1,82 @@
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import {
+  createTimeoutSignal,
+  detectImageMime,
+  fetchBinaryWithLimit,
+  isImageAttachment,
+} from './media-utils.mjs';
 
 const DINGTALK_API_BASE = 'https://api.dingtalk.com';
+const API_TIMEOUT_MS = 15_000;
+
+function resolveContentObject(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function extractQuotedMsgText(container, maxDepth = 3, options = {}) {
+  if (maxDepth <= 0 || !container || !container.isReplyMsg || !container.repliedMsg) {
+    return '';
+  }
+  const replied = container.repliedMsg;
+  const msgType = String(replied.msgType || 'text');
+  const contentObj = resolveContentObject(replied.content);
+
+  let bodyText = '';
+  switch (msgType) {
+    case 'text': {
+      bodyText = String(contentObj?.text || replied.text || '').trim();
+      if (contentObj?.isReplyMsg) {
+        const nested = extractQuotedMsgText(contentObj, maxDepth - 1, options);
+        if (nested) bodyText = bodyText ? `${bodyText}\n${nested}` : nested;
+      }
+      break;
+    }
+    case 'richText': {
+      const richList = Array.isArray(contentObj?.richText) ? contentObj.richText : [];
+      bodyText = richList
+        .filter((item) => item?.text && item.msgType !== 'skill' && !item.skillData)
+        .map((item) => String(item.text))
+        .join('')
+        .trim();
+      break;
+    }
+    case 'audio':
+      bodyText = String(contentObj?.recognition || '').trim() || '[语音]';
+      break;
+    case 'picture':
+      bodyText = options.suppressImagePlaceholder ? '' : '[图片]';
+      break;
+    case 'file':
+      bodyText = options.suppressImagePlaceholder && isImageAttachment('', contentObj?.fileName)
+        ? ''
+        : `[文件: ${String(contentObj?.fileName || 'unknown')}]`;
+      break;
+    default:
+      bodyText = String(contentObj?.text || '').trim();
+      break;
+  }
+
+  return bodyText ? `[引用: ${bodyText}]` : '';
+}
 
 export class DingTalkChannelDriver extends BaseChannelDriver {
   constructor(options) {
     super({ ...options, platform: 'dingtalk' });
     this.ws = null;
+    this.accessToken = '';
+    this.tokenExpiresAt = 0;
   }
 
   get clientId() {
@@ -16,32 +87,280 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
     return String(this.config.clientSecret || this.config.appSecret || '').trim();
   }
 
+  async getAppAccessToken(signal) {
+    if (this.accessToken && Date.now() < this.tokenExpiresAt - 60_000) {
+      return this.accessToken;
+    }
+    const reqAbort = createTimeoutSignal(API_TIMEOUT_MS, signal);
+    try {
+      const res = await fetch(`${DINGTALK_API_BASE}/v1.0/oauth2/accessToken`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          appKey: this.clientId,
+          appSecret: this.clientSecret,
+        }),
+        signal: reqAbort.signal,
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.accessToken) {
+        throw new Error(`DingTalk accessToken failed: ${data?.message || res.status}`);
+      }
+      this.accessToken = String(data.accessToken);
+      this.tokenExpiresAt = Date.now() + Number(data.expireIn || 7200) * 1000;
+      return this.accessToken;
+    } finally {
+      reqAbort.cleanup();
+    }
+  }
+
+  async downloadByCode(downloadCode, signal) {
+    const token = await this.getAppAccessToken(signal);
+    const reqAbort = createTimeoutSignal(API_TIMEOUT_MS, signal);
+    let downloadUrl = '';
+    try {
+      const res = await fetch(`${DINGTALK_API_BASE}/v1.0/robot/messageFiles/download`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-acs-dingtalk-access-token': token,
+        },
+        body: JSON.stringify({
+          downloadCode: String(downloadCode),
+          robotCode: this.clientId,
+        }),
+        signal: reqAbort.signal,
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.downloadUrl) {
+        throw new Error(`DingTalk messageFiles/download failed: ${data?.message || res.status}`);
+      }
+      downloadUrl = String(data.downloadUrl);
+    } finally {
+      reqAbort.cleanup();
+    }
+    return fetchBinaryWithLimit(downloadUrl, { signal });
+  }
+
+  async extractInboundPayload(payload, signal) {
+    const msgtype = String(payload?.msgtype || 'text').trim();
+    const content = resolveContentObject(payload?.content);
+    const attachments = [];
+    let text = '';
+
+    const downloadImageRef = async (pictureUrl, downloadCode, labelId, preferredName) => {
+      try {
+        const { buffer, contentType } = pictureUrl
+          ? await fetchBinaryWithLimit(pictureUrl, { signal })
+          : await this.downloadByCode(downloadCode, signal);
+        const { mimeType, ext } = detectImageMime(buffer, contentType);
+        attachments.push({
+          kind: 'image',
+          mimeType,
+          dataBase64: buffer.toString('base64'),
+          sizeBytes: buffer.byteLength,
+          name: preferredName || `dingtalk-image-${labelId}.${ext}`,
+        });
+        return true;
+      } catch (err) {
+        console.warn('[DingTalkChannelDriver] image download failed:', err instanceof Error ? err.message : String(err));
+        return false;
+      }
+    };
+
+    const downloadQuotedImages = async (container, baseLabel) => {
+      const replied = container?.isReplyMsg ? container.repliedMsg : null;
+      if (!replied) return false;
+      const repliedContent = resolveContentObject(replied.content);
+      let downloaded = false;
+      if (replied.msgType === 'picture') {
+        const picUrl = String(repliedContent?.pictureUrl || '').trim();
+        const code = String(repliedContent?.downloadCode || repliedContent?.pictureDownloadCode || '').trim();
+        if (picUrl || code) {
+          downloaded = await downloadImageRef(picUrl, code, baseLabel);
+        }
+      } else if (replied.msgType === 'file') {
+        const fileName = String(repliedContent?.fileName || '').trim();
+        const code = String(repliedContent?.downloadCode || '').trim();
+        if (code && isImageAttachment('', fileName)) {
+          downloaded = await downloadImageRef('', code, baseLabel, fileName);
+        }
+      } else if (replied.msgType === 'richText') {
+        const richList = Array.isArray(repliedContent?.richText) ? repliedContent.richText : [];
+        let quoteImgIdx = 0;
+        for (const item of richList) {
+          if (!item || typeof item !== 'object') continue;
+          const picUrl = String(item.pictureUrl || '').trim();
+          const code = String(item.downloadCode || item.pictureDownloadCode || '').trim();
+          if (picUrl || (code && (!item.type || item.type === 'picture' || item.msgType === 'picture'))) {
+            quoteImgIdx += 1;
+            const ok = await downloadImageRef(picUrl, code, `${baseLabel}-quote-${quoteImgIdx}`);
+            if (ok) downloaded = true;
+          }
+        }
+      }
+      return downloaded;
+    };
+
+    const downloadVoiceCode = async (downloadCode) => {
+      try {
+        const { buffer } = await this.downloadByCode(downloadCode, signal);
+        attachments.push({
+          kind: 'voice',
+          dataBase64: buffer.toString('base64'),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn('[DingTalkChannelDriver] voice download failed:', message);
+        attachments.push({ kind: 'voice', error: message });
+      }
+    };
+
+    switch (msgtype) {
+      case 'text': {
+        const rawText = String(payload?.text?.content || '').trim();
+        const quotedImageDownloaded = await downloadQuotedImages(payload?.text, payload?.msgId || Date.now());
+        const quoted = extractQuotedMsgText(payload?.text, 3, {
+          suppressImagePlaceholder: quotedImageDownloaded,
+        });
+        text = quoted ? (rawText ? `${quoted}\n${rawText}` : quoted) : rawText;
+
+        const replied = payload?.text?.repliedMsg;
+        const repliedContent = resolveContentObject(replied?.content);
+        if (replied?.msgType === 'audio' && !text && repliedContent?.downloadCode) {
+          await downloadVoiceCode(repliedContent.downloadCode);
+        }
+        break;
+      }
+      case 'audio': {
+        const recognition = String(content?.recognition || payload?.audio?.recognition || '').trim();
+        if (recognition && recognition !== '[语音消息]') {
+          text = recognition;
+        } else {
+          const code = String(content?.downloadCode || payload?.audio?.downloadCode || '').trim();
+          if (code) {
+            await downloadVoiceCode(code);
+          } else {
+            attachments.push({ kind: 'voice', error: 'DingTalk audio message missing downloadCode and recognition' });
+          }
+        }
+        break;
+      }
+      case 'picture': {
+        const pictureUrl = String(content?.pictureUrl || payload?.picture?.pictureUrl || '').trim();
+        const downloadCode = String(
+          content?.downloadCode
+            || content?.pictureDownloadCode
+            || payload?.picture?.downloadCode
+            || '',
+        ).trim();
+        if (pictureUrl || downloadCode) {
+          await downloadImageRef(pictureUrl, downloadCode, payload?.msgId || Date.now());
+        }
+        break;
+      }
+      case 'file': {
+        const fileName = String(content?.fileName || '').trim();
+        const downloadCode = String(content?.downloadCode || '').trim();
+        if (downloadCode && isImageAttachment('', fileName)) {
+          await downloadImageRef('', downloadCode, payload?.msgId || Date.now(), fileName);
+        }
+        break;
+      }
+      case 'richText': {
+        const richList = Array.isArray(content?.richText)
+          ? content.richText
+          : (Array.isArray(payload?.richText?.richTextList) ? payload.richText.richTextList : []);
+        const textParts = [];
+        let imgIdx = 0;
+        for (const item of richList) {
+          if (!item || typeof item !== 'object') continue;
+          const isSkill = item.type === 'skill' || Boolean(item.skillData);
+          if (typeof item.text === 'string' && item.text.trim() && !isSkill) {
+            textParts.push(item.text.trim());
+          }
+          const picUrl = String(item.pictureUrl || '').trim();
+          const code = String(item.downloadCode || item.pictureDownloadCode || '').trim();
+          if (picUrl || (code && (!item.type || item.type === 'picture' || item.msgType === 'picture'))) {
+            imgIdx += 1;
+            await downloadImageRef(picUrl, code, `${payload?.msgId || Date.now()}-${imgIdx}`);
+          } else if (item.downloadCode && item.type === 'audio') {
+            await downloadVoiceCode(item.downloadCode);
+          }
+        }
+        const quotedImageDownloaded = await downloadQuotedImages(content, payload?.msgId || Date.now());
+        const quoted = extractQuotedMsgText(content, 3, {
+          suppressImagePlaceholder: quotedImageDownloaded,
+        });
+        const joined = textParts.join('\n').trim();
+        text = quoted ? (joined ? `${quoted}\n${joined}` : quoted) : joined;
+        break;
+      }
+      case 'markdown': {
+        text = String(payload?.text?.content || content?.text || '').trim();
+        break;
+      }
+      default: {
+        text = String(payload?.text?.content || content?.text || '').trim();
+        break;
+      }
+    }
+
+    return { text, attachments };
+  }
+
   async connect(signal) {
     if (!this.clientId || !this.clientSecret) {
       throw new Error('DingTalk clientId and clientSecret are required');
     }
-    const res = await fetch(`${DINGTALK_API_BASE}/v1.0/gateway/connections/open`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        clientId: this.clientId,
-        clientSecret: this.clientSecret,
-        subscriptions: [{ type: 'CALLBACK', topic: '/v1.0/im/bot/messages/get' }],
-        ua: 'lobsterai-dsh-channels/1.0',
-      }),
-      signal,
-    });
-    const data = await res.json();
-    if (!res.ok || !data.endpoint || !data.ticket) {
-      throw new Error(`DingTalk stream open failed: ${data.message || res.status}`);
-    }
-    const wsUrl = `${data.endpoint}?ticket=${encodeURIComponent(data.ticket)}`;
-    this.setState('connected', null, { clientId: this.clientId });
-    void this.runStream(wsUrl, signal);
+    await this.runLoop(signal);
   }
 
-  async runStream(wsUrl, signal) {
+  async openStreamEndpoint(signal) {
+    const reqAbort = createTimeoutSignal(API_TIMEOUT_MS, signal);
+    try {
+      const res = await fetch(`${DINGTALK_API_BASE}/v1.0/gateway/connections/open`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: this.clientId,
+          clientSecret: this.clientSecret,
+          subscriptions: [{ type: 'CALLBACK', topic: '/v1.0/im/bot/messages/get' }],
+          ua: 'lobsterai-dsh-channels/1.0',
+        }),
+        signal: reqAbort.signal,
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.endpoint || !data?.ticket) {
+        throw new Error(`DingTalk stream open failed: ${data?.message || res.status}`);
+      }
+      return `${data.endpoint}?ticket=${encodeURIComponent(data.ticket)}`;
+    } finally {
+      reqAbort.cleanup();
+    }
+  }
+
+  async runLoop(signal) {
+    const firstWsUrl = await this.openStreamEndpoint(signal);
+    this.setState('connected', null, { clientId: this.clientId });
+    void this.maintainStream(firstWsUrl, signal);
+  }
+
+  async maintainStream(initialWsUrl, signal) {
+    let wsUrl = initialWsUrl;
     while (!signal.aborted) {
+      if (!wsUrl) {
+        try {
+          wsUrl = await this.openStreamEndpoint(signal);
+          this.setState('connected', null, { clientId: this.clientId });
+        } catch (err) {
+          if (signal.aborted) return;
+          this.setState('reconnecting', err instanceof Error ? err.message : String(err));
+          await sleepAbortable(5_000, signal);
+          continue;
+        }
+      }
+
       await new Promise((resolve) => {
         const ws = new WebSocket(wsUrl);
         this.ws = ws;
@@ -67,6 +386,10 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
             }));
             return;
           }
+          if (frame.type === 'SYSTEM' && frame.headers?.topic === 'disconnect') {
+            try { ws.close(1000, 'server_disconnect'); } catch {}
+            return;
+          }
           if (frame.type === 'CALLBACK' && frame.headers?.messageId) {
             ws.send(JSON.stringify({
               code: 200,
@@ -79,20 +402,32 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
             }));
             let payload;
             try { payload = JSON.parse(String(frame.data || '{}')); } catch { return; }
-            const text = String(payload.text?.content || '').trim();
-            const senderId = String(payload.senderStaffId || payload.senderId || '');
-            if (!text || !this.isSenderAllowed(senderId)) return;
-            void this.onInbound({
-              platform: 'dingtalk',
-              instanceId: this.instanceId,
-              chatId: String(payload.conversationId || senderId),
-              senderId,
-              senderName: payload.senderNick || senderId,
-              text,
-              messageId: String(payload.msgId || ''),
-              chatType: payload.conversationType === '1' ? 'direct' : 'group',
-              replyContext: { sessionWebhook: payload.sessionWebhook },
-            });
+            const senderId = String(payload.senderStaffId || payload.senderId || '').trim();
+            if (!senderId || !this.isSenderAllowed(senderId)) return;
+
+            void this.extractInboundPayload(payload, signal)
+              .then(({ text, attachments }) => {
+                if (!text && attachments.length === 0) return;
+                return this.onInbound({
+                  platform: 'dingtalk',
+                  instanceId: this.instanceId,
+                  chatId: String(payload.conversationId || senderId),
+                  senderId,
+                  senderName: payload.senderNick || senderId,
+                  text,
+                  ...(attachments.length > 0 ? { attachments } : {}),
+                  messageId: String(payload.msgId || frame.headers?.messageId || ''),
+                  chatType: payload.conversationType === '1' ? 'direct' : 'group',
+                  replyContext: {
+                    sessionWebhook: payload.sessionWebhook,
+                    senderStaffId: payload.senderStaffId,
+                    conversationType: payload.conversationType,
+                  },
+                });
+              })
+              .catch((err) => {
+                console.warn('[DingTalkChannelDriver] inbound handling failed:', err);
+              });
           }
         });
 
@@ -106,6 +441,8 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
         });
       });
 
+      // Stream tickets are single-use/short-lived; obtain a fresh ticket on reconnect.
+      wsUrl = '';
       if (!signal.aborted) {
         this.setState('reconnecting', 'DingTalk stream disconnected');
         await sleepAbortable(5_000, signal);
@@ -118,21 +455,57 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
     this.ws = null;
   }
 
-  async sendMessage({ text, replyContext }) {
+  async sendMessage({ chatId, text, replyContext }) {
+    const content = String(text || '');
     const webhook = String(replyContext?.sessionWebhook || this.config.webhookUrl || '').trim();
-    if (!webhook) {
-      throw new Error('DingTalk reply requires sessionWebhook or configured webhookUrl');
+    if (webhook) {
+      const res = await fetch(webhook, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          msgtype: 'text',
+          text: { content },
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`DingTalk sendMessage failed (HTTP ${res.status})`);
+      }
+      return { delivered: true };
     }
-    const res = await fetch(webhook, {
+
+    // Proactive OpenAPI fallback when no sessionWebhook is present (e.g. scheduled tasks)
+    const target = String(chatId || '').trim();
+    if (!target) {
+      throw new Error('DingTalk sendMessage requires sessionWebhook or chatId');
+    }
+    const token = await this.getAppAccessToken();
+    const isGroup = target.startsWith('cid') || replyContext?.conversationType === '2';
+    const url = isGroup
+      ? `${DINGTALK_API_BASE}/v1.0/robot/groupMessages/send`
+      : `${DINGTALK_API_BASE}/v1.0/robot/oToMessages/batchSend`;
+    const body = isGroup
+      ? {
+          robotCode: this.clientId,
+          openConversationId: target,
+          msgKey: 'sampleText',
+          msgParam: JSON.stringify({ content }),
+        }
+      : {
+          robotCode: this.clientId,
+          userIds: [String(replyContext?.senderStaffId || target)],
+          msgKey: 'sampleText',
+          msgParam: JSON.stringify({ content }),
+        };
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        msgtype: 'text',
-        text: { content: String(text || '') },
-      }),
+      headers: {
+        'content-type': 'application/json',
+        'x-acs-dingtalk-access-token': token,
+      },
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(`DingTalk sendMessage failed (HTTP ${res.status})`);
+      throw new Error(`DingTalk proactive send failed (HTTP ${res.status}): ${await res.text()}`);
     }
     return { delivered: true };
   }

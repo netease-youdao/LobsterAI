@@ -6,12 +6,28 @@ export const WeixinPlugin = {
   LoginWait: 'web.login.wait',
 } as const;
 
+export const WEIXIN_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
+
+export const WeixinQrPollStatus = {
+  Wait: 'wait',
+  Scanned: 'scaned',
+  Confirmed: 'confirmed',
+  Expired: 'expired',
+  ScannedRedirect: 'scaned_but_redirect',
+  NeedVerifyCode: 'need_verifycode',
+  VerifyCodeBlocked: 'verify_code_blocked',
+  BindedRedirect: 'binded_redirect',
+} as const;
+export type WeixinQrPollStatus = typeof WeixinQrPollStatus[keyof typeof WeixinQrPollStatus];
+
 export const WEIXIN_QR_ACTIVATION_TIMEOUT_MS = 10 * 60_000;
 
 export const WeixinQrLoginTimeout = {
   Start: 5 * 60_000,
   Wait: 8 * 60_000,
   RpcGrace: 10_000,
+  PollIntervalMs: 1_000,
+  LongPollMs: 35_000,
 } as const;
 
 /** Stable, redacted diagnostics emitted by the pinned Weixin plugin patch. */

@@ -23,9 +23,9 @@ function jsonResponse(body, status = 200) {
 async function notifyElectronBridge(payload) {
   const bridgeUrl = (process.env.LOBSTERAI_DSH_BRIDGE_URL || '').replace(/\/+$/, '');
   const bridgeSecret = process.env.LOBSTERAI_DSH_BRIDGE_SECRET || '';
-  if (!bridgeUrl) return;
+  if (!bridgeUrl) return null;
   try {
-    await fetch(`${bridgeUrl}/dsh-bridge/channel-event`, {
+    const res = await fetch(`${bridgeUrl}/dsh-bridge/channel-event`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -33,8 +33,11 @@ async function notifyElectronBridge(payload) {
       },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) return null;
+    return await res.json().catch(() => ({ ok: true }));
   } catch {
     // Best-effort telemetry/event bridge; never fail IM receive loop.
+    return null;
   }
 }
 
@@ -91,14 +94,25 @@ export function apply(ctx) {
           }
 
           case 'weixinQrStart': {
-            const baseUrl = payload && typeof payload === 'object' ? payload.baseUrl : undefined;
-            const result = await WeixinChannelDriver.startQrLogin(baseUrl);
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const result = await WeixinChannelDriver.startQrLogin({
+              baseUrl: p.baseUrl,
+              botType: p.botType,
+              localTokenList: p.localTokenList,
+              timeoutMs: p.timeoutMs,
+              signal: request.signal,
+            });
             return jsonResponse({ ok: true, result });
           }
 
           case 'weixinQrPoll': {
             const p = payload && typeof payload === 'object' ? payload : {};
-            const result = await WeixinChannelDriver.pollQrLogin(p.qrcode, p.baseUrl);
+            const result = await WeixinChannelDriver.pollQrLogin(p.qrcode, {
+              baseUrl: p.baseUrl,
+              timeoutMs: p.timeoutMs,
+              verifyCode: p.verifyCode,
+              signal: request.signal,
+            });
             return jsonResponse({ ok: true, result });
           }
 

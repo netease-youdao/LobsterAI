@@ -5,12 +5,23 @@
  */
 
 import Database from 'better-sqlite3';
+import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
-import { WeixinPlugin, WeixinQrLoginTimeout } from '../../shared/im/weixin';
+import {
+  DshChannelState,
+  RetainedImPlatform,
+} from '../../shared/dshEngine/hostConstants';
+import {
+  WEIXIN_DEFAULT_BASE_URL,
+  WEIXIN_QR_ACTIVATION_TIMEOUT_MS,
+  WeixinQrLoginTimeout,
+  WeixinQrPollStatus,
+} from '../../shared/im/weixin';
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
+import type { DshChannelsBridge } from './dshChannelsBridge';
 import { fetchJsonWithTimeout } from './http';
 import { IMCoworkHandler } from './imCoworkHandler';
 import {
@@ -29,14 +40,18 @@ import {
   IMGatewayStatus,
   Platform,
 } from './types';
-import { WeixinPluginActivation } from './weixinPluginActivation';
 
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
-const WEIXIN_OPENCLAW_CHANNEL = WeixinPlugin.Id;
-const WEIXIN_ALREADY_CONNECTED_MESSAGE = '已连接过此 OpenClaw';
+const WEIXIN_NOT_CONFIGURED_ERROR =
+  'Weixin not configured: iLink token is required (complete QR login first)';
 
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
 const INBOUND_ACTIVITY_WARN_AFTER_MS = 2 * 60 * 1000;
+
+export type DshChannelsBridgePort = Pick<
+  DshChannelsBridge,
+  'isReady' | 'listStatus' | 'weixinQrStart' | 'weixinQrPoll'
+>;
 
 type GatewayClientLike = {
   request: <T = Record<string, unknown>>(
@@ -63,19 +78,13 @@ interface WeixinQrLoginWaitResult {
   alreadyConnected?: boolean;
 }
 
-interface OpenClawChannelAccountSnapshot {
-  accountId?: unknown;
-  running?: unknown;
-  configured?: unknown;
-  enabled?: unknown;
-  lastError?: unknown;
-  lastStartAt?: unknown;
-  lastInboundAt?: unknown;
-  lastOutboundAt?: unknown;
-}
-
-interface OpenClawChannelsStatusResult {
-  channelAccounts?: Record<string, unknown>;
+interface ActiveWeixinQrSession {
+  sessionKey: string;
+  qrcode: string;
+  currentBaseUrl: string;
+  startedAt: number;
+  abortController: AbortController;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 interface TelegramGetMeResponse {
@@ -103,8 +112,34 @@ function readNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function isWeixinAlreadyConnectedMessage(message?: string): boolean {
-  return Boolean(message?.includes(WEIXIN_ALREADY_CONNECTED_MESSAGE));
+function normalizeWeixinRedirectOrigin(redirectHost: string): string | null {
+  const trimmed = redirectHost.trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(candidate).origin;
+  } catch {
+    return null;
+  }
+}
+
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted || ms <= 0) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    timer.unref?.();
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export interface IMGatewayManagerOptions {
@@ -119,16 +154,14 @@ export interface IMGatewayManagerOptions {
   getOpenClawGatewayClient?: () => GatewayClientLike | null;
   ensureOpenClawGatewayReady?: () => Promise<void>;
   getOpenClawSessionKeysForCoworkSession?: (sessionId: string) => string[];
+  getDshChannelsBridge?: () => DshChannelsBridgePort | null;
+  weixinQrPollIntervalMs?: number;
 }
 
 export class IMGatewayManager extends EventEmitter {
-  private readonly weixinPluginActivation = new WeixinPluginActivation(async () => {
-    if (!this.getConfig().weixin?.enabled) {
-      // Plugin activation is represented in config and can be applied by the
-      // gateway. Refreshing a QR code must not force a process restart.
-      await this.syncOpenClawConfig?.('weixin-qr-plugin-activation', { restartGatewayIfRunning: false, requireSuccess: true });
-    }
-  });
+  private activeWeixinQrSession: ActiveWeixinQrSession | null = null;
+  private weixinQrAttemptSeq = 0;
+  private readonly weixinQrPollIntervalMs: number;
   private imStore: IMStore;
   private coworkHandler: IMCoworkHandler | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
@@ -139,6 +172,7 @@ export class IMGatewayManager extends EventEmitter {
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
   private ensureOpenClawGatewayReady: (() => Promise<void>) | null = null;
   private getOpenClawSessionKeysForCoworkSession: ((sessionId: string) => string[]) | null = null;
+  private getDshChannelsBridge: (() => DshChannelsBridgePort | null) | null = null;
 
   // Cowork dependencies
   private coworkRuntime: CoworkRuntime | null = null;
@@ -153,6 +187,7 @@ export class IMGatewayManager extends EventEmitter {
     super();
 
     this.imStore = new IMStore(db);
+    this.weixinQrPollIntervalMs = options?.weixinQrPollIntervalMs ?? WeixinQrLoginTimeout.PollIntervalMs;
 
     // Store Cowork dependencies if provided
     if (options?.coworkRuntime && options?.coworkStore) {
@@ -165,6 +200,7 @@ export class IMGatewayManager extends EventEmitter {
     this.getOpenClawGatewayClient = options?.getOpenClawGatewayClient ?? null;
     this.ensureOpenClawGatewayReady = options?.ensureOpenClawGatewayReady ?? null;
     this.getOpenClawSessionKeysForCoworkSession = options?.getOpenClawSessionKeysForCoworkSession ?? null;
+    this.getDshChannelsBridge = options?.getDshChannelsBridge ?? null;
 
     // Forward gateway events
     this.setupGatewayEventForwarding();
@@ -245,7 +281,7 @@ export class IMGatewayManager extends EventEmitter {
   ): void {
     const previousConfig = this.imStore.getConfig();
     this.imStore.setConfig(config);
-    if (config.weixin?.enabled === false) this.weixinPluginActivation.cancel();
+    if (config.weixin?.enabled === false) this.cancelWeixinQrLoginSession();
 
     // Make sure the Cowork handler exists once IM settings are saved
     if (config.settings) {
@@ -400,10 +436,12 @@ export class IMGatewayManager extends EventEmitter {
         })),
       },
       weixin: {
-        connected: Boolean(config.weixin?.enabled),
+        connected: Boolean(config.weixin?.enabled && config.weixin?.botToken?.trim()),
         accountId: config.weixin?.accountId?.trim() || null,
         startedAt: null as number | null,
-        lastError: null as string | null,
+        lastError: config.weixin?.enabled && !config.weixin?.botToken?.trim()
+          ? WEIXIN_NOT_CONFIGURED_ERROR
+          : null,
         lastInboundAt: null as number | null,
         lastOutboundAt: null as number | null,
       },
@@ -436,83 +474,32 @@ export class IMGatewayManager extends EventEmitter {
 
   async getStatusWithOpenClawRuntime(): Promise<IMGatewayStatus> {
     const status = this.getStatus();
-    const client = this.getOpenClawGatewayClient?.();
-    if (!client) return status;
+    const channelsBridge = this.getDshChannelsBridge?.();
+    if (!channelsBridge || !channelsBridge.isReady()) return status;
 
     try {
-      const runtimeStatus = await this.requestOpenClawChannelsStatus(client);
-      const weixinAccount = this.pickWeixinAccountSnapshot(runtimeStatus, status.weixin.accountId);
-      if (!weixinAccount) return status;
+      const { statuses } = await channelsBridge.listStatus();
+      const weixinSnapshot = statuses.find(item => item.platform === RetainedImPlatform.Weixin);
+      if (!weixinSnapshot) return status;
 
-      const configured = weixinAccount.configured === true;
-      const running = weixinAccount.running === true;
-      const runtimeEnabled = weixinAccount.enabled !== false;
       const localEnabled = this.getConfig().weixin?.enabled === true;
-      const accountId = readString(weixinAccount.accountId) ?? status.weixin.accountId ?? null;
+      const snapshotAccountId =
+        isRecord(weixinSnapshot.botInfo) ? readString(weixinSnapshot.botInfo.accountId) : null;
+      const accountId = snapshotAccountId ?? status.weixin.accountId ?? null;
       status.weixin = {
         ...status.weixin,
         accountId,
-        connected: Boolean(localEnabled && (running || (runtimeEnabled && configured && status.weixin.connected))),
-        startedAt: readNumber(weixinAccount.lastStartAt),
-        lastError: readString(weixinAccount.lastError),
-        lastInboundAt: readNumber(weixinAccount.lastInboundAt),
-        lastOutboundAt: readNumber(weixinAccount.lastOutboundAt),
+        connected: Boolean(localEnabled && weixinSnapshot.state === DshChannelState.Connected),
+        startedAt: readNumber(weixinSnapshot.startedAt),
+        lastError: localEnabled ? readString(weixinSnapshot.error) : null,
+        lastInboundAt: readNumber(weixinSnapshot.lastInboundAt),
+        lastOutboundAt: readNumber(weixinSnapshot.lastOutboundAt),
       };
     } catch (error) {
-      console.debug('[IMGatewayManager] failed to enrich Weixin status from OpenClaw runtime:', error);
+      console.debug('[IMGatewayManager] failed to enrich Weixin status from DSH channels:', error);
     }
 
     return status;
-  }
-
-  private async requestOpenClawChannelsStatus(
-    client: GatewayClientLike,
-  ): Promise<OpenClawChannelsStatusResult> {
-    return client.request<OpenClawChannelsStatusResult>(
-      'channels.status',
-      { probe: false, timeoutMs: 2000 },
-    );
-  }
-
-  private getWeixinAccountSnapshots(
-    runtimeStatus: OpenClawChannelsStatusResult,
-  ): OpenClawChannelAccountSnapshot[] {
-    const rawAccounts = runtimeStatus.channelAccounts?.[WEIXIN_OPENCLAW_CHANNEL];
-    if (!Array.isArray(rawAccounts)) return [];
-
-    return rawAccounts
-      .filter(isRecord)
-      .map((account) => account as OpenClawChannelAccountSnapshot);
-  }
-
-  private pickWeixinAccountSnapshot(
-    runtimeStatus: OpenClawChannelsStatusResult,
-    preferredAccountId?: string | null,
-  ): OpenClawChannelAccountSnapshot | null {
-    const accounts = this.getWeixinAccountSnapshots(runtimeStatus);
-    if (accounts.length === 0) return null;
-
-    const preferred = preferredAccountId?.trim();
-    if (preferred) {
-      const matched = accounts.find((account) => readString(account.accountId) === preferred);
-      if (matched) return matched;
-    }
-
-    return accounts.find((account) => account.running === true)
-      ?? accounts.find((account) => account.configured === true)
-      ?? accounts[0];
-  }
-
-  private async resolveWeixinRuntimeAccountId(client: GatewayClientLike): Promise<string | undefined> {
-    try {
-      const runtimeStatus = await this.requestOpenClawChannelsStatus(client);
-      const preferred = this.getConfig().weixin?.accountId;
-      const account = this.pickWeixinAccountSnapshot(runtimeStatus, preferred);
-      return readString(account?.accountId) ?? undefined;
-    } catch (error) {
-      console.debug('[IMGatewayManager] failed to resolve Weixin account from OpenClaw runtime:', error);
-      return undefined;
-    }
   }
 
   async testGateway(
@@ -910,7 +897,7 @@ export class IMGatewayManager extends EventEmitter {
     if (wecomInstances.some(i => i.enabled && i.botId && i.secret)) {
       openClawPlatformsToStart.push('wecom');
     }
-    if (config.weixin?.enabled) {
+    if (config.weixin?.enabled && config.weixin?.botToken?.trim()) {
       openClawPlatformsToStart.push('weixin');
     }
 
@@ -926,8 +913,8 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   async stopAll(): Promise<void> {
-    this.weixinPluginActivation.cancel();
-    // All platforms run via OpenClaw; nothing to stop directly
+    this.cancelWeixinQrLoginSession();
+    // All platforms run via DSH channels; nothing to stop directly
   }
 
   isAnyConnected(): boolean {
@@ -984,7 +971,7 @@ export class IMGatewayManager extends EventEmitter {
     }
     if (platform === 'weixin') {
       const config = this.getConfig();
-      return Boolean(config.weixin?.enabled);
+      return Boolean(config.weixin?.enabled && config.weixin?.botToken?.trim());
     }
     if (platform === 'popo') {
       // POPO runs via OpenClaw; consider it connected when any instance is enabled and configured
@@ -1435,7 +1422,6 @@ export class IMGatewayManager extends EventEmitter {
     const mergedConfig = this.buildMergedConfig(configOverride);
     const wxConfig = mergedConfig.weixin;
 
-    // Weixin has no credentials; just check if enabled
     if (!wxConfig?.enabled) {
       checks.push({
         code: 'gateway_running',
@@ -1446,19 +1432,61 @@ export class IMGatewayManager extends EventEmitter {
       return { platform, testedAt, verdict: 'pass', checks };
     }
 
-    // Config completeness passes (no credentials needed)
+    if (!wxConfig.botToken?.trim()) {
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: t('imWeixinCredentialsMissing'),
+        suggestion: t('imWeixinRescanSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
     checks.push({
       code: 'auth_check',
       level: 'pass',
       message: t('imWeixinConfigReady'),
     });
 
-    // OpenClaw Gateway running info
-    checks.push({
-      code: 'gateway_running',
-      level: 'info',
-      message: t('imWeixinOpenClawHint'),
-    });
+    const channelsBridge = this.getDshChannelsBridge?.();
+    if (channelsBridge?.isReady()) {
+      try {
+        const { statuses } = await channelsBridge.listStatus();
+        const snapshot = statuses.find(item => item.platform === RetainedImPlatform.Weixin);
+        if (snapshot?.state === DshChannelState.Connected) {
+          checks.push({
+            code: 'gateway_running',
+            level: 'pass',
+            message: t('imWeixinConnected'),
+          });
+        } else if (snapshot?.error) {
+          checks.push({
+            code: 'gateway_running',
+            level: 'warn',
+            message: snapshot.error,
+            suggestion: t('imWeixinRescanSuggestion'),
+          });
+        } else {
+          checks.push({
+            code: 'gateway_running',
+            level: 'info',
+            message: t('imWeixinOpenClawHint'),
+          });
+        }
+      } catch {
+        checks.push({
+          code: 'gateway_running',
+          level: 'info',
+          message: t('imWeixinOpenClawHint'),
+        });
+      }
+    } else {
+      checks.push({
+        code: 'gateway_running',
+        level: 'info',
+        message: t('imWeixinOpenClawHint'),
+      });
+    }
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
@@ -1469,98 +1497,244 @@ export class IMGatewayManager extends EventEmitter {
     return { platform, testedAt, verdict, checks };
   }
 
+  private cancelWeixinQrLoginSession(session?: ActiveWeixinQrSession): void {
+    if (session && this.activeWeixinQrSession !== session) return;
+    this.weixinQrAttemptSeq += 1;
+    const current = this.activeWeixinQrSession;
+    this.activeWeixinQrSession = null;
+    if (!current) return;
+    clearTimeout(current.timer);
+    if (!current.abortController.signal.aborted) {
+      current.abortController.abort(new Error(t('imWeixinQrSessionExpired')));
+    }
+  }
+
   /**
-   * Start Weixin QR code login via OpenClaw Gateway RPC.
-   * Returns the QR code data URL and a session key for polling.
+   * Start Weixin QR code login via DSH `@lobsterai/dsh-channels`.
+   * Returns the QR code URL and a session key for status polling.
    */
   async weixinQrLoginStart(): Promise<WeixinQrLoginStartResult> {
-    return this.weixinPluginActivation.start(async () => {
-      await this.ensureOpenClawGatewayReady?.();
-      const client = this.getOpenClawGatewayClient?.();
-      if (!client) throw new Error(t('imWeixinGatewayUnavailable'));
-      return this.doWeixinQrLoginStart(client);
-    });
-  }
+    this.cancelWeixinQrLoginSession();
+    const attemptSeq = ++this.weixinQrAttemptSeq;
 
-  isWeixinQrLoginActive(): boolean {
-    return this.weixinPluginActivation.isActive();
-  }
-
-  private async doWeixinQrLoginStart(client: GatewayClientLike): Promise<WeixinQrLoginStartResult> {
     try {
-      const result = await client.request<WeixinQrLoginStartResult>(
-        WeixinPlugin.LoginStart,
-        { channel: WeixinPlugin.Id, force: true, timeoutMs: WeixinQrLoginTimeout.Start, verbose: true },
-        { timeoutMs: WeixinQrLoginTimeout.Start + WeixinQrLoginTimeout.RpcGrace },
-      );
-      if (typeof result?.qrDataUrl !== 'string' || !result.qrDataUrl.trim()) {
-        throw new Error(result?.message || t('imWeixinQrInvalidResponse'));
+      await this.ensureOpenClawGatewayReady?.();
+      if (attemptSeq !== this.weixinQrAttemptSeq) {
+        throw new Error(t('imWeixinQrSessionExpired'));
       }
-      if (typeof result.sessionKey !== 'string' || !result.sessionKey.trim()) {
+
+      const channelsBridge = this.getDshChannelsBridge?.();
+      if (!channelsBridge || !channelsBridge.isReady()) {
+        throw new Error(t('imWeixinGatewayUnavailable'));
+      }
+
+      const existingToken = this.getConfig().weixin?.botToken?.trim();
+      const qr = await channelsBridge.weixinQrStart({
+        baseUrl: WEIXIN_DEFAULT_BASE_URL,
+        localTokenList: existingToken ? [existingToken] : [],
+      });
+
+      if (attemptSeq !== this.weixinQrAttemptSeq) {
+        throw new Error(t('imWeixinQrSessionExpired'));
+      }
+
+      const qrcode = readString(qr?.qrcode);
+      const qrDataUrl = readString(qr?.qrDataUrl) ?? readString(qr?.qrcode_img_content);
+      if (!qrcode || !qrDataUrl) {
         throw new Error(t('imWeixinQrInvalidResponse'));
       }
-      console.log('[IMGatewayManager] Weixin QR login start result:', result.message);
-      return result;
+
+      const sessionKey = randomUUID();
+      const abortController = new AbortController();
+      const session: ActiveWeixinQrSession = {
+        sessionKey,
+        qrcode,
+        currentBaseUrl: WEIXIN_DEFAULT_BASE_URL,
+        startedAt: Date.now(),
+        abortController,
+        timer: setTimeout(() => {
+          this.cancelWeixinQrLoginSession(session);
+        }, WEIXIN_QR_ACTIVATION_TIMEOUT_MS),
+      };
+      session.timer.unref?.();
+      this.activeWeixinQrSession = session;
+
+      console.log('[IMGatewayManager] Weixin QR login started via DSH channels');
+      return {
+        qrDataUrl,
+        sessionKey,
+        message: t('imWeixinQrScanReady'),
+      };
     } catch (err) {
       console.error('[IMGatewayManager] Weixin QR login start failed:', err);
       throw err;
     }
   }
 
-  /**
-   * Wait for Weixin QR code scan completion via OpenClaw Gateway RPC.
-   */
-  async weixinQrLoginWait(sessionKey?: string): Promise<WeixinQrLoginWaitResult> {
-    return this.weixinPluginActivation.wait(sessionKey, assertCurrent => this.waitForWeixinQrLogin(sessionKey, assertCurrent));
+  isWeixinQrLoginActive(): boolean {
+    return this.activeWeixinQrSession !== null;
   }
 
-  private async waitForWeixinQrLogin(sessionKey: string | undefined, assertCurrent: () => void): Promise<WeixinQrLoginWaitResult> {
-    const client = this.getOpenClawGatewayClient?.();
-    if (!client) {
-      return { connected: false, message: 'OpenClaw Gateway is not connected.' };
+  /**
+   * Wait for Weixin QR code scan completion via DSH `@lobsterai/dsh-channels`.
+   */
+  async weixinQrLoginWait(sessionKey?: string): Promise<WeixinQrLoginWaitResult> {
+    const session = this.activeWeixinQrSession;
+    if (!session || !sessionKey || session.sessionKey !== sessionKey) {
+      throw new Error(t('imWeixinQrSessionExpired'));
     }
-    try {
-      const result = await client.request<WeixinQrLoginWaitResult>(
-        WeixinPlugin.LoginWait,
-        // OpenClaw's current web.login.wait schema has no sessionKey field, so
-        // the QR flow still has to pass the plugin session key through accountId.
-        { channel: WeixinPlugin.Id, timeoutMs: WeixinQrLoginTimeout.Wait, ...(sessionKey ? { accountId: sessionKey } : {}) },
-        // The plugin timeout is an RPC parameter, not the client's default 30s deadline.
-        { timeoutMs: WeixinQrLoginTimeout.Wait + WeixinQrLoginTimeout.RpcGrace },
-      );
-      const alreadyConnected = result.alreadyConnected === true
-        || isWeixinAlreadyConnectedMessage(result.message);
-      const configuredAccountId = this.getConfig().weixin?.accountId?.trim() || undefined;
-      const resolvedAccountId = result.accountId
-        ?? (alreadyConnected ? configuredAccountId ?? await this.resolveWeixinRuntimeAccountId(client) : undefined);
-      assertCurrent();
-      console.log('[IMGatewayManager] Weixin QR login wait completed:', JSON.stringify({
-        connected: result.connected,
-        alreadyConnected,
-        accountId: resolvedAccountId,
-      }));
-      if (result.connected || alreadyConnected) {
-        if (resolvedAccountId) {
-          this.setConfig({
-            weixin: {
-              ...this.getConfig().weixin,
-              enabled: true,
-              accountId: resolvedAccountId,
-            },
-          }, { syncGateway: false });
-        }
-        // Keep QR login consistent with Settings save semantics: persist the
-        // account locally, then let the global Save action apply IM config to
-        // OpenClaw and restart the gateway once if the fingerprint changed.
+
+    const assertCurrent = () => {
+      if (this.activeWeixinQrSession !== session || session.abortController.signal.aborted) {
+        throw new Error(t('imWeixinQrSessionExpired'));
       }
-      return {
-        ...result,
-        alreadyConnected,
-        accountId: resolvedAccountId,
-      };
+    };
+
+    const channelsBridge = this.getDshChannelsBridge?.();
+    if (!channelsBridge || !channelsBridge.isReady()) {
+      this.cancelWeixinQrLoginSession(session);
+      return { connected: false, message: t('imWeixinGatewayUnavailable') };
+    }
+
+    const deadline = Date.now() + WeixinQrLoginTimeout.Wait;
+
+    try {
+      while (Date.now() < deadline) {
+        assertCurrent();
+
+        const statusResp = await channelsBridge.weixinQrPoll(
+          {
+            qrcode: session.qrcode,
+            baseUrl: session.currentBaseUrl,
+            timeoutMs: WeixinQrLoginTimeout.LongPollMs,
+          },
+          session.abortController.signal,
+        );
+
+        assertCurrent();
+
+        switch (statusResp?.status) {
+          case WeixinQrPollStatus.Wait:
+          case WeixinQrPollStatus.Scanned:
+            await sleepAbortable(this.weixinQrPollIntervalMs, session.abortController.signal);
+            break;
+
+          case WeixinQrPollStatus.ScannedRedirect: {
+            const redirected = readString(statusResp.redirect_host)
+              ? normalizeWeixinRedirectOrigin(statusResp.redirect_host!)
+              : null;
+            if (redirected) {
+              session.currentBaseUrl = redirected;
+              console.log('[IMGatewayManager] Weixin QR login redirected polling host to:', redirected);
+            }
+            break;
+          }
+
+          case WeixinQrPollStatus.Confirmed: {
+            const accountId = readString(statusResp.ilink_bot_id);
+            const botToken = readString(statusResp.bot_token);
+            if (!accountId) {
+              this.cancelWeixinQrLoginSession(session);
+              return { connected: false, message: t('imWeixinQrAccountMissing') };
+            }
+            if (!botToken) {
+              this.cancelWeixinQrLoginSession(session);
+              return { connected: false, message: t('imWeixinQrTokenMissing') };
+            }
+
+            assertCurrent();
+            const currentWeixin = this.getConfig().weixin;
+            const nextBaseUrl =
+              readString(statusResp.baseurl) ?? currentWeixin.baseUrl ?? WEIXIN_DEFAULT_BASE_URL;
+            const nextUserId = readString(statusResp.ilink_user_id) ?? currentWeixin.userId;
+            const currentAllowFrom = Array.isArray(currentWeixin.allowFrom)
+              ? currentWeixin.allowFrom
+              : [];
+            const nextAllowFrom =
+              nextUserId
+              && currentAllowFrom.length > 0
+              && !currentAllowFrom.includes('*')
+              && !currentAllowFrom.includes(nextUserId)
+                ? [...currentAllowFrom, nextUserId]
+                : currentAllowFrom;
+
+            this.setConfig({
+              weixin: {
+                ...currentWeixin,
+                enabled: true,
+                accountId,
+                botToken,
+                baseUrl: nextBaseUrl,
+                ...(nextUserId ? { userId: nextUserId } : {}),
+                allowFrom: nextAllowFrom,
+              },
+            }, { syncGateway: false });
+
+            this.cancelWeixinQrLoginSession(session);
+            console.log('[IMGatewayManager] Weixin QR login confirmed via DSH channels:', JSON.stringify({
+              accountId,
+              baseUrl: nextBaseUrl,
+            }));
+            return {
+              connected: true,
+              alreadyConnected: false,
+              accountId,
+              message: t('imWeixinQrConnected'),
+            };
+          }
+
+          case WeixinQrPollStatus.BindedRedirect: {
+            const currentWeixin = this.getConfig().weixin;
+            const existingToken = readString(currentWeixin.botToken);
+            const existingAccountId = readString(currentWeixin.accountId);
+            this.cancelWeixinQrLoginSession(session);
+            if (existingToken && existingAccountId) {
+              if (!currentWeixin.enabled) {
+                this.setConfig({
+                  weixin: {
+                    ...currentWeixin,
+                    enabled: true,
+                  },
+                }, { syncGateway: false });
+              }
+              return {
+                connected: false,
+                alreadyConnected: true,
+                accountId: existingAccountId,
+                message: t('imWeixinQrAlreadyConnected'),
+              };
+            }
+            return { connected: false, message: t('imWeixinQrTokenMissing') };
+          }
+
+          case WeixinQrPollStatus.Expired:
+            this.cancelWeixinQrLoginSession(session);
+            return { connected: false, message: t('imWeixinQrExpired') };
+
+          case WeixinQrPollStatus.NeedVerifyCode:
+          case WeixinQrPollStatus.VerifyCodeBlocked:
+            this.cancelWeixinQrLoginSession(session);
+            return { connected: false, message: t('imWeixinQrVerifyRequired') };
+
+          default:
+            await sleepAbortable(this.weixinQrPollIntervalMs, session.abortController.signal);
+            break;
+        }
+      }
+
+      assertCurrent();
+      this.cancelWeixinQrLoginSession(session);
+      return { connected: false, message: t('imWeixinQrTimeout') };
     } catch (err) {
+      if (this.activeWeixinQrSession !== session || session.abortController.signal.aborted) {
+        throw new Error(t('imWeixinQrSessionExpired'));
+      }
+      this.cancelWeixinQrLoginSession(session);
       console.error('[IMGatewayManager] Weixin QR login wait failed:', err);
-      return { connected: false, message: `Login failed: ${String(err)}` };
+      return {
+        connected: false,
+        message: `Login failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
 

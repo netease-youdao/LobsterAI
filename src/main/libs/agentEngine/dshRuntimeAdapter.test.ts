@@ -689,4 +689,189 @@ describe('DshRuntimeAdapter', () => {
     expect(setPermissionPreset).toHaveBeenCalledWith(DshPermissionPreset.FullAccess);
     expect(onPermissionPresetChanged).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, undefined);
   });
+
+  test('persists localMediaAttachments with empty display text for IM image-only turns while sending model prompt + image', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-im-img',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    const promptPayloads: Array<Array<{ type: string; text?: string; mediaType?: string; data?: string }>> = [];
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-im-img-1' })),
+      promptSession: vi.fn(async (params: { content: Array<{ type: string; text?: string; mediaType?: string; data?: string }> }) => {
+        promptPayloads.push(params.content);
+        return { accepted: true };
+      }),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const emitted: CoworkMessage[] = [];
+    adapter.on('message', (_sid, msg) => emitted.push(msg));
+
+    const localPath = '/Users/demo/Library/Application Support/LobsterAI/cowork-image-originals/sess/abc.png';
+    await adapter.startSession('cw-im-img', '请查看这张图片。', {
+      userMessageContent: '',
+      imageAttachments: [
+        {
+          name: 'weixin-image-1.png',
+          mimeType: 'image/png',
+          base64Data: 'iVBORw0KGgo=',
+          sizeBytes: 8,
+          localPath,
+        },
+      ],
+      localMediaAttachments: [
+        {
+          localPath,
+          mimeType: 'image/png',
+          name: 'weixin-image-1.png',
+        },
+      ],
+    });
+
+    // Persisted and emitted user message shows the original image without placeholder text.
+    expect(messages).toHaveLength(1);
+    expect(messages[0].type).toBe('user');
+    expect(messages[0].content).toBe('');
+    expect(messages[0].metadata?.localMediaAttachments).toEqual([
+      { localPath, mimeType: 'image/png', name: 'weixin-image-1.png' },
+    ]);
+    expect(messages[0].metadata?.imageAttachmentPreviews).toBeUndefined();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].id).toBe(messages[0].id);
+
+    // DSH model turn still receives the default prompt text and base64 image bytes.
+    expect(promptPayloads[0]).toEqual([
+      { type: 'text', text: '请查看这张图片。' },
+      { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=' },
+    ]);
+
+    // Follow-up continueSession with imageAttachments only (no localMediaAttachments) stores imageAttachmentPreviews.
+    await adapter.continueSession('cw-im-img', '看看第二张', {
+      imageAttachments: [
+        {
+          name: 'desktop.png',
+          mimeType: 'image/png',
+          base64Data: 'iVBORw0KGgo=',
+          sizeBytes: 8,
+        },
+      ],
+    });
+    expect(messages).toHaveLength(2);
+    expect(messages[1].content).toBe('看看第二张');
+    expect(messages[1].metadata?.imageAttachmentPreviews).toEqual([
+      expect.objectContaining({
+        name: 'desktop.png',
+        mimeType: 'image/png',
+        base64Data: 'iVBORw0KGgo=',
+        isPreview: true,
+      }),
+    ]);
+  });
+
+  test('stopSession finalizes streaming message, awaits cancelSession before next prompt, and ignores stale aborted turn/end', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-interrupt',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    const callOrder: string[] = [];
+    let releaseCancel!: () => void;
+    const cancelGate = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
+    let followInvocation = 0;
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-int-1' })),
+      cancelSession: vi.fn(async () => {
+        callOrder.push('cancel:start');
+        await cancelGate;
+        callOrder.push('cancel:done');
+        return { accepted: true };
+      }),
+      promptSession: vi.fn(async (params: { content: Array<{ type: string; text?: string }> }) => {
+        callOrder.push(`prompt:${params.content[0]?.text ?? ''}`);
+        return { accepted: true };
+      }),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* (_req: unknown, signal?: AbortSignal) {
+        followInvocation += 1;
+        if (followInvocation === 1) {
+          yield { type: 'assistant-stream', frame: { type: 'start' } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'Partial...' } } };
+          // Hold stream open until stopSession aborts it.
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted) {
+              resolve();
+              return;
+            }
+            signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          return;
+        }
+        // Second turn stream sees a trailing aborted turn/end from turn 1 before turn 2's actual output.
+        yield { type: 'event', event: { type: 'turn/end', seq: 2, data: { reason: { kind: 'aborted' } } } };
+        yield { type: 'assistant-stream', frame: { type: 'start' } };
+        yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'Final answer' } } };
+        yield { type: 'assistant-stream', frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/message', seq: 3 } } };
+        yield { type: 'event', event: { type: 'turn/end', seq: 4, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const completed: string[] = [];
+    adapter.on('complete', (sid) => completed.push(sid));
+
+    const turn1Promise = adapter.startSession('cw-interrupt', 'first');
+    await vi.waitFor(() => {
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Partial...')).toBe(true);
+    });
+
+    adapter.stopSession('cw-interrupt');
+    await turn1Promise;
+
+    // Active streaming message from turn 1 must be finalized (no stuck spinner).
+    const partialAssistant = messages.find((m) => m.type === 'assistant' && m.content === 'Partial...');
+    expect(partialAssistant?.metadata?.isStreaming).toBe(false);
+
+    // Kick off turn 2 immediately while cancelSession RPC is still in flight.
+    const turn2Promise = adapter.continueSession('cw-interrupt', 'second');
+    await Promise.resolve();
+    expect(callOrder).toEqual(['prompt:first', 'cancel:start']);
+
+    releaseCancel();
+    await turn2Promise;
+
+    expect(callOrder).toEqual(['prompt:first', 'cancel:start', 'cancel:done', 'prompt:second']);
+    expect(completed).toEqual(['cw-interrupt']);
+    expect(messages.some((m) => m.type === 'assistant' && m.content === 'Final answer')).toBe(true);
+  });
 });
