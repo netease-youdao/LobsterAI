@@ -1,215 +1,69 @@
 ---
 name: docx
-description: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. When Claude needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
+description: "创建、编辑与分析 Word 文档（.docx），支持右侧实时编辑、规范中文排版、批量生成与修订批注。"
 license: Proprietary. LICENSE.txt has complete terms
 official: true
+version: 2.0.0
 ---
 
-# DOCX creation, editing, and analysis
+# DOCX 文档创建与编辑指南
 
-## Overview
+请全程使用与用户输入一致的语言进行思考、过程说明与最终交付。参考手册路径请基于本技能目录（`<skill_dir>`）解析。
 
-A user may ask you to create, edit, or analyze the contents of a .docx file. A .docx file is essentially a ZIP archive containing XML files and other resources that you can read or edit. You have different tools and workflows available for different tasks.
+## 一、任务路由（按场景选最简方案）
 
-## Workflow Decision Tree
+1. **编辑已有 `.docx`（改文字、样式、段落、插表格、选区"修改这里"）**
+   - **优先使用 LobsterAI 实时编辑工具 `word_read` + `word_edit`**（若工具未挂载，调用 `lobster_enable_tools({ capabilities: ["word"] })` 或已随本技能自动解锁）。
+   - 修改会在右侧 Word 编辑器实时显示、保留未动部分的原格式并自动保存：
+     1. 先调 `word_read({ path })` 获取 `revision`、各段落 `id`/`style`/`text`（表格单元格含 `table`/`row`/`cell`）及用户当前 `selection`。
+     2. 再调 `word_edit({ path, expectedRevision, edits })`，支持 `replace_text`（保留局部 run 样式）、`set_text`、`insert_paragraph`（`anchor` 为段落 `id`/`"start"`/`"end"`，`\n` 分段，可设 `style`）、`delete_paragraph`、`format_text`、`format_paragraph`、`insert_table`。
+     3. 若报 `revision` 冲突则重新 `word_read` 后重试；编辑成功返回的结果即最新内容，无需再次 `word_read`。
 
-### Reading/Analyzing Content
-Use "Text extraction" or "Raw XML access" sections below
+2. **从零新建 `.docx` 文档**
+   - **优先选 `python-docx`**（轻量快速、几乎零依赖折腾，适合绝大多数报告、方案、纪要、合同与含表格/图片的正式文档）；若需复杂页眉页脚、多级目录或已有 Node 流水线，也可选用 **`docx`（docx-js）**（需查具体 API 时再按需局部查阅 `<skill_dir>/docx-js.md`，不要整篇盲读）。
+   - 写完文档脚本后一次性生成，避免反复试探环境几十步。
 
-### Creating New Document
-Use "Creating a new Word document" workflow
+3. **修订模式（Tracked Changes / 批注 / 法律或他人文档审阅）**
+   - 仅在用户明确要求保留修订痕迹（红线修改）或添加批注时，走 OOXML 修订流程：按需局部查阅 `<skill_dir>/ooxml.md` 的 "Document Library" 与 "Tracked Change Patterns"，使用 `ooxml/scripts/unpack.py`、`scripts/document.py`、`ooxml/scripts/pack.py`。
+   - 修订原则：只标记真正改动的最短词组（保留未改动文字的原始 `<w:r>` 与 `rsid`），不要整段删了重写。
 
-### Editing Existing Document
-- **LobsterAI live editing (preferred when the `word_read` / `word_edit` tools are available)**
-  Use "Live editing in LobsterAI" below for text, paragraph and formatting changes. The document opens in LobsterAI's right-side Word editor, edits appear there immediately, untouched formatting is preserved, and the file saves automatically.
+4. **读取/提取 `.docx` 文本**
+   - 优先用 `word_read` 或 `python-docx` 读取段落与表格；若需查看修订痕迹可用 `pandoc --track-changes=all file.docx -o out.md`。
 
-- **Your own document + simple changes**
-  Use "Basic OOXML editing" workflow
+---
 
-- **Someone else's document**
-  Use **"Redlining workflow"** (recommended default)
+## 二、中文专业排版与核心避坑
 
-- **Legal, academic, business, or government docs**
-  Use **"Redlining workflow"** (required)
+1. **页面与字体**：
+   - 中文文档默认 **A4 纸张**（210mm × 297mm），页边距 2.54cm（1 英寸）；统一配色（如深蓝主色 `#1F4E79` + 浅灰表头/引用底色 `#F2F5F9` + 深灰正文 `#222222`）。
+   - **必须同时指定西文与东亚字体（`w:eastAsia`）**：中文推荐 `PingFang SC` / `Microsoft YaHei`（或正式公文用 `SimSun` / `FangSong`），西文数字用 `Arial` / `Calibri`，避免出现方框乱码或中英字体错位。
+2. **结构与分页**：
+   - 用规范标题层级（`Heading 1` / `Heading 2` / `Heading 3`）和段前/段后间距（如段后 6pt、行距 1.3–1.5 倍），不要用连续空行硬撑间距。
+   - **分页符避坑**：
+     - `python-docx`：使用 `document.add_page_break()` 或段落的 `paragraph_format.page_break_before = True`；
+     - `docx-js`：`PageBreak` **必须放在 `Paragraph` 的 `children` 内**，绝不能作为顶层元素，否则 Word 无法打开。
+   - **目录（TOC）注意**：Word 动态域代码目录首次打开前默认不会自动展开页码；如需用户一打开就看到完整结构，推荐在封面后直接生成排版整洁的静态「内容导览 / 目录概览」块（或清晰告知用户可在 Word 中右键更新目录域）。
+3. **表格与列表避坑**：
+   - `docx-js` 表格底纹**一律用 `ShadingType.CLEAR`**（禁止 `ShadingType.SOLID`，会渲染成全黑底！）；必须同时提供 `columnWidths` 与各单元格宽度，每个单元格至少包含一个 `Paragraph`。
+   - `python-docx` 表格显式设置列宽、表头加粗+浅色填充、清晰细边框、单元格内边距与跨页表头重复（`w:tblHeader`）。
+   - 列表使用标准编号/项目符号样式；段落中不要滥用 `\n` 强制换行，每条独立成段。
+   - `docx-js` 插入 `ImageRun` 时必须显式传入 `type`（`"png"` / `"jpg"` 等）。
 
-## Live editing in LobsterAI
+---
 
-When the `word_read` and `word_edit` tools exist, edit existing documents through them instead of regenerating or repacking the file:
+## 三、克制校验与交付红线（零弹窗、高效率）
 
-1. Call `word_read` with the absolute `path`. It returns `revision`, and for each paragraph its `id`, `style` and `text` (table cells include `table`/`row`/`cell`), plus the user's current `selection` when there is one ("修改这里" means that selection).
-2. Call `word_edit` with the same `path`, `expectedRevision` from the read, and a list of `edits` addressed by paragraph `id`:
-   - `replace_text` `{paragraph, find, replace, occurrence?}` for wording changes; it keeps the run formatting around the phrase.
-   - `set_text`, `insert_paragraph` (`anchor` is a paragraph id, `"start"` or `"end"`; `\n` in `text` makes several paragraphs; `style` such as `"Heading 1"`), `delete_paragraph`.
-   - `format_text` (bold, italic, underline, strike, color, highlight, size in pt, font) on a `find` phrase or the whole paragraph; `format_paragraph` (style, alignment, spacing and indents in pt).
-   - `insert_table` with `rows` as a 2D array of strings.
-3. If the call is refused because the revision changed, the user edited the document meanwhile: read again and redo the edit against the new ids. If any edit in a call fails, nothing is applied; fix the reported edit and retry.
-
-Use the OOXML workflows below only for what these tools cannot do: tracked changes, comments, headers/footers, images, or documents LobsterAI reports as read-only.
-
-## Reading and analyzing content
-
-### Text extraction
-If you just need to read the text contents of a document, you should convert the document to markdown using pandoc. Pandoc provides excellent support for preserving document structure and can show tracked changes:
-
-```bash
-# Convert document to markdown with tracked changes
-pandoc --track-changes=all path-to-file.docx -o output.md
-# Options: --track-changes=accept/reject/all
-```
-
-### Raw XML access
-You need raw XML access for: comments, complex formatting, document structure, embedded media, and metadata. For any of these features, you'll need to unpack a document and read its raw XML contents.
-
-#### Unpacking a file
-`python ooxml/scripts/unpack.py <office_file> <output_directory>`
-
-#### Key file structures
-* `word/document.xml` - Main document contents
-* `word/comments.xml` - Comments referenced in document.xml
-* `word/media/` - Embedded images and media files
-* Tracked changes use `<w:ins>` (insertions) and `<w:del>` (deletions) tags
-
-## Creating a new Word document
-
-When creating a new Word document from scratch, use **docx-js**, which allows you to create Word documents using JavaScript/TypeScript.
-
-### Workflow
-1. **MANDATORY - READ ENTIRE FILE**: Read [`docx-js.md`](docx-js.md) (~500 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Read the full file content for detailed syntax, critical formatting rules, and best practices before proceeding with document creation.
-2. Create a JavaScript/TypeScript file using Document, Paragraph, TextRun components (You can assume all dependencies are installed, but if not, refer to the dependencies section below)
-3. Export as .docx using Packer.toBuffer()
-
-## Editing an existing Word document
-
-When editing an existing Word document, use the **Document library** (a Python library for OOXML manipulation). The library automatically handles infrastructure setup and provides methods for document manipulation. For complex scenarios, you can access the underlying DOM directly through the library.
-
-### Workflow
-1. **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) (~600 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Read the full file content for the Document library API and XML patterns for directly editing document files.
-2. Unpack the document: `python ooxml/scripts/unpack.py <office_file> <output_directory>`
-3. Create and run a Python script using the Document library (see "Document Library" section in ooxml.md)
-4. Pack the final document: `python ooxml/scripts/pack.py <input_directory> <office_file>`
-
-The Document library provides both high-level methods for common operations and direct DOM access for complex scenarios.
-
-## Redlining workflow for document review
-
-This workflow allows you to plan comprehensive tracked changes using markdown before implementing them in OOXML. **CRITICAL**: For complete tracked changes, you must implement ALL changes systematically.
-
-**Batching Strategy**: Group related changes into batches of 3-10 changes. This makes debugging manageable while maintaining efficiency. Test each batch before moving to the next.
-
-**Principle: Minimal, Precise Edits**
-When implementing tracked changes, only mark text that actually changes. Repeating unchanged text makes edits harder to review and appears unprofessional. Break replacements into: [unchanged text] + [deletion] + [insertion] + [unchanged text]. Preserve the original run's RSID for unchanged text by extracting the `<w:r>` element from the original and reusing it.
-
-Example - Changing "30 days" to "60 days" in a sentence:
-```python
-# BAD - Replaces entire sentence
-'<w:del><w:r><w:delText>The term is 30 days.</w:delText></w:r></w:del><w:ins><w:r><w:t>The term is 60 days.</w:t></w:r></w:ins>'
-
-# GOOD - Only marks what changed, preserves original <w:r> for unchanged text
-'<w:r w:rsidR="00AB12CD"><w:t>The term is </w:t></w:r><w:del><w:r><w:delText>30</w:delText></w:r></w:del><w:ins><w:r><w:t>60</w:t></w:r></w:ins><w:r w:rsidR="00AB12CD"><w:t> days.</w:t></w:r>'
-```
-
-### Tracked changes workflow
-
-1. **Get markdown representation**: Convert document to markdown with tracked changes preserved:
-   ```bash
-   pandoc --track-changes=all path-to-file.docx -o current.md
-   ```
-
-2. **Identify and group changes**: Review the document and identify ALL changes needed, organizing them into logical batches:
-
-   **Location methods** (for finding changes in XML):
-   - Section/heading numbers (e.g., "Section 3.2", "Article IV")
-   - Paragraph identifiers if numbered
-   - Grep patterns with unique surrounding text
-   - Document structure (e.g., "first paragraph", "signature block")
-   - **DO NOT use markdown line numbers** - they don't map to XML structure
-
-   **Batch organization** (group 3-10 related changes per batch):
-   - By section: "Batch 1: Section 2 amendments", "Batch 2: Section 5 updates"
-   - By type: "Batch 1: Date corrections", "Batch 2: Party name changes"
-   - By complexity: Start with simple text replacements, then tackle complex structural changes
-   - Sequential: "Batch 1: Pages 1-3", "Batch 2: Pages 4-6"
-
-3. **Read documentation and unpack**:
-   - **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) (~600 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Pay special attention to the "Document Library" and "Tracked Change Patterns" sections.
-   - **Unpack the document**: `python ooxml/scripts/unpack.py <file.docx> <dir>`
-   - **Note the suggested RSID**: The unpack script will suggest an RSID to use for your tracked changes. Copy this RSID for use in step 4b.
-
-4. **Implement changes in batches**: Group changes logically (by section, by type, or by proximity) and implement them together in a single script. This approach:
-   - Makes debugging easier (smaller batch = easier to isolate errors)
-   - Allows incremental progress
-   - Maintains efficiency (batch size of 3-10 changes works well)
-
-   **Suggested batch groupings:**
-   - By document section (e.g., "Section 3 changes", "Definitions", "Termination clause")
-   - By change type (e.g., "Date changes", "Party name updates", "Legal term replacements")
-   - By proximity (e.g., "Changes on pages 1-3", "Changes in first half of document")
-
-   For each batch of related changes:
-
-   **a. Map text to XML**: Grep for text in `word/document.xml` to verify how text is split across `<w:r>` elements.
-
-   **b. Create and run script**: Use `get_node` to find nodes, implement changes, then `doc.save()`. See **"Document Library"** section in ooxml.md for patterns.
-
-   **Note**: Always grep `word/document.xml` immediately before writing a script to get current line numbers and verify text content. Line numbers change after each script run.
-
-5. **Pack the document**: After all batches are complete, convert the unpacked directory back to .docx:
-   ```bash
-   python ooxml/scripts/pack.py unpacked reviewed-document.docx
-   ```
-
-6. **Final verification**: Do a comprehensive check of the complete document:
-   - Convert final document to markdown:
+1. **代码重开校验即完成常规验收**：
+   - 保存 `.docx` 后，用 `python-docx`（或 `word_read`）重新打开，核对：① 文件可正常解析；② 章节标题数量与结构完整；③ 表格行列数与核心数据正确；④ 无意外空白或占位符残留。
+   - **新建文档与常规编辑只要内容和结构校验通过即可直接交付，无需强制转 PDF 或图片**。
+2. **视觉校验仅作可选增强，绝不强求**：
+   - 仅当用户明确要求导出 PDF / 视觉版面图片检查，且本机存在**可用**的 `soffice --headless` + `pdftoppm` 时，才执行：
      ```bash
-     pandoc --track-changes=all reviewed-document.docx -o verification.md
+     soffice --headless --convert-to pdf document.docx && pdftoppm -jpeg -r 130 document.pdf page
      ```
-   - Verify ALL changes were applied correctly:
-     ```bash
-     grep "original phrase" verification.md  # Should NOT find it
-     grep "replacement phrase" verification.md  # Should find it
-     ```
-   - Check that no unintended changes were introduced
-
-
-## Converting Documents to Images
-
-To visually analyze Word documents, convert them to images using a two-step process:
-
-1. **Convert DOCX to PDF**:
-   ```bash
-   soffice --headless --convert-to pdf document.docx
-   ```
-
-2. **Convert PDF pages to JPEG images**:
-   ```bash
-   pdftoppm -jpeg -r 150 document.pdf page
-   ```
-   This creates files like `page-1.jpg`, `page-2.jpg`, etc.
-
-Options:
-- `-r 150`: Sets resolution to 150 DPI (adjust for quality/size balance)
-- `-jpeg`: Output JPEG format (use `-png` for PNG if preferred)
-- `-f N`: First page to convert (e.g., `-f 2` starts from page 2)
-- `-l N`: Last page to convert (e.g., `-l 5` stops at page 5)
-- `page`: Prefix for output files
-
-Example for specific range:
-```bash
-pdftoppm -jpeg -r 150 -f 2 -l 5 document.pdf page  # Converts only pages 2-5
-```
-
-## Code Style Guidelines
-**IMPORTANT**: When generating code for DOCX operations:
-- Write concise code
-- Avoid verbose variable names and redundant operations
-- Avoid unnecessary print statements
-
-## Dependencies
-
-Required dependencies (install if not available):
-
-- **pandoc**: `sudo apt-get install pandoc` (for text extraction)
-- **docx**: `npm install -g docx` (for creating new documents)
-- **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)
-- **Poppler**: `sudo apt-get install poppler-utils` (for pdftoppm to convert PDF to images)
-- **defusedxml**: `pip install defusedxml` (for secure XML parsing)
+   - 若 `soffice --headless` 不可用或执行失败，**立即停止视觉转图**，在最终回复中如实注明「内容与结构校验已通过；本机未配置无头渲染环境，未进行页面转图」即可。
+3. **绝对红线（严禁弹窗与乱用键鼠）**：
+   - **严禁使用 `open -a`、`osascript`、直接运行 `.app` 可执行文件或启用 `computer-use` 来打开 WPS、Microsoft Word、Pages 或图形界面 LibreOffice 查看/检查文档**。
+4. **干净交付**：
+   - 最终 `.docx` 输出至用户工作目录，不留下杂乱中间脚本。
+   - 回复中用 `[文档名.docx](file:///绝对路径)` 给出可点击链接，简明总结章节结构与核心要点。

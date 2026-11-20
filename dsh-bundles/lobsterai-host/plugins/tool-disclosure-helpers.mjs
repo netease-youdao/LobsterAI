@@ -9,7 +9,7 @@ export const PROGRESSIVE_TOOL_GROUPS = Object.freeze([
     id: 'computer-use',
     prefix: 'mcp__computer-use__',
     skills: ['computer-use'],
-    label: '桌面键鼠与窗口自动化',
+    label: '桌面键鼠与窗口自动化（仅限用户明确要求操控桌面软件时启用，严禁用于预览或校验文档）',
   },
   {
     id: 'browser',

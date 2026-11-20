@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
+import { detectDisallowedOfficeGuiLaunch } from '../commandSafety';
 import {
   buildApprovalScopeKey,
   BUILTIN_MEMORY_TOOL_NAMES,
@@ -82,6 +83,45 @@ describe('evaluateDshToolApproval', () => {
         permissionPreset: DshPermissionPreset.FullAccess,
       }),
     ).toEqual({ kind: 'allow' });
+  });
+
+  test('denies desktop Office GUI launch commands even under danger-full-access preset', () => {
+    const blockedCommands = [
+      'osascript -e \'tell application "Keynote" to open POSIX file "/tmp/deck.pptx"\'',
+      'open -a /Applications/wpsoffice.app "/tmp/report.docx"',
+      'open -a "Microsoft PowerPoint" deck.pptx',
+      '/Applications/wpsoffice.app/Contents/MacOS/wpsoffice --headless --convert-to pdf a.docx',
+      'soffice report.docx',
+      'start "" WINWORD.EXE report.docx',
+    ];
+    for (const command of blockedCommands) {
+      expect(detectDisallowedOfficeGuiLaunch(command).matched).toBe(true);
+      const decision = evaluateDshToolApproval({
+        toolName: 'bash',
+        args: { command },
+        agentId: 'main',
+        permissionPreset: DshPermissionPreset.FullAccess,
+      });
+      expect(decision.kind).toBe('deny');
+    }
+
+    const allowedCommands = [
+      'soffice --headless --convert-to pdf report.docx --outdir /tmp',
+      'which soffice libreoffice pdftoppm',
+      'node scripts/preview_html.js slides/ --out preview.jpg',
+      'python3 build_doc.py',
+      'ls /Applications',
+    ];
+    for (const command of allowedCommands) {
+      expect(detectDisallowedOfficeGuiLaunch(command).matched).toBe(false);
+      const decision = evaluateDshToolApproval({
+        toolName: 'bash',
+        args: { command },
+        agentId: 'main',
+        permissionPreset: DshPermissionPreset.FullAccess,
+      });
+      expect(decision.kind).toBe('allow');
+    }
   });
 
   test('honors session allow-rule before moderate caution commands like git push', () => {

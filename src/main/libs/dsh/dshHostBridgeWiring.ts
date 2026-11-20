@@ -18,7 +18,11 @@ import type { Schedule, ScheduledTask, ScheduledTaskInput } from '../../../sched
 import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 import type { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import type { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
-import { getCommandDangerLevel, isDangerousCommand } from '../commandSafety';
+import {
+  detectDisallowedOfficeGuiLaunch,
+  getCommandDangerLevel,
+  isDangerousCommand,
+} from '../commandSafety';
 import type {
   DshBridgeApprovalDecision,
   DshBridgeApprovalEvaluateRequest,
@@ -104,15 +108,29 @@ export function evaluateDshToolApproval(
   request: DshBridgeApprovalEvaluateRequest,
   allowRules?: ApprovalAllowRulePort,
 ): DshBridgeApprovalDecision {
+  const toolName = request.toolName.trim();
+  const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
+  const command = isShellTool ? extractShellCommandFromArgs(request.args) : '';
+
+  // Never allow shell commands to pop up desktop Office GUI applications
+  // (WPS / Keynote / Pages / Microsoft Office / non-headless soffice) even under
+  // full-access mode — redirect the model cleanly without disturbing the user.
+  if (command) {
+    const officeGuiBlock = detectDisallowedOfficeGuiLaunch(command);
+    if (officeGuiBlock.matched) {
+      return {
+        kind: 'deny',
+        reason: officeGuiBlock.reason ?? '禁止启动桌面办公软件进行预览或转换。',
+      };
+    }
+  }
+
   // Explicit DSH `danger-full-access` preset sets DSH approvalPolicy='never' and
   // bypasses all interactive popups so the user is never interrupted repeatedly.
   if (request.permissionPreset === DshPermissionPreset.FullAccess) {
     return { kind: 'allow' };
   }
 
-  const toolName = request.toolName.trim();
-  const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
-  const command = isShellTool ? extractShellCommandFromArgs(request.args) : '';
   const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
   const scopeKey = buildApprovalScopeKey(toolName, request.args, danger.reason);
 

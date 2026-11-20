@@ -13,6 +13,7 @@
  * - `passthrough` (or bridge absent): delegate to `next()`
  */
 
+import { evaluateOfficeGuiGuard } from './office-gui-guard-helpers.mjs';
 import { callLobsterBridge, getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-approval-guard';
@@ -20,6 +21,13 @@ export const inject = ['tools'];
 
 export function apply(ctx) {
   const state = getHostState(ctx);
+
+  // Monotonic synchronous guard that runs AFTER pre-execute/approval resolution
+  // so desktop Office GUI launches (WPS / Keynote / Pages / MS Office / non-headless
+  // soffice) are blocked reliably even under `danger-full-access` or subagents.
+  const disposeOfficeGuiGuard = ctx.tools.guard((exec) => (
+    evaluateOfficeGuiGuard(exec?.name, exec?.arguments)
+  ));
 
   ctx.on('tools/pre-execute', async (exec, next) => {
     if (!state.bridgeUrl) {
@@ -75,6 +83,7 @@ export function apply(ctx) {
   });
 
   ctx.effect(() => () => {
+    disposeOfficeGuiGuard();
     state.pluginsReady.approvalGuard = false;
   }, 'lobster-approval-guard cleanup');
 

@@ -776,19 +776,25 @@ export interface UserInstalledPlugin {
 }
 
 
-let cachedDefaultSystemPrompt: string | null = null;
+let cachedDefaultSystemPrompt: { path: string; mtimeMs: number; content: string } | null = null;
 
 const getDefaultSystemPrompt = (): string => {
-  if (cachedDefaultSystemPrompt !== null) {
-    return cachedDefaultSystemPrompt;
-  }
   try {
     const promptPath = path.join(app.getAppPath(), 'resources', 'SYSTEM_PROMPT.md');
-    cachedDefaultSystemPrompt = fs.readFileSync(promptPath, 'utf-8');
+    const mtimeMs = fs.statSync(promptPath).mtimeMs;
+    if (
+      cachedDefaultSystemPrompt !== null
+      && cachedDefaultSystemPrompt.path === promptPath
+      && cachedDefaultSystemPrompt.mtimeMs === mtimeMs
+    ) {
+      return cachedDefaultSystemPrompt.content;
+    }
+    const content = fs.readFileSync(promptPath, 'utf-8');
+    cachedDefaultSystemPrompt = { path: promptPath, mtimeMs, content };
+    return content;
   } catch {
-    cachedDefaultSystemPrompt = '';
+    return cachedDefaultSystemPrompt?.content ?? '';
   }
-  return cachedDefaultSystemPrompt;
 };
 
 interface CoworkMessageRow {
