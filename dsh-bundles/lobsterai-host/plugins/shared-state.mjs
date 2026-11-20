@@ -81,6 +81,20 @@ export function resolveSessionId(candidate) {
   return undefined;
 }
 
+/** Follow only native delegation edges. An ordinary fork has its own Cowork context. */
+export function resolveSessionContext(ctx, state, sessionId) {
+  const visited = new Set();
+  while (sessionId && !visited.has(sessionId)) {
+    const bound = state.sessionContexts.get(sessionId);
+    if (bound) return bound;
+    visited.add(sessionId);
+    const header = ctx.get('agents')?.get(sessionId)?.session?.header;
+    if (header?.origin !== 'subagent') return undefined;
+    sessionId = header.parentSession;
+  }
+  return undefined;
+}
+
 /**
  * Call Electron main's authenticated local callback bridge.
  * Returns `{ available: false }` when running standalone (e.g. upgrade-check or CLI).

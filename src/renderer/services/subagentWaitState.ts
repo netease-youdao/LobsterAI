@@ -1,4 +1,4 @@
-import { SubagentToolName, SubagentYield } from '../../shared/cowork/subagent';
+import { isDshSubagentSpawn, SubagentToolName, SubagentYield } from '../../shared/cowork/subagent';
 import type { CoworkMessage, SubagentSessionSummary } from '../types/cowork';
 
 export const SubagentWaitPhase = {
@@ -14,11 +14,13 @@ export function getSubagentWaitPhase(
 ): SubagentWaitPhase | null {
   const spawnIds = new Set<string>();
   const yieldIds = new Set<string>();
+  const nativeWaitIds = new Set<string>();
   let waiting = false;
   for (const message of messages) {
     if (message.type === 'user') {
       spawnIds.clear();
       yieldIds.clear();
+      nativeWaitIds.clear();
       waiting = false;
     } else if (message.type === 'assistant' && message.content.trim()) {
       waiting = false;
@@ -26,8 +28,18 @@ export function getSubagentWaitPhase(
       waiting = false;
       const id = message.metadata?.toolUseId;
       if (typeof id !== 'string') continue;
-      if (message.metadata?.toolName === SubagentToolName.Spawn) spawnIds.add(id);
-      if (message.metadata?.toolName === SubagentToolName.Yield) yieldIds.add(id);
+      const tool = message.metadata?.toolName;
+      if (tool === SubagentToolName.Spawn || isDshSubagentSpawn(tool)) spawnIds.add(id);
+      if (tool === SubagentToolName.Yield) yieldIds.add(id);
+      if (tool === SubagentToolName.DshWait) {
+        nativeWaitIds.add(id);
+        waiting = true;
+      }
+    } else if (message.type === 'tool_result' && spawnIds.has(String(message.metadata?.toolUseId))) {
+      const runId = message.metadata?.subagentRunId;
+      if (typeof runId === 'string' && !message.metadata?.isError) spawnIds.add(runId);
+    } else if (message.type === 'tool_result' && nativeWaitIds.has(String(message.metadata?.toolUseId))) {
+      waiting = !message.metadata?.isError;
     } else if (message.type === 'tool_result' && yieldIds.has(String(message.metadata?.toolUseId))) {
       try {
         const result = JSON.parse(message.content);

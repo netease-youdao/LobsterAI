@@ -13,7 +13,7 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { callLobsterBridge, getHostState, resolveSessionId } from './shared-state.mjs';
+import { callLobsterBridge, getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-host-tools';
 export const inject = ['tools'];
@@ -148,7 +148,7 @@ function createBridgeTool(state, spec) {
     ...(spec.isConcurrencySafe === true ? { isConcurrencySafe: () => true } : {}),
     async execute(args, exec) {
       const sessionId = resolveSessionId(exec);
-      const bound = sessionId ? state.sessionContexts.get(sessionId) : undefined;
+      const bound = resolveSessionContext(ctx, state, sessionId);
       const result = await callLobsterBridge(
         state,
         '/dsh-bridge/tool-execute',

@@ -37,6 +37,7 @@ import {
   WorkspaceFileName,
 } from '../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
+import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
   collectDirectoryTarEntries,
   type TarEntryInput,
@@ -385,6 +386,7 @@ export function runLegacyOpenClawMigration(
   try {
     // Idempotency guard: already migrated -> instant return.
     if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
+      migrateLegacySubagentHistory(db, openclawStateDir);
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -421,6 +423,7 @@ export function runLegacyOpenClawMigration(
       const reauthRequired: MigrationV2ReauthItem[] = [];
 
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
+      migrateLegacySubagentHistory(db, openclawStateDir);
       const workspacesMigrated = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,

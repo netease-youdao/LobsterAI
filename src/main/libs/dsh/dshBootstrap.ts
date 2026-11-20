@@ -63,6 +63,7 @@ import {
   type LobsterMcpServerRecord,
   type LobsterProviderConfig,
 } from './dshProviderSync';
+import { DshSubagentSessions } from './dshSubagentSessions';
 
 export interface DshCompatEngineStatus {
   phase: OpenClawEnginePhase;
@@ -251,6 +252,7 @@ export class DshBootstrap {
   readonly hostManager: DshHostManager;
   readonly channelsBridge: DshChannelsBridge;
   readonly runtimeAdapter: DshRuntimeAdapter;
+  readonly subagentSessions: DshSubagentSessions;
   readonly scheduler: LobsterScheduler;
 
   private readonly options: DshBootstrapOptions;
@@ -311,7 +313,10 @@ export class DshBootstrap {
       hostManager: this.hostManager,
     });
 
+    this.subagentSessions = new DshSubagentSessions(options.db, this.hostManager,
+      id => options.coworkStore.getSession(id, Number.MAX_SAFE_INTEGER)?.messages ?? []);
     this.runtimeAdapter = new DshRuntimeAdapter({
+      subagentSessions: this.subagentSessions,
       hostManager: this.hostManager,
       store: options.coworkStore,
       resolveModelSelection: options.resolveModelSelection,

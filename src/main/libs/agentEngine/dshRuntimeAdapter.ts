@@ -16,6 +16,7 @@ import { CoworkBtwStatus } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { type CoworkSteerResponse,CoworkSteerStatus } from '../../../shared/cowork/steer';
+import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
   DSH_SESSION_ID_PREFIX,
@@ -32,6 +33,8 @@ import type {
   DshHostManager,
   DshHostSessionContext,
 } from '../dsh/dshHostManager';
+import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
+import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import type {
   DshPromptPart,
   DshSessionUpdateQueueParams,
@@ -71,7 +74,7 @@ export interface DshAdapterSessionRecord {
 }
 
 export interface DshCoworkStorePort {
-  getSession(sessionId: string): DshAdapterSessionRecord | null | undefined;
+  getSession(sessionId: string, messageLimit?: number): DshAdapterSessionRecord | null | undefined;
   getLatestUserMessage?(sessionId: string): CoworkMessage | null;
   addMessage(
     sessionId: string,
@@ -107,6 +110,7 @@ export interface DshModelSelection {
 }
 
 export interface DshRuntimeAdapterDeps {
+  subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>;
   hostManager: Pick<
     DshHostManager,
     'start' | 'isReady' | 'getClient' | 'bindSessionContext' | 'deleteSessionFiles'
@@ -129,6 +133,9 @@ export interface DshRuntimeAdapterDeps {
 }
 
 interface ActiveTurnState {
+  subagentIdsByName: Map<string, string>;
+  subagentTasksByCall: Map<string, string>;
+  pendingSubagentResults: Set<string>;
   coworkSessionId: string;
   dshSessionId: string;
   userMessageId?: string;
@@ -267,6 +274,7 @@ export function buildLazyContextBridgePrefix(
 }
 
 export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
+  private readonly subagentSessions?: DshRuntimeAdapterDeps['subagentSessions'];
   private readonly hostManager: DshRuntimeAdapterDeps['hostManager'];
   private readonly store: DshCoworkStorePort;
   private readonly resolveModelSelection?: DshRuntimeAdapterDeps['resolveModelSelection'];
@@ -285,6 +293,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   constructor(deps: DshRuntimeAdapterDeps) {
     super();
+    this.subagentSessions = deps.subagentSessions;
     this.hostManager = deps.hostManager;
     this.store = deps.store;
     this.resolveModelSelection = deps.resolveModelSelection;
@@ -832,7 +841,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     kind: 'approval' | 'user-questions',
     evt: DshWaterfallEvent,
   ): Promise<DshWaterfallOutcome> {
-    const coworkSessionId = this.dshToCoworkSession.get(evt.agentId);
+    const coworkSessionId = this.dshToCoworkSession.get(evt.agentId)
+      ?? this.subagentSessions?.getOwningSessionId(evt.agentId);
     if (!coworkSessionId) {
       return Promise.resolve({ kind: 'next' });
     }
@@ -1132,6 +1142,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       lastFinalizedAssistantText: '',
       lastCommittedAssistantSeq: null,
       toolCallMessageIds: new Map(),
+      subagentIdsByName: new Map(),
+      subagentTasksByCall: new Map(),
+      pendingSubagentResults: new Set(),
       turnCompleted: false,
       turnError: null,
       turnAborted: false,
@@ -1293,6 +1306,20 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const evType = typeof ev.type === 'string' ? ev.type : '';
       const data = (ev.data as Record<string, unknown> | undefined) ?? {};
 
+      if (evType === DshChildEvent.Catalog) {
+        const id = this.subagentSessions?.observeCatalog(coworkSessionId, data);
+        if (id && typeof data.name === 'string') turn.subagentIdsByName.set(data.name, id);
+        return false;
+      }
+      if (evType === DshChildEvent.User) {
+        this.subagentSessions?.observeNotice(coworkSessionId, data, ev.time);
+        const source = record(data.source);
+        if (source.kind === DshChildEvent.Settled && typeof source.senderSessionId === 'string') {
+          turn.pendingSubagentResults.delete(formatStoredDshSessionId(source.senderSessionId));
+        }
+        return false;
+      }
+
       if (evType === 'tool/call') {
         this.finalizeActiveThinkingMessage(turn);
         this.finalizeActiveAssistantMessage(turn);
@@ -1307,6 +1334,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const callId = String(data.callId ?? randomUUID());
         const toolName = String(data.name ?? 'tool');
         const toolInput = parseToolArgs(data.arguments);
+        if (isDshSubagentSpawn(toolName)) {
+          turn.subagentTasksByCall.set(callId, typeof toolInput.prompt === 'string' ? toolInput.prompt : '');
+        }
         const msg = this.store.addMessage(coworkSessionId, {
           type: 'tool_use',
           content: toolName,
@@ -1327,12 +1357,20 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const callId = String(messageObj?.callId ?? messageObj?.toolCallId ?? data.callId ?? '');
         const isError = Boolean(messageObj?.isError ?? data.isError);
         const text = extractTextFromContentBlocks(messageObj?.content ?? data.content);
+        const resultMeta = record(data.meta);
+        const subagentRunId = resultMeta.kind === DshChildEvent.Activation && typeof resultMeta.name === 'string'
+          ? turn.subagentIdsByName.get(resultMeta.name) : undefined;
+        const task = turn.subagentTasksByCall.get(callId);
+        if (subagentRunId && task !== undefined && !isError) turn.pendingSubagentResults.add(subagentRunId);
+        if (subagentRunId && task) this.subagentSessions?.setTask(coworkSessionId, subagentRunId, task);
+        turn.subagentTasksByCall.delete(callId);
         const msg = this.store.addMessage(coworkSessionId, {
           type: 'tool_result',
           content: text,
           metadata: {
             toolUseId: callId,
             isError,
+            ...(subagentRunId ? { subagentRunId } : {}),
             seq: ev.seq,
           },
         });
@@ -1454,6 +1492,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           turn.turnError = turnError;
         } else if (isAbortedTurnEndReason(data.reason)) {
           turn.turnAborted = true;
+        } else if (turn.pendingSubagentResults.size > 0) {
+          // A model can yield the native turn after delegating. Each child's settlement
+          // schedules another parent turn on this same stream.
+          return false;
         }
         return true;
       }

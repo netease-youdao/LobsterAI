@@ -256,8 +256,12 @@ export interface DshSessionForkParams {
   allowMigration?: boolean;
 }
 
+export type DshSessionAddress =
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'subagent'; parentSessionId: string; childSessionId: string; mode: 'one-shot' | 'continuable' | 'unknown' };
+
 export interface DshSessionFollowParams {
-  address: { kind: 'session'; sessionId: string } | { kind: 'subagent'; parentSessionId: string; childSessionId: string };
+  address: DshSessionAddress;
   maxMessages?: number;
   assistantStream?: boolean;
   activate?: boolean;
@@ -556,12 +560,12 @@ export class DshTypertClient extends EventEmitter {
   }
 
   getSessionEvents(
-    sessionId: string,
-    options: { throughSeq?: number; maxMessages?: number } = {},
+    session: string | DshSessionAddress,
+    options: { throughSeq?: number; beforeSeq?: number; maxMessages?: number } = {},
   ): Promise<Record<string, unknown>> {
     return this.call('session/events', {
       request: {
-        address: { kind: 'session', sessionId },
+        address: typeof session === 'string' ? { kind: 'session', sessionId: session } : session,
         ...options,
       },
     });

@@ -128,6 +128,39 @@ describe('dshRuntimeAdapter helpers', () => {
 });
 
 describe('DshRuntimeAdapter', () => {
+  test('keeps the parent stream open across a native yield until the child result has been summarized', async () => {
+    const { store, messages } = createInMemoryStore({ id: 'parent', cwd: '/tmp/work', messages: [] });
+    const childId = DSH_SESSION_ID_PREFIX + 'child';
+    const events: Array<[string, Record<string, unknown>]> = [
+      ['tool/call', { callId: 'call', name: 'subagent_fork', arguments: { prompt: 'write a report' } }],
+      ['subagent/catalog', { childId: 'child', name: 'worker', childCreatedAt: 1 }],
+      ['tool/result', { meta: { kind: 'activation', name: 'worker' }, message: { toolCallId: 'call', content: 'worker' } }],
+      ['turn/end', { reason: { kind: 'completed' } }],
+      ['user/message', { source: { kind: 'subagent-settled', senderSessionId: 'child', stopReason: 'completed' } }],
+      ['assistant/message', { message: { content: [{ type: 'text', text: 'The report is ready' }] } }],
+      ['turn/end', { reason: { kind: 'completed' } }],
+    ];
+    const client = {
+      createSession: async () => ({ sessionId: 'native-parent' }),
+      promptSession: async () => ({ accepted: true }),
+      onWaterfall: () => () => {},
+      followSession: async function* () {
+        for (const [seq, [type, data]] of events.entries()) yield { type: 'event', event: { type, data, seq } };
+      },
+    } as unknown as DshTypertClient;
+    const sessions = { observeCatalog: () => childId, observeNotice: vi.fn(), getOwningSessionId: vi.fn(), setTask: vi.fn() };
+    const adapter = new DshRuntimeAdapter({ store, subagentSessions: sessions, hostManager: {
+      start: async () => {}, isReady: () => true, getClient: () => client, bindSessionContext: async () => ({}),
+      deleteSessionFiles: async () => ({}),
+    } });
+    const complete = vi.fn();
+    adapter.on('complete', complete);
+    await adapter.startSession('parent', 'delegate');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(sessions.setTask).toHaveBeenCalledWith('parent', childId, 'write a report');
+    expect(messages.find(m => m.type === 'tool_result')?.metadata?.subagentRunId).toBe(childId);
+    expect(messages.at(-1)?.content).toBe('The report is ready');
+  });
   test('streams assistant deltas, tool calls, tool results, and resolves interactive approvals', async () => {
     const { store, session, messages } = createInMemoryStore({
       id: 'cw-1',

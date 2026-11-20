@@ -2402,6 +2402,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const candidateIds = [
       group.toolUse.id,
       group.toolUse.metadata?.toolUseId,
+      group.toolResult?.metadata?.subagentRunId,
     ].filter((value): value is string => typeof value === 'string' && value.length > 0);
     for (const candidateId of candidateIds) {
       if (seen.has(candidateId)) continue;
