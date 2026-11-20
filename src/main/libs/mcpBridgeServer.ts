@@ -87,6 +87,7 @@ export type MediaGenerationResponse = {
 export type BrowserToolRequest = {
   tool: string;
   args: Record<string, unknown>;
+  signal?: AbortSignal;
 };
 
 export type BrowserToolResponse = {
@@ -569,13 +570,18 @@ export class McpBridgeServer {
         return;
       }
 
+      const controller = new AbortController();
+      res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+      if (res.destroyed) return;
       const result = await this.onBrowserToolCallback({
         tool: request.tool,
+        signal: controller.signal,
         args: request.args && typeof request.args === 'object' && !Array.isArray(request.args)
           ? request.args
           : {},
       });
       log('DEBUG', `Browser tool "${request.tool}" completed in ${Date.now() - startedAt}ms`);
+      if (res.destroyed) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
     } catch (error) {

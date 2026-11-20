@@ -20,9 +20,12 @@ import {
 import {
   type AgentBrowserHostState,
   type AgentBrowserHostStateEvent,
+  AgentBrowserMcpToolPrefix,
+  AgentBrowserNavigation,
   AgentBrowserPageUrl,
   AgentBrowserPartition,
   type AgentBrowserToolEvent,
+  AgentBrowserToolPhase,
   AgentBrowserZoom,
   BrowserDisplayMode,
   type BrowserWebAccessConfig,
@@ -319,6 +322,17 @@ const resolveKeyInput = (rawKey: string): { keyCode: string; modifiers: string[]
   };
 };
 
+export function getDshBrowserToolStart(
+  sessionId: string,
+  name: string | undefined,
+  input?: Record<string, unknown>,
+): AgentBrowserToolEvent | undefined {
+  if (!name?.startsWith(AgentBrowserMcpToolPrefix)) return;
+  const action = name.slice(AgentBrowserMcpToolPrefix.length);
+  const targetId = action === BrowserMcpTool.TakeScreenshot ? undefined : readPageId(input?.pageId)?.toString();
+  return { sessionId, phase: AgentBrowserToolPhase.Start, action, targetId };
+}
+
 export class AgentBrowserHost {
   private readonly pages = new Map<number, BrowserPage>();
   private readonly browserSession: Session;
@@ -343,6 +357,7 @@ export class AgentBrowserHost {
   private browserToolBootstrapPagePromise: Promise<BrowserPage> | null = null;
   private reusableBrowserToolBootstrapPageId: number | undefined;
   private readonly debuggerActiveCounts = new Map<number, number>();
+  private readonly pendingScreenshots = new Map<number, number>();
 
   constructor(private readonly deps: AgentBrowserHostDeps) {
     this.windowVisible = Boolean(this.deps.getMainWindow()?.isVisible());
@@ -630,11 +645,12 @@ export class AgentBrowserHost {
     }
 
     try {
-      return await this.dispatchTool(request.tool, request.args);
+      request.signal?.throwIfAborted();
+      return await this.dispatchTool(request.tool, request.args, request.signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // Tool failures belong to the tool result, not the page's navigation state.
-      console.warn('[AgentBrowserHost] Browser tool failed:', request.tool, error);
+      if (!request.signal?.aborted) console.warn('[AgentBrowserHost] Browser tool failed:', request.tool, error);
       return errorResult(message);
     } finally {
       const usedPageId = readPageId(request.args.pageId) ?? this.selectedPageId;
@@ -649,6 +665,7 @@ export class AgentBrowserHost {
     await this.credentialLogin.dispose();
     this.manualCredentialCapture.dispose();
     this.detachCredentialLoginView();
+    this.pendingScreenshots.clear();
     this.detachPage(this.attachedPageId);
     for (const page of this.pages.values()) {
       if (page.view.webContents.isDestroyed()) continue;
@@ -670,7 +687,7 @@ export class AgentBrowserHost {
     console.log('[AgentBrowserHost] Persistent browser storage flushed on quit.');
   }
 
-  private async dispatchTool(tool: string, args: Record<string, unknown>): Promise<BrowserToolResponse> {
+  private async dispatchTool(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<BrowserToolResponse> {
     switch (tool) {
       case BrowserMcpTool.ListPages:
         await this.ensureBrowserToolPageBaseline();
@@ -701,9 +718,17 @@ export class AgentBrowserHost {
         this.closePage(this.requirePageId(args.pageId));
         return this.pagesResult();
       case BrowserMcpTool.NavigatePage: {
-        const page = this.requirePage(this.requirePageId(args.pageId));
+        const page = this.resolvePage(args.pageId);
         this.markBrowserToolBootstrapPageUsed(page.pageId);
-        await this.navigatePage(page, this.normalizeAddress(readString(args.url)), readTimeout(args.timeout));
+        const type = readString(args.type) || AgentBrowserNavigation.Url;
+        const timeout = readTimeout(args.timeout);
+        if (type === AgentBrowserNavigation.Url) {
+          const url = readString(args.url);
+          if (!url) throw new Error('A URL is required for browser navigation.');
+          await this.navigatePage(page, this.normalizeAddress(url), timeout);
+        } else {
+          await this.navigatePage(page, page.view.webContents.getURL(), timeout, undefined, type);
+        }
         return textResult('Page navigated.', { message: 'Page navigated.' });
       }
       case BrowserMcpTool.TakeSnapshot:
@@ -743,7 +768,7 @@ export class AgentBrowserHost {
       case BrowserMcpTool.EvaluateScript:
         return this.evaluateScript(this.resolvePage(args.pageId), readString(args.function), args.args);
       case BrowserMcpTool.WaitFor:
-        await this.waitForText(this.resolvePage(args.pageId), readString(args.text), readTimeout(args.timeout));
+        await this.waitForText(this.resolvePage(args.pageId), readString(args.text), readTimeout(args.timeout), signal);
         return textResult('Text found.');
       case BrowserMcpTool.LoginWithSavedCredential: {
         const page = this.resolvePage(args.pageId);
@@ -955,6 +980,7 @@ export class AgentBrowserHost {
     url: string,
     timeoutMs: number,
     loadOptions?: Electron.LoadURLOptions,
+    type: string = AgentBrowserNavigation.Url,
   ): Promise<void> {
     if (!this.isAllowedUrl(url)) {
       throw new Error('Navigation was blocked by the LobsterAI browser access policy.');
@@ -964,18 +990,49 @@ export class AgentBrowserHost {
     await this.proxyReady;
     await this.passkeys.ready;
     const webContents = page.view.webContents;
+    const history = webContents.navigationHistory;
+    const start = (): Promise<void> | void => {
+      switch (type) {
+        case AgentBrowserNavigation.Url:
+          return loadOptions ? webContents.loadURL(url, loadOptions) : webContents.loadURL(url);
+        case AgentBrowserNavigation.Back:
+        case AgentBrowserNavigation.Forward: {
+          const offset = type === AgentBrowserNavigation.Back ? -1 : 1;
+          const entry = history.getEntryAtIndex(history.getActiveIndex() + offset);
+          if (!entry || !this.isAllowedUrl(entry.url)) throw new Error('No available page in that direction.');
+          return history.goToOffset(offset);
+        }
+        case AgentBrowserNavigation.Reload:
+          return webContents.reload();
+        default:
+          throw new Error('Unknown browser navigation type.');
+      }
+    };
     let documentCommitted = false;
     const onCommit = () => { documentCommitted = true; };
-    let onDocumentReady = () => {};
-    const documentReady = new Promise<void>(resolve => {
-      onDocumentReady = () => { if (documentCommitted) resolve(); };
+    let ready!: () => void;
+    let failed!: (error: Error) => void;
+    const documentReady = new Promise<void>((resolve, reject) => {
+      ready = resolve;
+      failed = reject;
     });
+    const onDocumentReady = () => { if (documentCommitted) ready(); };
+    const onSameDocument = (_event: Electron.Event, _url: string, isMainFrame: boolean) => {
+      if (isMainFrame) ready();
+    };
+    const onFailure = (_event: Electron.Event, _code: number, description: string, _url: string, isMainFrame: boolean) => {
+      if (isMainFrame) failed(new Error(description));
+    };
     webContents.on('did-navigate', onCommit);
     webContents.on('dom-ready', onDocumentReady);
+    if (type !== AgentBrowserNavigation.Url) {
+      webContents.on('did-navigate-in-page', onSameDocument);
+      webContents.on('did-fail-load', onFailure);
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        loadOptions ? webContents.loadURL(url, loadOptions) : webContents.loadURL(url),
+        start() ?? documentReady,
         // A top-level document can be used while images keep loading. Ignore
         // readiness from the previous document; loadURL still owns load errors.
         documentReady,
@@ -987,6 +1044,8 @@ export class AgentBrowserHost {
       if (timer) clearTimeout(timer);
       webContents.removeListener('did-navigate', onCommit);
       webContents.removeListener('dom-ready', onDocumentReady);
+      webContents.removeListener('did-navigate-in-page', onSameDocument);
+      webContents.removeListener('did-fail-load', onFailure);
     }
   }
 
@@ -1117,7 +1176,7 @@ export class AgentBrowserHost {
     const snapshot: SnapshotNode = roots.length === 1
       ? roots[0]
       : { role: 'RootWebArea', name: page.view.webContents.getTitle(), children: roots };
-    return textResult('Accessibility snapshot captured.', { snapshot });
+    return textResult(JSON.stringify({ snapshot }), { snapshot });
   }
 
   private async takeScreenshot(
@@ -1146,21 +1205,35 @@ export class AgentBrowserHost {
     page: BrowserPage,
     params: Record<string, unknown>,
   ): Promise<string> {
+    const { pageId } = page;
+    const pending = this.pendingScreenshots.get(pageId) ?? 0;
+    this.pendingScreenshots.set(pageId, pending + 1);
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const result = await Promise.race([
-      page.view.webContents.debugger.sendCommand('Page.captureScreenshot', params) as Promise<{ data?: string }>,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`In-app browser screenshot timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms.`));
-        }, SCREENSHOT_CAPTURE_TIMEOUT_MS);
-      }),
-    ]).finally(() => {
+    try {
+      const window = this.deps.getMainWindow();
+      if (!pending && this.attachedPageId !== pageId && window && !window.isDestroyed()) {
+        this.attachOutsideWindow(page, window);
+      }
+      const result = await Promise.race([
+        page.view.webContents.debugger.sendCommand('Page.captureScreenshot', params) as Promise<{ data?: string }>,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`In-app browser screenshot timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms.`));
+          }, SCREENSHOT_CAPTURE_TIMEOUT_MS);
+        }),
+      ]);
+      if (!result.data) throw new Error('The in-app browser screenshot did not contain image data.');
+      return result.data;
+    } finally {
       if (timeout) clearTimeout(timeout);
-    });
-    if (!result.data) {
-      throw new Error('The in-app browser screenshot did not contain image data.');
+      const remaining = (this.pendingScreenshots.get(pageId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.pendingScreenshots.set(pageId, remaining);
+      } else {
+        this.pendingScreenshots.delete(pageId);
+        if (this.attachedPageId !== pageId) this.detachPage(pageId);
+      }
     }
-    return result.data;
   }
 
   private async click(page: BrowserPage, uid: string, doubleClick: boolean): Promise<void> {
@@ -1354,11 +1427,12 @@ export class AgentBrowserHost {
     });
   }
 
-  private async waitForText(page: BrowserPage, text: string, timeoutMs: number): Promise<void> {
+  private async waitForText(page: BrowserPage, text: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
     if (!text) throw new Error('Browser wait text is missing.');
     const expression = `Boolean(document.body && document.body.innerText.includes(${JSON.stringify(text)}))`;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       const found = await page.view.webContents.executeJavaScript(expression, false) as boolean;
       if (found) return;
       await new Promise(resolve => { setTimeout(resolve, 100); });
@@ -1540,13 +1614,24 @@ export class AgentBrowserHost {
     this.pages.get(this.attachedPageId!)?.view.setBounds(this.normalizeBounds(this.bounds));
   }
 
+  /** A detached Chromium view has no compositor frame. Keep it outside the visible panel during capture. */
+  private attachOutsideWindow(page: BrowserPage, window: BrowserWindow): void {
+    const { width, height } = this.getDetachedViewBounds();
+    page.view.setBounds({ x: -width, y: 0, width, height });
+    window.contentView.addChildView(page.view, 0);
+  }
+
   private detachPage(pageId: number | undefined): void {
     if (!pageId) return;
     const page = this.pages.get(pageId);
     const mainWindow = this.deps.getMainWindow();
     if (page && mainWindow && !mainWindow.isDestroyed()) {
       try {
-        mainWindow.contentView.removeChildView(page.view);
+        if (this.pendingScreenshots.has(pageId)) {
+          this.attachOutsideWindow(page, mainWindow);
+        } else {
+          mainWindow.contentView.removeChildView(page.view);
+        }
       } catch {
         // The view may already have been detached while the window was closing.
       }
@@ -1597,6 +1682,7 @@ export class AgentBrowserHost {
     const fallbackPageId = this.getPageCloseFallbackId(pageId);
     this.markBrowserToolBootstrapPageUsed(pageId);
     this.manualCredentialCapture.clearPage(pageId);
+    this.pendingScreenshots.delete(pageId);
     this.detachPage(pageId);
     this.debuggerActiveCounts.delete(pageId);
     if (page.view.webContents.debugger.isAttached()) {
