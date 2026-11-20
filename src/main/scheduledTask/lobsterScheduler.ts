@@ -53,6 +53,30 @@ export interface LobsterSchedulerOptions {
   skipMissedJobs?: boolean;
 }
 
+export interface LegacyTaskImportRecord {
+  id?: string;
+  input: ScheduledTaskInput;
+  state?: Partial<TaskState> | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface LegacyRunImportRecord {
+  id: string;
+  taskId: string;
+  sessionId?: string | null;
+  sessionKey?: string | null;
+  status: TaskStatus;
+  startedAt: string;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+  error?: string | null;
+  summary?: string | null;
+  deliveryError?: string | null;
+  deliveryStatus?: RunDeliveryStatus | null;
+  deliveryChannel?: string | null;
+}
+
 interface ParsedCronFields {
   minutes: Set<number>;
   hours: Set<number>;
@@ -569,15 +593,187 @@ export class LobsterScheduler extends EventEmitter {
 
   /**
    * Import legacy OpenClaw cron job records idempotently (used by
-   * `LegacyOpenClawMigrator` during v1 -> v2 upgrade).
+   * `LegacyOpenClawMigrator` during v1 -> v2 upgrade and backup backfill).
+   * Preserves original job IDs, timestamps, and historical last-run state.
    */
-  importLegacyJobs(jobs: Array<{ id?: string; input: ScheduledTaskInput }>): number {
+  importLegacyJobs(jobs: LegacyTaskImportRecord[]): number {
+    const nowMs = this.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const insertStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO lobster_scheduled_tasks (
+        id, name, description, enabled, schedule_json, session_target, wake_mode,
+        payload_json, delivery_json, agent_id, session_key, state_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
     let imported = 0;
-    for (const item of jobs) {
-      if (item.id && this.getTask(item.id)) continue;
-      this.createTask(item.input, item.id);
-      imported += 1;
+    const importTx = this.db.transaction(() => {
+      for (const item of jobs) {
+        if (item.id && this.getTask(item.id)) continue;
+        const id = item.id || randomUUID();
+        const delivery: ScheduledTaskDelivery = item.input.delivery ?? { mode: DeliveryMode.None };
+        let nextRunAtMs: number | null = null;
+        if (item.input.enabled) {
+          try {
+            nextRunAtMs = computeNextRunAtMs(item.input.schedule, nowMs);
+          } catch {
+            nextRunAtMs = null;
+          }
+        }
+        const rawLastStatus = item.state?.lastStatus ?? null;
+        const safeLastStatus =
+          rawLastStatus === TaskStatus.Running
+            ? (item.state?.lastError ? TaskStatus.Error : null)
+            : rawLastStatus;
+        const state: TaskState = {
+          nextRunAtMs,
+          lastRunAtMs:
+            typeof item.state?.lastRunAtMs === 'number' && Number.isFinite(item.state.lastRunAtMs)
+              ? item.state.lastRunAtMs
+              : null,
+          lastStatus: safeLastStatus,
+          lastError: typeof item.state?.lastError === 'string' ? item.state.lastError : null,
+          lastDurationMs:
+            typeof item.state?.lastDurationMs === 'number' && Number.isFinite(item.state.lastDurationMs)
+              ? item.state.lastDurationMs
+              : null,
+          runningAtMs: null,
+          consecutiveErrors:
+            typeof item.state?.consecutiveErrors === 'number' && Number.isFinite(item.state.consecutiveErrors)
+              ? Math.max(0, Math.floor(item.state.consecutiveErrors))
+              : 0,
+        };
+        const createdAt = item.createdAt && Number.isFinite(Date.parse(item.createdAt))
+          ? item.createdAt
+          : nowIso;
+        const updatedAt = item.updatedAt && Number.isFinite(Date.parse(item.updatedAt))
+          ? item.updatedAt
+          : createdAt;
+
+        const res = insertStmt.run(
+          id,
+          item.input.name,
+          item.input.description ?? '',
+          item.input.enabled ? 1 : 0,
+          JSON.stringify(item.input.schedule),
+          item.input.sessionTarget ?? SessionTarget.Isolated,
+          item.input.wakeMode ?? WakeMode.Now,
+          JSON.stringify(item.input.payload),
+          JSON.stringify(delivery),
+          item.input.agentId ?? null,
+          item.input.sessionKey ?? null,
+          JSON.stringify(state),
+          createdAt,
+          updatedAt,
+        );
+        if (res.changes > 0) imported += 1;
+      }
+    });
+    importTx();
+    return imported;
+  }
+
+  /**
+   * Import historical OpenClaw cron run logs idempotently.
+   * Skips orphan runs whose `taskId` is not present in `lobster_scheduled_tasks`
+   * and avoids duplicating existing `(task_id, started_at)` records.
+   */
+  importLegacyRuns(runs: LegacyRunImportRecord[]): number {
+    if (runs.length === 0) return 0;
+
+    const existingTasks = new Map<string, ScheduledTask>();
+    for (const task of this.listTasks()) {
+      existingTasks.set(task.id, task);
     }
+    if (existingTasks.size === 0) return 0;
+
+    const existingRunKeys = new Set<string>();
+    const existingRows = this.db
+      .prepare('SELECT task_id, started_at FROM lobster_scheduled_task_runs')
+      .all() as Array<{ task_id: string; started_at: string }>;
+    for (const row of existingRows) {
+      existingRunKeys.add(`${row.task_id}|${row.started_at}`);
+    }
+
+    const insertRunStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO lobster_scheduled_task_runs (
+        id, task_id, session_id, session_key, status, started_at, finished_at,
+        duration_ms, error, summary, delivery_error, delivery_status, delivery_channel
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let imported = 0;
+    const latestRunByTask = new Map<string, { startedMs: number; run: LegacyRunImportRecord }>();
+
+    const importTx = this.db.transaction(() => {
+      for (const run of runs) {
+        const task = existingTasks.get(run.taskId);
+        if (!task) continue;
+        const startedMs = Date.parse(run.startedAt);
+        if (!Number.isFinite(startedMs)) continue;
+
+        const dedupeKey = `${run.taskId}|${run.startedAt}`;
+        if (existingRunKeys.has(dedupeKey)) continue;
+
+        const safeStatus =
+          run.status === TaskStatus.Running ? TaskStatus.Error : run.status;
+        const safeError =
+          safeStatus === TaskStatus.Success
+            ? null
+            : (run.error ?? (run.status === TaskStatus.Running ? 'Interrupted before completion' : null));
+        const durationMs =
+          typeof run.durationMs === 'number' && Number.isFinite(run.durationMs)
+            ? Math.max(0, Math.round(run.durationMs))
+            : null;
+        const deliveryChannel =
+          run.deliveryChannel !== undefined
+            ? run.deliveryChannel
+            : (task.delivery.mode === DeliveryMode.Announce ? (task.delivery.channel ?? null) : null);
+
+        const res = insertRunStmt.run(
+          run.id,
+          run.taskId,
+          run.sessionId ?? null,
+          run.sessionKey ?? null,
+          safeStatus,
+          run.startedAt,
+          run.finishedAt ?? null,
+          durationMs,
+          safeError,
+          run.summary ?? null,
+          run.deliveryError ?? null,
+          run.deliveryStatus ?? null,
+          deliveryChannel,
+        );
+        if (res.changes > 0) {
+          imported += 1;
+          existingRunKeys.add(dedupeKey);
+          const prev = latestRunByTask.get(run.taskId);
+          if (!prev || startedMs > prev.startedMs) {
+            latestRunByTask.set(run.taskId, {
+              startedMs,
+              run: { ...run, status: safeStatus, error: safeError, durationMs },
+            });
+          }
+        }
+      }
+
+      // Backfill task summary state when imported runs exist but `lastRunAtMs` was empty.
+      for (const [taskId, latest] of latestRunByTask.entries()) {
+        const task = existingTasks.get(taskId);
+        if (!task || task.state.lastRunAtMs !== null) continue;
+        const patchedState: TaskState = {
+          ...task.state,
+          lastRunAtMs: latest.startedMs,
+          lastStatus: latest.run.status,
+          lastError: latest.run.error ?? null,
+          lastDurationMs: latest.run.durationMs ?? null,
+          runningAtMs: null,
+        };
+        this.saveTaskState(taskId, patchedState);
+      }
+    });
+    importTx();
     return imported;
   }
 

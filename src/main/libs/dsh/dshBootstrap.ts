@@ -18,9 +18,14 @@ import * as path from 'path';
 
 import {
   DeliveryMode,
+  IpcChannel as ScheduledTaskIpc,
   RunDeliveryStatus,
 } from '../../../scheduledTask/constants';
-import type { ScheduledTask } from '../../../scheduledTask/types';
+import type {
+  ScheduledTask,
+  ScheduledTaskRunEvent,
+  ScheduledTaskStatusEvent,
+} from '../../../scheduledTask/types';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
   DSH_PERMISSION_PRESET_KV_KEY,
@@ -29,10 +34,11 @@ import {
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
-import { type DshChannelInstanceConfig,DshChannelsBridge } from '../../im/dshChannelsBridge';
+import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshChannelsBridge';
 import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  backfillLegacyScheduledTasksFromBackup,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -352,6 +358,13 @@ export class DshBootstrap {
       executor: (task, signal) => this.executeScheduledTask(task, signal),
     });
 
+    this.scheduler.on('statusUpdate', (event: ScheduledTaskStatusEvent) => {
+      this.broadcastScheduledTaskEvent(ScheduledTaskIpc.StatusUpdate, event);
+    });
+    this.scheduler.on('runUpdate', (event: ScheduledTaskRunEvent) => {
+      this.broadcastScheduledTaskEvent(ScheduledTaskIpc.RunUpdate, event);
+    });
+
     this.hostManager.on('phaseChange', (_phase, hostStatus: DshHostStatus) => {
       options.onStatusChange?.(mapDshHostStatusToEngineStatus(hostStatus), hostStatus);
       if (hostStatus.phase === DshHostPhase.Ready && this.lastImInstances) {
@@ -407,12 +420,44 @@ export class DshBootstrap {
     return this.getPermissionPreset(sessionId);
   }
 
+  private broadcastScheduledTaskEvent(channel: string, payload?: unknown): void {
+    if (typeof BrowserWindow?.getAllWindows !== 'function') return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      if (payload === undefined) {
+        win.webContents.send(channel);
+      } else {
+        win.webContents.send(channel, payload);
+      }
+    }
+  }
+
   async start(): Promise<DshCompatEngineStatus> {
+    // One-shot idempotent backfill for users who completed v2 migration before
+    // `cron_jobs` / run-history extraction landed. Runs concurrently with DSH boot
+    // and returns instantaneously once `engine.migration.v2.cronBackfillCompleted` is set.
+    const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
+      userDataDir: this.options.userDataDir,
+      db: this.options.db,
+    }).catch((error) => {
+      console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
+      return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
+    });
+
     await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
     await this.hostManager.start();
     await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
       console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
     });
+
+    const backfill = await cronBackfillPromise;
+    if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
+      console.log(
+        `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
+      );
+      this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+    }
+
     this.scheduler.start();
     return this.getEngineStatus();
   }

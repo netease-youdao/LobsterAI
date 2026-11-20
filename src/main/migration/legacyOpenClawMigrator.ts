@@ -9,14 +9,25 @@
 
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import {
   DeliveryMode,
+  InternalTaskMarker,
+  OpenClawSystemPayloadKind,
+  PayloadKind,
+  RunDeliveryStatus,
   SessionTarget,
+  TaskStatus,
   WakeMode,
 } from '../../scheduledTask/constants';
-import type { Schedule, ScheduledTaskInput } from '../../scheduledTask/types';
+import type {
+  Schedule,
+  ScheduledTaskDelivery,
+  ScheduledTaskPayload,
+  TaskState,
+} from '../../scheduledTask/types';
 import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   RETAINED_IM_PLATFORM_LIST,
@@ -25,21 +36,28 @@ import {
 } from '../../shared/dshEngine/hostConstants';
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
+  MIGRATION_V2_CRON_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
   type MigrationV2Report,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { type Platform, PlatformRegistry } from '../../shared/platform';
 import {
   LobsterMemoryService,
   stripManagedAgentsSection,
   WorkspaceFileName,
 } from '../memory/lobsterMemoryService';
-import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
+import {
+  type LegacyRunImportRecord,
+  type LegacyTaskImportRecord,
+  LobsterScheduler,
+} from '../scheduledTask/lobsterScheduler';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
   collectDirectoryTarEntries,
+  extractMatchingEntriesFromTarGz,
   type TarEntryInput,
   writeTarGzArchive,
 } from './tarGzUtil';
@@ -131,46 +149,336 @@ function safeReadJson(filePath: string): unknown {
   }
 }
 
-function extractLegacyCronJobs(openclawStateDir: string): Array<{ id?: string; input: ScheduledTaskInput }> {
-  const results: Array<{ id?: string; input: ScheduledTaskInput }> = [];
+const RETAINED_IM_PLATFORM_SET = new Set<string>(RETAINED_IM_PLATFORM_LIST);
+const INTERNAL_DECLARATION_PREFIXES = ['heartbeat:', 'skill-collection-review:'] as const;
+const RUN_DEDUPE_WINDOW_MS = 5_000;
+const SESSION_MATCH_WINDOW_MS = 120_000;
+const CONTAINER_SESSION_SPAN_MS = 24 * 60 * 60 * 1_000;
+
+interface OpenedLegacyDb {
+  db: Database.Database;
+  close: () => void;
+}
+
+function openLegacyOpenClawDbReadOnly(openclawDbPath: string): OpenedLegacyDb | null {
+  if (!fs.existsSync(openclawDbPath)) return null;
+  try {
+    const db = new Database(openclawDbPath, { readonly: true });
+    return { db, close: () => db.close() };
+  } catch {
+    // WAL files without a matching `-shm` cannot be opened readonly; recover
+    // safely on a temporary copy so the legacy source is never mutated.
+  }
+
+  let tmpDir: string | null = null;
+  try {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-legacy-db-'));
+    const copiedDbPath = path.join(tmpDir, 'openclaw.sqlite');
+    fs.copyFileSync(openclawDbPath, copiedDbPath);
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = `${openclawDbPath}${suffix}`;
+      if (fs.existsSync(sidecar)) {
+        fs.copyFileSync(sidecar, `${copiedDbPath}${suffix}`);
+      }
+    }
+    const db = new Database(copiedDbPath);
+    const dirToClean = tmpDir;
+    return {
+      db,
+      close: () => {
+        try {
+          db.close();
+        } finally {
+          fs.rmSync(dirToClean, { recursive: true, force: true });
+        }
+      },
+    };
+  } catch {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+    return null;
+  }
+}
+
+function safeParseJsonObject(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function toFiniteNumberOrNull(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+}
+
+function toIsoTimestampOrNull(value: unknown): string | null {
+  const num = toFiniteNumberOrNull(value);
+  if (num !== null && num > 0) {
+    const d = new Date(num);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return null;
+}
+
+function resolveRetainedDeliveryChannel(rawChannel: unknown): string | null {
+  if (typeof rawChannel !== 'string') return null;
+  const trimmed = rawChannel.trim().toLowerCase();
+  if (!trimmed) return null;
+
+  const platformCandidate =
+    trimmed === 'lark'
+      ? 'feishu'
+      : trimmed === 'wecom-bot'
+        ? 'wecom'
+        : (PlatformRegistry.platformOfChannel(trimmed) ?? trimmed);
+
+  if (!RETAINED_IM_PLATFORM_SET.has(platformCandidate)) {
+    return null;
+  }
+  return PlatformRegistry.channelOf(platformCandidate as Platform);
+}
+
+function isInternalLegacyCronJob(
+  raw: Record<string, unknown>,
+  meta?: { declarationKey?: string | null; payloadKind?: string | null },
+): boolean {
+  const decl = (meta?.declarationKey ?? (typeof raw.declarationKey === 'string' ? raw.declarationKey : '')).trim();
+  if (decl && INTERNAL_DECLARATION_PREFIXES.some((prefix) => decl.startsWith(prefix))) {
+    return true;
+  }
+
+  const description = typeof raw.description === 'string' ? raw.description.trim() : '';
+  if (description.startsWith(InternalTaskMarker.MemoryCoreManagedDescriptionPrefix)) {
+    return true;
+  }
+
+  const rawPayload = safeParseJsonObject(raw.payload);
+  const payloadKind = (
+    (typeof rawPayload?.kind === 'string' ? rawPayload.kind : null)
+    ?? meta?.payloadKind
+    ?? ''
+  ).trim();
+  if (
+    payloadKind === OpenClawSystemPayloadKind.Heartbeat
+    || payloadKind === OpenClawSystemPayloadKind.SkillCollectionReview
+  ) {
+    return true;
+  }
+
+  const payloadText =
+    typeof rawPayload?.message === 'string'
+      ? rawPayload.message
+      : typeof rawPayload?.text === 'string'
+        ? rawPayload.text
+        : '';
+  return payloadText.trim().startsWith(InternalTaskMarker.MemoryCorePayloadPrefix);
+}
+
+function mapLegacyStatus(rawStatus: unknown): TaskStatus | null {
+  if (typeof rawStatus !== 'string') return null;
+  const normalized = rawStatus.trim().toLowerCase();
+  if (normalized === 'ok' || normalized === 'success' || normalized === 'succeeded' || normalized === 'completed') {
+    return TaskStatus.Success;
+  }
+  if (normalized === 'skipped' || normalized === 'superseded') {
+    return TaskStatus.Skipped;
+  }
+  if (
+    normalized === 'error'
+    || normalized === 'failed'
+    || normalized === 'timed_out'
+    || normalized === 'timeout'
+    || normalized === 'cancelled'
+    || normalized === 'canceled'
+    || normalized === 'interrupted'
+  ) {
+    return TaskStatus.Error;
+  }
+  if (normalized === 'running') {
+    return TaskStatus.Running;
+  }
+  return null;
+}
+
+function mapLegacyDeliveryStatus(rawStatus: unknown): RunDeliveryStatus | null {
+  if (typeof rawStatus !== 'string') return null;
+  const normalized = rawStatus.trim().toLowerCase();
+  if (normalized === RunDeliveryStatus.Delivered) return RunDeliveryStatus.Delivered;
+  if (normalized === RunDeliveryStatus.NotDelivered || normalized === 'not_delivered' || normalized === 'failed') {
+    return RunDeliveryStatus.NotDelivered;
+  }
+  if (
+    normalized === RunDeliveryStatus.NotRequested
+    || normalized === 'not_requested'
+    || normalized === 'not_applicable'
+  ) {
+    return RunDeliveryStatus.NotRequested;
+  }
+  if (normalized === RunDeliveryStatus.Unknown) return RunDeliveryStatus.Unknown;
+  return null;
+}
+
+function mapLegacyTaskState(
+  rawState: Record<string, unknown> | null,
+  deliveryMode: DeliveryMode,
+): Partial<TaskState> | null {
+  if (!rawState) return null;
+  let lastStatus = mapLegacyStatus(rawState.lastRunStatus ?? rawState.lastStatus);
+  const lastError = typeof rawState.lastError === 'string' && rawState.lastError.trim()
+    ? rawState.lastError
+    : null;
+  const lastDeliveryError = typeof rawState.lastDeliveryError === 'string'
+    ? rawState.lastDeliveryError
+    : null;
+
+  // Match legacy CronJobService: downgrade delivery-only errors on mode='none' tasks.
+  if (
+    lastStatus === TaskStatus.Error
+    && deliveryMode === DeliveryMode.None
+    && lastError
+    && lastDeliveryError
+    && lastError === lastDeliveryError
+  ) {
+    lastStatus = TaskStatus.Success;
+  }
+  if (lastStatus === TaskStatus.Running) {
+    lastStatus = lastError ? TaskStatus.Error : null;
+  }
+
+  return {
+    lastRunAtMs: toFiniteNumberOrNull(rawState.lastRunAtMs),
+    lastStatus,
+    lastError: lastStatus === TaskStatus.Success ? null : lastError,
+    lastDurationMs: toFiniteNumberOrNull(rawState.lastDurationMs),
+    runningAtMs: null,
+    consecutiveErrors: Math.max(0, Math.floor(toFiniteNumberOrNull(rawState.consecutiveErrors) ?? 0)),
+  };
+}
+
+function extractLegacyCronJobs(
+  openclawStateDir: string,
+  legacyDb: Database.Database | null,
+): LegacyTaskImportRecord[] {
+  const results: LegacyTaskImportRecord[] = [];
   const seenIds = new Set<string>();
 
-  const pushRawJob = (raw: Record<string, unknown>) => {
+  const pushRawJob = (
+    raw: Record<string, unknown>,
+    meta?: {
+      declarationKey?: string | null;
+      payloadKind?: string | null;
+      stateOverride?: Record<string, unknown> | null;
+      updatedAtOverride?: unknown;
+    },
+  ) => {
+    if (isInternalLegacyCronJob(raw, meta)) return;
+
     const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : undefined;
     if (id && seenIds.has(id)) return;
-    if (id) seenIds.add(id);
 
-    const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : (id || 'Migrated Task');
-    const description = typeof raw.description === 'string' ? raw.description : '';
-    const enabled = raw.enabled !== false;
-
-    const rawSched = (raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {}) as Record<string, unknown>;
+    const rawSched = safeParseJsonObject(raw.schedule) ?? {};
     let schedule: Schedule;
-    if (rawSched.kind === 'at' && typeof rawSched.at === 'string') {
-      schedule = { kind: 'at', at: rawSched.at };
-    } else if (rawSched.kind === 'every' && typeof rawSched.everyMs === 'number' && rawSched.everyMs > 0) {
-      schedule = { kind: 'every', everyMs: rawSched.everyMs };
+    if (rawSched.kind === 'at' && typeof rawSched.at === 'string' && rawSched.at.trim()) {
+      schedule = { kind: 'at', at: rawSched.at.trim() };
+    } else if (rawSched.kind === 'every') {
+      const everyMs = toFiniteNumberOrNull(rawSched.everyMs);
+      if (everyMs === null || everyMs <= 0) return;
+      const anchorMs = toFiniteNumberOrNull(rawSched.anchorMs);
+      schedule = {
+        kind: 'every',
+        everyMs,
+        ...(anchorMs !== null ? { anchorMs } : {}),
+      };
     } else if (typeof rawSched.expr === 'string' && rawSched.expr.trim()) {
+      const staggerMs = toFiniteNumberOrNull(rawSched.staggerMs);
       schedule = {
         kind: 'cron',
         expr: rawSched.expr.trim(),
         ...(typeof rawSched.tz === 'string' && rawSched.tz.trim() ? { tz: rawSched.tz.trim() } : {}),
+        ...(staggerMs !== null ? { staggerMs } : {}),
       };
     } else {
       return;
     }
 
-    const rawPayload = (raw.payload && typeof raw.payload === 'object' ? raw.payload : {}) as Record<string, unknown>;
-    const message = typeof rawPayload.message === 'string'
-      ? rawPayload.message
-      : typeof rawPayload.text === 'string'
-        ? rawPayload.text
-        : '';
-    if (!message.trim()) return;
+    const rawPayload = safeParseJsonObject(raw.payload) ?? {};
+    let payload: ScheduledTaskPayload;
+    if (rawPayload.kind === PayloadKind.SystemEvent) {
+      const text = typeof rawPayload.text === 'string' ? rawPayload.text : '';
+      if (!text.trim()) return;
+      payload = { kind: PayloadKind.SystemEvent, text };
+    } else {
+      const message = typeof rawPayload.message === 'string'
+        ? rawPayload.message
+        : typeof rawPayload.text === 'string'
+          ? rawPayload.text
+          : '';
+      if (!message.trim()) return;
+      const timeoutSeconds = toFiniteNumberOrNull(rawPayload.timeoutSeconds);
+      payload = {
+        kind: PayloadKind.AgentTurn,
+        message,
+        ...(timeoutSeconds !== null && timeoutSeconds > 0 ? { timeoutSeconds } : {}),
+        ...(typeof rawPayload.model === 'string' && rawPayload.model.trim() ? { model: rawPayload.model.trim() } : {}),
+      };
+    }
 
-    const rawDelivery = (raw.delivery && typeof raw.delivery === 'object' ? raw.delivery : {}) as Record<string, unknown>;
-    const channel = typeof rawDelivery.channel === 'string' ? rawDelivery.channel.toLowerCase() : undefined;
-    const isRetainedChannel = channel && (RETAINED_IM_PLATFORM_LIST as readonly string[]).includes(channel);
+    const rawDelivery = safeParseJsonObject(raw.delivery) ?? {};
+    const rawDeliveryMode = typeof rawDelivery.mode === 'string' ? rawDelivery.mode.trim().toLowerCase() : '';
+    const retainedChannel = resolveRetainedDeliveryChannel(rawDelivery.channel);
+    let delivery: ScheduledTaskDelivery;
+    if (rawDeliveryMode === DeliveryMode.Announce && retainedChannel) {
+      delivery = {
+        mode: DeliveryMode.Announce,
+        channel: retainedChannel,
+        ...(typeof rawDelivery.to === 'string' && rawDelivery.to.trim() ? { to: rawDelivery.to.trim() } : {}),
+        ...(typeof rawDelivery.accountId === 'string' && rawDelivery.accountId.trim()
+          ? { accountId: rawDelivery.accountId.trim() }
+          : {}),
+        ...(typeof rawDelivery.bestEffort === 'boolean' ? { bestEffort: rawDelivery.bestEffort } : {}),
+      };
+    } else if (
+      rawDeliveryMode === DeliveryMode.Webhook
+      && typeof rawDelivery.to === 'string'
+      && rawDelivery.to.trim()
+    ) {
+      delivery = {
+        mode: DeliveryMode.Webhook,
+        to: rawDelivery.to.trim(),
+        ...(typeof rawDelivery.bestEffort === 'boolean' ? { bestEffort: rawDelivery.bestEffort } : {}),
+      };
+    } else {
+      delivery = { mode: DeliveryMode.None };
+    }
+
+    if (id) seenIds.add(id);
+
+    const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : (id || 'Migrated Task');
+    const description = typeof raw.description === 'string' ? raw.description : '';
+    const enabled = raw.enabled !== false && raw.enabled !== 0;
+    const rawState = meta?.stateOverride ?? safeParseJsonObject(raw.state);
+    const createdAt = toIsoTimestampOrNull(raw.createdAtMs ?? raw.createdAt);
+    const updatedAt = toIsoTimestampOrNull(
+      meta?.updatedAtOverride ?? raw.updatedAtMs ?? raw.updatedAt,
+    ) ?? createdAt;
 
     results.push({
       id,
@@ -181,27 +489,69 @@ function extractLegacyCronJobs(openclawStateDir: string): Array<{ id?: string; i
         schedule,
         sessionTarget: raw.sessionTarget === SessionTarget.Main ? SessionTarget.Main : SessionTarget.Isolated,
         wakeMode: raw.wakeMode === WakeMode.NextHeartbeat ? WakeMode.NextHeartbeat : WakeMode.Now,
-        payload: {
-          kind: 'agentTurn',
-          message,
-          ...(typeof rawPayload.model === 'string' ? { model: rawPayload.model } : {}),
-        },
-        delivery: isRetainedChannel
-          ? {
-              mode: DeliveryMode.Announce,
-              channel,
-              ...(typeof rawDelivery.to === 'string' ? { to: rawDelivery.to } : {}),
-              ...(typeof rawDelivery.accountId === 'string' ? { accountId: rawDelivery.accountId } : {}),
-            }
-          : { mode: DeliveryMode.None },
-        agentId: typeof raw.agentId === 'string' ? raw.agentId : 'main',
+        payload,
+        delivery,
+        agentId: typeof raw.agentId === 'string' && raw.agentId.trim() ? raw.agentId.trim() : 'main',
+        sessionKey: typeof raw.sessionKey === 'string' && raw.sessionKey.trim() ? raw.sessionKey.trim() : null,
       },
+      state: mapLegacyTaskState(rawState, delivery.mode),
+      createdAt,
+      updatedAt,
     });
   };
 
-  // Source A: `<openclawStateDir>/cron/jobs.json`
-  const jobsJsonPath = path.join(openclawStateDir, 'cron', 'jobs.json');
-  if (fs.existsSync(jobsJsonPath)) {
+  // Source A (authoritative in OpenClaw >= 2026.8): `openclaw.sqlite` -> `cron_jobs` (fallback: `cron`)
+  let hasSqliteCronJobsTable = false;
+  if (legacyDb) {
+    try {
+      const targetTable = tableExists(legacyDb, 'cron_jobs')
+        ? 'cron_jobs'
+        : tableExists(legacyDb, 'cron')
+          ? 'cron'
+          : null;
+      if (targetTable) {
+        hasSqliteCronJobsTable = targetTable === 'cron_jobs';
+        const rows = legacyDb.prepare(`SELECT * FROM ${targetTable}`).all() as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const parsedJob = safeParseJsonObject(row.job_json) ?? { ...row };
+          if (typeof parsedJob.id !== 'string' && typeof row.job_id === 'string') {
+            parsedJob.id = row.job_id;
+          }
+          if (typeof parsedJob.name !== 'string' && typeof row.name === 'string') {
+            parsedJob.name = row.name;
+          }
+          if (typeof parsedJob.description !== 'string' && typeof row.description === 'string') {
+            parsedJob.description = row.description;
+          }
+          if (parsedJob.enabled === undefined && row.enabled !== undefined) {
+            parsedJob.enabled = Boolean(row.enabled);
+          }
+          if (typeof parsedJob.agentId !== 'string' && typeof row.agent_id === 'string') {
+            parsedJob.agentId = row.agent_id;
+          }
+          const stateOverride = safeParseJsonObject(row.state_json);
+          pushRawJob(parsedJob, {
+            declarationKey: typeof row.declaration_key === 'string' ? row.declaration_key : null,
+            payloadKind: typeof row.payload_kind === 'string' ? row.payload_kind : null,
+            stateOverride,
+            updatedAtOverride: row.runtime_updated_at_ms ?? row.updated_at,
+          });
+        }
+      }
+    } catch {
+      // ignore unreadable legacy cron table
+    }
+  }
+
+  // Source B: `<openclawStateDir>/cron/jobs.json` (or `.migrated` strictly when SQLite had no `cron_jobs` table)
+  const jsonCandidates = hasSqliteCronJobsTable
+    ? [path.join(openclawStateDir, 'cron', 'jobs.json')]
+    : [
+        path.join(openclawStateDir, 'cron', 'jobs.json'),
+        path.join(openclawStateDir, 'cron', 'jobs.json.migrated'),
+      ];
+  for (const jobsJsonPath of jsonCandidates) {
+    if (!fs.existsSync(jobsJsonPath)) continue;
     const parsed = safeReadJson(jobsJsonPath);
     const list = Array.isArray(parsed)
       ? parsed
@@ -213,35 +563,520 @@ function extractLegacyCronJobs(openclawStateDir: string): Array<{ id?: string; i
     }
   }
 
-  // Source B: `<openclawStateDir>/state/openclaw.sqlite` (`cron` table if present)
-  const openclawDbPath = path.join(openclawStateDir, 'state', 'openclaw.sqlite');
-  if (fs.existsSync(openclawDbPath)) {
-    let legacyDb: Database.Database | null = null;
+  return results;
+}
+
+function extractReceiptIdFromTaskRunId(runId: unknown): string | null {
+  if (typeof runId !== 'string') return null;
+  if (!runId.startsWith('cron:')) return null;
+  const parts = runId.split(':');
+  return parts.length >= 4 && parts[3].trim() ? parts[3].trim() : null;
+}
+
+function extractLegacyCronRuns(params: {
+  openclawStateDir: string;
+  legacyDb: Database.Database | null;
+  targetDb: Database.Database;
+  migratedJobs: LegacyTaskImportRecord[];
+}): LegacyRunImportRecord[] {
+  const { openclawStateDir, legacyDb, targetDb, migratedJobs } = params;
+  const taskDeliveryChannelById = new Map<string, string | null>();
+  for (const job of migratedJobs) {
+    if (!job.id) continue;
+    const delivery = job.input.delivery;
+    const channel = delivery?.mode === DeliveryMode.Announce ? (delivery.channel ?? null) : null;
+    taskDeliveryChannelById.set(job.id, channel);
+  }
+  if (taskDeliveryChannelById.size === 0) return [];
+
+  const runs: Array<LegacyRunImportRecord & { _startedMs: number }> = [];
+  const seenReceiptIds = new Set<string>();
+  const seenTimesByTask = new Map<string, number[]>();
+
+  const hasRunNear = (taskId: string, startedMs: number, toleranceMs: number): boolean => {
+    const times = seenTimesByTask.get(taskId);
+    if (!times) return false;
+    return times.some((t) => Math.abs(t - startedMs) <= toleranceMs);
+  };
+
+  const recordRunTime = (taskId: string, startedMs: number): void => {
+    const times = seenTimesByTask.get(taskId);
+    if (times) {
+      times.push(startedMs);
+    } else {
+      seenTimesByTask.set(taskId, [startedMs]);
+    }
+  };
+
+  // Source 1: `openclaw.sqlite` -> `task_runs WHERE runtime = 'cron'` (richest metadata & summaries)
+  if (legacyDb && tableExists(legacyDb, 'task_runs')) {
     try {
-      legacyDb = new Database(openclawDbPath, { readonly: true });
-      if (tableExists(legacyDb, 'cron')) {
-        const rows = legacyDb.prepare('SELECT * FROM cron').all() as Array<Record<string, unknown>>;
-        for (const row of rows) {
-          if (typeof row.job_json === 'string') {
-            try {
-              const parsed = JSON.parse(row.job_json) as Record<string, unknown>;
-              pushRawJob(parsed);
-            } catch {
-              // ignore malformed row
-            }
-          } else {
-            pushRawJob(row);
-          }
-        }
+      const rows = legacyDb
+        .prepare("SELECT * FROM task_runs WHERE runtime = 'cron' ORDER BY COALESCE(started_at, created_at) DESC")
+        .all() as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const taskId = typeof row.source_id === 'string' ? row.source_id.trim() : '';
+        if (!taskId || !taskDeliveryChannelById.has(taskId)) continue;
+
+        const startedMs = toFiniteNumberOrNull(row.started_at) ?? toFiniteNumberOrNull(row.created_at);
+        if (startedMs === null || startedMs <= 0) continue;
+
+        const receiptId = extractReceiptIdFromTaskRunId(row.run_id);
+        if (receiptId && seenReceiptIds.has(receiptId)) continue;
+        if (hasRunNear(taskId, startedMs, RUN_DEDUPE_WINDOW_MS)) continue;
+
+        const rawStatus = mapLegacyStatus(row.status);
+        const status = rawStatus === TaskStatus.Running || rawStatus === null ? TaskStatus.Error : rawStatus;
+        const endedMs = toFiniteNumberOrNull(row.ended_at);
+        const durationMs = endedMs !== null && endedMs >= startedMs ? endedMs - startedMs : null;
+        const rawError = typeof row.error === 'string' && row.error.trim() ? row.error.trim() : null;
+        const error =
+          status === TaskStatus.Success
+            ? null
+            : (rawError ?? (rawStatus === TaskStatus.Running || row.status === 'interrupted'
+              ? 'Interrupted before completion'
+              : null));
+        const summary = typeof row.terminal_summary === 'string' && row.terminal_summary.trim()
+          ? row.terminal_summary.trim()
+          : null;
+        const rawTaskRowId = typeof row.task_id === 'string' && row.task_id.trim()
+          ? row.task_id.trim()
+          : `${taskId}-${startedMs}`;
+
+        if (receiptId) seenReceiptIds.add(receiptId);
+        recordRunTime(taskId, startedMs);
+        runs.push({
+          id: `legacy-taskrun-${rawTaskRowId}`,
+          taskId,
+          sessionId: null,
+          sessionKey: typeof row.child_session_key === 'string' && row.child_session_key.trim()
+            ? row.child_session_key.trim()
+            : null,
+          status,
+          startedAt: new Date(startedMs).toISOString(),
+          finishedAt: endedMs !== null ? new Date(endedMs).toISOString() : null,
+          durationMs,
+          error,
+          summary,
+          deliveryError: null,
+          deliveryStatus: mapLegacyDeliveryStatus(row.delivery_status),
+          deliveryChannel: taskDeliveryChannelById.get(taskId) ?? null,
+          _startedMs: startedMs,
+        });
       }
     } catch {
-      // ignore unreadable legacy db
-    } finally {
-      legacyDb?.close();
+      // ignore malformed task_runs table
     }
   }
 
-  return results;
+  // Source 2: `openclaw.sqlite` -> `cron_run_receipts` (covers historical runs beyond `task_runs` retention)
+  if (legacyDb && tableExists(legacyDb, 'cron_run_receipts')) {
+    try {
+      const rows = legacyDb
+        .prepare('SELECT * FROM cron_run_receipts ORDER BY started_at_ms DESC')
+        .all() as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const taskId = typeof row.job_id === 'string' ? row.job_id.trim() : '';
+        if (!taskId || !taskDeliveryChannelById.has(taskId)) continue;
+
+        const startedMs = toFiniteNumberOrNull(row.started_at_ms);
+        if (startedMs === null || startedMs <= 0) continue;
+
+        const receiptId = typeof row.receipt_id === 'string' && row.receipt_id.trim()
+          ? row.receipt_id.trim()
+          : `${taskId}-${startedMs}`;
+        if (seenReceiptIds.has(receiptId) || hasRunNear(taskId, startedMs, RUN_DEDUPE_WINDOW_MS)) {
+          continue;
+        }
+
+        const rawStatus = mapLegacyStatus(row.status);
+        const status = rawStatus === TaskStatus.Running || rawStatus === null ? TaskStatus.Error : rawStatus;
+        const finishedMs = toFiniteNumberOrNull(row.finished_at_ms);
+        const durationMs = finishedMs !== null && finishedMs >= startedMs ? finishedMs - startedMs : null;
+        const rawError = typeof row.error_text === 'string' && row.error_text.trim()
+          ? row.error_text.trim()
+          : null;
+        const error =
+          status === TaskStatus.Success
+            ? null
+            : (rawError ?? (rawStatus === TaskStatus.Running || row.status === 'interrupted'
+              ? 'Interrupted before completion'
+              : null));
+
+        seenReceiptIds.add(receiptId);
+        recordRunTime(taskId, startedMs);
+        runs.push({
+          id: `legacy-receipt-${receiptId}`,
+          taskId,
+          sessionId: null,
+          sessionKey: null,
+          status,
+          startedAt: new Date(startedMs).toISOString(),
+          finishedAt: finishedMs !== null ? new Date(finishedMs).toISOString() : null,
+          durationMs,
+          error,
+          summary: null,
+          deliveryError: null,
+          deliveryStatus: null,
+          deliveryChannel: taskDeliveryChannelById.get(taskId) ?? null,
+          _startedMs: startedMs,
+        });
+      }
+    } catch {
+      // ignore malformed cron_run_receipts table
+    }
+  }
+
+  // Source 3: `<openclawStateDir>/cron/runs/*.jsonl` (and `.jsonl.migrated` matching migrated task IDs)
+  const runsDir = path.join(openclawStateDir, 'cron', 'runs');
+  if (fs.existsSync(runsDir)) {
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(runsDir);
+    } catch {
+      files = [];
+    }
+    for (const fileName of files) {
+      const match = fileName.match(/^(.+?)\.jsonl(?:\.migrated)?$/);
+      if (!match) continue;
+      const fallbackJobId = match[1];
+      let content: string;
+      try {
+        content = fs.readFileSync(path.join(runsDir, fileName), 'utf8');
+      } catch {
+        continue;
+      }
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const entry = safeParseJsonObject(trimmed);
+        if (!entry) continue;
+        const taskId = typeof entry.jobId === 'string' && entry.jobId.trim()
+          ? entry.jobId.trim()
+          : fallbackJobId;
+        if (!taskDeliveryChannelById.has(taskId)) continue;
+        if (typeof entry.action === 'string' && entry.action !== 'finished' && !entry.status) continue;
+
+        const tsMs = toFiniteNumberOrNull(entry.ts);
+        const startedMs = toFiniteNumberOrNull(entry.runAtMs) ?? tsMs;
+        if (startedMs === null || startedMs <= 0) continue;
+        if (hasRunNear(taskId, startedMs, RUN_DEDUPE_WINDOW_MS)) continue;
+
+        const rawStatus = mapLegacyStatus(entry.status);
+        let status = rawStatus === TaskStatus.Running || rawStatus === null ? TaskStatus.Error : rawStatus;
+        const rawError = typeof entry.error === 'string' && entry.error.trim() ? entry.error.trim() : null;
+        const deliveryError = typeof entry.deliveryError === 'string' && entry.deliveryError.trim()
+          ? entry.deliveryError.trim()
+          : null;
+        if (status === TaskStatus.Error && rawError && deliveryError && rawError === deliveryError) {
+          status = TaskStatus.Success;
+        }
+        const durationMs = toFiniteNumberOrNull(entry.durationMs);
+        const finishedMs = tsMs !== null && tsMs >= startedMs
+          ? tsMs
+          : (durationMs !== null ? startedMs + durationMs : null);
+
+        recordRunTime(taskId, startedMs);
+        runs.push({
+          id: `legacy-jsonl-${taskId}-${tsMs ?? startedMs}`,
+          taskId,
+          sessionId: null,
+          sessionKey: typeof entry.sessionKey === 'string' && entry.sessionKey.trim()
+            ? entry.sessionKey.trim()
+            : null,
+          status,
+          startedAt: new Date(startedMs).toISOString(),
+          finishedAt: finishedMs !== null ? new Date(finishedMs).toISOString() : null,
+          durationMs,
+          error: status === TaskStatus.Success ? null : rawError,
+          summary: typeof entry.summary === 'string' && entry.summary.trim() ? entry.summary.trim() : null,
+          deliveryError,
+          deliveryStatus: mapLegacyDeliveryStatus(entry.deliveryStatus),
+          deliveryChannel: taskDeliveryChannelById.get(taskId) ?? null,
+          _startedMs: startedMs,
+        });
+      }
+    }
+  }
+
+  // Source 4 + Session linking: link runs to existing `cowork_sessions` via `scheduled_task_id`
+  // and recover historical single-run sessions predating `task_runs`/`cron_run_receipts`.
+  if (tableExists(targetDb, 'cowork_sessions') && getTableColumns(targetDb, 'cowork_sessions').has('scheduled_task_id')) {
+    try {
+      const sessionRows = targetDb
+        .prepare(
+          'SELECT id, scheduled_task_id, created_at, updated_at FROM cowork_sessions WHERE scheduled_task_id IS NOT NULL ORDER BY created_at DESC',
+        )
+        .all() as Array<{
+          id: string;
+          scheduled_task_id: string;
+          created_at: number;
+          updated_at: number;
+        }>;
+      const sessionsByTask = new Map<string, typeof sessionRows>();
+      for (const s of sessionRows) {
+        if (!taskDeliveryChannelById.has(s.scheduled_task_id)) continue;
+        const list = sessionsByTask.get(s.scheduled_task_id);
+        if (list) list.push(s);
+        else sessionsByTask.set(s.scheduled_task_id, [s]);
+      }
+
+      for (const run of runs) {
+        const candidates = sessionsByTask.get(run.taskId);
+        if (!candidates || candidates.length === 0) continue;
+
+        let bestExact: { id: string; delta: number } | null = null;
+        let coveringSessionId: string | null = null;
+        for (const s of candidates) {
+          const delta = Math.abs(s.created_at - run._startedMs);
+          if (delta <= SESSION_MATCH_WINDOW_MS && (!bestExact || delta < bestExact.delta)) {
+            bestExact = { id: s.id, delta };
+          }
+          if (
+            !coveringSessionId
+            && s.created_at - SESSION_MATCH_WINDOW_MS <= run._startedMs
+            && run._startedMs <= s.updated_at + SESSION_MATCH_WINDOW_MS
+          ) {
+            coveringSessionId = s.id;
+          }
+        }
+        if (bestExact) {
+          run.sessionId = bestExact.id;
+        } else if (!run.summary && !run.error && coveringSessionId) {
+          run.sessionId = coveringSessionId;
+        }
+      }
+
+      for (const [taskId, taskSessions] of sessionsByTask.entries()) {
+        for (const s of taskSessions) {
+          if (!Number.isFinite(s.created_at) || s.created_at <= 0) continue;
+          if (hasRunNear(taskId, s.created_at, SESSION_MATCH_WINDOW_MS)) continue;
+
+          // Skip long-lived multi-run container sessions when runs already fall inside their span.
+          const spanMs = Math.max(0, (s.updated_at || s.created_at) - s.created_at);
+          if (spanMs > CONTAINER_SESSION_SPAN_MS) {
+            const times = seenTimesByTask.get(taskId) ?? [];
+            const covered = times.some(
+              (t) => s.created_at - SESSION_MATCH_WINDOW_MS <= t && t <= s.updated_at + SESSION_MATCH_WINDOW_MS,
+            );
+            if (covered) continue;
+          }
+
+          const finishedMs = Number.isFinite(s.updated_at) && s.updated_at >= s.created_at
+            ? s.updated_at
+            : null;
+          const durationMs = finishedMs !== null ? Math.min(finishedMs - s.created_at, 3_600_000) : null;
+          recordRunTime(taskId, s.created_at);
+          runs.push({
+            id: `legacy-session-${s.id}`,
+            taskId,
+            sessionId: s.id,
+            sessionKey: null,
+            status: TaskStatus.Success,
+            startedAt: new Date(s.created_at).toISOString(),
+            finishedAt: finishedMs !== null ? new Date(finishedMs).toISOString() : null,
+            durationMs,
+            error: null,
+            summary: null,
+            deliveryError: null,
+            deliveryStatus: null,
+            deliveryChannel: taskDeliveryChannelById.get(taskId) ?? null,
+            _startedMs: s.created_at,
+          });
+        }
+      }
+    } catch {
+      // ignore cowork_sessions lookup failure
+    }
+  }
+
+  // Avoid leaving unresolvable OpenClaw session keys on runs without local
+  // session/summary/error (which would trigger a retry spinner in RunSessionModal).
+  return runs.map(({ _startedMs: _ignored, ...run }) => {
+    if (!run.sessionId && !run.summary && !run.error) {
+      return { ...run, sessionKey: null };
+    }
+    return run;
+  });
+}
+
+export function migrateLegacyScheduledTasksAndRuns(params: {
+  openclawStateDir: string;
+  db: Database.Database;
+  nowMs?: number;
+}): { tasksImported: number; runsImported: number } {
+  const { openclawStateDir, db, nowMs } = params;
+  const openclawDbPath = path.join(openclawStateDir, 'state', 'openclaw.sqlite');
+  const openedLegacy = openLegacyOpenClawDbReadOnly(openclawDbPath);
+
+  try {
+    const legacyDb = openedLegacy?.db ?? null;
+    const scheduler = new LobsterScheduler({
+      db,
+      ...(typeof nowMs === 'number' ? { now: () => nowMs } : {}),
+    });
+    const legacyJobs = extractLegacyCronJobs(openclawStateDir, legacyDb);
+    const tasksImported = scheduler.importLegacyJobs(legacyJobs);
+    const legacyRuns = extractLegacyCronRuns({
+      openclawStateDir,
+      legacyDb,
+      targetDb: db,
+      migratedJobs: legacyJobs,
+    });
+    const runsImported = scheduler.importLegacyRuns(legacyRuns);
+    return { tasksImported, runsImported };
+  } finally {
+    openedLegacy?.close();
+  }
+}
+
+function isCronMigrationArchiveEntry(archivePath: string): boolean {
+  const normalized = archivePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return (
+    normalized === 'openclaw-state/state/openclaw.sqlite'
+    || normalized === 'openclaw-state/state/openclaw.sqlite-wal'
+    || normalized === 'openclaw-state/state/openclaw.sqlite-shm'
+    || normalized.startsWith('openclaw-state/cron/')
+  );
+}
+
+function findLegacyStateArchivePath(userDataDir: string, db: Database.Database): string | null {
+  const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+  if (rawReport) {
+    try {
+      const report = JSON.parse(rawReport) as MigrationV2Report;
+      if (report?.legacyStateArchivePath && fs.existsSync(report.legacyStateArchivePath)) {
+        return report.legacyStateArchivePath;
+      }
+    } catch {
+      // fall through to directory scan
+    }
+  }
+
+  const backupsRoot = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME);
+  if (!fs.existsSync(backupsRoot)) return null;
+  try {
+    const dirs = fs
+      .readdirSync(backupsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+      .reverse();
+    for (const dirName of dirs) {
+      const candidate = path.join(backupsRoot, dirName, 'legacy-openclaw-state.tar.gz');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export interface LegacyScheduledTaskBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  tasksImported: number;
+  runsImported: number;
+  error?: string;
+}
+
+/**
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before `cron_jobs` / run-history extraction was fixed.
+ *
+ * Streams only `openclaw-state/state/openclaw.sqlite*` and `openclaw-state/cron/*`
+ * from `legacy-openclaw-backup/<ts>/legacy-openclaw-state.tar.gz` into a temp
+ * directory, imports missing tasks & runs idempotently, and cleans up.
+ */
+export async function backfillLegacyScheduledTasksFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyScheduledTaskBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', tasksImported: 0, runsImported: 0 };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', tasksImported: 0, runsImported: 0 };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', tasksImported: 0, runsImported: 0 };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds to archive lookup.
+  }
+
+  const archivePath = findLegacyStateArchivePath(userDataDir, db);
+  if (!archivePath) {
+    setKv(
+      db,
+      MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), skipped: 'noBackupArchive' }),
+    );
+    return { status: 'skipped', tasksImported: 0, runsImported: 0 };
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-cron-backfill-'));
+  try {
+    await extractMatchingEntriesFromTarGz(archivePath, tmpDir, isCronMigrationArchiveEntry);
+    const extractedStateDir = path.join(tmpDir, 'openclaw-state');
+    const { tasksImported, runsImported } = migrateLegacyScheduledTasksAndRuns({
+      openclawStateDir: extractedStateDir,
+      db,
+      nowMs: now().getTime(),
+    });
+
+    const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+    if (rawReport && (tasksImported > 0 || runsImported > 0)) {
+      try {
+        const report = JSON.parse(rawReport) as MigrationV2Report;
+        if (report && report.version === 2 && report.summary) {
+          report.summary.scheduledTasksMigrated =
+            (report.summary.scheduledTasksMigrated ?? 0) + tasksImported;
+          report.summary.scheduledTaskRunsMigrated =
+            (report.summary.scheduledTaskRunsMigrated ?? 0) + runsImported;
+          setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
+          if (report.backupDir && fs.existsSync(report.backupDir)) {
+            fs.writeFileSync(
+              path.join(report.backupDir, 'migration-report.json'),
+              `${JSON.stringify(report, null, 2)}\n`,
+              'utf8',
+            );
+          }
+        }
+      } catch {
+        // Best-effort report metadata update.
+      }
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), tasksImported, runsImported }),
+    );
+    return { status: 'completed', tasksImported, runsImported };
+  } catch (error) {
+    return {
+      status: 'failed',
+      tasksImported: 0,
+      runsImported: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -394,7 +1229,9 @@ export function runLegacyOpenClawMigration(
     const hasOpenClawState = fs.existsSync(openclawStateDir);
     const hasLegacyEngineKv = getKv(db, 'cowork.agent_engine') === 'openclaw';
     if (!hasOpenClawState && !hasLegacyEngineKv) {
-      setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt: now().toISOString(), freshInstall: true }));
+      const migratedAt = now().toISOString();
+      setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
+      setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -431,10 +1268,15 @@ export function runLegacyOpenClawMigration(
         archivedModules,
       );
 
-      // Scheduled tasks: import OpenClaw cron jobs into LobsterScheduler tables.
-      const scheduler = new LobsterScheduler({ db });
-      const legacyJobs = extractLegacyCronJobs(openclawStateDir);
-      const scheduledTasksMigrated = scheduler.importLegacyJobs(legacyJobs);
+      // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
+      const {
+        tasksImported: scheduledTasksMigrated,
+        runsImported: scheduledTaskRunsMigrated,
+      } = migrateLegacyScheduledTasksAndRuns({
+        openclawStateDir,
+        db,
+        nowMs: now().getTime(),
+      });
 
       // IM allowFrom whitelists for the 7 retained platforms.
       let imAllowListsMigrated = 0;
@@ -629,6 +1471,7 @@ export function runLegacyOpenClawMigration(
         path.join(openclawRootDir, 'mcp-packages'),
         path.join(openclawRootDir, '.compile-cache'),
         path.join(openclawRootDir, 'repair-backups'),
+        path.join(openclawStateDir, '.compile-cache'),
         path.join(openclawStateDir, 'memory'),
         path.join(userDataDir, 'dsh-runtime'), // Old experimental 160MB runtime cache
       ];
@@ -659,6 +1502,7 @@ export function runLegacyOpenClawMigration(
         summary: {
           workspacesMigrated,
           scheduledTasksMigrated,
+          scheduledTaskRunsMigrated,
           imAllowListsMigrated,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
@@ -672,6 +1516,15 @@ export function runLegacyOpenClawMigration(
         setKv(db, 'cowork.agent_engine', 'dsh');
         setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
         setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt: report.migratedAt, backupDir }));
+        setKv(
+          db,
+          MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            tasksImported: scheduledTasksMigrated,
+            runsImported: scheduledTaskRunsMigrated,
+          }),
+        );
       });
       commitTx();
 

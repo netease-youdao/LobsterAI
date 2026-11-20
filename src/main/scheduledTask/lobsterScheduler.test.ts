@@ -116,4 +116,84 @@ describe('LobsterScheduler', () => {
     const updated = scheduler.getTask(task.id)!;
     expect(updated.state.nextRunAtMs).toBeGreaterThan(clock);
   });
+
+  test('imports legacy jobs and runs idempotently while enforcing FK safety and backfilling lastRun state', () => {
+    const nowMs = Date.parse('2026-11-20T02:00:00.000Z');
+    const scheduler = new LobsterScheduler({
+      db: createMemoryDb(),
+      now: () => nowMs,
+    });
+
+    const importedJobs = scheduler.importLegacyJobs([
+      {
+        id: 'legacy-job-1',
+        input: {
+          name: 'Morning Briefing',
+          description: 'Daily tech news',
+          enabled: true,
+          schedule: { kind: 'cron', expr: '30 8 * * 1,2,3,4,5', tz: 'Asia/Shanghai' },
+          sessionTarget: SessionTarget.Isolated,
+          wakeMode: WakeMode.Now,
+          payload: { kind: 'agentTurn', message: 'Summarize news' },
+          delivery: { mode: DeliveryMode.None },
+        },
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-11-19T01:00:00.000Z',
+      },
+    ]);
+    expect(importedJobs).toBe(1);
+
+    const importedRuns = scheduler.importLegacyRuns([
+      {
+        id: 'legacy-run-1',
+        taskId: 'legacy-job-1',
+        status: TaskStatus.Success,
+        startedAt: '2026-11-19T00:30:00.000Z',
+        finishedAt: '2026-11-19T00:32:00.000Z',
+        durationMs: 120_000,
+        summary: 'Briefing complete',
+      },
+      {
+        // Orphan run for a deleted/internal job must be skipped cleanly without FK violation.
+        id: 'legacy-run-orphan',
+        taskId: 'deleted-job-999',
+        status: TaskStatus.Success,
+        startedAt: '2026-11-19T00:30:00.000Z',
+      },
+      {
+        // Duplicate timestamp for same task must be skipped.
+        id: 'legacy-run-1-dup',
+        taskId: 'legacy-job-1',
+        status: TaskStatus.Success,
+        startedAt: '2026-11-19T00:30:00.000Z',
+      },
+    ]);
+    expect(importedRuns).toBe(1);
+
+    const task = scheduler.getTask('legacy-job-1')!;
+    expect(task.createdAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(task.state.nextRunAtMs).toBeGreaterThan(nowMs);
+    expect(task.state.lastRunAtMs).toBe(Date.parse('2026-11-19T00:30:00.000Z'));
+    expect(task.state.lastStatus).toBe(TaskStatus.Success);
+    expect(scheduler.countRuns('legacy-job-1')).toBe(1);
+
+    // Re-importing is idempotent.
+    expect(
+      scheduler.importLegacyJobs([
+        {
+          id: 'legacy-job-1',
+          input: {
+            name: 'Changed Name',
+            description: '',
+            enabled: false,
+            schedule: { kind: 'every', everyMs: 60_000 },
+            sessionTarget: SessionTarget.Isolated,
+            wakeMode: WakeMode.Now,
+            payload: { kind: 'agentTurn', message: 'Other' },
+          },
+        },
+      ]),
+    ).toBe(0);
+    expect(scheduler.getTask('legacy-job-1')!.name).toBe('Morning Briefing');
+  });
 });
