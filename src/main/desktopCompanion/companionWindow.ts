@@ -36,6 +36,43 @@ export function setCompanionWindowLevel(win: BrowserWindow, level: CompanionWind
 const PANEL_BLUR_DELAY_MS = 120;
 /** Focus requests for a macOS panel that has not become key since it was shown. */
 const PANEL_REFOCUS_ATTEMPTS = 2;
+/** Fallback delay after `did-finish-load` if Chromium/Electron drops `ready-to-show` on a hidden window. */
+const READY_TO_SHOW_FALLBACK_MS = 250;
+
+/**
+ * Runs `onReady` once when a newly created hidden companion window paints (`ready-to-show`),
+ * falling back shortly after `did-finish-load` so a dropped `ready-to-show` cannot leave the
+ * window hidden permanently.
+ */
+export function onCompanionWindowReadyToShow(
+  win: BrowserWindow,
+  onReady: () => void,
+  fallbackMs = READY_TO_SHOW_FALLBACK_MS,
+): void {
+  let settled = false;
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(fallbackTimer);
+    win.removeListener('ready-to-show', finish);
+    win.removeListener('closed', cancel);
+    if (!win.isDestroyed()) onReady();
+  };
+  const cancel = () => {
+    settled = true;
+    clearTimeout(fallbackTimer);
+    win.removeListener('ready-to-show', finish);
+  };
+  const scheduleFallback = () => {
+    if (settled || win.isDestroyed()) return;
+    clearTimeout(fallbackTimer);
+    fallbackTimer = setTimeout(finish, fallbackMs);
+  };
+  win.once('ready-to-show', finish);
+  win.webContents.once('did-finish-load', scheduleFallback);
+  win.once('closed', cancel);
+}
 
 /** Dismiss interactive panels on blur, preserving passive notifications and native dialogs. */
 export function dismissCompanionPanelOnBlur(win: BrowserWindow, dismiss: () => void, shouldDismiss = () => true): void {
