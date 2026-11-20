@@ -381,6 +381,22 @@ const artifactSlice = createSlice({
       }
     },
 
+    // A library preview and a conversation card may show the same document under different IDs.
+    // Saving the file updates existing cards without registering a new artifact or retargeting a tab.
+    syncMarkdownFileContent(state, action: PayloadAction<{
+      sessionId: string; filePath: string; content: string; contentVersion: number;
+    }>) {
+      const { sessionId, filePath, content, contentVersion } = action.payload;
+      const key = normalizeFilePathForDedup(filePath);
+      for (const item of state.artifactsBySession[sessionId] ?? []) {
+        if (item.type === ArtifactTypeValue.Markdown && item.filePath
+          && normalizeFilePathForDedup(item.filePath) === key && item.content !== content) {
+          item.content = content;
+          item.contentVersion = contentVersion;
+        }
+      }
+    },
+
     updateLocalServiceProjectMetadata(
       state,
       action: PayloadAction<UpdateLocalServiceProjectMetadataPayload>,
@@ -502,6 +518,7 @@ export const {
   setSessionArtifacts,
   addArtifact,
   addLinkedFileArtifact,
+  syncMarkdownFileContent,
   updateLocalServiceProjectMetadata,
   selectArtifact,
   openArtifactPreviewTab,
