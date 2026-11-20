@@ -6,6 +6,7 @@
 // 3. `tools/pre-execute` approval policy evaluation combining `commandSafety.ts`,
 //    session `executionMode`, and persistent `allow-always` rules.
 
+import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 import type { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import { getCommandDangerLevel, isDangerousCommand } from '../commandSafety';
 import type {
@@ -27,7 +28,9 @@ export interface ApprovalAllowRulePort {
     toolName: string;
     args: unknown;
     sessionId?: string;
+    coworkSessionId?: string;
     agentId: string;
+    scopeKey?: string;
   }): boolean;
 }
 
@@ -42,13 +45,30 @@ export interface HostToolProvider {
 
 const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'shell', 'exec', 'terminal_exec']);
 
-function extractShellCommand(args: unknown): string {
+export function extractShellCommandFromArgs(args: unknown): string {
   if (!args || typeof args !== 'object') return '';
   const record = args as Record<string, unknown>;
   if (typeof record.command === 'string') return record.command;
   if (typeof record.cmd === 'string') return record.cmd;
   if (typeof record.script === 'string') return record.script;
   return '';
+}
+
+export function buildApprovalScopeKey(
+  toolName: string,
+  args: unknown,
+  dangerReason?: string,
+): string {
+  const normalizedTool = toolName.trim().toLowerCase() || 'tool';
+  if (SHELL_TOOL_NAMES.has(normalizedTool)) {
+    const resolvedReason = dangerReason
+      || (() => {
+        const command = extractShellCommandFromArgs(args);
+        return command ? getCommandDangerLevel(command).reason : '';
+      })();
+    return resolvedReason ? `shell:${resolvedReason}` : 'shell:exec';
+  }
+  return `tool:${normalizedTool}`;
 }
 
 /**
@@ -58,43 +78,51 @@ export function evaluateDshToolApproval(
   request: DshBridgeApprovalEvaluateRequest,
   allowRules?: ApprovalAllowRulePort,
 ): DshBridgeApprovalDecision {
-  const toolName = request.toolName.trim();
-  const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
-  const command = isShellTool ? extractShellCommand(request.args) : '';
-
-  if (command) {
-    const danger = getCommandDangerLevel(command);
-    // High-severity destructive shell commands always require explicit confirmation
-    // (never silently auto-approved, even under auto mode or allow-always).
-    if (danger.level === 'destructive') {
-      return {
-        kind: 'ask',
-        reason: `Destructive command requires confirmation (${danger.reason}): ${command.slice(0, 160)}`,
-      };
-    }
-    if (isDangerousCommand(command) && request.executionMode !== 'auto') {
-      return {
-        kind: 'ask',
-        reason: `Potentially dangerous command requires confirmation (${danger.reason}): ${command.slice(0, 160)}`,
-      };
-    }
+  // Explicit DSH `danger-full-access` preset sets DSH approvalPolicy='never' and
+  // bypasses all interactive popups so the user is never interrupted repeatedly.
+  if (request.permissionPreset === DshPermissionPreset.FullAccess) {
+    return { kind: 'allow' };
   }
 
-  // Persisted allow-always rules short-circuit DSH's interactive prompt.
+  const toolName = request.toolName.trim();
+  const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
+  const command = isShellTool ? extractShellCommandFromArgs(request.args) : '';
+  const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
+  const scopeKey = buildApprovalScopeKey(toolName, request.args, danger.reason);
+
+  // High-severity destructive shell commands require explicit confirmation unless
+  // the user explicitly switched the session/default mode to `danger-full-access`.
+  if (command && danger.level === 'destructive') {
+    return {
+      kind: 'ask',
+      reason: `Destructive command requires confirmation (${danger.reason}): ${command.slice(0, 160)}`,
+    };
+  }
+
+  // Session-level or persisted allow rules short-circuit repeated caution prompts
+  // (e.g. git-push or file-delete after clicking "Don't ask again in this session").
   if (
     allowRules?.isToolAllowedAlways({
       toolName,
       args: request.args,
       sessionId: request.sessionId,
+      coworkSessionId: request.coworkSessionId,
       agentId: request.agentId,
+      scopeKey,
     })
   ) {
     return { kind: 'allow' };
   }
 
-  // Auto execution mode approves non-destructive calls directly.
   if (request.executionMode === 'auto') {
     return { kind: 'allow' };
+  }
+
+  if (command && isDangerousCommand(command)) {
+    return {
+      kind: 'ask',
+      reason: `Potentially dangerous command requires confirmation (${danger.reason}): ${command.slice(0, 160)}`,
+    };
   }
 
   return { kind: 'passthrough' };

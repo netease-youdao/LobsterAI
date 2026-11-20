@@ -9157,6 +9157,8 @@ if (!gotTheLock) {
     closeEcosystemWindow: () => {
       dshBootstrap?.closeEcosystemWindow();
     },
+    getPermissionPreset: (sessionId) => getDshBootstrap().getPermissionPreset(sessionId),
+    setPermissionPreset: (preset, sessionId) => getDshBootstrap().setPermissionPreset(preset, sessionId),
   });
 
   registerMigrationV2Handlers({

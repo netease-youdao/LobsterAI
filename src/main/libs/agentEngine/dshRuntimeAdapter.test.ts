@@ -1,7 +1,11 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import { getCoworkLlmTrace, isValidLlmTraceId } from '../../../shared/cowork/llmTurnUsage';
-import { DSH_SESSION_ID_PREFIX } from '../../../shared/dshEngine/hostConstants';
+import {
+  DSH_SESSION_ID_PREFIX,
+  DshApprovalPermissionAction,
+  DshPermissionPreset,
+} from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage } from '../../coworkStore';
 import type { DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from '../dsh/dshTypertClient';
 import { hasLlmUsageContext } from '../llmUsageContext';
@@ -533,5 +537,123 @@ describe('DshRuntimeAdapter', () => {
     expect(errors).toEqual(['model "deepseek-flash" returned a completed response with no visible text or tool calls']);
     // Failed attempt's placeholder thinking row must be deleted cleanly.
     expect(messages.map((m) => m.type)).toEqual(['user']);
+  });
+
+  test('enriches approval requests with cached args and honors allow-session and full-access switch', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-approve',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-approve-1`,
+    });
+
+    const waterfallMap = new Map<string, (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>>();
+    const fakeClient = {
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn((event: string, handler: (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>) => {
+        waterfallMap.set(event, handler);
+        return () => waterfallMap.delete(event);
+      }),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const setPermissionPreset = vi.fn(async () => ({ ok: true }));
+    const onPermissionPresetChanged = vi.fn();
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+        consumeApprovalCallContext: vi.fn((callId: string) => (
+          callId === 'call-git-1'
+            ? {
+                toolName: 'bash',
+                args: {
+                  command: 'cd /Users/demo/repo && git push origin main',
+                  description: 'Push committed branch to GitHub',
+                },
+                permissionPreset: DshPermissionPreset.WorkspaceWrite,
+                recordedAt: Date.now(),
+              }
+            : null
+        )),
+      },
+      store,
+      onPermissionPresetChanged,
+    });
+
+    await adapter.continueSession('cw-approve', 'Push code');
+
+    const capturedInputs: Array<Record<string, unknown>> = [];
+    adapter.on('permissionRequest', (_sid, req) => {
+      capturedInputs.push(req.toolInput);
+      if (capturedInputs.length === 1) {
+        adapter.respondToPermission(req.requestId, {
+          behavior: 'allow',
+          updatedPermissions: [
+            { type: DshApprovalPermissionAction.AllowSession, scope: 'shell:git-push' },
+          ],
+        });
+      } else {
+        adapter.respondToPermission(req.requestId, {
+          behavior: 'allow',
+          updatedPermissions: [
+            {
+              type: DshApprovalPermissionAction.SetPermissionPreset,
+              preset: DshPermissionPreset.FullAccess,
+              global: true,
+            },
+          ],
+        });
+      }
+    });
+
+    const approvalHandler = waterfallMap.get('approval/request')!;
+    const out1 = await approvalHandler({
+      event: 'approval/request',
+      eventId: 'ev-a1',
+      agentId: 'dsh-approve-1',
+      request: {
+        toolName: 'bash',
+        callId: 'call-git-1',
+        reason: 'Potentially dangerous command requires confirmation (git-push): cd /Users/demo/repo && git push origin main',
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(out1).toEqual({ kind: 'result', value: 'allowed-once' });
+    expect(capturedInputs[0].command).toBe('cd /Users/demo/repo && git push origin main');
+    expect(capturedInputs[0].description).toBe('Push committed branch to GitHub');
+    expect(capturedInputs[0].dangerLevel).toBe('caution');
+    expect(capturedInputs[0].dangerReason).toBe('git-push');
+    expect(capturedInputs[0].approvalScopeKey).toBe('shell:git-push');
+    expect(
+      adapter.isToolAllowedInSession({
+        toolName: 'bash',
+        args: { command: 'git push origin main' },
+        sessionId: 'dsh-approve-1',
+      }),
+    ).toBe(true);
+
+    const out2 = await approvalHandler({
+      event: 'approval/request',
+      eventId: 'ev-a2',
+      agentId: 'dsh-approve-1',
+      request: {
+        toolName: 'bash',
+        callId: 'call-other',
+        reason: 'Needs access outside workspace',
+      },
+      signal: new AbortController().signal,
+    });
+    expect(out2).toEqual({ kind: 'result', value: 'allowed-once' });
+    expect(setPermissionPreset).toHaveBeenCalledWith(DshPermissionPreset.FullAccess);
+    expect(onPermissionPresetChanged).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, undefined);
   });
 });

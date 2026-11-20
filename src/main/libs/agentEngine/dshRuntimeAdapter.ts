@@ -16,8 +16,18 @@ import { CoworkBtwStatus } from '../../../shared/cowork/btw';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { type CoworkSteerResponse,CoworkSteerStatus } from '../../../shared/cowork/steer';
-import { DSH_SESSION_ID_PREFIX } from '../../../shared/dshEngine/hostConstants';
+import {
+  DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_SESSION_ID_PREFIX,
+  DshApprovalPermissionAction,
+  DshPermissionPreset,
+} from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
+import { getCommandDangerLevel } from '../commandSafety';
+import {
+  buildApprovalScopeKey,
+  extractShellCommandFromArgs,
+} from '../dsh/dshHostBridgeWiring';
 import type {
   DshHostManager,
   DshHostSessionContext,
@@ -100,7 +110,7 @@ export interface DshRuntimeAdapterDeps {
   hostManager: Pick<
     DshHostManager,
     'start' | 'isReady' | 'getClient' | 'bindSessionContext' | 'deleteSessionFiles'
-  >;
+  > & Partial<Pick<DshHostManager, 'setPermissionPreset' | 'consumeApprovalCallContext'>>;
   store: DshCoworkStorePort;
   resolveModelSelection?: (
     sessionId: string,
@@ -111,6 +121,11 @@ export interface DshRuntimeAdapterDeps {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
+  resolveDefaultPermissionPreset?: () => DshPermissionPreset;
+  onPermissionPresetChanged?: (
+    preset: DshPermissionPreset,
+    coworkSessionId?: string,
+  ) => Promise<void> | void;
 }
 
 interface ActiveTurnState {
@@ -256,11 +271,15 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly store: DshCoworkStorePort;
   private readonly resolveModelSelection?: DshRuntimeAdapterDeps['resolveModelSelection'];
   private readonly resolveAllowedSkillIds?: DshRuntimeAdapterDeps['resolveAllowedSkillIds'];
+  private readonly resolveDefaultPermissionPreset?: DshRuntimeAdapterDeps['resolveDefaultPermissionPreset'];
+  private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
   private readonly dshToCoworkSession = new Map<string, string>();
   private readonly pendingInteractions = new Map<string, PendingInteraction>();
   private readonly btwAbortControllers = new Map<string, AbortController>();
+  private readonly sessionAllowedScopes = new Map<string, Set<string>>();
+  private readonly sessionPermissionPresets = new Map<string, DshPermissionPreset>();
   private wiredClient: DshTypertClient | null = null;
   private unwireClientHandlers: Array<() => void> = [];
 
@@ -270,6 +289,50 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.store = deps.store;
     this.resolveModelSelection = deps.resolveModelSelection;
     this.resolveAllowedSkillIds = deps.resolveAllowedSkillIds;
+    this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
+    this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
+  }
+
+  getEffectivePermissionPreset(coworkSessionId?: string): DshPermissionPreset {
+    if (coworkSessionId) {
+      const override = this.sessionPermissionPresets.get(coworkSessionId);
+      if (override) return override;
+    }
+    return this.resolveDefaultPermissionPreset?.() ?? DEFAULT_DSH_PERMISSION_PRESET;
+  }
+
+  async setSessionPermissionPreset(
+    preset: DshPermissionPreset,
+    coworkSessionId?: string,
+  ): Promise<void> {
+    if (coworkSessionId) {
+      this.sessionPermissionPresets.set(coworkSessionId, preset);
+      const dshSessionId = this.resolveExistingDshSessionId(coworkSessionId);
+      if (dshSessionId && this.hostManager.setPermissionPreset) {
+        await this.hostManager.setPermissionPreset(preset, dshSessionId);
+      }
+      return;
+    }
+    this.sessionPermissionPresets.clear();
+    if (this.hostManager.setPermissionPreset) {
+      await this.hostManager.setPermissionPreset(preset);
+    }
+  }
+
+  isToolAllowedInSession(params: {
+    toolName: string;
+    args: unknown;
+    sessionId?: string;
+    coworkSessionId?: string;
+    scopeKey?: string;
+  }): boolean {
+    const coworkSessionId = params.coworkSessionId
+      ?? (params.sessionId ? this.dshToCoworkSession.get(params.sessionId) : undefined);
+    if (!coworkSessionId) return false;
+    const allowed = this.sessionAllowedScopes.get(coworkSessionId);
+    if (!allowed || allowed.size === 0) return false;
+    const scopeKey = params.scopeKey ?? buildApprovalScopeKey(params.toolName, params.args);
+    return allowed.has(scopeKey) || allowed.has('*');
   }
 
   override on<U extends keyof CoworkRuntimeEvents>(
@@ -662,6 +725,40 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.pendingInteractions.delete(requestId);
 
     if (pending.kind === 'approval') {
+      if (result.behavior === 'allow' && Array.isArray(result.updatedPermissions)) {
+        for (const entry of result.updatedPermissions) {
+          if (!entry || typeof entry !== 'object') continue;
+          const record = entry as Record<string, unknown>;
+          if (record.type === DshApprovalPermissionAction.AllowSession) {
+            const scope = typeof record.scope === 'string' && record.scope.trim()
+              ? record.scope.trim()
+              : typeof pending.request.toolInput?.approvalScopeKey === 'string'
+                ? pending.request.toolInput.approvalScopeKey
+                : '';
+            if (scope) {
+              let set = this.sessionAllowedScopes.get(pending.coworkSessionId);
+              if (!set) {
+                set = new Set<string>();
+                this.sessionAllowedScopes.set(pending.coworkSessionId, set);
+              }
+              set.add(scope);
+            }
+          } else if (record.type === DshApprovalPermissionAction.SetPermissionPreset) {
+            const preset = record.preset;
+            if (
+              preset === DshPermissionPreset.ReadOnly
+              || preset === DshPermissionPreset.WorkspaceWrite
+              || preset === DshPermissionPreset.FullAccess
+            ) {
+              const targetSessionId = record.global === true ? undefined : pending.coworkSessionId;
+              void this.setSessionPermissionPreset(preset, targetSessionId).catch((): void => undefined);
+              void Promise.resolve(this.onPermissionPresetChanged?.(preset, targetSessionId)).catch(
+                (): void => undefined,
+              );
+            }
+          }
+        }
+      }
       const outcomeValue = result.behavior === 'allow' ? 'allowed-once' : 'rejected';
       pending.resolve({ kind: 'result', value: outcomeValue });
     } else {
@@ -699,6 +796,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   onSessionDeleted(sessionId: string): void {
     this.stopSession(sessionId);
+    this.sessionAllowedScopes.delete(sessionId);
+    this.sessionPermissionPresets.delete(sessionId);
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
     if (dshSessionId) {
       this.dshToCoworkSession.delete(dshSessionId);
@@ -742,11 +841,20 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const toolName = kind === 'approval'
       ? String(evt.request.toolName ?? 'tool')
       : DSH_ASK_USER_TOOL_NAME;
+    const callId = typeof evt.request.callId === 'string' ? evt.request.callId : null;
+    const toolInput = kind === 'approval'
+      ? this.enrichApprovalToolInput(
+          toolName,
+          evt.request,
+          callId,
+          coworkSessionId,
+        )
+      : evt.request;
     const permissionRequest: PermissionRequest = {
       requestId,
       toolName,
-      toolInput: evt.request,
-      toolUseId: typeof evt.request.callId === 'string' ? evt.request.callId : null,
+      toolInput,
+      toolUseId: callId,
     };
 
     return new Promise<DshWaterfallOutcome>((resolve) => {
@@ -770,6 +878,80 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       this.emit('permissionRequest', coworkSessionId, permissionRequest);
     });
+  }
+
+  private enrichApprovalToolInput(
+    toolName: string,
+    rawRequest: Record<string, unknown>,
+    callId: string | null,
+    coworkSessionId: string,
+  ): Record<string, unknown> {
+    const cached = callId ? this.hostManager.consumeApprovalCallContext?.(callId) ?? null : null;
+    const rawArgs = cached?.args ?? {};
+    const rawReason = typeof rawRequest.reason === 'string' ? rawRequest.reason.trim() : '';
+
+    // Extract shell command from cached args first; fall back to parsing DSH/guard reason string.
+    let command = extractShellCommandFromArgs(rawArgs).trim();
+    if (!command && rawReason) {
+      const reasonCmdMatch = /requires confirmation \([^)]+\):\s*([\s\S]+)$/i.exec(rawReason);
+      if (reasonCmdMatch?.[1]) {
+        command = reasonCmdMatch[1].trim();
+      }
+    }
+
+    const description = (
+      (typeof rawArgs.justification === 'string' && rawArgs.justification.trim())
+      || (typeof rawArgs.description === 'string' && rawArgs.description.trim())
+      || ''
+    );
+    const filePath = (
+      (typeof rawArgs.file_path === 'string' && rawArgs.file_path.trim())
+      || (typeof rawArgs.path === 'string' && rawArgs.path.trim())
+      || (typeof rawArgs.target_path === 'string' && rawArgs.target_path.trim())
+      || ''
+    );
+    const workdir = (
+      (typeof rawArgs.workdir === 'string' && rawArgs.workdir.trim())
+      || (typeof rawArgs.cwd === 'string' && rawArgs.cwd.trim())
+      || ''
+    );
+    const sandboxPermissions = typeof rawArgs.sandbox_permissions === 'string'
+      ? rawArgs.sandbox_permissions.trim()
+      : '';
+
+    const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
+    let dangerReason = danger.reason;
+    if (!dangerReason && rawReason) {
+      const parsedReason = /requires confirmation \(([^)]+)\)/i.exec(rawReason);
+      if (parsedReason?.[1]) {
+        dangerReason = parsedReason[1].trim();
+      }
+    }
+    const dangerLevel = danger.level !== 'safe'
+      ? danger.level
+      : (rawReason.toLowerCase().startsWith('destructive command')
+        ? 'destructive'
+        : rawReason.toLowerCase().startsWith('potentially dangerous')
+          ? 'caution'
+          : 'safe');
+
+    const approvalScopeKey = buildApprovalScopeKey(toolName, rawArgs, dangerReason);
+    const permissionPreset = cached?.permissionPreset ?? this.getEffectivePermissionPreset(coworkSessionId);
+
+    return {
+      ...rawRequest,
+      ...rawArgs,
+      ...(command ? { command } : {}),
+      ...(description ? { description } : {}),
+      ...(filePath ? { filePath } : {}),
+      ...(workdir ? { workdir } : {}),
+      ...(sandboxPermissions ? { sandboxPermissions } : {}),
+      ...(rawReason ? { reason: rawReason } : {}),
+      dangerLevel,
+      ...(dangerReason ? { dangerReason } : {}),
+      approvalScopeKey,
+      permissionPreset,
+    };
   }
 
   private cancelPendingInteractionsForSession(coworkSessionId: string): void {
@@ -907,6 +1089,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         ? { customSystemPrompt: params.systemPrompt || session.systemPrompt }
         : {}),
       ...(session.executionMode ? { executionMode: session.executionMode } : {}),
+      permissionPreset: this.getEffectivePermissionPreset(sessionId),
     };
     await this.hostManager.bindSessionContext(contextPayload);
 

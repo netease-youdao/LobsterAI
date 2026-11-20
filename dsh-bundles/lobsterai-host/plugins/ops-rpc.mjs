@@ -134,6 +134,51 @@ export function apply(ctx) {
 
   state.syncMcpServers = syncMcpServers;
 
+  const VALID_PERMISSION_PRESETS = new Set([
+    'read-only',
+    'workspace-write',
+    'danger-full-access',
+  ]);
+
+  function applyPermissionPresetToAgent(agent, preset) {
+    if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
+    const permissionPresets = ctx.get('permissionPresets');
+    if (!permissionPresets || typeof permissionPresets.set !== 'function') return false;
+    try {
+      const current = typeof permissionPresets.current === 'function'
+        ? permissionPresets.current(agent.session)
+        : undefined;
+      if (current === preset) return true;
+      permissionPresets.set(agent.session, preset);
+      const approval = ctx.get('approval');
+      if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
+        const spec = permissionPresets.resolve(preset);
+        if (spec?.approval) {
+          approval.setPolicy(agent, spec.approval);
+        }
+      }
+      return true;
+    } catch (error) {
+      ctx.logger.warn(
+        `[LobsterAI:OpsRpc] failed to apply permission preset "${preset}" to session "${agent.id}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
+    }
+  }
+
+  // Ensure every newly attached/created session inherits LobsterAI's active permission preset.
+  ctx.on('agent/created', ({ agent }) => {
+    if (!agent?.session) return;
+    const sid = agent.id || agent.session.id;
+    const bound = sid ? state.sessionContexts.get(sid) : undefined;
+    const targetPreset = typeof bound?.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(bound.permissionPreset)
+      ? bound.permissionPreset
+      : state.defaultPermissionPreset;
+    if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
+      applyPermissionPresetToAgent(agent, targetPreset);
+    }
+  });
+
   ctx.connection.fetch.register({
     path: OPS_ROUTE_PATH,
     methods: ['POST'],
@@ -215,6 +260,9 @@ export function apply(ctx) {
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
             const prev = state.sessionContexts.get(sessionId) ?? {};
+            const nextPreset = typeof p.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(p.permissionPreset)
+              ? p.permissionPreset
+              : undefined;
             state.sessionContexts.set(sessionId, {
               ...prev,
               ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
@@ -228,8 +276,53 @@ export function apply(ctx) {
                 ? { customSystemPrompt: p.customSystemPrompt }
                 : {}),
               ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
+              ...(nextPreset ? { permissionPreset: nextPreset } : {}),
             });
-            return jsonResponse({ ok: true, result: { bound: sessionId } });
+            const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
+            const liveAgent = ctx.get('agents')?.get(sessionId);
+            if (liveAgent && effectivePreset) {
+              applyPermissionPresetToAgent(liveAgent, effectivePreset);
+            }
+            return jsonResponse({ ok: true, result: { bound: sessionId, permissionPreset: effectivePreset } });
+          }
+
+          case 'setPermissionPreset': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const preset = typeof p.preset === 'string' ? p.preset.trim() : '';
+            if (!VALID_PERMISSION_PRESETS.has(preset)) {
+              return jsonResponse({ ok: false, error: `Unsupported permission preset: "${preset}"` }, 400);
+            }
+            const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
+            const appliedSessions = [];
+            if (sessionId) {
+              const prev = state.sessionContexts.get(sessionId) ?? {};
+              state.sessionContexts.set(sessionId, { ...prev, permissionPreset: preset });
+              const liveAgent = ctx.get('agents')?.get(sessionId);
+              if (liveAgent && applyPermissionPresetToAgent(liveAgent, preset)) {
+                appliedSessions.push(sessionId);
+              }
+            } else {
+              state.defaultPermissionPreset = preset;
+              for (const [sid, ctxEntry] of state.sessionContexts.entries()) {
+                state.sessionContexts.set(sid, { ...ctxEntry, permissionPreset: preset });
+              }
+              const agents = ctx.get('agents');
+              if (agents && typeof agents.list === 'function') {
+                for (const agent of agents.list()) {
+                  if (applyPermissionPresetToAgent(agent, preset)) {
+                    appliedSessions.push(agent.id);
+                  }
+                }
+              }
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                preset,
+                defaultPermissionPreset: state.defaultPermissionPreset,
+                appliedSessions,
+              },
+            });
           }
 
           case 'syncHostTools': {

@@ -22,7 +22,10 @@ import {
 } from '../../../scheduledTask/constants';
 import type { ScheduledTask } from '../../../scheduledTask/types';
 import {
+  DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_PERMISSION_PRESET_KV_KEY,
   DshHostPhase,
+  DshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
@@ -251,6 +254,12 @@ export class DshBootstrap {
   readonly scheduler: LobsterScheduler;
 
   private readonly options: DshBootstrapOptions;
+  private readonly kvStorage: {
+    get(key: string): string | null;
+    set(key: string, value: string): void;
+    delete(key: string): void;
+  };
+  private defaultPermissionPreset: DshPermissionPreset;
   private readonly bridgeWiring: {
     syncDynamicHostTools: () => Promise<Record<string, unknown>>;
     dispose: () => void;
@@ -273,9 +282,18 @@ export class DshBootstrap {
 
     fs.mkdirSync(this.workspacesDir, { recursive: true });
 
+    this.kvStorage = createSqliteKvStoragePort(options.db);
+    const storedPreset = this.kvStorage.get(DSH_PERMISSION_PRESET_KV_KEY);
+    this.defaultPermissionPreset =
+      storedPreset === DshPermissionPreset.ReadOnly
+      || storedPreset === DshPermissionPreset.WorkspaceWrite
+      || storedPreset === DshPermissionPreset.FullAccess
+        ? storedPreset
+        : DEFAULT_DSH_PERMISSION_PRESET;
+
     this.memoryService = new LobsterMemoryService(this.workspacesDir);
     this.mcpOAuthManager = new McpOAuthManager({
-      storage: createSqliteKvStoragePort(options.db),
+      storage: this.kvStorage,
       cipher: createSafeStorageCipher(),
     });
 
@@ -293,19 +311,36 @@ export class DshBootstrap {
       hostManager: this.hostManager,
     });
 
-    this.bridgeWiring = wireDshHostBridge({
-      hostManager: this.hostManager,
-      memoryService: this.memoryService,
-      allowRules: options.allowRules,
-      toolProviders: options.toolProviders,
-    });
-
     this.runtimeAdapter = new DshRuntimeAdapter({
       hostManager: this.hostManager,
       store: options.coworkStore,
       resolveModelSelection: options.resolveModelSelection,
       resolveAllowedSkillIds: options.resolveAllowedSkillIds,
+      resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
+      onPermissionPresetChanged: async (preset, coworkSessionId) => {
+        if (!coworkSessionId) {
+          this.defaultPermissionPreset = preset;
+          this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, preset);
+        }
+      },
     });
+
+    const combinedAllowRules: ApprovalAllowRulePort = {
+      isToolAllowedAlways: (params) => (
+        this.runtimeAdapter.isToolAllowedInSession(params)
+        || Boolean(options.allowRules?.isToolAllowedAlways(params))
+      ),
+    };
+
+    this.bridgeWiring = wireDshHostBridge({
+      hostManager: this.hostManager,
+      memoryService: this.memoryService,
+      allowRules: combinedAllowRules,
+      toolProviders: options.toolProviders,
+    });
+
+    // Seed initial persisted permission preset into DshHostManager so it replays on boot.
+    void this.hostManager.setPermissionPreset(this.defaultPermissionPreset).catch((): void => undefined);
 
     this.scheduler = new LobsterScheduler({
       db: options.db,
@@ -334,6 +369,37 @@ export class DshBootstrap {
 
   getEngineStatus(): DshCompatEngineStatus {
     return mapDshHostStatusToEngineStatus(this.hostManager.getStatus());
+  }
+
+  getPermissionPreset(sessionId?: string): {
+    preset: DshPermissionPreset;
+    defaultPreset: DshPermissionPreset;
+  } {
+    return {
+      preset: this.runtimeAdapter.getEffectivePermissionPreset(sessionId),
+      defaultPreset: this.defaultPermissionPreset,
+    };
+  }
+
+  async setPermissionPreset(
+    preset: DshPermissionPreset,
+    sessionId?: string,
+  ): Promise<{ preset: DshPermissionPreset; defaultPreset: DshPermissionPreset }> {
+    if (
+      preset !== DshPermissionPreset.ReadOnly
+      && preset !== DshPermissionPreset.WorkspaceWrite
+      && preset !== DshPermissionPreset.FullAccess
+    ) {
+      throw new Error(`Unsupported DSH permission preset: "${String(preset)}"`);
+    }
+    // Always persist as default when global (no sessionId) OR when user switches
+    // from the composer/settings without specifying a session-only scope.
+    if (!sessionId) {
+      this.defaultPermissionPreset = preset;
+      this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, preset);
+    }
+    await this.runtimeAdapter.setSessionPermissionPreset(preset, sessionId);
+    return this.getPermissionPreset(sessionId);
   }
 
   async start(): Promise<DshCompatEngineStatus> {

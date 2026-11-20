@@ -7,8 +7,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
+  DEFAULT_DSH_PERMISSION_PRESET,
   DSH_PROFILE_NAME,
   DshHostIpc,
+  DshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
 import { DSH_NODE_EXEC_ARGV } from '../../libs/dshRuntime';
@@ -19,6 +21,14 @@ export interface DshHostIpcDeps {
   getExecutablePath: () => string;
   openEcosystemWindow?: (authenticatedUrl: string, routeHash?: string) => Promise<void> | void;
   closeEcosystemWindow?: () => void;
+  getPermissionPreset?: (sessionId?: string) => {
+    preset: DshPermissionPreset;
+    defaultPreset: DshPermissionPreset;
+  };
+  setPermissionPreset?: (
+    preset: DshPermissionPreset,
+    sessionId?: string,
+  ) => Promise<{ preset: DshPermissionPreset; defaultPreset: DshPermissionPreset }>;
 }
 
 export interface DshProfilePluginInfo {
@@ -63,12 +73,18 @@ function runDshPluginCommand(options: {
   return new Promise((resolve) => {
     const binPath = path.join(options.runtimeDir, 'lib', 'bin.js');
     const pmDir = path.join(options.runtimeDir, 'package-manager');
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      DSH_HOME: options.dshHomeDir,
-      DSH_TELEMETRY_DISABLED: '1',
-    };
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (/^dsh_/i.test(key)) continue;
+      if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+      env[key] = value;
+    }
+    env.ELECTRON_RUN_AS_NODE = '1';
+    env.DSH_HOME = options.dshHomeDir;
+    env.DSH_AGENTS_HOME = path.join(options.dshHomeDir, 'agents-home');
+    env.DSH_TELEMETRY_DISABLED = '1';
+    env.npm_config_store_dir = path.join(options.dshHomeDir, 'cache', 'pnpm-store');
+    env.npm_config_cache = path.join(options.dshHomeDir, 'cache', 'npm-cache');
     if (fs.existsSync(pmDir)) {
       const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
       env[pathKey] = env[pathKey] ? `${pmDir}${path.delimiter}${env[pathKey]}` : pmDir;
@@ -212,4 +228,44 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
     }
     return { ok: false };
   });
+
+  ipcMain.handle(DshHostIpc.GetPermissionPreset, (_event, sessionId?: string) => {
+    const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : undefined;
+    if (deps.getPermissionPreset) {
+      return { ok: true, ...deps.getPermissionPreset(resolvedSessionId) };
+    }
+    return {
+      ok: true,
+      preset: DEFAULT_DSH_PERMISSION_PRESET,
+      defaultPreset: DEFAULT_DSH_PERMISSION_PRESET,
+    };
+  });
+
+  ipcMain.handle(
+    DshHostIpc.SetPermissionPreset,
+    async (_event, payload: { preset?: string; sessionId?: string }) => {
+      const rawPreset = typeof payload?.preset === 'string' ? payload.preset.trim() : '';
+      const preset =
+        rawPreset === DshPermissionPreset.ReadOnly
+        || rawPreset === DshPermissionPreset.WorkspaceWrite
+        || rawPreset === DshPermissionPreset.FullAccess
+          ? rawPreset
+          : null;
+      if (!preset) {
+        return { ok: false, error: `Unsupported permission preset: "${rawPreset}"` };
+      }
+      const sessionId = typeof payload?.sessionId === 'string' && payload.sessionId.trim()
+        ? payload.sessionId.trim()
+        : undefined;
+      if (!deps.setPermissionPreset) {
+        return { ok: false, error: 'Permission preset handler is not configured' };
+      }
+      try {
+        const result = await deps.setPermissionPreset(preset, sessionId);
+        return { ok: true, ...result };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
 }

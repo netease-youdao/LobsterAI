@@ -1766,6 +1766,9 @@ contextBridge.exposeInMainWorld('electron', {
     installPlugin: (packageSpec: string) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, packageSpec),
     removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
     openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),
+    getPermissionPreset: (sessionId?: string) => ipcRenderer.invoke(DshHostIpc.GetPermissionPreset, sessionId),
+    setPermissionPreset: (preset: string, sessionId?: string) =>
+      ipcRenderer.invoke(DshHostIpc.SetPermissionPreset, { preset, ...(sessionId ? { sessionId } : {}) }),
   },
   migrationV2: {
     getReport: () => ipcRenderer.invoke(MigrationV2Ipc.GetReport),

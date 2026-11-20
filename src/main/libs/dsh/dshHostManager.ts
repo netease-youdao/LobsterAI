@@ -20,11 +20,13 @@ import * as http from 'http';
 import * as path from 'path';
 
 import {
+  DEFAULT_DSH_PERMISSION_PRESET,
   DSH_PROFILE_DIR_NAME,
   DSH_PROFILE_NAME,
   DshHostBundleEnvVar,
   DshHostPhase,
   DshOpsAction,
+  DshPermissionPreset,
   DshSearchPolicy,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
@@ -99,6 +101,7 @@ export interface DshHostSessionContext {
   allowedSkillIds?: string[] | null;
   customSystemPrompt?: string;
   executionMode?: string;
+  permissionPreset?: DshPermissionPreset;
   unbind?: boolean;
 }
 
@@ -123,6 +126,14 @@ export interface DshBridgeApprovalEvaluateRequest {
   agentId: string;
   coworkSessionId?: string;
   executionMode?: string;
+  permissionPreset?: DshPermissionPreset;
+}
+
+export interface DshApprovalCallContext {
+  toolName: string;
+  args: Record<string, unknown>;
+  permissionPreset?: DshPermissionPreset;
+  recordedAt: number;
 }
 
 export type DshBridgeApprovalDecision =
@@ -298,6 +309,8 @@ export class DshHostManager extends EventEmitter {
   private lastMcpServers: DshHostMcpServerSpec[] | null = null;
   private lastSkillsPolicy: DshHostSkillsPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
+  private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
+  private readonly approvalCallContexts = new Map<string, DshApprovalCallContext>();
 
   constructor(options: DshHostManagerOptions) {
     super();
@@ -430,6 +443,38 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.DeleteSessionFiles, { sessionId });
   }
 
+  async setPermissionPreset(
+    preset: DshPermissionPreset,
+    sessionId?: string,
+  ): Promise<Record<string, unknown>> {
+    if (!sessionId) {
+      this.lastPermissionPreset = preset;
+    }
+    if (!this.isReady()) return { deferred: true, preset };
+    return this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
+      preset,
+      ...(sessionId ? { sessionId } : {}),
+    });
+  }
+
+  consumeApprovalCallContext(callId: string): DshApprovalCallContext | null {
+    if (!callId) return null;
+    const entry = this.approvalCallContexts.get(callId) ?? null;
+    if (entry) {
+      this.approvalCallContexts.delete(callId);
+    }
+    return entry;
+  }
+
+  private recordApprovalCallContext(callId: string, context: DshApprovalCallContext): void {
+    this.approvalCallContexts.set(callId, context);
+    while (this.approvalCallContexts.size > 128) {
+      const oldestKey = this.approvalCallContexts.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.approvalCallContexts.delete(oldestKey);
+    }
+  }
+
   // ── Internal Boot & Supervision ────────────────────────────────────────────
 
   private async doStart(): Promise<void> {
@@ -501,6 +546,9 @@ export class DshHostManager extends EventEmitter {
     if (this.lastMcpServers) {
       await this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
     }
+    await this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
+      preset: this.lastPermissionPreset,
+    });
   }
 
   private readRuntimeVersion(): string | null {
@@ -762,19 +810,39 @@ export class DshHostManager extends EventEmitter {
       }
 
       if (pathname === '/dsh-bridge/approval-evaluate') {
+        const callId = typeof body.callId === 'string' ? body.callId : undefined;
+        const toolName = String(body.toolName ?? '');
+        const rawPreset = typeof body.permissionPreset === 'string' ? body.permissionPreset : undefined;
+        const permissionPreset =
+          rawPreset === DshPermissionPreset.ReadOnly
+          || rawPreset === DshPermissionPreset.WorkspaceWrite
+          || rawPreset === DshPermissionPreset.FullAccess
+            ? rawPreset
+            : undefined;
+        if (callId) {
+          this.recordApprovalCallContext(callId, {
+            toolName,
+            args: (body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+              ? body.args
+              : {}) as Record<string, unknown>,
+            permissionPreset,
+            recordedAt: Date.now(),
+          });
+        }
         if (!this.approvalEvaluator) {
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ kind: 'passthrough' }));
           return;
         }
         const decision = await this.approvalEvaluator({
-          toolName: String(body.toolName ?? ''),
+          toolName,
           args: body.args,
-          callId: typeof body.callId === 'string' ? body.callId : undefined,
+          callId,
           sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
           agentId: typeof body.agentId === 'string' && body.agentId ? body.agentId : 'main',
           coworkSessionId: typeof body.coworkSessionId === 'string' ? body.coworkSessionId : undefined,
           executionMode: typeof body.executionMode === 'string' ? body.executionMode : undefined,
+          permissionPreset,
         });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(decision));

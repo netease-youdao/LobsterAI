@@ -39,6 +39,7 @@ export function apply(ctx) {
         agentId: bound?.agentId ?? 'main',
         coworkSessionId: bound?.coworkSessionId,
         executionMode: bound?.executionMode,
+        permissionPreset: bound?.permissionPreset ?? state.defaultPermissionPreset,
       },
       exec.signal,
     );

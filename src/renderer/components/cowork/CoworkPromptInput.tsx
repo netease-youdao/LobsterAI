@@ -181,6 +181,7 @@ import {
 } from './mediaMentionUtils';
 import MediaModelPicker from './MediaModelPicker';
 import { PastedTextAttachmentCard } from './PastedTextCards';
+import PermissionModeSelector from './PermissionModeSelector';
 import {
   getAttachmentAnalyticsParams,
   getKitAnalyticsParams,
@@ -4061,6 +4062,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </div>
         )}
       </div>
+      <PermissionModeSelector
+        sessionId={sessionId}
+        compact={narrow}
+        disabled={disabled || voiceInputLocksEditing}
+      />
     </div>
   ) : null;
 
@@ -4336,6 +4342,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     </>
                   )}
                   {voiceRecordingUiState.showLargeInputControls && largeInputToolActions}
+                  {voiceRecordingUiState.showLargeInputControls && (
+                    <PermissionModeSelector
+                      sessionId={sessionId}
+                      compact={isCompact}
+                      disabled={disabled || voiceInputLocksEditing}
+                    />
+                  )}
                 </div>
                 <div className={`flex shrink-0 items-center ${largeToolbarControlGapClass}`}>
                   {contextUsageControl}

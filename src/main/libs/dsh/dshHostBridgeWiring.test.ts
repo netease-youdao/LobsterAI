@@ -3,8 +3,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  buildApprovalScopeKey,
   BUILTIN_MEMORY_TOOL_NAMES,
   evaluateDshToolApproval,
   wireDshHostBridge,
@@ -52,6 +54,45 @@ describe('evaluateDshToolApproval', () => {
           executionMode: 'default',
         },
         { isToolAllowedAlways: () => true },
+      ),
+    ).toEqual({ kind: 'allow' });
+  });
+
+  test('bypasses all confirmation prompts under DSH danger-full-access preset', () => {
+    expect(
+      evaluateDshToolApproval({
+        toolName: 'bash',
+        args: { command: 'git push origin main' },
+        agentId: 'main',
+        permissionPreset: DshPermissionPreset.FullAccess,
+      }),
+    ).toEqual({ kind: 'allow' });
+
+    expect(
+      evaluateDshToolApproval({
+        toolName: 'bash',
+        args: { command: 'rm -rf /tmp/build' },
+        agentId: 'main',
+        permissionPreset: DshPermissionPreset.FullAccess,
+      }),
+    ).toEqual({ kind: 'allow' });
+  });
+
+  test('honors session allow-rule before moderate caution commands like git push', () => {
+    const scopeKey = buildApprovalScopeKey('bash', { command: 'git push origin main' });
+    expect(scopeKey).toBe('shell:git-push');
+
+    expect(
+      evaluateDshToolApproval(
+        {
+          toolName: 'bash',
+          args: { command: 'git push origin main' },
+          agentId: 'main',
+          permissionPreset: DshPermissionPreset.WorkspaceWrite,
+        },
+        {
+          isToolAllowedAlways: (p) => p.scopeKey === 'shell:git-push',
+        },
       ),
     ).toEqual({ kind: 'allow' });
   });

@@ -80,8 +80,26 @@ export const DshOpsAction = {
   BindSessionContext: 'bindSessionContext',
   DeleteSessionFiles: 'deleteSessionFiles',
   SyncHostTools: 'syncHostTools',
+  SetPermissionPreset: 'setPermissionPreset',
 } as const;
 export type DshOpsAction = typeof DshOpsAction[keyof typeof DshOpsAction];
+
+export const DshPermissionPreset = {
+  ReadOnly: 'read-only',
+  WorkspaceWrite: 'workspace-write',
+  FullAccess: 'danger-full-access',
+} as const;
+export type DshPermissionPreset = typeof DshPermissionPreset[keyof typeof DshPermissionPreset];
+
+export const DEFAULT_DSH_PERMISSION_PRESET: DshPermissionPreset = DshPermissionPreset.WorkspaceWrite;
+export const DSH_PERMISSION_PRESET_KV_KEY = 'dsh.permissionPreset.default';
+
+export const DshApprovalPermissionAction = {
+  AllowSession: 'allow-session',
+  SetPermissionPreset: 'set-permission-preset',
+} as const;
+export type DshApprovalPermissionAction =
+  typeof DshApprovalPermissionAction[keyof typeof DshApprovalPermissionAction];
 
 export const DshSearchPolicy = {
   DeepSeekNativeOnly: 'deepseek_native_only',
@@ -101,5 +119,7 @@ export const DshHostIpc = {
   RemovePlugin: 'dshHost:removePlugin',
   OpenProfileDir: 'dshHost:openProfileDir',
   CopyCliShimCommand: 'dshHost:copyCliShimCommand',
+  GetPermissionPreset: 'dshHost:getPermissionPreset',
+  SetPermissionPreset: 'dshHost:setPermissionPreset',
 } as const;
 export type DshHostIpc = typeof DshHostIpc[keyof typeof DshHostIpc];

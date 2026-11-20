@@ -2452,6 +2452,20 @@ interface IElectronAPI {
       plugins?: Array<{ name: string; specifier: string; managed: boolean }>;
     }>;
     openProfileDir: () => Promise<{ ok: boolean; profileDir?: string }>;
+    getPermissionPreset: (sessionId?: string) => Promise<{
+      ok: boolean;
+      preset: 'read-only' | 'workspace-write' | 'danger-full-access';
+      defaultPreset: 'read-only' | 'workspace-write' | 'danger-full-access';
+    }>;
+    setPermissionPreset: (
+      preset: 'read-only' | 'workspace-write' | 'danger-full-access',
+      sessionId?: string,
+    ) => Promise<{
+      ok: boolean;
+      preset?: 'read-only' | 'workspace-write' | 'danger-full-access';
+      defaultPreset?: 'read-only' | 'workspace-write' | 'danger-full-access';
+      error?: string;
+    }>;
   };
   migrationV2: {
     getReport: () => Promise<import('../../shared/migration/constants').MigrationV2Report | null>;

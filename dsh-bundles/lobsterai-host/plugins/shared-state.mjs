@@ -30,6 +30,7 @@ export function getHostState(ctx) {
       skillsDir: process.env[ENV_KEYS.skillsDir] || '',
       instanceId: process.env[ENV_KEYS.instanceId] || '',
       searchPolicy: process.env[ENV_KEYS.searchPolicy] || 'deepseek_native_only',
+      defaultPermissionPreset: 'workspace-write',
       /** @type {Map<string, Record<string, unknown>>} */
       sessionContexts: new Map(),
       /** @type {{ enabledIds: Set<string> | null, disabledIds: Set<string>, extraDirs: string[] }} */
