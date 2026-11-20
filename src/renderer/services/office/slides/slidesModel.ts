@@ -1,3 +1,4 @@
+import { readSlideChart, type SlideChartView } from './slidesCharts';
 import { layoutOf, masterOf, presentationPart, slideSize, themeOf } from './slidesDeck';
 import { isLineGeometry } from './slidesGeometry';
 import type { SlidesPackage } from './slidesPackage';
@@ -107,6 +108,7 @@ export const ShapeViewKind = {
   Shape: 'shape',
   Picture: 'picture',
   Table: 'table',
+  Chart: 'chart',
   Group: 'group',
   Graphic: 'graphic',
 } as const;
@@ -123,6 +125,7 @@ export interface ShapeView {
   text?: TextView;
   image?: { part: string; crop?: { l: number; t: number; r: number; b: number } };
   table?: TableView;
+  chart?: SlideChartView;
   children?: ShapeView[];
   placeholder?: { type: string; idx?: string };
   /** A shape of the slide itself (not of its layout or master): it can be selected and edited. */
@@ -154,6 +157,7 @@ interface Context {
   master: Document;
   layout?: Document;
   presentation: Document;
+  background?: Fill;
 }
 
 /** Placeholder type as matching uses it: an untyped placeholder is a body/content one. */
@@ -720,7 +724,7 @@ function readShape(shape: Element, context: Context, own: boolean, skipPlacehold
       };
     }
     case 'graphicFrame': {
-      const box = readXfrm(named(shape, 'xfrm'));
+      const box = readXfrm(named(shape, 'xfrm')) ?? shapeBox(shape, inheritance(shape, context));
       if (!box) return undefined;
       const data = el(named(shape, 'graphic'), 'a:graphicData');
       const uri = data?.getAttribute('uri') ?? '';
@@ -728,6 +732,14 @@ function readShape(shape: Element, context: Context, own: boolean, skipPlacehold
       if (uri.endsWith('/table')) {
         const table = readTable(shape, context);
         if (table) return { ...base, kind: ShapeViewKind.Table, box: mapped, table };
+      }
+      if (uri.endsWith('/chart')) {
+        const chartElement = el(data, 'c:chart') ?? (data ? Array.from(data.getElementsByTagNameNS(NS.c, 'chart'))[0] : undefined);
+        const chartPart = context.pkg.target(context.part, relationshipId(chartElement, 'id'));
+        const chart = chartPart
+          ? readSlideChart(context.pkg, chartPart, context.colors, context.background ?? { kind: 'solid', color: '#FFFFFF' })
+          : undefined;
+        if (chart) return { ...base, kind: ShapeViewKind.Chart, box: mapped, chart };
       }
       // Embedded objects carry a picture of themselves; use it.
       const fallbackPicture = data ? Array.from(data.getElementsByTagNameNS(NS.p, 'pic'))[0] : undefined;
@@ -791,9 +803,10 @@ export function buildSlideView(pkg: SlidesPackage, slidePart: string): SlideView
   map = readColorMap(el(slide.documentElement, 'p:clrMapOvr'), map);
   const presentation = pkg.xml(presentationPart(pkg));
   const base = { pkg, theme, colors: { theme, map }, master, presentation };
-  const slideContext: Context = { ...base, part: slidePart, layout };
-  const layoutContext: Context = { ...base, part: layoutPart };
-  const masterContext: Context = { ...base, part: masterPart };
+  const slideBg = background([slide, layout, master], [slidePart, layoutPart, masterPart], { ...base, part: slidePart, layout });
+  const slideContext: Context = { ...base, part: slidePart, layout, background: slideBg };
+  const layoutContext: Context = { ...base, part: layoutPart, background: slideBg };
+  const masterContext: Context = { ...base, part: masterPart, background: slideBg };
   const shapes: ShapeView[] = [];
   if (showsMasterShapes(slide) && showsMasterShapes(layout)) shapes.push(...readShapes(spTree(master), masterContext, false, true));
   if (showsMasterShapes(slide)) shapes.push(...readShapes(spTree(layout), { ...layoutContext, layout: undefined }, false, true));
@@ -802,7 +815,7 @@ export function buildSlideView(pkg: SlidesPackage, slidePart: string): SlideView
   return {
     width: pxFromEmu(size.cx),
     height: pxFromEmu(size.cy),
-    background: background([slide, layout, master], [slidePart, layoutPart, masterPart], slideContext),
+    background: slideBg,
     shapes,
   };
 }
@@ -814,6 +827,7 @@ export function fontsOf(view: SlideView): string[] {
     for (const shape of shapes) {
       for (const paragraph of shape.text?.paragraphs ?? []) for (const run of paragraph.runs) families.add(run.style.fontFamily.split(',')[0].replace(/"/g, '').trim());
       for (const row of shape.table?.rows ?? []) for (const cell of row.cells) for (const paragraph of cell.text.paragraphs) for (const run of paragraph.runs) families.add(run.style.fontFamily.split(',')[0].replace(/"/g, '').trim());
+      for (const font of shape.chart?.fonts ?? []) families.add(font);
       if (shape.children) visit(shape.children);
     }
   };

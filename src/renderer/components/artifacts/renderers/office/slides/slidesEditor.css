@@ -137,17 +137,19 @@
 .lobster-slide { position: absolute; left: 0; top: 0; overflow: hidden; color: #000; font-synthesis: weight style; user-select: none; cursor: default; }
 .lobster-slide-shape { position: absolute; box-sizing: border-box; }
 .lobster-slide-group { left: 0; top: 0; width: 0; height: 0; overflow: visible; }
-.lobster-slide-geometry, .lobster-slide-fill, .lobster-slide-picture, .lobster-slide-graphic { position: absolute; inset: 0; }
+.lobster-slide-geometry, .lobster-slide-fill, .lobster-slide-picture, .lobster-slide-chart, .lobster-slide-graphic { position: absolute; inset: 0; }
 .lobster-slide-stroke { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .lobster-slide-picture { overflow: hidden; }
 .lobster-slide-picture img { position: absolute; max-width: none; user-select: none; }
+.lobster-slide-chart { box-sizing: border-box; overflow: hidden; pointer-events: none; }
+.lobster-slide-chart > svg { display: block; width: 100%; height: 100%; }
 .lobster-slide-graphic {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px dashed rgba(0, 0, 0, .35);
-  background: rgba(0, 0, 0, .04);
-  color: rgba(0, 0, 0, .55);
+  border: 1px dashed rgba(128, 128, 128, .55);
+  background: rgba(128, 128, 128, .12);
+  color: rgba(128, 128, 128, .9);
   font-size: 14px;
 }
 .lobster-slide-text {

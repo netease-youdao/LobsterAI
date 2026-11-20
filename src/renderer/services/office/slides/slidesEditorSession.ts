@@ -263,6 +263,7 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     return {
       titlePrompt: t('slidesPromptTitle'), subtitlePrompt: t('slidesPromptSubtitle'), textPrompt: t('slidesPromptText'),
       chart: t('slidesChart'), diagram: t('slidesDiagram'), object: t('slidesObject'), picture: t('slidesPicture'),
+      series: t('sheetChartSeries'),
     };
   }
 
