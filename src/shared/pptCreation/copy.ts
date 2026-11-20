@@ -1,6 +1,6 @@
 export const pptCreationTranslations = {
   zh: {
-    pptCreationHeading: '从一份好演示开始', pptCreationMore: '查看全部示例', pptCreationPreview: '预览与定制',
+    pptCreationHeading: '从一份好演示开始', pptCreationMore: '查看全部示例', pptCreationBackToAll: '返回全部示例', pptCreationPreview: '预览与定制',
     pptCreationGalleryHint: '选一份喜欢的示例，直接试做，或换成你的内容。',
     pptCreationExamplePreview: '示例预览', pptCreationDirectHint: '体验这份示例', pptCreationGuidedHint: '替换为你的主题和资料',
     pptCreationPromptHint: '已为你准备好，可以直接使用或修改。',
@@ -27,7 +27,7 @@ export const pptCreationTranslations = {
     pptCreationImageFailed: '预览暂不可用，仍可查看提示词',
   },
   en: {
-    pptCreationHeading: 'Start with a great presentation', pptCreationMore: 'Browse all examples', pptCreationPreview: 'Preview and customize',
+    pptCreationHeading: 'Start with a great presentation', pptCreationMore: 'Browse all examples', pptCreationBackToAll: 'Back to all examples', pptCreationPreview: 'Preview and customize',
     pptCreationGalleryHint: 'Choose an example to try, or make it your own.',
     pptCreationExamplePreview: 'Example preview', pptCreationDirectHint: 'Explore this ready-made example', pptCreationGuidedHint: 'Add your own topic and materials',
     pptCreationPromptHint: 'Ready to use. Adjust the prompt if you like.',
