@@ -149,10 +149,9 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
     },
   });
   win.setMenu(null);
-  if (process.platform === 'win32' && isScreenshot) {
-    // Windows clamps initial bounds to the work area, even for frameless windows.
-    // Restore the full display before loading the image, otherwise it is squeezed
-    // above the real taskbar and both the preview and crop coordinates are wrong.
+  if (process.platform === 'win32' && (isScreenshot || options.surface === DesktopCompanionSurface.Mascot)) {
+    // Windows clamps initial bounds to the work area (affecting full-screen screenshots) and may
+    // scale frameless windows by the primary display's DPI when created on a secondary monitor.
     win.setBounds(options.bounds);
   }
   // The selection toolbar sits above menus of the app it is attached to; the orb's menu above the other cards.

@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
-import { DesktopCompanionPanelPlacement, DesktopCompanionSize } from './constants';
+import { CompanionOrbEdge, DesktopCompanionPanelPlacement, DesktopCompanionSize } from './constants';
 import {
   clampCompanionBounds,
   companionDragGrabOffset,
   companionMenuOpensUp,
   companionStageOpensLeft,
+  createCompanionOrbPosition,
+  normalizeCompanionOrbPosition,
   resolveCompanionBounds,
   resolveCompanionCardBounds,
   resolveCompanionComposerLayout,
@@ -29,11 +31,38 @@ describe('orb placement', () => {
     expect(result.x).toBeGreaterThanOrEqual(-1920);
   });
 
-  test('ignores malformed saved positions and starts near the right edge', () => {
+  test('ignores malformed saved positions and starts flush against the right edge', () => {
     const result = resolveCompanionBounds({ x: 'left', y: Number.NaN }, workArea);
     expect(result).toEqual(resolveCompanionBounds(null, workArea));
-    expect(result.x + result.width).toBeLessThan(0);
-    expect(result.x + result.width).toBeGreaterThan(-60);
+    expect(result.x + result.width).toBe(workArea.x + workArea.width);
+    expect(result.y).toBe(Math.round(workArea.y + (workArea.height - orb.height) / 2));
+  });
+
+  test.each([
+    { edge: CompanionOrbEdge.Right, laptopX: 1440 - DesktopCompanionSize.BrandOrb.width, expectedLargeX: 2560 - DesktopCompanionSize.BrandOrb.width },
+    { edge: CompanionOrbEdge.Left, laptopX: 0, expectedLargeX: 0 },
+  ])('keeps a $edge-docked orb flush to the same edge and proportional height on a larger monitor', ({ edge, laptopX, expectedLargeX }) => {
+    const laptop = { x: 0, y: 25, width: 1440, height: 875 };
+    const large = { x: 0, y: 25, width: 2560, height: 1415 };
+    const size = DesktopCompanionSize.BrandOrb;
+    const saved = createCompanionOrbPosition({ ...size, x: laptopX, y: 432 }, laptop, 1);
+    expect(saved.edge).toBe(edge);
+    expect(saved.displayId).toBe(1);
+    expect(resolveCompanionBounds(saved, laptop, size)).toEqual({ ...size, x: laptopX, y: 432 });
+    const restored = resolveCompanionBounds(saved, large, size);
+    expect(restored.x).toBe(expectedLargeX);
+    expect(restored.y).toBe(Math.round(large.y + saved.yRatio! * (large.height - size.height)));
+    // Switching skin sizes also keeps the docked orb flush against its edge.
+    const largerSkin = resolveCompanionBounds(saved, large, orb);
+    expect(largerSkin.x).toBe(edge === CompanionOrbEdge.Right ? large.x + large.width - orb.width : large.x);
+  });
+
+  test('normalizes orb positions and drops invalid edge metadata', () => {
+    expect(normalizeCompanionOrbPosition({ x: 100.4, y: 200.6, edge: 'top', yRatio: 0.5, displayId: Number.NaN }))
+      .toEqual({ x: 100, y: 201 });
+    expect(normalizeCompanionOrbPosition({ x: 0, y: 300, edge: CompanionOrbEdge.Left, yRatio: 2, displayId: 4 }))
+      .toEqual({ x: 0, y: 300, edge: CompanionOrbEdge.Left, yRatio: 1, displayId: 4 });
+    expect(normalizeCompanionOrbPosition({ x: Number.NaN, y: 10 })).toBeUndefined();
   });
 
   test('keeps a dropped orb whole on its own display, even at an edge shared with another one', () => {

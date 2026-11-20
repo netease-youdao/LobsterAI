@@ -98,13 +98,16 @@ export interface DesktopCompanionSnooze {
 
 export const DesktopCompanionStoreKey = {
   Preferences: 'desktop-companion.preferences.v1',
-  Position: 'desktop-companion.position.v1',
+  Position: 'desktop-companion.position.v2',
   Draft: 'desktop-companion.draft.v1',
   Session: 'desktop-companion.session.v1',
   Snooze: 'desktop-companion.snooze.v1',
   HintLedger: 'desktop-companion.hints.v1',
   Greeted: 'desktop-companion.greeted.v1',
 } as const;
+
+export const CompanionOrbEdge = { Left: 'left', Right: 'right' } as const;
+export type CompanionOrbEdge = typeof CompanionOrbEdge[keyof typeof CompanionOrbEdge];
 
 export const CompanionCapability = {
   Unsupported: 'unsupported',
