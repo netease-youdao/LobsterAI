@@ -193,6 +193,7 @@ import { LogIpc } from '../shared/logExport/constants';
 import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
+import { MediaDefaultsProtocol } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
 import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
@@ -433,6 +434,7 @@ import {
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
+import { createDshImageGenerationProvider } from './libs/dsh/dshImageGenerationTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
@@ -2246,6 +2248,7 @@ const getDshBootstrap = (): DshBootstrap => {
     const userDataDir = app.getPath('userData');
     const storeInstance = getCoworkStore();
     dshBootstrap = new DshBootstrap({
+      toolProviders: [createDshImageGenerationProvider(request => getMcpRuntime().executeMediaGeneration(request))],
       userDataDir,
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
@@ -5471,7 +5474,7 @@ if (!gotTheLock) {
     sessionId ?? resolveSubagentRequesterCoworkSessionId(getStore().getDatabase(), sessionKey);
 
   /**
-   * Handle media generation tool callbacks from the OpenClaw plugin.
+   * Shared account policy for desktop media generation.
    */
   const mediaDefaults = new MediaDefaultPolicyManager({
     get: key => getStore().get(key),
@@ -14844,24 +14847,17 @@ if (!gotTheLock) {
     // Same for task records whose saved assets older builds kept as inline images.
     try { getMediaTaskStore().tasks(); }
     catch (error) { console.warn('[MediaGeneration] Media task index compaction failed:', error); }
-    // Message rows from older builds hold generated images inline; rewrite them once, in the
-    // background, after startup work has settled. Progress is kept, so quitting only pauses it.
-    const MEDIA_METADATA_MIGRATION_IDLE_SECONDS = 3;
-    let mediaMetadataMigrationStopped = false;
-    app.once('before-quit', () => { mediaMetadataMigrationStopped = true; });
-    setTimeout(() => {
-      const startedAt = Date.now();
-      void migrateInlineMediaMetadata({
-        db: getStore().getDatabase(),
-        kv: getStore(),
-        recoveryDirectory: sessionId => path.join(app.getPath('userData'), 'generated-images', sessionId),
-        isIdle: () => powerMonitor.getSystemIdleTime() >= MEDIA_METADATA_MIGRATION_IDLE_SECONDS,
-        shouldStop: () => mediaMetadataMigrationStopped,
-      }).then((result) => {
-        if (result.compactedRows === 0 && result.skippedRows === 0) return;
-        console.log(`[MediaGeneration] compacted inline media in stored messages: ${result.compactedRows} rows, ${(result.bytesBefore / 1e6).toFixed(1)}MB -> ${(result.bytesAfter / 1e6).toFixed(1)}MB, ${result.rescuedImages} images restored to the recovery directory, ${result.skippedRows} rows left as-is, ${result.done ? 'finished' : 'paused'} after ${Date.now() - startedAt}ms.`);
-      }).catch(error => console.warn('[MediaGeneration] Stored message media compaction failed:', error));
-    }, 15_000);
+    // Restore legacy image preferences and artwork before the first window can read them.
+    const database = getStore().getDatabase();
+    const legacyKeys = database.prepare('SELECT key FROM kv WHERE key GLOB ?')
+      .all(MediaDefaultsProtocol.LegacyKey + ':*') as Array<{ key: string }>;
+    mediaDefaults.migrateLegacyPreferences(legacyKeys.map(row => row.key));
+    await migrateInlineMediaMetadata({
+      db: database,
+      kv: getStore(),
+      recoveryDirectory: sessionId => path.join(app.getPath('userData'), 'generated-images', sessionId),
+      pause: () => new Promise(resolve => setImmediate(resolve)),
+    });
     let mediaRecoveryInFlight = false;
     const mediaRecoveryTimer = setInterval(() => {
       if (mediaRecoveryInFlight) return;

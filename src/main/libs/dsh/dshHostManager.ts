@@ -106,6 +106,7 @@ export interface DshHostSessionContext {
 }
 
 export interface DshBridgeToolExecuteRequest {
+  signal?: AbortSignal;
   toolName: string;
   args: Record<string, unknown>;
   callId?: string;
@@ -117,6 +118,10 @@ export interface DshBridgeToolExecuteRequest {
 export type DshBridgeToolHandler = (
   request: DshBridgeToolExecuteRequest,
 ) => Promise<unknown> | unknown;
+
+interface DshBridgeTool {
+  execute: DshBridgeToolHandler;
+}
 
 export interface DshBridgeApprovalEvaluateRequest {
   toolName: string;
@@ -296,8 +301,8 @@ export class DshHostManager extends EventEmitter {
   private startPromise: Promise<void> | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private readonly toolHandlers = new Map<string, DshBridgeToolHandler>();
-  private fallbackToolHandler: DshBridgeToolHandler | null = null;
+  private readonly bridgeTools = new Map<string, DshBridgeTool>();
+  private fallbackBridgeTool: DshBridgeTool | null = null;
   private approvalEvaluator: DshBridgeApprovalEvaluator | null = null;
   private channelEventHandler: DshBridgeChannelEventHandler | null = null;
 
@@ -353,16 +358,17 @@ export class DshHostManager extends EventEmitter {
   }
 
   registerBridgeToolHandler(toolName: string, handler: DshBridgeToolHandler): () => void {
-    this.toolHandlers.set(toolName, handler);
+    const tool = { execute: handler };
+    this.bridgeTools.set(toolName, tool);
     return () => {
-      if (this.toolHandlers.get(toolName) === handler) {
-        this.toolHandlers.delete(toolName);
+      if (this.bridgeTools.get(toolName) === tool) {
+        this.bridgeTools.delete(toolName);
       }
     };
   }
 
   setFallbackBridgeToolHandler(handler: DshBridgeToolHandler | null): void {
-    this.fallbackToolHandler = handler;
+    this.fallbackBridgeTool = handler ? { execute: handler } : null;
   }
 
   setApprovalEvaluator(evaluator: DshBridgeApprovalEvaluator | null): void {
@@ -789,23 +795,38 @@ export class DshHostManager extends EventEmitter {
     const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
     try {
       if (pathname === '/dsh-bridge/tool-execute') {
+        if (typeof body?.toolName !== 'string' || !body.toolName.trim()) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Expected a non-empty tool name' }));
+          return;
+        }
         const request: DshBridgeToolExecuteRequest = {
-          toolName: String(body.toolName ?? ''),
+          toolName: body.toolName,
           args: (body.args && typeof body.args === 'object' ? body.args : {}) as Record<string, unknown>,
           callId: typeof body.callId === 'string' ? body.callId : undefined,
           sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
           agentId: typeof body.agentId === 'string' && body.agentId ? body.agentId : 'main',
           coworkSessionId: typeof body.coworkSessionId === 'string' ? body.coworkSessionId : undefined,
         };
-        const handler = this.toolHandlers.get(request.toolName) ?? this.fallbackToolHandler;
-        if (!handler) {
+        const tool = this.bridgeTools.get(request.toolName) ?? this.fallbackBridgeTool;
+        if (!tool) {
           res.writeHead(404, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: `No host tool handler registered for "${request.toolName}"` }));
           return;
         }
-        const data = await handler(request);
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(data ?? { ok: true }));
+        const controller = new AbortController();
+        const onDisconnect = () => controller.abort();
+        res.once('close', onDisconnect);
+        try {
+          if (res.destroyed) return;
+          const data = await tool.execute({ ...request, signal: controller.signal });
+          if (!res.destroyed) {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(data ?? { ok: true }));
+          }
+        } finally {
+          res.off('close', onDisconnect);
+        }
         return;
       }
 
@@ -859,6 +880,7 @@ export class DshHostManager extends EventEmitter {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: `Unknown bridge route: ${pathname}` }));
     } catch (error) {
+      if (res.destroyed) return;
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     }

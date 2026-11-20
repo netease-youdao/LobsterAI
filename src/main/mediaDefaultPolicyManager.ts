@@ -54,6 +54,17 @@ export class MediaDefaultPolicyManager {
     return preferences;
   }
 
+  migrateLegacyPreferences(keys: string[]): void {
+    const prefix = MediaDefaultsProtocol.LegacyKey + ':';
+    const owners = new Set(keys.filter(key => key.startsWith(prefix) && key.length > prefix.length)
+      .map(key => key.slice(prefix.length)));
+    const activeOwner = this.deps.scope()?.ownerAccountKey;
+    if (activeOwner && this.deps.get(MediaDefaultsProtocol.LegacyKey) != null) owners.add(activeOwner);
+    for (const owner of owners) {
+      if (this.deps.get(mediaPreferenceKey(owner)) == null) this.read(owner);
+    }
+  }
+
   private async policy(scope: MediaAccountScope): Promise<MediaDefaultPolicy | undefined> {
     if (!this.deps.entitled()) return undefined;
     const server = this.deps.server();
