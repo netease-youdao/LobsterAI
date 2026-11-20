@@ -1,8 +1,17 @@
-import { DesktopCompanionPanelPlacement, DesktopCompanionSize } from './constants';
+import { CompanionOrbEdge, DesktopCompanionPanelPlacement, DesktopCompanionSize } from './constants';
 
 export interface CompanionPoint { x: number; y: number }
 export interface CompanionSize { width: number; height: number }
 export interface CompanionRect extends CompanionPoint, CompanionSize {}
+
+export interface CompanionOrbPosition extends CompanionPoint {
+  /** Horizontal edge the orb is docked to, when snapped. */
+  edge?: CompanionOrbEdge;
+  /** Vertical fraction inside the display's usable travel range (0 = top, 1 = bottom). */
+  yRatio?: number;
+  /** Electron display ID where this position was placed, when known. */
+  displayId?: number;
+}
 
 /** Where the selected text sits on screen: from the top-left of its first line to the bottom-right of its last. */
 export interface CompanionSelectionAnchor {
@@ -39,13 +48,69 @@ export function companionDragGrabOffset(grab: unknown, size: CompanionSize): Com
   };
 }
 
-/** Restores the orb at its saved spot, or vertically centered near the right edge of the work area. */
+export function normalizeCompanionOrbPosition(value: unknown): CompanionOrbPosition | undefined {
+  if (!isPoint(value)) return undefined;
+  const raw = value as Partial<CompanionOrbPosition>;
+  const edge = raw.edge === CompanionOrbEdge.Left || raw.edge === CompanionOrbEdge.Right ? raw.edge : undefined;
+  const yRatio = edge && typeof raw.yRatio === 'number' && Number.isFinite(raw.yRatio)
+    ? Math.min(Math.max(raw.yRatio, 0), 1)
+    : undefined;
+  const displayId = typeof raw.displayId === 'number' && Number.isFinite(raw.displayId) ? raw.displayId : undefined;
+  return {
+    x: Math.round(raw.x!),
+    y: Math.round(raw.y!),
+    ...(edge ? { edge } : {}),
+    ...(yRatio !== undefined ? { yRatio } : {}),
+    ...(displayId !== undefined ? { displayId } : {}),
+  };
+}
+
+function detectCompanionOrbEdge(bounds: CompanionRect, workArea: CompanionRect): CompanionOrbEdge | undefined {
+  const leftEdge = Math.round(workArea.x);
+  const rightEdge = Math.round(workArea.x + workArea.width - bounds.width);
+  if (bounds.x === rightEdge && bounds.x !== leftEdge) return CompanionOrbEdge.Right;
+  if (bounds.x === leftEdge) return CompanionOrbEdge.Left;
+  return undefined;
+}
+
+/** Encodes an orb's settled bounds so docked orbs stay flush against the same edge across display changes. */
+export function createCompanionOrbPosition(
+  bounds: CompanionRect,
+  workArea: CompanionRect,
+  displayId?: number,
+): CompanionOrbPosition {
+  const visible = clampCompanionBounds(bounds, workArea);
+  const edge = detectCompanionOrbEdge(visible, workArea);
+  const travelY = workArea.height - visible.height;
+  const yRatio = edge ? (travelY > 0 ? Math.min(Math.max((visible.y - workArea.y) / travelY, 0), 1) : 0.5) : undefined;
+  return {
+    x: visible.x,
+    y: visible.y,
+    ...(edge ? { edge, yRatio } : {}),
+    ...(typeof displayId === 'number' && Number.isFinite(displayId) ? { displayId } : {}),
+  };
+}
+
+/** Restores the orb at its saved spot (keeping docked orbs flush against their edge), or vertically centered on the right edge. */
 export function resolveCompanionBounds(position: unknown, workArea: CompanionRect, size: CompanionSize = DesktopCompanionSize.Orb): CompanionRect {
-  return clampCompanionBounds({
-    ...size,
-    x: isPoint(position) ? position.x : workArea.x + workArea.width - size.width - DesktopCompanionSize.Margin,
-    y: isPoint(position) ? position.y : workArea.y + (workArea.height - size.height) / 2,
-  }, workArea);
+  const saved = normalizeCompanionOrbPosition(position);
+  if (!saved) {
+    return clampCompanionBounds({
+      ...size,
+      x: workArea.x + workArea.width - size.width,
+      y: workArea.y + (workArea.height - size.height) / 2,
+    }, workArea);
+  }
+  const travelY = Math.max(0, workArea.height - size.height);
+  const x = saved.edge === CompanionOrbEdge.Left
+    ? workArea.x
+    : saved.edge === CompanionOrbEdge.Right
+      ? workArea.x + workArea.width - size.width
+      : saved.x;
+  const y = saved.edge && saved.yRatio !== undefined
+    ? workArea.y + saved.yRatio * travelY
+    : saved.y;
+  return clampCompanionBounds({ ...size, x, y }, workArea);
 }
 
 /** Settles a dropped orb against the nearer left or right edge, keeping it whole and at the same height. */
