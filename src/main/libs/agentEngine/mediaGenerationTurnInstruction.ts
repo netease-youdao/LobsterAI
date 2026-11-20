@@ -2,18 +2,23 @@ import {
   MediaPreferenceMode,
   MediaSelectionMode,
   MediaSelectionSource,
+  MediaType,
 } from '../../../shared/media/defaultPolicy';
 import {
   SkinAssetSlot,
   SkinWorkflowKind,
   type SkinWorkflowKind as SkinWorkflowKindValue,
 } from '../../../shared/skin/constants';
-import type { CoworkMediaSelection } from './types';
+import type { CoworkMediaAttachmentRef, CoworkMediaSelection } from './types';
 
-const buildSkinPackInstruction = (selection?: CoworkMediaSelection): string => {
-  const useLobsterImageTool = selection?.mode === 'image' || selection?.mode === 'auto';
-  const imageTool = useLobsterImageTool ? 'lobsterai_image_generate' : 'image_generate';
-  const singleOutputParams = useLobsterImageTool ? 'count=1 or n=1' : 'count=1';
+export const buildSkinPackInstruction = (selection?: CoworkMediaSelection, refs?: CoworkMediaAttachmentRef[]): string => {
+  if (selection?.imagePreference === MediaPreferenceMode.Off
+    || (selection?.mode === MediaSelectionMode.None && selection.preferencesRevision === undefined)) {
+    return 'Image generation is disabled by the user. Ask the user to enable it before creating skin assets.';
+  }
+  if (selection?.mode !== MediaSelectionMode.Image && selection?.mode !== MediaSelectionMode.Auto) {
+    return 'The AI Skin Designer needs an available LobsterAI image model. Explain this requirement and stop before creating or billing a skin.';
+  }
   const lines = [
     '[AI skin pack workflow: two-asset serial flow]',
     'The structured workflowKind for this turn is skin_pack. These rules override ordinary single-image generation instructions.',
@@ -22,26 +27,25 @@ const buildSkinPackInstruction = (selection?: CoworkMediaSelection): string => {
     'The presentation may style only allow-listed LobsterAI surfaces and title bars. Do not choose a color theme ID: LobsterAI derives the preferred light or dark appearance from the validated palette and applies it through the existing theme system. Do not change page layout, component positions, or system icons.',
   ];
 
-  if (useLobsterImageTool) {
-    lines.push('The image backend for this entire pack is locked to lobsterai_image_generate. Do not use image_generate, seedream, seedance, or any other image tool or skill.');
-    const imageModel = selection?.imageModelId?.trim() || selection?.modelId?.trim();
-    if (imageModel) {
-      lines.push(`You MUST use model "${imageModel}" for both image generation jobs. Do not list, switch, or use any other model.`);
-    } else {
-      lines.push('You may call lobsterai_image_generate action="list" once before generation to choose one image model, then lock that model for both assets. Listing is not an image generation attempt.');
-    }
-    lines.push('If a generate call returns an asynchronous taskId, call lobsterai_image_generate with action="status" exactly once. That single status call polls internally to a terminal state; never busy-poll or repeat it.');
+  lines.push('The image backend for this entire pack is locked to lobsterai_image_generate. Use that same backend for both assets.');
+  const imageModel = selection?.imageModelId?.trim() || selection?.modelId?.trim();
+  if (imageModel) {
+    lines.push(`You MUST use model "${imageModel}" for both image generation jobs. Do not list, switch, or use any other model.`);
   } else {
-    lines.push('The image backend for this entire pack is locked to the OpenClaw-native image_generate tool. Do not call lobsterai_image_generate, seedream, seedance, or any other image tool or skill.');
-    lines.push('You may call image_generate action="list" once before generation to choose one ready provider/model, then lock that provider and model for both assets. Listing is not an image generation attempt.');
-    lines.push('After each image_generate action="generate" call, wait for that call or its completion event to reach terminal success. There is no lobsterai_image_generate status step for this route.');
+    lines.push('You may call lobsterai_image_generate action="list" once before generation to choose one image model, then lock that model for both assets. Listing is not an image generation attempt.');
   }
+  lines.push('If a generate call returns an asynchronous taskId, call lobsterai_image_generate with action="status" and waitForResult=true to obtain the saved local file before registering it. Never resubmit a pending job.');
 
+  const references = refs?.filter(ref => ref.mediaType === MediaType.Image).map(ref => ref.token);
+  if (references?.length) {
+    lines.push(`Pass the user's attached artwork to the backdrop generation in images using these exact reference tokens: `
+      + JSON.stringify(references) + '. The desktop resolves their original image bytes. No shell, file copy or conversion is needed.');
+  }
   lines.push('The required skin slots are:');
   lines.push(`1. ${SkinAssetSlot.WorkspaceBackdrop}`);
   lines.push(`2. ${SkinAssetSlot.HomeEmblem}`);
-  lines.push(`Use a soft budget of about two serial ${imageTool} calls with action="generate" for the completed pack. This is guidance, not a hard quota or a call-to-slot invariant.`);
-  lines.push(`Request one output image per attempt by default (${singleOutputParams}). Extra serial attempts are allowed when a call fails, produces no usable local output, or a candidate cannot satisfy a required slot.`);
+  lines.push(`Use a soft budget of about two serial lobsterai_image_generate calls with action="generate" for the completed pack. This is guidance, not a hard quota or a call-to-slot invariant.`);
+  lines.push(`Request one output image per attempt by default (count=1 or n=1). Register a saved file immediately. Extra serial attempts are allowed when generation fails or the desktop rejects the file for the slot. Artistic preferences and provider watermarks alone do not authorize another paid attempt.`);
   lines.push('Do not start the next slot until the current generation reaches terminal status="succeeded" and lobsterai_skin_manage action="register_asset" succeeds for the current skinId, slot, and exact generated local sourcePath.');
   lines.push('After registering workspace.backdrop, and only then, generate and register home.emblem.');
   lines.push('Keep all image attempts serial. Never start parallel generations. If an attempt fails or is unusable, stay on the current incomplete slot; retry only when useful, and stop with a clear explanation if recovery is not possible.');
@@ -80,10 +84,6 @@ export const buildMediaGenerationTurnInstruction = (
   workflowKind?: SkinWorkflowKindValue,
 ): string => {
   if (workflowKind === SkinWorkflowKind.SkinPack) {
-    if (selection?.imagePreference === MediaPreferenceMode.Off
-      || (selection?.mode === MediaSelectionMode.None && selection.preferencesRevision === undefined)) {
-      return 'Image generation is disabled by the user. Do not generate skin assets or fall back to a different paid tool. Ask the user to enable image generation first.';
-    }
     return buildSkinPackInstruction(selection);
   }
 

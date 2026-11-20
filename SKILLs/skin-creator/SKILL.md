@@ -2,7 +2,7 @@
 name: skin-creator
 description: Create and apply a two-asset LobsterAI visual skin from the user's style description. Use only when the AI Skin Designer kit supplies the structured skin_pack workflow marker; do not use for ordinary theme or image requests.
 official: true
-version: 0.2.0
+version: 0.3.0
 ---
 
 # LobsterAI Skin Creator
@@ -22,7 +22,7 @@ Read [references/asset-contract.md](references/asset-contract.md) before the fir
 - Aim for about two serial image-generation calls for the completed pack and request one image per attempt by default. This is a soft budget, not a hard quota or a call-to-slot invariant.
 - A status query is not a generation call. If a tool returns a non-terminal task, wait for or query that task to terminal success before continuing.
 - Register each successful asset immediately. Do not start the next generation until `lobsterai_skin_manage` confirms registration.
-- Additional serial attempts are allowed when generation fails, returns no usable local output, or the current candidate cannot satisfy a required slot. Never run image generations in parallel or switch backend silently.
+- Register the saved file immediately. Retry only if generation fails or the desktop rejects the file for its slot. A stylistic difference or a provider watermark does not authorize another paid attempt. Never run image generations in parallel or switch backend silently.
 - Never write skin files, application configuration, CSS, or databases directly. Only `lobsterai_skin_manage` may register or apply a skin.
 - Do not choose or name a LobsterAI color theme. LobsterAI deterministically infers the presentation's preferred light or dark appearance from its validated palette and reuses the existing theme system when the completed skin is applied.
 - Do not create icons, sprite sheets, wallpapers for other views, custom fonts, arbitrary CSS, or layout changes in this MVP.
@@ -86,9 +86,7 @@ Preserve the returned `skinId` for all subsequent calls.
 
 Follow the structured system instruction for this turn:
 
-- LobsterAI route: call `lobsterai_image_generate` with `action="list"`, choose one available image model when no model is already fixed, then keep that model.
-- OpenClaw route: use `image_generate` with `action="list"`, select one ready provider/model, then keep that model.
-- Unavailable route: stop and explain that a supported image provider or LobsterAI media entitlement is required.
+Use `lobsterai_image_generate` with the selected image model. If the workflow is enabled without a fixed model, list available models once and choose one for both assets. If generation is disabled or unavailable, stop and explain what the user needs to enable.
 
 Listing models is not an image-generation attempt.
 
@@ -96,10 +94,7 @@ Listing models is not an image-generation attempt.
 
 Generate exactly one 16:9 or closest supported landscape image. The prompt must include the shared style bible, the same presentation palette, the intended focus coordinates, and the backdrop contract. Prefer a 2K-class output when supported. Use a stable filename hint such as `lobster-skin-backdrop.png`.
 
-If the generation returns a pending task:
-
-- for `lobsterai_image_generate`, call `action="status"` once with the task ID; the tool owns adaptive polling;
-- for `image_generate`, wait for its completion event and continue from this workflow.
+If generation returns a pending task, call `lobsterai_image_generate` with `action="status"`, the existing task ID, and `waitForResult=true`. Use the local file from the successful result.
 
 After terminal success, call:
 

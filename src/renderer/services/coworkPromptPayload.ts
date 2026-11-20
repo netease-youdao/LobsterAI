@@ -10,6 +10,7 @@ import {
   isPastedTextAttachment,
 } from '../../shared/cowork/pastedText';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
+import { MediaType } from '../../shared/media/defaultPolicy';
 import {
   computeMediaLabels,
   extractMediaReferencesFromPrompt,
@@ -57,6 +58,7 @@ interface PrepareCoworkPromptPayloadOptions {
   attachments: CoworkPromptAttachment[];
   selectedTextSnippets: CoworkSelectedTextSnippet[];
   modelSupportsImage: boolean;
+  useAttachedImagesAsReferences?: boolean;
   readFileAsDataUrl?: (path: string) => Promise<{ success: boolean; dataUrl?: string }>;
   createImagePreviewDataUrl?: (dataUrl: string) => Promise<string>;
   /** Re-encodes an image above the model's per-image limit into a data URL of at most `maxBytes`. */
@@ -266,7 +268,11 @@ export async function prepareCoworkPromptPayload(
   const editLines = mediaLabels.filter(item => item.attachment.imageEdit).map(item =>
     `@${item.label} ${imageEditUserPrompt(item.attachment.imageEdit!)}`);
   if (editLines.length) finalPrompt = [finalPrompt, ...editLines].filter(Boolean).join('\n\n');
-  const mediaReferences = extractMediaReferencesFromPrompt(finalPrompt, mediaLabels);
+  let mediaReferences = extractMediaReferencesFromPrompt(finalPrompt, mediaLabels);
+  if (!mediaReferences.length && options.useAttachedImagesAsReferences) {
+    const imageTokens = mediaLabels.filter(item => item.mediaType === MediaType.Image).map(item => '@' + item.label);
+    mediaReferences = extractMediaReferencesFromPrompt(imageTokens.join(' '), mediaLabels);
+  }
 
   return {
     success: true,

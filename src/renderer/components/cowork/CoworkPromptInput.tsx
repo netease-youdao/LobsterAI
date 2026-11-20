@@ -52,6 +52,7 @@ import {
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
 import { isChatPresetSession, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import { buildPptOutlineSystemPrompt, shouldUsePptOutlinePrompt } from '../../../shared/pptCreation/outline';
+import { SkinPackKitId } from '../../../shared/skin/kit';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -1438,6 +1439,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       attachments: sourceAttachments,
       selectedTextSnippets: sourceSelectedTextSnippets,
       modelSupportsImage,
+      useAttachedImagesAsReferences: activeKitIds.includes(SkinPackKitId.BuiltIn),
       readFileAsDataUrl: path => window.electron.dialog.readFileAsDataUrl(path),
       fileLabel: i18nService.t('inputFileLabel'),
       folderLabel: i18nService.t('inputFolderLabel'),
@@ -1492,6 +1494,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
     return payload;
   }, [
+    activeKitIds,
     effectiveSelectedModel?.id,
     modelSupportsImage,
     reportPromptControl,

@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { MediaDeliveryStatus, MediaTaskStatus } from '../../../shared/media/constants';
 import { MediaPreferenceMode, MediaSelectionMode } from '../../../shared/media/defaultPolicy';
+import { SkinToolAction, SkinToolName, SkinWorkflowKind } from '../../../shared/skin/constants';
 import { MediaGenerationAction, MediaGenerationTool } from '../../mediaGenerationPolicy';
 import { buildDshMediaTurnInstruction, createDshMediaGenerationProvider } from './dshMediaGenerationTool';
 
@@ -16,10 +17,37 @@ describe('LobsterAI media generation in dsh', () => {
     const submit = vi.fn().mockResolvedValue(response);
     const provider = createDshMediaGenerationProvider(submit);
     const args = { action: MediaGenerationAction.Generate, prompt: 'teapot', sessionKey: 'forged', toolCallId: 'other' };
-    expect(provider.listDescriptors().map(tool => tool.name)).toEqual([name, MediaGenerationTool.Video]);
+    expect(provider.listDescriptors().map(tool => tool.name)).toEqual([name, MediaGenerationTool.Video, SkinToolName.Manage]);
     expect(await provider.execute(name, args, context)).toEqual(response);
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit.mock.calls[0][0].context).toEqual({ sessionKey: 'agent:artist:lobsterai:conversation', toolCallId: 'call-1' });
+  });
+
+  test('forwards a skin action once to the workflow bound to this desktop conversation', async () => {
+    const response = { content: [], details: { status: 'ready', skinId: 'my-skin' } };
+    const submit = vi.fn().mockResolvedValue(response);
+    const provider = createDshMediaGenerationProvider(submit);
+    const args = { action: SkinToolAction.Status, skinId: 'my-skin' };
+    expect(await provider.execute(SkinToolName.Manage, args, context)).toBe(response);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      tool: SkinToolName.Manage, args, context: { sessionKey: 'agent:artist:lobsterai:conversation', toolCallId: 'call-1' },
+    }));
+    await expect(provider.execute(SkinToolName.Manage, args, { ...context, coworkSessionId: undefined })).rejects.toThrow('bound');
+    await expect(provider.execute(SkinToolName.Manage, args, { ...context, signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  test('only a skin turn gets the serial workflow and keeps the supplied image reference', () => {
+    const selection = { mode: MediaSelectionMode.Image, imageModelId: 'chosen' };
+    const ref = { token: '@image1', mediaType: 'image' as const, index: 0, fileId: 'old', fileName: 'old.png', mimeType: 'image/png', localPath: '/old.png' };
+    const instruction = buildDshMediaTurnInstruction(selection, [ref], SkinWorkflowKind.SkinPack);
+    expect(instruction).toContain(SkinToolName.Manage);
+    expect(instruction).toContain('"@image1"');
+    expect(instruction).toContain('"chosen"');
+    expect(instruction).toContain('waitForResult=true');
+    expect(buildDshMediaTurnInstruction(selection, [ref])).not.toContain(SkinToolName.Manage);
+    expect(buildDshMediaTurnInstruction(undefined, [ref], SkinWorkflowKind.SkinPack)).not.toContain('create_draft');
   });
 
   test('rejects unbound and aborted submissions before invoking the account service', async () => {

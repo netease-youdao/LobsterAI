@@ -39,6 +39,7 @@ interface ApplyMediaReferencesInput {
   mediaType: MediaGenerationRequestType;
   params: Record<string, unknown>;
   refs?: MediaAttachmentRefMain[];
+  preferExplicitImageInputs?: boolean;
 }
 
 const DATA_URL_RE = /^data:([^;,]+)[;,]/;
@@ -137,9 +138,15 @@ export const applyMediaReferencesToGenerationParams = ({
   mediaType,
   params,
   refs,
+  preferExplicitImageInputs,
 }: ApplyMediaReferencesInput): Record<string, unknown> => {
   const valueByToken = buildReferenceValueByToken(refs);
   const next = replaceMediaReferenceTokens(params, valueByToken) as Record<string, unknown>;
+  // The designer can explicitly reference its newly generated backdrop for the emblem.
+  if (preferExplicitImageInputs && mediaType === MediaGenerationRequestType.Image
+    && ((typeof next.image === 'string' && next.image.trim()) || getStringArray(next.images).length > 0)) {
+    return next;
+  }
   const resolvedRefs = (refs ?? [])
     .map(ref => ({ ref, value: valueByToken.get(ref.token.trim()) }))
     .filter((item): item is { ref: MediaAttachmentRefMain; value: string } => Boolean(item.value));

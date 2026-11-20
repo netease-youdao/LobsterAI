@@ -238,6 +238,7 @@ import {
 } from '../shared/shareDeployment/constants';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
 import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
+import { SkinPackKitId, SkinPackSkillId } from '../shared/skin/kit';
 import { isUrlOnDomain } from '../shared/url/hostname';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
@@ -5939,6 +5940,7 @@ if (!gotTheLock) {
           : MediaGenerationRequestType.Image,
         params,
         refs,
+        preferExplicitImageInputs: Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId),
       });
       if (editGeneration) params = editGeneration.params;
 
@@ -14775,6 +14777,10 @@ if (!gotTheLock) {
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();
     profiler.measure('initStore');
+    // An installed designer must use the bundled dsh instructions from the first visible turn.
+    if (store.get<Record<string, InstalledKitRecord>>(KitStoreKey.Installed)?.[SkinPackKitId.BuiltIn]) {
+      getSkillManager().syncBundledSkillsToUserData(SkinPackSkillId.BuiltIn);
+    }
     console.log('[Main] initApp: store initialized');
     const libraryLocalStore = new LibraryLocalStore(store.getDatabase());
     const emitLibraryChanged = (payload: LibraryChangedPayload): void => {

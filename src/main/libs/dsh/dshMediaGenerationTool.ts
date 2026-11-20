@@ -3,12 +3,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { buildManagedSessionKey } from '../../../shared/cowork/managedSessionKey';
 import { MediaDeliveryStatus, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { MediaPreferenceMode, type MediaSelection, MediaSelectionMode } from '../../../shared/media/defaultPolicy';
+import { SkinToolName, SkinWorkflowKind } from '../../../shared/skin/constants';
 import type { MediaGenerationRequest, MediaGenerationResponse } from '../../mcp/mcpRuntime';
 import { MediaGenerationAction, MediaGenerationTool } from '../../mediaGenerationPolicy';
+import { buildSkinPackInstruction } from '../agentEngine/mediaGenerationTurnInstruction';
 import type { CoworkMediaAttachmentRef } from '../agentEngine/types';
 import { compactMediaDetails } from '../mediaMetadataCompaction';
 import type { HostToolProvider } from './dshHostBridgeWiring';
 import type { DshHostToolDescriptor } from './dshHostManager';
+import { dshSkinTool } from './dshSkinTool';
 
 const foregroundWaitMs = 60_000;
 const savedImageWaitMs = 30 * 60_000;
@@ -91,7 +94,12 @@ const videoTool: DshHostToolDescriptor = {
   },
 };
 
-export function buildDshMediaTurnInstruction(selection?: MediaSelection, refs?: CoworkMediaAttachmentRef[]): string {
+export function buildDshMediaTurnInstruction(
+  selection?: MediaSelection,
+  refs?: CoworkMediaAttachmentRef[],
+  workflowKind?: SkinWorkflowKind,
+): string {
+  if (workflowKind === SkinWorkflowKind.SkinPack) return buildSkinPackInstruction(selection, refs);
   if (!selection) return '';
   const image = selection.imageModelId ?? (selection.mode === MediaSelectionMode.Image ? selection.modelId : undefined);
   const video = selection.videoModelId ?? (selection.mode === MediaSelectionMode.Video ? selection.modelId : undefined);
@@ -116,21 +124,25 @@ export function createDshMediaGenerationProvider(
   submit: (request: MediaGenerationRequest) => Promise<MediaGenerationResponse>,
 ): HostToolProvider {
   return {
-    listDescriptors: () => [imageTool, videoTool],
+    listDescriptors: () => [imageTool, videoTool, dshSkinTool],
     async execute(tool, args, context) {
-      if ((tool !== MediaGenerationTool.Image && tool !== MediaGenerationTool.Video)
+      if ((tool !== MediaGenerationTool.Image && tool !== MediaGenerationTool.Video && tool !== SkinToolName.Manage)
         || !context.coworkSessionId?.trim() || !context.callId?.trim()) {
         throw new Error('Media generation requires a bound LobsterAI conversation and tool call.');
+      }
+      const request: MediaGenerationRequest = {
+        tool, args, signal: context.signal,
+        context: { sessionKey: buildManagedSessionKey(context.coworkSessionId, context.agentId), toolCallId: context.callId },
+      };
+      if (tool === SkinToolName.Manage) {
+        context.signal?.throwIfAborted();
+        return submit(request);
       }
       const video = tool === MediaGenerationTool.Video;
       const actions: readonly string[] = video ? videoActions : imageActions;
       if (args.action !== undefined && (typeof args.action !== 'string' || !actions.includes(args.action))) {
         throw new Error('Unsupported media generation action.');
       }
-      const request: MediaGenerationRequest = {
-        tool, args, signal: context.signal,
-        context: { sessionKey: buildManagedSessionKey(context.coworkSessionId, context.agentId), toolCallId: context.callId },
-      };
       const savedWaitMs = video ? savedVideoWaitMs : savedImageWaitMs;
       const deadline = Date.now() + (args.waitForResult === true ? savedWaitMs : foregroundWaitMs);
       let polls = 0;

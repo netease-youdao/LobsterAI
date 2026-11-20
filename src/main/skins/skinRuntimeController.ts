@@ -1,5 +1,5 @@
 import type { InstalledKitRecord } from '../../shared/kit/constants';
-import { SkinToolName } from '../../shared/skin/constants';
+import { SkinToolName, SkinWorkflowKind } from '../../shared/skin/constants';
 import type { MediaSelectionState } from '../mediaGenerationPolicy';
 import { SkinMediaBridge } from './skinMediaBridge';
 import { SkinStore } from './skinStore';
@@ -41,6 +41,10 @@ export class SkinRuntimeController {
 
   prepareTurn(input: PrepareSkinWorkflowTurnInput): PreparedSkinWorkflowTurn {
     return this.workflowRegistry.prepareTurn(input);
+  }
+
+  isSkinWorkflow(sessionId: string | null): boolean {
+    return this.workflowRegistry.resolve(sessionId)?.state.workflowKind === SkinWorkflowKind.SkinPack;
   }
 
   handlesTool(tool: string): boolean {
