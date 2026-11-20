@@ -38,6 +38,32 @@ afterEach(() => {
 });
 
 describe('runLegacyOpenClawMigration', () => {
+  test('hydrates missing expert persona files before first use and preserves edited or cleared files', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const db = new Database(sqlitePath);
+    db.exec("CREATE TABLE agents (id TEXT, system_prompt TEXT, identity TEXT)");
+    const add = db.prepare('INSERT INTO agents VALUES (?, ?, ?)');
+    add.run('editor', 'old database prompt', 'proofreader');
+    add.run('planner', 'meeting planner', 'stale identity');
+    db.close();
+    const state = path.join(userDataDir, 'openclaw', 'state');
+    for (const expert of ['editor', 'planner']) {
+      fs.mkdirSync(path.join(state, `workspace-${expert}`), { recursive: true });
+    }
+    fs.writeFileSync(path.join(state, 'workspace-editor', 'SOUL.md'), 'edited prompt');
+    fs.writeFileSync(path.join(state, 'workspace-planner', 'IDENTITY.md'), '');
+    expect(runLegacyOpenClawMigration({ userDataDir, sqlitePath }).status).toBe(MigrationV2Status.Completed);
+    const root = path.join(userDataDir, WORKSPACES_DIR_NAME);
+    expect(fs.readFileSync(path.join(root, 'editor', 'SOUL.md'), 'utf8')).toBe('edited prompt');
+    expect(fs.readFileSync(path.join(root, 'editor', 'IDENTITY.md'), 'utf8')).toBe('proofreader\n');
+    expect(fs.readFileSync(path.join(root, 'planner', 'SOUL.md'), 'utf8')).toBe('meeting planner\n');
+    expect(fs.readFileSync(path.join(root, 'planner', 'IDENTITY.md'), 'utf8')).toBe('');
+    fs.writeFileSync(path.join(root, 'planner', 'SOUL.md'), 'changed after upgrade');
+    runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(fs.readFileSync(path.join(root, 'planner', 'SOUL.md'), 'utf8')).toBe('changed after upgrade');
+  });
+
   test('executes full 6-step offline migration, archives incompatible modules, cleans caches, and is idempotent', () => {
     const userDataDir = createTempDir();
     const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
