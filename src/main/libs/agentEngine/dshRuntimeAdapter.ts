@@ -300,6 +300,14 @@ export function buildLazyContextBridgePrefix(
   messages: CoworkMessage[] | undefined,
 ): string {
   const parts: string[] = [];
+  const images = (messages ?? [])
+    .filter(message => message.type === 'user')
+    .flatMap(message => message.metadata?.historyImageReferences ?? [])
+    .slice(-LEGACY_BRIDGE_MAX_MESSAGES);
+  if (images.length) {
+    parts.push('[历史消息中的图片] 用户询问图片内容时，请使用 read_image 读取对应文件。\n'
+      + images.map(image => JSON.stringify(image)).join('\n'));
+  }
   if (capsule) {
     const formatted = formatCoworkContinuityCapsuleBridge(capsule).trim();
     if (formatted) parts.push(formatted);

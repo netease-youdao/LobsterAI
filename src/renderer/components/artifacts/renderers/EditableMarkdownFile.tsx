@@ -1,11 +1,11 @@
 import { CheckIcon } from '@heroicons/react/24/outline';
-import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useDispatch } from 'react-redux';
 
 import { i18nService } from '@/services/i18n';
 import { getMarkdownDocument, MarkdownSaveState } from '@/services/markdownDocument';
 import { normalizeShellFilePath } from '@/services/shellAppsCache';
-import { addArtifact } from '@/store/slices/artifactSlice';
+import { syncMarkdownFileContent } from '@/store/slices/artifactSlice';
 import type { Artifact } from '@/types/artifact';
 
 import { MarkdownFileError } from '../../../../shared/artifactPreview/markdownEditing';
@@ -29,13 +29,15 @@ interface EditableMarkdownFileProps {
 
 const EditableMarkdownFile: React.FC<EditableMarkdownFileProps> = ({ artifact, sourceView = false, renderPreview, resolveLocalFilePath }) => {
   const dispatch = useDispatch();
-  const document = useMemo(() => getMarkdownDocument(normalizeShellFilePath(artifact.filePath!)), [artifact.filePath]);
+  const filePath = normalizeShellFilePath(artifact.filePath!);
+  const document = useMemo(() => getMarkdownDocument(filePath), [filePath]);
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   const [conflictChoice, setConflictChoice] = useState<boolean | null>(null);
   const [engaged, setEngaged] = useState(false);
   const [notice, setNotice] = useState<SaveNotice>(SaveNotice.None);
-  const artifactRef = useRef(artifact);
-  artifactRef.current = artifact;
+  const syncSavedContent = useCallback((content: string) => {
+    dispatch(syncMarkdownFileContent({ sessionId: artifact.sessionId, filePath, content, contentVersion: Date.now() }));
+  }, [dispatch, artifact.sessionId, filePath]);
 
   useEffect(() => {
     void document.refresh();
@@ -49,29 +51,22 @@ const EditableMarkdownFile: React.FC<EditableMarkdownFileProps> = ({ artifact, s
       window.removeEventListener('focus', focus);
       // Complete synchronization even if the user switches to Source or closes
       // the preview before the final write replies.
-      const closingArtifact = artifactRef.current;
       void document.flush().then(() => {
         const finalState = document.getSnapshot();
         if (finalState.ready && finalState.status === MarkdownSaveState.Saved) {
-          dispatch(addArtifact({
-            sessionId: closingArtifact.sessionId,
-            artifact: { ...closingArtifact, content: finalState.content, contentVersion: Date.now() },
-          }));
+          syncSavedContent(finalState.content);
         }
       });
     };
-  }, [dispatch, document]);
+  }, [document, syncSavedContent]);
 
   useEffect(() => { void document.refresh(); }, [document, artifact.contentVersion]);
 
   useEffect(() => {
     if (state.ready && state.status === MarkdownSaveState.Saved && artifact.content !== state.content) {
-      dispatch(addArtifact({
-        sessionId: artifact.sessionId,
-        artifact: { ...artifact, content: state.content, contentVersion: Date.now() },
-      }));
+      syncSavedContent(state.content);
     }
-  }, [artifact, dispatch, state.content, state.ready, state.status]);
+  }, [artifact.content, syncSavedContent, state.content, state.ready, state.status]);
 
   // Autosave stays quiet: a hint until the reader first clicks into the text,
   // a notice only for a slow save, and a brief confirmation after an edit lands.

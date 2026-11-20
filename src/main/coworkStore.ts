@@ -515,6 +515,7 @@ export interface CoworkLiveEditDiff {
 export interface CoworkMessageMetadata {
   imageAttachments?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPayload[];
   imageAttachmentPreviews?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPreview[];
+  historyImageReferences?: { name: string; path: string; previewOnly: boolean }[];
   browserAnnotations?: import('../shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[];
   turnOutcome?: import('../shared/cowork/turnOutcome').CoworkTurnOutcome;
   imageEdits?: import('../shared/imageEditing/types').ImageEditMessageSnapshot[];

@@ -57,6 +57,7 @@ import {
   type LegacyTaskImportRecord,
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
+import { migrateLegacyConversationImages } from './legacyConversationImages';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
   collectDirectoryTarEntries,
@@ -1242,6 +1243,7 @@ export function runLegacyOpenClawMigration(
     // Idempotency guard: already migrated -> instant return.
     if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
       migrateLegacySubagentHistory(db, openclawStateDir);
+      migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
       return { status: MigrationV2Status.Skipped };
     }
@@ -1251,6 +1253,7 @@ export function runLegacyOpenClawMigration(
     const hasLegacyEngineKv = getKv(db, 'cowork.agent_engine') === 'openclaw';
     if (!hasOpenClawState && !hasLegacyEngineKv) {
       backfillAgentPersonaFiles(db, workspacesDir);
+      migrateLegacyConversationImages(db, userDataDir);
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
@@ -1283,6 +1286,7 @@ export function runLegacyOpenClawMigration(
 
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
       migrateLegacySubagentHistory(db, openclawStateDir);
+      migrateLegacyConversationImages(db, userDataDir);
       const workspacesMigrated = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,

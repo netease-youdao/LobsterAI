@@ -11,6 +11,7 @@ import artifactReducer, {
   selectActivePreviewTab,
   selectSessionArtifacts,
   setSessionArtifacts,
+  syncMarkdownFileContent,
   updateLocalServiceProjectMetadata,
 } from './artifactSlice';
 
@@ -93,6 +94,22 @@ test('setSessionArtifacts dedupes generated videos by file path within one messa
 
   expect(state.artifactsBySession['session-1']).toHaveLength(1);
   expect(state.artifactsBySession['session-1'][0].id).toBe('video-local-path');
+});
+
+test('saving a library Markdown preview updates existing cards without changing their IDs or the active tab', () => {
+  const sessionId = 'session-1', filePath = '/work/notes.md';
+  const first: Artifact = { ...makeVideoArtifact('first', filePath), type: ArtifactTypeValue.Markdown };
+  const second = { ...first, id: 'second', messageId: 'another-message' };
+  let state = artifactReducer(undefined, setSessionArtifacts({ sessionId, artifacts: [first, second] }));
+  state = artifactReducer(state, openArtifactPreviewTab({ sessionId, artifactId: second.id }));
+  const before = state.activePreviewTabIdBySession[sessionId];
+  const save = syncMarkdownFileContent({ sessionId, filePath, content: 'updated notes', contentVersion: 42 });
+  state = artifactReducer(state, save);
+  expect(state.artifactsBySession[sessionId].map(item => [item.id, item.content]))
+    .toEqual([['first', 'updated notes'], ['second', 'updated notes']]);
+  expect(state.activePreviewTabIdBySession[sessionId]).toEqual(before);
+  expect(artifactReducer(state, save)).toBe(state);
+  expect(artifactReducer(state, syncMarkdownFileContent({ ...save.payload, filePath: '/elsewhere.md' }))).toBe(state);
 });
 
 test('addArtifact keeps same file path cards from different messages', () => {
