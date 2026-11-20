@@ -13,6 +13,7 @@ import type {
   CoworkBtwSubmitResponse,
 } from '../../../shared/cowork/btw';
 import { CoworkBtwStatus } from '../../../shared/cowork/btw';
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
@@ -20,6 +21,7 @@ import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cow
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_QUESTION_REQUEST_ID_PREFIX,
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
   DshPermissionPreset,
@@ -178,7 +180,11 @@ interface PendingInteraction {
 
 const LEGACY_BRIDGE_MAX_MESSAGES = 8;
 const LEGACY_BRIDGE_MAX_CHARS = 6_000;
-const DSH_ASK_USER_TOOL_NAME = 'AskUserQuestion';
+function cancelledInteraction(kind: PendingInteraction['kind']): DshWaterfallOutcome {
+  return kind === 'approval'
+    ? { kind: 'result', value: 'cancelled' }
+    : { kind: 'rejected', error: { name: 'UserQuestionError', code: 'ASK_ABORTED', message: 'The question was cancelled.' } };
+}
 const DSH_SUPPORTED_REASONING_EFFORTS = new Set([
   'off',
   'minimal',
@@ -859,14 +865,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
       const outcomeValue = result.behavior === 'allow' ? 'allowed-once' : 'rejected';
       pending.resolve({ kind: 'result', value: outcomeValue });
+    } else if (result.behavior !== 'allow') {
+      pending.resolve(cancelledInteraction(pending.kind));
+    } else if (Array.isArray(result.updatedInput?.answers)) {
+      pending.resolve({ kind: 'result', value: { answers: result.updatedInput.answers } });
     } else {
-      // `user-questions/request` waterfall answer
-      if (result.behavior === 'allow') {
-        const answers = result.updatedInput?.answers ?? result.updatedInput ?? {};
-        pending.resolve({ kind: 'result', value: { status: 'answered', answers } });
-      } else {
-        pending.resolve({ kind: 'result', value: { status: 'cancelled' } });
-      }
+      pending.resolve({ kind: 'rejected', error: { name: 'UserQuestionError', code: 'BAD_ANSWER', message: 'Expected answers keyed by question ID.' } });
     }
 
     this.emit('permissionResolved', pending.coworkSessionId, requestId);
@@ -936,10 +940,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       return Promise.resolve({ kind: 'next' });
     }
 
-    const requestId = `${kind === 'approval' ? 'dsh-approval' : 'dsh-question'}:${evt.eventId}`;
+    const requestId = `${kind === 'approval' ? 'dsh-approval:' : DSH_QUESTION_REQUEST_ID_PREFIX}${evt.eventId}`;
     const toolName = kind === 'approval'
       ? String(evt.request.toolName ?? 'tool')
-      : DSH_ASK_USER_TOOL_NAME;
+      : ASK_USER_QUESTION_TOOL_NAME;
     const callId = typeof evt.request.callId === 'string' ? evt.request.callId : null;
     const toolInput = kind === 'approval'
       ? this.enrichApprovalToolInput(
@@ -969,7 +973,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       const onAbort = () => {
         if (this.pendingInteractions.delete(requestId)) {
-          resolve({ kind: 'result', value: kind === 'approval' ? 'cancelled' : { status: 'cancelled' } });
+          resolve(cancelledInteraction(kind));
           this.emit('permissionResolved', coworkSessionId, requestId);
         }
       };
@@ -1057,10 +1061,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     for (const [requestId, pending] of [...this.pendingInteractions.entries()]) {
       if (pending.coworkSessionId !== coworkSessionId) continue;
       this.pendingInteractions.delete(requestId);
-      pending.resolve({
-        kind: 'result',
-        value: pending.kind === 'approval' ? 'cancelled' : { status: 'cancelled' },
-      });
+      pending.resolve(cancelledInteraction(pending.kind));
       this.emit('permissionResolved', coworkSessionId, requestId);
     }
   }

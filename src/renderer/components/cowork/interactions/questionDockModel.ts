@@ -4,18 +4,20 @@ import {
   OpenClawQuestionStatus,
   parseOpenClawQuestionRecord,
 } from '../../../../shared/cowork/openclawQuestion';
+import { DSH_QUESTION_REQUEST_ID_PREFIX } from '../../../../shared/dshEngine/hostConstants';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../../types/cowork';
 
 /**
- * Where a docked question comes from. The two sources share the dock UI but
+ * Where a docked question comes from. The sources share the dock UI but
  * answer over different wire contracts:
+ * - Dsh: an ordered batch of question IDs, selected labels and free text.
  * - Native: OpenClaw `ask_user`, answered as questionId -> string[] through
  *   `openclawQuestionController`. Every question must be answered; skipping
  *   is not part of the protocol.
  * - Plugin: the `AskUserQuestion` extension, answered as question text ->
  *   '|||'-joined labels plus an explicit `skippedQuestionIds` list.
  */
-export const QuestionSource = { Native: 'native', Plugin: 'plugin' } as const;
+export const QuestionSource = { Native: 'native', Plugin: 'plugin', Dsh: 'dsh' } as const;
 export type QuestionSource = typeof QuestionSource[keyof typeof QuestionSource];
 
 export interface DockQuestionOption { id: string; label: string; description?: string }
@@ -93,7 +95,8 @@ export function permissionDockRequest(permission: CoworkPermissionRequest): Dock
     key: `${permission.sessionId}:${permission.requestId}`,
     sessionId: permission.sessionId,
     requestId: permission.requestId,
-    source: native ? QuestionSource.Native : QuestionSource.Plugin,
+    source: native ? QuestionSource.Native
+      : permission.requestId.startsWith(DSH_QUESTION_REQUEST_ID_PREFIX) ? QuestionSource.Dsh : QuestionSource.Plugin,
     questions,
     ...(record ? { expiresAt: record.expiresAtMs } : {}),
     permission,
@@ -109,6 +112,15 @@ export const questionResolved = (draft: QuestionDraft, id: string): boolean =>
 
 /** Translate the dock draft into the wire shape each source expects. */
 export function permissionDockAnswer(request: DockRequest, draft: QuestionDraft): CoworkPermissionResult {
+  if (request.source === QuestionSource.Dsh) {
+    const answers = request.questions.map(({ id, multiSelect }) => {
+      if (draft.skipped.includes(id)) return { id, selected: [] };
+      const custom = draft.freeText[id]?.trim();
+      const selected = custom && !multiSelect ? [] : draft.answers[id] ?? [];
+      return { id, selected, ...(custom ? { custom } : {}) };
+    });
+    return { behavior: 'allow', updatedInput: { answers } };
+  }
   if (request.source === QuestionSource.Native) {
     // Same payload as CoworkNativeQuestionModal: a typed answer is one more value.
     const answers: Record<string, string[]> = {};

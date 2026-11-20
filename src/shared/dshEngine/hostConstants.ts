@@ -9,6 +9,7 @@ export const DSH_WEB_APP_BUNDLE_NAME = '@deepseek-ai/dsh-web-app';
 export const DSH_OPS_ROUTE_PATH = '/api/lobsterai/ops';
 export const DSH_CHANNELS_ROUTE_PATH = '/api/lobsterai/channels';
 export const DSH_SESSION_ID_PREFIX = 'dsh:';
+export const DSH_QUESTION_REQUEST_ID_PREFIX = 'dsh-question:';
 
 export const RetainedImPlatform = {
   Feishu: 'feishu',
