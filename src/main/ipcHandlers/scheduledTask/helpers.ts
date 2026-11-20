@@ -1,6 +1,35 @@
 import { ImPeerKind, parseImConversationId, PlatformRegistry } from '../../../shared/platform';
+import { isRetainedImPlatform } from '../../im/dshChannelsBridge';
 import type { Platform } from '../../im/types';
-import { resolveAgentBinding } from '../../libs/openclawChannelSessionSync';
+
+const MULTI_INSTANCE_BINDING_PLATFORMS = new Set<string>([
+  'dingtalk',
+  'feishu',
+  'qq',
+  'wecom',
+  'telegram',
+  'discord',
+]);
+
+function resolveAgentBinding(
+  bindings: Record<string, string> | undefined,
+  platform: Platform,
+  accountId?: string | null,
+): string {
+  if (!bindings) return 'main';
+  if (MULTI_INSTANCE_BINDING_PLATFORMS.has(platform) && accountId) {
+    const prefix = `${platform}:`;
+    for (const key of Object.keys(bindings)) {
+      if (key.startsWith(prefix)) {
+        const instanceId = key.slice(prefix.length);
+        if (instanceId === accountId || instanceId.startsWith(accountId)) {
+          return bindings[key];
+        }
+      }
+    }
+  }
+  return bindings[platform] || 'main';
+}
 
 export interface ScheduledTaskHelperDeps {
   getIMGatewayManager: () => {
@@ -16,7 +45,7 @@ export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
 }
 
-const MULTI_INSTANCE_CONFIG_KEYS = new Set(['dingtalk', 'feishu', 'nim', 'qq', 'wecom', 'telegram', 'discord', 'popo']);
+const MULTI_INSTANCE_CONFIG_KEYS = new Set(['dingtalk', 'feishu', 'qq', 'wecom', 'telegram', 'discord']);
 
 function deriveNimRuntimeAccountId(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
@@ -106,7 +135,7 @@ export function listScheduledTaskChannels(): Array<{
 
   for (const option of PlatformRegistry.channelOptions()) {
     const platform = PlatformRegistry.platformOfChannel(option.value);
-    if (platform === undefined || !enabledPlatforms.has(platform)) continue;
+    if (platform === undefined || !isRetainedImPlatform(platform) || !enabledPlatforms.has(platform)) continue;
 
     const instances = instancesByPlatform.get(platform);
     if (instances && instances.length > 0) {

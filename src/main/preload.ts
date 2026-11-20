@@ -83,6 +83,7 @@ import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
 import { DialogIpc } from '../shared/dialog/constants';
 import { DshIpcChannel } from '../shared/dshEngine/constants';
+import { DshHostIpc } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   type EnterpriseQuotaRequestType,
@@ -130,6 +131,7 @@ import type {
   MediaSelection,
   MediaType,
 } from '../shared/media/defaultPolicy';
+import { MigrationV2Ipc } from '../shared/migration/constants';
 import { type ModelPresetId, ModelPresetIpc } from '../shared/modelPresets/constants';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
@@ -830,7 +832,7 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: {
       workingDirectory?: string;
       executionMode?: 'auto' | 'local' | 'sandbox';
-      agentEngine?: 'openclaw';
+      agentEngine?: 'dsh';
       memoryEnabled?: boolean;
       memoryImplicitUpdateEnabled?: boolean;
       memoryLlmJudgeEnabled?: boolean;
@@ -1753,5 +1755,21 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('xai-oauth:device-code', handler);
       return () => ipcRenderer.removeListener('xai-oauth:device-code', handler);
     },
+  },
+  dshHost: {
+    getStatus: () => ipcRenderer.invoke(DshHostIpc.GetStatus),
+    restart: () => ipcRenderer.invoke(DshHostIpc.Restart),
+    getWebUrl: () => ipcRenderer.invoke(DshHostIpc.GetWebUrl),
+    openEcosystemView: (routeHash?: string) => ipcRenderer.invoke(DshHostIpc.OpenEcosystemView, routeHash),
+    closeEcosystemView: () => ipcRenderer.invoke(DshHostIpc.CloseEcosystemView),
+    listPlugins: () => ipcRenderer.invoke(DshHostIpc.ListPlugins),
+    installPlugin: (packageSpec: string) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, packageSpec),
+    removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
+    openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),
+  },
+  migrationV2: {
+    getReport: () => ipcRenderer.invoke(MigrationV2Ipc.GetReport),
+    dismissReport: () => ipcRenderer.invoke(MigrationV2Ipc.DismissReport),
+    openBackupDir: () => ipcRenderer.invoke(MigrationV2Ipc.OpenBackupDir),
   },
 });

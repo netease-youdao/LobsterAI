@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   buildProviderSelection: vi.fn(),
 }));
 vi.mock('./claudeSettings', () => ({ resolveRawApiConfig: mocks.resolveRawApiConfig }));
-vi.mock('./openclawConfigSync', () => ({ buildProviderSelection: mocks.buildProviderSelection }));
+vi.mock('./providerSelection', () => ({ buildProviderSelection: mocks.buildProviderSelection }));
 
 import {
   buildOneShotHttpRequest,

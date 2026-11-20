@@ -104,7 +104,7 @@ const keyfrom = readBuildKeyfrom();
 const isChannelBuild = isTruthyBuildEnv(BuildEnv.ChannelBuild);
 const silentOnDoubleClick = isChannelBuild && isTruthyBuildEnv(BuildEnv.SilentOnDoubleClick);
 
-for (const platformName of ['mac', 'win', 'linux']) {
+for (const platformName of ['mac', 'win']) {
   mergeExtraResources(platformName);
 }
 

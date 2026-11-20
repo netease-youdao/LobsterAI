@@ -5,7 +5,6 @@ import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 
 import App from './App';
-import EngineRepairOverlay from './components/cowork/EngineRepairOverlay';
 import WindowZoomIndicator from './components/window/WindowZoomIndicator';
 import { store } from './store';
 
@@ -19,7 +18,6 @@ try {
     <React.StrictMode>
       <Provider store={store}>
         <App />
-        <EngineRepairOverlay />
         <WindowZoomIndicator />
       </Provider>
     </React.StrictMode>

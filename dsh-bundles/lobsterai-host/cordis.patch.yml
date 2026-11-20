@@ -1,0 +1,73 @@
+# LobsterAI first-class host bundle layered after @deepseek-ai/dsh-base and
+# @deepseek-ai/dsh-web-app inside LobsterAI's App-Owned Profile.
+#
+# Ownership rules:
+# - Never mutate the user's cordis.patch.yml for LobsterAI-managed settings.
+# - Explicitly disable DeepSeek telemetry, session-log injection, DeepSeek Search
+#   API fallback for non-DeepSeek routes, and heavy LibreOffice kit rows that
+#   LobsterAI replaces natively.
+# - Mount LobsterAI's modular Cordis plugins via relative specifiers (resolved
+#   to file:// URLs by dsh-app-boot while keeping @deepseek-ai/* peer resolution).
+
+# ── Privacy & Compliance Guard (enforced by scripts/dsh-upgrade-check.cjs) ───
+
+- id: session-log-deepseek
+  disabled: true
+
+- id: plugin-package-inventory-deepseek
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true
+
+- id: deepseek-account
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true
+
+- id: desktop-product-telemetry
+  disabled: true
+
+- id: product-analytics
+  disabled: true
+
+# ── Pruned heavy native capabilities replaced by LobsterAI native editors ────
+
+- id: office-kit
+  disabled: true
+
+# ── Search policy guard (0.2.2-rc.5) ─────────────────────────────────────────
+# Non-DeepSeek routes default to DeepSeek Search API when web-deepseek-api is
+# enabled, which fails without DeepSeek Search credentials. Disable it here so
+# DeepSeek routes still use native server-side search when a DeepSeek key is
+# configured, while non-DeepSeek routes use LobsterAI's web-search skill/tools.
+
+- id: web-deepseek-api
+  disabled: true
+
+# ── Product identity & prompt baseline ───────────────────────────────────────
+
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    includeRuntimeContext: true
+    personaPrefix: ''
+
+# ── LobsterAI Host Cordis Plugins ────────────────────────────────────────────
+
+- insert:
+    - id: lobster-model-bridge
+      name: './plugins/model-bridge.mjs'
+
+    - id: lobster-persona-scope
+      name: './plugins/persona-scope.mjs'
+
+    - id: lobster-host-tools
+      name: './plugins/host-tools.mjs'
+
+    - id: lobster-approval-guard
+      name: './plugins/approval-guard.mjs'
+
+    - id: lobster-ops-rpc
+      name: './plugins/ops-rpc.mjs'

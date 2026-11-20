@@ -39,7 +39,7 @@ export const selectAgentEngine = createSelector(
 
 export const selectIsOpenClawEngine = createSelector(
   selectAgentEngine,
-  (engine) => engine === 'openclaw',
+  (engine) => engine === 'dsh',
 );
 
 export const selectCurrentMessages = createSelector(

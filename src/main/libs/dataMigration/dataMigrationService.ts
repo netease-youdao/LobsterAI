@@ -10,6 +10,7 @@ import {
   DataMigrationRestoreStatus,
 } from '../../../shared/dataMigration/constants';
 import { APP_NAME, DB_FILENAME } from '../../appConstants';
+import { runLegacyOpenClawMigration } from '../../migration/legacyOpenClawMigrator';
 import { SQLITE_BACKUP_DIR_NAME } from '../sqliteBackup/constants';
 
 const CURRENT_ARCHIVE_ROOT = APP_NAME;
@@ -17,7 +18,8 @@ const MANIFEST_FILE_NAME = '.lobsterai-migration.json';
 const PENDING_RESTORE_FILE_NAME = '.lobsterai-data-migration-restore-pending.json';
 const LAST_RESTORE_RESULT_FILE_NAME = '.lobsterai-data-migration-restore-result.json';
 const ARCHIVE_FORMAT = 'lobsterai-data-migration';
-const ARCHIVE_FORMAT_VERSION = 1;
+const ARCHIVE_FORMAT_VERSION = 2;
+const SUPPORTED_ARCHIVE_FORMAT_VERSIONS = new Set([1, 2]);
 const SQLITE_BACKUP_TOP_LEVEL_DIR_NAME = SQLITE_BACKUP_DIR_NAME.split('/')[0] || 'backups';
 const SQLITE_RESTORE_FILE_NAMES = [
   DB_FILENAME,
@@ -161,12 +163,18 @@ const EXCLUDED_RELATIVE_PATHS = [
   'openclaw/logs',
   'openclaw/mcp-packages',
   'openclaw/state/logs',
+  'dsh-profile/profiles/lobsterai/node_modules',
+  'dsh-profile/bin',
+  'legacy-openclaw-backup',
 ];
 
 const RESTORE_PRESERVED_RELATIVE_PATHS = [
   'openclaw/logs',
   'openclaw/mcp-packages',
   'openclaw/state/logs',
+  'dsh-profile/profiles/lobsterai/node_modules',
+  'dsh-profile/bin',
+  'legacy-openclaw-backup',
 ];
 
 const ALLOWED_ENTRY_TYPES = new Set([
@@ -1055,7 +1063,7 @@ const readMigrationManifestSync = (sourceRoot: string): MigrationManifest => {
   if (manifest.format !== ARCHIVE_FORMAT) {
     throw new Error(`Backup archive manifest format is unsupported: ${manifest.format || 'missing'}.`);
   }
-  if (manifest.version !== ARCHIVE_FORMAT_VERSION) {
+  if (manifest.version === undefined || !SUPPORTED_ARCHIVE_FORMAT_VERSIONS.has(manifest.version)) {
     throw new Error(`Backup archive manifest version is unsupported: ${String(manifest.version ?? 'missing')}.`);
   }
   if (manifest.archiveRoot !== CURRENT_ARCHIVE_ROOT) {
@@ -1098,14 +1106,16 @@ const validateExtractedArchiveContentSync = (sourceRoot: string): MigrationManif
   const sqliteSummary = assertMigrationSqliteReadySync(path.join(sourceRoot, DB_FILENAME), 'Backup archive');
   assertManifestSqliteSummaryMatches(manifest.sqlite, sqliteSummary, 'Backup archive manifest');
 
-  if (!manifest.openclawState) {
-    throw new Error('Backup archive manifest is missing OpenClaw state summary.');
+  if (manifest.version === 1) {
+    if (!manifest.openclawState) {
+      throw new Error('Backup archive manifest is missing OpenClaw state summary.');
+    }
+    assertOpenClawStateSummaryValuesMatch(
+      manifest.openclawState,
+      readOpenClawStateMigrationSummarySync(sourceRoot),
+      'Backup archive manifest',
+    );
   }
-  assertOpenClawStateSummaryValuesMatch(
-    manifest.openclawState,
-    readOpenClawStateMigrationSummarySync(sourceRoot),
-    'Backup archive manifest',
-  );
   return manifest;
 };
 
@@ -1663,11 +1673,35 @@ export const performDataMigrationRestoreSync = (
     checkpointSqliteDatabaseSync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
     const sourceSummary = assertMigrationSqliteReadySync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
 
+    const extractedManifestVersion = (() => {
+      try {
+        return readMigrationManifestSync(extracted.sourceRoot).version ?? 2;
+      } catch {
+        return 2;
+      }
+    })();
+
     targetWasTouched = true;
     replaceRestorableUserDataSync(extracted.sourceRoot, input.userDataPath);
     assertSqliteRestoredSync(extracted.sourceRoot, input.userDataPath, sourceSummary);
-    assertOpenClawStateSummaryMatches(extracted.sourceRoot, input.userDataPath, 'Restored data');
+    if (extractedManifestVersion === 1) {
+      assertOpenClawStateSummaryMatches(extracted.sourceRoot, input.userDataPath, 'Restored data');
+    }
     removeSqliteSidecarsWithRetrySync(input.userDataPath);
+
+    // Restoring a legacy v1 OpenClaw backup automatically runs the offline v2
+    // migrator so workspaces, schedules, IM allowFrom, and SQLite state come up
+    // cleanly under DeepSeek Harness.
+    if (extractedManifestVersion === 1) {
+      const migrationResult = runLegacyOpenClawMigration({
+        userDataDir: input.userDataPath,
+        sqlitePath: path.join(input.userDataPath, DB_FILENAME),
+        now: () => now,
+      });
+      if (migrationResult.status === 'failed') {
+        throw new Error(`Legacy backup migration failed: ${migrationResult.error ?? 'unknown error'}`);
+      }
+    }
 
     const result: DataMigrationLastRestoreResult = {
       status: DataMigrationRestoreStatus.Success,

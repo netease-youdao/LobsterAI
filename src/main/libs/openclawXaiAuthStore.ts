@@ -1,44 +1,87 @@
+// Engine-independent xAI OAuth credential store persisted under userData.
+// Replaces the legacy OpenClaw runtime-coupled xAI auth store so xAI OAuth
+// works cleanly under DeepSeek Harness with zero OpenClaw runtime dependency.
+
 import { app } from 'electron';
 import fs from 'fs';
-import { createRequire } from 'module';
 import path from 'path';
 
 import {
-  OPENCLAW_XAI_AUTH_STORE_ENTRY,
   type OpenClawXaiAuthStore,
-  XaiAuthStoreErrorCode,
+  type XaiOAuthCredential,
+  type XaiOAuthStatus,
 } from '../../shared/openclawEngine/xaiAuthStore';
-import { t } from '../i18n';
 
-const runtimeRequire = createRequire(__filename);
+const XAI_AUTH_FILENAME = 'xai-oauth.json';
+
+interface StoredXaiAuthPayload {
+  profileId?: string;
+  credential?: XaiOAuthCredential;
+  updatedAt?: number;
+}
+
+function getXaiAuthFilePath(stateDir: string): string {
+  return path.join(stateDir, XAI_AUTH_FILENAME);
+}
+
+function readStoredPayload(stateDir: string): StoredXaiAuthPayload | null {
+  try {
+    const raw = fs.readFileSync(getXaiAuthFilePath(stateDir), 'utf8');
+    const parsed = JSON.parse(raw) as StoredXaiAuthPayload;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function readStoredXaiCredential(stateDir?: string): XaiOAuthCredential | null {
+  const dir = stateDir ?? getOpenClawXaiStateDir();
+  const payload = readStoredPayload(dir);
+  const cred = payload?.credential;
+  if (!cred || typeof cred.access !== 'string' || !cred.access.trim()) {
+    return null;
+  }
+  return cred;
+}
 
 export function getOpenClawXaiAuthStore(): OpenClawXaiAuthStore {
-  const roots = app.isPackaged
-    ? [path.join(process.resourcesPath, 'cfmind')]
-    : [app.getAppPath(), process.cwd()].map(root => path.join(root, 'vendor', 'openclaw-runtime', 'current'));
-  const entry = roots.map(root => path.join(root, OPENCLAW_XAI_AUTH_STORE_ENTRY)).find(file => fs.existsSync(file));
-  if (!entry) throw new Error(t('openClawRuntimeFilesMissing'));
-  // Electron's pinned Node supports synchronous ESM loading. The owner has no
-  // top-level await; require caches its schema/module graph, not login status.
-  const owner = runtimeRequire(entry) as OpenClawXaiAuthStore;
-  const run = <T>(operation: () => T): T => {
-    try {
-      return operation();
-    } catch (error) {
-      if ((error as { code?: string }).code === XaiAuthStoreErrorCode.MigrationPending) {
-        throw new Error(t('xaiAuthMigrationPending'));
-      }
-      console.error('[XaiAuth] canonical auth store operation failed:', error);
-      throw new Error(t('xaiAuthStoreFailed'));
-    }
-  };
   return {
-    readStatus: stateDir => run(() => owner.readStatus(stateDir)),
-    replaceCredential: (stateDir, profileId, credential) => run(() => owner.replaceCredential(stateDir, profileId, credential)),
-    logout: stateDir => run(() => owner.logout(stateDir)),
+    readStatus(stateDir: string): XaiOAuthStatus {
+      const cred = readStoredXaiCredential(stateDir);
+      if (!cred) {
+        return { loggedIn: false };
+      }
+      return {
+        loggedIn: true,
+        email: typeof cred.email === 'string' ? cred.email : undefined,
+        displayName: typeof cred.displayName === 'string' ? cred.displayName : undefined,
+        expiresAt: typeof cred.expires === 'number' ? cred.expires : undefined,
+      };
+    },
+
+    replaceCredential(stateDir: string, profileId: string, credential: XaiOAuthCredential): void {
+      fs.mkdirSync(stateDir, { recursive: true });
+      const filePath = getXaiAuthFilePath(stateDir);
+      const tmpPath = `${filePath}.tmp`;
+      const payload: StoredXaiAuthPayload = {
+        profileId,
+        credential,
+        updatedAt: Date.now(),
+      };
+      fs.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+      fs.renameSync(tmpPath, filePath);
+    },
+
+    logout(stateDir: string): void {
+      const filePath = getXaiAuthFilePath(stateDir);
+      if (fs.existsSync(filePath)) {
+        fs.rmSync(filePath, { force: true });
+      }
+    },
   };
 }
 
 export function getOpenClawXaiStateDir(): string {
-  return path.join(app.getPath('userData'), 'openclaw', 'state');
+  return path.join(app.getPath('userData'), 'auth');
 }

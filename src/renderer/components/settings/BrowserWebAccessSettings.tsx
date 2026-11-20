@@ -99,6 +99,7 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
     onChange({
       ...value,
       browserEnabled: true,
+      displayMode: BrowserDisplayMode.InApp,
       profileMode: BrowserProfileMode.Managed,
       ...patch,
     });
@@ -151,33 +152,6 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
       <div className="space-y-6">
         <SettingsSection title={i18nService.t('browserSettingsGeneralSection')}>
           <SettingsCard>
-            <SettingsItem
-              title={i18nService.t('browserDisplayModeTitle')}
-              description={value.displayMode === BrowserDisplayMode.InApp
-                ? i18nService.t('browserDisplayModeInAppDescription')
-                : i18nService.t('browserDisplayModeExternalDescription')}
-              control={(
-                <div className={SELECT_WIDTH_CLASS}>
-                  <ThemedSelect
-                    id="browser-display-mode"
-                    size="sm"
-                    value={value.displayMode}
-                    onChange={(mode) => update({ displayMode: mode as BrowserDisplayMode })}
-                    options={[
-                      {
-                        value: BrowserDisplayMode.InApp,
-                        label: i18nService.t('browserDisplayModeInApp'),
-                      },
-                      {
-                        value: BrowserDisplayMode.External,
-                        label: i18nService.t('browserDisplayModeExternal'),
-                      },
-                    ]}
-                  />
-                </div>
-              )}
-            />
-
             <SettingsItem
               title={i18nService.t('browserNetworkSectionTitle')}
               description={networkModeDescription}

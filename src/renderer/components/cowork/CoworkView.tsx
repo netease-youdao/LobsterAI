@@ -896,7 +896,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         <div className="mt-3 flex items-center justify-between gap-3">
           <button
             type="button"
-            onClick={() => onRequestAppSettings?.({ initialTab: 'coworkAgentEngine' })}
+            onClick={() => onRequestAppSettings?.({ initialTab: 'general' })}
             className="text-xs text-secondary underline-offset-2 transition-colors hover:text-foreground hover:underline"
           >
             {i18nService.t('coworkOpenClawGoToSettingsInstall')}

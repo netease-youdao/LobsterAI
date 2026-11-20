@@ -1,14 +1,11 @@
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from 'child_process';
+import { type ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import crypto from 'crypto';
 import { session } from 'electron';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
-import { pathToFileURL } from 'url';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import yazl from 'yazl';
-
-import { buildOpenClawMcpServers } from '../libs/openclawConfigSync';
 
 const TEST_USER_DATA = path.join(process.cwd(), '.test-computer-use-runtime');
 const originalPlatform = process.platform;
@@ -368,7 +365,7 @@ describe('resolveComputerUseRuntimePaths', () => {
     ].sort());
   });
 
-  test('preserves the bridge secret reference through OpenClaw config serialization', () => {
+  test('preserves the bridge secret reference on the resolved MCP server env', () => {
     writeWindowsRuntimeFixture();
 
     const server = resolveComputerUseMcpServer({
@@ -378,53 +375,11 @@ describe('resolveComputerUseRuntimePaths', () => {
     });
 
     expect(server).not.toBeNull();
-    const config = buildOpenClawMcpServers([server!]);
-    expect(config[ComputerUseMcpServerName.BuiltIn].env).toMatchObject({
-      [ComputerUseMcpEnv.BridgeSecret]: '${LOBSTER_MCP_BRIDGE_SECRET}',
+    expect(server?.name).toBe(ComputerUseMcpServerName.BuiltIn);
+    expect(server?.gatewayEnvRefs).toEqual({
+      [ComputerUseMcpEnv.BridgeSecret]: ComputerUseMcpEnv.BridgeSecret,
     });
   });
-
-  test.runIf(fs.existsSync(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/config-runtime.js')))(
-    'resolves the internal bridge secret with the pinned runtime while external MCP values stay literal',
-    () => {
-      writeWindowsRuntimeFixture();
-      const server = resolveComputerUseMcpServer({
-        askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
-        electronNodePath: process.execPath,
-        hostInfoUrl: HOST_INFO_URL,
-      });
-      expect(server).not.toBeNull();
-      const configPath = path.join(TEST_USER_DATA, 'openclaw.json');
-      fs.writeFileSync(configPath, JSON.stringify({
-        mcp: { servers: buildOpenClawMcpServers([server!, {
-          name: 'external',
-          transportType: 'stdio',
-          command: process.execPath,
-          env: { [ComputerUseMcpEnv.BridgeSecret]: '${LOBSTER_MCP_BRIDGE_SECRET}' },
-        }]) },
-      }));
-      const sdkUrl = pathToFileURL(path.resolve('vendor/openclaw-runtime/current/dist/plugin-sdk/config-runtime.js')).href;
-      const loaded = spawnSync(process.execPath, ['--input-type=module', '-e', `
-        import { loadConfig } from ${JSON.stringify(sdkUrl)};
-        console.log(JSON.stringify(loadConfig().mcp.servers));
-      `], {
-        env: {
-          ...process.env,
-          OPENCLAW_HOME: TEST_USER_DATA,
-          OPENCLAW_STATE_DIR: path.join(TEST_USER_DATA, 'state'),
-          OPENCLAW_CONFIG_PATH: configPath,
-          [ComputerUseMcpEnv.BridgeSecret]: 'fixture-bridge-secret',
-        },
-        encoding: 'utf8',
-        timeout: 15000,
-      });
-
-      expect(loaded.status, loaded.stderr || loaded.error?.message).toBe(0);
-      const servers = JSON.parse(loaded.stdout);
-      expect(servers[ComputerUseMcpServerName.BuiltIn].env[ComputerUseMcpEnv.BridgeSecret]).toBe('fixture-bridge-secret');
-      expect(servers.external.env[ComputerUseMcpEnv.BridgeSecret]).toBe('${LOBSTER_MCP_BRIDGE_SECRET}');
-    },
-  );
 
   test('renders the same launch spec on every app launch', () => {
     writeWindowsRuntimeFixture();

@@ -7,21 +7,14 @@ import {
   type ProcessTableRow,
   reapOrphanedDshRuntimes,
 } from './dshOrphanReaper';
-import { buildDshProcessLaunch } from './dshProcessLauncher';
 import { buildDshWebArgs } from './dshRuntime';
 
 const EXEC = '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI';
 const DEV_EXEC = '/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron';
-const INSTALLED_ENTRY = '/Users/me/Library/Application Support/LobsterAI/dsh-runtime/0.2.1-rc.5/lib/bin.js';
+const INSTALLED_ENTRY = '/Users/me/Library/Application Support/LobsterAI/dsh-runtime/0.2.2-rc.5/lib/bin.js';
 
-// The command line exactly as the manager spawns it, so the matcher cannot
-// drift from dshProcessLauncher/buildDshWebArgs unnoticed.
 function dshCommand(executablePath: string, entry: string, port: number): string {
-  const launch = buildDshProcessLaunch(
-    { executablePath, args: buildDshWebArgs(entry, port), cwd: '/', env: {} },
-    'darwin'
-  );
-  return [launch.command, ...launch.args].join(' ');
+  return [executablePath, '--expose-internals', ...buildDshWebArgs(entry, port)].join(' ');
 }
 
 describe('parseProcessTable', () => {
@@ -38,8 +31,9 @@ describe('parseProcessTable', () => {
 });
 
 describe('isDshWebCommand', () => {
-  test('matches the spawned runtime, through bin.js or a generated launcher', () => {
+  test('matches the spawned runtime, through bin.js, profile boot, or a generated launcher', () => {
     expect(isDshWebCommand(dshCommand(EXEC, INSTALLED_ENTRY, 57437), EXEC)).toBe(true);
+    expect(isDshWebCommand(`${EXEC} --expose-internals ${INSTALLED_ENTRY} --profile lobsterai --no-open`, EXEC)).toBe(true);
     expect(isDshWebCommand(dshCommand(EXEC, '/Users/me/Library/Application Support/LobsterAI/dsh-launcher/launch.mjs', 1), EXEC)).toBe(true);
   });
 

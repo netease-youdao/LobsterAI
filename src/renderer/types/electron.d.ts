@@ -314,7 +314,7 @@ interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
   executionMode: 'auto' | 'local' | 'sandbox';
-  agentEngine: 'openclaw';
+  agentEngine: 'dsh';
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -2412,6 +2412,51 @@ interface IElectronAPI {
         expiresInMs: number;
       }) => void,
     ) => () => void;
+  };
+  dshHost: {
+    getStatus: () => Promise<{
+      phase: string;
+      origin: string | null;
+      authenticatedWebUrl: string | null;
+      pid: number | null;
+      runtimeVersion: string | null;
+      profileDir: string;
+      dshHomeDir: string;
+      cliShimPath: string | null;
+      lastError: string | null;
+      startedAt: number | null;
+      restartCount: number;
+    } | null>;
+    restart: () => Promise<{ ok: boolean; error?: string }>;
+    getWebUrl: () => Promise<{ ok: boolean; url?: string | null; error?: string }>;
+    openEcosystemView: (routeHash?: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    closeEcosystemView: () => Promise<{ ok: boolean }>;
+    listPlugins: () => Promise<{
+      ok: boolean;
+      profileDir?: string;
+      cliShimPath?: string | null;
+      plugins: Array<{ name: string; specifier: string; managed: boolean }>;
+    }>;
+    installPlugin: (packageSpec: string) => Promise<{
+      ok: boolean;
+      stdout?: string;
+      stderr?: string;
+      error?: string;
+      plugins?: Array<{ name: string; specifier: string; managed: boolean }>;
+    }>;
+    removePlugin: (packageName: string) => Promise<{
+      ok: boolean;
+      stdout?: string;
+      stderr?: string;
+      error?: string;
+      plugins?: Array<{ name: string; specifier: string; managed: boolean }>;
+    }>;
+    openProfileDir: () => Promise<{ ok: boolean; profileDir?: string }>;
+  };
+  migrationV2: {
+    getReport: () => Promise<import('../../shared/migration/constants').MigrationV2Report | null>;
+    dismissReport: () => Promise<{ ok: boolean }>;
+    openBackupDir: () => Promise<{ ok: boolean; backupDir?: string }>;
   };
 }
 

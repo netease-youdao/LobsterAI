@@ -3,7 +3,7 @@ import { ApiFormat, OpenClawApi, ProviderName } from '../../shared/providers';
 import { resolveRawApiConfig } from './claudeSettings';
 import { buildAnthropicMessagesUrl } from './coworkModelApi';
 import type { ResolvedPresetModel } from './modelPresets';
-import { buildProviderSelection } from './openclawConfigSync';
+import { buildProviderSelection } from './providerSelection';
 import {
   readAnthropicStreamEvent,
   readGeminiStreamEvent,

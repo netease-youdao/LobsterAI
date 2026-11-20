@@ -165,7 +165,7 @@ const initialState: CoworkState = {
     workingDirectory: '',
     systemPrompt: '',
     executionMode: 'local',
-    agentEngine: 'openclaw',
+    agentEngine: 'dsh',
     memoryEnabled: true,
     memoryImplicitUpdateEnabled: true,
     memoryLlmJudgeEnabled: false,

@@ -253,7 +253,7 @@ const EngineFailureOverlay: React.FC<EngineFailureOverlayProps> = ({
           {onRequestAppSettings ? (
             <button
               type="button"
-              onClick={() => onRequestAppSettings({ initialTab: 'coworkAgentEngine' })}
+              onClick={() => onRequestAppSettings({ initialTab: 'general' })}
               className="text-xs text-secondary underline-offset-2 transition-colors hover:text-foreground hover:underline"
             >
               {i18nService.t('coworkOpenClawGoToSettingsInstall')}

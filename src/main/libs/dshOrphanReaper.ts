@@ -13,7 +13,15 @@
 
 import { execFile } from 'child_process';
 
-import { isProcessAlive } from './dshSharedHome';
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
 
 export interface ProcessTableRow {
   pid: number;
@@ -21,10 +29,9 @@ export interface ProcessTableRow {
   command: string;
 }
 
-// The tail dshProcessLauncher + buildDshWebArgs produce after the executable:
-// `--expose-internals <entry> web --port <n> --no-open`. The entry is left
-// open so the direct bin.js and a generated launcher both match.
-const DSH_WEB_COMMAND_TAIL = /^ --expose-internals .+ web --port \d+ --no-open$/;
+// Matches both the App-Owned Profile host (`--expose-internals <entry> --profile lobsterai --no-open ...`)
+// and legacy `web --port <n> --no-open` runs spawned by this executable.
+const DSH_WEB_COMMAND_TAIL = /^ --expose-internals .+ (?:web --port \d+ --no-open|--profile \S+ --no-open\b.*)$/;
 
 // dsh shuts itself down within 5s of SIGTERM (PROCESS_SHUTDOWN_TIMEOUT_MS in
 // its profile boot), so a little over that before escalating.

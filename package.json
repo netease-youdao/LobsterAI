@@ -7,108 +7,8 @@
   },
   "license": "MIT",
   "version": "2026.11.16",
-  "openclaw": {
-    "version": "v2026.8.1",
-    "repo": "https://github.com/openclaw/openclaw.git",
-    "plugins": [
-      {
-        "id": "qwen",
-        "npm": "@openclaw/qwen-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "deepseek",
-        "npm": "@openclaw/deepseek-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "moonshot",
-        "npm": "@openclaw/moonshot-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "qianfan",
-        "npm": "@openclaw/qianfan-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "stepfun",
-        "npm": "@openclaw/stepfun-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "zai",
-        "npm": "@openclaw/zai-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "xiaomi",
-        "npm": "@openclaw/xiaomi-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "volcengine",
-        "npm": "@openclaw/volcengine-provider",
-        "version": "2026.8.1"
-      },
-      {
-        "id": "dingtalk-connector",
-        "npm": "@dingtalk-real-ai/dingtalk-connector",
-        "version": "0.8.26"
-      },
-      {
-        "id": "openclaw-lark",
-        "npm": "@larksuite/openclaw-lark",
-        "version": "2026.7.16"
-      },
-      {
-        "id": "qqbot",
-        "npm": "@tencent-connect/openclaw-qqbot",
-        "version": "2.0.1"
-      },
-      {
-        "id": "discord",
-        "npm": "@openclaw/discord",
-        "version": "2026.8.1",
-        "runtimeBundled": true
-      },
-      {
-        "id": "wecom-openclaw-plugin",
-        "npm": "@wecom/wecom-openclaw-plugin",
-        "version": "2026.5.25"
-      },
-      {
-        "id": "openclaw-weixin",
-        "npm": "@tencent-weixin/openclaw-weixin",
-        "version": "2.4.3"
-      },
-      {
-        "id": "moltbot-popo",
-        "npm": "moltbot-popo",
-        "version": "2.1.13",
-        "registry": "https://npm.nie.netease.com",
-        "optional": true
-      },
-      {
-        "id": "openclaw-nim-channel",
-        "npm": "git+https://github.com/netease-im/openclaw-nim-channel.git#1.1.1",
-        "version": "1.1.1",
-        "optional": true
-      },
-      {
-        "id": "openclaw-netease-bee",
-        "npm": "openclaw-netease-bee",
-        "version": "0.1.3"
-      },
-      {
-        "id": "clawemail-email",
-        "npm": "@clawemail/email",
-        "version": "0.9.16"
-      }
-    ]
-  },
   "dsh": {
-    "version": "0.2.2-rc.1",
+    "version": "0.2.2-rc.5",
     "npm": "@deepseek-ai/dsh",
     "pnpm": "11.28.5",
     "runtimes": {
@@ -156,52 +56,34 @@
     "wait:electron:dev": "wait-on -v -t 120000 http://localhost:5175 dist-electron/main.js dist-electron/preload.js dist-electron/appQuitConfirmationPreload.js dist-electron/browserAnnotationPreload.js dist-electron/agentBrowserCredentialPreload.js dist-electron/manualCredentialCapturePreload.js",
     "electron:dev": "rimraf dist-electron && npm run compile:electron && concurrently --kill-others \"vite --port 5175 --strictPort\" \"npm run wait:electron:dev && npm run start:electron\"",
     "electron:dev:inspect": "cross-env ELECTRON_OPEN_DEVTOOLS=1 npm run electron:dev",
-    "electron:dev:openclaw": "npm run openclaw:runtime:host && npm run electron:dev",
+    "electron:dev:dsh": "npm run dsh:runtime:host && npm run electron:dev",
     "postinstall": "patch-package --error-on-fail",
     "pack": "npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder --dir --config scripts/electron-builder-config.cjs",
     "dist": "npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder --config scripts/electron-builder-config.cjs",
     "dist:mac": "electron-builder --mac --config scripts/electron-builder-config.cjs",
-    "predist:mac": "npm run build && npm run compile:electron && npm run build:skills && npm run openclaw:runtime:mac-arm64",
-    "dist:mac:x64": "npm run build && npm run compile:electron && npm run build:skills && npm run openclaw:runtime:mac-x64 && electron-builder --mac --x64 --config scripts/electron-builder-config.cjs",
-    "dist:mac:arm64": "npm run build && npm run compile:electron && npm run build:skills && npm run openclaw:runtime:mac-arm64 && electron-builder --mac --arm64 --config scripts/electron-builder-config.cjs",
+    "predist:mac": "npm run build && npm run compile:electron && npm run build:skills && npm run dsh:runtime:mac-arm64 && npm run dsh:upgrade-check",
+    "dist:mac:x64": "npm run build && npm run compile:electron && npm run build:skills && npm run dsh:runtime:mac-x64 && electron-builder --mac --x64 --config scripts/electron-builder-config.cjs",
+    "dist:mac:arm64": "npm run build && npm run compile:electron && npm run build:skills && npm run dsh:runtime:mac-arm64 && npm run dsh:upgrade-check && electron-builder --mac --arm64 --config scripts/electron-builder-config.cjs",
     "dist:mac:universal": "npm run build && npm run compile:electron && npm run build:skills && electron-builder --mac --universal --config scripts/electron-builder-config.cjs",
-    "predist:win": "npm run openclaw:runtime:win-x64",
+    "predist:win": "npm run dsh:runtime:win-x64",
     "dist:win": "npm run verify:installer-patches && npm run build:selection-hook && npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder --win --x64 --config scripts/electron-builder-config.cjs",
     "dist:win:channel": "node scripts/dist-win-channel.cjs",
     "dist:win:web": "node scripts/dist-win-web.cjs",
     "release:codown": "node scripts/release-codown.cjs",
     "codown:publish": "node scripts/codown-publish.cjs",
     "codown:verify": "node scripts/codown-publish.cjs --verify",
-    "predist:linux": "npm run openclaw:runtime:linux-x64",
-    "dist:linux": "npm run build && npm run compile:electron && npm run build:skills && electron-builder --linux --config scripts/electron-builder-config.cjs",
     "clean:release": "rimraf release",
     "generate:tray-icons": "node scripts/generate-tray-icons.js",
     "setup:mingit": "node scripts/setup-mingit.js",
     "setup:python-runtime": "node scripts/setup-python-runtime.js",
-    "openclaw:ensure": "node scripts/ensure-openclaw-version.cjs",
-    "openclaw:patch": "node scripts/apply-openclaw-patches.cjs",
     "verify:installer-patches": "node scripts/verify-installer-patches.cjs",
     "build:selection-hook": "node scripts/build-selection-hook.cjs",
-    "openclaw:plugins": "node scripts/ensure-openclaw-plugins.cjs",
-    "openclaw:extensions:local": "node scripts/sync-local-openclaw-extensions.cjs",
-    "openclaw:bundle": "node scripts/bundle-openclaw-startup-migration.cjs && node scripts/bundle-openclaw-gateway.cjs",
-    "openclaw:precompile": "node scripts/precompile-openclaw-extensions.cjs",
-    "openclaw:sdk-contract": "node scripts/openclaw-plugin-sdk-contract.cjs",
-    "openclaw:channel-deps": "node scripts/install-openclaw-channel-deps.cjs",
-    "openclaw:prune": "node scripts/prune-openclaw-runtime.cjs",
-    "openclaw:runtime:host": "node scripts/openclaw-runtime-host.cjs",
-    "openclaw:runtime:mac-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs mac-arm64 && node scripts/sync-openclaw-runtime-current.cjs mac-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
-    "openclaw:runtime:mac-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs mac-x64 && node scripts/sync-openclaw-runtime-current.cjs mac-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
-    "openclaw:runtime:win-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-x64 && node scripts/sync-openclaw-runtime-current.cjs win-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
-    "openclaw:runtime:win-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-arm64 && node scripts/sync-openclaw-runtime-current.cjs win-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
-    "openclaw:runtime:linux-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-x64 && node scripts/sync-openclaw-runtime-current.cjs linux-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
-    "openclaw:runtime:linux-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-arm64 && node scripts/sync-openclaw-runtime-current.cjs linux-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
     "dsh:runtime:host": "node scripts/dsh-runtime-host.cjs",
     "dsh:runtime:mac-arm64": "node scripts/build-dsh-runtime.cjs mac-arm64 && node scripts/sync-dsh-runtime-current.cjs mac-arm64",
     "dsh:runtime:mac-x64": "node scripts/build-dsh-runtime.cjs mac-x64 && node scripts/sync-dsh-runtime-current.cjs mac-x64",
     "dsh:runtime:win-x64": "node scripts/build-dsh-runtime.cjs win-x64 && node scripts/sync-dsh-runtime-current.cjs win-x64",
-    "dsh:runtime:linux-x64": "node scripts/build-dsh-runtime.cjs linux-x64 && node scripts/sync-dsh-runtime-current.cjs linux-x64",
     "dsh:runtime:verify": "node scripts/verify-dsh-runtime.cjs",
+    "dsh:upgrade-check": "node scripts/dsh-upgrade-check.cjs",
     "dsh:runtime:pack": "node scripts/pack-dsh-runtime.cjs",
     "dsh:runtime:url": "node scripts/set-dsh-runtime-url.cjs",
     "dsh:runtime:verify-urls": "node scripts/verify-dsh-runtime-urls.cjs",

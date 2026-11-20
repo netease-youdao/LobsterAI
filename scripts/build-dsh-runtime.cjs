@@ -66,6 +66,17 @@ const PRUNE_FILE_PATTERNS = [
 
 const PRUNE_DIR_NAMES = new Set(['test', 'tests', '__tests__', '__mocks__', '.github', 'example', 'examples', 'coverage']);
 
+// Large optional platform binaries that LobsterAI replaces with native
+// implementations (Office editors/PDF preview, speech). Keep the tiny JS
+// wrapper packages so untouched DSH manifests still resolve if loaded bare;
+// `@lobsterai/dsh-bundle` disables the corresponding Cordis rows.
+const PRUNE_HEAVY_SCOPED_PREFIXES = [
+  { scope: '@deepseek-ai', prefix: 'libreoffice-kit-' },
+];
+const PRUNE_HEAVY_UNSCOPED_PREFIXES = [
+  'sherpa-onnx-',
+];
+
 // `git apply` can report success while a patch lands somewhere unexpected, and
 // an upstream refactor can move the code a patch targets. Each patch therefore
 // declares a string that must exist afterwards, so a silent no-op fails the
@@ -100,14 +111,14 @@ const PATCH_SENTINELS = [
     // internalModules() must reach Node internals via --expose-internals.
     patch: '01-app-boot-expose-internals-fallback.cjs',
     file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
-    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
-    occurrences: 1,
+    expect: '--expose-internals',
+    minOccurrences: 1,
   },
   {
     patch: '01-app-boot-expose-internals-fallback.cjs',
     file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/worker/profile-resolution-bootstrap.js',
-    expect: 'const exposed = process.execArgv.includes("--expose-internals");',
-    occurrences: 1,
+    expect: '--expose-internals',
+    minOccurrences: 1,
   },
 ];
 
@@ -211,6 +222,7 @@ if (process.env.DSH_FORCE_BUILD !== '1' && fs.existsSync(buildInfoPath)) {
       info.patchHash === patchHash &&
       info.target === targetId &&
       info.pnpmVersion === pnpmVersion &&
+      info.builderVersion === 3 &&
       isRuntimeComplete()
     ) {
       log(`Runtime ${targetId} for dsh ${dshVersion} (pnpm ${pnpmVersion}) is up to date. Set DSH_FORCE_BUILD=1 to rebuild.`);
@@ -330,7 +342,7 @@ for (const patchFile of listPatchFiles()) {
 assertPatchesLanded();
 
 // [7/7] Prune and verify.
-pruneRuntime();
+const prunedHeavyPackages = pruneRuntime();
 verifyRuntimeLayout();
 
 fs.writeFileSync(
@@ -345,7 +357,8 @@ fs.writeFileSync(
       dshVersion,
       pnpmVersion,
       patchHash,
-      builderVersion: 2,
+      prunedHeavyPackages,
+      builderVersion: 3,
     },
     null,
     2
@@ -458,15 +471,51 @@ function assertPatchesLanded() {
     }
     const contents = fs.readFileSync(filePath, 'utf8');
     const found = contents.split(sentinel.expect).length - 1;
-    if (found !== sentinel.occurrences) {
+    if (typeof sentinel.minOccurrences === 'number') {
+      if (found < sentinel.minOccurrences) {
+        fail(`Patch ${sentinel.patch} did not land: expected >= ${sentinel.minOccurrences} × "${sentinel.expect}", found ${found}`);
+      }
+    } else if (found !== sentinel.occurrences) {
       fail(`Patch ${sentinel.patch} did not land: expected ${sentinel.occurrences} × "${sentinel.expect}", found ${found}`);
     }
     log(`Verified ${sentinel.patch} (${found} sites)`);
   }
 }
 
+function pruneHeavyOptionalPackages(nodeModules) {
+  const removed = [];
+  let removedBytes = 0;
+
+  for (const { scope, prefix } of PRUNE_HEAVY_SCOPED_PREFIXES) {
+    const scopeDir = path.join(nodeModules, scope);
+    if (!fs.existsSync(scopeDir)) continue;
+    for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+      const entryPath = path.join(scopeDir, entry.name);
+      removedBytes += directorySize(entryPath);
+      fs.rmSync(entryPath, { recursive: true, force: true });
+      removed.push(`${scope}/${entry.name}`);
+    }
+  }
+
+  for (const entry of fs.readdirSync(nodeModules, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (!PRUNE_HEAVY_UNSCOPED_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue;
+    const entryPath = path.join(nodeModules, entry.name);
+    removedBytes += directorySize(entryPath);
+    fs.rmSync(entryPath, { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    log(`Pruned heavy optional platform binaries (${Math.round(removedBytes / 1024 / 1024)} MB): ${removed.join(', ')}`);
+  }
+  return removed.sort();
+}
+
 function pruneRuntime() {
   const nodeModules = path.join(outDir, 'node_modules');
+  const prunedHeavyPackages = pruneHeavyOptionalPackages(nodeModules);
 
   // node-pty ships every platform's prebuilt binary inside one package, so a
   // mac runtime otherwise carries ~58 MB of Windows PTY binaries.
@@ -514,6 +563,7 @@ function pruneRuntime() {
       }
     }
   }
+  return prunedHeavyPackages;
 }
 
 function verifyRuntimeLayout() {

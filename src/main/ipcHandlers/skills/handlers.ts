@@ -1,25 +1,15 @@
 import { ipcMain } from 'electron';
 
-import { updatePluginSkillIdsFromReport } from '../../skills';
 import type { SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;
   getSkillStoreUrl: () => string;
-  getOpenClawRuntimeAdapter: () => {
-    connectGatewayIfNeeded: () => Promise<void>;
-    getGatewayClient: () => {
-      request: <T = Record<string, unknown>>(
-        method: string,
-        params?: unknown,
-        opts?: { timeoutMs?: number },
-      ) => Promise<T>;
-    } | null;
-  } | null;
+  onSkillsPolicyChanged?: () => Promise<void> | void;
 }
 
 export function registerSkillHandlers(deps: SkillHandlerDeps): void {
-  const { getSkillManager, getSkillStoreUrl, getOpenClawRuntimeAdapter } = deps;
+  const { getSkillManager, getSkillStoreUrl, onSkillsPolicyChanged } = deps;
 
   ipcMain.handle('skills:list', () => {
     try {
@@ -33,18 +23,10 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   ipcMain.handle('skills:setEnabled', async (_event, options: { id: string; enabled: boolean }) => {
     try {
       const skills = getSkillManager().setSkillEnabled(options.id, options.enabled);
-      // Best-effort sync to OpenClaw
       try {
-        const adapter = getOpenClawRuntimeAdapter();
-        if (adapter) {
-          await adapter.connectGatewayIfNeeded();
-          const client = adapter.getGatewayClient();
-          if (client) {
-            await client.request('skills.update', { skillKey: options.id, enabled: options.enabled }, { timeoutMs: 10_000 });
-          }
-        }
-      } catch (ocError) {
-        console.warn('[skills] Failed to sync enabled state to OpenClaw:', ocError);
+        await onSkillsPolicyChanged?.();
+      } catch (syncError) {
+        console.warn('[skills] Failed to sync enabled state to DSH host:', syncError);
       }
       return { success: true, skills };
     } catch (error) {
@@ -54,9 +36,8 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
 
   ipcMain.handle('skills:delete', async (_event, id: string) => {
     try {
-      // Only the skill's own directory is removed. Files inside it come from the
-      // installed package, so they must never name anything else to delete.
       const skills = await getSkillManager().deleteSkill(id);
+      await Promise.resolve(onSkillsPolicyChanged?.()).catch((): void => undefined);
       return { success: true, skills };
     } catch (error) {
       console.error('[skills] Failed to delete skill:', id, error);
@@ -79,7 +60,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     }
     return getSkillManager().confirmPendingInstall(
       pendingId,
-      action as 'install' | 'installDisabled' | 'cancel'
+      action as 'install' | 'installDisabled' | 'cancel',
     );
   });
 
@@ -120,7 +101,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   ipcMain.handle('skills:testEmailAccountConnectivity', async (
     _event,
     skillId: string,
-    account: Parameters<SkillManager['testEmailAccountConnectivity']>[1]
+    account: Parameters<SkillManager['testEmailAccountConnectivity']>[1],
   ) => {
     return getSkillManager().testEmailAccountConnectivity(skillId, account);
   });
@@ -128,7 +109,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   ipcMain.handle('skills:testEmailConnectivity', async (
     _event,
     skillId: string,
-    config: Record<string, string>
+    config: Record<string, string>,
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
   });
@@ -160,63 +141,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     }
   });
 
-  ipcMain.handle('skills:detectFromOpenClaw', async () => {
-    try {
-      const adapter = getOpenClawRuntimeAdapter();
-      if (!adapter) {
-        return { skills: [], error: 'OpenClaw runtime not available' };
-      }
-      await adapter.connectGatewayIfNeeded();
-      const client = adapter.getGatewayClient();
-      if (!client) {
-        return { skills: [], error: 'Gateway client not connected' };
-      }
-      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
-      const sm = getSkillManager();
-      updatePluginSkillIdsFromReport(sm, report as any);
-      return sm.detectSkillsFromOpenClaw(report as any);
-    } catch (error) {
-      return { skills: [], error: error instanceof Error ? error.message : 'Detection failed' };
-    }
-  });
-
-  ipcMain.handle('skills:syncFromOpenClaw', async () => {
-    try {
-      const adapter = getOpenClawRuntimeAdapter();
-      if (!adapter) {
-        return { synced: [], error: 'OpenClaw runtime not available' };
-      }
-      await adapter.connectGatewayIfNeeded();
-      const client = adapter.getGatewayClient();
-      if (!client) {
-        return { synced: [], error: 'Gateway client not connected' };
-      }
-      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
-      const sm = getSkillManager();
-      updatePluginSkillIdsFromReport(sm, report as any);
-      return sm.syncSkillsFromOpenClaw(report as any);
-    } catch (error) {
-      return { synced: [], error: error instanceof Error ? error.message : 'Sync failed' };
-    }
-  });
-
-  ipcMain.handle('skills:refreshPluginSkillIds', async () => {
-    try {
-      const adapter = getOpenClawRuntimeAdapter();
-      if (!adapter) {
-        return { success: false, error: 'OpenClaw runtime not available' };
-      }
-      await adapter.connectGatewayIfNeeded();
-      const client = adapter.getGatewayClient();
-      if (!client) {
-        return { success: false, error: 'Gateway client not connected' };
-      }
-      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
-      const sm = getSkillManager();
-      updatePluginSkillIdsFromReport(sm, report as any);
-      return { success: true, pluginSkillIds: [...sm.getPluginSkillIds()] };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Refresh failed' };
-    }
-  });
+  // Compatibility no-ops for removed OpenClaw skill sync channels.
+  ipcMain.handle('skills:detectFromOpenClaw', () => ({ skills: [] }));
+  ipcMain.handle('skills:syncFromOpenClaw', () => ({ synced: [] }));
 }

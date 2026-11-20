@@ -48,6 +48,7 @@ import FeedbackDialog from './components/feedback/FeedbackDialog';
 import LaunchAdModal from './components/LaunchAdModal';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
+import { MigrationReportModal } from './components/migration/MigrationReportModal';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
@@ -2049,6 +2050,8 @@ const App: React.FC = () => {
         onRequestAppSettings={handleShowSettings}
         suspended={showSettings || showFeedback || showUpdateModal || showUpdateInstallConfirm || isPermissionModalOpen}
       />
+
+      <MigrationReportModal />
 
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
       {showSettings && (

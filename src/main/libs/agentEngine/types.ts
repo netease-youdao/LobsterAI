@@ -19,7 +19,7 @@ import type { MediaSelection } from '../../../shared/media/defaultPolicy';
 import type { SkinWorkflowKind } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 
-export type CoworkAgentEngine = 'openclaw';
+export type CoworkAgentEngine = 'dsh';
 
 export type PermissionResult =
   | {
@@ -170,6 +170,12 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  forkDshSession?(sessionId: string, atSeq?: number): Promise<{ dshSessionId: string; storedSessionId: string }>;
+  updateQueuedMessage?(
+    sessionId: string,
+    itemId: string,
+    action: { kind: 'edit'; content: Array<{ type: 'text'; text: string }> } | { kind: 'remove' } | { kind: 'steer' },
+  ): Promise<{ accepted: boolean }>;
   editMessage?(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void>;
   recoverMessageEdit?(sessionId: string, operationId: string): Promise<void>;
   hasPendingMessageEdit?(sessionId: string): boolean;

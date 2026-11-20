@@ -25,8 +25,6 @@ import {
   type WebSearchPageHandler,
 } from '../libs/mcpBridgeServer';
 import { applyNodeSystemCaDefault } from '../libs/nodeSystemCaEnv';
-import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
-import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey } from '../libs/openclawLocalSessionResolver';
 import { applyPythonEncodingDefaults } from '../libs/pythonEncodingEnv';
 import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
@@ -36,6 +34,7 @@ import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus } from './m
 import { McpLaunchResolverManager } from './mcpLaunchResolverManager';
 import { type McpServerRecord, McpStore } from './mcpStore';
 import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
+import type { ResolvedMcpServer } from './types';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
 
@@ -79,7 +78,7 @@ export interface McpRuntimeDeps {
   syncOpenClawConfig: (options: {
     reason: string;
     restartGatewayIfRunning?: boolean;
-    expectedImpact?: OpenClawConfigImpact;
+    expectedImpact?: string;
   }) => Promise<{ success: boolean; changed: boolean }>;
   /** Fired when an AskUserQuestion request is surfaced to the renderer. */
   onAskUserRequested?: (sessionId: string, request: { requestId: string; toolName: string }) => void;
@@ -128,7 +127,7 @@ export class McpRuntime {
         reason => {
           this.deps.syncOpenClawConfig({
             reason,
-            expectedImpact: OpenClawConfigImpact.Sync,
+            expectedImpact: 'sync',
           }).catch(err =>
             console.error('[MCP] config sync error after launch resolution:', err),
           );

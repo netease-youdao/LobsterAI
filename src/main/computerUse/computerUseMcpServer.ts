@@ -4,8 +4,8 @@ import path from 'path';
 
 import { ComputerUseMcpServerName } from '../../shared/computerUse/constants';
 import { getLanguage } from '../i18n';
-import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { findSystemNodePath } from '../libs/resolveStdioCommand';
+import type { ResolvedMcpServer } from '../mcp/types';
 import {
   ensureComputerUseLogDir,
   getComputerUseLogRetentionDays,

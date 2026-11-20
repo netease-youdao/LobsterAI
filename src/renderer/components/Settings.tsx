@@ -1,4 +1,4 @@
-import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, QuestionMarkCircleIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, QuestionMarkCircleIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -65,14 +65,11 @@ import type {
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
-import DreamingRecoveryNotice from './cowork/DreamingRecoveryNotice';
-import DreamingSettingsSection from './cowork/DreamingSettingsSection';
-import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
 import { useDesktopCompanionState } from './desktopCompanion/useDesktopCompanionState';
-import DshExperimentalSettings from './DshExperimentalSettings';
+import { DshPluginEcosystemView } from './dsh/DshPluginEcosystemView';
 import ErrorMessage from './ErrorMessage';
 import FeedbackDialog from './feedback/FeedbackDialog';
 import BrainIcon from './icons/BrainIcon';
@@ -81,7 +78,6 @@ import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
-import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
@@ -113,7 +109,6 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
-import OpenClawUserConfigRow from './settings/OpenClawUserConfigRow';
 import ProviderTransferDialog from './settings/ProviderTransferDialog';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
 import {
@@ -259,14 +254,6 @@ type ShortcutSettingAnalyticsSummary = {
   configuredCount: number;
   disabledCount: number;
   resetToDefault: boolean;
-};
-
-type PluginSettingsAnalyticsSummary = {
-  changedKeys: string;
-  configCount: number;
-  disabledToggleCount: number;
-  enabledToggleCount: number;
-  toggleCount: number;
 };
 
 const DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS = new Set([
@@ -587,31 +574,6 @@ const buildShortcutSettingAnalyticsSummary = (
   };
 };
 
-const buildPluginSettingsAnalyticsSummary = (
-  pendingChanges: PluginPendingChanges | null,
-): PluginSettingsAnalyticsSummary | null => {
-  if (!pendingChanges) {
-    return null;
-  }
-  const toggleCount = pendingChanges.toggles.length;
-  const configCount = pendingChanges.configs.length;
-  if (toggleCount === 0 && configCount === 0) {
-    return null;
-  }
-  const changedKeys = [
-    ...(toggleCount > 0 ? ['toggle'] : []),
-    ...(configCount > 0 ? ['config'] : []),
-  ].join(',');
-
-  return {
-    changedKeys,
-    configCount,
-    disabledToggleCount: pendingChanges.toggles.filter(change => !change.enabled).length,
-    enabledToggleCount: pendingChanges.toggles.filter(change => change.enabled).length,
-    toggleCount,
-  };
-};
-
 const reportGeneralSettingChanged = (
   settingKey: string,
   settingValue: SettingsAnalyticsValue,
@@ -686,17 +648,6 @@ const reportDreamingSettingChanged = (
   void reportYdAnalyzer({
     action: LogReporterAction.DreamingSettingChanged,
     source: SettingsAnalyticsSource.Dreaming,
-    ...summary,
-  });
-};
-
-const reportPluginSettingsSaved = (
-  summary: PluginSettingsAnalyticsSummary,
-): void => {
-  console.debug('[Settings] reporting plugin settings analytics');
-  void reportYdAnalyzer({
-    action: LogReporterAction.PluginSettingsSaved,
-    source: SettingsAnalyticsSource.Plugins,
     ...summary,
   });
 };
@@ -805,17 +756,19 @@ const AGENT_TASK_SLOT_COMMANDS: ShortcutCommandDefinition[] = [
   slot: index + 1,
 }));
 
+const RETIRED_SETTINGS_TABS = new Set<TabType>(['coworkAgentEngine', 'email', 'coworkDreaming']);
+const normalizeSettingsTab = (tab?: TabType): TabType => (
+  !tab || RETIRED_SETTINGS_TABS.has(tab) ? 'general' : tab
+);
+
 const SETTINGS_TAB_SHORTCUT_COMMANDS: ShortcutCommandDefinition[] = [
   { key: ShortcutAction.OpenSettingsGeneral, tabLabelKey: 'general' },
   { key: ShortcutAction.OpenSettingsAppearance, tabLabelKey: 'appearance' },
   { key: ShortcutAction.OpenSettingsDesktopCompanion, tabLabelKey: 'desktopCompanionTitle' },
-  { key: ShortcutAction.OpenSettingsAgentEngine, tabLabelKey: 'coworkAgentEngine' },
   { key: ShortcutAction.OpenSettingsModel, tabLabelKey: 'settingsCustomModel' },
   { key: ShortcutAction.OpenSettingsIm, tabLabelKey: 'imBot' },
   { key: ShortcutAction.OpenSettingsBrowser, tabLabelKey: 'browserWebAccessTab' },
-  { key: ShortcutAction.OpenSettingsEmail, tabLabelKey: 'emailTab' },
   { key: ShortcutAction.OpenSettingsMemory, tabLabelKey: 'coworkMemoryTitle' },
-  { key: ShortcutAction.OpenSettingsDreaming, tabLabelKey: 'coworkMemoryTabDreaming' },
   { key: ShortcutAction.OpenSettingsPlugins, tabLabelKey: 'pluginsTab' },
   { key: ShortcutAction.OpenSettingsAbout, tabLabelKey: 'about' },
 ].map(command => ({
@@ -916,23 +869,6 @@ const SettingsSlidersIcon: React.FC<{ className?: string }> = ({ className }) =>
     <path d="M19 7h-9" />
     <circle cx="17" cy="17" r="3" />
     <circle cx="7" cy="7" r="3" />
-  </svg>
-);
-
-const DreamingTabIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    width="34"
-    height="34"
-    viewBox="0 0 34 34"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    className={className}
-    aria-hidden="true"
-  >
-    <path
-      d="M27.9219 21.9648L29.014 22.4621L29.8552 20.6145L27.831 20.7683L27.9219 21.9648ZM16.0762 5.03516L17.1683 5.53234L18.0095 3.68449L15.9851 3.83862L16.0762 5.03516ZM27.9219 21.9648L26.8297 21.4676C25.1281 25.205 21.3674 27.8 17 27.8V29V30.2C22.3442 30.2 26.9378 27.0221 29.014 22.4621L27.9219 21.9648ZM17 29V27.8C11.0353 27.8 6.2 22.9647 6.2 17H5H3.8C3.8 24.2902 9.70984 30.2 17 30.2V29ZM5 17H6.2C6.2 11.3157 10.5923 6.65614 16.1673 6.23169L16.0762 5.03516L15.9851 3.83862C9.16855 4.35759 3.8 10.0512 3.8 17H5ZM16.0762 5.03516L14.984 4.53798C14.2262 6.20275 13.8 8.052 13.8 10H15H16.2C16.2 8.40537 16.5483 6.8944 17.1683 5.53234L16.0762 5.03516ZM15 10H13.8C13.8 17.2902 19.7098 23.2 27 23.2V22V20.8C21.0353 20.8 16.2 15.9647 16.2 10H15ZM27 22V23.2C27.3413 23.2 27.679 23.1868 28.0128 23.1614L27.9219 21.9648L27.831 20.7683C27.5562 20.7892 27.2791 20.8 27 20.8V22Z"
-      fill="currentColor"
-    />
   </svg>
 );
 
@@ -1417,7 +1353,7 @@ const Settings: React.FC<SettingsProps> = ({
     selectThemeMode,
   } = useSkin();
   // 状态
-  const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
+  const [activeTab, setActiveTab] = useState<TabType>(() => normalizeSettingsTab(initialTab));
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
@@ -1481,7 +1417,7 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   // Plugin settings handle (deferred save)
-  const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
+  // DSH Ecosystem plugins are managed live via DshPluginEcosystemView.
   // Unsaved edits from the experimental decision model card (deferred save)
   const decisionModelDraftRef = useRef<DecisionModelConfigUpdate | null>(null);
 
@@ -1783,7 +1719,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const coworkConfig = useSelector(selectCoworkConfig);
 
-  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
+  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'dsh');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
@@ -1835,7 +1771,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [showOpenClawDataRestoreConfirm, setShowOpenClawDataRestoreConfirm] = useState<boolean>(false);
 
   useEffect(() => {
-    setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
+    setCoworkAgentEngine(coworkConfig.agentEngine || 'dsh');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
     setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
@@ -2346,7 +2282,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     if (initialTab) {
-      setActiveTab(initialTab);
+      setActiveTab(normalizeSettingsTab(initialTab));
     }
   }, [initialTab, initialTabRequestId]);
 
@@ -2907,7 +2843,7 @@ const Settings: React.FC<SettingsProps> = ({
     || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '')
     || dreamingEnabled !== (coworkConfig.dreamingEnabled ?? false)
     || dreamingFrequency !== (coworkConfig.dreamingFrequency ?? '0 3 * * *');
-  const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
+  const isOpenClawAgentEngine = coworkAgentEngine === 'dsh';
 
   const openClawProgressPercent = useMemo(() => {
     if (typeof openClawEngineStatus?.progressPercent !== 'number' || !Number.isFinite(openClawEngineStatus.progressPercent)) {
@@ -3455,7 +3391,7 @@ const Settings: React.FC<SettingsProps> = ({
       const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? false;
       const previousOpenClawSkillReviewEnabled = coworkConfig.openClawSkillReviewEnabled ?? false;
       const previousOpenClawMemoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled ?? false;
-      const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
+      const previousAgentEngine = coworkConfig.agentEngine || 'dsh';
       const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
         || OpenClawSessionKeepAliveValues.ThirtyDays;
       const previousMemorySettings = {
@@ -3505,7 +3441,7 @@ const Settings: React.FC<SettingsProps> = ({
         FontPreferences.CodeFontSizeMin,
         FontPreferences.CodeFontSizeMax,
       );
-      let savedPluginPendingChanges: PluginPendingChanges | null = null;
+      // Legacy OpenClaw plugin batch-save removed; DSH ecosystem manages plugins directly.
 
       if (quickPanelShortcutDraft !== null) {
         const result = await window.electron.desktopCompanion.setPreferences({ shortcut: quickPanelShortcutDraft });
@@ -3640,16 +3576,6 @@ const Settings: React.FC<SettingsProps> = ({
         throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
       }
 
-      // Batch save plugin changes (toggles + configs) if any pending
-      if (activeTab === 'plugins' && pluginsSettingsRef.current) {
-        const pendingChanges = pluginsSettingsRef.current.getPendingChanges();
-        if (pendingChanges) {
-          await window.electron?.plugins.batchSave(pendingChanges);
-          savedPluginPendingChanges = pendingChanges;
-          pluginsSettingsRef.current.resetDirty();
-        }
-      }
-
       // Decision model edits save with the dialog, so switching the tool on
       // or off restarts the gateway once, on Save, rather than per field.
       if (decisionModelDraftRef.current) {
@@ -3773,10 +3699,6 @@ const Settings: React.FC<SettingsProps> = ({
         if (shortcutSettingsSummary) {
           reportShortcutSettingChanged(shortcutSettingsSummary);
         }
-        const pluginSettingsSummary = buildPluginSettingsAnalyticsSummary(savedPluginPendingChanges);
-        if (pluginSettingsSummary) {
-          reportPluginSettingsSaved(pluginSettingsSummary);
-        }
         const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
           previousProviders,
           normalizedProviders,
@@ -3818,20 +3740,14 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleTabChange = useCallback((tab: TabType) => {
     if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
-    if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => doTabChange(tab))) {
-      return;
-    }
     doTabChange(tab);
-  }, [activeTab, doTabChange, isBackingUpOpenClawData, isRestoringOpenClawData]);
+  }, [doTabChange, isBackingUpOpenClawData, isRestoringOpenClawData]);
 
-  // Guarded close: check plugin dirty state before closing
+  // Guarded close: prevent closing while backup/restore is active
   const guardedClose = useCallback(() => {
     if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
-    if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => onClose())) {
-      return;
-    }
     onClose();
-  }, [activeTab, isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
+  }, [isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
 
   const shortcutCommandMap = useMemo(
     () => new Map(SHORTCUT_COMMANDS.map(command => [command.key, command])),
@@ -4400,13 +4316,10 @@ const Settings: React.FC<SettingsProps> = ({
       { key: 'general' as TabType,        label: i18nService.t('general'),        icon: <SettingsSlidersIcon className="h-5 w-5" /> },
       { key: 'appearance' as TabType,     label: i18nService.t('appearance'),     icon: <SunIcon className="h-5 w-5" /> },
       { key: 'desktopCompanion' as TabType, label: i18nService.t('desktopCompanionTitle'), icon: <FloatingOrbTabIcon className="h-5 w-5" /> },
-      { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
       { key: 'model' as TabType,          label: i18nService.t('settingsCustomModel'), icon: <CubeIcon className="h-5 w-5" /> },
       { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
       { key: 'browserWebAccess' as TabType, label: i18nService.t('browserWebAccessTab'), icon: <GlobeAltIcon className="h-5 w-5" /> },
-      { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
       { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
-      { key: 'coworkDreaming' as TabType, label: i18nService.t('coworkMemoryTabDreaming'), icon: <DreamingTabIcon className="h-5 w-5" /> },
       { key: 'plugins' as TabType,        label: i18nService.t('pluginsTab'),     icon: <PlugIcon className="h-5 w-5" /> },
       { key: 'experimental' as TabType,   label: i18nService.t('experimentalTab'), icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3v6.4c0 .35-.09.68-.27.98l-4.4 7.34A2 2 0 0 0 6.8 20.75h10.4a2 2 0 0 0 1.72-3.03l-4.4-7.34a1.9 1.9 0 0 1-.27-.98V3M8.25 3h7.5M7.5 14.25h9" /></svg> },
       { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
@@ -4679,7 +4592,6 @@ const Settings: React.FC<SettingsProps> = ({
       case 'experimental':
         return (
           <div className="space-y-8">
-            <DshExperimentalSettings />
             <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
           </div>
         );
@@ -4975,6 +4887,95 @@ const Settings: React.FC<SettingsProps> = ({
                   }}
                 />
               </SettingsRow>
+
+              {openClawDataBackupResult && (
+                <SettingsRow>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 space-y-1">
+                      <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                        {i18nService.t('openClawDataBackupSavedTitle')}
+                      </div>
+                      <div className="break-all font-mono text-xs leading-5 text-secondary">
+                        {openClawDataBackupResult.path}
+                      </div>
+                      {formatBackupSize(openClawDataBackupResult.sizeBytes) && (
+                        <div className="text-xs text-secondary">
+                          {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(openClawDataBackupResult.sizeBytes)}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { void handleRevealOpenClawDataBackup(); }}
+                      className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
+                    >
+                      {i18nService.t('showInFolder')}
+                    </button>
+                  </div>
+                </SettingsRow>
+              )}
+
+              <SettingsRow>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                      <ArchiveBoxIcon className="h-[18px] w-[18px]" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                        {i18nService.t('openClawDataBackupTitle')}
+                      </div>
+                      <div className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                        {i18nService.t('openClawDataBackupDesc')}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { void handleOpenClawDataBackup(); }}
+                    disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
+                    className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
+                  >
+                    {isBackingUpOpenClawData && (
+                      <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                    )}
+                    {isBackingUpOpenClawData
+                      ? i18nService.t('openClawDataBackupRunning')
+                      : i18nService.t('openClawDataBackupAction')}
+                  </button>
+                </div>
+              </SettingsRow>
+
+              <SettingsRow>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                      <ArrowPathRoundedSquareIcon className="h-[18px] w-[18px]" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                        {i18nService.t('openClawDataMigrationTitle')}
+                      </div>
+                      <div className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                        {i18nService.t('openClawDataMigrationDesc')}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOpenClawDataRestoreConfirm(true)}
+                    disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
+                    className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
+                  >
+                    {isRestoringOpenClawData && (
+                      <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                    )}
+                    {isRestoringOpenClawData
+                      ? i18nService.t('openClawDataMigrationRunning')
+                      : i18nService.t('openClawDataMigrationAction')}
+                  </button>
+                </div>
+              </SettingsRow>
             </SettingsGroup>
           </div>
         );
@@ -5196,8 +5197,6 @@ const Settings: React.FC<SettingsProps> = ({
                       </button>
                     </div>
 
-                    <OpenClawUserConfigRow />
-
                     {openClawDataBackupResult && (
                       <div className={`flex flex-col gap-3 p-4 ${SETTINGS_ITEM_TITLE_TEXT} sm:flex-row sm:items-center sm:justify-between`}>
                         <div className="min-w-0 space-y-1">
@@ -5283,10 +5282,6 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </section>
 
-                {openClawEngineStatus?.dreamingRecovery && (
-                  <DreamingRecoveryNotice summary={openClawEngineStatus.dreamingRecovery} />
-                )}
-
                 {openClawRepairResult && (
                   <div className={`rounded-lg border px-3 py-3 text-sm ${openClawRepairResult.success
                     ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300'
@@ -5331,7 +5326,6 @@ const Settings: React.FC<SettingsProps> = ({
       case 'coworkMemory': {
         const memoryTabs = [
           { key: 'entries' as const, titleKey: 'coworkMemoryTabEntries' },
-          { key: 'embedding' as const, titleKey: 'coworkMemoryTabEmbedding' },
         ];
         const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
         for (const entry of coworkMemoryEntries) {
@@ -5545,39 +5539,13 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
 
-              {memoryTab === 'embedding' && (
-                <EmbeddingSettingsSection
-                  embeddingEnabled={embeddingEnabled}
-                  embeddingProvider={embeddingProvider}
-                  embeddingModel={embeddingModel}
-                  embeddingVectorWeight={embeddingVectorWeight}
-                  embeddingRemoteBaseUrl={embeddingRemoteBaseUrl}
-                  embeddingRemoteApiKey={embeddingRemoteApiKey}
-                  onEmbeddingEnabledChange={setEmbeddingEnabled}
-                  onEmbeddingProviderChange={setEmbeddingProvider}
-                  onEmbeddingModelChange={setEmbeddingModel}
-                  onEmbeddingVectorWeightChange={setEmbeddingVectorWeight}
-                  onEmbeddingRemoteBaseUrlChange={setEmbeddingRemoteBaseUrl}
-                  onEmbeddingRemoteApiKeyChange={setEmbeddingRemoteApiKey}
-                />
-              )}
-
             </div>
           </div>
         );
       }
 
       case 'coworkDreaming':
-        return (
-          <div className="min-h-full">
-            <DreamingSettingsSection
-              dreamingEnabled={dreamingEnabled}
-              dreamingFrequency={dreamingFrequency}
-              onDreamingEnabledChange={setDreamingEnabled}
-              onDreamingFrequencyChange={setDreamingFrequency}
-            />
-          </div>
-        );
+        return null;
 
       case 'browserWebAccess':
         return (
@@ -5752,11 +5720,7 @@ const Settings: React.FC<SettingsProps> = ({
         return <IMSettings />;
 
       case 'plugins':
-        return (
-          <PluginsSettings
-            handleRef={pluginsSettingsRef}
-          />
-        );
+        return <DshPluginEcosystemView />;
 
       case 'help':
         return (

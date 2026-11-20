@@ -913,25 +913,14 @@ export class IMGatewayManager extends EventEmitter {
     if (config.weixin?.enabled) {
       openClawPlatformsToStart.push('weixin');
     }
-    const popoInstances = config.popo?.instances || [];
-    if (popoInstances.some(i => i.enabled && i.appKey && i.appSecret && i.aesKey && (i.connectionMode === 'websocket' || i.token))) {
-      openClawPlatformsToStart.push('popo');
-    }
-    const nimInstances = config.nim?.instances || [];
-    if (nimInstances.some(i => i.enabled && ((i.nimToken && i.nimToken.trim()) || (i.appKey && i.account && i.token)))) {
-      openClawPlatformsToStart.push('nim');
-    }
-    if (config['netease-bee']?.enabled && config['netease-bee']?.clientId && config['netease-bee']?.secret) {
-      openClawPlatformsToStart.push('netease-bee');
-    }
 
     if (openClawPlatformsToStart.length > 0) {
-      console.log(`[IMGatewayManager] Starting OpenClaw platforms in batch: ${openClawPlatformsToStart.join(', ')}`);
+      console.log(`[IMGatewayManager] Starting IM platforms in batch: ${openClawPlatformsToStart.join(', ')}`);
       try {
         await this.syncOpenClawConfig?.(`im-gateway-start-batch:${openClawPlatformsToStart.join(',')}`);
         await this.ensureOpenClawGatewayConnected?.();
       } catch (error: any) {
-        console.error(`[IMGatewayManager] Failed to start OpenClaw platforms: ${error.message}`);
+        console.error(`[IMGatewayManager] Failed to start IM platforms: ${error.message}`);
       }
     }
   }
@@ -2464,6 +2453,9 @@ export class IMGatewayManager extends EventEmitter {
    * Returns { schema, uiHints } or null if the gateway is unavailable.
    */
   async getOpenClawConfigSchema(): Promise<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> } | null> {
+    if (!this.getOpenClawGatewayClient) {
+      return null;
+    }
     try {
       return await this.requestOpenClawGateway<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> }>('config.schema', {});
     } catch (err: any) {

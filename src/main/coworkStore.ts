@@ -439,7 +439,7 @@ function shouldAutoDeleteMemoryText(text: string): boolean {
 export type { CoworkSessionStatus } from '../shared/cowork/constants';
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
-export type CoworkAgentEngine = 'openclaw';
+export type CoworkAgentEngine = 'dsh';
 
 export type { AgentSource } from '../shared/agent';
 
@@ -2933,7 +2933,7 @@ export class CoworkStore {
       workingDirectory: cfg.get('workingDirectory') || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
       executionMode: parseExecutionMode(cfg.get('executionMode')),
-      agentEngine: 'openclaw' as CoworkAgentEngine,
+      agentEngine: 'dsh' as CoworkAgentEngine,
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
         cfg.get('memoryImplicitUpdateEnabled'),
@@ -2975,7 +2975,7 @@ export class CoworkStore {
       this.upsertConfig('executionMode', config.executionMode, now);
     }
     if (config.agentEngine !== undefined) {
-      this.upsertConfig('agentEngine', 'openclaw', now);
+      this.upsertConfig('agentEngine', 'dsh', now);
     }
     if (config.memoryEnabled !== undefined) {
       this.upsertConfig('memoryEnabled', config.memoryEnabled ? '1' : '0', now);

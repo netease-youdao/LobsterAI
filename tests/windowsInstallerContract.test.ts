@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 const repoFile = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8');
 
 const installerInclude = repoFile('scripts/nsis-installer.nsh');
-const unpackScript = repoFile('scripts/unpack-cfmind.cjs');
+const unpackScript = repoFile('scripts/unpack-dsh-resources.cjs');
 const installSection = repoFile(
   'node_modules/app-builder-lib/templates/nsis/installSection.nsh',
 );
@@ -874,6 +874,8 @@ describe('Windows installer hardening contracts', () => {
     );
     expect(rebalance).toContain('Add-MpPreference -ExclusionPath $$addTargets -ErrorAction Stop');
     for (const entry of [
+      String.raw`resources\dsh-runtime\"`,
+      String.raw`resources\dsh-bundles\"`,
       String.raw`resources\cfmind\"`,
       String.raw`resources\python-win\"`,
       String.raw`resources\app.asar.unpacked\"`,
@@ -944,29 +946,30 @@ describe('Windows installer hardening contracts', () => {
   test('rescues a null watchdog exit code with the extractor success sentinel', () => {
     // The Node extractor publishes the sentinel only after every expected
     // root directory verified, keeping it strictly stronger than exit 0.
-    expect(unpackScript).toContain("'.unpack-cfmind-ok'");
+    expect(unpackScript).toContain("'.unpack-dsh-ok'");
     expect(unpackScript).toContain('missingDirs === 0');
     expect(unpackScript).toContain('required resources missing after extraction');
-    expect(unpackScript).toContain("name: 'cfmind-entry'");
-    expect(unpackScript).toContain("name: 'cfmind-bundle-assets'");
+    expect(unpackScript).toContain("name: 'dsh-runtime-entry'");
+    expect(unpackScript).toContain("name: 'dsh-host-bundle'");
+    expect(unpackScript).toContain("name: 'dsh-channels-bundle'");
     expect(unpackScript).toContain("name: 'skills-content'");
     expect(unpackScript).toContain("name: 'python-entry'");
     expect(unpackScript).toContain('phase=sentinel-written');
     expect(unpackScript).toContain('phase=sentinel-write-failed');
     expect(unpackScript.indexOf('phase=verify-missing')).toBeLessThan(
-      unpackScript.indexOf("'.unpack-cfmind-ok'"),
+      unpackScript.indexOf("'.unpack-dsh-ok'"),
     );
 
     // A stale sentinel must never vouch for a new attempt, and a committed
     // install leaves no sentinel behind (pre-launch delete + success delete).
-    const sentinelDelete = String.raw`Delete "$INSTDIR\resources\.unpack-cfmind-ok"`;
+    const sentinelDelete = String.raw`Delete "$INSTDIR\resources\.unpack-dsh-ok"`;
     const preLaunchDelete = installerInclude.indexOf(sentinelDelete);
     expect(preLaunchDelete).toBeGreaterThan(-1);
     expect(preLaunchDelete).toBeLessThan(
       installerInclude.indexOf('LOBSTERAI_WATCHDOG_MARKER_PATH'),
     );
     expect(
-      installerInclude.match(/Delete "\$INSTDIR\\resources\\\.unpack-cfmind-ok"/g),
+      installerInclude.match(/Delete "\$INSTDIR\\resources\\\.unpack-dsh-ok"/g),
     ).toHaveLength(2);
 
     // Exit 127 re-enters the on-disk verification when the sentinel exists
@@ -975,7 +978,7 @@ describe('Windows installer hardening contracts', () => {
     const branchEnd = installerInclude.indexOf('TarExtractNonZero:', branchStart);
     const branch = installerInclude.slice(branchStart, branchEnd);
     expect(branch).toContain(
-      String.raw`IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal`,
+      String.raw`IfFileExists "$INSTDIR\resources\.unpack-dsh-ok" 0 TarExtractOutputValidationFatal`,
     );
     expect(branch).toContain('phase=tar-extract-sentinel-rescue');
     expect(branch).toContain('Goto TarExtractVerify');
@@ -983,12 +986,14 @@ describe('Windows installer hardening contracts', () => {
     expect(branch).toContain('will not commit a partial application');
   });
 
-  test('requires complete OpenClaw bundle assets, Skills, and Python before committing an installation', () => {
+  test('requires complete DSH runtime, bundles, Skills, and Python before committing an installation', () => {
     const extractVerifyStart = installerInclude.indexOf('TarExtractVerify:');
     const extractVerifyEnd = installerInclude.indexOf('TarExtractProcessFailed:', extractVerifyStart);
     const extractVerify = installerInclude.slice(extractVerifyStart, extractVerifyEnd);
     expect(extractVerify).toContain('TarExtractVerifyBundleAssets:');
-    expect(extractVerify).toContain(String.raw`resources\cfmind\web-tree-sitter.wasm`);
+    expect(extractVerify).toContain(String.raw`resources\dsh-runtime\lib\bin.js`);
+    expect(extractVerify).toContain(String.raw`resources\dsh-bundles\lobsterai-host\package.json`);
+    expect(extractVerify).toContain(String.raw`resources\dsh-bundles\lobsterai-channels\package.json`);
     expect(extractVerify).toContain('TarExtractVerifySkills:');
     expect(extractVerify).toContain(String.raw`resources\SKILLs\*.*`);
     expect(extractVerify).toContain(String.raw`resources\python-win\python.exe`);
@@ -999,7 +1004,8 @@ describe('Windows installer hardening contracts', () => {
     const prevalidateEnd = installerInclude.indexOf('NewInstallPrevalidateSucceeded:', prevalidateStart);
     const prevalidate = installerInclude.slice(prevalidateStart, prevalidateEnd);
     expect(prevalidate).toContain('NewInstallPrevalidateBundleAssets:');
-    expect(prevalidate).toContain(String.raw`resources\cfmind\web-tree-sitter.wasm`);
+    expect(prevalidate).toContain(String.raw`resources\dsh-bundles\lobsterai-host\package.json`);
+    expect(prevalidate).toContain(String.raw`resources\dsh-bundles\lobsterai-channels\package.json`);
     expect(prevalidate).toContain(String.raw`resources\SKILLs\*.*`);
     expect(prevalidate).toContain(String.raw`resources\python-win\python.exe`);
     expect(prevalidate).toContain(String.raw`resources\python-win\python3.exe`);
@@ -1296,7 +1302,7 @@ describe('Windows installer hardening contracts', () => {
     expect(failure).toContain('SetErrorLevel 3');
     expect(failure).toContain('Quit');
     expect(installerInclude).toContain(
-      'IfFileExists "$INSTDIR\\resources\\cfmind\\gateway-bundle.mjs"',
+      'IfFileExists "$INSTDIR\\resources\\dsh-runtime\\lib\\bin.js"',
     );
     expect(installerInclude).not.toContain('runtime-and-recovery-artifacts-missing');
     expect(installerInclude).not.toContain('retry the extraction automatically');
