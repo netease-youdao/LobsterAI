@@ -41,6 +41,16 @@ beforeEach(() => {
 });
 
 describe('migrateInlineMediaMetadata', () => {
+  test('recovers a small inline-only image even when the previous size-limited scan finished', async () => {
+    kvValues.set('cowork.mediaMetadataCompaction.v1', { done: true, lastRowId: 1 });
+    const bytes = pngBytes.subarray(0, 128);
+    insert('tiny', 'system', { toolResultDetails: { mediaType: 'image', assets: [
+      { type: 'image', url: 'data:image/png;base64,' + bytes.toString('base64') },
+    ] } });
+    expect(await run()).toMatchObject({ done: true, rescuedImages: 1 });
+    expect(fs.readFileSync(stored('tiny').toolResultDetails.assets[0].filePath)).toEqual(bytes);
+    expect(await run()).toMatchObject({ done: true, rescuedImages: 0 });
+  });
   test('rewrites saved assets, result URLs and poll details to file references', async () => {
     const savedPath = path.join(tempDir, 'generated.png');
     fs.writeFileSync(savedPath, pngBytes);

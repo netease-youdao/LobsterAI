@@ -34,6 +34,7 @@ import type {
   DshHostManager,
   DshHostSessionContext,
 } from '../dsh/dshHostManager';
+import { buildDshImageTurnInstruction } from '../dsh/dshImageGenerationTool';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import type {
@@ -376,6 +377,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
       imageAttachments: options.imageAttachments,
+      mediaInstruction: buildDshImageTurnInstruction(options.mediaSelection, options.mediaReferences),
       localMediaAttachments: options.localMediaAttachments,
       agentId: options.agentId,
       workspaceRoot: options.workspaceRoot,
@@ -397,6 +399,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
+      mediaInstruction: buildDshImageTurnInstruction(options.mediaSelection, options.mediaReferences),
       localMediaAttachments: options.localMediaAttachments,
     });
   }
@@ -1038,6 +1041,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       systemPrompt?: string;
       confirmationMode: 'modal' | 'text';
       imageAttachments?: CoworkStartOptions['imageAttachments'];
+      mediaInstruction?: string;
       localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
       agentId?: string;
       workspaceRoot?: string;
@@ -1250,7 +1254,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         abortController.signal,
       );
 
-      const contentParts = buildPromptContentParts(prompt, lazyBridgePrefix, params.imageAttachments);
+      const turnPrefix = [lazyBridgePrefix, params.mediaInstruction].filter(Boolean).join('\n\n');
+      const contentParts = buildPromptContentParts(prompt, turnPrefix, params.imageAttachments);
       const streamTask = this.consumeFollowStream(turn, followStream);
 
       try {
@@ -1457,9 +1462,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       if (evType === 'tool/result') {
         const messageObj = data.message as Record<string, unknown> | undefined;
         const callId = String(messageObj?.callId ?? messageObj?.toolCallId ?? data.callId ?? '');
-        const isError = Boolean(messageObj?.isError ?? data.isError);
         const text = extractTextFromContentBlocks(messageObj?.content ?? data.content);
         const resultMeta = record(data.meta);
+        const hostResult = record(resultMeta.lobsterToolResult);
+        const isError = Boolean(hostResult.isError || messageObj?.isError || data.isError);
         const subagentRunId = resultMeta.kind === DshChildEvent.Activation && typeof resultMeta.name === 'string'
           ? turn.subagentIdsByName.get(resultMeta.name) : undefined;
         const task = turn.subagentTasksByCall.get(callId);
@@ -1472,6 +1478,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           metadata: {
             toolUseId: callId,
             isError,
+            ...(hostResult.details ? { toolResultDetails: record(hostResult.details) } : {}),
             ...(subagentRunId ? { subagentRunId } : {}),
             seq: ev.seq,
           },
@@ -1744,12 +1751,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
 function buildPromptContentParts(
   prompt: string,
-  lazyBridgePrefix: string,
+  turnPrefix: string,
   imageAttachments?: CoworkStartOptions['imageAttachments'],
 ): DshPromptPart[] {
   const parts: DshPromptPart[] = [];
-  const fullText = lazyBridgePrefix
-    ? `${lazyBridgePrefix}\n\n${prompt}`.trim()
+  const fullText = turnPrefix
+    ? `${turnPrefix}\n\n${prompt}`.trim()
     : prompt;
   if (fullText.length > 0) {
     parts.push({ type: 'text', text: fullText });

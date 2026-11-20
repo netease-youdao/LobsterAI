@@ -147,6 +147,16 @@ export class McpRuntime {
     this.mediaGenerationHandler = handler;
   }
 
+  async executeMediaGeneration(request: MediaGenerationRequest): Promise<MediaGenerationResponse> {
+    if (!this.mediaGenerationHandler) {
+      return {
+        content: [{ type: 'text', text: 'Media generation service is not ready yet.' }],
+        isError: true,
+      };
+    }
+    return await this.mediaGenerationHandler(request);
+  }
+
   setBrowserToolHandler(
     handler: (request: BrowserToolRequest) => Promise<BrowserToolResponse>,
   ): void {
@@ -281,15 +291,7 @@ export class McpRuntime {
       this.deps.onAskUserDismissed?.(requestId);
     });
 
-    this.bridgeServer.onMediaGeneration(async (request) => {
-      if (!this.mediaGenerationHandler) {
-        return {
-          content: [{ type: 'text', text: 'Media generation service is not ready yet.' }],
-          isError: true,
-        };
-      }
-      return await this.mediaGenerationHandler(request);
-    });
+    this.bridgeServer.onMediaGeneration(request => this.executeMediaGeneration(request));
 
     this.bridgeServer.onDecisionTool(async (request, signal) => {
       if (!this.decisionToolHandler) {

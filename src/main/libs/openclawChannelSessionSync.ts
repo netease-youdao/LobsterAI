@@ -17,6 +17,8 @@ import { t } from '../i18n';
 import type { IMStore } from '../im/imStore';
 import type { Platform } from '../im/types';
 
+export { buildManagedSessionKey } from '../../shared/cowork/managedSessionKey';
+
 const LOBSTERAI_SESSION_PREFIX = 'lobsterai:';
 const FEISHU_GROUP_CHAT_ID_RE = /^oc_/i;
 export const DEFAULT_MANAGED_AGENT_ID = 'main';
@@ -24,15 +26,6 @@ export const DEFAULT_MANAGED_AGENT_ID = 'main';
 export interface ManagedSessionKey {
   agentId: string | null;
   sessionId: string;
-}
-
-export function buildManagedSessionKey(
-  sessionId: string,
-  agentId = DEFAULT_MANAGED_AGENT_ID,
-): string {
-  const normalizedSessionId = sessionId.trim();
-  const normalizedAgentId = agentId.trim() || DEFAULT_MANAGED_AGENT_ID;
-  return `agent:${normalizedAgentId}:lobsterai:${normalizedSessionId}`;
 }
 
 export function parseManagedSessionKey(

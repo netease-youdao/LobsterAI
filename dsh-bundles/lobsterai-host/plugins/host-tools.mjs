@@ -75,11 +75,12 @@ function toDshParameterMap(jsonSchema) {
 }
 
 function renderHostToolOutput(_args, value) {
-  if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && typeof value.text === 'string') {
-    return value.text;
+  if (Array.isArray(value?.content) && value.content.every(block => block?.type === 'text' && typeof block.text === 'string')) {
+    return value.content;
   }
-  return JSON.stringify(value ?? null, null, 2);
+  const text = typeof value === 'string' ? value
+    : typeof value?.text === 'string' ? value.text : JSON.stringify(value ?? null);
+  return [{ type: 'text', text }];
 }
 
 const BUILTIN_MEMORY_TOOL_SPECS = [
@@ -130,7 +131,7 @@ const BUILTIN_MEMORY_TOOL_SPECS = [
   },
 ];
 
-function createBridgeTool(state, spec) {
+function createBridgeTool(ctx, state, spec) {
   const toolName = String(spec.name || '').trim();
   if (!toolName || toolName === 'run_code') {
     throw new Error(`lobster-host-tools: invalid tool name "${toolName}"`);
@@ -142,6 +143,9 @@ function createBridgeTool(state, spec) {
     output: {
       schema: { type: 'json' },
       render: renderHostToolOutput,
+      presentationMeta: (_args, value) => Array.isArray(value?.content)
+        ? { lobsterToolResult: { details: value.details ?? null, isError: value.isError === true } }
+        : null,
     },
     ...(typeof spec.timeoutMs === 'number' && spec.timeoutMs > 0 ? { timeoutMs: spec.timeoutMs } : {}),
     ...(spec.deferLoading === true ? { deferLoading: true } : {}),
@@ -184,7 +188,7 @@ export function apply(ctx) {
 
   // Register built-in memory tools immediately.
   for (const spec of BUILTIN_MEMORY_TOOL_SPECS) {
-    const disposer = ctx.tools.register(createBridgeTool(state, spec));
+    const disposer = ctx.tools.register(createBridgeTool(ctx, state, spec));
     builtinDisposers.set(spec.name, disposer);
   }
 
@@ -212,7 +216,7 @@ export function apply(ctx) {
         continue;
       }
       try {
-        const dispose = ctx.tools.register(createBridgeTool(state, spec));
+        const dispose = ctx.tools.register(createBridgeTool(ctx, state, spec));
         dynamicDisposers.set(toolName, dispose);
         registered.push(toolName);
       } catch (error) {

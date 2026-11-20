@@ -39,7 +39,7 @@ export interface HostToolProvider {
   execute(
     toolName: string,
     args: Record<string, unknown>,
-    context: { sessionId?: string; agentId: string; coworkSessionId?: string; callId?: string },
+    context: { sessionId?: string; agentId: string; coworkSessionId?: string; callId?: string; signal?: AbortSignal },
   ): Promise<unknown>;
 }
 
@@ -220,6 +220,7 @@ export function wireDshHostBridge(options: {
       agentId: req.agentId,
       coworkSessionId: req.coworkSessionId,
       callId: req.callId,
+      ...(req.signal ? { signal: req.signal } : {}),
     });
   });
 

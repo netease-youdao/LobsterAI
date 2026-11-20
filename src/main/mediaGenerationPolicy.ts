@@ -10,6 +10,8 @@ export type MediaGenerationTool = typeof MediaGenerationTool[keyof typeof MediaG
 
 export const MediaGenerationAction = {
   Generate: 'generate',
+  List: 'list',
+  Status: 'status',
 } as const;
 export type MediaGenerationAction = typeof MediaGenerationAction[keyof typeof MediaGenerationAction];
 

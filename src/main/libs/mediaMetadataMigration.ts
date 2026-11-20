@@ -15,13 +15,13 @@ import {
 /**
  * Older builds stored every generated image as an inline data URL in several message rows
  * (one 13-image session held 1.1 GB). New writes keep file references only; this pass rewrites
- * the rows already stored, in the background and resumably.
+ * the rows already stored, before the first window opens.
  */
-export const MEDIA_METADATA_MIGRATION_KEY = 'cowork.mediaMetadataCompaction.v1';
+export const MEDIA_METADATA_MIGRATION_KEY = 'cowork.mediaMetadataCompaction.v2';
 
 /** Rows are visited by rowid range so each scan step stays a few milliseconds long. */
 const SCAN_WINDOW_ROWS = 2000;
-/** Metadata smaller than this cannot hold a generated image. */
+/** Inspect small records in SQL; read large candidates one at a time in migrateRow. */
 const MIN_CANDIDATE_METADATA_BYTES = 64 * 1024;
 const INLINE_MARKER = ';base64,';
 const IMAGE_DATA_URL_PATTERN = /^\s*data:(image\/[a-z0-9.+-]+)(?:;[^,]*)?;base64,/i;
@@ -183,7 +183,7 @@ export async function migrateInlineMediaMetadata(deps: MediaMetadataMigrationDep
     FROM cowork_messages
     WHERE rowid > ? AND rowid <= ?
       AND type IN ('tool_use', 'tool_result', 'system')
-      AND octet_length(metadata) > ?
+      AND (octet_length(metadata) > ? OR instr(metadata, ?) > 0)
     ORDER BY rowid
   `);
 
@@ -191,7 +191,7 @@ export async function migrateInlineMediaMetadata(deps: MediaMetadataMigrationDep
   while (cursor < maxRowId) {
     if (shouldStop()) return result;
     const windowEnd = Math.min(cursor + SCAN_WINDOW_ROWS, maxRowId);
-    const candidates = selectCandidates.all(cursor, windowEnd, MIN_CANDIDATE_METADATA_BYTES) as Array<{ row_id: number }>;
+    const candidates = selectCandidates.all(cursor, windowEnd, MIN_CANDIDATE_METADATA_BYTES, INLINE_MARKER) as Array<{ row_id: number }>;
     for (const { row_id: rowId } of candidates) {
       // An interrupted window is visited again on the next run; rewritten rows are no longer candidates.
       while (!isIdle()) {

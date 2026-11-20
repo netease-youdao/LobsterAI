@@ -106,6 +106,7 @@ export interface DshHostSessionContext {
 }
 
 export interface DshBridgeToolExecuteRequest {
+  signal?: AbortSignal;
   toolName: string;
   args: Record<string, unknown>;
   callId?: string;
@@ -803,9 +804,19 @@ export class DshHostManager extends EventEmitter {
           res.end(JSON.stringify({ error: `No host tool handler registered for "${request.toolName}"` }));
           return;
         }
-        const data = await handler(request);
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(data ?? { ok: true }));
+        const controller = new AbortController();
+        const onDisconnect = () => controller.abort();
+        res.once('close', onDisconnect);
+        try {
+          if (res.destroyed) return;
+          const data = await handler({ ...request, signal: controller.signal });
+          if (!res.destroyed) {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(data ?? { ok: true }));
+          }
+        } finally {
+          res.off('close', onDisconnect);
+        }
         return;
       }
 
@@ -859,6 +870,7 @@ export class DshHostManager extends EventEmitter {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: `Unknown bridge route: ${pathname}` }));
     } catch (error) {
+      if (res.destroyed) return;
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     }
