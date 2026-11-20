@@ -9,6 +9,7 @@ import { CompanionAnalyticsAction as AnalyticsAction, CompanionAnalyticsInteract
 import {
   COMPANION_COPY_MAX_BYTES,
   CompanionCapability,
+  CompanionOrbEdge,
   CompanionPermission,
   DEFAULT_COMPANION_SKIN,
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
@@ -109,9 +110,10 @@ vi.mock('electron', async () => {
     }),
     globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
     screen: Object.assign(new EventEmitter(), {
+      getAllDisplays: () => [{ id: 1, workArea }],
       getCursorScreenPoint: () => ({ x: 100, y: 100 }),
-      getDisplayNearestPoint: () => ({ workArea }),
-      getDisplayMatching: () => ({ workArea }),
+      getDisplayNearestPoint: () => ({ id: 1, workArea }),
+      getDisplayMatching: () => ({ id: 1, workArea }),
       screenToDipPoint: (point: unknown) => point,
     }),
     Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
@@ -430,9 +432,9 @@ describe('orb edge snapping', () => {
   });
 
   test.each([
-    { edgeX: 0, releaseX: 30, placement: DesktopCompanionPanelPlacement.Right },
-    { edgeX: rightEdge, releaseX: rightEdge - 30, placement: DesktopCompanionPanelPlacement.Left },
-  ])('snaps to x=$edgeX on release, aligns the panel and restores the saved position', ({ edgeX, releaseX, placement }) => {
+    { edge: CompanionOrbEdge.Left, edgeX: 0, releaseX: 30, placement: DesktopCompanionPanelPlacement.Right },
+    { edge: CompanionOrbEdge.Right, edgeX: rightEdge, releaseX: rightEdge - 30, placement: DesktopCompanionPanelPlacement.Left },
+  ])('snaps to x=$edgeX on release, aligns the panel and restores the saved position', ({ edge, edgeX, releaseX, placement }) => {
     create();
     manager.togglePanel();
     const panel = mocks.windows.at(-1);
@@ -442,7 +444,13 @@ describe('orb edge snapping', () => {
     expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 200, y: 300 });
     drag(DesktopCompanionDragPhase.End, releaseX + 30);
     expect(orb().bounds).toMatchObject({ x: edgeX, y: 300 });
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: edgeX, y: 300 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({
+      x: edgeX,
+      y: 300,
+      edge,
+      yRatio: 300 / (900 - DesktopCompanionSize.BrandOrb.height),
+      displayId: 1,
+    });
     expect(manager.getState().panelPlacement).toBe(placement);
     if (placement === DesktopCompanionPanelPlacement.Right) {
       expect(panel.bounds.x + DesktopCompanionSize.SurfacePad).toBe(edgeX + DesktopCompanionSize.BrandOrb.width);
@@ -464,7 +472,7 @@ describe('orb edge snapping', () => {
     drag(DesktopCompanionDragPhase.Move, x + 30);
     drag(DesktopCompanionDragPhase.End, x + 30);
     expect(orb().bounds).toMatchObject({ x, y: 300 });
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x, y: 300 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x, y: 300, displayId: 1 });
   });
 
   test.each([30, rightEdge - 30])('a click near an edge at x=%i does not move the orb', x => {
@@ -484,7 +492,7 @@ describe('orb edge snapping', () => {
     drag(DesktopCompanionDragPhase.Move, 430);
     expect(orb().bounds).toMatchObject({ x: 400, y: 300 });
     drag(DesktopCompanionDragPhase.End, 430);
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 400, y: 300 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 400, y: 300, displayId: 1 });
   });
 
   test('does not move the orb again for pointer events while the cursor stays still', () => {
@@ -502,9 +510,9 @@ describe('orb edge snapping', () => {
   });
 
   test.each([
-    { displayX: -1440, cursorX: -1380, edgeX: -1440 },
-    { displayX: 1280, cursorX: 2660, edgeX: 2660 },
-  ])('snaps to the display at x=$displayX under the cursor when crossing monitors', ({ displayX, cursorX, edgeX }) => {
+    { edge: CompanionOrbEdge.Left, displayX: -1440, cursorX: -1380, edgeX: -1440 },
+    { edge: CompanionOrbEdge.Right, displayX: 1280, cursorX: 2660, edgeX: 2660 },
+  ])('snaps to the display at x=$displayX under the cursor when crossing monitors', ({ edge, displayX, cursorX, edgeX }) => {
     create();
     drag(DesktopCompanionDragPhase.Start, 230);
     vi.spyOn(screen, 'getDisplayNearestPoint').mockReturnValue({
@@ -512,7 +520,128 @@ describe('orb edge snapping', () => {
     } as Electron.Display);
     drag(DesktopCompanionDragPhase.End, cursorX, 430);
     expect(orb().bounds).toMatchObject({ x: edgeX, y: 400 });
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: edgeX, y: 400 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({
+      x: edgeX,
+      y: 400,
+      edge,
+      yRatio: (400 - 25) / (875 - DesktopCompanionSize.BrandOrb.height),
+    });
+  });
+
+  test('starts flush against the far right edge on a large monitor and does not bake default coordinates on display changes', () => {
+    values.delete(DesktopCompanionStoreKey.Position);
+    const laptop = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 875 } } as Electron.Display;
+    const large = { id: 2, workArea: { x: 0, y: 25, width: 2560, height: 1415 } } as Electron.Display;
+    let active: Electron.Display = laptop;
+    vi.spyOn(screen, 'getAllDisplays').mockImplementation(() => [active]);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockImplementation(() => active);
+    vi.spyOn(screen, 'getDisplayMatching').mockImplementation(() => active);
+
+    create();
+    expect(orb().bounds).toMatchObject({
+      x: laptop.workArea.width - DesktopCompanionSize.BrandOrb.width,
+      y: Math.round(laptop.workArea.y + (laptop.workArea.height - DesktopCompanionSize.BrandOrb.height) / 2),
+    });
+    // Display changes and skin switches must not persist the laptop's default x coordinate.
+    screen.emit('display-metrics-changed');
+    manager.setPreferences({ skin: 'ruanruanxia' });
+    expect(orb().bounds.x).toBe(laptop.workArea.width - DesktopCompanionSize.Orb.width);
+    manager.setPreferences({ skin: 'lobster' });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toBeUndefined();
+
+    // Switching to a large monitor and relaunching keeps the orb flush against the large monitor's right edge.
+    manager.dispose();
+    mocks.windows.length = 0;
+    active = large;
+    create();
+    expect(orb().bounds).toMatchObject({
+      ...DesktopCompanionSize.BrandOrb,
+      x: large.workArea.width - DesktopCompanionSize.BrandOrb.width,
+      y: Math.round(large.workArea.y + (large.workArea.height - DesktopCompanionSize.BrandOrb.height) / 2),
+    });
+  });
+
+  test('keeps a docked orb flush against the large monitor edge on relaunch and restores it after unplugging and reconnecting', () => {
+    const laptop = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 875 } } as Electron.Display;
+    const large = { id: 2, workArea: { x: 0, y: 25, width: 2560, height: 1415 } } as Electron.Display;
+    let displays: Electron.Display[] = [laptop];
+    vi.spyOn(screen, 'getAllDisplays').mockImplementation(() => displays);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockImplementation(() => displays[displays.length - 1]);
+    vi.spyOn(screen, 'getDisplayMatching').mockImplementation(() => displays[displays.length - 1]);
+
+    // Dock on the laptop's right edge, then switch to a large monitor (clamshell mode) and relaunch.
+    values.set(DesktopCompanionStoreKey.Position, { x: 1000, y: 400 });
+    create();
+    drag(DesktopCompanionDragPhase.Start, 1030, 430);
+    drag(DesktopCompanionDragPhase.Move, laptop.workArea.width - 30, 430);
+    drag(DesktopCompanionDragPhase.End, laptop.workArea.width - 30, 430);
+    expect(orb().bounds.x).toBe(laptop.workArea.width - DesktopCompanionSize.BrandOrb.width);
+
+    manager.dispose();
+    mocks.windows.length = 0;
+    displays = [large];
+    create();
+    expect(orb().bounds.x).toBe(large.workArea.width - DesktopCompanionSize.BrandOrb.width);
+
+    // Dock explicitly on the large monitor, unplug it (falls back to laptop right edge), then reconnect it.
+    drag(DesktopCompanionDragPhase.Start, orb().bounds.x + 30, orb().bounds.y + 30);
+    drag(DesktopCompanionDragPhase.End, large.workArea.width - 20, 730);
+    expect(orb().bounds.x).toBe(large.workArea.width - DesktopCompanionSize.BrandOrb.width);
+    const savedOnLarge = values.get(DesktopCompanionStoreKey.Position);
+    expect(savedOnLarge).toMatchObject({ edge: CompanionOrbEdge.Right, displayId: 2 });
+
+    displays = [laptop];
+    screen.emit('display-removed');
+    expect(orb().bounds.x).toBe(laptop.workArea.width - DesktopCompanionSize.BrandOrb.width);
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual(savedOnLarge);
+
+    displays = [laptop, large];
+    screen.emit('display-added');
+    expect(orb().bounds.x).toBe(large.workArea.width - DesktopCompanionSize.BrandOrb.width);
+  });
+
+  test('keeps an undragged orb anchored to its display when the cursor moves to another monitor', () => {
+    values.delete(DesktopCompanionStoreKey.Position);
+    const laptop = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 875 } } as Electron.Display;
+    const large = { id: 2, workArea: { x: 1440, y: 25, width: 2560, height: 1415 } } as Electron.Display;
+    const displayAt = ({ x }: { x: number }) => (x >= large.workArea.x ? large : laptop);
+    vi.spyOn(screen, 'getAllDisplays').mockReturnValue([laptop, large]);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockImplementation(displayAt);
+    vi.spyOn(screen, 'getDisplayMatching').mockImplementation(bounds => displayAt({ x: bounds.x + bounds.width / 2 }));
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: 2000, y: 500 });
+
+    create();
+    const expectedX = large.workArea.x + large.workArea.width - DesktopCompanionSize.BrandOrb.width;
+    expect(orb().bounds.x).toBe(expectedX);
+
+    // Moving the cursor back to the laptop must not pull the composer panel away from the orb on the large monitor.
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: 300, y: 300 });
+    manager.togglePanel();
+    const panel = mocks.windows.at(-1);
+    expect(panel.bounds.x + panel.bounds.width - DesktopCompanionSize.SurfacePad).toBe(expectedX);
+  });
+
+  test('corrects cross-DPI Windows orb bounds before showing the window', () => {
+    values.delete(DesktopCompanionStoreKey.Position);
+    const large = { id: 2, workArea: { x: 0, y: 0, width: 2560, height: 1400 } } as Electron.Display;
+    vi.spyOn(screen, 'getAllDisplays').mockReturnValue([large]);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockReturnValue(large);
+    vi.spyOn(screen, 'getDisplayMatching').mockReturnValue(large);
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      create();
+      const expected = {
+        ...DesktopCompanionSize.BrandOrb,
+        x: large.workArea.width - DesktopCompanionSize.BrandOrb.width,
+        y: Math.round((large.workArea.height - DesktopCompanionSize.BrandOrb.height) / 2),
+      };
+      // Simulate Windows misplacing the newly created frameless window using another monitor's scale factor.
+      orb().bounds = { ...expected, x: 1250 };
+      orb().emit('ready-to-show');
+      expect(orb().bounds).toEqual(expected);
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   describe('task bubbles across displays', () => {
@@ -1012,6 +1141,25 @@ describe('desktop companion lifecycle', () => {
     expect(center()).toEqual(start);
   });
 
+  test('switching skins keeps a docked orb flush against its edge', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    values.set(DesktopCompanionStoreKey.Position, {
+      x: 1280 - DesktopCompanionSize.BrandOrb.width,
+      y: 300,
+      edge: CompanionOrbEdge.Right,
+      yRatio: 300 / (900 - DesktopCompanionSize.BrandOrb.height),
+      displayId: 1,
+    });
+    create();
+    expect(orb().bounds.x + orb().bounds.width).toBe(1280);
+    manager.setPreferences({ skin: 'ruanruanxia' });
+    expect(orb().bounds).toMatchObject(DesktopCompanionSize.Orb);
+    expect(orb().bounds.x + orb().bounds.width).toBe(1280);
+    manager.setPreferences({ skin: 'lobster' });
+    expect(orb().bounds).toMatchObject(DesktopCompanionSize.BrandOrb);
+    expect(orb().bounds.x + orb().bounds.width).toBe(1280);
+  });
+
   test('the context menu holds only what changes the companion itself; what it does is in the hover launcher', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
@@ -1385,7 +1533,9 @@ describe('desktop companion lifecycle', () => {
     manager.setPreferences({ shortcut: 'Control+Shift+J' });
     manager.dispose();
     expect(globalShortcut.unregister).toHaveBeenCalledWith('Control+Shift+J');
+    expect(screen.listenerCount('display-added')).toBe(0);
     expect(screen.listenerCount('display-removed')).toBe(0);
+    expect(screen.listenerCount('display-metrics-changed')).toBe(0);
     expect(foreground.listenerCount('change')).toBe(0);
     expect(fileDrag.listenerCount(FileDragEvent.Start)).toBe(0);
     expect(mocks.handlers.size).toBe(0);
