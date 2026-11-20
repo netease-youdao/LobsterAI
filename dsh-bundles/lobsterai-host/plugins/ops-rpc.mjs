@@ -142,6 +142,8 @@ export function apply(ctx) {
 
   function applyPermissionPresetToAgent(agent, preset) {
     if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
+    // dsh applies the delegation's sandbox on top of its parent's permissions.
+    if (agent.session.header?.origin === 'subagent') return false;
     const permissionPresets = ctx.get('permissionPresets');
     if (!permissionPresets || typeof permissionPresets.set !== 'function') return false;
     try {

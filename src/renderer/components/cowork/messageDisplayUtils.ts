@@ -10,6 +10,7 @@ import {
   ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
 import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
+import { isDshSubagentSpawn, SubagentToolName } from '../../../shared/cowork/subagent';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
 import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
@@ -140,7 +141,12 @@ export const getStringArray = (value: unknown): string | null => {
   return lines.length > 0 ? lines.join('\n') : null;
 };
 
-export const normalizeToolName = (value: string): string => value.toLowerCase().replace(/[\s_]+/g, '');
+export const normalizeToolName = (value: string): string => {
+  let name = value.toLowerCase();
+  if (isDshSubagentSpawn(name)) name = SubagentToolName.Spawn;
+  if (name === SubagentToolName.DshWait) name = SubagentToolName.Yield;
+  return name.replace(/[\s_]+/g, '');
+};
 
 const MCP_TOOL_NAME_SEPARATOR = '__';
 
@@ -450,8 +456,8 @@ export const getToolInputSummary = (
       return action ?? sessionId;
     }
     case 'sessionsspawn': {
-      const spawnAgent = getToolInputString(input, ['agentId', 'agent_id']);
-      const spawnTask = getToolInputString(input, ['task']);
+      const spawnAgent = getToolInputString(input, ['agentId', 'agent_id', 'name']);
+      const spawnTask = getToolInputString(input, ['task', 'description', 'prompt']);
       return [spawnAgent, spawnTask ? truncatePreview(spawnTask) : null].filter(Boolean).join(' · ');
     }
     default:

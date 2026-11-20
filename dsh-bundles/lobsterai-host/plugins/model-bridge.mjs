@@ -18,7 +18,7 @@ import {
 } from '@deepseek-ai/dsh-llm';
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai';
 import { DEFAULT_LOBSTER_RETRY_POLICY, guardEmptyStopStream } from './empty-stop-guard.mjs';
-import { getHostState, resolveSessionId } from './shared-state.mjs';
+import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-model-bridge';
 export const inject = ['llm'];
@@ -305,7 +305,7 @@ export function apply(ctx) {
       headers.set('x-lobsterai-instance', state.instanceId);
     }
     const sid = resolveSessionId(request);
-    const bound = sid ? state.sessionContexts.get(sid) : undefined;
+    const bound = resolveSessionContext(ctx, state, sid);
     if (bound && typeof bound.coworkSessionId === 'string' && bound.coworkSessionId.length > 0) {
       headers.set('x-lobsterai-session', bound.coworkSessionId);
     }

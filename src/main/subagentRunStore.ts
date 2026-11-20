@@ -55,8 +55,8 @@ export class SubagentRunStore {
       );
   }
 
-  updateSubagentRunStatus(id: string, status: SubagentRunStatus, endedAt?: number): void {
-    if (endedAt != null) {
+  updateSubagentRunStatus(id: string, status: SubagentRunStatus, endedAt?: number | null): void {
+    if (endedAt !== undefined) {
       this.db.prepare('UPDATE subagent_runs SET status = ?, ended_at = ? WHERE id = ?')
         .run(status, endedAt, id);
     } else {

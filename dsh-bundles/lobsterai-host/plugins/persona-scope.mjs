@@ -12,7 +12,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isSkillName } from '@deepseek-ai/dsh-skill';
-import { getHostState, resolveSessionId } from './shared-state.mjs';
+import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-persona-scope';
 export const inject = ['systemPrompt', 'skills'];
@@ -193,7 +193,7 @@ export function apply(ctx) {
     text: (assemblyCtx) => {
       const sessionId = resolveSessionId(assemblyCtx?.scope)
         ?? resolveSessionId(assemblyCtx?.agent);
-      const bound = sessionId ? state.sessionContexts.get(sessionId) : undefined;
+      const bound = resolveSessionContext(ctx, state, sessionId);
       const agentId = bound && typeof bound.agentId === 'string'
         ? bound.agentId
         : DEFAULT_AGENT_ID;
@@ -211,7 +211,7 @@ export function apply(ctx) {
       name: 'lobsterai-skills',
       async list(options) {
         const sessionId = resolveSessionId(options?.scope);
-        const bound = sessionId ? state.sessionContexts.get(sessionId) : undefined;
+        const bound = resolveSessionContext(ctx, state, sessionId);
         const allowedSkillIds = bound && Array.isArray(bound.allowedSkillIds)
           ? new Set(bound.allowedSkillIds.filter((s) => typeof s === 'string'))
           : null;

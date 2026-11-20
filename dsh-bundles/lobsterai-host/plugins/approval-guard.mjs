@@ -13,7 +13,7 @@
  * - `passthrough` (or bridge absent): delegate to `next()`
  */
 
-import { callLobsterBridge, getHostState, resolveSessionId } from './shared-state.mjs';
+import { callLobsterBridge, getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-approval-guard';
 export const inject = ['tools'];
@@ -26,7 +26,7 @@ export function apply(ctx) {
       return next();
     }
     const sessionId = resolveSessionId(exec);
-    const bound = sessionId ? state.sessionContexts.get(sessionId) : undefined;
+    const bound = resolveSessionContext(ctx, state, sessionId);
 
     const response = await callLobsterBridge(
       state,
@@ -51,6 +51,7 @@ export function apply(ctx) {
     const decision = /** @type {Record<string, unknown>} */ (response.data);
     switch (decision.kind) {
       case 'allow':
+        if (exec.agent?.session?.header?.origin === 'subagent') return next();
         return { kind: 'allow' };
       case 'deny':
         return {

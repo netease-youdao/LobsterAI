@@ -10826,8 +10826,7 @@ if (!gotTheLock) {
   // ── Subagent tracking IPC ──────────────────────────────────────────────
 
   registerCoworkSubagentHandlers({
-    getOpenClawRuntimeAdapter: () => null,
-    getCoworkEngineRouter,
+    getSubagentSessions: () => getDshBootstrap().subagentSessions,
   });
 
   ipcMain.handle(CoworkIpcChannel.CancelMediaTask, async (_event, taskId: string) => {
