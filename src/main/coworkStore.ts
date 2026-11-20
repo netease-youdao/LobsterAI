@@ -71,6 +71,7 @@ import {
   parseModelThinkingLevel,
 } from '../shared/providers/modelThinking';
 import {
+  buildCoworkContinuityCapsule,
   ContinuityCapsuleSource,
   type CoworkContinuityCapsule,
 } from './libs/agentEngine/coworkContinuityCapsule';
@@ -513,6 +514,9 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  /** The native dsh log that owns this assistant event's sequence number. */
+  dshSessionId?: string;
+  seq?: number;
   imageAttachments?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPayload[];
   imageAttachmentPreviews?: import('../shared/cowork/imageAttachments').CoworkImageAttachmentPreview[];
   historyImageReferences?: { name: string; path: string; previewOnly: boolean }[];
@@ -1427,7 +1431,18 @@ export class CoworkStore {
         );
       }
 
-      this.copyContinuityCapsuleToFork(options.sourceSessionId, id, now);
+      if (forkedFromMessageId) {
+        // The parent's latest capsule can describe turns beyond the selected message.
+        this.upsertContinuityCapsule(id, buildCoworkContinuityCapsule({
+          sessionId: id,
+          messages: sourceMessages.map(row => this.parseStoredMessage(options.sourceSessionId, row)),
+          source: ContinuityCapsuleSource.Fork,
+          sourceMessageId: forkedMessageIds.get(forkedFromMessageId),
+          now,
+        }));
+      } else {
+        this.copyContinuityCapsuleToFork(options.sourceSessionId, id, now);
+      }
     });
 
     const forked = this.getSession(id);

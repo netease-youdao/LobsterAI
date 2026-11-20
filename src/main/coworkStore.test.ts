@@ -34,7 +34,7 @@ import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSession
 import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
-import { ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
+import { buildCoworkContinuityCapsule, ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
 
@@ -1019,6 +1019,24 @@ test('forkSession copies the source continuity capsule to the forked session', (
   expect(capsule?.revision).toBe(1);
   expect(capsule?.lastSource).toBe(ContinuityCapsuleSource.Fork);
   expect(capsule?.currentObjective).toBe('Keep context after compaction.');
+});
+
+test('a message fork builds its continuity capsule from the copied prefix', () => {
+  const parent = store.createSession('Source', '/tmp');
+  store.addMessage(parent.id, { type: 'user', content: 'Prepare a summary of the blue folder.' });
+  const cut = store.addMessage(parent.id, { type: 'assistant', content: 'The blue-folder summary is ready.' });
+  store.addMessage(parent.id, { type: 'user', content: 'Now use the later red folder.' });
+  store.upsertContinuityCapsule(parent.id, buildCoworkContinuityCapsule({
+    sessionId: parent.id,
+    source: ContinuityCapsuleSource.PostRun,
+    messages: store.getSession(parent.id)!.messages,
+  }));
+  const child = store.forkSession({ sourceSessionId: parent.id, forkedFromMessageId: cut.id });
+  const capsule = store.getContinuityCapsule(child.id);
+  expect(capsule?.currentObjective).toContain('blue folder');
+  expect(capsule?.lastSourceMessageId).toBe(child.messages[child.messages.length - 1].id);
+  expect(JSON.stringify(capsule)).not.toContain('red folder');
+  expect(store.getContinuityCapsule(parent.id)?.currentObjective).toContain('red folder');
 });
 
 test('main agent lists legacy sessions with null agent id', () => {

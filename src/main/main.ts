@@ -10506,10 +10506,17 @@ if (!gotTheLock) {
           title: options?.title,
           contextMessages: forkContextMessages,
         });
-        const forkedDsh = await runtime.forkDshSession(sessionId).catch((forkErr: unknown): null => {
-          console.warn('[CoworkFork] DSH native fork fell back to lazy context bridge:', forkErr);
-          return null;
-        });
+        const selected = forkedFromMessageId
+          ? coworkStoreInstance.getMessage(sessionId, forkedFromMessageId)?.metadata : undefined;
+        const atSeq = selected?.dshSessionId && selected.dshSessionId === sourceSession.claudeSessionId
+          ? selected.seq : undefined;
+        // An omitted native boundary means the parent's latest turn. Old and inherited
+        // messages without a position in this log must use the copied local prefix.
+        const forkedDsh = (!forkedFromMessageId || atSeq !== undefined)
+          ? await runtime.forkDshSession(sessionId, atSeq).catch((error: unknown): null => {
+            console.warn('[CoworkFork] Could not fork the native session at the selected boundary', error);
+            return null;
+          }) : null;
         if (forkedDsh?.storedSessionId) {
           coworkStoreInstance.updateSession(session.id, { claudeSessionId: forkedDsh.storedSessionId }, { touchUpdatedAt: false });
         }
