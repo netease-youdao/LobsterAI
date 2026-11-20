@@ -210,6 +210,58 @@ export function resolveBundledDshPaths(options: {
   return { runtimeDir, hostBundleDir, channelsBundleDir };
 }
 
+/**
+ * Build a strictly isolated environment for LobsterAI's embedded DSH child
+ * process so a co-installed standalone native DSH (using `~/.dsh`, `~/.agents`,
+ * or exported `DSH_*` / pnpm store env vars) never interferes with LobsterAI,
+ * and LobsterAI never mutates the user's standalone DSH data or plugins.
+ */
+export function buildIsolatedDshChildEnv(params: {
+  baseEnv?: NodeJS.ProcessEnv;
+  dshHomeDir: string;
+  bridgeUrl: string;
+  bridgeSecret: string;
+  workspacesDir: string;
+  skillsDir: string;
+  searchPolicy: DshSearchPolicy;
+  runtimeDir: string;
+  instanceId?: string;
+  skipElectronRunAsNode?: boolean;
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(params.baseEnv ?? process.env)) {
+    // Strip any inherited native DSH or global pnpm/npm store overrides.
+    if (/^dsh_/i.test(key)) continue;
+    if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+    env[key] = value;
+  }
+
+  env.DSH_HOME = params.dshHomeDir;
+  env.DSH_AGENTS_HOME = path.join(params.dshHomeDir, 'agents-home');
+  env.DSH_TELEMETRY_DISABLED = '1';
+  env.npm_config_store_dir = path.join(params.dshHomeDir, 'cache', 'pnpm-store');
+  env.npm_config_cache = path.join(params.dshHomeDir, 'cache', 'npm-cache');
+  env[DshHostBundleEnvVar.BridgeUrl] = params.bridgeUrl;
+  env[DshHostBundleEnvVar.BridgeSecret] = params.bridgeSecret;
+  env[DshHostBundleEnvVar.WorkspacesDir] = params.workspacesDir;
+  env[DshHostBundleEnvVar.SkillsDir] = params.skillsDir;
+  env[DshHostBundleEnvVar.SearchPolicy] = params.searchPolicy;
+
+  if (!params.skipElectronRunAsNode) {
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
+  if (params.instanceId) {
+    env[DshHostBundleEnvVar.InstanceId] = params.instanceId;
+  }
+  // Prepend bundled package-manager dir so `dsh-plugin-manager` finds bundled pnpm.
+  const pmDir = path.join(params.runtimeDir, 'package-manager');
+  if (fs.existsSync(pmDir)) {
+    const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+    env[pathKey] = env[pathKey] ? `${pmDir}${path.delimiter}${env[pathKey]}` : pmDir;
+  }
+  return env;
+}
+
 export class DshHostManager extends EventEmitter {
   private readonly options: DshHostManagerOptions;
   private readonly dshHomeDir: string;
@@ -462,30 +514,18 @@ export class DshHostManager extends EventEmitter {
   }
 
   private buildChildEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      DSH_HOME: this.dshHomeDir,
-      DSH_TELEMETRY_DISABLED: '1',
-      [DshHostBundleEnvVar.BridgeUrl]: this.bridgeUrl,
-      [DshHostBundleEnvVar.BridgeSecret]: this.bridgeSecret,
-      [DshHostBundleEnvVar.WorkspacesDir]: this.workspacesDir,
-      [DshHostBundleEnvVar.SkillsDir]: this.options.skillsDir,
-      [DshHostBundleEnvVar.SearchPolicy]:
-        this.options.searchPolicy ?? DshSearchPolicy.DeepSeekNativeOnly,
-    };
-    if (!this.options.skipElectronRunAsNode) {
-      env.ELECTRON_RUN_AS_NODE = '1';
-    }
-    if (this.options.instanceId) {
-      env[DshHostBundleEnvVar.InstanceId] = this.options.instanceId;
-    }
-    // Prepend bundled package-manager dir so `dsh-plugin-manager` finds bundled pnpm.
-    const pmDir = path.join(this.options.runtimeDir, 'package-manager');
-    if (fs.existsSync(pmDir)) {
-      const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
-      env[pathKey] = env[pathKey] ? `${pmDir}${path.delimiter}${env[pathKey]}` : pmDir;
-    }
-    return env;
+    return buildIsolatedDshChildEnv({
+      baseEnv: process.env,
+      dshHomeDir: this.dshHomeDir,
+      bridgeUrl: this.bridgeUrl,
+      bridgeSecret: this.bridgeSecret,
+      workspacesDir: this.workspacesDir,
+      skillsDir: this.options.skillsDir,
+      searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.DeepSeekNativeOnly,
+      runtimeDir: this.options.runtimeDir,
+      instanceId: this.options.instanceId,
+      skipElectronRunAsNode: this.options.skipElectronRunAsNode,
+    });
   }
 
   private spawnAndWaitForLaunchUrl(runtimeBinPath: string): Promise<string> {

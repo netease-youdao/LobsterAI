@@ -199,6 +199,10 @@ export function writeDshCliShim(options: WriteDshCliShimOptions): string {
   const platform = options.platform ?? process.platform;
   fs.mkdirSync(options.binDir, { recursive: true });
   const execFlags = DSH_NODE_EXEC_ARGV.join(' ');
+  const pathImpl = platform === 'win32' ? path.win32 : path.posix;
+  const agentsHomeDir = pathImpl.join(options.dshHomeDir, 'agents-home');
+  const pnpmStoreDir = pathImpl.join(options.dshHomeDir, 'cache', 'pnpm-store');
+  const npmCacheDir = pathImpl.join(options.dshHomeDir, 'cache', 'npm-cache');
 
   if (platform === 'win32') {
     const shimPath = path.join(options.binDir, 'dsh.cmd');
@@ -207,6 +211,10 @@ export function writeDshCliShim(options: WriteDshCliShimOptions): string {
       'setlocal',
       'set ELECTRON_RUN_AS_NODE=1',
       `set "DSH_HOME=${options.dshHomeDir}"`,
+      `set "DSH_AGENTS_HOME=${agentsHomeDir}"`,
+      'set "DSH_TELEMETRY_DISABLED=1"',
+      `set "npm_config_store_dir=${pnpmStoreDir}"`,
+      `set "npm_config_cache=${npmCacheDir}"`,
       `set "LOBSTERAI_DSH_PROFILE_DIR=${options.profileDir}"`,
       `"${options.electronPath}" ${execFlags} "${options.runtimeEntryPath}" %*`,
       '',
@@ -221,6 +229,10 @@ export function writeDshCliShim(options: WriteDshCliShimOptions): string {
     'set -e',
     'export ELECTRON_RUN_AS_NODE=1',
     `export DSH_HOME=${shellQuotePosix(options.dshHomeDir)}`,
+    `export DSH_AGENTS_HOME=${shellQuotePosix(agentsHomeDir)}`,
+    'export DSH_TELEMETRY_DISABLED=1',
+    `export npm_config_store_dir=${shellQuotePosix(pnpmStoreDir)}`,
+    `export npm_config_cache=${shellQuotePosix(npmCacheDir)}`,
     `export LOBSTERAI_DSH_PROFILE_DIR=${shellQuotePosix(options.profileDir)}`,
     `exec ${shellQuotePosix(options.electronPath)} ${execFlags} ${shellQuotePosix(options.runtimeEntryPath)} "$@"`,
     '',

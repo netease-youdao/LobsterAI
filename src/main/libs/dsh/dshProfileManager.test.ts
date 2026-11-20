@@ -126,6 +126,9 @@ describe('writeDshCliShim', () => {
     });
     const posixText = fs.readFileSync(posixShim, 'utf8');
     expect(posixText).toContain('ELECTRON_RUN_AS_NODE=1');
+    expect(posixText).toContain('DSH_AGENTS_HOME=');
+    expect(posixText).toContain('DSH_TELEMETRY_DISABLED=1');
+    expect(posixText).toContain('npm_config_store_dir=');
     expect(posixText).toContain('--expose-internals');
 
     const winShim = writeDshCliShim({
@@ -139,6 +142,9 @@ describe('writeDshCliShim', () => {
     expect(path.basename(winShim)).toBe('dsh.cmd');
     const winText = fs.readFileSync(winShim, 'utf8');
     expect(winText).toContain('set ELECTRON_RUN_AS_NODE=1');
+    expect(winText).toContain('set "DSH_AGENTS_HOME=');
+    expect(winText).toContain('set "DSH_TELEMETRY_DISABLED=1"');
+    expect(winText).toContain('set "npm_config_store_dir=');
     expect(winText).toContain('--expose-internals');
   });
 });

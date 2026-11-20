@@ -86,12 +86,13 @@ flowchart TD
 │   ├── <agentId>/                  #   各自定义/预设 Agent 独立人设与记忆
 │   └── memory-fts.sqlite           #   主进程 FTS5 索引（可随时重建）
 ├── SKILLs/                         # 技能目录（原地保留）
-├── dsh-profile/                    # LobsterAI 专属 App-Owned Profile（与 ~/.dsh 隔离）
-│   ├── package.json                #   声明 bundles 依赖
-│   ├── cordis.patch.yml            #   留给用户与 dsh-plugin-manager，LobsterAI 不覆写
+├── dsh-profile/                    # LobsterAI 专属 App-Owned Profile（与原生 ~/.dsh / ~/.agents 完全隔离）
+│   ├── profiles/lobsterai/         #   独立的 package.json / node_modules / pnpm-lock.yaml / cordis.patch.yml
+│   ├── agents-home/                #   隔离的 DSH_AGENTS_HOME（不读写用户全局 ~/.agents）
+│   ├── cache/                      #   隔离的 pnpm-store / npm-cache 及 DSH 运行缓存
 │   ├── sessions/                   #   DSH v4 zstd JSONL 运行态会话日志
 │   ├── attachments/                #   DSH 附件存储
-│   └── bin/dsh(.cmd)               #   内置 dsh CLI shim
+│   └── bin/dsh(.cmd)               #   内置私有 dsh CLI shim（不修改系统 PATH）
 └── legacy-openclaw-backup/         # 升级老用户生成的一次性安全保险箱
     └── <timestamp>/
         ├── lobsterai.pre-v2.sqlite
@@ -162,6 +163,7 @@ flowchart TD
 
 | 场景 | 处理方式 |
 |---|---|
+| 用户本机同时安装了原生独立 DSH（CLI 或 Desktop）与 LobsterAI | 全链路隔离，互不影响：① `buildIsolatedDshChildEnv` 启动前剥离宿主 `process.env` 中全部 `DSH_*` 与全局 `npm_config_store_dir`/`npm_config_cache`，独立指定 `DSH_HOME=<userData>/dsh-profile`、`DSH_AGENTS_HOME=<userData>/dsh-profile/agents-home` 及私有 `pnpm-store`/`npm-cache`；② 插件仅安装在 `<userData>/dsh-profile/profiles/lobsterai/`，不触碰 `~/.dsh` 与 `~/.agents`；③ 使用随机回环端口 `--host 127.0.0.1 --port 0` 与独立 Electron partition `persist:dsh-ecosystem`；④ `dshOrphanReaper` 仅匹配 LobsterAI 自身 `process.execPath`，绝不误杀原生 DSH 进程 |
 | 推理模型输出部分 `reasoning_content` 后无正文/无工具调用直接 `stop` | `empty-stop-guard.mjs` 重分类为 `EMPTY_RESPONSE`，`dsh-llm-retry` 自动重试；`dshRuntimeAdapter` 原地复用占位消息行，避免空白回复或重复思考块 |
 | 重试耗尽或下游返回 `turn/end { reason: { kind: 'error' } }` | 清理未使用的占位行，更新会话为 `error` 并向前端抛出明确错误，不静默标记 `completed` |
 | 模型不支持前端所选 `reasoningEffort` 档位 | `selectModelWithReasoningFallback` 自动去掉 `reasoningEffort` 重试一次，保证切模型成功 |

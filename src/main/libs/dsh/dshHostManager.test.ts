@@ -3,8 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { DshHostPhase } from '../../../shared/dshEngine/hostConstants';
-import { DshHostManager, resolveBundledDshPaths } from './dshHostManager';
+import { DshHostPhase, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
+import {
+  buildIsolatedDshChildEnv,
+  DshHostManager,
+  resolveBundledDshPaths,
+} from './dshHostManager';
 
 const tempDirs: string[] = [];
 
@@ -94,5 +98,38 @@ describe('DshHostManager', () => {
     expect(mcpRes).toEqual({ deferred: true });
     expect(skillRes).toEqual({ deferred: true });
     expect(toolsRes).toEqual({ deferred: true });
+  });
+
+  test('buildIsolatedDshChildEnv strips inherited native DSH_* vars and isolates home, agents-home, and pnpm store', () => {
+    const temp = createTempDir();
+    const dshHomeDir = path.join(temp, 'userData', 'dsh-profile');
+    const env = buildIsolatedDshChildEnv({
+      baseEnv: {
+        PATH: '/usr/bin',
+        DSH_HOME: '/Users/alice/.dsh',
+        DSH_AGENTS_HOME: '/Users/alice/.agents',
+        DSH_BUNDLED_SKILL_DIR: '/opt/native-dsh/skills',
+        DSH_PROFILE: 'desktop',
+        npm_config_store_dir: '/Users/alice/.local/share/pnpm/store',
+        npm_config_cache: '/Users/alice/.npm',
+        HOME: '/Users/alice',
+      },
+      dshHomeDir,
+      bridgeUrl: 'http://127.0.0.1:41234',
+      bridgeSecret: 'secret',
+      workspacesDir: path.join(temp, 'userData', 'workspaces'),
+      skillsDir: path.join(temp, 'userData', 'SKILLs'),
+      searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
+      runtimeDir: path.join(temp, 'runtime'),
+    });
+
+    expect(env.DSH_HOME).toBe(dshHomeDir);
+    expect(env.DSH_AGENTS_HOME).toBe(path.join(dshHomeDir, 'agents-home'));
+    expect(env.DSH_TELEMETRY_DISABLED).toBe('1');
+    expect(env.DSH_BUNDLED_SKILL_DIR).toBeUndefined();
+    expect(env.DSH_PROFILE).toBeUndefined();
+    expect(env.npm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
+    expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
+    expect(env.HOME).toBe('/Users/alice');
   });
 });
