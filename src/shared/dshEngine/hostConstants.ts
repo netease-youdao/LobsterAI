@@ -126,6 +126,16 @@ export const DshSearchPolicy = {
 } as const;
 export type DshSearchPolicy = typeof DshSearchPolicy[keyof typeof DshSearchPolicy];
 
+export const DshProgressiveCapability = {
+  ComputerUse: 'computer-use',
+  Browser: 'browser',
+  Word: 'word',
+  Excel: 'excel',
+  Ppt: 'ppt',
+} as const;
+export type DshProgressiveCapability =
+  typeof DshProgressiveCapability[keyof typeof DshProgressiveCapability];
+
 export const DshHostIpc = {
   GetStatus: 'dshHost:getStatus',
   Restart: 'dshHost:restart',

@@ -46,6 +46,7 @@ export function getHostState(ctx) {
         hostTools: false,
         approvalGuard: false,
         opsRpc: false,
+        toolDisclosure: false,
       },
       /** @type {((payload: unknown) => Promise<unknown>) | null} */
       syncProviders: null,
@@ -55,6 +56,8 @@ export function getHostState(ctx) {
       syncHostTools: null,
       /** @type {(() => void) | null} */
       invalidateSkills: null,
+      /** @type {((sessionId?: string) => void) | null} */
+      reconcileToolDisclosure: null,
     };
     rootStates.set(root, state);
   }

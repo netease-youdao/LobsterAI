@@ -32,9 +32,31 @@
 - id: product-analytics
   disabled: true
 
-# ── Pruned heavy native capabilities replaced by LobsterAI native editors ────
+# ── Pruned heavy / duplicate / DSH-dev capabilities ──────────────────────────
+# LobsterAI provides native Office editors & skills (docx/pptx/xlsx), its own
+# file:// link renderer, and does not expose DSH self-development context to
+# end users.
 
 - id: office-kit
+  disabled: true
+
+- id: skill-office
+  disabled: true
+
+- id: harness-dev-context
+  disabled: true
+
+- id: deliverable-file-references
+  disabled: true
+
+# LobsterAI owns scheduled tasks via SQLite `LobsterScheduler` (+ IM delivery &
+# sidebar UI) and exposes them through the compact `lobster_schedule` tool.
+- id: schedule
+  disabled: true
+
+# None of LobsterAI's built-in MCP servers use MCP Resources; disabling this
+# avoids injecting 3 unused resource tools + an extra prompt section per turn.
+- id: mcp-resources
   disabled: true
 
 # ── Search policy guard (0.2.2-rc.5) ─────────────────────────────────────────
@@ -46,7 +68,7 @@
 - id: web-deepseek-api
   disabled: true
 
-# ── Product identity & prompt baseline ───────────────────────────────────────
+# ── Product identity, prompt baseline & default preset ───────────────────────
 
 - id: system-prompt
   config:
@@ -54,9 +76,98 @@
     includeRuntimeContext: true
     personaPrefix: ''
 
-# ── LobsterAI Host Cordis Plugins ────────────────────────────────────────────
+- id: agent-preset-registry
+  config:
+    default: lobsterai
+
+# ── LobsterAI Default Agent Preset & Host Cordis Plugins ─────────────────────
 
 - insert:
+    - id: preset-lobsterai
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: lobsterai
+        name: LobsterAI
+        description: LobsterAI 默认智能体配置
+        order: 0
+        plugins:
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 32768
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              applyPatch: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+            config:
+              catalogDescriptionMaxLength: 160
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: tool-subagent-control
+            name: '@deepseek-ai/dsh-tool-subagent-control'
+            config:
+              interrupt: false
+          - id: tool-subagent
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: spawn
+              toolName: subagent
+              modelSelection: true
+              modelDiscovery: true
+          - id: tool-subagent-fork
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: fork
+              toolName: subagent_fork
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+
     - id: lobster-model-bridge
       name: './plugins/model-bridge.mjs'
 
@@ -65,6 +176,9 @@
 
     - id: lobster-host-tools
       name: './plugins/host-tools.mjs'
+
+    - id: lobster-tool-disclosure
+      name: './plugins/tool-disclosure.mjs'
 
     - id: lobster-approval-guard
       name: './plugins/approval-guard.mjs'

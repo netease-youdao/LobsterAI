@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -5,10 +6,13 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
+import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
 import {
   buildApprovalScopeKey,
   BUILTIN_MEMORY_TOOL_NAMES,
+  BUILTIN_SCHEDULE_TOOL_NAME,
   evaluateDshToolApproval,
+  LobsterScheduleAction,
   wireDshHostBridge,
 } from './dshHostBridgeWiring';
 import type {
@@ -18,9 +22,11 @@ import type {
 
 const cleanupPaths: string[] = [];
 const openServices: LobsterMemoryService[] = [];
+const openDbs: Database.Database[] = [];
 
 afterEach(() => {
   while (openServices.length > 0) openServices.pop()!.close();
+  while (openDbs.length > 0) openDbs.pop()!.close();
   while (cleanupPaths.length > 0) fs.rmSync(cleanupPaths.pop()!, { recursive: true, force: true });
 });
 
@@ -165,6 +171,135 @@ describe('wireDshHostBridge', () => {
     });
     expect(dynRes).toEqual({ ran: 'lobster_office_edit', file: 'report.docx' });
     expect(evaluator).not.toBeNull();
+
+    wired.dispose();
+  });
+
+  test('executes lobster_schedule CRUD via LobsterScheduler and triggers onScheduleMutated', async () => {
+    const workspacesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-bridge-sched-'));
+    cleanupPaths.push(workspacesDir);
+    const memoryService = new LobsterMemoryService(workspacesDir);
+    openServices.push(memoryService);
+
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    openDbs.push(db);
+    const scheduler = new LobsterScheduler({ db });
+
+    const handlers = new Map<string, DshBridgeToolHandler>();
+    const onScheduleMutated = vi.fn();
+    const wired = wireDshHostBridge({
+      hostManager: {
+        registerBridgeToolHandler: (name, fn) => {
+          handlers.set(name, fn);
+          return () => handlers.delete(name);
+        },
+        setFallbackBridgeToolHandler: () => undefined,
+        setApprovalEvaluator: () => undefined,
+        syncHostTools: async () => ({ ok: true }),
+      },
+      memoryService,
+      scheduler,
+      onScheduleMutated,
+    });
+
+    const schedHandler = handlers.get(BUILTIN_SCHEDULE_TOOL_NAME)!;
+    expect(schedHandler).toBeDefined();
+
+    // Empty list does not trigger mutation broadcast.
+    const emptyList = await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: { action: LobsterScheduleAction.List },
+      agentId: 'main',
+    }) as { ok: boolean; tasks: unknown[]; text: string };
+    expect(emptyList.ok).toBe(true);
+    expect(emptyList.tasks).toHaveLength(0);
+    expect(onScheduleMutated).toHaveBeenCalledTimes(0);
+
+    // Create a cron task.
+    const created = await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: {
+        action: LobsterScheduleAction.Create,
+        name: '每日早报',
+        prompt: '汇总今日科技新闻',
+        scheduleKind: 'cron',
+        cronExpr: '0 9 * * *',
+        tz: 'Asia/Shanghai',
+      },
+      agentId: 'main',
+    }) as { ok: boolean; task: { id: string; name: string; enabled: boolean }; text: string };
+    expect(created.ok).toBe(true);
+    expect(created.task.name).toBe('每日早报');
+    expect(created.task.enabled).toBe(true);
+    expect(onScheduleMutated).toHaveBeenCalledTimes(1);
+
+    // Update timezone only without repeating cronExpr.
+    const updated = await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: {
+        action: LobsterScheduleAction.Update,
+        taskId: created.task.id,
+        tz: 'UTC',
+      },
+      agentId: 'main',
+    }) as { ok: boolean; task: { schedule: { kind: string; expr: string; tz?: string } } };
+    expect(updated.task.schedule).toEqual({ kind: 'cron', expr: '0 9 * * *', tz: 'UTC' });
+    expect(onScheduleMutated).toHaveBeenCalledTimes(2);
+
+    // Toggle pause.
+    const paused = await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: {
+        action: LobsterScheduleAction.Toggle,
+        taskId: created.task.id,
+        enabled: false,
+      },
+      agentId: 'main',
+    }) as { ok: boolean; task: { enabled: boolean } };
+    expect(paused.task.enabled).toBe(false);
+    expect(onScheduleMutated).toHaveBeenCalledTimes(3);
+
+    // Create an every task and validate past one-shot `at` rejection.
+    const everyRes = await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: {
+        action: LobsterScheduleAction.Create,
+        name: '巡检',
+        prompt: '检查服务状态',
+        scheduleKind: 'every',
+        everyMinutes: 15,
+      },
+      agentId: 'main',
+    }) as { ok: boolean; task: { id: string } };
+    expect(everyRes.ok).toBe(true);
+    expect(onScheduleMutated).toHaveBeenCalledTimes(4);
+
+    expect(() => schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: {
+        action: LobsterScheduleAction.Create,
+        name: '过期提醒',
+        prompt: '测试',
+        scheduleKind: 'at',
+        at: '2020-01-01T00:00:00Z',
+      },
+      agentId: 'main',
+    })).toThrow(/晚于当前时间/);
+
+    // Delete both tasks.
+    await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: { action: LobsterScheduleAction.Delete, taskId: created.task.id },
+      agentId: 'main',
+    });
+    await schedHandler({
+      toolName: BUILTIN_SCHEDULE_TOOL_NAME,
+      args: { action: LobsterScheduleAction.Delete, taskId: everyRes.task.id },
+      agentId: 'main',
+    });
+    expect(scheduler.listTasks()).toHaveLength(0);
+    expect(onScheduleMutated).toHaveBeenCalledTimes(6);
 
     wired.dispose();
   });

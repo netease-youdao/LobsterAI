@@ -265,6 +265,12 @@ export function apply(ctx) {
             const nextPreset = typeof p.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(p.permissionPreset)
               ? p.permissionPreset
               : undefined;
+            const mergedUnlocked = new Set([
+              ...(Array.isArray(prev.unlockedCapabilities) ? prev.unlockedCapabilities : []),
+              ...(Array.isArray(p.unlockedCapabilities)
+                ? p.unlockedCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0)
+                : []),
+            ]);
             state.sessionContexts.set(sessionId, {
               ...prev,
               ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
@@ -279,7 +285,9 @@ export function apply(ctx) {
                 : {}),
               ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
               ...(nextPreset ? { permissionPreset: nextPreset } : {}),
+              ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
             });
+            state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);
             if (liveAgent && effectivePreset) {

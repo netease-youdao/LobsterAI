@@ -40,6 +40,7 @@ export interface AsrHandlerDeps {
   getAuthTokens: () => AuthTokens | null;
   fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
   getServerApiBaseUrl: () => string;
+  onRealtimeSessionCreated?: (wsUrl: string, webContentsId: number, expiresInSeconds?: number) => void;
 }
 
 export async function createRealtimeAsrSession(
@@ -96,7 +97,16 @@ export async function createRealtimeAsrSession(
 export function registerAsrIpcHandlers(deps: AsrHandlerDeps): void {
   ipcMain.handle(
     AsrIpcChannel.CreateRealtimeSession,
-    async (_event, options?: AsrRealtimeSessionRequest): Promise<AsrRealtimeSessionResult> =>
-      createRealtimeAsrSession(deps, options),
+    async (event, options?: AsrRealtimeSessionRequest): Promise<AsrRealtimeSessionResult> => {
+      const result = await createRealtimeAsrSession(deps, options);
+      if (result.success) {
+        deps.onRealtimeSessionCreated?.(
+          result.data.wsUrl,
+          event.sender.id,
+          result.data.expiresInSeconds,
+        );
+      }
+      return result;
+    },
   );
 }

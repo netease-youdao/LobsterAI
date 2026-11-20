@@ -48,12 +48,12 @@ describe('buildSelectedSkillRoutingPrompt', () => {
       }),
     ]);
 
-    expect(prompt).toContain('## Selected skills for this turn');
+    expect(prompt).toContain('## 本轮已选技能');
     expect(prompt).toContain('<id>imagegen</id>');
     expect(prompt).toContain('<name>Image Gen</name>');
     expect(prompt).toContain('<location>/Users/example/SKILLs/imagegen/SKILL.md</location>');
     expect(prompt).toContain('<directory>/Users/example/SKILLs/imagegen</directory>');
-    expect(prompt).toContain('read its SKILL.md at <location>');
+    expect(prompt).toContain('`skill` 工具');
     expect(prompt).not.toContain('FULL SKILL BODY SHOULD NOT BE INLINED');
   });
 
@@ -81,7 +81,7 @@ describe('buildSelectedSkillRoutingPrompt', () => {
 
     expect(prompt).toContain('<id>docx</id>');
     expect(prompt).toContain('<id>xlsx</id>');
-    expect(prompt).toContain('Do not read every selected skill up front.');
+    expect(prompt).toContain('不要一次性预读全部技能');
     expect(prompt).not.toContain('DOCX BODY');
     expect(prompt).not.toContain('XLSX BODY');
   });

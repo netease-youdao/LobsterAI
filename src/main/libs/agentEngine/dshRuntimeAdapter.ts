@@ -23,6 +23,7 @@ import {
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
   DshPermissionPreset,
+  DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
@@ -244,6 +245,46 @@ export function formatStoredDshSessionId(dshSessionId: string): string {
     : `${DSH_SESSION_ID_PREFIX}${dshSessionId}`;
 }
 
+const SKILL_TO_PROGRESSIVE_CAPABILITY: Readonly<Record<string, DshProgressiveCapability>> = {
+  'computer-use': DshProgressiveCapability.ComputerUse,
+  'web-search': DshProgressiveCapability.Browser,
+  docx: DshProgressiveCapability.Word,
+  xlsx: DshProgressiveCapability.Excel,
+  pptx: DshProgressiveCapability.Ppt,
+};
+
+/**
+ * Determine which built-in progressive MCP capability groups should be
+ * pre-unlocked for this turn based on explicit user-selected skills or
+ * attached browser annotations.
+ */
+export function resolveUnlockedCapabilitiesForTurn(params: {
+  messageSkillIds?: string[];
+  browserAnnotations?: CoworkStartOptions['browserAnnotations'];
+}): DshProgressiveCapability[] {
+  const unlocked = new Set<DshProgressiveCapability>();
+  if (Array.isArray(params.messageSkillIds)) {
+    for (const rawId of params.messageSkillIds) {
+      if (typeof rawId !== 'string') continue;
+      const cap = SKILL_TO_PROGRESSIVE_CAPABILITY[rawId.trim().toLowerCase()];
+      if (cap) unlocked.add(cap);
+    }
+  }
+  if (Array.isArray(params.browserAnnotations) && params.browserAnnotations.length > 0) {
+    unlocked.add(DshProgressiveCapability.Browser);
+  }
+  return [...unlocked];
+}
+
+function resolveLocalTimeZone(): string | undefined {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof tz === 'string' && tz.trim().length > 0 ? tz.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Build a compact one-time context bridge prefix when resuming a historical
  * OpenClaw session inside DSH for the first time ("Lazy Context Bridge").
@@ -266,9 +307,9 @@ export function buildLazyContextBridgePrefix(
     .slice(-LEGACY_BRIDGE_MAX_MESSAGES);
   if (relevant.length > 0) {
     const transcript = relevant
-      .map((m) => `${m.type === 'user' ? 'User' : 'Assistant'}: ${m.content.trim().slice(0, 800)}`)
+      .map((m) => `${m.type === 'user' ? '用户' : '助手'}: ${m.content.trim().slice(0, 800)}`)
       .join('\n\n');
-    parts.push(`[Recent conversation turns before engine upgrade]\n${transcript}`);
+    parts.push(`[历史会话近期对话]\n${transcript}`);
   }
   if (parts.length === 0) return '';
   const combined = `<previous_conversation_context>\n${parts.join('\n\n')}\n</previous_conversation_context>`;
@@ -374,6 +415,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       skipInitialUserMessage: options.skipInitialUserMessage,
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
+      messageSkillIds: options.messageSkillIds,
+      browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
       imageAttachments: options.imageAttachments,
@@ -396,6 +439,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       skipInitialUserMessage: options.skipInitialUserMessage,
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
+      messageSkillIds: options.messageSkillIds,
+      browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
@@ -418,11 +463,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     if (!dshSessionId) {
       throw new Error(`No active DSH session found for ${sessionId}`);
     }
+    const clientTimeZone = resolveLocalTimeZone();
     await client.promptSession({
       sessionId: dshSessionId,
       requestId: clientSteerId || randomUUID(),
       content: [{ type: 'text', text: trimmed }],
       mode: 'steer',
+      ...(clientTimeZone ? { clientTimeZone } : {}),
     });
     const message = this.store.addMessage(sessionId, {
       type: 'user',
@@ -1038,6 +1085,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       skipInitialUserMessage?: boolean;
       userMessageContent?: string;
       skillIds?: string[];
+      messageSkillIds?: string[];
+      browserAnnotations?: CoworkStartOptions['browserAnnotations'];
       systemPrompt?: string;
       confirmationMode: 'modal' | 'text';
       imageAttachments?: CoworkStartOptions['imageAttachments'];
@@ -1174,6 +1223,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const allowedSkillIds = this.resolveAllowedSkillIds
         ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
         : params.skillIds ?? null;
+      const unlockedCapabilities = resolveUnlockedCapabilitiesForTurn({
+        messageSkillIds: params.messageSkillIds,
+        browserAnnotations: params.browserAnnotations,
+      });
       const contextPayload: DshHostSessionContext = {
         sessionId: dshSessionId,
         agentId,
@@ -1186,6 +1239,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           : {}),
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: this.getEffectivePermissionPreset(sessionId),
+        ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
       };
       await this.hostManager.bindSessionContext(contextPayload);
       if (abortController.signal.aborted) return;
@@ -1258,12 +1312,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const contentParts = buildPromptContentParts(prompt, turnPrefix, params.imageAttachments);
       const streamTask = this.consumeFollowStream(turn, followStream);
 
+      const clientTimeZone = resolveLocalTimeZone();
       try {
         await client.promptSession({
           sessionId: dshSessionId,
           requestId: params.requestId || randomUUID(),
           content: contentParts,
           mode: 'queue',
+          ...(clientTimeZone ? { clientTimeZone } : {}),
         });
         params.onAccepted?.();
       } catch (error) {

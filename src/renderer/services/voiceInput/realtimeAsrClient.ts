@@ -19,6 +19,11 @@ import { buildPcm16WavHeader } from './wavEncoder';
 const REALTIME_FINAL_WAIT_MS = 4_000;
 const PCM16_BYTES_PER_SAMPLE = 2;
 
+const warnVoiceInput = (message: string): void => {
+  console.warn(`[VoiceInput] ${message}`);
+  window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', message);
+};
+
 export interface RealtimeVoiceInputSession {
   stop: () => Promise<string>;
   cancel: () => void;
@@ -161,7 +166,7 @@ export const startRealtimeVoiceInput = async ({
     langType: AsrLangType.ZhChs,
   });
   if (!session.success) {
-    console.warn(`[VoiceInput] realtime ASR session request failed with code ${session.code ?? 'unknown'} and message: ${session.message || session.error || 'No response message'}`);
+    warnVoiceInput(`realtime ASR session request failed with code ${session.code ?? 'unknown'} and message: ${session.message || session.error || 'No response message'}`);
     throw new AsrClientError(getFallbackAsrErrorMessage(session.code), session.code);
   }
 
@@ -200,7 +205,7 @@ export const startRealtimeVoiceInput = async ({
     if (!message) return;
 
     if (message.type === AsrRealtimeEventType.Error) {
-      console.warn(`[VoiceInput] realtime ASR WebSocket reported error; requestId=${message.requestId || session.data.requestId}, code=${message.code ?? 'unknown'}, message=${message.message || 'No response message'}`);
+      warnVoiceInput(`realtime ASR WebSocket reported error; requestId=${message.requestId || session.data.requestId}, code=${message.code ?? 'unknown'}, message=${message.message || 'No response message'}`);
       terminalError = new AsrClientError(
         getFallbackAsrErrorMessage(message.code),
         message.code,
@@ -231,7 +236,7 @@ export const startRealtimeVoiceInput = async ({
 
   socket.addEventListener('error', () => {
     if (closed) return;
-    console.warn(`[VoiceInput] realtime ASR WebSocket error event; requestId=${session.data.requestId}`);
+    warnVoiceInput(`realtime ASR WebSocket error event; requestId=${session.data.requestId}`);
     terminalError = new AsrClientError(
       getFallbackAsrErrorMessage(AsrApiCode.UpstreamError),
       AsrApiCode.UpstreamError,
@@ -244,7 +249,7 @@ export const startRealtimeVoiceInput = async ({
   socket.addEventListener('close', (event) => {
     closed = true;
     if (event.code !== 1000) {
-      console.warn(`[VoiceInput] realtime ASR WebSocket closed unexpectedly; code=${event.code}, clean=${event.wasClean}`);
+      warnVoiceInput(`realtime ASR WebSocket closed unexpectedly; requestId=${session.data.requestId}, code=${event.code}, clean=${event.wasClean}`);
     }
     finishFinalWait();
   });
@@ -293,10 +298,15 @@ export const startRealtimeVoiceInput = async ({
     }
   };
 
-  recorder = await startRealtimeVoiceRecording({
-    chunkIntervalMillis,
-    onPcmChunk: sendPcmChunk,
-  });
+  try {
+    recorder = await startRealtimeVoiceRecording({
+      chunkIntervalMillis,
+      onPcmChunk: sendPcmChunk,
+    });
+  } catch (error) {
+    closeSocket();
+    throw error;
+  }
   if (terminalError) {
     recorder.cancel();
     closeSocket();

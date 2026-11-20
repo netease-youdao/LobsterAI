@@ -83,15 +83,15 @@ function renderHostToolOutput(_args, value) {
   return [{ type: 'text', text }];
 }
 
-const BUILTIN_MEMORY_TOOL_SPECS = [
+const BUILTIN_HOST_TOOL_SPECS = [
   {
     name: 'lobster_memory_search',
-    description: 'Search the agent workspace long-term memory (MEMORY.md) and daily memory notes using full-text search.',
+    description: '全文检索当前智能体的长期记忆（MEMORY.md）与每日笔记。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query text (Chinese or English keywords).' },
-        limit: { type: 'integer', description: 'Maximum number of matching snippets to return (default 8).' },
+        query: { type: 'string', description: '检索关键词（支持中英文）。' },
+        limit: { type: 'integer', description: '最多返回的结果条数（默认 8）。' },
       },
       required: ['query'],
     },
@@ -99,13 +99,13 @@ const BUILTIN_MEMORY_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_get',
-    description: 'Read a specific memory file or line range from the agent workspace (e.g. MEMORY.md or memory/2026-11-19.md).',
+    description: '按路径和行号读取智能体工作区内的记忆文件（如 MEMORY.md 或 memory/YYYY-MM-DD.md）。',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Relative path inside the agent workspace (e.g. MEMORY.md).' },
-        startLine: { type: 'integer', description: 'Optional 1-based start line number.' },
-        endLine: { type: 'integer', description: 'Optional 1-based inclusive end line number.' },
+        path: { type: 'string', description: '智能体工作区内的相对路径（如 MEMORY.md）。' },
+        startLine: { type: 'integer', description: '可选，起始行号（从 1 开始）。' },
+        endLine: { type: 'integer', description: '可选，结束行号（含）。' },
       },
       required: ['path'],
     },
@@ -113,19 +113,48 @@ const BUILTIN_MEMORY_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_save',
-    description: 'Save a durable memory entry to MEMORY.md or append a daily note to memory/YYYY-MM-DD.md.',
+    description: '保存一条长期记忆到 MEMORY.md，或追加一条每日记录到 memory/YYYY-MM-DD.md。',
     inputSchema: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: 'Concise factual memory text to persist.' },
+        content: { type: 'string', description: '需要持久化的简洁事实内容。' },
         target: {
           type: 'string',
           enum: ['memory', 'daily'],
-          description: 'Target store: "memory" for long-term MEMORY.md, "daily" for today\'s daily log.',
+          description: '写入目标："memory" 写入长期 MEMORY.md，"daily" 追加到当日日志。',
         },
-        date: { type: 'string', description: 'Optional YYYY-MM-DD date when target is "daily".' },
+        date: { type: 'string', description: '可选，target 为 "daily" 时的日期（YYYY-MM-DD）。' },
       },
       required: ['content'],
+    },
+    isConcurrencySafe: false,
+  },
+  {
+    name: 'lobster_schedule',
+    description: '管理 LobsterAI 定时任务（查看、创建、修改、启停、删除）。仅在用户明确要求定时提醒或周期任务时调用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'create', 'update', 'toggle', 'delete'],
+          description: '操作类型。',
+        },
+        taskId: { type: 'string', description: '任务 ID（update / toggle / delete 必填）。' },
+        name: { type: 'string', description: '任务名称（create 必填）。' },
+        prompt: { type: 'string', description: '定时触发时要执行的任务指令（create 必填）。' },
+        scheduleKind: {
+          type: 'string',
+          enum: ['cron', 'every', 'at'],
+          description: '调度类型：cron（5段表达式）、every（按分钟间隔）、at（一次性 ISO 时间）。',
+        },
+        cronExpr: { type: 'string', description: '5段 cron 表达式，如 "0 9 * * *"（scheduleKind="cron" 时必填）。' },
+        tz: { type: 'string', description: '可选 IANA 时区（如 "Asia/Shanghai"，默认本地时区）。' },
+        everyMinutes: { type: 'number', description: '间隔分钟数，至少 1（scheduleKind="every" 时必填）。' },
+        at: { type: 'string', description: '带时区偏移的未来 ISO 时间，如 "2026-11-21T09:00:00+08:00"（scheduleKind="at" 时必填）。' },
+        enabled: { type: 'boolean', description: '是否启用（默认 true；toggle 必填）。' },
+      },
+      required: ['action'],
     },
     isConcurrencySafe: false,
   },
@@ -186,8 +215,8 @@ export function apply(ctx) {
   /** @type {Map<string, () => void>} */
   const dynamicDisposers = new Map();
 
-  // Register built-in memory tools immediately.
-  for (const spec of BUILTIN_MEMORY_TOOL_SPECS) {
+  // Register built-in memory & scheduler host tools immediately.
+  for (const spec of BUILTIN_HOST_TOOL_SPECS) {
     const disposer = ctx.tools.register(createBridgeTool(ctx, state, spec));
     builtinDisposers.set(spec.name, disposer);
   }

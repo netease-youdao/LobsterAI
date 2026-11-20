@@ -343,16 +343,6 @@ export class DshBootstrap {
       ),
     };
 
-    this.bridgeWiring = wireDshHostBridge({
-      hostManager: this.hostManager,
-      memoryService: this.memoryService,
-      allowRules: combinedAllowRules,
-      toolProviders: options.toolProviders,
-    });
-
-    // Seed initial persisted permission preset into DshHostManager so it replays on boot.
-    void this.hostManager.setPermissionPreset(this.defaultPermissionPreset).catch((): void => undefined);
-
     this.scheduler = new LobsterScheduler({
       db: options.db,
       executor: (task, signal) => this.executeScheduledTask(task, signal),
@@ -364,6 +354,20 @@ export class DshBootstrap {
     this.scheduler.on('runUpdate', (event: ScheduledTaskRunEvent) => {
       this.broadcastScheduledTaskEvent(ScheduledTaskIpc.RunUpdate, event);
     });
+
+    this.bridgeWiring = wireDshHostBridge({
+      hostManager: this.hostManager,
+      memoryService: this.memoryService,
+      scheduler: this.scheduler,
+      onScheduleMutated: () => {
+        this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+      },
+      allowRules: combinedAllowRules,
+      toolProviders: options.toolProviders,
+    });
+
+    // Seed initial persisted permission preset into DshHostManager so it replays on boot.
+    void this.hostManager.setPermissionPreset(this.defaultPermissionPreset).catch((): void => undefined);
 
     this.hostManager.on('phaseChange', (_phase, hostStatus: DshHostStatus) => {
       options.onStatusChange?.(mapDshHostStatusToEngineStatus(hostStatus), hostStatus);

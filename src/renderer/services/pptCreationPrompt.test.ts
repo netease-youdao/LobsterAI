@@ -55,10 +55,10 @@ test('switching an outline example to direct creation retains edits and override
 test('presentation planning retains the runtime gate without asking for a software implementation plan', () => {
   const prompt = buildPptOutlineSystemPrompt();
   expect(containsPlanModePrompt(prompt)).toBe(true);
-  expect(prompt).toContain('This turn is read-only');
-  expect(prompt).toContain('numbered slide-by-slide outline');
-  expect(prompt).toContain('An outline adjustment is not approval');
-  expect(prompt).not.toContain('Include these sections: Summary, Implementation Approach');
+  expect(prompt).toContain('本轮为只读模式');
+  expect(prompt).toContain('按页编号的逐页大纲');
+  expect(prompt).toContain('对大纲提出调整意见不代表批准生成');
+  expect(prompt).not.toContain('核心改动、验证方式');
 });
 
 test('PPT expert outline adjustments remain presentations after transient skill selection is cleared', () => {

@@ -27,6 +27,7 @@ import {
   DshHostPhase,
   DshOpsAction,
   DshPermissionPreset,
+  type DshProgressiveCapability,
   DshSearchPolicy,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
@@ -102,6 +103,7 @@ export interface DshHostSessionContext {
   customSystemPrompt?: string;
   executionMode?: string;
   permissionPreset?: DshPermissionPreset;
+  unlockedCapabilities?: DshProgressiveCapability[];
   unbind?: boolean;
 }
 

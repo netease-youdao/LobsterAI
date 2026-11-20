@@ -9,99 +9,21 @@
  *    filtered by global `skills_state` policy and per-agent `allowedSkillIds`.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { isSkillName } from '@deepseek-ai/dsh-skill';
+import {
+  assembleWorkspacePersona,
+  DEFAULT_AGENT_ID,
+  parseSkillFrontmatter,
+  readTextCached,
+} from './persona-helpers.mjs';
 import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-persona-scope';
 export const inject = ['systemPrompt', 'skills'];
 
-const DEFAULT_AGENT_ID = 'main';
 const LOBSTERAI_SKILL_RANK = 260;
-const MAX_PERSONA_FILE_BYTES = 128 * 1024;
-const MANAGED_BLOCK_RE = /<!--\s*LOBSTERAI_MANAGED_START\s*-->[\s\S]*?<!--\s*LOBSTERAI_MANAGED_END\s*-->\s*/g;
-
-const PERSONA_FILES = Object.freeze([
-  { file: 'SOUL.md', heading: 'Persona (SOUL.md)' },
-  { file: 'IDENTITY.md', heading: 'Identity (IDENTITY.md)' },
-  { file: 'USER.md', heading: 'User Profile (USER.md)' },
-  { file: 'AGENTS.md', heading: 'Agent Instructions (AGENTS.md)', stripManaged: true },
-  { file: 'MEMORY.md', heading: 'Long-Term Memory (MEMORY.md)' },
-]);
-
-/** Simple mtime-keyed file cache so synchronous prompt assembly stays fast. */
-const fileCache = new Map();
-
-function readTextCached(filePath) {
-  try {
-    if (!existsSync(filePath)) return '';
-    const stat = statSync(filePath);
-    if (!stat.isFile() || stat.size === 0) return '';
-    const cached = fileCache.get(filePath);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return cached.content;
-    }
-    const raw = readFileSync(filePath, 'utf8');
-    const content = raw.length > MAX_PERSONA_FILE_BYTES
-      ? `${raw.slice(0, MAX_PERSONA_FILE_BYTES)}\n...(truncated)`
-      : raw;
-    fileCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content });
-    return content;
-  } catch {
-    return '';
-  }
-}
-
-function sanitizeAgentId(agentId) {
-  const raw = typeof agentId === 'string' ? agentId.trim() : '';
-  if (!raw || !/^[a-zA-Z0-9_-]{1,64}$/.test(raw)) return DEFAULT_AGENT_ID;
-  return raw;
-}
-
-function assembleWorkspacePersona(workspacesDir, agentId, customSystemPrompt) {
-  const sections = [];
-  if (workspacesDir) {
-    const dir = resolve(workspacesDir, sanitizeAgentId(agentId));
-    for (const item of PERSONA_FILES) {
-      let text = readTextCached(join(dir, item.file));
-      if (item.stripManaged && text) {
-        text = text.replace(MANAGED_BLOCK_RE, '');
-      }
-      const trimmed = text.trim();
-      if (trimmed.length > 0) {
-        sections.push(`## ${item.heading}\n\n${trimmed}`);
-      }
-    }
-  }
-  if (typeof customSystemPrompt === 'string' && customSystemPrompt.trim().length > 0) {
-    sections.push(customSystemPrompt.trim());
-  }
-  return sections.join('\n\n');
-}
-
-/**
- * Parse YAML frontmatter header from a SKILL.md file (lightweight, zero-dep).
- */
-function parseSkillFrontmatter(markdown) {
-  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!match) return { meta: {}, body: markdown };
-  const [, yamlBlock, body] = match;
-  const meta = {};
-  for (const line of yamlBlock.split(/\r?\n/)) {
-    const kv = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:\s*(.*)\s*$/);
-    if (!kv) continue;
-    let value = kv[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"'))
-      || (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    meta[kv[1]] = value;
-  }
-  return { meta, body };
-}
 
 function toKebabSkillName(raw) {
   return String(raw || '')
@@ -231,6 +153,8 @@ export function apply(ctx) {
           name: locator.skillName,
           description: locator.description,
           provider: 'lobsterai-skills',
+          source: locator.filePath,
+          path: locator.filePath,
           content: body.trim(),
           invocation: {
             modelInvocable: true,

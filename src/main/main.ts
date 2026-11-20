@@ -30,7 +30,6 @@ import { buildGoalSettingMessageMetadata } from '../common/goalCommandDisplay';
 import type { OpenClawSessionPatch } from '../common/openclawSession';
 import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { buildSessionTitleFromInput } from '../common/sessionTitle';
-import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
 import {
   AgentId,
 } from '../shared/agent/constants';
@@ -302,7 +301,11 @@ import type {
 import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
-import { createRealtimeAsrSession, registerAsrIpcHandlers } from './ipcHandlers/asr';
+import {
+  createAsrRealtimeWsOriginStripper,
+  createRealtimeAsrSession,
+  registerAsrIpcHandlers,
+} from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
@@ -395,6 +398,7 @@ import {
   setCopilotTokenState,
 } from './libs/copilotTokenManager';
 import { CoworkImageOriginalStore } from './libs/coworkImageOriginalStore';
+import { normalizeCoworkSystemPrompt } from './libs/coworkSystemPrompt';
 import {
   type CoworkTempJanitor,
   createCoworkTempJanitor,
@@ -3339,14 +3343,11 @@ const refreshImSessionWorkingDirectoriesForAgent = (agentId: string): number => 
   }
 };
 
-function mergeCoworkSystemPrompt(systemPrompt?: string): string | undefined {
-  const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
-  const normalizedSystemPrompt = systemPrompt?.trim() || '';
-  if (normalizedSystemPrompt && normalizedSystemPrompt.includes(scheduledTaskPrompt)) {
-    return normalizedSystemPrompt;
-  }
-  const sections = [scheduledTaskPrompt, normalizedSystemPrompt].filter(Boolean);
-  return sections.length > 0 ? sections.join('\n\n') : undefined;
+function mergeCoworkSystemPrompt(
+  systemPrompt?: string,
+  defaultSystemPrompt?: string,
+): string | undefined {
+  return normalizeCoworkSystemPrompt(systemPrompt, defaultSystemPrompt);
 }
 
 type CoworkImageAttachmentMain = {
@@ -9401,9 +9402,9 @@ if (!gotTheLock) {
 
         const coworkStoreInstance = getCoworkStore();
         const config = coworkStoreInstance.getConfig();
-        const systemPrompt = mergeCoworkSystemPrompt(options.systemPrompt ?? config.systemPrompt);
+        const systemPrompt = mergeCoworkSystemPrompt(options.systemPrompt ?? config.systemPrompt, config.systemPrompt);
         const persistedSystemPrompt = containsPlanModePrompt(systemPrompt)
-          ? mergeCoworkSystemPrompt(config.systemPrompt)
+          ? mergeCoworkSystemPrompt(config.systemPrompt, config.systemPrompt)
           : systemPrompt;
         const imageAttachmentValidation = validateCoworkImageAttachmentsForRuntime(options.imageAttachments);
         if (imageAttachmentValidation.ok === false) {
@@ -9692,10 +9693,11 @@ if (!gotTheLock) {
         const continuationSystemPrompt = mergeCoworkSystemPrompt(
           options.systemPrompt
             ?? (hasLegacyPersistedPlanMode ? config.systemPrompt : existingSession?.systemPrompt),
+          config.systemPrompt,
         );
         if (hasLegacyPersistedPlanMode) {
           coworkStoreInstance.updateSession(options.sessionId, {
-            systemPrompt: mergeCoworkSystemPrompt(config.systemPrompt) ?? '',
+            systemPrompt: mergeCoworkSystemPrompt(config.systemPrompt, config.systemPrompt) ?? '',
           });
           console.log(
             `[Cowork] removed a legacy persisted plan mode prompt from session ${options.sessionId}.`,
@@ -13420,10 +13422,14 @@ if (!gotTheLock) {
     }
   });
 
+  const asrRealtimeWsOriginStripper = createAsrRealtimeWsOriginStripper();
   const asrDeps = {
     getAuthTokens,
     fetchWithAuth,
     getServerApiBaseUrl,
+    onRealtimeSessionCreated: (wsUrl: string, webContentsId: number, expiresInSeconds?: number) => {
+      asrRealtimeWsOriginStripper.allow(wsUrl, webContentsId, expiresInSeconds);
+    },
   };
   createRealtimeAsrSessionForIm = (options?: AsrRealtimeSessionRequest) =>
     createRealtimeAsrSession(asrDeps, options);
@@ -15181,6 +15187,7 @@ if (!gotTheLock) {
     // sees the loading UI within ~1-2 s instead of waiting for the full
     // skill bootstrap (~6-8 s previously).
     setContentSecurityPolicy();
+    asrRealtimeWsOriginStripper.attachToSession(session.defaultSession);
     registerRendererPermissionHandler({
       session: session.defaultSession,
       getMainWindow: () => mainWindow,

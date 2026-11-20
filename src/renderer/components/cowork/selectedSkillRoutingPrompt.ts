@@ -32,17 +32,10 @@ export const buildSelectedSkillRoutingPrompt = (skills: Skill[]): string | undef
   });
 
   return [
-    '## Selected skills for this turn',
-    'The user selected these skills as preferred candidates for this turn.',
-    'If one selected skill clearly applies, read its SKILL.md at <location> before using it.',
-    'If no selected skill applies, ignore this block and continue normal automatic skill routing.',
-    'If multiple selected skills could apply, choose the most specific one first.',
-    'Do not read every selected skill up front. Only read additional skills if the first selected skill explicitly references them.',
-    '<path_rules>',
-    '  Treat <location> as the canonical SKILL.md path.',
-    '  Resolve relative file references from each selected skill against its <directory>.',
-    '  Do not assume skills are under the current workspace directory.',
-    '</path_rules>',
+    '## 本轮已选技能',
+    '用户指定以下技能作为本轮优先候选：',
+    '- 若有明确适用的技能，请优先调用 `skill` 工具按 `<id>` 加载（或读取 `<location>` 处的 SKILL.md）后再执行；多选时优先最具体的技能，不要一次性预读全部技能。',
+    '- 若均不适用，可忽略本区块并按常规流程处理。技能内的相对路径请基于对应 `<directory>` 解析。',
     '',
     '<selected_skills>',
     ...skillEntries,

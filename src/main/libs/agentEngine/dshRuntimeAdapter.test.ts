@@ -5,6 +5,7 @@ import {
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
   DshPermissionPreset,
+  DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage } from '../../coworkStore';
 import type { DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from '../dsh/dshTypertClient';
@@ -16,6 +17,7 @@ import {
   type DshCoworkStorePort,
   DshRuntimeAdapter,
   isDshBackedSessionId,
+  resolveUnlockedCapabilitiesForTurn,
 } from './dshRuntimeAdapter';
 
 function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
@@ -121,9 +123,10 @@ describe('dshRuntimeAdapter helpers', () => {
       ],
     );
     expect(prefix).toContain('<previous_conversation_context>');
+    expect(prefix).toContain('[历史会话近期对话]');
     expect(prefix).toContain('Ship v2 engine');
-    expect(prefix).toContain('Hello OpenClaw');
-    expect(prefix).toContain('Hi from legacy engine');
+    expect(prefix).toContain('用户: Hello OpenClaw');
+    expect(prefix).toContain('助手: Hi from legacy engine');
   });
 });
 
@@ -140,9 +143,10 @@ describe('DshRuntimeAdapter', () => {
       ['assistant/message', { message: { content: [{ type: 'text', text: 'The report is ready' }] } }],
       ['turn/end', { reason: { kind: 'completed' } }],
     ];
+    const promptSession = vi.fn(async () => ({ accepted: true }));
     const client = {
       createSession: async () => ({ sessionId: 'native-parent' }),
-      promptSession: async () => ({ accepted: true }),
+      promptSession,
       onWaterfall: () => () => {},
       followSession: async function* () {
         for (const [seq, [type, data]] of events.entries()) yield { type: 'event', event: { type, data, seq } };
@@ -156,6 +160,9 @@ describe('DshRuntimeAdapter', () => {
     const complete = vi.fn();
     adapter.on('complete', complete);
     await adapter.startSession('parent', 'delegate');
+    expect(promptSession).toHaveBeenCalledWith(expect.objectContaining({
+      clientTimeZone: expect.any(String),
+    }));
     expect(complete).toHaveBeenCalledTimes(1);
     expect(sessions.setTask).toHaveBeenCalledWith('parent', childId, 'write a report');
     expect(messages.find(m => m.type === 'tool_result')?.metadata?.subagentRunId).toBe(childId);
@@ -873,5 +880,70 @@ describe('DshRuntimeAdapter', () => {
     expect(callOrder).toEqual(['prompt:first', 'cancel:start', 'cancel:done', 'prompt:second']);
     expect(completed).toEqual(['cw-interrupt']);
     expect(messages.some((m) => m.type === 'assistant' && m.content === 'Final answer')).toBe(true);
+  });
+
+  test('passes unlockedCapabilities only for explicitly selected messageSkillIds or browserAnnotations', async () => {
+    expect(resolveUnlockedCapabilitiesForTurn({ messageSkillIds: ['docx', 'pptx', 'article-writer'] })).toEqual([
+      DshProgressiveCapability.Word,
+      DshProgressiveCapability.Ppt,
+    ]);
+    expect(resolveUnlockedCapabilitiesForTurn({
+      browserAnnotations: [{ id: 'ann-1', pageUrl: 'https://example.com', pageTitle: 'Example', items: [] }],
+    })).toEqual([DshProgressiveCapability.Browser]);
+
+    const { store } = createInMemoryStore({
+      id: 'cw-disclosure',
+      title: 'Disclosure Test',
+      cwd: '/tmp/ws',
+      systemPrompt: '',
+      executionMode: 'local',
+      agentId: 'main',
+      claudeSessionId: null,
+      messages: [],
+    });
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-disc-1' })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    // Turn 1: `skillIds` contains all enabled skills, but no explicit `messageSkillIds` -> must NOT pre-unlock.
+    await adapter.startSession('cw-disclosure', '你好', {
+      skillIds: ['docx', 'xlsx', 'pptx', 'web-search', 'computer-use'],
+    });
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ unlockedCapabilities: expect.anything() }),
+    );
+
+    // Turn 2: explicit `messageSkillIds: ['xlsx']` + `browserAnnotations` -> pre-unlocks excel & browser.
+    await adapter.continueSession('cw-disclosure', '帮我整理表格', {
+      skillIds: ['docx', 'xlsx', 'pptx'],
+      messageSkillIds: ['xlsx'],
+      browserAnnotations: [{ id: 'ann-2', pageUrl: 'https://example.com', pageTitle: 'Example', items: [] }],
+    });
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        unlockedCapabilities: [
+          DshProgressiveCapability.Excel,
+          DshProgressiveCapability.Browser,
+        ],
+      }),
+    );
   });
 });

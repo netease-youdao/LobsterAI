@@ -38,6 +38,11 @@ const REQUIRED_DISABLED_IDS = [
   'desktop-product-telemetry',
   'product-analytics',
   'office-kit',
+  'skill-office',
+  'harness-dev-context',
+  'deliverable-file-references',
+  'schedule',
+  'mcp-resources',
   'web-deepseek-api',
 ];
 
@@ -45,6 +50,7 @@ const REQUIRED_LOBSTER_PLUGIN_IDS = [
   'lobster-model-bridge',
   'lobster-persona-scope',
   'lobster-host-tools',
+  'lobster-tool-disclosure',
   'lobster-approval-guard',
   'lobster-ops-rpc',
 ];
@@ -227,7 +233,17 @@ function checkDumpConfig(env) {
     fail('Expected system-prompt.config.includeHarnessIdentity === false');
   }
 
-  log(`--dump-config gate passed (${REQUIRED_DISABLED_IDS.length} disabled rows verified, ${REQUIRED_LOBSTER_PLUGIN_IDS.length} LobsterAI plugins verified).`);
+  const presetRegistry = byId.get('agent-preset-registry');
+  if (!presetRegistry || presetRegistry.config?.default !== 'lobsterai') {
+    fail(`Expected agent-preset-registry.config.default === "lobsterai", got ${JSON.stringify(presetRegistry?.config)}`);
+  }
+
+  const lobsterPreset = byId.get('preset-lobsterai');
+  if (!lobsterPreset || lobsterPreset.disabled === true) {
+    fail('Expected preset-lobsterai row to be present and enabled');
+  }
+
+  log(`--dump-config gate passed (${REQUIRED_DISABLED_IDS.length} disabled rows verified, ${REQUIRED_LOBSTER_PLUGIN_IDS.length} LobsterAI plugins verified, default preset=lobsterai).`);
 }
 
 function httpRequest(urlString, options = {}) {
@@ -348,15 +364,15 @@ async function checkLiveBoot(env) {
       throw new Error(`Expected 401 for unauthenticated /api/lobsterai/ops, got ${unauthRes.status}`);
     }
 
-    // 3. Verify health reports all 5 plugins ready.
+    // 3. Verify health reports all 6 LobsterAI plugins ready.
     const health = await callOps('health');
     if (!health.ok) throw new Error(`health returned ok=false: ${JSON.stringify(health)}`);
-    for (const key of ['modelBridge', 'personaScope', 'hostTools', 'approvalGuard', 'opsRpc']) {
+    for (const key of ['modelBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'approvalGuard', 'opsRpc']) {
       if (health.pluginsReady?.[key] !== true) {
         throw new Error(`Plugin "${key}" not ready: ${JSON.stringify(health.pluginsReady)}`);
       }
     }
-    log('All 5 LobsterAI Cordis plugins reported ready.');
+    log('All 6 LobsterAI Cordis plugins reported ready.');
 
     // 4. Verify syncProviders hot-registers provider and exposes it via Typert session.modelCatalog.
     const syncProv = await callOps('syncProviders', {

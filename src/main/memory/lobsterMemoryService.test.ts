@@ -98,4 +98,37 @@ describe('stripManagedAgentsSection', () => {
 
     expect(stripManagedAgentsSection(raw)).toBe('# My Custom Rules\nAlways format tables cleanly.');
   });
+
+  test('strips OpenClaw stock AGENTS.md workspace boilerplate while preserving trailing user rules', () => {
+    const stock = [
+      '# AGENTS.md - Your Workspace',
+      '',
+      'This folder is home. Treat it that way.',
+      '',
+      '## First Run',
+      'If `BOOTSTRAP.md` exists, follow it.',
+      '',
+      '## Tools',
+      'Voice storytelling: sag ElevenLabs TTS',
+      '',
+      '## Make It Yours',
+      '',
+      'This is a starting point. Add your own conventions, style, and rules as you figure out what works.',
+      '',
+      '## Related',
+      '',
+      '- [Default AGENTS.md](/reference/AGENTS.default)',
+      '- [Heartbeat](/gateway/heartbeat)',
+    ].join('\n');
+
+    expect(stripManagedAgentsSection(stock)).toBe('');
+    expect(stripManagedAgentsSection(`${stock}\n\n## 我的自定义规则\n- 回复始终带目录`)).toBe(
+      '## 我的自定义规则\n- 回复始终带目录',
+    );
+  });
+
+  test('preserves non-OpenClaw custom AGENTS.md manuals intact', () => {
+    const custom = '# AGENTS.md — 抖音带货官工作手册\n\n- 选品先看佣金率与复购率';
+    expect(stripManagedAgentsSection(custom)).toBe(custom);
+  });
 });

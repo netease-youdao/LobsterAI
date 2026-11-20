@@ -191,17 +191,24 @@ function serializeMemorySegments(segments: MemorySegment[]): string {
 }
 
 const MANAGED_BLOCK_RE = /<!--\s*LOBSTERAI_MANAGED_START\s*-->[\s\S]*?<!--\s*LOBSTERAI_MANAGED_END\s*-->\s*/g;
+const OPENCLAW_STOCK_AGENTS_RE = /^#\s+AGENTS\.md\s*-\s*Your Workspace\s*\n+This folder is home\.\s*Treat it that way\.[\s\S]*?^##\s+Make It Yours\s*\n+This is a starting point\.\s*Add your own conventions, style, and rules as you figure out what works\.(?:\s*\n+##\s+Related\s*\n+(?:-\s+\[[^\]]+\]\(\/(?:reference|concepts|automation|gateway)\/[^)]+\)\s*\n?)+)?\s*/m;
+const OPENCLAW_STOCK_TOOLS_RE = /^#\s+TOOLS\.md\s*-\s*Local Notes\s*\n+Skills define _how_ tools work\.[\s\S]*?Add whatever helps you do your job\.\s*This is your cheat sheet\.\s*/m;
 
 /**
  * Strips legacy OpenClaw managed sections (`<!-- LOBSTERAI_MANAGED_START -->...`
- * or `<!-- LobsterAI managed: ... -->` tail) from a migrated `AGENTS.md` file
- * so only user-authored instructions remain.
+ * or `<!-- LobsterAI managed: ... -->` tail) and stock OpenClaw workspace/tools
+ * boilerplate from a migrated `AGENTS.md` file so only user-authored
+ * instructions remain.
  */
 export function stripManagedAgentsSection(content: string): string {
-  const withoutBlocks = content.replace(/\r\n/g, '\n').replace(MANAGED_BLOCK_RE, '');
-  const markerIndex = withoutBlocks.indexOf(MANAGED_AGENTS_MARKER);
-  if (markerIndex < 0) return withoutBlocks.trim();
-  return withoutBlocks.slice(0, markerIndex).trim();
+  let text = content.replace(/\r\n/g, '\n').replace(MANAGED_BLOCK_RE, '');
+  const markerIndex = text.indexOf(MANAGED_AGENTS_MARKER);
+  if (markerIndex >= 0) {
+    text = text.slice(0, markerIndex);
+  }
+  text = text.replace(OPENCLAW_STOCK_AGENTS_RE, '');
+  text = text.replace(OPENCLAW_STOCK_TOOLS_RE, '');
+  return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 export function sanitizeAgentId(agentId: string): string {
