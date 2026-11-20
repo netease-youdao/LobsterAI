@@ -49,6 +49,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 const logPath = process.env.FAKE_CLIENT_LOG;
 const record = (method, params) => fs.appendFileSync(logPath, JSON.stringify({ method, params }) + '\n');
+async function requestWindowsApproval(app) {
+  if (process.env.LOBSTER_COMPUTER_USE_PLATFORM === 'win32') {
+    await globalThis.nodeRepl.createElicitation({
+      meta: { tool_params: { app }, tool_params_display: [{ value: app }] },
+    });
+  }
+}
 const windows = [
   { app: 'Notes', id: 11, pid: 101, bundleId: 'com.apple.Notes', title: 'Groceries' },
   { app: 'LobsterAI', id: 12, pid: ${'$'}{SELF_PID}, bundleId: 'com.lobsterai.app', title: 'LobsterAI' },
@@ -67,9 +74,10 @@ export class ComputerUseClient {
     if (params.app === '终端') return { app: '终端', bundleId: 'com.apple.Terminal', running: false };
     return { app: '备忘录', bundleId: 'com.apple.Notes', running: false };
   }
-  async launch_app(params) { record('launch_app', params); return { ok: true, app: '备忘录', bundleId: 'com.apple.Notes', pid: 101, windows: [windows[0]] }; }
+  async launch_app(params) { await requestWindowsApproval(params.app); record('launch_app', params); return { ok: true, app: '备忘录', bundleId: 'com.apple.Notes', pid: 101, windows: [windows[0]] }; }
   async get_window(params) { record('get_window', params); return windows[0]; }
   async get_window_state(params) {
+    await requestWindowsApproval(params.window.app);
     record('get_window_state', params);
     return {
       state_id: 's-1',
@@ -122,7 +130,7 @@ afterEach(async () => {
   }
 });
 
-function createBridgeFixture(options: { askUserUrl: string; locale?: string }): BridgeFixture {
+function createBridgeFixture(options: { askUserUrl: string; locale?: string; platform?: 'darwin' | 'win32' }): BridgeFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-cu-bridge-'));
   tempRoots.push(root);
   const scriptPath = path.join(root, 'computer-use-mcp-server.mjs');
@@ -148,7 +156,7 @@ function createBridgeFixture(options: { askUserUrl: string; locale?: string }): 
       LOBSTER_COMPUTER_USE_HOME: home,
       LOBSTER_COMPUTER_USE_HOST_INFO_URL: new URL('/host/info', options.askUserUrl).href,
       LOBSTER_COMPUTER_USE_LOCALE: options.locale ?? 'zh',
-      LOBSTER_COMPUTER_USE_PLATFORM: 'darwin',
+      LOBSTER_COMPUTER_USE_PLATFORM: options.platform ?? 'darwin',
       LOBSTER_COMPUTER_USE_SELF_APP: 'LobsterAI',
       LOBSTER_COMPUTER_USE_MCP_SDK_ROOT: resolvePackageRoot('@modelcontextprotocol/sdk')!,
       LOBSTER_COMPUTER_USE_ZOD_ROOT: resolvePackageRoot('zod')!,
@@ -165,6 +173,7 @@ async function startBridge(options: {
   answer: 'allow' | 'deny';
   hostInfoAvailable?: boolean;
   locale?: string;
+  platform?: 'darwin' | 'win32';
 }): Promise<BridgeHarness> {
   const askRequests: BridgeHarness['askRequests'] = [];
   const hostInfoSecrets: BridgeHarness['hostInfoSecrets'] = [];
@@ -197,6 +206,7 @@ async function startBridge(options: {
   const fixture = createBridgeFixture({
     askUserUrl: `http://127.0.0.1:${port}/askuser`,
     locale: options.locale,
+    platform: options.platform,
   });
 
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -272,6 +282,43 @@ async function expectCleanExit(child: ChildProcessWithoutNullStreams): Promise<v
 }
 
 const NOTES_WINDOW = { app: 'Notes', id: 11, pid: 101, bundleId: 'com.apple.Notes', title: 'Groceries' };
+
+describe('Computer Use MCP bridge (Windows approval identity)', () => {
+  test('reuses a launch approval for the same executable returned as a process ID', async () => {
+    const bridge = await startBridge({ answer: 'allow', platform: 'win32' });
+    const launched = await bridge.call('launch_app', { app: 'D:\\Apps\\Notes\\Notes.exe' });
+    const captured = await bridge.call('get_window_state', {
+      window: { app: 'process:d:/apps/notes/NOTES.exe', id: 11 },
+    });
+
+    expect(launched.isError).toBeFalsy();
+    expect(captured.isError).toBeFalsy();
+    expect(bridge.askRequests).toHaveLength(1);
+    expect(bridge.clientCalls().filter(call => call.method === 'get_window_state')).toHaveLength(1);
+  });
+
+  test('does not share approval between different paths with the same executable name', async () => {
+    const bridge = await startBridge({ answer: 'allow', platform: 'win32' });
+    await bridge.call('get_window_state', { window: { app: 'D:\\Trusted\\Notes.exe', id: 11 } });
+    await bridge.call('get_window_state', { window: { app: 'process:D:\\Other\\Notes.exe', id: 21 } });
+
+    expect(bridge.askRequests).toHaveLength(2);
+  });
+
+  test('does not let a prior grant bypass sensitive-app or self-app denial', async () => {
+    const bridge = await startBridge({ answer: 'allow', platform: 'win32' });
+    await bridge.call('get_window_state', { window: { app: 'D:\\Apps\\Notes.exe', id: 11 } });
+    const terminal = await bridge.call('get_window_state', { window: { app: 'process:C:\\Windows\\System32\\cmd.exe', id: 13 } });
+    const self = await bridge.call('get_window_state', { window: { app: 'LobsterAI', id: 12 } });
+
+    expect(terminal.isError).toBe(true);
+    expect(textOf(terminal)).toContain('blocked for safety');
+    expect(self.isError).toBe(true);
+    expect(textOf(self)).toContain('cannot operate LobsterAI itself');
+    expect(bridge.askRequests).toHaveLength(1);
+    expect(bridge.clientCalls().filter(call => call.method === 'get_window_state')).toHaveLength(1);
+  });
+});
 
 describe('Computer Use MCP bridge (macOS behavior)', () => {
   test('hides LobsterAI windows and asks once per app with a localized prompt', async () => {
