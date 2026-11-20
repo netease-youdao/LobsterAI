@@ -94,7 +94,12 @@ import {
 } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { CompanionStageController } from './companionStage';
-import { type CompanionWindowEnvironment, createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
+import {
+  type CompanionWindowEnvironment,
+  createCompanionWindow,
+  dismissCompanionPanelOnBlur,
+  onCompanionWindowReadyToShow,
+} from './companionWindow';
 import { CompanionFileDragMonitor, FileDragEvent, type FileDragMonitor, type FileDragStart } from './fileDragMonitor';
 import { CompanionFileDragProximity } from './fileDragProximity';
 import { CompanionForegroundMonitor, type ForegroundAppMonitor } from './foregroundAppMonitor';
@@ -722,7 +727,7 @@ export class DesktopCompanionManager {
           this.activeOrbDisplayId = undefined;
         }
       });
-      win.once('ready-to-show', () => {
+      onCompanionWindowReadyToShow(win, () => {
         if (this.disposing || win.isDestroyed() || !this.isPresent()) return;
         if (process.platform === 'win32') {
           const target = this.orbBounds();

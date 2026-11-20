@@ -362,6 +362,30 @@ describe('gateway readiness', () => {
     },
   );
 
+  test('shows the orb and reports Open once after did-finish-load even when ready-to-show never fires', () => {
+    vi.useFakeTimers();
+    try {
+      values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+      create();
+      expect(orb().isVisible()).toBe(false);
+
+      orb().webContents.emit('did-finish-load');
+      vi.advanceTimersByTime(250);
+      expect(orb().isVisible()).toBe(true);
+      const openReports = reportAnalytics.mock.calls.filter(([event]) =>
+        event.surface === DesktopCompanionSurface.Mascot && event.interactionType === Interaction.Open);
+      expect(openReports).toHaveLength(1);
+
+      // A late ready-to-show must not report a duplicate open.
+      orb().emit('ready-to-show');
+      const openReportsAfterLateEvent = reportAnalytics.mock.calls.filter(([event]) =>
+        event.surface === DesktopCompanionSurface.Mascot && event.interactionType === Interaction.Open);
+      expect(openReportsAfterLateEvent).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('defers a shortcut opening until ready, including when the orb is disabled', () => {
     create(undefined, OpenClawEnginePhase.Starting);
     manager.togglePanel(AnalyticsSource.Shortcut);

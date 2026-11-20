@@ -177,10 +177,14 @@ import { createOfficeBridges } from './office/officePreloadBridges';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
-// Every page starts at 100%. Setting the zoom from the page also makes it a per-window zoom (see
-// installMainWindowZoom): Chromium then neither saves it across restarts nor shares it with other windows
-// of the same origin, which all windows are in development.
-webFrame.setZoomFactor(1);
+// Apply per-window zoom only when the main process asks (after initial paint for the main window).
+// Calling webFrame.setZoomFactor() unconditionally during preload on a hidden (`show: false`)
+// window triggers Electron #51972 (40.x–43.x), suppressing `ready-to-show` permanently.
+ipcRenderer.on(WindowIpcChannel.ApplyZoom, (_event, zoomFactor: unknown) => {
+  if (typeof zoomFactor === 'number' && Number.isFinite(zoomFactor) && zoomFactor > 0) {
+    webFrame.setZoomFactor(zoomFactor);
+  }
+});
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {

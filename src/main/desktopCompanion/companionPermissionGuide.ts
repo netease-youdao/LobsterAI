@@ -20,7 +20,7 @@ import {
 } from '../../shared/desktopCompanion/permissionGuide';
 import { MediaAccessStatus } from '../../shared/permissions/constants';
 import { extractIcon } from '../shellApps';
-import { dismissCompanionPanelOnBlur } from './companionWindow';
+import { dismissCompanionPanelOnBlur, onCompanionWindowReadyToShow } from './companionWindow';
 import { parseRunningApplication } from './foregroundAppMonitor';
 
 const execFileAsync = promisify(execFile);
@@ -367,7 +367,7 @@ export class CompanionPermissionGuideController {
   private createWindow(bounds: Rectangle): BrowserWindow {
     const win = this.host.createWindow(bounds);
     this.window = win;
-    win.once('ready-to-show', () => {
+    onCompanionWindowReadyToShow(win, () => {
       if (!this.wantVisible || this.window !== win || win.isDestroyed()) return;
       if (this.stage === Stage.Intro) this.showIntro(win);
       else win.showInactive();

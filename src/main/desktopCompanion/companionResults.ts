@@ -10,7 +10,7 @@ import {
   normalizeCompanionTaskRecords,
 } from '../../shared/desktopCompanion/results';
 import type { CompanionAnalytics } from './companionAnalytics';
-import { dismissCompanionPanelOnBlur } from './companionWindow';
+import { dismissCompanionPanelOnBlur, onCompanionWindowReadyToShow } from './companionWindow';
 
 interface ResultHost {
   analytics?: CompanionAnalytics;
@@ -152,7 +152,7 @@ export class CompanionResultsController {
     if (!this.browserWindow) {
       const win = this.host.createWindow();
       this.window = win;
-      win.once('ready-to-show', () => { if (this.visible && !win.isDestroyed()) this.reveal(win); });
+      onCompanionWindowReadyToShow(win, () => { if (this.visible && !win.isDestroyed()) this.reveal(win); });
       dismissCompanionPanelOnBlur(win, () => { if (!this.pinned && !this.host.isCapturing()) this.hide(); },
         () => this.focusOnShow && !this.host.isContextMenuOpen());
       win.on('will-move', () => { this.moved = true; this.pinned = true; this.host.publish(); });
