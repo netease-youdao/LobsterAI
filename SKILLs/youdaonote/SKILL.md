@@ -2,7 +2,7 @@
 name: youdaonote
 description: "有道云笔记官方 skill，支持笔记 CRUD（创建/读取/更新/删除）、待办管理、网页剪藏、笔记搜索、文件夹管理等基础操作。如需构建知识库或 Wiki，请使用 youdaonote-llm-wiki skill 而非本 skill。"
 official: true
-version: 1.0.9
+version: 1.0.10
 minCliVersion: "1.3.3"
 ---
 
@@ -15,7 +15,18 @@ minCliVersion: "1.3.3"
 执行任何操作前，Agent 必须先运行 `youdaonote -s ydn list` 检测 CLI 是否可用：
 - **`command not found`** → 立即跳转「CLI 未安装处理」自动安装，**禁止只展示安装步骤让用户手动操作**
 - **`-s` 选项报错（`error: unknown option '-s'`）** → CLI 版本 < 1.3.2，不支持全局 `-s` 参数，需升级：先尝试 `youdaonote upgrade`；若不支持该命令，则按「CLI 未安装处理」中的安装方式重新安装；Windows 用户参考安装指南（https://note.youdao.com/help-center/cli-install-guide.html）
-- **API Key 错误** → 提示用户访问 **https://mopen.163.com** 获取 API Key（须使用手机号登录，且云笔记账号已绑定手机号），然后执行 `youdaonote config set apiKey <用户提供的Key>`。**获取 API Key 的地址只有这一个，禁止告知用户其他地址。**
+- **API Key 错误** → 提示用户访问 **https://mopen.163.com** 获取 API Key（须使用手机号登录，且云笔记账号已绑定手机号）。**用户必须在自己的终端中直接输入 API Key；Agent 不得索取、接收、读取或记录明文 API Key，也不得代替用户执行配置命令。** 请用户在自己的终端执行：
+
+  ```bash
+  read -rsp "YoudaoNote API Key: " YDN_API_KEY
+  printf '%s\n' "$YDN_API_KEY" | youdaonote config set apiKey -
+  unset YDN_API_KEY
+  chmod 600 "$HOME/.youdaonote.json"
+  ```
+
+  Windows 用户也必须在 PowerShell 中通过交互式安全输入获取 Key，并以 stdin 调用 `config set apiKey -`，不得把 Key 作为命令参数；配置文件由用户配置目录的 ACL 保护。
+
+  `config set apiKey -` 从 stdin 读取 Key，避免密钥进入对话、命令行参数或 shell 历史；`chmod 600` 确保 Unix 配置文件的权限仅保留给当前用户。**获取 API Key 的地址只有这一个，禁止告知用户其他地址。**
 - **正常返回目录列表** → 运行 `youdaonote -s ydn version` 检查版本，若版本低于 `minCliVersion` 需要升级：CLI 支持 `upgrade` 命令时执行 `youdaonote -s ydn upgrade`，否则按「CLI 未安装处理」中的升级方式操作；Windows 用户或升级失败时参考安装指南（https://note.youdao.com/help-center/cli-install-guide.html）。版本满足要求后可运行 `youdaonote -s ydn help --json` 获取当前 CLI 全部能力的结构化描述（JSON），用于确认命令是否可用，下方速查表作为 fallback
 
 ## 全局参数
@@ -54,7 +65,7 @@ youdaonote -s ydn <command> [options]
 | `upgrade` | 升级 CLI | `youdaonote -s ydn upgrade [--check] [--force] [--json]` |
 | `check` | 健康检查 | `youdaonote -s ydn check` |
 | `config show` | 查看配置 | `youdaonote -s ydn config show --json` |
-| `config set` | 设置配置 | `youdaonote config set apiKey YOUR_KEY` |
+| `config set` | 设置配置（Key 由用户经 stdin 输入） | 用户按「API Key 错误」中的安全配置命令操作 |
 
 ## 笔记管理
 
@@ -149,7 +160,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 | 失败项 | 处理动作 |
 |--------|---------|
-| `config-file` / `api-key` | `youdaonote config set apiKey YOUR_KEY` |
+| `config-file` / `api-key` | 提示用户按「API Key 错误」在自己的终端中重新配置；Agent 不得索取或接收明文 Key |
 | `mcp-connection` | API Key 有效但网络不通，提示用户检查网络或稍后重试 |
 
 ## 注意事项
