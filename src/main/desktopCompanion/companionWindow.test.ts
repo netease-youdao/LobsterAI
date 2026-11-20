@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { DesktopCompanionSurface } from '../../shared/desktopCompanion/constants';
-import { createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
+import { createCompanionWindow, dismissCompanionPanelOnBlur, onCompanionWindowReadyToShow } from './companionWindow';
 
 const { windowOptions, windowInstances } = vi.hoisted(() => ({
   windowOptions: [] as BrowserWindowConstructorOptions[],
@@ -264,5 +264,55 @@ describe('companion window creation', () => {
     } finally {
       Object.defineProperty(process, 'platform', platform);
     }
+  });
+});
+
+describe('onCompanionWindowReadyToShow', () => {
+  const createMockWindow = () => Object.assign(new EventEmitter(), {
+    destroyed: false,
+    webContents: new EventEmitter(),
+    isDestroyed() { return this.destroyed; },
+  });
+
+  test('runs immediately on ready-to-show and cancels any pending did-finish-load fallback', () => {
+    const target = createMockWindow();
+    const onReady = vi.fn();
+    onCompanionWindowReadyToShow(target as unknown as BrowserWindow, onReady, 250);
+
+    target.webContents.emit('did-finish-load');
+    target.emit('ready-to-show');
+    expect(onReady).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1_000);
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  test('falls back after did-finish-load when ready-to-show is dropped, without firing twice later', () => {
+    const target = createMockWindow();
+    const onReady = vi.fn();
+    onCompanionWindowReadyToShow(target as unknown as BrowserWindow, onReady, 250);
+
+    target.webContents.emit('did-finish-load');
+    vi.advanceTimersByTime(249);
+    expect(onReady).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onReady).toHaveBeenCalledOnce();
+
+    target.emit('ready-to-show');
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  test('cancels fallback when the window closes before showing', () => {
+    const target = createMockWindow();
+    const onReady = vi.fn();
+    onCompanionWindowReadyToShow(target as unknown as BrowserWindow, onReady, 250);
+
+    target.webContents.emit('did-finish-load');
+    target.destroyed = true;
+    target.emit('closed');
+
+    vi.advanceTimersByTime(1_000);
+    expect(onReady).not.toHaveBeenCalled();
   });
 });
