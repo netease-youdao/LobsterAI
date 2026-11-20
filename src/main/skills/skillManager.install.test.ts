@@ -134,6 +134,24 @@ describe('installing a skill whose SKILL.md sits at the archive root', () => {
     expect(installedSkillDirs()).toEqual(['skill-vetter']);
   });
 
+  test('importing a local zip without metadata twice does not create a duplicate', async () => {
+    // #776: local zips carry no _meta.json, so identical content must count as the same skill.
+    const zipPath = await writeZip('data-tools.zip', { 'SKILL.md': '# Data tools\n' });
+
+    await manager.downloadSkill(zipPath);
+    const second = await manager.downloadSkill(zipPath);
+
+    expect(second.success).toBe(true);
+    expect(installedSkillDirs()).toEqual(['data-tools']);
+  });
+
+  test('a local zip with different content but the same name still gets a suffix', async () => {
+    await manager.downloadSkill(await writeZip('data-tools.zip', { 'SKILL.md': '# Data tools\n' }));
+    await manager.downloadSkill(await writeZip('data-tools.zip', { 'SKILL.md': '# Data tools v2\n' }));
+
+    expect(installedSkillDirs()).toEqual(['data-tools', 'data-tools-1']);
+  });
+
   test('a different release with the same slug still gets a suffix', async () => {
     await manager.downloadSkill(await writeZip('old.zip', rootLevelSkillFiles()));
     await manager.downloadSkill(await writeZip('new.zip', rootLevelSkillFiles({ ...release, version: '1.0.1' })));
