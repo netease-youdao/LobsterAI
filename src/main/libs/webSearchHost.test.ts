@@ -40,7 +40,11 @@ const createFakePage = (options: {
 
 const createHost = (
   page: WebSearchPage,
-  overrides: { displayMode?: BrowserDisplayMode; isAllowedUrl?: (url: string) => boolean } = {},
+  overrides: {
+    displayMode?: BrowserDisplayMode;
+    isAllowedUrl?: (url: string) => boolean;
+    isSkillEnabled?: () => boolean;
+  } = {},
 ) => {
   const createPage = vi.fn(() => page);
   const context = {
@@ -51,6 +55,7 @@ const createHost = (
   const host = new WebSearchHost({
     getBrowserConfig: () => ({ displayMode: overrides.displayMode ?? BrowserDisplayMode.InApp }),
     getPageContext: () => context,
+    isSkillEnabled: overrides.isSkillEnabled,
     createPage,
   });
   return { host, createPage };
@@ -192,5 +197,28 @@ describe('WebSearchHost', () => {
     await expect(host.handleRequest({ op: WebSearchPageOp.Text }))
       .resolves.toEqual({ success: true, data: { text: 'page text' } });
     host.dispose();
+  });
+
+  test('refuses status and search and disposes the hidden page when web-search skill is disabled', async () => {
+    let enabled = true;
+    const { page } = createFakePage({ results: [{ title: 'Ok', url: 'https://ok.example/' }] });
+    const { host, createPage } = createHost(page, { isSkillEnabled: () => enabled });
+
+    await expect(host.handleRequest({ op: WebSearchPageOp.Search, engine: WebSearchEngine.Bing, query: 'hi' }))
+      .resolves.toMatchObject({ success: true });
+    expect(createPage).toHaveBeenCalledTimes(1);
+
+    enabled = false;
+    await expect(host.handleRequest({ op: WebSearchPageOp.Status })).resolves.toMatchObject({
+      success: false,
+      code: WebSearchPageErrorCode.SkillDisabled,
+    });
+    expect(page.destroy).toHaveBeenCalledTimes(1);
+
+    await expect(host.handleRequest({ op: WebSearchPageOp.Search, engine: WebSearchEngine.Bing, query: 'hi' }))
+      .resolves.toMatchObject({
+        success: false,
+        code: WebSearchPageErrorCode.SkillDisabled,
+      });
   });
 });

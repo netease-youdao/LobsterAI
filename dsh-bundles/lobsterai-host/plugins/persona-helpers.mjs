@@ -10,8 +10,17 @@ import { dirname, join, resolve } from 'node:path';
 export const DEFAULT_AGENT_ID = 'main';
 export const LOBSTERAI_SKILL_RANK = 260;
 export const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const WEB_SEARCH_SKILL_ID = 'web-search';
 export const MAX_PERSONA_FILE_BYTES = 128 * 1024;
 export const MAX_INLINE_MEMORY_CHARS = 3_000;
+
+export const WEB_SEARCH_ROUTING_GUIDANCE = [
+  'When you need live web search:',
+  '- If a dedicated search MCP tool (such as Tavily) is available and requested or suitable, prefer that MCP search tool.',
+  '- Otherwise use the LobsterAI `web-search` skill (`bash "$SKILLS_ROOT/web-search/scripts/search.sh" "<query>" [max_results]`, or `bash "$env:SKILLS_ROOT/web-search/scripts/search.sh" "<query>" [max_results]` in Windows PowerShell).',
+  '- Use `web_fetch` only to read a specific known URL, not as a substitute for search engines.',
+  '- Never claim you searched the web unless you actually ran a search tool or the `web-search` skill.',
+].join('\n');
 
 const MEMORY_TRUNCATED_HINT = '\n\n（长期记忆较长，以上仅展示前段内容；如需检索完整历史记忆或每日笔记，请调用 `lobster_memory_search` / `lobster_memory_get`。）';
 
@@ -241,6 +250,41 @@ function matchesAnyIdentifier(set, identifiers) {
     if (set.has(id)) return true;
   }
   return false;
+}
+
+/**
+ * Determine whether a LobsterAI skill is installed and enabled for the current
+ * session (respecting global skill toggles and per-agent allowlists).
+ *
+ * @param {string} skillId
+ * @param {readonly string[]} rootDirs
+ * @param {{ enabledIds?: Set<string> | null, disabledIds?: Set<string> }} policy
+ * @param {Set<string> | null | undefined} allowedSkillIds
+ * @returns {boolean}
+ */
+export function isSkillEnabledForSession(skillId, rootDirs, policy, allowedSkillIds) {
+  if (!skillId) return false;
+  if (policy?.disabledIds?.has(skillId)) return false;
+  if (policy?.enabledIds instanceof Set && !policy.enabledIds.has(skillId)) return false;
+  if (allowedSkillIds instanceof Set && !allowedSkillIds.has(skillId)) return false;
+  if (!Array.isArray(rootDirs) || rootDirs.length === 0) return false;
+  for (const rootDir of rootDirs) {
+    if (typeof rootDir !== 'string' || rootDir.length === 0) continue;
+    if (existsSync(join(rootDir, skillId, 'SKILL.md'))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Return concise web-search routing guidance when the `web-search` skill is
+ * enabled for the current session, or empty string when disabled.
+ */
+export function buildWebSearchRoutingGuidance(rootDirs, policy, allowedSkillIds) {
+  return isSkillEnabledForSession(WEB_SEARCH_SKILL_ID, rootDirs, policy, allowedSkillIds)
+    ? WEB_SEARCH_ROUTING_GUIDANCE
+    : '';
 }
 
 function findProjectRootForSkills(cwd) {

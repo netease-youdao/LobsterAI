@@ -125,3 +125,32 @@ describe('stopWebSearchService', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('web-search skill enabled toggle enforcement', () => {
+  test('skips starting web-search bridge when resolver reports disabled', async () => {
+    const manager = new SkillServiceManager();
+    manager.setWebSearchEnabledResolver(() => false);
+    const startSpy = vi.spyOn(
+      manager as unknown as { startWebSearchServiceProcess: (skillPath: string) => Promise<void> },
+      'startWebSearchServiceProcess',
+    ).mockResolvedValue();
+
+    await manager.startWebSearchService();
+
+    expect(manager.isWebSearchSkillEnabled()).toBe(false);
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  test('syncWebSearchSkillEnabled stops when disabled and starts when re-enabled', async () => {
+    const manager = new SkillServiceManager();
+    const stopSpy = vi.spyOn(manager, 'stopWebSearchService').mockResolvedValue();
+    const startSpy = vi.spyOn(manager, 'startWebSearchService').mockResolvedValue();
+
+    await manager.syncWebSearchSkillEnabled(false);
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).not.toHaveBeenCalled();
+
+    await manager.syncWebSearchSkillEnabled(true);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+  });
+});

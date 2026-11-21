@@ -33,12 +33,14 @@ import {
   DshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import { McpIpcChannel } from '../../../shared/mcp/constants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshChannelsBridge';
 import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
   backfillLegacyScheduledTasksFromBackup,
+  backfillLegacyTavilyFromBackup,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -69,6 +71,7 @@ import {
   type DshHostAgentSpec,
   DshHostManager,
   type DshHostStatus,
+  type DshHostWebAccessPolicy,
   resolveBundledDshPaths,
 } from './dshHostManager';
 import {
@@ -99,6 +102,7 @@ export interface DshBootstrapSyncInput {
     extraDirs?: string[];
     skillsDir?: string;
   };
+  webAccessPolicy?: DshHostWebAccessPolicy;
   agents?: DshHostAgentSpec[];
   imInstances?: Array<{
     platform: string;
@@ -527,18 +531,33 @@ export class DshBootstrap {
       return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
     });
 
+    const tavilyBackfillPromise = backfillLegacyTavilyFromBackup({
+      userDataDir: this.options.userDataDir,
+      db: this.options.db,
+    }).catch((error) => {
+      console.warn('[MigrationV2] legacy Tavily MCP backfill failed:', error);
+      return { status: 'failed' as const, migrated: false };
+    });
+
     await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
     await this.hostManager.start();
     await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
       console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
     });
 
-    const backfill = await cronBackfillPromise;
+    const [backfill, tavilyBackfill] = await Promise.all([
+      cronBackfillPromise,
+      tavilyBackfillPromise,
+    ]);
     if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
       console.log(
         `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
       );
       this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+    }
+    if (tavilyBackfill.migrated) {
+      console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');
+      this.broadcastScheduledTaskEvent(McpIpcChannel.Changed);
     }
 
     this.scheduler.start();
@@ -582,6 +601,9 @@ export class DshBootstrap {
       );
       await this.hostManager.syncMcpServers(servers);
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
+      if (input.webAccessPolicy) {
+        await this.hostManager.syncWebAccessPolicy(input.webAccessPolicy);
+      }
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);
       }

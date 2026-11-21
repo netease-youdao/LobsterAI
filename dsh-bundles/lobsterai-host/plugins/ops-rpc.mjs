@@ -22,6 +22,7 @@ import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { getHostState } from './shared-state.mjs';
+import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
 
 export const name = 'lobster-ops-rpc';
 export const inject = ['connection'];
@@ -489,6 +490,28 @@ export function apply(ctx) {
             }
             const result = await state.syncHostTools(payload);
             return jsonResponse({ ok: true, result });
+          }
+
+          case 'syncWebAccessPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const validSearchPolicies = new Set(Object.values(DSH_SEARCH_POLICY));
+            state.webAccessPolicy = {
+              webFetchEnabled: p.webFetchEnabled !== false,
+              blockedHostnames: normalizeHostnamePolicyList(p.blockedHostnames),
+              allowedHostnames: normalizeHostnamePolicyList(p.allowedHostnames),
+            };
+            if (typeof p.searchPolicy === 'string' && validSearchPolicies.has(p.searchPolicy)) {
+              state.searchPolicy = p.searchPolicy;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+                blockedHostnamesCount: state.webAccessPolicy.blockedHostnames.length,
+                allowedHostnamesCount: state.webAccessPolicy.allowedHostnames.length,
+                searchPolicy: state.searchPolicy,
+              },
+            });
           }
 
           case 'deleteSessionFiles': {

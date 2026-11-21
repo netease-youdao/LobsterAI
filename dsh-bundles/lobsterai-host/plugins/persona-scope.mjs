@@ -12,6 +12,7 @@
 import { isSkillName } from '@deepseek-ai/dsh-skill';
 import {
   assembleWorkspacePersona,
+  buildWebSearchRoutingGuidance,
   DEFAULT_AGENT_ID,
   discoverLobsterSkills,
   parseSkillFrontmatter,
@@ -41,8 +42,16 @@ export function apply(ctx) {
         ? bound.customSystemPrompt
         : '';
       const persona = assembleWorkspacePersona(state.workspacesDir, agentId, customSystemPrompt);
+      const allowedSkillIds = bound && Array.isArray(bound.allowedSkillIds)
+        ? new Set(bound.allowedSkillIds.filter((s) => typeof s === 'string'))
+        : null;
+      const roots = [
+        ...(state.skillsDir ? [state.skillsDir] : []),
+        ...state.skillsPolicy.extraDirs,
+      ];
+      const webSearchGuidance = buildWebSearchRoutingGuidance(roots, state.skillsPolicy, allowedSkillIds);
       const install = 'For requests to install a local or attached skill into My Skills, use lobster_skill_install. Its inspect action reports this instance’s actual skill root and install performs desktop security review and registration.';
-      return [persona, install].filter(Boolean).join('\n\n');
+      return [persona, webSearchGuidance, install].filter(Boolean).join('\n\n');
     },
   });
 

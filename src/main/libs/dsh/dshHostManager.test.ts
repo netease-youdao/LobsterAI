@@ -134,6 +134,10 @@ describe('DshHostManager', () => {
     const provRes = await manager.syncProviders({ providers: [] });
     const mcpRes = await manager.syncMcpServers([]);
     const skillRes = await manager.syncSkillsPolicy({ disabledIds: ['foo'] });
+    const webAccessRes = await manager.syncWebAccessPolicy({
+      webFetchEnabled: false,
+      blockedHostnames: ['blocked.example.com'],
+    });
     const toolsRes = await manager.syncHostTools([]);
     const agentsRes = await manager.syncAgents([]);
     const bindingsRes = await manager.syncSubagentBindings([], { replace: true });
@@ -141,14 +145,21 @@ describe('DshHostManager', () => {
     expect(provRes).toEqual({ deferred: true });
     expect(mcpRes).toEqual({ deferred: true });
     expect(skillRes).toEqual({ deferred: true });
+    expect(webAccessRes).toEqual({ deferred: true });
     expect(toolsRes).toEqual({ deferred: true });
     expect(agentsRes).toEqual({ deferred: true });
     expect(bindingsRes).toEqual({ deferred: true });
   });
 
-  test('buildIsolatedDshChildEnv strips inherited native DSH_* vars and isolates home, agents-home, and pnpm store', () => {
+  test('buildIsolatedDshChildEnv strips inherited native DSH_* & DEEPSEEK_API_KEY vars and exposes skill/node-shim env', () => {
     const temp = createTempDir();
     const dshHomeDir = path.join(temp, 'userData', 'dsh-profile');
+    const nodeShimDir = path.join(temp, 'userData', 'cowork', 'bin');
+    fs.mkdirSync(nodeShimDir, { recursive: true });
+    const skillsDir = path.join(temp, 'userData', 'SKILLs');
+    const bridgeFile = path.join(temp, 'userData', 'web-search-bridge.json');
+    const npmBinDir = path.join(temp, 'npm', 'bin');
+
     const env = buildIsolatedDshChildEnv({
       baseEnv: {
         PATH: '/usr/bin',
@@ -156,6 +167,8 @@ describe('DshHostManager', () => {
         DSH_AGENTS_HOME: '/Users/alice/.agents',
         DSH_BUNDLED_SKILL_DIR: '/opt/native-dsh/skills',
         DSH_PROFILE: 'desktop',
+        DEEPSEEK_API_KEY: 'sk-ambient-leak',
+        deepseek_api_key: 'sk-ambient-leak-lower',
         npm_config_store_dir: '/Users/alice/.local/share/pnpm/store',
         npm_config_cache: '/Users/alice/.npm',
         HOME: '/Users/alice',
@@ -164,9 +177,13 @@ describe('DshHostManager', () => {
       bridgeUrl: 'http://127.0.0.1:41234',
       bridgeSecret: 'secret',
       workspacesDir: path.join(temp, 'userData', 'workspaces'),
-      skillsDir: path.join(temp, 'userData', 'SKILLs'),
+      skillsDir,
       searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
       runtimeDir: path.join(temp, 'runtime'),
+      executablePath: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      webSearchBridgeFile: bridgeFile,
+      nodeShimDir,
+      npmBinDir,
     });
 
     expect(env.DSH_HOME).toBe(dshHomeDir);
@@ -174,12 +191,18 @@ describe('DshHostManager', () => {
     expect(env.DSH_TELEMETRY_DISABLED).toBe('1');
     expect(env.DSH_BUNDLED_SKILL_DIR).toBeUndefined();
     expect(env.DSH_PROFILE).toBeUndefined();
+    expect(env.DEEPSEEK_API_KEY).toBeUndefined();
+    expect(env.deepseek_api_key).toBeUndefined();
+    expect(env.SKILLS_ROOT).toBe(skillsDir.replace(/\\/g, '/'));
+    expect(env.LOBSTERAI_SKILLS_ROOT).toBe(skillsDir.replace(/\\/g, '/'));
+    expect(env.LOBSTERAI_ELECTRON_PATH).toBe('/Applications/LobsterAI.app/Contents/MacOS/LobsterAI');
+    expect(env.LOBSTERAI_WEB_SEARCH_BRIDGE_FILE).toBe(bridgeFile);
+    expect(env.LOBSTERAI_NPM_BIN_DIR).toBe(npmBinDir);
+    expect(env.PATH?.split(path.delimiter)[0]).toBe(nodeShimDir);
     expect(env.npm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
     expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
     expect(env.HOME).toBe('/Users/alice');
-    expect(env.SKILLS_ROOT).toBe(path.join(temp, 'userData', 'SKILLs'));
-    expect(env.LOBSTERAI_SKILLS_ROOT).toBe(path.join(temp, 'userData', 'SKILLs'));
-    expect(env[DshHostBundleEnvVar.SkillsDir]).toBe(path.join(temp, 'userData', 'SKILLs'));
+    expect(env[DshHostBundleEnvVar.SkillsDir]).toBe(skillsDir);
   });
 
   test('buildIsolatedDshChildEnv injects skill runtime vars, preserves TZ, and merges runtime PATH dirs without leaking DSH_*', () => {

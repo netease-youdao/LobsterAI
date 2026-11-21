@@ -88,6 +88,7 @@ export const DshOpsAction = {
   BindSessionContext: 'bindSessionContext',
   DeleteSessionFiles: 'deleteSessionFiles',
   SyncHostTools: 'syncHostTools',
+  SyncWebAccessPolicy: 'syncWebAccessPolicy',
   SetPermissionPreset: 'setPermissionPreset',
 } as const;
 export type DshOpsAction = typeof DshOpsAction[keyof typeof DshOpsAction];

@@ -39,6 +39,7 @@ import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
+  MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
   type MigrationV2Report,
@@ -61,11 +62,25 @@ import {
 import { migrateLegacyConversationImages } from './legacyConversationImages';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
+  type ExtractedLegacyTavilyConfig,
+  extractLegacyTavilyConfig,
+  LegacyTavilySource,
+  type LegacyUserPluginRow,
+  migrateLegacyTavilyPluginToMcp,
+} from './legacyTavilyMigration';
+import {
   collectDirectoryTarEntries,
   extractMatchingEntriesFromTarGz,
   type TarEntryInput,
   writeTarGzArchive,
 } from './tarGzUtil';
+
+export {
+  type ExtractedLegacyTavilyConfig,
+  extractLegacyTavilyConfig,
+  LegacyTavilySource,
+  migrateLegacyTavilyPluginToMcp,
+};
 
 export interface RunLegacyOpenClawMigrationOptions {
   /** Electron userData root directory. */
@@ -1084,6 +1099,145 @@ export async function backfillLegacyScheduledTasksFromBackup(options: {
   }
 }
 
+function findIncompatibleModulesArchivePath(userDataDir: string, db: Database.Database): string | null {
+  const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+  if (rawReport) {
+    try {
+      const report = JSON.parse(rawReport) as MigrationV2Report;
+      if (report?.incompatibleArchivePath && fs.existsSync(report.incompatibleArchivePath)) {
+        return report.incompatibleArchivePath;
+      }
+    } catch {
+      // fall through to directory scan
+    }
+  }
+
+  const backupsRoot = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME);
+  if (!fs.existsSync(backupsRoot)) return null;
+  try {
+    const dirs = fs
+      .readdirSync(backupsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+      .reverse();
+    for (const dirName of dirs) {
+      const candidate = path.join(backupsRoot, dirName, 'incompatible-modules-backup.tar.gz');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isTavilyMigrationArchiveEntry(entryPath: string): boolean {
+  const normalized = entryPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return (
+    normalized === 'sqlite/user_plugins.json'
+    || normalized === 'openclaw-config/openclaw.user.json'
+    || normalized === 'openclaw-config/openclaw.json'
+  );
+}
+
+export interface LegacyTavilyBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  migrated: boolean;
+  error?: string;
+}
+
+/**
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before legacy plugin-based Tavily config extraction landed.
+ */
+export async function backfillLegacyTavilyFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyTavilyBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_TAVILY_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', migrated: false };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', migrated: false };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', migrated: false };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds.
+  }
+
+  const archivePath = findIncompatibleModulesArchivePath(userDataDir, db);
+  const tmpDir = archivePath ? fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-tavily-backfill-')) : null;
+
+  try {
+    let archivedUserPlugins: LegacyUserPluginRow[] | undefined;
+    let archivedOpenclawUserConfig: Record<string, unknown> | null = null;
+    let archivedOpenclawConfig: Record<string, unknown> | null = null;
+
+    if (archivePath && tmpDir) {
+      await extractMatchingEntriesFromTarGz(archivePath, tmpDir, isTavilyMigrationArchiveEntry);
+      const pluginsJson = safeReadJson(path.join(tmpDir, 'sqlite', 'user_plugins.json'));
+      if (Array.isArray(pluginsJson)) {
+        archivedUserPlugins = pluginsJson as LegacyUserPluginRow[];
+      }
+      const userCfg = safeReadJson(path.join(tmpDir, 'openclaw-config', 'openclaw.user.json'));
+      if (userCfg && typeof userCfg === 'object' && !Array.isArray(userCfg)) {
+        archivedOpenclawUserConfig = userCfg as Record<string, unknown>;
+      }
+      const mainCfg = safeReadJson(path.join(tmpDir, 'openclaw-config', 'openclaw.json'));
+      if (mainCfg && typeof mainCfg === 'object' && !Array.isArray(mainCfg)) {
+        archivedOpenclawConfig = mainCfg as Record<string, unknown>;
+      }
+    }
+
+    const res = migrateLegacyTavilyPluginToMcp({
+      db,
+      userPluginsOverride: archivedUserPlugins,
+      openclawUserConfigOverride: archivedOpenclawUserConfig,
+      openclawConfigOverride: archivedOpenclawConfig,
+      nowMs: now().getTime(),
+    });
+
+    setKv(
+      db,
+      MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+      JSON.stringify({
+        completedAt: now().toISOString(),
+        migrated: res.migrated,
+        ...(res.source ? { source: res.source } : {}),
+        ...(res.skippedReason ? { skippedReason: res.skippedReason } : {}),
+      }),
+    );
+
+    return { status: 'completed', migrated: res.migrated };
+  } catch (error) {
+    return {
+      status: 'failed',
+      migrated: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+}
+
 /**
  * Copy legacy `workspace-*` persona & memory files out of OpenClaw's state dir
  * into engine-independent `<userData>/workspaces/<agentId>/`, stripping the
@@ -1337,6 +1491,7 @@ export function runLegacyOpenClawMigration(
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(db, MIGRATION_V2_TAVILY_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1437,6 +1592,16 @@ export function runLegacyOpenClawMigration(
           mcpLaunchCachesCleared = res.changes;
         }
       }
+
+      // Migrate legacy plugin/search-based Tavily config into SQLite `mcp_servers`
+      // (`npx -y tavily-mcp@latest`, preserving API key & enabled state) if no
+      // Tavily MCP server already exists.
+      const tavilyMigration = migrateLegacyTavilyPluginToMcp({
+        db,
+        openclawStateDir,
+        nowMs: now().getTime(),
+      });
+      const tavilyMcpMigrated = tavilyMigration.migrated ? 1 : 0;
 
       // Inspect Remote MCP OAuth servers needing reauth after migration.
       if (tableExists(db, 'mcp_servers')) {
@@ -1618,6 +1783,7 @@ export function runLegacyOpenClawMigration(
           imAllowListsMigrated,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
+          tavilyMcpMigrated,
           disposableBytesFreed,
         },
         archivedModules,
@@ -1635,6 +1801,16 @@ export function runLegacyOpenClawMigration(
             completedAt: report.migratedAt,
             tasksImported: scheduledTasksMigrated,
             runsImported: scheduledTaskRunsMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            migrated: tavilyMigration.migrated,
+            ...(tavilyMigration.source ? { source: tavilyMigration.source } : {}),
+            ...(tavilyMigration.skippedReason ? { skippedReason: tavilyMigration.skippedReason } : {}),
           }),
         );
       });

@@ -84,6 +84,7 @@ import {
   BrowserNetworkMode,
   BrowserRuntimeProfile,
   type BrowserWebAccessConfig,
+  normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
@@ -2434,11 +2435,20 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
   return agentBrowserHost;
 };
 
+const isWebSearchSkillEnabled = (): boolean => {
+  try {
+    return getSkillManager().isSkillEnabled('web-search');
+  } catch {
+    return true;
+  }
+};
+
 const getWebSearchHost = (): WebSearchHost => {
   if (!webSearchHost) {
     webSearchHost = new WebSearchHost({
       getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
       getPageContext: () => getAgentBrowserHost().getBackgroundPageContext(),
+      isSkillEnabled: isWebSearchSkillEnabled,
     });
   }
   return webSearchHost;
@@ -2849,6 +2859,17 @@ const syncOpenClawConfig = async (options: {
       // IM manager not initialized yet; skipped until ready.
     }
 
+    const rawBrowserWebAccess = getStore().get<AppConfigSettings>('app_config')?.browserWebAccess;
+    const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig(rawBrowserWebAccess);
+    const blockedHostnames = Array.from(new Set([
+      ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.blockedHostnames),
+      ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.blockedHostnames),
+    ]));
+    const allowedHostnames = Array.from(new Set([
+      ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.allowedHostnames),
+      ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.allowedHostnames),
+    ]));
+
     const result = await bootstrap.syncAllConfig({
       providers,
       modelAuthProxyUrl: proxyUrl,
@@ -2858,6 +2879,11 @@ const syncOpenClawConfig = async (options: {
         enabledIds,
         disabledIds,
         skillsDir: getSkillManager().getSkillsRoot(),
+      },
+      webAccessPolicy: {
+        webFetchEnabled: normalizedBrowserWebAccess.webFetch.enabled,
+        blockedHostnames,
+        allowedHostnames,
       },
       agents,
       imInstances,
@@ -8730,6 +8756,11 @@ if (!gotTheLock) {
     getSkillManager,
     getSkillStoreUrl,
     onSkillsPolicyChanged: async () => {
+      const webSearchEnabled = isWebSearchSkillEnabled();
+      if (!webSearchEnabled) {
+        webSearchHost?.dispose();
+      }
+      await getSkillServiceManager().syncWebSearchSkillEnabled(webSearchEnabled);
       await syncOpenClawConfig({ reason: 'skills-enabled-changed' });
     },
   });
@@ -15421,6 +15452,7 @@ if (!gotTheLock) {
     // No IPC handler or downstream init depends on this completing.
     try {
       const skillServices = getSkillServiceManager();
+      skillServices.setWebSearchEnabledResolver(isWebSearchSkillEnabled);
       console.log('[Main] initApp: getSkillServiceManager done');
       const t0 = performance.now();
       void skillServices

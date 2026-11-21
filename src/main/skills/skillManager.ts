@@ -2020,6 +2020,15 @@ export class SkillManager {
     }
   }
 
+  isSkillEnabled(id: string): boolean {
+    const state = this.loadSkillStateMap();
+    if (state[id] !== undefined) {
+      return state[id].enabled;
+    }
+    const skill = this.listSkills().find(item => item.id === id);
+    return skill ? skill.enabled : false;
+  }
+
   setSkillEnabled(id: string, enabled: boolean): SkillRecord[] {
     const state = this.loadSkillStateMap();
     state[id] = { enabled };

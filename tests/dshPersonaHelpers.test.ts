@@ -10,6 +10,7 @@ const HELPERS_URL = pathToFileURL(
 
 type PersonaHelpers = {
   MAX_INLINE_MEMORY_CHARS: number;
+  WEB_SEARCH_ROUTING_GUIDANCE: string;
   stripLegacyOpenClawAgentsBoilerplate: (content: string) => string;
   sanitizeMemoryMarkdownForPrompt: (content: string, maxChars?: number) => string;
   parseSkillFrontmatter: (markdown: string) => { meta: Record<string, string>; body: string };
@@ -22,6 +23,11 @@ type PersonaHelpers = {
     allowedSkillIds: Set<string> | null,
     options?: { cwd?: string },
   ) => Array<{ name: string; description: string; source: string }>;
+  buildWebSearchRoutingGuidance: (
+    rootDirs: readonly string[],
+    policy: { enabledIds?: Set<string> | null; disabledIds?: Set<string> },
+    allowedSkillIds?: Set<string> | null,
+  ) => string;
 };
 
 let cachedHelpers: PersonaHelpers | null = null;
@@ -239,5 +245,40 @@ describe('persona-helpers', () => {
       { cwd: projectDir },
     );
     expect(planMode).toEqual([]);
+  });
+
+  test('injects concise web-search routing guidance only when web-search skill is installed and enabled', async () => {
+    const { buildWebSearchRoutingGuidance, WEB_SEARCH_ROUTING_GUIDANCE } = await loadHelpers();
+
+    const skillsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-'));
+    tempDirs.push(skillsRoot);
+    fs.mkdirSync(path.join(skillsRoot, 'web-search'), { recursive: true });
+    fs.writeFileSync(path.join(skillsRoot, 'web-search', 'SKILL.md'), '---\nname: web-search\n---\n', 'utf8');
+
+    // Enabled globally and unrestricted for agent -> guidance included.
+    expect(buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe(
+      WEB_SEARCH_ROUTING_GUIDANCE,
+    );
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: new Set(['web-search']), disabledIds: new Set() }, null),
+    ).toBe(WEB_SEARCH_ROUTING_GUIDANCE);
+
+    // Disabled globally -> omitted.
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set(['web-search']) }, null),
+    ).toBe('');
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: new Set(['docx']), disabledIds: new Set() }, null),
+    ).toBe('');
+
+    // Excluded by per-agent allowlist -> omitted.
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, new Set(['docx'])),
+    ).toBe('');
+
+    // Missing from skills root -> omitted.
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-empty-'));
+    tempDirs.push(emptyRoot);
+    expect(buildWebSearchRoutingGuidance([emptyRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe('');
   });
 });

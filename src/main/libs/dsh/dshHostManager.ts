@@ -40,7 +40,7 @@ import type {
   ModelThinkingLevel,
 } from '../../../shared/providers/modelThinking';
 import { DSH_NODE_EXEC_ARGV } from '../dshRuntime';
-import { WEB_SEARCH_BRIDGE_FILE_ENV } from '../webSearchBridgeFile';
+import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from '../webSearchBridgeFile';
 import {
   ensureAppOwnedProfile,
   resolveLobsterDshProfileDir,
@@ -105,6 +105,13 @@ export interface DshHostSkillsPolicy {
   disabledIds?: string[];
   extraDirs?: string[];
   skillsDir?: string;
+}
+
+export interface DshHostWebAccessPolicy {
+  webFetchEnabled: boolean;
+  blockedHostnames: string[];
+  allowedHostnames?: string[];
+  searchPolicy?: DshSearchPolicy;
 }
 
 export interface DshHostAgentSkillSummary {
@@ -379,9 +386,12 @@ export function buildIsolatedDshChildEnv(params: {
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(params.baseEnv ?? process.env)) {
-    // Strip any inherited native DSH or global pnpm/npm store overrides.
+    // Strip any inherited native DSH, global pnpm/npm store overrides, or
+    // ambient DEEPSEEK_API_KEY (which would otherwise accidentally activate
+    // `dsh-web-search-deepseek` on non-DeepSeek routes).
     if (/^dsh_/i.test(key)) continue;
     if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+    if (/^deepseek_api_key$/i.test(key)) continue;
     env[key] = value;
   }
 
@@ -390,10 +400,13 @@ export function buildIsolatedDshChildEnv(params: {
       if (value === undefined) continue;
       if (/^dsh_/i.test(key)) continue;
       if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+      if (/^deepseek_api_key$/i.test(key)) continue;
       if (key.toLowerCase() === 'path') continue;
       env[key] = value;
     }
   }
+
+  const normalizedSkillsRoot = params.skillsDir.replace(/\\/g, '/');
 
   env.DSH_HOME = params.dshHomeDir;
   env.DSH_AGENTS_HOME = path.join(params.dshHomeDir, 'agents-home');
@@ -404,8 +417,8 @@ export function buildIsolatedDshChildEnv(params: {
   env[DshHostBundleEnvVar.BridgeSecret] = params.bridgeSecret;
   env[DshHostBundleEnvVar.WorkspacesDir] = params.workspacesDir;
   env[DshHostBundleEnvVar.SkillsDir] = params.skillsDir;
-  env.SKILLS_ROOT = params.skillsDir;
-  env.LOBSTERAI_SKILLS_ROOT = params.skillsDir;
+  env.SKILLS_ROOT = normalizedSkillsRoot;
+  env.LOBSTERAI_SKILLS_ROOT = normalizedSkillsRoot;
   env[DshHostBundleEnvVar.SearchPolicy] = params.searchPolicy;
 
   if (params.executablePath?.trim()) {
@@ -432,9 +445,9 @@ export function buildIsolatedDshChildEnv(params: {
   }
 
   const prependPathDirs: string[] = [];
-  // Prepend bundled package-manager dir (`pnpm`) and Electron Node shim dir so
-  // `dsh-plugin-manager` and skill scripts (e.g. `node scripts/imap.js`) run
-  // reliably even without system Node.js.
+  // Prepend bundled package-manager dir (`pnpm`) and Electron Node/npm/npx shim
+  // dir so `dsh-plugin-manager`, skill scripts (e.g. `web-search`, `imap.js`),
+  // and `npx` MCP servers work reliably even without system Node.js.
   const pmDir = path.join(params.runtimeDir, 'package-manager');
   if (fs.existsSync(pmDir)) {
     prependPathDirs.push(pmDir);
@@ -494,6 +507,7 @@ export class DshHostManager extends EventEmitter {
   } | null = null;
   private lastMcpServers: DshHostMcpServerSpec[] | null = null;
   private lastSkillsPolicy: DshHostSkillsPolicy | null = null;
+  private lastWebAccessPolicy: DshHostWebAccessPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
   private lastAgents: DshHostAgentSpec[] | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
@@ -619,6 +633,12 @@ export class DshHostManager extends EventEmitter {
     this.lastSkillsPolicy = policy;
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, policy);
+  }
+
+  async syncWebAccessPolicy(policy: DshHostWebAccessPolicy): Promise<Record<string, unknown>> {
+    this.lastWebAccessPolicy = policy;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncWebAccessPolicy, policy);
   }
 
   async syncHostTools(tools: DshHostToolDescriptor[]): Promise<Record<string, unknown>> {
@@ -758,6 +778,9 @@ export class DshHostManager extends EventEmitter {
     if (this.lastSkillsPolicy) {
       await this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, this.lastSkillsPolicy);
     }
+    if (this.lastWebAccessPolicy) {
+      await this.getClient().callOps(DshOpsAction.SyncWebAccessPolicy, this.lastWebAccessPolicy);
+    }
     if (this.lastHostTools) {
       await this.getClient().callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
     }
@@ -800,7 +823,7 @@ export class DshHostManager extends EventEmitter {
       searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.DeepSeekNativeOnly,
       runtimeDir: this.options.runtimeDir,
       executablePath: this.options.executablePath,
-      webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile,
+      webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile ?? getWebSearchBridgeFilePath(this.options.userDataDir),
       timeZone: additions?.timeZone ?? this.options.timeZone,
       nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir,
       npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir,
