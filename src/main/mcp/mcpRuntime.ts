@@ -2,12 +2,17 @@ import crypto from 'crypto';
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
+import { COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS } from '../../shared/computerUse/constants';
 import { ASK_USER_QUESTION_TOOL_NAME, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
-import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
+import {
+  isComputerUseKitInstalled,
+  isComputerUseSkillEnabled,
+  syncComputerUseSkillFromRuntime,
+} from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
@@ -515,7 +520,8 @@ export class McpRuntime {
 
     const askUserCallbackUrl = this.getAskUserCallbackUrl();
     const shouldEnableComputerUse = askUserCallbackUrl !== null
-      && isComputerUseKitInstalled(this.deps.getStore());
+      && isComputerUseKitInstalled(this.deps.getStore())
+      && isComputerUseSkillEnabled(this.deps.getStore());
     if (shouldEnableComputerUse) {
       const installResult = await installComputerUseRuntime();
       if (!installResult.success) {
@@ -537,7 +543,10 @@ export class McpRuntime {
       })
       : null;
     if (computerUseServer) {
-      resolved.push(computerUseServer);
+      resolved.push({
+        ...computerUseServer,
+        requestTimeoutMs: computerUseServer.requestTimeoutMs ?? COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
+      });
       builtInCount++;
     }
 

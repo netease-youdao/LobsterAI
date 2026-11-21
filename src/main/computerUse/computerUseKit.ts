@@ -37,6 +37,7 @@ const COMPUTER_USE_MCP_REF = {
 
 type InstalledKitsMap = Record<string, InstalledKitRecord>;
 type SkillStateMap = Record<string, { enabled: boolean }>;
+type LegacySkillStateEntry = { id?: unknown; enabled?: unknown };
 
 export interface ComputerUseKitBundleDescriptor {
   archiveName?: string;
@@ -146,6 +147,41 @@ export function getInstalledKitsMap(store: SqliteStore): InstalledKitsMap {
 export function isComputerUseKitInstalled(store: SqliteStore): boolean {
   return isComputerUseKitSupportedPlatform()
     && Boolean(getInstalledKitsMap(store)[ComputerUseKitId.BuiltIn]);
+}
+
+/**
+ * Check whether the Computer Use skill is enabled in `skills_state`.
+ * Matches `SkillManager` semantics: defaults to `true` when installed and no
+ * explicit `enabled: false` entry exists.
+ */
+export function isComputerUseSkillEnabled(store: SqliteStore): boolean {
+  const installedRecord = getInstalledKitsMap(store)[ComputerUseKitId.BuiltIn];
+  const recordedSkillId = installedRecord?.skills?.skillIds?.[0];
+  const candidateIds = recordedSkillId && recordedSkillId !== ComputerUseSkillId.BuiltIn
+    ? [recordedSkillId, ComputerUseSkillId.BuiltIn]
+    : [ComputerUseSkillId.BuiltIn];
+
+  const raw = store.get<SkillStateMap | LegacySkillStateEntry[]>(SKILL_STATE_KEY);
+  if (Array.isArray(raw)) {
+    for (const id of candidateIds) {
+      const entry = raw.find(item => item && typeof item === 'object' && item.id === id);
+      if (entry && typeof entry.enabled === 'boolean') {
+        return entry.enabled;
+      }
+    }
+    return true;
+  }
+
+  if (raw && typeof raw === 'object') {
+    for (const id of candidateIds) {
+      const entry = raw[id];
+      if (entry && typeof entry.enabled === 'boolean') {
+        return entry.enabled;
+      }
+    }
+  }
+
+  return true;
 }
 
 export function buildInstalledComputerUseKitRecord(

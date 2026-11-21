@@ -2830,6 +2830,8 @@ const syncOpenClawConfig = async (options: {
           url: srv.url,
           headers: srv.headers,
           oauthEnabled: srv.auth === "oauth",
+          ...(srv.requestTimeoutMs ? { requestTimeoutMs: srv.requestTimeoutMs } : {}),
+          ...(srv.connectionTimeoutMs ? { connectionTimeoutMs: srv.connectionTimeoutMs } : {}),
         });
       }
       const generatedDir = path.join(app.getPath("userData"), "dsh-generated-mcp");

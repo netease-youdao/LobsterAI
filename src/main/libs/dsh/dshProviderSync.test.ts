@@ -1,6 +1,10 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
+  COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
+  ComputerUseMcpServerName,
+} from '../../../shared/computerUse/constants';
+import {
   KIMI_K3_RUNTIME_PROFILE,
   LOBSTERAI_REQUEST_OPTIONS_VERSION,
   LobsterAIRequestCapability,
@@ -633,5 +637,55 @@ describe('buildDshMcpServerSpecs', () => {
       headers: { Authorization: 'Bearer fresh-tok' },
     });
     expect(result.needsReauthIds).toEqual(['mcp-oauth-expired']);
+  });
+
+  test('propagates requestTimeoutMs and connectionTimeoutMs for stdio and HTTP servers', async () => {
+    const result = await buildDshMcpServerSpecs([
+      {
+        id: ComputerUseMcpServerName.BuiltIn,
+        name: ComputerUseMcpServerName.BuiltIn,
+        enabled: true,
+        transportType: 'stdio',
+        command: '/usr/local/bin/node',
+        args: ['computer-use-mcp-server.mjs'],
+        requestTimeoutMs: COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
+        connectionTimeoutMs: 45_000,
+      },
+      {
+        id: 'mcp-remote-slow',
+        name: 'Remote Slow',
+        enabled: true,
+        transportType: 'http',
+        url: 'https://mcp.example.com/rpc',
+        requestTimeoutMs: 240_000,
+        connectionTimeoutMs: 15_000,
+      },
+      {
+        id: 'mcp-invalid-timeouts',
+        name: 'Invalid Timeouts',
+        enabled: true,
+        transportType: 'stdio',
+        command: '/usr/local/bin/node',
+        args: ['server.mjs'],
+        requestTimeoutMs: 0,
+        connectionTimeoutMs: -500,
+      },
+    ]);
+
+    expect(result.servers).toHaveLength(3);
+    expect(result.servers[0]).toMatchObject({
+      name: ComputerUseMcpServerName.BuiltIn,
+      transport: 'stdio',
+      toolCallTimeoutMs: COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
+      startupTimeoutMs: 45_000,
+    });
+    expect(result.servers[1]).toMatchObject({
+      name: 'remote-slow',
+      transport: 'streamable-http',
+      toolCallTimeoutMs: 240_000,
+      startupTimeoutMs: 15_000,
+    });
+    expect(result.servers[2].toolCallTimeoutMs).toBeUndefined();
+    expect(result.servers[2].startupTimeoutMs).toBeUndefined();
   });
 });

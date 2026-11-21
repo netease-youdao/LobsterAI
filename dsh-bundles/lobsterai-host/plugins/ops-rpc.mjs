@@ -69,8 +69,16 @@ export function apply(ctx) {
   const state = getHostState(ctx);
   /** @type {Map<string, () => void>} */
   const managedMcpDisposers = new Map();
+  /** @type {Promise<void>} */
+  let mcpSyncQueue = Promise.resolve();
 
-  async function syncMcpServers(payload) {
+  function parsePositiveTimeoutMs(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+      ? value
+      : undefined;
+  }
+
+  async function syncMcpServersInner(payload) {
     const mcpManager = ctx.get('mcpManager');
     if (!mcpManager) {
       return { available: false, registered: [], errors: ['mcpManager service is not mounted'] };
@@ -78,15 +86,17 @@ export function apply(ctx) {
     const body = payload && typeof payload === 'object' ? payload : {};
     const servers = Array.isArray(body.servers) ? body.servers : [];
 
-    // Dispose all previously LobsterAI-managed MCP registrations cleanly.
-    for (const dispose of managedMcpDisposers.values()) {
+    // Snapshot and clear before awaiting disposal so no overlapping caller can
+    // double-dispose or drop newly registered disposers.
+    const previousDisposers = [...managedMcpDisposers.values()];
+    managedMcpDisposers.clear();
+    for (const dispose of previousDisposers) {
       try {
         await dispose();
       } catch {
         // best-effort unmount
       }
     }
-    managedMcpDisposers.clear();
 
     const registered = [];
     const errors = [];
@@ -95,6 +105,8 @@ export function apply(ctx) {
       const serverName = String(entry.name || '').trim();
       if (!serverName || entry.enabled === false) continue;
 
+      const startupTimeoutMs = parsePositiveTimeoutMs(entry.startupTimeoutMs);
+      const toolCallTimeoutMs = parsePositiveTimeoutMs(entry.toolCallTimeoutMs);
       const transport = entry.transport === 'streamable-http' ? 'streamable-http' : 'stdio';
       const config = transport === 'stdio'
         ? {
@@ -105,8 +117,8 @@ export function apply(ctx) {
               ? Object.fromEntries(Object.entries(entry.env).map(([k, v]) => [k, String(v)]))
               : {},
             cwd: typeof entry.cwd === 'string' ? entry.cwd : '',
-            ...(typeof entry.startupTimeoutMs === 'number' ? { startupTimeoutMs: entry.startupTimeoutMs } : {}),
-            ...(typeof entry.toolCallTimeoutMs === 'number' ? { toolCallTimeoutMs: entry.toolCallTimeoutMs } : {}),
+            ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
+            ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
           }
         : {
             transport: 'streamable-http',
@@ -114,8 +126,8 @@ export function apply(ctx) {
             headers: entry.headers && typeof entry.headers === 'object'
               ? Object.fromEntries(Object.entries(entry.headers).map(([k, v]) => [k, String(v)]))
               : {},
-            ...(typeof entry.startupTimeoutMs === 'number' ? { startupTimeoutMs: entry.startupTimeoutMs } : {}),
-            ...(typeof entry.toolCallTimeoutMs === 'number' ? { toolCallTimeoutMs: entry.toolCallTimeoutMs } : {}),
+            ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
+            ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
           };
 
       try {
@@ -133,6 +145,12 @@ export function apply(ctx) {
       errors,
       statuses: mcpManager.list(),
     };
+  }
+
+  function syncMcpServers(payload) {
+    const run = mcpSyncQueue.then(() => syncMcpServersInner(payload));
+    mcpSyncQueue = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   state.syncMcpServers = syncMcpServers;
@@ -519,12 +537,14 @@ export function apply(ctx) {
   });
 
   ctx.effect(() => async () => {
-    for (const dispose of managedMcpDisposers.values()) {
+    await mcpSyncQueue;
+    const disposers = [...managedMcpDisposers.values()];
+    managedMcpDisposers.clear();
+    for (const dispose of disposers) {
       try {
         await dispose();
       } catch {}
     }
-    managedMcpDisposers.clear();
     state.syncMcpServers = null;
     state.pluginsReady.opsRpc = false;
   }, 'lobster-ops-rpc cleanup');

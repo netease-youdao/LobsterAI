@@ -623,6 +623,17 @@ export interface LobsterMcpServerRecord {
   url?: string;
   headers?: Record<string, string>;
   oauthEnabled?: boolean;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
+}
+
+const MAX_DSH_MCP_TIMEOUT_MS = 2_147_483_647;
+
+function normalizeDshMcpTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const rounded = Math.round(value);
+  if (rounded < 1) return undefined;
+  return Math.min(rounded, MAX_DSH_MCP_TIMEOUT_MS);
 }
 
 /**
@@ -662,6 +673,13 @@ export async function buildDshMcpServerSpecs(
     }
     usedNames.add(name);
 
+    const startupTimeoutMs = normalizeDshMcpTimeoutMs(rec.connectionTimeoutMs);
+    const toolCallTimeoutMs = normalizeDshMcpTimeoutMs(rec.requestTimeoutMs);
+    const timeoutFields = {
+      ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
+      ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
+    };
+
     if (rec.transportType === 'stdio') {
       if (!rec.command) continue;
       servers.push({
@@ -672,6 +690,7 @@ export async function buildDshMcpServerSpecs(
         args: rec.args ?? [],
         env: rec.env ?? {},
         ...(rec.cwd ? { cwd: rec.cwd } : {}),
+        ...timeoutFields,
       });
       continue;
     }
@@ -699,6 +718,7 @@ export async function buildDshMcpServerSpecs(
       transport: 'streamable-http',
       url: rec.url,
       headers,
+      ...timeoutFields,
     });
   }
 
