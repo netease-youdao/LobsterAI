@@ -42,7 +42,11 @@ import PurchaseOfferCountdown from '../PurchaseOfferCountdown';
 import { useLowCreditOfferExposure } from '../useLowCreditOfferExposure';
 import ActivityGroupBlock from './ActivityGroupBlock';
 import { ActivityStepLine } from './ActivityStepLine';
-import AssistantMessageItem from './AssistantMessageItem';
+import AssistantMessageItem, {
+  AssistantMessageMeta,
+  getAssistantMessageCopyContent,
+  getGoalCompletionLabel,
+} from './AssistantMessageItem';
 import AssistantTurnFooter from './AssistantTurnFooter';
 import { ActivityEntryVariant } from './constants';
 import { reportConversationBlockAction } from './conversationAnalytics';
@@ -700,21 +704,43 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
+  const hasTurnArtifacts = videoPathArtifacts.length > 0
+    || imageArtifacts.length > 0
+    || fileArtifactCards.length > 0;
+  const isRenderedAssistantReply = (message: CoworkMessage): boolean => {
+    if (message.metadata?.isThinking) return false;
+    if (isDuplicateGeneratedVideoAssistantMessage(message, videoPathArtifacts)) return false;
+    // A message that only carries MEDIA tokens has nothing to say: its images show in the turn's gallery.
+    const hasInlineImage = artifacts?.some(artifact => (
+      artifact.type === ArtifactTypeValue.Image && artifact.messageId === message.id
+    ));
+    if (hasInlineImage && !message.content.replace(/\s*MEDIA\s*/gi, '').trim()) return false;
+    return true;
+  };
   // Prefer the final visible text reply; interrupted turns may need a footer.
+  let finalTrailingReplyMessage: CoworkMessage | null = null;
   let turnUsageReplyId: string | null = null;
   for (let index = consolidatedItems.length - 1; index >= 0; index--) {
     const item = consolidatedItems[index];
     if (item.type === 'tool_group' || item.type === 'media_polling_group') break;
-    if (item.type !== 'assistant' || item.message.metadata?.isThinking
-      || isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) continue;
-    const hasInlineImage = artifacts?.some(artifact => artifact.type === 'image' && artifact.messageId === item.message.id);
-    if (hasInlineImage && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) continue;
-    const content = mapDisplayText ? mapDisplayText(item.message.content) : item.message.content;
-    if (hasText(getAssistantMessageDisplayText(content))) {
-      turnUsageReplyId = item.message.id;
-      break;
+    if (item.type !== 'assistant' || !isRenderedAssistantReply(item.message)) continue;
+    if (!finalTrailingReplyMessage) {
+      finalTrailingReplyMessage = item.message;
     }
+    if (turnUsageReplyId === null) {
+      const content = mapDisplayText ? mapDisplayText(item.message.content) : item.message.content;
+      if (hasText(getAssistantMessageDisplayText(content))) {
+        turnUsageReplyId = item.message.id;
+      }
+    }
+    if (finalTrailingReplyMessage && turnUsageReplyId !== null) break;
   }
+  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
+  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
+  // Place result deliverables (files, images, videos) above the final reply's time/model/credits row.
+  const deferredReplyMetaMessage = showCopyButtons && hasTurnArtifacts && !trailingTurnUsageSlot
+    ? finalTrailingReplyMessage
+    : null;
 
   const renderSystemMessage = (message: CoworkMessage) => {
     if (isModelChangeMessage(message) && message.metadata?.modelChange) {
@@ -920,24 +946,18 @@ const AssistantTurnBlock: React.FC<{
         );
       }
 
+      if (!isRenderedAssistantReply(item.message)) {
+        return null;
+      }
+
       const hasToolGroupAfter = consolidatedItems
         .slice(index + 1)
         .some(laterItem => laterItem.type === 'tool_group' || laterItem.type === 'media_polling_group');
       const isLastAssistant = showCopyButtons && !hasToolGroupAfter;
+      const showInlineMeta = isLastAssistant && deferredReplyMetaMessage?.id !== item.message.id;
       const hasAssistantAfter = consolidatedItems
         .slice(index + 1)
         .some(laterItem => laterItem.type === 'assistant');
-      if (isDuplicateGeneratedVideoAssistantMessage(item.message, videoPathArtifacts)) {
-        return null;
-      }
-
-      // A message that only carries MEDIA tokens has nothing to say: its images show in the turn's gallery.
-      const hasMessageImages = artifacts?.some(a =>
-        a.type === ArtifactTypeValue.Image && a.messageId === item.message.id,
-      );
-      if (hasMessageImages && !item.message.content.replace(/\s*MEDIA\s*/gi, '').trim()) {
-        return null;
-      }
 
       return (
         <AssistantMessageItem
@@ -945,17 +965,17 @@ const AssistantTurnBlock: React.FC<{
           message={item.message}
           resolveLocalFilePath={resolveLocalFilePath}
           mapDisplayText={mapDisplayText}
-          showCopyButton={isLastAssistant}
-          enableMessageSpeech={enableMessageSpeech && isLastAssistant && planConfirmationMessageId !== item.message.id}
-          onFork={isLastAssistant ? onForkMessage : undefined}
-          turnMetadata={isLastAssistant
+          showCopyButton={showInlineMeta}
+          enableMessageSpeech={enableMessageSpeech && showInlineMeta && planConfirmationMessageId !== item.message.id}
+          onFork={showInlineMeta ? onForkMessage : undefined}
+          turnMetadata={showInlineMeta
             ? withTurnModelPreset(
               item.message.metadata as CoworkMessageMetadata,
               turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
             )
             : undefined}
-          completedGoal={isLastAssistant && !hasAssistantAfter ? completedGoal : null}
-          turnUsageSlot={item.message.id === turnUsageReplyId ? turnUsageSlot : null}
+          completedGoal={showInlineMeta && !hasAssistantAfter ? completedGoal : null}
+          turnUsageSlot={showInlineMeta && item.message.id === turnUsageReplyId ? turnUsageSlot : null}
           planConfirmationMessageId={planConfirmationMessageId}
           onConfirmPlan={onConfirmPlan}
           onAdjustPlan={onAdjustPlan}
@@ -1107,10 +1127,7 @@ const AssistantTurnBlock: React.FC<{
     setProcessExpanded(nextExpanded);
   };
 
-  // A stopped turn may end on a tool step or before any text reply, leaving no reply to carry its usage.
-  const trailingTurnUsageSlot = turnUsageSlot && !turnUsageReplyId ? turnUsageSlot : null;
-
-  if (renderChunks.length === 0 && !showActivityIndicator && !artifacts?.length && !trailingTurnUsageSlot) {
+  if (renderChunks.length === 0 && !showActivityIndicator && !hasTurnArtifacts && !trailingTurnUsageSlot) {
     return null;
   }
 
@@ -1152,7 +1169,7 @@ const AssistantTurnBlock: React.FC<{
                 awaitingRunStart={awaitingRunStart}
               />
             )}
-            {artifacts && artifacts.length > 0 && (
+            {hasTurnArtifacts && (
               <div className="space-y-2 pt-1">
                 <VideoArtifactPathList artifacts={videoPathArtifacts} />
                 <InlineImageGallery artifacts={imageArtifacts} editable={!onOpenArtifactPreview} />
@@ -1197,6 +1214,24 @@ const AssistantTurnBlock: React.FC<{
                   </div>
                 )}
               </div>
+            )}
+            {deferredReplyMetaMessage && (
+              <AssistantMessageMeta
+                message={deferredReplyMetaMessage}
+                copyContent={getAssistantMessageCopyContent(
+                  mapDisplayText
+                    ? mapDisplayText(deferredReplyMetaMessage.content)
+                    : deferredReplyMetaMessage.content,
+                )}
+                turnMetadata={withTurnModelPreset(
+                  deferredReplyMetaMessage.metadata as CoworkMessageMetadata,
+                  turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+                )}
+                turnUsageSlot={deferredReplyMetaMessage.id === turnUsageReplyId ? turnUsageSlot : null}
+                onFork={onForkMessage}
+                enableMessageSpeech={enableMessageSpeech && planConfirmationMessageId !== deferredReplyMetaMessage.id}
+                goalCompletionLabel={getGoalCompletionLabel(completedGoal)}
+              />
             )}
             {trailingTurnUsageSlot && (
               <AssistantTurnFooter
