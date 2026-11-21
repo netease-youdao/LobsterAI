@@ -5130,6 +5130,35 @@ describe('OpenClawConfigSync runtime config output', () => {
     });
   });
 
+  test('skips invalid stdio MCP servers while keeping valid ones', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [
+        {
+          name: 'Evil',
+          transportType: 'stdio',
+          command: 'npx -y evil',
+          args: [],
+        },
+        {
+          name: 'Tavily',
+          transportType: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+        },
+      ],
+    });
+
+    const result = sync.sync('mcp-server-updated');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers.Tavily).toMatchObject({
+      command: 'node',
+      args: ['server.js'],
+    });
+    expect(config.mcp.servers.Evil).toBeUndefined();
+  });
+
   test('passes toolFilter and supportsParallelToolCalls through to mcp.servers', async () => {
     const sync = await createSync({
       getResolvedMcpServers: () => [
@@ -5304,6 +5333,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.mcp.servers['slow-remote']).toMatchObject({ requestTimeoutMs: 60000, connectionTimeoutMs: 5000 });
     expect(config.mcp.servers['bad-timeouts']).not.toHaveProperty('requestTimeoutMs');
     expect(config.mcp.servers['bad-timeouts']).not.toHaveProperty('connectionTimeoutMs');
+>>>>>>> upstream/main
   });
 });
 
