@@ -1592,4 +1592,89 @@ describe('DshRuntimeAdapter', () => {
     const headers = getLlmUsageHeaders(`00-${trace.traceId}-1111111111111111-01`, 'deepseek-v4-flash');
     expect(headers['x-lobster-model-preset']).toBe('balanced');
   });
+
+  test('honors autoApprove=true by binding danger-full-access and auto-resolving approval/request without modal', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-scheduled-auto',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    const waterfallMap = new Map<string, (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>>();
+    let approvalOutcome: DshWaterfallOutcome | null = null;
+    const permissionRequests: unknown[] = [];
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-auto-1' })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn((event: string, handler: (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>) => {
+        waterfallMap.set(event, handler);
+        return () => waterfallMap.delete(event);
+      }),
+      followSession: vi.fn(async function* () {
+        const approvalHandler = waterfallMap.get('approval/request');
+        expect(approvalHandler).toBeDefined();
+        approvalOutcome = await approvalHandler!({
+          eventId: 'evt-auto-1',
+          agentId: 'dsh-auto-1',
+          request: { toolName: 'bash', callId: 'call-rm-1', reason: 'Caution shell command' },
+          signal: new AbortController().signal,
+        });
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 1,
+            data: { message: { content: [{ type: 'text', text: 'Scheduled cleanup done.' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 2, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const consumeApprovalCallContext = vi.fn(() => null);
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        consumeApprovalCallContext,
+      },
+      store,
+      resolveDefaultPermissionPreset: () => DshPermissionPreset.WorkspaceWrite,
+    });
+    adapter.on('permissionRequest', (_sid, req) => {
+      permissionRequests.push(req);
+    });
+
+    await adapter.startSession('cw-scheduled-auto', 'Run background cleanup', {
+      agentId: 'main',
+      autoApprove: true,
+    });
+
+    expect(bindSessionContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-auto-1',
+        permissionPreset: DshPermissionPreset.FullAccess,
+      }),
+    );
+    expect(approvalOutcome).toEqual({ kind: 'result', value: 'allowed-once' });
+    expect(consumeApprovalCallContext).toHaveBeenCalledWith('call-rm-1');
+    expect(permissionRequests).toEqual([]);
+
+    // Subsequent manual continuation in chat restores the default permission preset.
+    (fakeClient.followSession as ReturnType<typeof vi.fn>).mockImplementationOnce(async function* () {
+      yield { type: 'event', event: { type: 'turn/end', seq: 3, data: {} } };
+    });
+    await adapter.continueSession('cw-scheduled-auto', 'Follow up interactively');
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-auto-1',
+        permissionPreset: DshPermissionPreset.WorkspaceWrite,
+      }),
+    );
+  });
 });

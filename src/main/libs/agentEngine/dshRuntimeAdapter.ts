@@ -193,6 +193,7 @@ interface ActiveTurnState {
   traceId: string;
   abortController: AbortController;
   confirmationMode: 'modal' | 'text';
+  autoApprove: boolean;
   startedAt: number;
   currentThinkingMessageId: string | null;
   currentThinkingText: string;
@@ -583,6 +584,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
+      autoApprove: options.autoApprove,
       imageAttachments: options.imageAttachments,
       mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
       localMediaAttachments: options.localMediaAttachments,
@@ -1186,6 +1188,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       return Promise.resolve({ kind: 'next' });
     }
 
+    if (kind === 'approval' && this.activeTurns.get(coworkSessionId)?.autoApprove) {
+      const callId = typeof evt.request.callId === 'string' ? evt.request.callId : null;
+      if (callId) {
+        this.hostManager.consumeApprovalCallContext?.(callId);
+      }
+      return Promise.resolve({ kind: 'result', value: 'allowed-once' });
+    }
+
     const requestId = `${kind === 'approval' ? 'dsh-approval:' : DSH_QUESTION_REQUEST_ID_PREFIX}${evt.eventId}`;
     const toolName = kind === 'approval'
       ? String(evt.request.toolName ?? 'tool')
@@ -1337,6 +1347,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       browserAnnotations?: CoworkStartOptions['browserAnnotations'];
       systemPrompt?: string;
       confirmationMode: 'modal' | 'text';
+      autoApprove?: boolean;
       imageAttachments?: CoworkStartOptions['imageAttachments'];
       mediaInstruction?: string;
       localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
@@ -1569,7 +1580,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           : {}),
         ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
-        permissionPreset: this.getEffectivePermissionPreset(sessionId),
+        permissionPreset: params.autoApprove
+          ? DshPermissionPreset.FullAccess
+          : this.getEffectivePermissionPreset(sessionId),
         ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
         ...(contextWindowSelection !== undefined ? { contextWindowSelection } : {}),
         ...(contextWindowOverride !== undefined ? { contextWindowOverride } : {}),
@@ -1613,6 +1626,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         traceId: llmTrace.traceId,
         abortController,
         confirmationMode: params.confirmationMode,
+        autoApprove: Boolean(params.autoApprove),
         startedAt: Date.now(),
         currentThinkingMessageId: null,
         currentThinkingText: '',

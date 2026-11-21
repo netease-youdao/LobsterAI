@@ -108,6 +108,7 @@ export interface ScheduledTaskInput {
 export interface ScheduledTaskStatusEvent {
   taskId: string;
   state: TaskState;
+  enabled?: boolean;
 }
 
 export interface ScheduledTaskRunEvent {

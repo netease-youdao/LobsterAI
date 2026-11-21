@@ -2298,8 +2298,26 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.updateSession(sessionId, updates);
         },
         getContinuityCapsule: sessionId => storeInstance.getContinuityCapsule(sessionId),
-        createSession: (title, cwd, systemPrompt, executionMode, activeSkillIds, agentId) =>
-          storeInstance.createSession(title, cwd, systemPrompt, executionMode, activeSkillIds, agentId),
+        createSession: (
+          title,
+          cwd,
+          systemPrompt,
+          executionMode,
+          activeSkillIds,
+          agentId,
+          modelOverride,
+          options,
+        ) =>
+          storeInstance.createSession(
+            title,
+            cwd,
+            systemPrompt,
+            executionMode,
+            activeSkillIds,
+            agentId,
+            modelOverride,
+            options,
+          ),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {

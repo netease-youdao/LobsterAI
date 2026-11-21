@@ -38,6 +38,69 @@ export function instanceKey(platform, instanceId) {
   return `${platform}:${instanceId}`;
 }
 
+/**
+ * Resolve a running IM channel instance entry from `instances` map:
+ * 1. Exact `${platform}:${instanceId}` match.
+ * 2. When a non-default `instanceId` (such as an 8-char UUID prefix stored in
+ *    `delivery.accountId`) is provided, match a unique running instance whose
+ *    full instanceId starts with that prefix (exact-case first, case-insensitive fallback).
+ * 3. When `instanceId` is omitted/empty/`default`, match the sole running
+ *    instance for `platform` (legacy single-instance compatibility).
+ *
+ * @template T
+ * @param {Map<string, T>} instances
+ * @param {string} platform
+ * @param {string | undefined | null} instanceId
+ * @returns {T}
+ */
+export function resolveChannelInstanceEntry(instances, platform, instanceId) {
+  const normalizedPlatform = String(platform || '').trim().toLowerCase();
+  const rawInstanceId = instanceId == null ? '' : String(instanceId).trim();
+  const requestedId = rawInstanceId || 'default';
+  const exactKey = instanceKey(normalizedPlatform, requestedId);
+
+  const exact = instances.get(exactKey);
+  if (exact) {
+    return exact;
+  }
+
+  const keyPrefix = `${normalizedPlatform}:`;
+  /** @type {Array<{ instanceId: string, entry: T }>} */
+  const platformEntries = [];
+  for (const [key, entry] of instances.entries()) {
+    if (key.startsWith(keyPrefix)) {
+      platformEntries.push({ instanceId: key.slice(keyPrefix.length), entry });
+    }
+  }
+
+  if (rawInstanceId && rawInstanceId !== 'default') {
+    let matches = platformEntries.filter((item) => item.instanceId.startsWith(rawInstanceId));
+    if (matches.length === 0) {
+      const lowerPrefix = rawInstanceId.toLowerCase();
+      matches = platformEntries.filter((item) => item.instanceId.toLowerCase().startsWith(lowerPrefix));
+    }
+    if (matches.length === 1) {
+      return matches[0].entry;
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `IM channel instance "${exactKey}" is ambiguous (${matches.length} matching instances running)`,
+      );
+    }
+    throw new Error(`IM channel instance "${exactKey}" is not running`);
+  }
+
+  if (platformEntries.length === 1) {
+    return platformEntries[0].entry;
+  }
+  if (platformEntries.length > 1) {
+    throw new Error(
+      `IM channel instance "${exactKey}" is not running (${platformEntries.length} instances exist for "${normalizedPlatform}"; specify instanceId)`,
+    );
+  }
+  throw new Error(`IM channel instance "${exactKey}" is not running`);
+}
+
 export class ChannelManager {
   /**
    * @param {{
@@ -152,11 +215,7 @@ export class ChannelManager {
    * and manual test sends).
    */
   async send({ platform, instanceId = 'default', chatId, text, replyContext }) {
-    const key = instanceKey(String(platform).toLowerCase(), String(instanceId));
-    const entry = this.instances.get(key);
-    if (!entry) {
-      throw new Error(`IM channel instance "${key}" is not running`);
-    }
+    const entry = resolveChannelInstanceEntry(this.instances, platform, instanceId);
     return entry.driver.sendMessage({ chatId: String(chatId), text: String(text || ''), replyContext }).then((res) => {
       entry.driver.markOutbound();
       return res;
