@@ -22,6 +22,7 @@ import {
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
+import type { DreamDiaryData } from '../../shared/cowork/dreamDiary';
 import { normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
@@ -2533,6 +2534,14 @@ class CoworkService {
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
     const result = await api({ content, agentId: options?.agentId });
     return result ?? { success: false };
+  }
+
+  async getDreamingDiary(options?: { agentId?: string }): Promise<DreamDiaryData | null> {
+    const api = window.electron?.cowork?.getDreamDiary;
+    if (!api) return null;
+    const result = await api(options);
+    if (!result?.success || !result.data) return null;
+    return result.data;
   }
 
   async readBootstrapFile(filename: string, options?: { agentId?: string }): Promise<string> {

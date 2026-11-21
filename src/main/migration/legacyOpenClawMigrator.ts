@@ -30,6 +30,10 @@ import type {
 } from '../../scheduledTask/types';
 import { AgentId } from '../../shared/agent/constants';
 import {
+  LEGACY_DREAM_DIARY_FILENAME,
+  LEGACY_DREAM_DIARY_LOWERCASE_FILENAME,
+} from '../../shared/cowork/dreamDiary';
+import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   RETAINED_IM_PLATFORM_LIST,
   RetiredImPlatform,
@@ -38,6 +42,7 @@ import {
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+  MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   type MigrationV2ArchivedItem,
@@ -47,6 +52,7 @@ import {
 } from '../../shared/migration/constants';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
+import { findLegacyDreamDiaryFile } from '../memory/legacyDreamDiaryReader';
 import {
   LobsterMemoryService,
   sanitizeAgentId,
@@ -1138,49 +1144,223 @@ function copyLegacyMemoryMarkdownRecursive(
   return { copiedAny, dreamsFilesArchived };
 }
 
+export interface LegacyDreamDiaryBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  diariesRestored: number;
+  error?: string;
+}
+
+function copyLegacyDreamDiaryFile(srcFile: string, dstDir: string): boolean {
+  if (!fs.existsSync(srcFile)) return false;
+  const content = fs.readFileSync(srcFile, 'utf8');
+  if (!content.trim()) return false;
+  if (findLegacyDreamDiaryFile(dstDir)) return false;
+
+  fs.mkdirSync(dstDir, { recursive: true });
+  const dstFile = path.join(dstDir, LEGACY_DREAM_DIARY_FILENAME);
+  fs.writeFileSync(dstFile, content, 'utf8');
+  try {
+    const stat = fs.statSync(srcFile);
+    fs.utimesSync(dstFile, stat.atime, stat.mtime);
+  } catch {
+    // Best-effort mtime preservation.
+  }
+  return true;
+}
+
+interface ParsedDreamDiaryArchiveEntry {
+  agentId: string;
+  isCanonicalWorkspace: boolean;
+  isUpperCase: boolean;
+}
+
+function parseDreamDiaryArchiveEntry(archivePath: string): ParsedDreamDiaryArchiveEntry | null {
+  const normalized = archivePath
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .replace(/^\/+/, '');
+  const stripped = normalized.startsWith('openclaw-state/')
+    ? normalized.slice('openclaw-state/'.length)
+    : normalized;
+  const segments = stripped.split('/').filter(Boolean);
+  if (segments.length !== 2) return null;
+
+  const [dirName, fileName] = segments;
+  if (fileName.toLowerCase() !== LEGACY_DREAM_DIARY_LOWERCASE_FILENAME) return null;
+  if (dirName !== 'workspace' && !dirName.startsWith('workspace-')) return null;
+
+  const rawAgentId = dirName === 'workspace'
+    ? AgentId.Main
+    : dirName.slice('workspace-'.length).trim() || AgentId.Main;
+  try {
+    return {
+      agentId: sanitizeAgentId(rawAgentId),
+      isCanonicalWorkspace: dirName !== 'workspace',
+      isUpperCase: fileName === LEGACY_DREAM_DIARY_FILENAME,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isDreamDiaryArchiveEntry(archivePath: string): boolean {
+  return parseDreamDiaryArchiveEntry(archivePath) !== null;
+}
+
 /**
- * Copy legacy `workspace-*` (and bare `workspace/` when `workspace-main` is
- * absent) persona & memory files out of OpenClaw's state dir into
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before `DREAMS.md` preservation landed.
+ *
+ * Streams only `workspace-<agentId>/DREAMS.md`, `workspace-<agentId>/dreams.md`, and
+ * `workspace/DREAMS.md` from `legacy-openclaw-backup/<ts>/legacy-openclaw-state.tar.gz`
+ * into `<userData>/workspaces/<agentId>/DREAMS.md` without overwriting existing files.
+ */
+export async function backfillLegacyDreamDiariesFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyDreamDiaryBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', diariesRestored: 0 };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', diariesRestored: 0 };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', diariesRestored: 0 };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds to archive lookup.
+  }
+
+  const archivePath = findLegacyStateArchivePath(userDataDir, db);
+  if (!archivePath) {
+    setKv(
+      db,
+      MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), skipped: 'noBackupArchive' }),
+    );
+    return { status: 'skipped', diariesRestored: 0 };
+  }
+
+  const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-dream-diary-backfill-'));
+  try {
+    const extractedEntries = await extractMatchingEntriesFromTarGz(
+      archivePath,
+      tmpDir,
+      isDreamDiaryArchiveEntry,
+    );
+
+    const prioritized = extractedEntries
+      .map((entryPath) => ({
+        entryPath,
+        parsed: parseDreamDiaryArchiveEntry(entryPath),
+      }))
+      .filter(
+        (item): item is { entryPath: string; parsed: ParsedDreamDiaryArchiveEntry } =>
+          item.parsed !== null,
+      )
+      .sort((a, b) => {
+        if (a.parsed.isCanonicalWorkspace !== b.parsed.isCanonicalWorkspace) {
+          return a.parsed.isCanonicalWorkspace ? -1 : 1;
+        }
+        if (a.parsed.isUpperCase !== b.parsed.isUpperCase) {
+          return a.parsed.isUpperCase ? -1 : 1;
+        }
+        return a.entryPath.localeCompare(b.entryPath);
+      });
+
+    let diariesRestored = 0;
+    for (const { entryPath, parsed } of prioritized) {
+      const extractedFile = path.resolve(tmpDir, ...entryPath.split('/').filter(Boolean));
+      const dstDir = path.join(workspacesDir, parsed.agentId);
+      if (copyLegacyDreamDiaryFile(extractedFile, dstDir)) {
+        diariesRestored += 1;
+      }
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), diariesRestored }),
+    );
+    return { status: 'completed', diariesRestored };
+  } catch (error) {
+    return {
+      status: 'failed',
+      diariesRestored: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Copy legacy `workspace-*` (and bare `workspace`) persona, memory, and
+ * read-only historical `DREAMS.md` files out of OpenClaw's state dir into
  * engine-independent `<userData>/workspaces/<agentId>/`, stripping the old
  * OpenClaw-managed `AGENTS.md` section, recursively copying `memory/**\/*.md`,
- * and skipping `.dreams/`.
+ * and archiving `memory/.dreams/` (plus legacy `.dreams/`) into
+ * `incompatible-modules-backup.tar.gz`.
  */
 function migrateLegacyWorkspaces(
   openclawStateDir: string,
   workspacesDir: string,
   incompatibleEntries: TarEntryInput[],
   archivedModules: MigrationV2ArchivedItem[],
-): number {
-  if (!fs.existsSync(openclawStateDir)) return 0;
-  let migratedCount = 0;
+): { workspacesMigrated: number; dreamDiariesMigrated: number } {
+  if (!fs.existsSync(openclawStateDir)) {
+    return { workspacesMigrated: 0, dreamDiariesMigrated: 0 };
+  }
+  const migratedAgentIds = new Set<string>();
+  let dreamDiariesMigrated = 0;
   let dreamsFilesArchived = 0;
 
   let dirents: fs.Dirent[];
   try {
     dirents = fs.readdirSync(openclawStateDir, { withFileTypes: true });
   } catch {
-    return 0;
+    return { workspacesMigrated: 0, dreamDiariesMigrated: 0 };
   }
 
-  const hasWorkspaceMain = dirents.some(
-    (dirent) => dirent.isDirectory() && dirent.name === 'workspace-main',
-  );
-  const workspaceTargets: Array<{ dirName: string; agentId: string }> = [];
-  for (const dirent of dirents) {
-    if (!dirent.isDirectory()) continue;
-    if (dirent.name.startsWith('workspace-')) {
-      const agentId = dirent.name.slice('workspace-'.length).trim() || 'main';
-      workspaceTargets.push({ dirName: dirent.name, agentId });
-    } else if (dirent.name === 'workspace' && !hasWorkspaceMain) {
-      workspaceTargets.push({ dirName: dirent.name, agentId: 'main' });
-    }
-  }
+  const workspaceDirents = dirents
+    .filter((d) => d.isDirectory() && (d.name === 'workspace' || d.name.startsWith('workspace-')))
+    .sort((a, b) => {
+      // Process `workspace-*` before bare `workspace` so `workspace-main` wins when both exist.
+      if (a.name === 'workspace' && b.name !== 'workspace') return 1;
+      if (b.name === 'workspace' && a.name !== 'workspace') return -1;
+      return a.name.localeCompare(b.name);
+    });
 
   const memoryService = new LobsterMemoryService(workspacesDir);
   try {
-    for (const target of workspaceTargets) {
-      const { agentId, dirName } = target;
-      const srcDir = path.join(openclawStateDir, dirName);
+    for (const dirent of workspaceDirents) {
+      const rawAgentId = dirent.name === 'workspace'
+        ? AgentId.Main
+        : dirent.name.slice('workspace-'.length).trim() || AgentId.Main;
+      let agentId: string;
+      try {
+        agentId = sanitizeAgentId(rawAgentId);
+      } catch {
+        continue;
+      }
+
+      const srcDir = path.join(openclawStateDir, dirent.name);
       const dstDir = memoryService.ensureAgentWorkspace(agentId);
 
       let copiedAny = false;
@@ -1200,7 +1380,16 @@ function migrateLegacyWorkspaces(
         }
       }
 
-      // Recursively copy daily and nested memory markdown notes (`memory/**/*.md`), skipping `.dreams/`.
+      // Preserve historical `DREAMS.md` / `dreams.md` (case-insensitive) as read-only
+      // `DREAMS.md` inside `<userData>/workspaces/<agentId>/`.
+      const srcDreamDiary = findLegacyDreamDiaryFile(srcDir);
+      if (srcDreamDiary && copyLegacyDreamDiaryFile(srcDreamDiary, dstDir)) {
+        dreamDiariesMigrated += 1;
+        copiedAny = true;
+      }
+
+      // Recursively copy daily and nested memory markdown notes (`memory/**/*.md`),
+      // archiving `memory/.dreams/` (and any nested `.dreams/`) into incompatible backup.
       const srcDailyDir = path.join(srcDir, 'memory');
       if (fs.existsSync(srcDailyDir)) {
         const dstDailyDir = path.join(dstDir, 'memory');
@@ -1215,17 +1404,21 @@ function migrateLegacyWorkspaces(
         dreamsFilesArchived += copiedMemory.dreamsFilesArchived;
       }
 
-      // Archive `.dreams/` into incompatible modules backup instead of migrating.
-      const dreamsDir = path.join(srcDir, '.dreams');
-      if (fs.existsSync(dreamsDir)) {
-        const dreamEntries = collectDirectoryTarEntries(dreamsDir, `dreams/${agentId}`);
+      // Archive legacy top-level `.dreams/` into incompatible modules backup instead of migrating.
+      // (`memory/.dreams/` is already archived during the recursive walk above.)
+      const legacyTopDreamsDir = path.join(srcDir, '.dreams');
+      if (fs.existsSync(legacyTopDreamsDir)) {
+        const dreamEntries = collectDirectoryTarEntries(
+          legacyTopDreamsDir,
+          `dreams/${agentId}/.dreams`,
+        );
         incompatibleEntries.push(...dreamEntries);
         dreamsFilesArchived += dreamEntries.length;
       }
 
       if (copiedAny) {
         memoryService.reindexAgent(agentId);
-        migratedCount += 1;
+        migratedAgentIds.add(agentId);
       }
     }
   } finally {
@@ -1239,7 +1432,10 @@ function migrateLegacyWorkspaces(
       count: dreamsFilesArchived,
     });
   }
-  return migratedCount;
+  return {
+    workspacesMigrated: migratedAgentIds.size,
+    dreamDiariesMigrated,
+  };
 }
 
 /** Legacy workspaces can have just one persona file. SQLite supplies only missing files. */
@@ -1439,6 +1635,11 @@ export function runLegacyOpenClawMigration(
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(
+        db,
+        MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }),
+      );
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1469,7 +1670,7 @@ export function runLegacyOpenClawMigration(
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
-      const workspacesMigrated = migrateLegacyWorkspaces(
+      const { workspacesMigrated, dreamDiariesMigrated } = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,
         incompatibleEntries,
@@ -1745,6 +1946,14 @@ export function runLegacyOpenClawMigration(
           JSON.stringify({
             completedAt: report.migratedAt,
             memoriesImported: userMemoriesMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            diariesRestored: dreamDiariesMigrated,
           }),
         );
       });

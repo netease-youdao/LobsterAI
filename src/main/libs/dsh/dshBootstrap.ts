@@ -38,8 +38,10 @@ import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshCh
 import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  backfillLegacyDreamDiariesFromBackup,
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyUserMemories,
+  type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -281,6 +283,7 @@ export class DshBootstrap {
   };
   private ecosystemWindow: BrowserWindow | null = null;
   private lastImInstances: DshChannelInstanceConfig[] | null = null;
+  private dreamDiaryBackfillPromise: Promise<LegacyDreamDiaryBackfillResult> | null = null;
 
   constructor(options: DshBootstrapOptions) {
     this.options = options;
@@ -465,10 +468,39 @@ export class DshBootstrap {
     }
   }
 
+  /**
+   * Ensure one-shot idempotent backfill of legacy `DREAMS.md` files from
+   * `legacy-openclaw-state.tar.gz` has completed before reading diaries.
+   */
+  ensureDreamDiaryBackfilled(): Promise<LegacyDreamDiaryBackfillResult> {
+    if (!this.dreamDiaryBackfillPromise) {
+      this.dreamDiaryBackfillPromise = backfillLegacyDreamDiariesFromBackup({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+      })
+        .then((result) => {
+          if (result.status === 'failed') {
+            this.dreamDiaryBackfillPromise = null;
+          }
+          return result;
+        })
+        .catch((error) => {
+          console.warn('[MigrationV2] dream diary backup backfill failed:', error);
+          this.dreamDiaryBackfillPromise = null;
+          return {
+            status: 'failed' as const,
+            diariesRestored: 0,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        });
+    }
+    return this.dreamDiaryBackfillPromise;
+  }
+
   async start(): Promise<DshCompatEngineStatus> {
-    // One-shot idempotent backfill for users who completed v2 migration before
-    // `cron_jobs` / run-history extraction landed. Runs concurrently with DSH boot
-    // and returns instantaneously once `engine.migration.v2.cronBackfillCompleted` is set.
+    // One-shot idempotent backfills for users who completed v2 migration before
+    // `cron_jobs` / `DREAMS.md` extraction landed. Both run concurrently with DSH
+    // boot and return instantaneously once their completion keys are set.
     const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
       userDataDir: this.options.userDataDir,
       db: this.options.db,
@@ -476,6 +508,7 @@ export class DshBootstrap {
       console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
       return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
     });
+    const dreamDiaryBackfillPromise = this.ensureDreamDiaryBackfilled();
 
     // One-shot idempotent backfill for already-migrated v2 DBs so SQLite-only
     // active `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
@@ -500,12 +533,20 @@ export class DshBootstrap {
       console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
     });
 
-    const backfill = await cronBackfillPromise;
+    const [backfill, dreamDiaryBackfill] = await Promise.all([
+      cronBackfillPromise,
+      dreamDiaryBackfillPromise,
+    ]);
     if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
       console.log(
         `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
       );
       this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+    }
+    if (dreamDiaryBackfill.diariesRestored > 0) {
+      console.log(
+        `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
+      );
     }
 
     this.scheduler.start();

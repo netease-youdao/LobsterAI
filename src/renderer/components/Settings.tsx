@@ -65,12 +65,15 @@ import type {
   CoworkMemoryStats,
   CoworkTempDirPreview,
   CoworkUserMemoryEntry,
+  DreamDiaryData,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
   OpenClawSessionKeepAlive,
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
+import { getVisibleLegacyDreamDiaries } from './cowork/dreamDiaryParser';
+import LegacyDreamDiaryViewer from './cowork/LegacyDreamDiaryViewer';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
@@ -132,6 +135,12 @@ import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
 type TabType = 'general' | 'appearance' | 'desktopCompanion' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'help' | 'about';
+
+const MemorySubTab = {
+  Entries: 'entries',
+  LegacyDreamDiary: 'legacyDreamDiary',
+} as const;
+type MemorySubTab = typeof MemorySubTab[keyof typeof MemorySubTab];
 
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
   window.requestAnimationFrame(() => {
@@ -1752,7 +1761,10 @@ const Settings: React.FC<SettingsProps> = ({
   const [dreamingFrequency, setDreamingFrequency] = useState<string>(coworkConfig.dreamingFrequency ?? '0 3 * * *');
   const [dreamingModel, setDreamingModel] = useState<string>(coworkConfig.dreamingModel ?? '');
   const [dreamingTimezone, setDreamingTimezone] = useState<string>(coworkConfig.dreamingTimezone ?? '');
-  const [memoryTab, setMemoryTab] = useState<'entries' | 'embedding'>('entries');
+  const [memoryTab, setMemoryTab] = useState<MemorySubTab>(MemorySubTab.Entries);
+  const [legacyDreamDiary, setLegacyDreamDiary] = useState<DreamDiaryData | null>(null);
+  const [legacyDreamDiaryLoading, setLegacyDreamDiaryLoading] = useState<boolean>(false);
+  const [legacyDreamDiaryError, setLegacyDreamDiaryError] = useState<string | null>(null);
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
     coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
@@ -3169,6 +3181,38 @@ const Settings: React.FC<SettingsProps> = ({
     if (activeTab !== 'coworkMemory') return;
     void loadCoworkMemoryData();
   }, [activeTab, loadCoworkMemoryData]);
+
+  const visibleLegacyDreamDiaries = useMemo(
+    () => getVisibleLegacyDreamDiaries(legacyDreamDiary),
+    [legacyDreamDiary],
+  );
+
+  const loadLegacyDreamDiary = useCallback(async () => {
+    setLegacyDreamDiaryLoading(true);
+    setLegacyDreamDiaryError(null);
+    try {
+      const diary = await coworkService.getDreamingDiary();
+      setLegacyDreamDiary(diary);
+    } catch (loadError) {
+      console.error('Failed to load historical dream diary:', loadError);
+      setLegacyDreamDiaryError(
+        loadError instanceof Error ? loadError.message : i18nService.t('coworkDreamingDiaryLoadError'),
+      );
+    } finally {
+      setLegacyDreamDiaryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'coworkMemory') return;
+    void loadLegacyDreamDiary();
+  }, [activeTab, loadLegacyDreamDiary]);
+
+  useEffect(() => {
+    if (memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length === 0) {
+      setMemoryTab(MemorySubTab.Entries);
+    }
+  }, [memoryTab, visibleLegacyDreamDiaries.length]);
 
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
@@ -5415,8 +5459,11 @@ const Settings: React.FC<SettingsProps> = ({
         );
 
       case 'coworkMemory': {
-        const memoryTabs = [
-          { key: 'entries' as const, titleKey: 'coworkMemoryTabEntries' },
+        const memoryTabs: Array<{ key: MemorySubTab; titleKey: string }> = [
+          { key: MemorySubTab.Entries, titleKey: 'coworkMemoryTabEntries' },
+          ...(visibleLegacyDreamDiaries.length > 0
+            ? [{ key: MemorySubTab.LegacyDreamDiary, titleKey: 'coworkMemoryTabLegacyDreamDiary' }]
+            : []),
         ];
         const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
         for (const entry of coworkMemoryEntries) {
@@ -5452,7 +5499,7 @@ const Settings: React.FC<SettingsProps> = ({
               ))}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
-              {memoryTab === 'entries' && (
+              {memoryTab === MemorySubTab.Entries && (
                 <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
@@ -5750,6 +5797,15 @@ const Settings: React.FC<SettingsProps> = ({
                     </Modal>
                   )}
                 </div>
+              )}
+
+              {memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length > 0 && (
+                <LegacyDreamDiaryViewer
+                  diaries={visibleLegacyDreamDiaries}
+                  loading={legacyDreamDiaryLoading}
+                  error={legacyDreamDiaryError}
+                  onRefresh={() => { void loadLegacyDreamDiary(); }}
+                />
               )}
 
             </div>

@@ -645,6 +645,7 @@ import {
   summarizeMediaGenerationParamsForLog,
 } from './mediaGenerationReferences';
 import { MediaRunAccountScopes, MediaRunLifecycle } from './mediaRunAccountScopes';
+import { readLegacyDreamDiaries } from './memory/legacyDreamDiaryReader';
 import {
   createManagedMemoryEntry,
   type CreateMemoryEntryOptions,
@@ -11419,9 +11420,35 @@ if (!gotTheLock) {
       }
     },
   );
-  // Dreaming retired in LobsterAI v2 (DSH cutover).
+  // Dreaming generation is retired in LobsterAI v2 (DSH cutover);
+  // historical OpenClaw DREAMS.md diaries remain readable in read-only mode.
   ipcMain.handle(CoworkIpcChannel.DreamingStatus, async () => ({ success: true, data: null }));
-  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async () => ({ success: true, data: null }));
+  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
+    try {
+      const bootstrap = getDshBootstrap();
+      await bootstrap.ensureDreamDiaryBackfilled();
+      const data = readLegacyDreamDiaries(bootstrap.workspacesDir, {
+        agentId: options?.agentId,
+        resolveAgentName: (agentId) => {
+          if (agentId === AgentId.Main) return undefined;
+          try {
+            return getAgentManager().getAgent(agentId)?.name?.trim() || undefined;
+          } catch {
+            return undefined;
+          }
+        },
+      });
+      return { success: true, data };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to read historical dream diary',
+      };
+    }
+  });
 
   ipcMain.handle(CoworkIpcChannel.BootstrapRead, async (
     _event,

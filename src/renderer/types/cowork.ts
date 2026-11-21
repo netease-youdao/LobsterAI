@@ -11,6 +11,10 @@ import type {
   CoworkUserMemoryEntry as SharedCoworkUserMemoryEntry,
   CoworkUserMemorySourceSummary as SharedCoworkUserMemorySourceSummary,
 } from '../../shared/cowork/constants';
+import type {
+  DreamDiaryData as SharedDreamDiaryData,
+  LegacyAgentDreamDiary as SharedLegacyAgentDreamDiary,
+} from '../../shared/cowork/dreamDiary';
 import type { CoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type {
@@ -544,12 +548,8 @@ export interface DreamingStatusData {
   };
 }
 
-export interface DreamDiaryData {
-  found: boolean;
-  path: string;
-  content?: string;
-  updatedAtMs?: number;
-}
+export type LegacyAgentDreamDiary = SharedLegacyAgentDreamDiary;
+export type DreamDiaryData = SharedDreamDiaryData;
 
 // Stream event types for IPC communication
 export type CoworkStreamEventType =

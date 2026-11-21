@@ -219,7 +219,7 @@ import type {
   SkinListResponse,
 } from '../../shared/skin/types';
 import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
-import type { CoworkTempDirPreview } from './cowork';
+import type { CoworkTempDirPreview, DreamDiaryData, DreamingStatusData } from './cowork';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -1349,6 +1349,12 @@ interface IElectronAPI {
       agentId?: string;
       content: string;
     }) => Promise<{ success: boolean; error?: string }>;
+    getDreamingStatus: (
+      options?: { agentId?: string },
+    ) => Promise<{ success: boolean; data?: DreamingStatusData | null; error?: string }>;
+    getDreamDiary: (
+      options?: { agentId?: string },
+    ) => Promise<{ success: boolean; data?: DreamDiaryData | null; error?: string }>;
     readBootstrapFile: (
       filename: string,
       options?: { agentId?: string },

@@ -11,6 +11,7 @@ import {
 } from '../../shared/dshEngine/hostConstants';
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
+  MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   MigrationV2Status,
@@ -18,13 +19,18 @@ import {
 import { LobsterMemoryService, memoryFingerprint } from '../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
+  backfillLegacyDreamDiariesFromBackup,
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyUserMemories,
   dismissMigrationV2Report,
   getPendingMigrationV2Report,
   runLegacyOpenClawMigration,
 } from './legacyOpenClawMigrator';
-import { collectDirectoryTarEntries, writeTarGzArchive } from './tarGzUtil';
+import {
+  collectDirectoryTarEntries,
+  extractMatchingEntriesFromTarGz,
+  writeTarGzArchive,
+} from './tarGzUtil';
 
 const tempDirs: string[] = [];
 
@@ -1057,5 +1063,243 @@ describe('runLegacyOpenClawMigration', () => {
     } finally {
       memService.close();
     }
+  });
+
+  test('migrates DREAMS.md and dreams.md normalized to DREAMS.md and archives memory/.dreams/', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.close();
+
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    const wsMain = path.join(stateDir, 'workspace-main');
+    const wsAgent1 = path.join(stateDir, 'workspace-agent1');
+    fs.mkdirSync(path.join(wsMain, 'memory', '.dreams'), { recursive: true });
+    fs.mkdirSync(wsAgent1, { recursive: true });
+
+    const mainDiary = [
+      '# Dream Diary',
+      '',
+      '<!-- openclaw:dreaming:diary:start -->',
+      '---',
+      '*November 14, 2026 at 3:00 AM GMT+8*',
+      'Main agent historical dream entry.',
+      '<!-- openclaw:dreaming:diary:end -->',
+      '',
+    ].join('\n');
+    const agent1Diary = [
+      '# Dream Diary',
+      '',
+      '<!-- openclaw:dreaming:diary:start -->',
+      '---',
+      '*November 12, 2026 at 3:00 AM GMT+8*',
+      'Agent1 lowercase dreams.md entry.',
+      '<!-- openclaw:dreaming:diary:end -->',
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(path.join(wsMain, 'DREAMS.md'), mainDiary, 'utf8');
+    fs.writeFileSync(path.join(wsMain, 'memory', '.dreams', 'short-term-recall.json'), '{"entries":[]}\n');
+    fs.writeFileSync(path.join(wsMain, 'memory', '.dreams', 'phase-signals.json'), '{"signals":[]}\n');
+    fs.writeFileSync(path.join(wsAgent1, 'dreams.md'), agent1Diary, 'utf8');
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    const report = result.report!;
+
+    // Verify both DREAMS.md and lowercase dreams.md are copied and normalized to DREAMS.md.
+    const migratedMainDreams = path.join(userDataDir, WORKSPACES_DIR_NAME, 'main', 'DREAMS.md');
+    const migratedAgent1Dreams = path.join(userDataDir, WORKSPACES_DIR_NAME, 'agent1', 'DREAMS.md');
+    expect(fs.readFileSync(migratedMainDreams, 'utf8')).toBe(mainDiary);
+    expect(fs.readFileSync(migratedAgent1Dreams, 'utf8')).toBe(agent1Diary);
+    expect(fs.readdirSync(path.join(userDataDir, WORKSPACES_DIR_NAME, 'agent1'))).toContain('DREAMS.md');
+
+    // Verify memory/.dreams/ was archived into incompatible-modules-backup.tar.gz and NOT copied.
+    expect(fs.existsSync(path.join(userDataDir, WORKSPACES_DIR_NAME, 'main', 'memory', '.dreams'))).toBe(false);
+    const dreamingArchiveItem = report.archivedModules.find((m) => m.category === 'dreaming_embedding');
+    expect(dreamingArchiveItem?.count).toBe(2);
+
+    const inspectDir = createTempDir();
+    const extractedDreamState = await extractMatchingEntriesFromTarGz(
+      report.incompatibleArchivePath,
+      inspectDir,
+      (archivePath) => archivePath.startsWith('dreams/'),
+    );
+    expect(extractedDreamState.sort()).toEqual([
+      'dreams/main/memory/.dreams/phase-signals.json',
+      'dreams/main/memory/.dreams/short-term-recall.json',
+    ]);
+
+    // Verify dream diary backfill KV marker is stamped so already-migrated DB won't rescan archive.
+    const verifyDb = new Database(sqlitePath);
+    const kvRow = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY) as { value?: string } | undefined;
+    expect(kvRow?.value).toBeTruthy();
+    expect(JSON.parse(kvRow!.value!).diariesRestored).toBe(2);
+    verifyDb.close();
+  });
+
+  test('backfillLegacyDreamDiariesFromBackup restores DREAMS.md from legacy-openclaw-state.tar.gz idempotently', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    // Build a legacy OpenClaw state archive mimicking an earlier v2 migration backup.
+    const stagingStateDir = path.join(createTempDir(), 'openclaw-state');
+    fs.mkdirSync(path.join(stagingStateDir, 'workspace-main'), { recursive: true });
+    fs.mkdirSync(path.join(stagingStateDir, 'workspace-agent1'), { recursive: true });
+    fs.mkdirSync(path.join(stagingStateDir, 'workspace-existing'), { recursive: true });
+    fs.mkdirSync(path.join(stagingStateDir, 'workspace'), { recursive: true });
+
+    const mainDiary = [
+      '<!-- openclaw:dreaming:diary:start -->',
+      '---',
+      '*November 15, 2026 at 3:00 AM GMT+8*',
+      'Restored from legacy state archive.',
+      '<!-- openclaw:dreaming:diary:end -->',
+    ].join('\n');
+    const bareWorkspaceDiary = 'Bare workspace fallback (should lose to workspace-main).\n';
+    const agent1Diary = [
+      '<!-- openclaw:dreaming:diary:start -->',
+      '---',
+      '*November 11, 2026 at 3:00 AM GMT+8*',
+      'Agent1 restored lowercase dreams.md.',
+      '<!-- openclaw:dreaming:diary:end -->',
+    ].join('\n');
+
+    fs.writeFileSync(path.join(stagingStateDir, 'workspace-main', 'DREAMS.md'), mainDiary, 'utf8');
+    fs.writeFileSync(path.join(stagingStateDir, 'workspace', 'DREAMS.md'), bareWorkspaceDiary, 'utf8');
+    fs.writeFileSync(path.join(stagingStateDir, 'workspace-agent1', 'dreams.md'), agent1Diary, 'utf8');
+    fs.writeFileSync(path.join(stagingStateDir, 'workspace-existing', 'DREAMS.md'), 'Old backup copy', 'utf8');
+
+    // Pre-populate workspace-existing/DREAMS.md so we verify backfill does not overwrite it.
+    const existingDir = path.join(userDataDir, WORKSPACES_DIR_NAME, 'existing');
+    fs.mkdirSync(existingDir, { recursive: true });
+    fs.writeFileSync(path.join(existingDir, 'DREAMS.md'), 'Already present diary', 'utf8');
+
+    const backupDir = path.join(
+      userDataDir,
+      LEGACY_OPENCLAW_BACKUP_DIR_NAME,
+      '2026-11-20T00-57-39-889Z',
+    );
+    fs.mkdirSync(backupDir, { recursive: true });
+    const archivePath = path.join(backupDir, 'legacy-openclaw-state.tar.gz');
+    writeTarGzArchive(
+      archivePath,
+      collectDirectoryTarEntries(stagingStateDir, 'openclaw-state'),
+    );
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T00:57:39.889Z', backupDir }),
+      1,
+    );
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_REPORT_KV_KEY,
+      JSON.stringify({
+        version: 2,
+        migratedAt: '2026-11-20T00:57:39.889Z',
+        backupDir,
+        incompatibleArchivePath: path.join(backupDir, 'incompatible-modules-backup.tar.gz'),
+        legacyStateArchivePath: archivePath,
+        sqliteSnapshotPath: path.join(backupDir, 'lobsterai.pre-v2.sqlite'),
+        dismissed: true,
+        summary: {
+          workspacesMigrated: 2,
+          scheduledTasksMigrated: 0,
+          imAllowListsMigrated: 0,
+          sessionsPreservedForLazyBridge: 0,
+          mcpLaunchCachesCleared: 0,
+          disposableBytesFreed: 0,
+        },
+        archivedModules: [],
+        reauthRequired: [],
+      }),
+      1,
+    );
+
+    const first = await backfillLegacyDreamDiariesFromBackup({
+      userDataDir,
+      db,
+      now: () => new Date('2026-11-21T01:00:00.000Z'),
+    });
+    expect(first).toEqual({
+      status: 'completed',
+      diariesRestored: 2,
+    });
+
+    const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+    expect(fs.readFileSync(path.join(workspacesDir, 'main', 'DREAMS.md'), 'utf8')).toBe(mainDiary);
+    expect(fs.readFileSync(path.join(workspacesDir, 'agent1', 'DREAMS.md'), 'utf8')).toBe(agent1Diary);
+    expect(fs.readdirSync(path.join(workspacesDir, 'agent1'))).toContain('DREAMS.md');
+    expect(fs.readFileSync(path.join(workspacesDir, 'existing', 'DREAMS.md'), 'utf8')).toBe(
+      'Already present diary',
+    );
+
+    // Second run must be an idempotent no-op.
+    const second = await backfillLegacyDreamDiariesFromBackup({ userDataDir, db });
+    expect(second).toEqual({
+      status: 'skipped',
+      diariesRestored: 0,
+    });
+    db.close();
+  });
+
+  test('backfillLegacyDreamDiariesFromBackup falls back to bare workspace/DREAMS.md and skips fresh installs', async () => {
+    // 1. Bare workspace/DREAMS.md without workspace-main
+    const upgradedDir = createTempDir();
+    const upgradedDb = new Database(path.join(upgradedDir, 'lobsterai.sqlite'));
+    upgradedDb.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    const staging = path.join(createTempDir(), 'openclaw-state');
+    fs.mkdirSync(path.join(staging, 'workspace'), { recursive: true });
+    fs.writeFileSync(path.join(staging, 'workspace', 'DREAMS.md'), 'Bare workspace diary\n', 'utf8');
+    const backupDir = path.join(upgradedDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME, '2026-11-20T01-00-00-000Z');
+    fs.mkdirSync(backupDir, { recursive: true });
+    writeTarGzArchive(
+      path.join(backupDir, 'legacy-openclaw-state.tar.gz'),
+      collectDirectoryTarEntries(staging, 'openclaw-state'),
+    );
+    upgradedDb.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T01:00:00.000Z', backupDir }),
+      1,
+    );
+
+    const restored = await backfillLegacyDreamDiariesFromBackup({
+      userDataDir: upgradedDir,
+      db: upgradedDb,
+    });
+    expect(restored).toEqual({ status: 'completed', diariesRestored: 1 });
+    expect(
+      fs.readFileSync(path.join(upgradedDir, WORKSPACES_DIR_NAME, 'main', 'DREAMS.md'), 'utf8'),
+    ).toBe('Bare workspace diary\n');
+    upgradedDb.close();
+
+    // 2. Fresh install must skip immediately without creating workspaces.
+    const freshDir = createTempDir();
+    const freshDb = new Database(path.join(freshDir, 'lobsterai.sqlite'));
+    freshDb.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    freshDb.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T01:00:00.000Z', freshInstall: true }),
+      1,
+    );
+    const freshResult = await backfillLegacyDreamDiariesFromBackup({
+      userDataDir: freshDir,
+      db: freshDb,
+    });
+    expect(freshResult).toEqual({ status: 'skipped', diariesRestored: 0 });
+    expect(fs.existsSync(path.join(freshDir, WORKSPACES_DIR_NAME))).toBe(false);
+    freshDb.close();
   });
 });

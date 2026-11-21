@@ -2111,6 +2111,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryTabEntries: '记忆条目管理',
     coworkMemoryTabEmbedding: 'Embedding 语义搜索',
     coworkMemoryTabDreaming: '梦境',
+    coworkMemoryTabLegacyDreamDiary: '历史梦境日记',
+    coworkDreamingLegacyReadOnlyNotice:
+      '旧版梦境生成功能已下线，以下历史梦境日记以只读方式保留，供回顾查阅。',
+    coworkDreamingLegacyReadOnlyBadge: '只读归档',
+    coworkDreamingLegacyViewParsed: '条目视图',
+    coworkDreamingLegacyViewRaw: '查看原文',
+    coworkDreamingLegacyMainAgent: '主助手',
+    coworkDreamingLegacyUntitledEntry: '日记 #{index}',
     // Dreaming content display
     coworkDreamingSubTabScene: '场景',
     coworkDreamingSubTabDiary: '日记',
@@ -7142,6 +7150,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryTabEntries: 'Memory Entries',
     coworkMemoryTabEmbedding: 'Embedding Search',
     coworkMemoryTabDreaming: 'Dreaming',
+    coworkMemoryTabLegacyDreamDiary: 'Historical Dream Diary',
+    coworkDreamingLegacyReadOnlyNotice:
+      'Dreaming generation has been retired. Your historical dream diaries are preserved here in read-only mode.',
+    coworkDreamingLegacyReadOnlyBadge: 'Read-only archive',
+    coworkDreamingLegacyViewParsed: 'Entries',
+    coworkDreamingLegacyViewRaw: 'Raw text',
+    coworkDreamingLegacyMainAgent: 'Main Assistant',
+    coworkDreamingLegacyUntitledEntry: 'Entry #{index}',
     // Dreaming content display
     coworkDreamingSubTabScene: 'Scene',
     coworkDreamingSubTabDiary: 'Diary',
