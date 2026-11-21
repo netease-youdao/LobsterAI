@@ -10,6 +10,8 @@
  * - `syncProviders`: hot-sync LobsterAI providers & API keys into memory
  * - `syncMcpServers`: reconcile LobsterAI MCP servers via `ctx.mcpManager.register`
  * - `syncSkillsPolicy`: update global enabled/disabled skill lists & refresh catalog
+ * - `syncAgents`: hot-sync LobsterAI agent roster & collaboration policies into memory
+ * - `syncSubagentBindings`: restore durable childSessionId -> targetAgentId delegation bindings
  * - `bindSessionContext`: bind `{ agentId, coworkSessionId, allowedSkillIds, customSystemPrompt, executionMode }`
  * - `syncHostTools`: hot-sync native host tool definitions
  * - `deleteSessionFiles`: cancel/stop live agent and delete persisted JSONL session dir
@@ -207,6 +209,8 @@ export function apply(ctx) {
               providers: llm ? llm.listProviders() : [],
               mcpServers: mcpManager ? mcpManager.list() : [],
               boundSessionsCount: state.sessionContexts.size,
+              agentsCount: state.agents.size,
+              delegatedBindingsCount: state.delegatedChildAgents.size,
               workspacesDirConfigured: state.workspacesDir.length > 0,
               skillsDirConfigured: state.skillsDir.length > 0,
               bridgeConfigured: state.bridgeUrl.length > 0,
@@ -251,6 +255,121 @@ export function apply(ctx) {
             });
           }
 
+          case 'syncAgents': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const rawAgents = Array.isArray(p.agents) ? p.agents : [];
+            const nextAgents = new Map();
+            const nextOrder = [];
+            for (const item of rawAgents) {
+              if (!item || typeof item !== 'object') continue;
+              const id = typeof item.id === 'string' ? item.id.trim() : '';
+              if (!id || nextAgents.has(id)) continue;
+              const collaborationMode = item.collaborationMode === 'allowlist' || item.collaborationMode === 'disabled'
+                ? item.collaborationMode
+                : 'all';
+              const allowAgentIds = Array.isArray(item.allowAgentIds)
+                ? [...new Set(item.allowAgentIds
+                  .filter((candidate) => typeof candidate === 'string')
+                  .map((candidate) => candidate.trim())
+                  .filter((candidate) => candidate.length > 0 && candidate !== id))]
+                : [];
+              const allowedSkillIds = Array.isArray(item.allowedSkillIds)
+                ? item.allowedSkillIds.filter((s) => typeof s === 'string' && s.trim().length > 0)
+                : null;
+              const rawModel = item.modelSelection && typeof item.modelSelection === 'object'
+                ? item.modelSelection
+                : null;
+              const modelSelection = rawModel
+                && typeof rawModel.provider === 'string' && rawModel.provider.trim().length > 0
+                && typeof rawModel.model === 'string' && rawModel.model.trim().length > 0
+                ? {
+                    provider: rawModel.provider.trim(),
+                    model: rawModel.model.trim(),
+                    ...(typeof rawModel.reasoningEffort === 'string' && rawModel.reasoningEffort.trim().length > 0
+                      ? { reasoningEffort: rawModel.reasoningEffort.trim() }
+                      : {}),
+                  }
+                : undefined;
+              const skillSummaries = Array.isArray(item.skillSummaries)
+                ? item.skillSummaries
+                  .filter((s) => s && typeof s === 'object' && typeof s.id === 'string' && s.id.trim().length > 0)
+                  .map((s) => ({
+                    id: s.id.trim(),
+                    name: typeof s.name === 'string' && s.name.trim().length > 0 ? s.name.trim() : s.id.trim(),
+                    ...(typeof s.description === 'string' && s.description.trim().length > 0
+                      ? { description: s.description.trim() }
+                      : {}),
+                  }))
+                : [];
+              nextAgents.set(id, {
+                id,
+                name: typeof item.name === 'string' && item.name.trim().length > 0 ? item.name.trim() : id,
+                description: typeof item.description === 'string' ? item.description.trim() : '',
+                enabled: item.enabled !== false,
+                ...(typeof item.presetId === 'string' && item.presetId.trim().length > 0
+                  ? { presetId: item.presetId.trim() }
+                  : {}),
+                ...(typeof item.systemPrompt === 'string' && item.systemPrompt.trim().length > 0
+                  ? { systemPrompt: item.systemPrompt }
+                  : {}),
+                ...(typeof item.workingDirectory === 'string' && item.workingDirectory.trim().length > 0
+                  ? { workingDirectory: item.workingDirectory.trim() }
+                  : {}),
+                allowedSkillIds,
+                ...(modelSelection ? { modelSelection } : {}),
+                collaborationMode,
+                allowAgentIds,
+                skillSummaries,
+              });
+              nextOrder.push(id);
+            }
+            state.agents = nextAgents;
+            state.agentOrder = nextOrder;
+            state.invalidateSkills?.();
+            return jsonResponse({
+              ok: true,
+              result: {
+                agentsCount: nextAgents.size,
+              },
+            });
+          }
+
+          case 'syncSubagentBindings': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const rawBindings = Array.isArray(p.bindings) ? p.bindings : [];
+            const replace = p.replace === true;
+            if (replace) {
+              state.delegatedChildAgents.clear();
+            }
+            let syncedCount = 0;
+            for (const entry of rawBindings) {
+              if (!entry || typeof entry !== 'object') continue;
+              const childSessionId = typeof entry.childSessionId === 'string' ? entry.childSessionId.trim() : '';
+              const targetAgentId = typeof entry.targetAgentId === 'string' ? entry.targetAgentId.trim() : '';
+              if (!childSessionId || !targetAgentId) continue;
+              state.delegatedChildAgents.set(childSessionId, {
+                targetAgentId,
+                ...(typeof entry.parentDshSessionId === 'string' && entry.parentDshSessionId.trim().length > 0
+                  ? { parentDshSessionId: entry.parentDshSessionId.trim() }
+                  : {}),
+                ...(typeof entry.rootCoworkSessionId === 'string' && entry.rootCoworkSessionId.trim().length > 0
+                  ? { rootCoworkSessionId: entry.rootCoworkSessionId.trim() }
+                  : {}),
+                ...(typeof entry.workspaceDir === 'string' && entry.workspaceDir.trim().length > 0
+                  ? { workspaceDir: entry.workspaceDir.trim() }
+                  : {}),
+              });
+              syncedCount += 1;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                syncedCount,
+                totalBindings: state.delegatedChildAgents.size,
+              },
+            });
+          }
+
           case 'bindSessionContext': {
             const p = payload && typeof payload === 'object' ? payload : {};
             const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
@@ -259,6 +378,7 @@ export function apply(ctx) {
             }
             if (p.unbind === true) {
               state.sessionContexts.delete(sessionId);
+              state.delegatedChildAgents.delete(sessionId);
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
             const prev = state.sessionContexts.get(sessionId) ?? {};
@@ -350,6 +470,7 @@ export function apply(ctx) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
             state.sessionContexts.delete(sessionId);
+            state.delegatedChildAgents.delete(sessionId);
             // Stop live agent if running before deleting files.
             const liveAgent = ctx.get('agents')?.get(sessionId);
             if (liveAgent && typeof liveAgent.cancel === 'function') {

@@ -130,11 +130,15 @@ describe('DshHostManager', () => {
     const mcpRes = await manager.syncMcpServers([]);
     const skillRes = await manager.syncSkillsPolicy({ disabledIds: ['foo'] });
     const toolsRes = await manager.syncHostTools([]);
+    const agentsRes = await manager.syncAgents([]);
+    const bindingsRes = await manager.syncSubagentBindings([], { replace: true });
 
     expect(provRes).toEqual({ deferred: true });
     expect(mcpRes).toEqual({ deferred: true });
     expect(skillRes).toEqual({ deferred: true });
     expect(toolsRes).toEqual({ deferred: true });
+    expect(agentsRes).toEqual({ deferred: true });
+    expect(bindingsRes).toEqual({ deferred: true });
   });
 
   test('buildIsolatedDshChildEnv strips inherited native DSH_* vars and isolates home, agents-home, and pnpm store', () => {

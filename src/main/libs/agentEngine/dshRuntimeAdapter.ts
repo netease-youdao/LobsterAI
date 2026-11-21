@@ -115,7 +115,8 @@ export interface DshModelSelection {
 }
 
 export interface DshRuntimeAdapterDeps {
-  subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>;
+  subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>
+    & Partial<Pick<DshSubagentSessions, 'setDelegatedAgent'>>;
   hostManager: Pick<
     DshHostManager,
     'start' | 'isReady' | 'getClient' | 'bindSessionContext' | 'deleteSessionFiles'
@@ -1541,11 +1542,20 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const resultMeta = record(data.meta);
         const hostResult = record(resultMeta.lobsterToolResult);
         const isError = Boolean(hostResult.isError || messageObj?.isError || data.isError);
-        const subagentRunId = resultMeta.kind === DshChildEvent.Activation && typeof resultMeta.name === 'string'
-          ? turn.subagentIdsByName.get(resultMeta.name) : undefined;
+        const subagentRunId = resultMeta.kind === DshChildEvent.Activation
+          ? (
+              (typeof resultMeta.name === 'string' ? turn.subagentIdsByName.get(resultMeta.name) : undefined)
+              ?? (typeof resultMeta.childId === 'string' && resultMeta.childId.trim()
+                ? formatStoredDshSessionId(resultMeta.childId.trim())
+                : undefined)
+            )
+          : undefined;
         const task = turn.subagentTasksByCall.get(callId);
         if (subagentRunId && task !== undefined && !isError) turn.pendingSubagentResults.add(subagentRunId);
         if (subagentRunId && task) this.subagentSessions?.setTask(coworkSessionId, subagentRunId, task);
+        if (subagentRunId && typeof resultMeta.agentId === 'string' && resultMeta.agentId.trim()) {
+          this.subagentSessions?.setDelegatedAgent?.(coworkSessionId, subagentRunId, resultMeta.agentId.trim());
+        }
         turn.subagentTasksByCall.delete(callId);
         const msg = this.store.addMessage(coworkSessionId, {
           type: 'tool_result',

@@ -434,6 +434,7 @@ import {
   DevelopmentProtocolSwitch,
   resolveDevelopmentLaunchContext,
 } from './libs/developmentProtocolContext';
+import { buildDshHostAgentSpecs } from './libs/dsh/dshAgentSync';
 import {
   DshBootstrap,
   type DshCompatEngineStatus,
@@ -2785,6 +2786,27 @@ const syncOpenClawConfig = async (options: {
     const enabledIds = skills.filter(s => s.enabled).map(s => s.id);
     const disabledIds = skills.filter(s => !s.enabled).map(s => s.id);
 
+    const agents = buildDshHostAgentSpecs({
+      agents: getAgentManager().listAgents(),
+      skills,
+      resolveExplicitModel: (agent) => {
+        const normalized = normalizeOpenClawModelRef(agent.model.trim());
+        const parsed = parsePrimaryModelRef(normalized);
+        if (!parsed) return null;
+        if (
+          parsed.providerId === OpenClawProviderId.LobsteraiServer
+          && parseModelPresetModelId(parsed.modelId)
+        ) {
+          return null;
+        }
+        return {
+          provider: parsed.providerId,
+          model: parsed.modelId,
+          ...(agent.thinkingLevel ? { reasoningEffort: agent.thinkingLevel } : {}),
+        };
+      },
+    });
+
     let imInstances: ReturnType<typeof buildDshImChannelInstances> | undefined;
     try {
       const imConfig = getIMGatewayManager().getConfig() as unknown as Record<string, unknown>;
@@ -2806,6 +2828,7 @@ const syncOpenClawConfig = async (options: {
         disabledIds,
         skillsDir: getSkillManager().getSkillsRoot(),
       },
+      agents,
       imInstances,
     });
 

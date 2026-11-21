@@ -17,6 +17,28 @@ export const AgentModelSelectionMode = {
 } as const;
 export type AgentModelSelectionMode = typeof AgentModelSelectionMode[keyof typeof AgentModelSelectionMode];
 
+export const SubagentCollaborationMode = {
+  All: 'all',
+  Allowlist: 'allowlist',
+  Disabled: 'disabled',
+} as const;
+export type SubagentCollaborationMode =
+  typeof SubagentCollaborationMode[keyof typeof SubagentCollaborationMode];
+
+export function normalizeSubagentCollaborationMode(
+  raw: unknown,
+  fallback: SubagentCollaborationMode = SubagentCollaborationMode.All,
+): SubagentCollaborationMode {
+  if (
+    raw === SubagentCollaborationMode.All
+    || raw === SubagentCollaborationMode.Allowlist
+    || raw === SubagentCollaborationMode.Disabled
+  ) {
+    return raw;
+  }
+  return fallback;
+}
+
 export const AgentIpcChannel = {
   List: 'agents:list',
   Get: 'agents:get',

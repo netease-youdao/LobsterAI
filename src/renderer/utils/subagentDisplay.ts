@@ -20,10 +20,28 @@ export const getSubagentDisplayName = (
   return getAgentDisplayNameById(agentId, agents) ?? agentId;
 };
 
+/**
+ * Resolve the delegated specialist agent's display name when a subagent run
+ * belongs to a different LobsterAI agent than the parent session.
+ */
+export const getSubagentTargetAgentName = (
+  subagent: Pick<SubagentSessionSummary, 'agentId'>,
+  agents: Array<Pick<SubagentAgentDisplaySource, 'id' | 'name'>>,
+  parentAgentId?: string | null,
+): string | null => {
+  const targetId = subagent.agentId?.trim();
+  if (!targetId) return null;
+  const normalizedParent = parentAgentId?.trim() || 'main';
+  if (targetId === normalizedParent) return null;
+  return getAgentDisplayNameById(targetId, agents) ?? targetId;
+};
+
 export const getSubagentDisplayInitial = (
   subagent: Pick<SubagentSessionSummary, 'label' | 'agentId'>,
   agents: Array<Pick<SubagentAgentDisplaySource, 'id' | 'name'>>,
+  parentAgentId?: string | null,
 ): string => {
-  const displayName = getSubagentDisplayName(subagent, agents).trim();
-  return displayName.slice(0, 1).toUpperCase() || 'S';
+  const targetAgentName = getSubagentTargetAgentName(subagent, agents, parentAgentId);
+  const source = (targetAgentName || getSubagentDisplayName(subagent, agents)).trim();
+  return source.slice(0, 1).toUpperCase() || 'S';
 };

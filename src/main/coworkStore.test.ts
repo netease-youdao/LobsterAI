@@ -22,7 +22,12 @@ import BetterSqlite3 from 'better-sqlite3';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
 import { AgentAvatarSvg, DefaultAgentAvatarIcon, encodeAgentAvatarIcon } from '../shared/agent/avatar';
-import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
+import {
+  AgentId,
+  AgentModelSelectionMode,
+  AgentSource,
+  SubagentCollaborationMode,
+} from '../shared/agent/constants';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SEARCH_HISTORY_MAX_MESSAGE_CONTENT_CODE_UNITS,
@@ -143,6 +148,7 @@ function setupDb(): void {
       icon TEXT NOT NULL DEFAULT '',
       icon_customized INTEGER,
       skill_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}',
       subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
       pinned INTEGER NOT NULL DEFAULT 0,
@@ -2152,4 +2158,25 @@ test('sidebar hides historical self-spawns while preserving expert work, forks a
   expect(store.countSearchSessions({ query: 'child' })).toBe(2);
   expect(store.countSearchSessions({ query: 'child', agentId: 'main' })).toBe(1);
   expect(store.getSession(self.id)?.id).toBe(self.id);
+});
+
+test('agent CRUD persists subagentCollaborationMode and defaults new agents to all', () => {
+  const defaultAgent = store.createAgent({ id: 'translator', name: '翻译专家' });
+  expect(defaultAgent.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(defaultAgent.subagentAllowAgentIds).toEqual([]);
+
+  const restricted = store.createAgent({
+    id: 'blog-publisher',
+    name: '博客自动发布',
+    subagentCollaborationMode: SubagentCollaborationMode.Allowlist,
+    subagentAllowAgentIds: ['translator'],
+  });
+  expect(restricted.subagentCollaborationMode).toBe(SubagentCollaborationMode.Allowlist);
+  expect(restricted.subagentAllowAgentIds).toEqual(['translator']);
+
+  const updated = store.updateAgent('blog-publisher', {
+    subagentCollaborationMode: SubagentCollaborationMode.Disabled,
+  });
+  expect(updated?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Disabled);
+  expect(updated?.subagentAllowAgentIds).toEqual(['translator']);
 });

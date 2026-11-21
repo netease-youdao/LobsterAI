@@ -1,5 +1,11 @@
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import { AgentLegacyIdentityCleanupStatus, AgentModelSelectionMode, AgentSource } from '@shared/agent';
+import {
+  AgentLegacyIdentityCleanupStatus,
+  AgentModelSelectionMode,
+  AgentSource,
+  normalizeSubagentCollaborationMode,
+  SubagentCollaborationMode,
+} from '@shared/agent';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import { ProviderName } from '@shared/providers';
@@ -24,6 +30,7 @@ import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
 import TrashIcon from '../icons/TrashIcon';
 import AgentAvatarPicker from './AgentAvatarPicker';
+import AgentCollaborationSettings from './AgentCollaborationSettings';
 import AgentConfirmDialog from './AgentConfirmDialog';
 import AgentDetailToolbar from './AgentDetailToolbar';
 import {
@@ -97,6 +104,9 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [modelSelectionMode, setModelSelectionMode] = useState<AgentModelSelectionMode>(AgentModelSelectionMode.Explicit);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [subagentCollaborationMode, setSubagentCollaborationMode] = useState<SubagentCollaborationMode>(
+    SubagentCollaborationMode.All,
+  );
   const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
   const [nameTouched, setNameTouched] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -128,6 +138,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     icon: '',
     workingDirectory: '',
     skillIds: [] as string[],
+    subagentCollaborationMode: SubagentCollaborationMode.All as SubagentCollaborationMode,
     subagentAllowAgentIds: [] as string[],
   });
 
@@ -145,6 +156,9 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (workingDirectory !== init.workingDirectory) changedFields.push('workingDirectory');
     if (skillIds.length !== init.skillIds.length || skillIds.some((id, i) => id !== init.skillIds[i])) {
       changedFields.push('skillIds');
+    }
+    if (subagentCollaborationMode !== init.subagentCollaborationMode) {
+      changedFields.push('subagentCollaborationMode');
     }
     if (
       subagentAllowAgentIds.length !== init.subagentAllowAgentIds.length ||
@@ -169,6 +183,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     skillIds,
     storedModelRef,
     subagentAllowAgentIds,
+    subagentCollaborationMode,
     systemPrompt,
     userInfo,
     workingDirectory,
@@ -280,6 +295,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       setModelSelectionMode(a.modelSelectionMode ?? AgentModelSelectionMode.Explicit);
       setWorkingDirectory(a.workingDirectory ?? '');
       setSkillIds(a.skillIds ?? []);
+      const nextCollaborationMode = normalizeSubagentCollaborationMode(a.subagentCollaborationMode);
+      setSubagentCollaborationMode(nextCollaborationMode);
       setSubagentAllowAgentIds(a.subagentAllowAgentIds ?? []);
       initialValuesRef.current = {
         name: a.name,
@@ -290,6 +307,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         icon: a.icon,
         workingDirectory: a.workingDirectory ?? '',
         skillIds: a.skillIds ?? [],
+        subagentCollaborationMode: nextCollaborationMode,
         subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
       };
     })();
@@ -399,6 +417,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         workingDirectory: workingDirectory.trim(),
         ...(icon.trim() !== initialValuesRef.current.icon ? { icon: icon.trim() } : {}),
         skillIds,
+        subagentCollaborationMode,
         subagentAllowAgentIds,
       });
       if (!result) {
@@ -576,56 +595,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   );
 
   const renderCollaborationSettings = () => (
-    <div className="h-full overflow-y-auto">
-      <div className="mb-4">
-        <div className="text-sm font-semibold text-foreground">
-          {i18nService.t('agentSubagentsTitle')}
-        </div>
-        <p className="mt-1 text-xs leading-5 text-secondary">
-          {i18nService.t('agentSubagentsHint')}
-        </p>
-      </div>
-      {availableSubagentAgents.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-secondary">
-          {i18nService.t('agentSubagentsEmpty')}
-        </div>
-      ) : (
-        <div className="space-y-1">
-          {availableSubagentAgents.map((candidate) => {
-            const checked = subagentAllowAgentIds.includes(candidate.id);
-            return (
-              <label
-                key={candidate.id}
-                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-raised"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-sm">
-                    <span className="font-medium text-secondary">
-                      {getAgentDisplayName(candidate).slice(0, 1).toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {getAgentDisplayName(candidate)}
-                    </div>
-                    <div className="truncate text-xs text-secondary">
-                      {candidate.id}
-                    </div>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => handleToggleSubagentAllowAgent(candidate.id)}
-                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                  aria-label={getAgentDisplayName(candidate)}
-                />
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <AgentCollaborationSettings
+      mode={subagentCollaborationMode}
+      allowAgentIds={subagentAllowAgentIds}
+      candidates={availableSubagentAgents}
+      onChangeMode={setSubagentCollaborationMode}
+      onToggleAllowAgent={handleToggleSubagentAllowAgent}
+    />
   );
 
   const renderToggle = (isOn: boolean) => (

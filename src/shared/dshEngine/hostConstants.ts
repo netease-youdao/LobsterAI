@@ -12,6 +12,9 @@ export const DSH_SESSION_ID_PREFIX = 'dsh:';
 export const DSH_QUESTION_REQUEST_ID_PREFIX = 'dsh-question:';
 export const DSH_SKILL_INSTALL_TOOL = 'lobster_skill_install';
 export const DshSkillInstallAction = { Inspect: 'inspect', Install: 'install' } as const;
+export const DSH_DELEGATE_AGENT_TOOL = 'delegate_agent';
+export const DSH_DELEGATE_MAX_DEPTH = 2;
+export const DSH_BRIDGE_SUBAGENT_BINDING_PATH = '/dsh-bridge/subagent-binding';
 
 export const RetainedImPlatform = {
   Feishu: 'feishu',
@@ -80,6 +83,8 @@ export const DshOpsAction = {
   SyncProviders: 'syncProviders',
   SyncMcpServers: 'syncMcpServers',
   SyncSkillsPolicy: 'syncSkillsPolicy',
+  SyncAgents: 'syncAgents',
+  SyncSubagentBindings: 'syncSubagentBindings',
   BindSessionContext: 'bindSessionContext',
   DeleteSessionFiles: 'deleteSessionFiles',
   SyncHostTools: 'syncHostTools',

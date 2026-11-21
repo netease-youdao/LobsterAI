@@ -95,4 +95,98 @@ describe('native and upgraded subagent sessions', () => {
     expect((await service.getSubTaskHistory('other', oldRun.id)).map(m => m.content)).toEqual(['legacy task', 'legacy result']);
     expect(host.start).not.toHaveBeenCalled();
   });
+
+  it('persists delegated specialist agentId and reads nested depth-2 subagent history via direct parent', async () => {
+    const db = new Database(':memory:');
+    dbs.push(db);
+    db.exec(`
+      CREATE TABLE cowork_sessions (id TEXT PRIMARY KEY, claude_session_id TEXT, agent_id TEXT, title TEXT, updated_at INTEGER);
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, parent_session_id TEXT, session_key TEXT, child_cowork_session_id TEXT,
+        agent_id TEXT, task TEXT, label TEXT, status TEXT, created_at INTEGER, ended_at INTEGER);
+      CREATE TABLE subagent_messages (id TEXT PRIMARY KEY, run_id TEXT, type TEXT, content TEXT, metadata TEXT,
+        created_at INTEGER, sequence INTEGER);
+    `);
+    const rootDshId = '11111111-1111-4111-8111-111111111111';
+    const depth1Id = '44444444-4444-4444-8444-444444444444';
+    const depth2Id = '55555555-5555-4555-8555-555555555555';
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, ?, ?, ?)')
+      .run('cw-main', DSH_SESSION_ID_PREFIX + rootDshId, 'main', 'root', 100);
+
+    const getSessionProjections = vi.fn(async (id: string): Promise<Record<string, unknown>> => {
+      if (id === rootDshId) {
+        return {
+          values: {
+            subagentCatalog: [{ id: depth1Id, name: 'translator', label: '翻译文章', createdAt: 10, mode: 'continuable' }],
+          },
+        };
+      }
+      if (id === depth1Id) {
+        return {
+          values: {
+            subagent: { seq: 5, mode: 'continuable' },
+            subagentTiming: { lastTurnCompleted: true },
+            subagentCatalog: [{ id: depth2Id, name: 'blog-publisher', label: '发布博客', createdAt: 20, mode: 'continuable' }],
+          },
+        };
+      }
+      return {
+        values: {
+          subagent: { seq: 7, mode: 'continuable' },
+          subagentTiming: { lastTurnCompleted: true },
+        },
+      };
+    });
+    const getSessionEvents = vi.fn(async () => ({
+      records: [
+        { type: 'event', event: { seq: 8, time: 200, type: 'user/message', data: { content: '发布文章', source: { kind: 'user' } } } },
+        { type: 'event', event: { seq: 9, time: 210, type: 'assistant/message', data: { message: { content: '发布完成' } } } },
+      ],
+      hasMore: false,
+    }));
+    const deleteSessionFiles = vi.fn(async () => ({ removedPaths: [] }));
+    const host = {
+      isReady: vi.fn(() => true),
+      start: vi.fn(async () => {}),
+      getClient: () => ({ getSessionProjections, getSessionEvents }),
+      deleteSessionFiles,
+    };
+
+    const service = new DshSubagentSessions(db, host, () => []);
+    service.recordAgentBinding({
+      childSessionId: depth1Id,
+      parentDshSessionId: rootDshId,
+      rootCoworkSessionId: 'cw-main',
+      targetAgentId: 'translator',
+      createdAt: 10,
+    });
+    service.recordAgentBinding({
+      childSessionId: depth2Id,
+      parentDshSessionId: depth1Id,
+      rootCoworkSessionId: 'cw-main',
+      targetAgentId: 'blog-publisher',
+      createdAt: 20,
+    });
+
+    const runs = await service.listSubagentRuns('cw-main');
+    expect(runs.map(r => [r.id, r.agentId, r.label, r.status])).toEqual([
+      [DSH_SESSION_ID_PREFIX + depth1Id, 'translator', '翻译文章', 'done'],
+      [DSH_SESSION_ID_PREFIX + depth2Id, 'blog-publisher', '发布博客', 'done'],
+    ]);
+    expect(service.getOwningSessionId(depth2Id)).toBe('cw-main');
+    expect(service.listAgentBindings()).toHaveLength(2);
+
+    const depth2History = await service.getSubTaskHistory('cw-main', DSH_SESSION_ID_PREFIX + depth2Id);
+    expect(depth2History.map(m => [m.type, m.content])).toEqual([
+      ['user', '发布文章'],
+      ['assistant', '发布完成'],
+    ]);
+    expect(getSessionEvents).toHaveBeenLastCalledWith(
+      { kind: 'subagent', parentSessionId: depth1Id, childSessionId: depth2Id, mode: 'continuable' },
+      { maxMessages: 100, throughSeq: undefined, beforeSeq: undefined },
+    );
+
+    expect(await service.deleteSubagentSession('cw-main', DSH_SESSION_ID_PREFIX + depth2Id)).toBe(true);
+    expect(deleteSessionFiles).toHaveBeenCalledWith(depth2Id);
+    expect(service.listAgentBindings().map(b => b.childSessionId)).toEqual([depth1Id]);
+  });
 });
