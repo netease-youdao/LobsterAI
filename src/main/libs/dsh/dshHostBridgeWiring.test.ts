@@ -5,7 +5,8 @@ import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
-import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
+import { LobsterMemoryService, WorkspaceFileName } from '../../memory/lobsterMemoryService';
+import { MemoryScope } from '../../memory/projectMemoryScope';
 import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
 import { detectDisallowedOfficeGuiLaunch } from '../commandSafety';
 import {
@@ -349,6 +350,154 @@ describe('wireDshHostBridge', () => {
     });
     expect(scheduler.listTasks()).toHaveLength(0);
     expect(onScheduleMutated).toHaveBeenCalledTimes(6);
+
+    wired.dispose();
+  });
+
+  test('enforces project scope, global preference sharing, expert isolation, and memoryEnabled toggle in memory tools', async () => {
+    const workspacesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-bridge-scope-'));
+    const projA = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-bridge-proj-a-'));
+    const projB = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-bridge-proj-b-'));
+    cleanupPaths.push(workspacesDir, projA, projB);
+
+    const memoryService = new LobsterMemoryService(workspacesDir);
+    openServices.push(memoryService);
+
+    let memoryFlag = true;
+    const handlers = new Map<string, DshBridgeToolHandler>();
+    const wired = wireDshHostBridge({
+      hostManager: {
+        registerBridgeToolHandler: (name, fn) => {
+          handlers.set(name, fn);
+          return () => handlers.delete(name);
+        },
+        setFallbackBridgeToolHandler: () => undefined,
+        setApprovalEvaluator: () => undefined,
+        syncHostTools: async () => ({ ok: true }),
+      },
+      memoryService,
+      isMemoryEnabled: () => memoryFlag,
+    });
+
+    const save = handlers.get(BUILTIN_MEMORY_TOOL_NAMES.Save)!;
+    const search = handlers.get(BUILTIN_MEMORY_TOOL_NAMES.Search)!;
+    const get = handlers.get(BUILTIN_MEMORY_TOOL_NAMES.Get)!;
+
+    // Main saves global preference + main-only Project A entry.
+    await save({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Save,
+      args: { content: 'Global pref: always answer with concise bullets', scope: MemoryScope.Global },
+      agentId: 'main',
+      workspaceDir: projA,
+    });
+    await save({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Save,
+      args: { content: 'Main Project A secret flag', scope: MemoryScope.Project },
+      agentId: 'main',
+      workspaceDir: projA,
+    });
+
+    // Expert A saves a project-scoped memory in Project A and a private global memory.
+    const savedProjA = await save({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Save,
+      args: { content: 'Project A test command is pnpm test:alpha', scope: MemoryScope.Project },
+      agentId: 'expert-a',
+      workspaceDir: projA,
+    }) as { ok: boolean; scope: string; projectKey?: string };
+    expect(savedProjA.ok).toBe(true);
+    expect(savedProjA.scope).toBe(MemoryScope.Project);
+    expect(savedProjA.projectKey).toMatch(/^path:/);
+
+    await save({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Save,
+      args: { content: 'Expert A private codename FALCON', scope: MemoryScope.Global },
+      agentId: 'expert-a',
+      workspaceDir: projA,
+    });
+
+    // Raw file on disk carries the <!-- project: ... --> tag.
+    const rawExpertA = memoryService.readWorkspaceFile('expert-a', WorkspaceFileName.Memory);
+    expect(rawExpertA).toContain('<!-- project:');
+
+    // Expert A in Project A recalls Project A convention + global pref + FALCON.
+    const searchAInA = await search({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Search,
+      args: { query: 'pnpm test:alpha' },
+      agentId: 'expert-a',
+      workspaceDir: projA,
+    }) as { hits: unknown[]; text: string };
+    expect(searchAInA.hits).toHaveLength(1);
+    expect(searchAInA.text).not.toContain('<!-- project:');
+
+    // Expert A in Project B does NOT see Project A convention, but DOES see global pref & FALCON.
+    const searchAInB = await search({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Search,
+      args: { query: 'pnpm test:alpha' },
+      agentId: 'expert-a',
+      workspaceDir: projB,
+    }) as { hits: unknown[] };
+    expect(searchAInB.hits).toHaveLength(0);
+
+    const searchGlobalFromExpA = await search({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Search,
+      args: { query: 'concise bullets' },
+      agentId: 'expert-a',
+      workspaceDir: projB,
+    }) as { hits: unknown[]; text: string };
+    expect(searchGlobalFromExpA.hits).toHaveLength(1);
+    expect(searchGlobalFromExpA.text).toContain('[global/MEMORY.md:');
+
+    // Expert A can read global/MEMORY.md (global entries only, never main's Project A secret).
+    const globalGet = await get({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Get,
+      args: { path: 'global/MEMORY.md' },
+      agentId: 'expert-a',
+      workspaceDir: projB,
+    }) as { text: string };
+    expect(globalGet.text).toContain('concise bullets');
+    expect(globalGet.text).not.toContain('Main Project A secret flag');
+
+    // Expert A reading own MEMORY.md in Project B does NOT leak Project A convention.
+    const ownGetInB = await get({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Get,
+      args: { path: 'MEMORY.md' },
+      agentId: 'expert-a',
+      workspaceDir: projB,
+    }) as { text: string };
+    expect(ownGetInB.text).toContain('FALCON');
+    expect(ownGetInB.text).not.toContain('pnpm test:alpha');
+
+    // Expert B sees global pref, NEVER Expert A's FALCON.
+    const searchExpBFalcon = await search({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Search,
+      args: { query: 'FALCON' },
+      agentId: 'expert-b',
+      workspaceDir: projA,
+    }) as { hits: unknown[] };
+    expect(searchExpBFalcon.hits).toHaveLength(0);
+
+    // Disabling memoryEnabled disables search, get, and save without mutating disk.
+    memoryFlag = false;
+    const disabledSearch = await search({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Search,
+      args: { query: 'FALCON' },
+      agentId: 'expert-a',
+      workspaceDir: projA,
+    }) as { hits: unknown[]; disabled?: boolean };
+    expect(disabledSearch.disabled).toBe(true);
+    expect(disabledSearch.hits).toHaveLength(0);
+
+    const disabledSave = await save({
+      toolName: BUILTIN_MEMORY_TOOL_NAMES.Save,
+      args: { content: 'Should not be persisted when disabled' },
+      agentId: 'expert-a',
+      workspaceDir: projA,
+    }) as { ok: boolean; disabled?: boolean };
+    expect(disabledSave.ok).toBe(false);
+    expect(disabledSave.disabled).toBe(true);
+    expect(memoryService.readWorkspaceFile('expert-a', WorkspaceFileName.Memory)).not.toContain(
+      'Should not be persisted when disabled',
+    );
 
     wired.dispose();
   });

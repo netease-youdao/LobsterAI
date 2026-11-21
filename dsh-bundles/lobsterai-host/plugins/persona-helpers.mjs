@@ -5,10 +5,32 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {
+  extractProjectKeys,
+  filterMarkdownForProject,
+  parseProjectTagFromLine,
+  resolveProjectMemoryKeys,
+  stripProjectTags,
+} from './project-memory-scope.mjs';
+
+export {
+  extractProjectKeys,
+  filterMarkdownForProject,
+  parseProjectTagFromLine,
+  resolveProjectMemoryKeys,
+  stripProjectTags,
+};
 
 export const DEFAULT_AGENT_ID = 'main';
 export const MAX_PERSONA_FILE_BYTES = 128 * 1024;
 export const MAX_INLINE_MEMORY_CHARS = 3_000;
+
+export const MEMORY_WRITE_POLICY_PROMPT = [
+  '## Memory Policy',
+  '- Write before you confirm: when the user asks you to remember something ("记住", "以后", "remember this", "from now on") or shares a durable preference or convention, call `lobster_memory_save` BEFORE confirming that you have remembered it.',
+  '- Choose the right scope: pass `scope: "project"` for repository/project-specific conventions, commands, architecture, or file paths; pass `scope: "global"` for cross-project user preferences and general facts.',
+  '- Use `lobster_memory_search` and `lobster_memory_get` to recall older memories or daily notes not shown inline.',
+].join('\n');
 
 const MEMORY_TRUNCATED_HINT = '\n\n（长期记忆较长，以上仅展示前段内容；如需检索完整历史记忆或每日笔记，请调用 `lobster_memory_search` / `lobster_memory_get`。）';
 
@@ -97,21 +119,64 @@ export function sanitizeMemoryMarkdownForPrompt(content, maxChars = MAX_INLINE_M
   return `${bounded}${MEMORY_TRUNCATED_HINT}`;
 }
 
-export function assembleWorkspacePersona(workspacesDir, agentId, customSystemPrompt) {
+export function assembleWorkspacePersona(workspacesDir, agentId, customSystemPrompt, options = {}) {
   const sections = [];
+  const memoryEnabled = options?.memoryEnabled !== false;
+  const activeProjectKeys = resolveProjectMemoryKeys(options?.workspaceDir);
+
   if (workspacesDir) {
-    const dir = resolve(workspacesDir, sanitizeAgentId(agentId));
-    for (const item of PERSONA_FILES) {
-      let text = readTextCached(join(dir, item.file));
-      if (item.sanitize === 'agents' && text) {
-        text = stripLegacyOpenClawAgentsBoilerplate(text);
-      } else if (item.sanitize === 'memory' && text) {
-        text = sanitizeMemoryMarkdownForPrompt(text);
-      }
-      const trimmed = text.trim();
+    const safeId = sanitizeAgentId(agentId);
+    const dir = resolve(workspacesDir, safeId);
+    const isNonMainExpert = safeId !== DEFAULT_AGENT_ID;
+    const mainDir = isNonMainExpert ? resolve(workspacesDir, DEFAULT_AGENT_ID) : null;
+
+    const pushSection = (heading, text) => {
+      const trimmed = typeof text === 'string' ? text.trim() : '';
       if (trimmed.length > 0) {
-        sections.push(`## ${item.heading}\n\n${trimmed}`);
+        sections.push(`## ${heading}\n\n${trimmed}`);
       }
+    };
+
+    pushSection('角色设定', readTextCached(join(dir, 'SOUL.md')));
+    pushSection('身份信息', readTextCached(join(dir, 'IDENTITY.md')));
+
+    if (memoryEnabled) {
+      if (mainDir) {
+        const globalUser = filterMarkdownForProject(
+          readTextCached(join(mainDir, 'USER.md')),
+          [],
+          { stripTags: true, globalOnly: true },
+        );
+        pushSection('Global User Preferences', globalUser);
+
+        const globalMemoryFiltered = filterMarkdownForProject(
+          readTextCached(join(mainDir, 'MEMORY.md')),
+          [],
+          { stripTags: true, globalOnly: true },
+        );
+        pushSection('Global Memory', sanitizeMemoryMarkdownForPrompt(globalMemoryFiltered));
+      }
+
+      const ownUser = filterMarkdownForProject(
+        readTextCached(join(dir, 'USER.md')),
+        activeProjectKeys,
+        { stripTags: true },
+      );
+      pushSection('用户信息', ownUser);
+    }
+
+    const agentsText = readTextCached(join(dir, 'AGENTS.md'));
+    if (agentsText) {
+      pushSection('工作区指令', stripLegacyOpenClawAgentsBoilerplate(agentsText));
+    }
+
+    if (memoryEnabled) {
+      const ownMemoryFiltered = filterMarkdownForProject(
+        readTextCached(join(dir, 'MEMORY.md')),
+        activeProjectKeys,
+        { stripTags: true },
+      );
+      pushSection('长期记忆', sanitizeMemoryMarkdownForPrompt(ownMemoryFiltered));
     }
   }
   if (typeof customSystemPrompt === 'string' && customSystemPrompt.trim().length > 0) {

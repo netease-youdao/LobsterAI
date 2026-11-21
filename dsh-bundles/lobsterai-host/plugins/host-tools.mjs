@@ -13,10 +13,22 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { callLobsterBridge, getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
+import {
+  callLobsterBridge,
+  getHostState,
+  resolveSessionContext,
+  resolveSessionId,
+  resolveSessionWorkspaceDir,
+} from './shared-state.mjs';
 
 export const name = 'lobster-host-tools';
 export const inject = ['tools'];
+
+const MEMORY_TOOL_NAMES = new Set([
+  'lobster_memory_search',
+  'lobster_memory_get',
+  'lobster_memory_save',
+]);
 
 /**
  * Convert an arbitrary JSON Schema (e.g. from MCP or host tool specs) into
@@ -86,7 +98,7 @@ function renderHostToolOutput(_args, value) {
 const BUILTIN_HOST_TOOL_SPECS = [
   {
     name: 'lobster_memory_search',
-    description: '全文检索当前智能体的长期记忆（MEMORY.md）与每日笔记。',
+    description: '全文检索当前智能体的长期记忆（MEMORY.md / USER.md）、每日笔记以及全局用户偏好（自动按当前项目隔离）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -99,11 +111,11 @@ const BUILTIN_HOST_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_get',
-    description: '按路径和行号读取智能体工作区内的记忆文件（如 MEMORY.md 或 memory/YYYY-MM-DD.md）。',
+    description: '按路径和行号读取智能体工作区内的记忆文件（如 MEMORY.md、USER.md、memory/YYYY-MM-DD.md，或 global/MEMORY.md）。',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: '智能体工作区内的相对路径（如 MEMORY.md）。' },
+        path: { type: 'string', description: '智能体工作区内的相对路径（如 MEMORY.md 或 global/MEMORY.md）。' },
         startLine: { type: 'integer', description: '可选，起始行号（从 1 开始）。' },
         endLine: { type: 'integer', description: '可选，结束行号（含）。' },
       },
@@ -113,7 +125,7 @@ const BUILTIN_HOST_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_save',
-    description: '保存一条长期记忆到 MEMORY.md，或追加一条每日记录到 memory/YYYY-MM-DD.md。',
+    description: '保存一条长期记忆到 MEMORY.md，或追加一条每日记录到 memory/YYYY-MM-DD.md。支持按项目或全局作用域持久化。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -122,6 +134,11 @@ const BUILTIN_HOST_TOOL_SPECS = [
           type: 'string',
           enum: ['memory', 'daily'],
           description: '写入目标："memory" 写入长期 MEMORY.md，"daily" 追加到当日日志。',
+        },
+        scope: {
+          type: 'string',
+          enum: ['global', 'project'],
+          description: '记忆作用域："project" 用于当前仓库/项目专属的规范、命令或文件路径；"global" 用于跨项目用户偏好或通用事实（默认）。',
         },
         date: { type: 'string', description: '可选，target 为 "daily" 时的日期（YYYY-MM-DD）。' },
       },
@@ -182,6 +199,34 @@ function createBridgeTool(ctx, state, spec) {
     async execute(args, exec) {
       const sessionId = resolveSessionId(exec);
       const bound = resolveSessionContext(ctx, state, sessionId);
+      const workspaceDir = resolveSessionWorkspaceDir(ctx, state, sessionId, bound, exec.agent);
+      if (MEMORY_TOOL_NAMES.has(toolName)) {
+        const memoryEnabled = typeof bound?.memoryEnabled === 'boolean'
+          ? bound.memoryEnabled
+          : state.memoryEnabled !== false;
+        if (!memoryEnabled) {
+          if (toolName === 'lobster_memory_search') {
+            return {
+              query: typeof args?.query === 'string' ? args.query : '',
+              hits: [],
+              disabled: true,
+              text: 'Memory is currently disabled in settings.',
+            };
+          }
+          if (toolName === 'lobster_memory_get') {
+            return {
+              path: typeof args?.path === 'string' ? args.path : 'MEMORY.md',
+              text: '',
+              disabled: true,
+            };
+          }
+          return {
+            ok: false,
+            disabled: true,
+            text: 'Memory is currently disabled in settings; nothing was saved.',
+          };
+        }
+      }
       const result = await callLobsterBridge(
         state,
         '/dsh-bridge/tool-execute',
@@ -192,6 +237,7 @@ function createBridgeTool(ctx, state, spec) {
           sessionId,
           agentId: bound?.agentId ?? 'main',
           coworkSessionId: bound?.coworkSessionId,
+          ...(workspaceDir ? { workspaceDir } : {}),
         },
         exec.signal,
       );

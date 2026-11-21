@@ -106,6 +106,10 @@ export interface DshHostSkillsPolicy {
   skillsDir?: string;
 }
 
+export interface DshHostMemoryPolicy {
+  enabled: boolean;
+}
+
 export interface DshHostAgentSkillSummary {
   id: string;
   name: string;
@@ -166,6 +170,7 @@ export interface DshHostSessionContext {
   allowedSkillIds?: string[] | null;
   customSystemPrompt?: string;
   executionMode?: string;
+  memoryEnabled?: boolean;
   permissionPreset?: DshPermissionPreset;
   unlockedCapabilities?: DshProgressiveCapability[];
   unbind?: boolean;
@@ -179,6 +184,7 @@ export interface DshBridgeToolExecuteRequest {
   sessionId?: string;
   agentId: string;
   coworkSessionId?: string;
+  workspaceDir?: string;
 }
 
 export type DshBridgeToolHandler = (
@@ -381,6 +387,7 @@ export class DshHostManager extends EventEmitter {
   } | null = null;
   private lastMcpServers: DshHostMcpServerSpec[] | null = null;
   private lastSkillsPolicy: DshHostSkillsPolicy | null = null;
+  private lastMemoryPolicy: DshHostMemoryPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
   private lastAgents: DshHostAgentSpec[] | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
@@ -506,6 +513,12 @@ export class DshHostManager extends EventEmitter {
     this.lastSkillsPolicy = policy;
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, policy);
+  }
+
+  async syncMemoryPolicy(policy: DshHostMemoryPolicy): Promise<Record<string, unknown>> {
+    this.lastMemoryPolicy = policy;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncMemoryPolicy, policy);
   }
 
   async syncHostTools(tools: DshHostToolDescriptor[]): Promise<Record<string, unknown>> {
@@ -644,6 +657,9 @@ export class DshHostManager extends EventEmitter {
     }
     if (this.lastSkillsPolicy) {
       await this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, this.lastSkillsPolicy);
+    }
+    if (this.lastMemoryPolicy) {
+      await this.getClient().callOps(DshOpsAction.SyncMemoryPolicy, this.lastMemoryPolicy);
     }
     if (this.lastHostTools) {
       await this.getClient().callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
@@ -915,6 +931,9 @@ export class DshHostManager extends EventEmitter {
           sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
           agentId: typeof body.agentId === 'string' && body.agentId ? body.agentId : 'main',
           coworkSessionId: typeof body.coworkSessionId === 'string' ? body.coworkSessionId : undefined,
+          workspaceDir: typeof body.workspaceDir === 'string' && body.workspaceDir.trim().length > 0
+            ? body.workspaceDir.trim()
+            : undefined,
         };
         const tool = this.bridgeTools.get(request.toolName) ?? this.fallbackBridgeTool;
         if (!tool) {

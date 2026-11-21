@@ -1083,10 +1083,66 @@ export async function backfillLegacyScheduledTasksFromBackup(options: {
   }
 }
 
+function copyLegacyMemoryMarkdownRecursive(
+  srcDir: string,
+  dstDir: string,
+  agentId: string,
+  incompatibleEntries: TarEntryInput[],
+  relPrefix = '',
+): { copiedAny: boolean; dreamsFilesArchived: number } {
+  let copiedAny = false;
+  let dreamsFilesArchived = 0;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(srcDir, { withFileTypes: true });
+  } catch {
+    return { copiedAny, dreamsFilesArchived };
+  }
+
+  for (const entry of entries) {
+    const srcPath = path.join(srcDir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '.dreams') {
+        const archivePrefix = relPrefix
+          ? `dreams/${agentId}/memory/${relPrefix}/.dreams`
+          : `dreams/${agentId}/memory/.dreams`;
+        const dreamEntries = collectDirectoryTarEntries(srcPath, archivePrefix);
+        incompatibleEntries.push(...dreamEntries);
+        dreamsFilesArchived += dreamEntries.length;
+        continue;
+      }
+      const nextRelPrefix = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+      const nested = copyLegacyMemoryMarkdownRecursive(
+        srcPath,
+        path.join(dstDir, entry.name),
+        agentId,
+        incompatibleEntries,
+        nextRelPrefix,
+      );
+      if (nested.copiedAny) copiedAny = true;
+      dreamsFilesArchived += nested.dreamsFilesArchived;
+      continue;
+    }
+
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const dstPath = path.join(dstDir, entry.name);
+    if (!fs.existsSync(dstPath)) {
+      fs.mkdirSync(dstDir, { recursive: true });
+      fs.copyFileSync(srcPath, dstPath);
+      copiedAny = true;
+    }
+  }
+
+  return { copiedAny, dreamsFilesArchived };
+}
+
 /**
- * Copy legacy `workspace-*` persona & memory files out of OpenClaw's state dir
- * into engine-independent `<userData>/workspaces/<agentId>/`, stripping the
- * old OpenClaw-managed `AGENTS.md` section and skipping `.dreams/`.
+ * Copy legacy `workspace-*` (and bare `workspace/` when `workspace-main` is
+ * absent) persona & memory files out of OpenClaw's state dir into
+ * engine-independent `<userData>/workspaces/<agentId>/`, stripping the old
+ * OpenClaw-managed `AGENTS.md` section, recursively copying `memory/**\/*.md`,
+ * and skipping `.dreams/`.
  */
 function migrateLegacyWorkspaces(
   openclawStateDir: string,
@@ -1105,12 +1161,25 @@ function migrateLegacyWorkspaces(
     return 0;
   }
 
+  const hasWorkspaceMain = dirents.some(
+    (dirent) => dirent.isDirectory() && dirent.name === 'workspace-main',
+  );
+  const workspaceTargets: Array<{ dirName: string; agentId: string }> = [];
+  for (const dirent of dirents) {
+    if (!dirent.isDirectory()) continue;
+    if (dirent.name.startsWith('workspace-')) {
+      const agentId = dirent.name.slice('workspace-'.length).trim() || 'main';
+      workspaceTargets.push({ dirName: dirent.name, agentId });
+    } else if (dirent.name === 'workspace' && !hasWorkspaceMain) {
+      workspaceTargets.push({ dirName: dirent.name, agentId: 'main' });
+    }
+  }
+
   const memoryService = new LobsterMemoryService(workspacesDir);
   try {
-    for (const dirent of dirents) {
-      if (!dirent.isDirectory() || !dirent.name.startsWith('workspace-')) continue;
-      const agentId = dirent.name.slice('workspace-'.length).trim() || 'main';
-      const srcDir = path.join(openclawStateDir, dirent.name);
+    for (const target of workspaceTargets) {
+      const { agentId, dirName } = target;
+      const srcDir = path.join(openclawStateDir, dirName);
       const dstDir = memoryService.ensureAgentWorkspace(agentId);
 
       let copiedAny = false;
@@ -1130,20 +1199,19 @@ function migrateLegacyWorkspaces(
         }
       }
 
-      // Copy daily memory notes (`memory/YYYY-MM-DD.md`).
+      // Recursively copy daily and nested memory markdown notes (`memory/**/*.md`), skipping `.dreams/`.
       const srcDailyDir = path.join(srcDir, 'memory');
       if (fs.existsSync(srcDailyDir)) {
         const dstDailyDir = path.join(dstDir, 'memory');
         fs.mkdirSync(dstDailyDir, { recursive: true });
-        for (const f of fs.readdirSync(srcDailyDir)) {
-          if (!f.endsWith('.md')) continue;
-          const srcMd = path.join(srcDailyDir, f);
-          const dstMd = path.join(dstDailyDir, f);
-          if (fs.statSync(srcMd).isFile() && !fs.existsSync(dstMd)) {
-            fs.copyFileSync(srcMd, dstMd);
-            copiedAny = true;
-          }
-        }
+        const copiedMemory = copyLegacyMemoryMarkdownRecursive(
+          srcDailyDir,
+          dstDailyDir,
+          agentId,
+          incompatibleEntries,
+        );
+        if (copiedMemory.copiedAny) copiedAny = true;
+        dreamsFilesArchived += copiedMemory.dreamsFilesArchived;
       }
 
       // Archive `.dreams/` into incompatible modules backup instead of migrating.

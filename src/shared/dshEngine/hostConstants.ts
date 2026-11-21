@@ -83,6 +83,7 @@ export const DshOpsAction = {
   SyncProviders: 'syncProviders',
   SyncMcpServers: 'syncMcpServers',
   SyncSkillsPolicy: 'syncSkillsPolicy',
+  SyncMemoryPolicy: 'syncMemoryPolicy',
   SyncAgents: 'syncAgents',
   SyncSubagentBindings: 'syncSubagentBindings',
   BindSessionContext: 'bindSessionContext',

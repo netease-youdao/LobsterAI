@@ -2290,6 +2290,7 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.createSession(title, cwd, systemPrompt, executionMode, activeSkillIds, agentId),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
+      getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
       resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {
         const session = storeInstance.getSession(sessionId, 0);
         const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
@@ -2859,6 +2860,7 @@ const syncOpenClawConfig = async (options: {
         disabledIds,
         skillsDir: getSkillManager().getSkillsRoot(),
       },
+      memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       agents,
       imInstances,
     });
@@ -10884,6 +10886,7 @@ if (!gotTheLock) {
       if (committed && agentId && agentId !== AgentId.Main) {
         const wsDir = resolveAgentWorkspacePath(agentId);
         fs.rmSync(wsDir, { recursive: true, force: true });
+        getDshBootstrap().memoryService.deleteAgentIndex(agentId);
       }
       return committed;
     },

@@ -14,6 +14,7 @@ import {
   MIGRATION_V2_REPORT_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { LobsterMemoryService } from '../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
   backfillLegacyScheduledTasksFromBackup,
@@ -661,5 +662,80 @@ describe('runLegacyOpenClawMigration', () => {
       runsImported: 0,
     });
     db.close();
+  });
+
+  test('migrates bare legacy workspace/ when workspace-main is absent and recursively copies nested memory/**/*.md excluding .dreams/', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);');
+    db.close();
+
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    const bareWs = path.join(stateDir, 'workspace');
+    fs.mkdirSync(path.join(bareWs, 'memory', 'topics', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(bareWs, 'memory', '.dreams'), { recursive: true });
+    fs.writeFileSync(path.join(bareWs, 'USER.md'), '# User\n- Bare workspace user pref\n', 'utf8');
+    fs.writeFileSync(
+      path.join(bareWs, 'MEMORY.md'),
+      '# Memories\n- Bare global pref\n- Alpha repo rule <!-- project: github.com/acme/alpha -->\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(bareWs, 'memory', 'topics', 'sub', 'architecture.md'),
+      '# Architecture\n- Nested markdown memory note\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(bareWs, 'memory', '.dreams', 'ignored-dream.md'),
+      'Dream note inside memory/.dreams\n',
+      'utf8',
+    );
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.workspacesMigrated).toBe(1);
+
+    const migratedMain = path.join(userDataDir, WORKSPACES_DIR_NAME, 'main');
+    expect(fs.readFileSync(path.join(migratedMain, 'USER.md'), 'utf8')).toContain('Bare workspace user pref');
+    expect(fs.readFileSync(path.join(migratedMain, 'MEMORY.md'), 'utf8')).toContain('<!-- project: github.com/acme/alpha -->');
+    expect(
+      fs.readFileSync(path.join(migratedMain, 'memory', 'topics', 'sub', 'architecture.md'), 'utf8'),
+    ).toContain('Nested markdown memory note');
+    expect(fs.existsSync(path.join(migratedMain, 'memory', '.dreams'))).toBe(false);
+    expect(result.report?.archivedModules.some((m) => m.category === 'dreaming_embedding')).toBe(true);
+
+    // Verify FTS5 index populated during migration finds nested markdown & USER.md while respecting project tags.
+    const memSvc = new LobsterMemoryService(path.join(userDataDir, WORKSPACES_DIR_NAME));
+    try {
+      expect(memSvc.search('main', 'Nested markdown memory note')).toHaveLength(1);
+      expect(memSvc.search('main', 'Bare workspace user pref')).toHaveLength(1);
+      expect(memSvc.search('main', 'Alpha repo rule')).toHaveLength(0);
+    } finally {
+      memSvc.close();
+    }
+  });
+
+  test('prefers workspace-main over bare workspace/ when both exist', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);');
+    db.close();
+
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    fs.mkdirSync(path.join(stateDir, 'workspace'), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, 'workspace-main'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'workspace', 'MEMORY.md'), '- Old bare workspace\n', 'utf8');
+    fs.writeFileSync(path.join(stateDir, 'workspace-main', 'MEMORY.md'), '- Canonical workspace-main\n', 'utf8');
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    const migratedMem = fs.readFileSync(
+      path.join(userDataDir, WORKSPACES_DIR_NAME, 'main', 'MEMORY.md'),
+      'utf8',
+    );
+    expect(migratedMem).toContain('Canonical workspace-main');
+    expect(migratedMem).not.toContain('Old bare workspace');
   });
 });

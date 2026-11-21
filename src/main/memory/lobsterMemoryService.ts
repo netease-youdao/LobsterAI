@@ -12,6 +12,14 @@ import crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import {
+  filterMarkdownLinesPreservingLineNumbers,
+  INVALID_PROJECT_KEY_SENTINEL,
+  parseScopedMarkdownBlocks,
+  resolveProjectMemoryKeys,
+  stripProjectTags,
+} from './projectMemoryScope';
+
 export const WorkspaceFileName = {
   Soul: 'SOUL.md',
   Identity: 'IDENTITY.md',
@@ -45,6 +53,16 @@ export interface MemorySearchHit {
   lineEnd: number;
   snippet: string;
   score: number;
+}
+
+export interface MemorySearchOptions {
+  workspaceDir?: string;
+  includeMainGlobal?: boolean;
+}
+
+export interface ReadMemorySnippetOptions {
+  workspaceDir?: string;
+  globalOnly?: boolean;
 }
 
 export interface AgentPersonaFiles {
@@ -262,8 +280,9 @@ export class LobsterMemoryService {
     const dir = this.ensureAgentWorkspace(agentId);
     const filePath = path.join(dir, fileName);
     fs.writeFileSync(filePath, content, 'utf8');
-    if (fileName === WorkspaceFileName.Memory) {
-      this.indexSingleFile(sanitizeAgentId(agentId), WorkspaceFileName.Memory, content);
+    if (fileName === WorkspaceFileName.Memory || fileName === WorkspaceFileName.User) {
+      const stat = safeStatFile(filePath);
+      this.indexSingleFile(sanitizeAgentId(agentId), fileName, content, stat?.mtimeMs, stat?.size);
     }
   }
 
@@ -374,11 +393,18 @@ export class LobsterMemoryService {
       ? `${existing.replace(/\s+$/, '')}\n\n${trimmed}\n`
       : `# ${dateKey}\n\n${trimmed}\n`;
     fs.writeFileSync(filePath, nextContent, 'utf8');
-    this.indexSingleFile(safeId, relPath, nextContent);
+    const stat = safeStatFile(filePath);
+    this.indexSingleFile(safeId, relPath, nextContent, stat?.mtimeMs, stat?.size);
     return relPath;
   }
 
-  readMemorySnippet(agentId: string, relPath: string, fromLine = 1, lineCount = 80): string | null {
+  readMemorySnippet(
+    agentId: string,
+    relPath: string,
+    fromLine = 1,
+    lineCount = 80,
+    options?: ReadMemorySnippetOptions,
+  ): string | null {
     const safeId = sanitizeAgentId(agentId);
     const workspaceDir = this.getAgentWorkspaceDir(safeId);
     const normalizedRel = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -388,10 +414,38 @@ export class LobsterMemoryService {
       throw new Error(`Refusing path outside agent workspace: ${relPath}`);
     }
     if (!fs.existsSync(resolved)) return null;
-    const lines = fs.readFileSync(resolved, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    const rawContent = fs.readFileSync(resolved, 'utf8');
     const startIdx = Math.max(0, Math.floor(fromLine) - 1);
-    const endIdx = Math.min(lines.length, startIdx + Math.max(1, Math.floor(lineCount)));
+    const count = Math.max(1, Math.floor(lineCount));
+
+    if (options && (options.workspaceDir !== undefined || options.globalOnly === true)) {
+      const activeProjectKeys = options.globalOnly ? [] : resolveProjectMemoryKeys(options.workspaceDir);
+      const filteredLines = filterMarkdownLinesPreservingLineNumbers(rawContent, activeProjectKeys, {
+        stripTags: true,
+        globalOnly: options.globalOnly === true,
+      });
+      const endIdx = Math.min(filteredLines.length, startIdx + count);
+      return filteredLines
+        .slice(startIdx, endIdx)
+        .filter((line): line is string => line !== null)
+        .join('\n');
+    }
+
+    const lines = rawContent.replace(/\r\n/g, '\n').split('\n');
+    const endIdx = Math.min(lines.length, startIdx + count);
     return lines.slice(startIdx, endIdx).join('\n');
+  }
+
+  deleteAgentIndex(agentId: string): void {
+    const safeId = sanitizeAgentId(agentId);
+    const dbPath = path.join(this.workspacesDir, MEMORY_FTS_DB_NAME);
+    if (!this.db && !fs.existsSync(dbPath)) return;
+    const db = this.ensureIndexDb();
+    const runTx = db.transaction(() => {
+      db.prepare('DELETE FROM memory_chunks WHERE agent_id = ?').run(safeId);
+      db.prepare('DELETE FROM memory_file_meta WHERE agent_id = ?').run(safeId);
+    });
+    runTx();
   }
 
   reindexAgent(agentId = 'main'): number {
@@ -399,42 +453,62 @@ export class LobsterMemoryService {
     const db = this.ensureIndexDb();
     const workspaceDir = this.getAgentWorkspaceDir(safeId);
 
-    const clearStmt = db.prepare('DELETE FROM memory_chunks WHERE agent_id = ?');
-    clearStmt.run(safeId);
+    const clearTx = db.transaction(() => {
+      db.prepare('DELETE FROM memory_chunks WHERE agent_id = ?').run(safeId);
+      db.prepare('DELETE FROM memory_file_meta WHERE agent_id = ?').run(safeId);
+    });
+    clearTx();
 
     if (!fs.existsSync(workspaceDir)) return 0;
 
     let chunkCount = 0;
-    const memoryPath = path.join(workspaceDir, WorkspaceFileName.Memory);
-    if (fs.existsSync(memoryPath)) {
-      chunkCount += this.indexSingleFile(safeId, WorkspaceFileName.Memory, fs.readFileSync(memoryPath, 'utf8'));
-    }
-
-    const dailyDir = path.join(workspaceDir, MEMORY_DAILY_DIR_NAME);
-    if (fs.existsSync(dailyDir)) {
-      const files = fs.readdirSync(dailyDir).filter((name) => name.endsWith('.md')).sort();
-      for (const name of files) {
-        const relPath = `${MEMORY_DAILY_DIR_NAME}/${name}`;
-        const content = fs.readFileSync(path.join(dailyDir, name), 'utf8');
-        chunkCount += this.indexSingleFile(safeId, relPath, content);
+    const files = collectIndexableFiles(workspaceDir);
+    for (const file of files) {
+      let content: string;
+      try {
+        content = fs.readFileSync(file.absPath, 'utf8');
+      } catch {
+        continue;
       }
+      chunkCount += this.indexSingleFile(safeId, file.relPath, content, file.mtimeMs, file.size);
     }
     return chunkCount;
   }
 
-  search(agentId: string, query: string, limit = 10): MemorySearchHit[] {
+  search(
+    agentId: string,
+    query: string,
+    limit = 10,
+    options?: MemorySearchOptions,
+  ): MemorySearchHit[] {
     const safeId = sanitizeAgentId(agentId);
     const trimmed = query.trim();
     if (!trimmed) return [];
 
+    const includeMainGlobal = options?.includeMainGlobal !== false && safeId !== 'main';
+    const activeProjectKeys = resolveProjectMemoryKeys(options?.workspaceDir);
+
     const db = this.ensureIndexDb();
-    const countRow = db.prepare('SELECT COUNT(*) AS count FROM memory_chunks WHERE agent_id = ?').get(safeId) as { count: number };
-    if (countRow.count === 0) {
-      this.reindexAgent(safeId);
+    this.syncAgentIndexIfStale(safeId);
+    if (includeMainGlobal) {
+      this.syncAgentIndexIfStale('main');
     }
 
     const clampedLimit = Math.max(1, Math.min(50, Math.floor(limit)));
     const useFts = this.ftsTokenizer !== 'trigram' || Array.from(trimmed).length >= 3;
+
+    const ownConditions = ["project_keys = ''"];
+    const scopeParams: string[] = [safeId];
+    for (const key of activeProjectKeys) {
+      ownConditions.push("INSTR(char(10) || project_keys || char(10), char(10) || ? || char(10)) > 0");
+      scopeParams.push(key);
+    }
+    const ownClause = `(agent_id = ? AND (${ownConditions.join(' OR ')}))`;
+    let visibilityClause = ownClause;
+    if (includeMainGlobal) {
+      visibilityClause = `(${ownClause} OR (agent_id = ? AND project_keys = '' AND rel_path IN (?, ?)))`;
+      scopeParams.push('main', WorkspaceFileName.Memory, WorkspaceFileName.User);
+    }
 
     if (useFts) {
       const escaped = `"${trimmed.replace(/"/g, '""')}"`;
@@ -442,10 +516,10 @@ export class LobsterMemoryService {
         const rows = db.prepare(`
           SELECT agent_id, rel_path, line_start, line_end, content, bm25(memory_chunks) AS score
           FROM memory_chunks
-          WHERE agent_id = ? AND memory_chunks MATCH ?
+          WHERE (${visibilityClause}) AND memory_chunks MATCH ?
           ORDER BY score ASC
           LIMIT ?
-        `).all(safeId, escaped, clampedLimit) as Array<{
+        `).all(...scopeParams, escaped, clampedLimit) as Array<{
           agent_id: string;
           rel_path: string;
           line_start: number;
@@ -473,9 +547,9 @@ export class LobsterMemoryService {
     const rows = db.prepare(`
       SELECT agent_id, rel_path, line_start, line_end, content
       FROM memory_chunks
-      WHERE agent_id = ? AND content LIKE ? ESCAPE '\\'
+      WHERE (${visibilityClause}) AND content LIKE ? ESCAPE '\\'
       LIMIT ?
-    `).all(safeId, likePattern, clampedLimit) as Array<{
+    `).all(...scopeParams, likePattern, clampedLimit) as Array<{
       agent_id: string;
       rel_path: string;
       line_start: number;
@@ -506,6 +580,19 @@ export class LobsterMemoryService {
     const dbPath = path.join(this.workspacesDir, MEMORY_FTS_DB_NAME);
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
+
+    // Recreate derived FTS5 index cleanly if an older DB lacks `project_keys`.
+    const existingTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_chunks'")
+      .get() as { name?: string } | undefined;
+    if (existingTable?.name) {
+      const cols = db.prepare('PRAGMA table_info(memory_chunks)').all() as Array<{ name?: string }>;
+      const hasProjectKeys = cols.some((col) => col.name === 'project_keys');
+      if (!hasProjectKeys) {
+        db.exec('DROP TABLE IF EXISTS memory_chunks; DROP TABLE IF EXISTS memory_file_meta;');
+      }
+    }
+
     try {
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks USING fts5(
@@ -513,6 +600,7 @@ export class LobsterMemoryService {
           rel_path UNINDEXED,
           line_start UNINDEXED,
           line_end UNINDEXED,
+          project_keys UNINDEXED,
           content,
           tokenize='trigram'
         );
@@ -525,28 +613,115 @@ export class LobsterMemoryService {
           rel_path UNINDEXED,
           line_start UNINDEXED,
           line_end UNINDEXED,
+          project_keys UNINDEXED,
           content,
           tokenize='unicode61'
         );
       `);
       this.ftsTokenizer = 'unicode61';
     }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_file_meta (
+        agent_id TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        mtime_ms REAL NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (agent_id, rel_path)
+      );
+    `);
+
     this.db = db;
     return db;
   }
 
-  private indexSingleFile(agentId: string, relPath: string, content: string): number {
+  private syncAgentIndexIfStale(agentId: string): void {
+    const db = this.ensureIndexDb();
+    const workspaceDir = this.getAgentWorkspaceDir(agentId);
+    const metaRows = db
+      .prepare('SELECT rel_path, mtime_ms, size FROM memory_file_meta WHERE agent_id = ?')
+      .all(agentId) as Array<{ rel_path: string; mtime_ms: number; size: number }>;
+    const metaByPath = new Map(metaRows.map((row) => [row.rel_path, row]));
+
+    if (!fs.existsSync(workspaceDir)) {
+      if (metaByPath.size > 0) {
+        this.deleteAgentIndex(agentId);
+      } else {
+        const orphan = db
+          .prepare('SELECT 1 FROM memory_chunks WHERE agent_id = ? LIMIT 1')
+          .get(agentId);
+        if (orphan) {
+          db.prepare('DELETE FROM memory_chunks WHERE agent_id = ?').run(agentId);
+        }
+      }
+      return;
+    }
+
+    const diskFiles = collectIndexableFiles(workspaceDir);
+    const diskPathSet = new Set(diskFiles.map((f) => f.relPath));
+
+    // Remove deleted files from FTS5 and meta table.
+    for (const relPath of metaByPath.keys()) {
+      if (!diskPathSet.has(relPath)) {
+        const delTx = db.transaction(() => {
+          db.prepare('DELETE FROM memory_chunks WHERE agent_id = ? AND rel_path = ?').run(agentId, relPath);
+          db.prepare('DELETE FROM memory_file_meta WHERE agent_id = ? AND rel_path = ?').run(agentId, relPath);
+        });
+        delTx();
+      }
+    }
+
+    // Reindex any new or modified file.
+    for (const file of diskFiles) {
+      const tracked = metaByPath.get(file.relPath);
+      if (tracked && tracked.mtime_ms === file.mtimeMs && tracked.size === file.size) {
+        continue;
+      }
+      let content: string;
+      try {
+        content = fs.readFileSync(file.absPath, 'utf8');
+      } catch {
+        continue;
+      }
+      this.indexSingleFile(agentId, file.relPath, content, file.mtimeMs, file.size);
+    }
+  }
+
+  private indexSingleFile(
+    agentId: string,
+    relPath: string,
+    content: string,
+    mtimeMs?: number,
+    size?: number,
+  ): number {
     const db = this.ensureIndexDb();
     const deleteStmt = db.prepare('DELETE FROM memory_chunks WHERE agent_id = ? AND rel_path = ?');
     const insertStmt = db.prepare(
-      'INSERT INTO memory_chunks (agent_id, rel_path, line_start, line_end, content) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO memory_chunks (agent_id, rel_path, line_start, line_end, project_keys, content) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const upsertMetaStmt = db.prepare(
+      'INSERT OR REPLACE INTO memory_file_meta (agent_id, rel_path, mtime_ms, size) VALUES (?, ?, ?, ?)',
     );
 
     const chunks = splitMarkdownChunks(content);
+    const resolvedMeta = (mtimeMs !== undefined && size !== undefined)
+      ? { mtimeMs, size }
+      : safeStatFile(path.join(this.getAgentWorkspaceDir(agentId), relPath));
+
     const runTx = db.transaction(() => {
       deleteStmt.run(agentId, relPath);
       for (const chunk of chunks) {
-        insertStmt.run(agentId, relPath, chunk.lineStart, chunk.lineEnd, chunk.content);
+        insertStmt.run(
+          agentId,
+          relPath,
+          chunk.lineStart,
+          chunk.lineEnd,
+          chunk.projectKeys,
+          chunk.content,
+        );
+      }
+      if (resolvedMeta) {
+        upsertMetaStmt.run(agentId, relPath, resolvedMeta.mtimeMs, resolvedMeta.size);
       }
     });
     runTx();
@@ -554,33 +729,102 @@ export class LobsterMemoryService {
   }
 }
 
-function splitMarkdownChunks(content: string): Array<{ lineStart: number; lineEnd: number; content: string }> {
-  const lines = content.replace(/\r\n/g, '\n').split('\n');
-  const chunks: Array<{ lineStart: number; lineEnd: number; content: string }> = [];
-  let start = -1;
-  let buffer: string[] = [];
+const PROMOTION_COMMENT_RE = /^[ \t]*<!--\s*openclaw-memory-promotion:[^>]*-->[ \t]*\r?\n?/gm;
 
-  const flush = (endIdx: number) => {
-    const text = buffer.join('\n').trim();
-    if (text && start >= 0) {
-      chunks.push({ lineStart: start + 1, lineEnd: endIdx + 1, content: text });
-    }
-    start = -1;
-    buffer = [];
-  };
+interface IndexableFileEntry {
+  relPath: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+}
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line.trim() === '') {
-      flush(i - 1);
+function safeStatFile(filePath: string): { mtimeMs: number; size: number } | null {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+function walkMarkdownFilesRecursive(
+  rootDir: string,
+  relPrefix: string,
+  out: IndexableFileEntry[],
+): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    if (entry.name === '.dreams') continue;
+    const absPath = path.join(rootDir, entry.name);
+    const relPath = `${relPrefix}/${entry.name}`;
+    if (entry.isDirectory()) {
+      walkMarkdownFilesRecursive(absPath, relPath, out);
       continue;
     }
-    if (start < 0) start = i;
-    buffer.push(line);
-    if (buffer.length >= 24) {
-      flush(i);
+    if (!entry.name.endsWith('.md')) continue;
+    const stat = safeStatFile(absPath);
+    if (stat) {
+      out.push({ relPath, absPath, mtimeMs: stat.mtimeMs, size: stat.size });
     }
   }
-  flush(lines.length - 1);
+}
+
+function collectIndexableFiles(workspaceDir: string): IndexableFileEntry[] {
+  const files: IndexableFileEntry[] = [];
+  for (const rootFile of [WorkspaceFileName.Memory, WorkspaceFileName.User]) {
+    const absPath = path.join(workspaceDir, rootFile);
+    const stat = safeStatFile(absPath);
+    if (stat) {
+      files.push({ relPath: rootFile, absPath, mtimeMs: stat.mtimeMs, size: stat.size });
+    }
+  }
+  const dailyDir = path.join(workspaceDir, MEMORY_DAILY_DIR_NAME);
+  if (fs.existsSync(dailyDir)) {
+    walkMarkdownFilesRecursive(dailyDir, MEMORY_DAILY_DIR_NAME, files);
+  }
+  return files;
+}
+
+interface MarkdownSearchChunk {
+  lineStart: number;
+  lineEnd: number;
+  content: string;
+  projectKeys: string;
+}
+
+function splitMarkdownChunks(content: string): MarkdownSearchChunk[] {
+  const blocks = parseScopedMarkdownBlocks(content);
+  const chunks: MarkdownSearchChunk[] = [];
+
+  for (const block of blocks) {
+    if (block.kind !== 'entry') continue;
+    const projectKeys = !block.annotated
+      ? ''
+      : block.projectKeys.length > 0
+        ? block.projectKeys.join('\n')
+        : INVALID_PROJECT_KEY_SENTINEL;
+
+    for (let offset = 0; offset < block.lines.length; offset += 24) {
+      const slice = block.lines.slice(offset, offset + 24);
+      const cleaned = stripProjectTags(slice.join('\n'))
+        .replace(PROMOTION_COMMENT_RE, '')
+        .trim();
+      if (!cleaned) continue;
+      chunks.push({
+        lineStart: block.lineStart + offset,
+        lineEnd: block.lineStart + offset + slice.length - 1,
+        content: cleaned,
+        projectKeys,
+      });
+    }
+  }
+
   return chunks;
 }

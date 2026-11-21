@@ -92,6 +92,7 @@ export interface DshBootstrapSyncInput {
     extraDirs?: string[];
     skillsDir?: string;
   };
+  memoryEnabled?: boolean;
   agents?: DshHostAgentSpec[];
   imInstances?: Array<{
     platform: string;
@@ -118,6 +119,7 @@ export interface DshBootstrapOptions {
     ) => { id: string };
   };
   getDefaultCwd: (agentId?: string) => string;
+  getMemoryEnabled?: () => boolean;
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
@@ -378,6 +380,7 @@ export class DshBootstrap {
     this.bridgeWiring = wireDshHostBridge({
       hostManager: this.hostManager,
       memoryService: this.memoryService,
+      isMemoryEnabled: options.getMemoryEnabled,
       scheduler: this.scheduler,
       onScheduleMutated: () => {
         this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
@@ -386,8 +389,13 @@ export class DshBootstrap {
       toolProviders: options.toolProviders,
     });
 
-    // Seed initial persisted permission preset into DshHostManager so it replays on boot.
+    // Seed initial persisted permission preset & memory policy into DshHostManager so they replay on boot.
     void this.hostManager.setPermissionPreset(this.defaultPermissionPreset).catch((): void => undefined);
+    if (options.getMemoryEnabled) {
+      void this.hostManager
+        .syncMemoryPolicy({ enabled: options.getMemoryEnabled() !== false })
+        .catch((): void => undefined);
+    }
 
     this.hostManager.on('phaseChange', (_phase, hostStatus: DshHostStatus) => {
       options.onStatusChange?.(mapDshHostStatusToEngineStatus(hostStatus), hostStatus);
@@ -523,6 +531,9 @@ export class DshBootstrap {
       );
       await this.hostManager.syncMcpServers(servers);
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
+      if (typeof input.memoryEnabled === 'boolean') {
+        await this.hostManager.syncMemoryPolicy({ enabled: input.memoryEnabled });
+      }
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);
       }
