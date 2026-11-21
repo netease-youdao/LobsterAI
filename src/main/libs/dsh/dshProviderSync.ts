@@ -583,6 +583,11 @@ export async function buildDshMcpServerSpecs(
       try {
         const authHeaders = await oauthManager.resolveAuthorizationHeaders(rec.id);
         if (authHeaders) {
+          for (const existingKey of Object.keys(headers)) {
+            if (existingKey.toLowerCase() === 'authorization') {
+              delete headers[existingKey];
+            }
+          }
           Object.assign(headers, authHeaders);
         } else {
           needsReauthIds.push(rec.id);

@@ -43,10 +43,12 @@ vi.mock('electron', () => ({
   },
 }));
 
+const mockEnabledServers: unknown[] = [];
+
 vi.mock('./mcpStore', () => ({
   McpStore: class {
     getEnabledServers(): unknown[] {
-      return [];
+      return mockEnabledServers;
     }
   },
 }));
@@ -233,6 +235,47 @@ describe('McpRuntime resolved server metadata', () => {
       auth: McpAuthMode.OAuth,
       requestTimeoutMs: 120_000,
       connectionTimeoutMs: 30_000,
+    });
+  });
+});
+
+describe('McpRuntime resolved server IDs', () => {
+  afterEach(() => {
+    mockEnabledServers.length = 0;
+  });
+
+  test('preserves SQLite server.id on resolved remote OAuth servers', async () => {
+    mockEnabledServers.push({
+      id: 'srv-uuid-1234',
+      name: 'Linear OAuth',
+      description: 'Remote OAuth server',
+      enabled: true,
+      transportType: 'http',
+      url: 'https://mcp.linear.app/mcp',
+      auth: McpAuthMode.OAuth,
+      isBuiltIn: false,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const sqliteStore = {
+      get: vi.fn(() => undefined),
+      set: vi.fn(),
+      getDatabase: vi.fn(() => ({})),
+    };
+    const runtime = new McpRuntime({
+      getStore: () => sqliteStore as never,
+      syncOpenClawConfig: vi.fn(async () => ({ success: true, changed: false })),
+    });
+
+    const resolved = await runtime.refreshResolvedServersCache();
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      id: 'srv-uuid-1234',
+      name: 'Linear OAuth',
+      transportType: 'http',
+      url: 'https://mcp.linear.app/mcp',
+      auth: McpAuthMode.OAuth,
     });
   });
 });

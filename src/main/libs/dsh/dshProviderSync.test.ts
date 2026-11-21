@@ -583,4 +583,50 @@ describe('buildDshMcpServerSpecs', () => {
     expect(result.warnings[4]).not.toContain('LEGACY_TOKEN');
     expect(warnSpy).toHaveBeenCalledTimes(5);
   });
+
+  test('strips case-insensitive existing authorization headers before injecting OAuth token keyed by server UUID id', async () => {
+    const serverUuid = '8b4b4d2a-1234-4a5b-9c6d-111122223333';
+    const resolveAuthorizationHeaders = vi.fn(async (id: string) => {
+      if (id === serverUuid) return { Authorization: 'Bearer oauth-live-token' };
+      throw new Error('refresh failed');
+    });
+
+    const result = await buildDshMcpServerSpecs(
+      [
+        {
+          id: serverUuid,
+          name: 'Notion Remote',
+          enabled: true,
+          transportType: 'http',
+          url: 'https://mcp.notion.com/mcp',
+          headers: {
+            authorization: 'Bearer stale-lowercase-token',
+            AUTHORIZATION: 'Bearer stale-uppercase-token',
+            'X-Workspace': 'acme',
+          },
+          oauthEnabled: true,
+        },
+        {
+          id: 'uuid-failing-refresh',
+          name: 'Broken OAuth',
+          enabled: true,
+          transportType: 'http',
+          url: 'https://mcp.broken.example/mcp',
+          oauthEnabled: true,
+        },
+      ],
+      { resolveAuthorizationHeaders },
+    );
+
+    expect(resolveAuthorizationHeaders).toHaveBeenCalledWith(serverUuid);
+    expect(result.servers).toHaveLength(1);
+    expect(result.servers[0].headers).toEqual({
+      'X-Workspace': 'acme',
+      Authorization: 'Bearer oauth-live-token',
+    });
+    expect(Object.keys(result.servers[0].headers ?? {}).filter((k) => k.toLowerCase() === 'authorization')).toEqual([
+      'Authorization',
+    ]);
+    expect(result.needsReauthIds).toEqual(['uuid-failing-refresh']);
+  });
 });

@@ -4,6 +4,7 @@
 export const MIGRATION_V2_COMPLETED_KV_KEY = 'engine.migration.v2.completed';
 export const MIGRATION_V2_REPORT_KV_KEY = 'engine.migration.v2.report';
 export const MIGRATION_V2_CRON_BACKFILL_KV_KEY = 'engine.migration.v2.cronBackfillCompleted';
+export const MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY = 'engine.migration.v2.mcpOAuthBackfillCompleted';
 
 export const MigrationV2Status = {
   Skipped: 'skipped',
@@ -54,6 +55,7 @@ export interface MigrationV2Report {
     imAllowListsMigrated: number;
     sessionsPreservedForLazyBridge: number;
     mcpLaunchCachesCleared: number;
+    mcpOAuthTokensMigrated?: number;
     disposableBytesFreed: number;
   };
   archivedModules: MigrationV2ArchivedItem[];

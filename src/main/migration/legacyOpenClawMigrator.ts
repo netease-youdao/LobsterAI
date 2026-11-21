@@ -8,6 +8,7 @@
 // OpenClaw caches only after atomic commit succeeds.
 
 import Database from 'better-sqlite3';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -35,9 +36,12 @@ import {
   RetiredImPlatform,
   WORKSPACES_DIR_NAME,
 } from '../../shared/dshEngine/hostConstants';
+import { McpAuthMode } from '../../shared/mcp/auth';
+import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+  MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
@@ -46,6 +50,11 @@ import {
 } from '../../shared/migration/constants';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
+import {
+  encodeMigratedMcpOAuthToken,
+  MCP_OAUTH_TOKEN_KV_PREFIX,
+  type McpOAuthTokenRecord,
+} from '../mcp/mcpOAuthManager';
 import {
   LobsterMemoryService,
   sanitizeAgentId,
@@ -1083,6 +1092,559 @@ export async function backfillLegacyScheduledTasksFromBackup(options: {
   }
 }
 
+const LEGACY_MCP_TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
+const LEGACY_MCP_TOOL_NAME_MAX_PREFIX = 30;
+const LEGACY_MCP_OAUTH_REQUESTER_SUFFIX_RE = /-r-[0-9a-f]{16}$/i;
+
+function hasNonAsciiChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    if (value.charCodeAt(i) > 0x7f) return true;
+  }
+  return false;
+}
+
+function legacySafeServerKey(name: string): string {
+  if (!hasNonAsciiChar(name)) return name;
+  const hash = createHash('md5').update(name).digest('hex').slice(0, 8);
+  return `mcp-${hash}`;
+}
+
+function legacySanitizeServerName(raw: string): string {
+  const cleaned = raw.trim().replace(LEGACY_MCP_TOOL_NAME_SAFE_RE, '-');
+  const normalized = cleaned || 'mcp';
+  const providerSafe = /^[A-Za-z]/.test(normalized) ? normalized : `mcp-${normalized}`;
+  return providerSafe.length > LEGACY_MCP_TOOL_NAME_MAX_PREFIX
+    ? providerSafe.slice(0, LEGACY_MCP_TOOL_NAME_MAX_PREFIX)
+    : providerSafe;
+}
+
+/**
+ * Compute OpenClaw's canonical operator `mcp_oauth_stores.store_key` for a
+ * LobsterAI MCP server name & URL.
+ */
+export function computeLegacyMcpOAuthStoreKey(serverName: string, serverUrl: string): string {
+  const serverKey = legacySafeServerKey(serverName);
+  const safeName = legacySanitizeServerName(serverKey);
+  const hash = createHash('sha256').update(serverKey).update('\0').update(serverUrl).digest('hex');
+  return `${safeName}-${hash.slice(0, 16)}`;
+}
+
+interface LegacyMcpOAuthStoreEntry {
+  storeKey: string;
+  store: Record<string, unknown>;
+  updatedAt: number | null;
+}
+
+function isLegacyOAuthMcpRow(
+  config: Record<string, unknown>,
+  transportType?: string | null,
+): boolean {
+  if (typeof transportType === 'string' && transportType.trim().toLowerCase() === 'stdio') {
+    return false;
+  }
+  if (config.auth === McpAuthMode.OAuth) return true;
+  if (config.oauth === true) return true;
+  const legacyOAuthObj = safeParseJsonObject(config.oauth);
+  if (legacyOAuthObj && legacyOAuthObj.enabled !== false) return true;
+  return false;
+}
+
+function normalizeUrlForComparison(rawUrl: string | undefined): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    const trimmedPath = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.origin}${trimmedPath}`.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function extractOriginLower(rawUrl: string | undefined): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function collectCandidateUrls(rawUrl: string | undefined): string[] {
+  if (!rawUrl || !rawUrl.trim()) return [];
+  const candidates: string[] = [];
+  const pushUnique = (val: string) => {
+    if (val && !candidates.includes(val)) candidates.push(val);
+  };
+  const trimmed = rawUrl.trim();
+  const normalized = normalizeMcpServerUrlInput(trimmed);
+  if (normalized.ok) {
+    pushUnique(normalized.url);
+    pushUnique(normalized.url.replace(/\/+$/, ''));
+  }
+  pushUnique(trimmed);
+  pushUnique(trimmed.replace(/\/+$/, ''));
+  if (!trimmed.endsWith('/')) {
+    pushUnique(`${trimmed}/`);
+  }
+  return candidates;
+}
+
+function loadLegacyMcpOAuthStores(openclawStateDir: string): LegacyMcpOAuthStoreEntry[] {
+  const entriesByKey = new Map<string, LegacyMcpOAuthStoreEntry>();
+
+  const openclawDbPath = path.join(openclawStateDir, 'state', 'openclaw.sqlite');
+  const opened = openLegacyOpenClawDbReadOnly(openclawDbPath);
+  if (opened) {
+    try {
+      if (tableExists(opened.db, 'mcp_oauth_stores')) {
+        const rows = opened.db
+          .prepare('SELECT store_key, format_version, store_json, updated_at FROM mcp_oauth_stores')
+          .all() as Array<{
+            store_key?: unknown;
+            format_version?: unknown;
+            store_json?: unknown;
+            updated_at?: unknown;
+          }>;
+        for (const row of rows) {
+          if (typeof row.store_key !== 'string' || !row.store_key.trim()) continue;
+          const parsed = safeParseJsonObject(row.store_json);
+          if (!parsed) continue;
+          entriesByKey.set(row.store_key, {
+            storeKey: row.store_key,
+            store: parsed,
+            updatedAt: toFiniteNumberOrNull(row.updated_at),
+          });
+        }
+      }
+    } catch {
+      // Ignore unreadable legacy mcp_oauth_stores table.
+    } finally {
+      opened.close();
+    }
+  }
+
+  // Fallback for retired pre-SQLite JSON files (`<openclawStateDir>/mcp-oauth/<storeKey>.json`).
+  // Never override a canonical SQLite row (including explicit `credentialState: "cleared"`).
+  const legacyJsonDir = path.join(openclawStateDir, 'mcp-oauth');
+  if (fs.existsSync(legacyJsonDir)) {
+    try {
+      for (const fileName of fs.readdirSync(legacyJsonDir)) {
+        if (!fileName.endsWith('.json')) continue;
+        const storeKey = fileName.slice(0, -'.json'.length);
+        if (!storeKey || entriesByKey.has(storeKey)) continue;
+        const fullPath = path.join(legacyJsonDir, fileName);
+        const parsed = safeParseJsonObject(safeReadJson(fullPath));
+        if (!parsed) continue;
+        let mtimeMs: number | null = null;
+        try {
+          mtimeMs = Math.floor(fs.statSync(fullPath).mtimeMs);
+        } catch {
+          mtimeMs = null;
+        }
+        entriesByKey.set(storeKey, {
+          storeKey,
+          store: parsed,
+          updatedAt: mtimeMs,
+        });
+      }
+    } catch {
+      // Ignore unreadable legacy mcp-oauth directory.
+    }
+  }
+
+  return Array.from(entriesByKey.values());
+}
+
+function extractUsableTokenRecordFromLegacyStore(params: {
+  serverId: string;
+  serverUrl?: string;
+  entry: LegacyMcpOAuthStoreEntry;
+  nowMs: number;
+}): McpOAuthTokenRecord | null {
+  const { serverId, serverUrl, entry, nowMs } = params;
+  const { store } = entry;
+
+  if (store.credentialState === 'cleared' || store.credentialState === 'uninitialized') {
+    return null;
+  }
+
+  const tokens = safeParseJsonObject(store.tokens);
+  const accessToken = typeof tokens?.access_token === 'string' && tokens.access_token.trim()
+    ? tokens.access_token.trim()
+    : null;
+  if (!accessToken) return null;
+
+  const refreshToken = typeof tokens?.refresh_token === 'string' && tokens.refresh_token.trim()
+    ? tokens.refresh_token.trim()
+    : undefined;
+  const tokenType = typeof tokens?.token_type === 'string' && tokens.token_type.trim()
+    ? tokens.token_type.trim()
+    : 'Bearer';
+  const scope = typeof tokens?.scope === 'string' && tokens.scope.trim()
+    ? tokens.scope.trim()
+    : undefined;
+  const expiresAtMs = toFiniteNumberOrNull(store.tokenExpiresAt) ?? undefined;
+
+  const clientInfo = safeParseJsonObject(store.clientInformation);
+  const clientId = typeof clientInfo?.client_id === 'string' && clientInfo.client_id.trim()
+    ? clientInfo.client_id.trim()
+    : undefined;
+  const clientSecret = typeof clientInfo?.client_secret === 'string' && clientInfo.client_secret.length > 0
+    ? clientInfo.client_secret
+    : undefined;
+  const tokenEndpointAuthMethod =
+    typeof clientInfo?.token_endpoint_auth_method === 'string'
+    && clientInfo.token_endpoint_auth_method.trim()
+      ? clientInfo.token_endpoint_auth_method.trim()
+      : undefined;
+
+  const discoveryState = safeParseJsonObject(store.discoveryState);
+  const asMeta = safeParseJsonObject(discoveryState?.authorizationServerMetadata);
+  const resourceMeta = safeParseJsonObject(discoveryState?.resourceMetadata);
+  const tokenEndpoint = typeof asMeta?.token_endpoint === 'string' && asMeta.token_endpoint.trim()
+    ? asMeta.token_endpoint.trim()
+    : undefined;
+
+  const normalizedUrlResult = serverUrl ? normalizeMcpServerUrlInput(serverUrl) : null;
+  const fallbackResource = normalizedUrlResult?.ok ? normalizedUrlResult.url : undefined;
+  const resource = (typeof resourceMeta?.resource === 'string' && resourceMeta.resource.trim()
+    ? resourceMeta.resource.trim()
+    : undefined) ?? fallbackResource;
+
+  const isExpired = expiresAtMs !== undefined && expiresAtMs <= nowMs;
+  const isRefreshable = Boolean(refreshToken && tokenEndpoint);
+  if (isExpired && !isRefreshable) {
+    return null;
+  }
+
+  return {
+    serverId,
+    accessToken,
+    ...(refreshToken ? { refreshToken } : {}),
+    tokenType,
+    ...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
+    ...(scope ? { scope } : {}),
+    ...(tokenEndpoint ? { tokenEndpoint } : {}),
+    ...(clientId ? { clientId } : {}),
+    ...(clientSecret ? { clientSecret } : {}),
+    ...(tokenEndpointAuthMethod ? { tokenEndpointAuthMethod } : {}),
+    ...(resource ? { resource } : {}),
+    updatedAt: entry.updatedAt ?? nowMs,
+  };
+}
+
+function matchLegacyMcpOAuthStore(params: {
+  serverName: string;
+  serverUrl?: string;
+  entries: LegacyMcpOAuthStoreEntry[];
+  usedStoreKeys: Set<string>;
+}): LegacyMcpOAuthStoreEntry | null {
+  const { serverName, serverUrl, entries, usedStoreKeys } = params;
+  const operatorEntries = entries.filter(
+    (e) => !usedStoreKeys.has(e.storeKey) && !LEGACY_MCP_OAUTH_REQUESTER_SUFFIX_RE.test(e.storeKey),
+  );
+  if (operatorEntries.length === 0) return null;
+
+  const byKey = new Map(operatorEntries.map((e) => [e.storeKey, e]));
+
+  // Pass 1: Exact OpenClaw store_key match across normalized/raw URL variants.
+  const urlCandidates = collectCandidateUrls(serverUrl);
+  const safeKey = legacySafeServerKey(serverName);
+  const nameVariants = safeKey === serverName ? [serverName] : [safeKey, serverName];
+  for (const candidateName of nameVariants) {
+    const safeName = legacySanitizeServerName(candidateName);
+    for (const candidateUrl of urlCandidates) {
+      const hash = createHash('sha256')
+        .update(candidateName)
+        .update('\0')
+        .update(candidateUrl)
+        .digest('hex');
+      const key = `${safeName}-${hash.slice(0, 16)}`;
+      const exact = byKey.get(key);
+      if (exact) return exact;
+    }
+  }
+
+  // Pass 2: Fallback match by normalized resource URL inside `discoveryState`.
+  const targetNormalizedUrl = normalizeUrlForComparison(serverUrl);
+  if (targetNormalizedUrl) {
+    const resourceMatches = operatorEntries.filter((entry) => {
+      const discovery = safeParseJsonObject(entry.store.discoveryState);
+      const resourceMeta = safeParseJsonObject(discovery?.resourceMetadata);
+      const storeResource = typeof resourceMeta?.resource === 'string'
+        ? normalizeUrlForComparison(resourceMeta.resource)
+        : null;
+      return storeResource === targetNormalizedUrl;
+    });
+    if (resourceMatches.length === 1) {
+      return resourceMatches[0];
+    }
+  }
+
+  // Pass 3: Fallback match by sanitized server-name prefix (requiring non-conflicting origin).
+  const targetOrigin = extractOriginLower(serverUrl);
+  const prefixes = Array.from(new Set(nameVariants.map((n) => `${legacySanitizeServerName(n)}-`)));
+  for (const prefix of prefixes) {
+    const prefixMatches = operatorEntries.filter((entry) => {
+      if (!entry.storeKey.startsWith(prefix)) return false;
+      const suffix = entry.storeKey.slice(prefix.length);
+      if (!/^[0-9a-f]{16}$/i.test(suffix)) return false;
+      if (!targetOrigin) return true;
+      const discovery = safeParseJsonObject(entry.store.discoveryState);
+      const resourceMeta = safeParseJsonObject(discovery?.resourceMetadata);
+      const storeOrigin =
+        extractOriginLower(typeof resourceMeta?.resource === 'string' ? resourceMeta.resource : undefined)
+        ?? extractOriginLower(
+          typeof discovery?.resourceMetadataUrl === 'string' ? discovery.resourceMetadataUrl : undefined,
+        );
+      return !storeOrigin || storeOrigin === targetOrigin;
+    });
+    if (prefixMatches.length === 1) {
+      return prefixMatches[0];
+    }
+  }
+
+  return null;
+}
+
+export interface MigrateLegacyMcpOAuthTokensResult {
+  tokensMigrated: number;
+  migratedServerIds: string[];
+  reauthRequired: MigrationV2ReauthItem[];
+}
+
+/**
+ * Migrate valid or refreshable Remote MCP OAuth tokens from OpenClaw's
+ * `openclaw.sqlite` (`mcp_oauth_stores`) into LobsterAI's SQLite `kv` table
+ * under `mcp.oauth.token.<server.id>`. Only reports servers in `reauthRequired`
+ * when no valid/refreshable token exists or could be migrated.
+ */
+export function migrateLegacyMcpOAuthTokens(params: {
+  openclawStateDir: string;
+  db: Database.Database;
+  nowMs?: number;
+}): MigrateLegacyMcpOAuthTokensResult {
+  const { openclawStateDir, db } = params;
+  const nowMs = params.nowMs ?? Date.now();
+  const reauthRequired: MigrationV2ReauthItem[] = [];
+  const migratedServerIds: string[] = [];
+
+  if (!tableExists(db, 'mcp_servers')) {
+    return { tokensMigrated: 0, migratedServerIds, reauthRequired };
+  }
+
+  const cols = getTableColumns(db, 'mcp_servers');
+  if (!cols.has('id') || !cols.has('config_json')) {
+    return { tokensMigrated: 0, migratedServerIds, reauthRequired };
+  }
+
+  const selectCols = [
+    'id',
+    ...(cols.has('name') ? ['name'] : []),
+    ...(cols.has('transport_type') ? ['transport_type'] : []),
+    'config_json',
+  ].join(', ');
+
+  const mcpRows = db.prepare(`SELECT ${selectCols} FROM mcp_servers`).all() as Array<{
+    id: string;
+    name?: string;
+    transport_type?: string;
+    config_json?: string;
+  }>;
+
+  const oauthServers: Array<{ id: string; name: string; url?: string }> = [];
+  for (const row of mcpRows) {
+    const config = safeParseJsonObject(row.config_json);
+    if (!config || !isLegacyOAuthMcpRow(config, row.transport_type)) continue;
+    oauthServers.push({
+      id: row.id,
+      name: (typeof row.name === 'string' && row.name.trim()) ? row.name.trim() : row.id,
+      url: typeof config.url === 'string' && config.url.trim() ? config.url.trim() : undefined,
+    });
+  }
+
+  if (oauthServers.length === 0) {
+    return { tokensMigrated: 0, migratedServerIds, reauthRequired };
+  }
+
+  const legacyEntries = loadLegacyMcpOAuthStores(openclawStateDir);
+  const usedStoreKeys = new Set<string>();
+
+  for (const server of oauthServers) {
+    const existingKv = getKv(db, `${MCP_OAUTH_TOKEN_KV_PREFIX}${server.id}`);
+    if (existingKv && existingKv.trim().length > 0) {
+      // User already holds a v2 OAuth token for this server; preserve it.
+      continue;
+    }
+
+    const matched = matchLegacyMcpOAuthStore({
+      serverName: server.name,
+      serverUrl: server.url,
+      entries: legacyEntries,
+      usedStoreKeys,
+    });
+
+    if (matched) {
+      usedStoreKeys.add(matched.storeKey);
+      const tokenRecord = extractUsableTokenRecordFromLegacyStore({
+        serverId: server.id,
+        serverUrl: server.url,
+        entry: matched,
+        nowMs,
+      });
+      if (tokenRecord) {
+        setKv(
+          db,
+          `${MCP_OAUTH_TOKEN_KV_PREFIX}${server.id}`,
+          encodeMigratedMcpOAuthToken(tokenRecord),
+        );
+        migratedServerIds.push(server.id);
+        continue;
+      }
+    }
+
+    reauthRequired.push({
+      kind: 'mcp_oauth',
+      id: server.id,
+      label: server.name || server.id,
+    });
+  }
+
+  return {
+    tokensMigrated: migratedServerIds.length,
+    migratedServerIds,
+    reauthRequired,
+  };
+}
+
+function isMcpOAuthMigrationArchiveEntry(archivePath: string): boolean {
+  const normalized = archivePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return (
+    normalized === 'openclaw-state/state/openclaw.sqlite'
+    || normalized === 'openclaw-state/state/openclaw.sqlite-wal'
+    || normalized === 'openclaw-state/state/openclaw.sqlite-shm'
+    || normalized.startsWith('openclaw-state/mcp-oauth/')
+  );
+}
+
+export interface LegacyMcpOAuthBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  tokensMigrated: number;
+  migratedServerIds: string[];
+  error?: string;
+}
+
+/**
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before `mcp_oauth_stores` token migration landed.
+ */
+export async function backfillLegacyMcpOAuthTokensFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyMcpOAuthBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', tokensMigrated: 0, migratedServerIds: [] };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', tokensMigrated: 0, migratedServerIds: [] };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', tokensMigrated: 0, migratedServerIds: [] };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds to archive lookup.
+  }
+
+  const archivePath = findLegacyStateArchivePath(userDataDir, db);
+  if (!archivePath) {
+    setKv(
+      db,
+      MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), skipped: 'noBackupArchive' }),
+    );
+    return { status: 'skipped', tokensMigrated: 0, migratedServerIds: [] };
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-mcp-oauth-backfill-'));
+  try {
+    await extractMatchingEntriesFromTarGz(archivePath, tmpDir, isMcpOAuthMigrationArchiveEntry);
+    const extractedStateDir = path.join(tmpDir, 'openclaw-state');
+    const { tokensMigrated, migratedServerIds } = migrateLegacyMcpOAuthTokens({
+      openclawStateDir: extractedStateDir,
+      db,
+      nowMs: now().getTime(),
+    });
+
+    const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+    if (rawReport && tokensMigrated > 0) {
+      try {
+        const report = JSON.parse(rawReport) as MigrationV2Report;
+        if (report && report.version === 2 && report.summary) {
+          const migratedSet = new Set(migratedServerIds);
+          report.summary.mcpOAuthTokensMigrated =
+            (report.summary.mcpOAuthTokensMigrated ?? 0) + tokensMigrated;
+          if (Array.isArray(report.reauthRequired)) {
+            report.reauthRequired = report.reauthRequired.filter(
+              (item) => !(item.kind === 'mcp_oauth' && migratedSet.has(item.id)),
+            );
+          }
+          if (
+            Array.isArray(report.archivedModules)
+            && report.archivedModules.length === 0
+            && Array.isArray(report.reauthRequired)
+            && report.reauthRequired.length === 0
+          ) {
+            report.dismissed = true;
+          }
+          setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
+          if (report.backupDir && fs.existsSync(report.backupDir)) {
+            fs.writeFileSync(
+              path.join(report.backupDir, 'migration-report.json'),
+              `${JSON.stringify(report, null, 2)}\n`,
+              'utf8',
+            );
+          }
+        }
+      } catch {
+        // Best-effort report metadata update.
+      }
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), tokensMigrated }),
+    );
+    return { status: 'completed', tokensMigrated, migratedServerIds };
+  } catch (error) {
+    return {
+      status: 'failed',
+      tokensMigrated: 0,
+      migratedServerIds: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * Copy legacy `workspace-*` persona & memory files out of OpenClaw's state dir
  * into engine-independent `<userData>/workspaces/<agentId>/`, stripping the
@@ -1415,6 +1977,11 @@ export function runLegacyOpenClawMigration(
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(
+        db,
+        MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }),
+      );
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1513,27 +2080,18 @@ export function runLegacyOpenClawMigration(
       mcpPackagesMovedWholeDir = relocateMcpResult.movedWholeDir;
       const { cleared: mcpLaunchCachesCleared } = migrateLegacyMcpLaunchResolutions(db);
 
-      // Inspect Remote MCP OAuth servers needing reauth after migration.
-      if (tableExists(db, 'mcp_servers')) {
-        const cols = getTableColumns(db, 'mcp_servers');
-        if (cols.has('id') && cols.has('config_json')) {
-          const selectCols = cols.has('name') ? 'id, name, config_json' : 'id, config_json';
-          const mcpRows = db.prepare(`SELECT ${selectCols} FROM mcp_servers`).all() as Array<{
-            id: string;
-            name?: string;
-            config_json?: string;
-          }>;
-          for (const row of mcpRows) {
-            if (typeof row.config_json === 'string' && row.config_json.includes('"oauth"')) {
-              reauthRequired.push({
-                kind: 'mcp_oauth',
-                id: row.id,
-                label: row.name || row.id,
-              });
-            }
-          }
-        }
-      }
+      // Migrate Remote MCP OAuth tokens from OpenClaw `mcp_oauth_stores` before
+      // removing `openclaw/state/`. Only servers without a valid or refreshable
+      // legacy token are marked for re-authorization.
+      const {
+        tokensMigrated: mcpOAuthTokensMigrated,
+        reauthRequired: mcpOAuthReauthRequired,
+      } = migrateLegacyMcpOAuthTokens({
+        openclawStateDir,
+        db,
+        nowMs: now().getTime(),
+      });
+      reauthRequired.push(...mcpOAuthReauthRequired);
 
       // Count historical sessions preserved for Lazy Context Bridge.
       let sessionsPreservedForLazyBridge = 0;
@@ -1691,6 +2249,7 @@ export function runLegacyOpenClawMigration(
           imAllowListsMigrated,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
+          mcpOAuthTokensMigrated,
           disposableBytesFreed,
         },
         archivedModules,
@@ -1708,6 +2267,14 @@ export function runLegacyOpenClawMigration(
             completedAt: report.migratedAt,
             tasksImported: scheduledTasksMigrated,
             runsImported: scheduledTaskRunsMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            tokensMigrated: mcpOAuthTokensMigrated,
           }),
         );
       });

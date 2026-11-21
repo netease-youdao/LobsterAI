@@ -189,6 +189,7 @@ import {
   LocalWebServicesIpc,
 } from '../shared/localWebServices/constants';
 import { LogIpc } from '../shared/logExport/constants';
+import { McpAuthMode } from '../shared/mcp/auth';
 import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
@@ -2357,6 +2358,7 @@ const getDshBootstrap = (): DshBootstrap => {
       },
       instanceId: getStore().get<string>('installation_uuid') ?? undefined,
       ecosystemWindowTitle: t('dshEcosystemTitle'),
+      mcpOAuthFetcher: (url, init) => session.defaultSession.fetch(url, init),
       onStatusChange: (compatStatus) => {
         forwardOpenClawStatus(compatStatus);
       },
@@ -2654,7 +2656,13 @@ const syncOpenClawConfig = async (options: {
   expectedImpact?: string;
   imConfigRestartFingerprint?: string;
   skillChangeBatch?: unknown;
-}): Promise<{ success: boolean; changed: boolean; status?: DshCompatEngineStatus; error?: string }> => {
+}): Promise<{
+  success: boolean;
+  changed: boolean;
+  needsReauthMcpIds?: string[];
+  status?: DshCompatEngineStatus;
+  error?: string;
+}> => {
   try {
     const bootstrap = getDshBootstrap();
     const providers: Record<string, LobsterProviderConfig> = {};
@@ -2762,7 +2770,7 @@ const syncOpenClawConfig = async (options: {
           cwd: srv.cwd,
           url: srv.url,
           headers: srv.headers,
-          oauthEnabled: srv.auth === "oauth",
+          oauthEnabled: srv.auth === McpAuthMode.OAuth,
           ...(srv.requestTimeoutMs ? { requestTimeoutMs: srv.requestTimeoutMs } : {}),
           ...(srv.connectionTimeoutMs ? { connectionTimeoutMs: srv.connectionTimeoutMs } : {}),
         });
@@ -2865,6 +2873,12 @@ const syncOpenClawConfig = async (options: {
       imInstances,
     });
 
+    if (result.needsReauthMcpIds.length > 0) {
+      console.warn(
+        `[DSH] syncConfig (${options.reason}) skipped ${result.needsReauthMcpIds.length} MCP OAuth server(s) requiring re-authorization: ${result.needsReauthMcpIds.join(', ')}`,
+      );
+    }
+
     if (options.restartGatewayIfRunning && bootstrap.hostManager.isReady()) {
       await bootstrap.restart();
     }
@@ -2872,6 +2886,7 @@ const syncOpenClawConfig = async (options: {
     return {
       success: result.success,
       changed: result.changed,
+      needsReauthMcpIds: result.needsReauthMcpIds,
       status: bootstrap.getEngineStatus(),
       error: result.error,
     };

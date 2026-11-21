@@ -12,7 +12,7 @@
 // - Isolated Dual-Track DSH Ecosystem Web View (`BrowserWindow`)
 
 import type Database from 'better-sqlite3';
-import { app, BrowserWindow, safeStorage } from 'electron';
+import { app, BrowserWindow, safeStorage, session } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -33,11 +33,18 @@ import {
   DshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import { McpIpcChannel } from '../../../shared/mcp/constants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshChannelsBridge';
-import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
+import {
+  decodePlainOrBase64McpOAuthToken,
+  type McpOAuthFetch,
+  McpOAuthManager,
+  McpOAuthRefreshScheduler,
+} from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  backfillLegacyMcpOAuthTokensFromBackup,
   backfillLegacyScheduledTasksFromBackup,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
@@ -133,6 +140,8 @@ export interface DshBootstrapOptions {
   toolProviders?: HostToolProvider[];
   instanceId?: string;
   ecosystemWindowTitle?: string;
+  mcpOAuthFetcher?: McpOAuthFetch;
+  onMcpOAuthNeedsReauth?: (serverIds: string[]) => void;
   onStatusChange?: (status: DshCompatEngineStatus, hostStatus: DshHostStatus) => void;
 }
 
@@ -235,11 +244,17 @@ function createSafeStorageCipher(): {
       if (encoded.startsWith('safe:')) {
         return safeStorage.decryptString(Buffer.from(encoded.slice(5), 'base64'));
       }
-      if (encoded.startsWith('b64:')) {
-        return Buffer.from(encoded.slice(4), 'base64').toString('utf8');
-      }
-      return Buffer.from(encoded, 'base64').toString('utf8');
+      return decodePlainOrBase64McpOAuthToken(encoded);
     },
+  };
+}
+
+function createProxyAwareOAuthFetcher(): McpOAuthFetch {
+  return (url, init) => {
+    if (session?.defaultSession && typeof session.defaultSession.fetch === 'function') {
+      return session.defaultSession.fetch(url, init);
+    }
+    return fetch(url, init);
   };
 }
 
@@ -321,6 +336,9 @@ export class DshBootstrap {
   };
   private ecosystemWindow: BrowserWindow | null = null;
   private lastImInstances: DshChannelInstanceConfig[] | null = null;
+  private lastMcpServerRecords: LobsterMcpServerRecord[] = [];
+  private lastNeedsReauthMcpKey = '';
+  private readonly mcpOAuthRefreshScheduler: McpOAuthRefreshScheduler;
 
   constructor(options: DshBootstrapOptions) {
     this.options = options;
@@ -350,6 +368,17 @@ export class DshBootstrap {
     this.mcpOAuthManager = new McpOAuthManager({
       storage: this.kvStorage,
       cipher: createSafeStorageCipher(),
+      fetcher: options.mcpOAuthFetcher ?? createProxyAwareOAuthFetcher(),
+    });
+    this.mcpOAuthRefreshScheduler = new McpOAuthRefreshScheduler({
+      oauthManager: this.mcpOAuthManager,
+      onRefreshDue: async (dueServerIds) => {
+        console.log(
+          `[DshBootstrap] Proactive MCP OAuth refresh triggered for ${dueServerIds.length} server(s): ${dueServerIds.join(', ')}`,
+        );
+        const result = await this.syncMcpServersOnly('mcp-oauth-proactive-refresh');
+        return { needsReauthIds: result.needsReauthIds };
+      },
     });
 
     this.hostManager = new DshHostManager({
@@ -500,16 +529,86 @@ export class DshBootstrap {
     }
   }
 
+  private broadcastMcpChanged(): void {
+    if (typeof BrowserWindow?.getAllWindows !== 'function') return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(McpIpcChannel.Changed);
+      } catch {
+        // ignore destroyed windows
+      }
+    }
+  }
+
+  private notifyNeedsReauthMcpIds(needsReauthIds: string[], reason: string): void {
+    const nextKey = [...needsReauthIds].sort().join(',');
+    if (needsReauthIds.length > 0) {
+      console.warn(
+        `[DshBootstrap] MCP OAuth re-authorization required (${reason}) for ${needsReauthIds.length} server(s): ${needsReauthIds.join(', ')}`,
+      );
+    }
+    if (nextKey !== this.lastNeedsReauthMcpKey) {
+      this.lastNeedsReauthMcpKey = nextKey;
+      if (needsReauthIds.length > 0) {
+        this.options.onMcpOAuthNeedsReauth?.(needsReauthIds);
+      }
+      this.broadcastMcpChanged();
+    }
+  }
+
+  async syncMcpServersOnly(reason: string): Promise<{
+    success: boolean;
+    needsReauthIds: string[];
+    error?: string;
+  }> {
+    try {
+      const { servers, needsReauthIds } = await buildDshMcpServerSpecs(
+        this.lastMcpServerRecords,
+        this.mcpOAuthManager,
+      );
+      const mcpSyncResult = await this.hostManager.syncMcpServers(servers);
+      if (mcpSyncResult && typeof mcpSyncResult === 'object') {
+        if (mcpSyncResult.available === false) {
+          console.warn(`[DshBootstrap] syncMcpServers (${reason}) reported mcpManager unavailable`);
+        }
+        const mcpErrors = Array.isArray(mcpSyncResult.errors) ? mcpSyncResult.errors : [];
+        if (mcpErrors.length > 0) {
+          console.warn(
+            `[DshBootstrap] syncMcpServers (${reason}) reported ${mcpErrors.length} error(s): ${mcpErrors.join('; ')}`,
+          );
+        }
+      }
+      this.mcpOAuthRefreshScheduler.updateTrackedServers(
+        this.lastMcpServerRecords.filter((s) => s.enabled && s.oauthEnabled).map((s) => s.id),
+        needsReauthIds,
+      );
+      this.notifyNeedsReauthMcpIds(needsReauthIds, reason);
+      return { success: true, needsReauthIds };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[DshBootstrap] syncMcpServersOnly (${reason}) failed:`, message);
+      return { success: false, needsReauthIds: [], error: message };
+    }
+  }
+
   async start(): Promise<DshCompatEngineStatus> {
-    // One-shot idempotent backfill for users who completed v2 migration before
-    // `cron_jobs` / run-history extraction landed. Runs concurrently with DSH boot
-    // and returns instantaneously once `engine.migration.v2.cronBackfillCompleted` is set.
+    // One-shot idempotent backfills for users who completed v2 migration before
+    // `cron_jobs` / run-history or `mcp_oauth_stores` extraction landed. Run
+    // concurrently with DSH boot and return instantaneously once completed.
     const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
       userDataDir: this.options.userDataDir,
       db: this.options.db,
     }).catch((error) => {
       console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
       return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
+    });
+    const mcpOAuthBackfillPromise = backfillLegacyMcpOAuthTokensFromBackup({
+      userDataDir: this.options.userDataDir,
+      db: this.options.db,
+    }).catch((error) => {
+      console.warn('[MigrationV2] MCP OAuth backup backfill failed:', error);
+      return { status: 'failed' as const, tokensMigrated: 0, migratedServerIds: [] as string[] };
     });
 
     await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
@@ -526,6 +625,17 @@ export class DshBootstrap {
       this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
     }
 
+    const oauthBackfill = await mcpOAuthBackfillPromise;
+    if (oauthBackfill.tokensMigrated > 0) {
+      console.log(
+        `[MigrationV2] backfilled ${oauthBackfill.tokensMigrated} MCP OAuth token(s) from legacy backup`,
+      );
+      if (this.lastMcpServerRecords.length > 0) {
+        await this.syncMcpServersOnly('mcp-oauth-legacy-backfill');
+      }
+      this.broadcastMcpChanged();
+    }
+
     this.scheduler.start();
     return this.getEngineStatus();
   }
@@ -539,6 +649,7 @@ export class DshBootstrap {
   }
 
   async stop(): Promise<void> {
+    this.mcpOAuthRefreshScheduler.stop();
     this.scheduler.stop();
     this.closeEcosystemWindow();
     this.runtimeAdapter.stopAllSessions();
@@ -561,6 +672,7 @@ export class DshBootstrap {
       });
       await this.hostManager.syncProviders(providersPayload);
 
+      this.lastMcpServerRecords = input.mcpServers;
       const { servers, needsReauthIds } = await buildDshMcpServerSpecs(
         input.mcpServers,
         this.mcpOAuthManager,
@@ -575,6 +687,11 @@ export class DshBootstrap {
           console.warn(`[DshBootstrap] syncMcpServers reported ${mcpErrors.length} error(s): ${mcpErrors.join('; ')}`);
         }
       }
+      this.mcpOAuthRefreshScheduler.updateTrackedServers(
+        input.mcpServers.filter((s) => s.enabled && s.oauthEnabled).map((s) => s.id),
+        needsReauthIds,
+      );
+      this.notifyNeedsReauthMcpIds(needsReauthIds, 'syncAllConfig');
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);

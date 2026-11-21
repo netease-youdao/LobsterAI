@@ -17,7 +17,11 @@ import {
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
-import type { McpOAuthManager } from '../../mcp/mcpOAuthManager';
+import {
+  DEFAULT_MCP_OAUTH_CLIENT_ID,
+  type McpOAuthClientCredentials,
+  type McpOAuthManager,
+} from '../../mcp/mcpOAuthManager';
 import type { McpRuntime } from '../../mcp/mcpRuntime';
 import type { McpServerFormData, McpServerRecord } from '../../mcp/mcpStore';
 import {
@@ -154,13 +158,17 @@ function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpS
  * Run a browser-based OAuth 2.1 PKCE login flow via an ephemeral loopback HTTP
  * callback listener and exchange the authorization code through `McpOAuthManager`.
  */
-async function runNativeMcpOAuthLogin(options: {
+export async function runNativeMcpOAuthLogin(options: {
   oauthManager: McpOAuthManager;
   serverId: string;
   serverUrl: string;
   signal: AbortSignal;
+  openExternal?: (url: string) => Promise<void>;
+  timeoutMs?: number;
 }): Promise<void> {
   const { oauthManager, serverId, serverUrl, signal } = options;
+  const openExternal = options.openExternal ?? openAuthorizationUrl;
+  const timeoutMs = options.timeoutMs ?? OAUTH_LOGIN_TIMEOUT_MS;
 
   let resolveCallback!: (params: { code: string; state: string }) => void;
   let rejectCallback!: (error: Error) => void;
@@ -210,20 +218,40 @@ async function runNativeMcpOAuthLogin(options: {
   const onAbort = () => {
     rejectCallback(new Error('CANCELLED'));
   };
+  if (signal.aborted) {
+    server.close();
+    throw new Error('CANCELLED');
+  }
   signal.addEventListener('abort', onAbort, { once: true });
   const timeout = setTimeout(() => {
-    rejectCallback(new Error('OAuth sign-in timed out.'));
-  }, OAUTH_LOGIN_TIMEOUT_MS);
+    rejectCallback(new Error('TIMEOUT'));
+  }, timeoutMs);
 
   try {
     const metadata = await oauthManager.discoverMetadata(serverUrl);
+    if (signal.aborted) throw new Error('CANCELLED');
+
+    let clientCredentials: McpOAuthClientCredentials = { clientId: DEFAULT_MCP_OAUTH_CLIENT_ID };
+    if (metadata.registrationEndpoint) {
+      clientCredentials = await oauthManager.registerDynamicClient({
+        registrationEndpoint: metadata.registrationEndpoint,
+        redirectUri,
+        scope: metadata.defaultScope,
+      });
+      if (signal.aborted) throw new Error('CANCELLED');
+    }
+
     const pkce = oauthManager.beginPkceFlow({
       serverId,
       metadata,
       redirectUri,
-      clientId: 'lobsterai-desktop',
+      clientId: clientCredentials.clientId,
+      clientSecret: clientCredentials.clientSecret,
+      tokenEndpointAuthMethod: clientCredentials.tokenEndpointAuthMethod,
+      scope: metadata.defaultScope,
+      resource: metadata.resource,
     });
-    await openAuthorizationUrl(pkce.authorizationUrl);
+    await openExternal(pkce.authorizationUrl);
     const { code, state } = await callbackPromise;
     await oauthManager.completePkceFlow(state, code);
   } finally {
@@ -519,6 +547,23 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         : McpToolDiscoveryTimeoutMs.Remote;
       try {
         const launch = await getMcpRuntime().resolveToolDiscoveryLaunch(request);
+        if (launch.transportType !== 'stdio' && request.serverId) {
+          const saved = getMcpRuntime().getStore().getServer(request.serverId);
+          if (isOAuthRemoteServer(saved)) {
+            const authHeaders = await getMcpOAuthManager()
+              ?.resolveAuthorizationHeaders(saved.id)
+              .catch((): null => null);
+            if (authHeaders) {
+              const mergedHeaders: Record<string, string> = { ...(launch.headers ?? {}) };
+              for (const key of Object.keys(mergedHeaders)) {
+                if (key.toLowerCase() === 'authorization') {
+                  delete mergedHeaders[key];
+                }
+              }
+              launch.headers = { ...mergedHeaders, ...authHeaders };
+            }
+          }
+        }
         const tools = await discoverMcpTools(launch, {
           timeoutMs,
           fetch: sessionFetch,
@@ -617,6 +662,9 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       if (msg === 'CANCELLED') {
         return { success: false, code: McpOAuthErrorCode.Cancelled, error: 'Sign-in cancelled.' };
       }
+      if (msg === 'TIMEOUT') {
+        return { success: false, code: McpOAuthErrorCode.Timeout, error: 'OAuth sign-in timed out.' };
+      }
       console.warn('[MCP] OAuth sign-in failed:', msg);
       return { success: false, code: McpOAuthErrorCode.Failed, error: msg };
     } finally {
@@ -640,6 +688,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     if (!oauthManager) {
       return { success: false, code: McpOAuthErrorCode.RuntimeUnavailable, error: 'MCP OAuth manager is not initialized.' };
     }
+    cancelMcpOAuthLogin(server.id);
     oauthManager.deleteToken(server.id);
     await syncMcpConfig('mcp-oauth-logout');
     return { success: true, state: McpOAuthState.RequiresAuthorization };
@@ -650,15 +699,20 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     if (servers.length === 0) return { success: true, states: {} };
     const oauthManager = getMcpOAuthManager();
     const states: Record<string, McpOAuthState> = {};
+    let refreshedAny = false;
     for (const server of servers) {
       if (!server.enabled || !oauthManager) {
         states[server.id] = McpOAuthState.Unknown;
         continue;
       }
-      const token = oauthManager.getToken(server.id);
-      states[server.id] = token?.accessToken
+      const status = await oauthManager.checkAuthorizationStatus(server.id);
+      if (status.refreshed) refreshedAny = true;
+      states[server.id] = status.authorized
         ? McpOAuthState.Authorized
         : McpOAuthState.RequiresAuthorization;
+    }
+    if (refreshedAny) {
+      await syncMcpConfig('mcp-oauth-refreshed');
     }
     return { success: true, states };
   });

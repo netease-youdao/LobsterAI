@@ -14,9 +14,12 @@ import {
   MIGRATION_V2_REPORT_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { McpOAuthManager } from '../mcp/mcpOAuthManager';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
+  backfillLegacyMcpOAuthTokensFromBackup,
   backfillLegacyScheduledTasksFromBackup,
+  computeLegacyMcpOAuthStoreKey,
   dismissMigrationV2Report,
   getPendingMigrationV2Report,
   runLegacyOpenClawMigration,
@@ -742,5 +745,380 @@ describe('runLegacyOpenClawMigration', () => {
       command: process.execPath,
       args_json: JSON.stringify([expectedBinPath, '--stdio']),
     });
+  });
+
+  test('migrates valid and refreshable legacy OpenClaw mcp_oauth_stores tokens and only marks unmigratable servers for reauth', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const migrationNow = new Date('2026-11-21T00:00:00.000Z');
+    const nowMs = migrationNow.getTime();
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        transport_type TEXT,
+        config_json TEXT
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+
+    const insertServer = db.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?, ?)');
+    // 1. Valid active token matched by exact ASCII store_key
+    insertServer.run(
+      'srv-valid-uuid',
+      'Remote Docs',
+      'http',
+      JSON.stringify({ url: 'https://mcp.docs.example/mcp', auth: 'oauth' }),
+    );
+    // 2. Expired token WITH refresh_token + token_endpoint (non-ASCII name -> safeServerKey md5!)
+    insertServer.run(
+      'srv-refreshable-uuid',
+      '飞书知识库',
+      'http',
+      JSON.stringify({ url: 'https://mcp.feishu.example/v1', auth: 'oauth' }),
+    );
+    // 3. Fallback match by resource URL inside discoveryState when URL changed slightly
+    insertServer.run(
+      'srv-fallback-uuid',
+      'Renamed Linear',
+      'http',
+      JSON.stringify({ url: 'https://mcp.linear.example/mcp/', auth: 'oauth' }),
+    );
+    // 4. Expired token WITHOUT refresh_token -> must require reauth
+    insertServer.run(
+      'srv-expired-uuid',
+      'Expired Service',
+      'http',
+      JSON.stringify({ url: 'https://mcp.expired.example/mcp', auth: 'oauth' }),
+    );
+    // 5. Explicitly cleared store -> must require reauth
+    insertServer.run(
+      'srv-cleared-uuid',
+      'Cleared Service',
+      'http',
+      JSON.stringify({ url: 'https://mcp.cleared.example/mcp', auth: 'oauth' }),
+    );
+    // 6. Non-OAuth server whose headers mention "oauth" -> must NOT be treated as OAuth!
+    insertServer.run(
+      'srv-static-uuid',
+      'Static Header Server',
+      'http',
+      JSON.stringify({
+        url: 'https://mcp.static.example/mcp',
+        headers: { 'X-Note': 'not "oauth" mode' },
+      }),
+    );
+    db.close();
+
+    // Seed legacy OpenClaw SQLite `mcp_oauth_stores`.
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    fs.mkdirSync(path.join(stateDir, 'state'), { recursive: true });
+    const openclawDb = new Database(path.join(stateDir, 'state', 'openclaw.sqlite'));
+    openclawDb.exec(`
+      CREATE TABLE mcp_oauth_stores (
+        store_key TEXT PRIMARY KEY,
+        format_version INTEGER NOT NULL,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    const insertOAuth = openclawDb.prepare(
+      'INSERT INTO mcp_oauth_stores (store_key, format_version, store_json, updated_at) VALUES (?, 1, ?, ?)',
+    );
+
+    insertOAuth.run(
+      computeLegacyMcpOAuthStoreKey('Remote Docs', 'https://mcp.docs.example/mcp'),
+      JSON.stringify({
+        tokens: {
+          access_token: 'legacy-valid-access',
+          refresh_token: 'legacy-valid-refresh',
+          token_type: 'Bearer',
+          scope: 'mcp:read',
+        },
+        tokenExpiresAt: nowMs + 3_600_000,
+        clientInformation: {
+          client_id: 'legacy-client-1',
+          client_secret: 'legacy-secret-1',
+        },
+        discoveryState: {
+          authorizationServerUrl: 'https://auth.docs.example',
+          authorizationServerMetadata: {
+            token_endpoint: 'https://auth.docs.example/token',
+          },
+          resourceMetadata: {
+            resource: 'https://mcp.docs.example/mcp',
+          },
+        },
+      }),
+      nowMs - 5000,
+    );
+
+    insertOAuth.run(
+      computeLegacyMcpOAuthStoreKey('飞书知识库', 'https://mcp.feishu.example/v1'),
+      JSON.stringify({
+        tokens: {
+          access_token: 'expired-but-refreshable',
+          refresh_token: 'feishu-refresh-tok',
+          token_type: 'Bearer',
+        },
+        tokenExpiresAt: nowMs - 60_000, // already expired, but refreshable!
+        clientInformation: { client_id: 'feishu-dcr-id', client_secret: 'feishu-dcr-sec' },
+        discoveryState: {
+          authorizationServerUrl: 'https://auth.feishu.example',
+          authorizationServerMetadata: {
+            token_endpoint: 'https://auth.feishu.example/token',
+          },
+        },
+      }),
+      nowMs - 10_000,
+    );
+
+    insertOAuth.run(
+      computeLegacyMcpOAuthStoreKey('Old Linear Name', 'https://mcp.linear.example/mcp'),
+      JSON.stringify({
+        tokens: {
+          access_token: 'fallback-linear-tok',
+          token_type: 'Bearer',
+        },
+        tokenExpiresAt: nowMs + 7_200_000,
+        discoveryState: {
+          authorizationServerUrl: 'https://auth.linear.example',
+          resourceMetadata: {
+            resource: 'https://mcp.linear.example/mcp',
+          },
+        },
+      }),
+      nowMs - 2000,
+    );
+
+    insertOAuth.run(
+      computeLegacyMcpOAuthStoreKey('Expired Service', 'https://mcp.expired.example/mcp'),
+      JSON.stringify({
+        tokens: {
+          access_token: 'dead-token',
+          token_type: 'Bearer',
+        },
+        tokenExpiresAt: nowMs - 10_000, // expired & no refresh_token
+      }),
+      nowMs - 20_000,
+    );
+
+    insertOAuth.run(
+      computeLegacyMcpOAuthStoreKey('Cleared Service', 'https://mcp.cleared.example/mcp'),
+      JSON.stringify({ credentialState: 'cleared' }),
+      nowMs - 1000,
+    );
+    openclawDb.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => migrationNow,
+    });
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.mcpOAuthTokensMigrated).toBe(3);
+    expect(result.report?.reauthRequired).toEqual([
+      { kind: 'mcp_oauth', id: 'srv-expired-uuid', label: 'Expired Service' },
+      { kind: 'mcp_oauth', id: 'srv-cleared-uuid', label: 'Cleared Service' },
+    ]);
+
+    // Verify migrated tokens load cleanly via McpOAuthManager.
+    const verifyDb = new Database(sqlitePath);
+    const kvPort = {
+      get: (k: string) => {
+        const row = verifyDb.prepare('SELECT value FROM kv WHERE key = ?').get(k) as
+          | { value?: string }
+          | undefined;
+        return typeof row?.value === 'string' ? row.value : null;
+      },
+      set: (k: string, v: string) => {
+        verifyDb.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(k, v, nowMs);
+      },
+      delete: (k: string) => {
+        verifyDb.prepare('DELETE FROM kv WHERE key = ?').run(k);
+      },
+    };
+    const oauthManager = new McpOAuthManager({ storage: kvPort, now: () => nowMs });
+
+    expect(oauthManager.getToken('srv-valid-uuid')).toMatchObject({
+      serverId: 'srv-valid-uuid',
+      accessToken: 'legacy-valid-access',
+      refreshToken: 'legacy-valid-refresh',
+      clientId: 'legacy-client-1',
+      clientSecret: 'legacy-secret-1',
+      tokenEndpoint: 'https://auth.docs.example/token',
+      resource: 'https://mcp.docs.example/mcp',
+      scope: 'mcp:read',
+    });
+    expect(oauthManager.getToken('srv-refreshable-uuid')).toMatchObject({
+      serverId: 'srv-refreshable-uuid',
+      accessToken: 'expired-but-refreshable',
+      refreshToken: 'feishu-refresh-tok',
+      clientId: 'feishu-dcr-id',
+      clientSecret: 'feishu-dcr-sec',
+      tokenEndpoint: 'https://auth.feishu.example/token',
+    });
+    expect(oauthManager.getToken('srv-fallback-uuid')).toMatchObject({
+      serverId: 'srv-fallback-uuid',
+      accessToken: 'fallback-linear-tok',
+    });
+    expect(oauthManager.getToken('srv-expired-uuid')).toBeNull();
+    expect(oauthManager.getToken('srv-cleared-uuid')).toBeNull();
+    expect(oauthManager.getToken('srv-static-uuid')).toBeNull();
+    verifyDb.close();
+  });
+
+  test('backfillLegacyMcpOAuthTokensFromBackup restores tokens from legacy-openclaw-state.tar.gz and preserves existing v2 tokens', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const now = new Date('2026-11-21T06:00:00.000Z');
+    const nowMs = now.getTime();
+
+    // Build a legacy backup archive containing `openclaw-state/state/openclaw.sqlite`.
+    const stagingStateDir = path.join(createTempDir(), 'openclaw-state');
+    fs.mkdirSync(path.join(stagingStateDir, 'state'), { recursive: true });
+    const legacyDb = new Database(path.join(stagingStateDir, 'state', 'openclaw.sqlite'));
+    legacyDb.exec(`
+      CREATE TABLE mcp_oauth_stores (
+        store_key TEXT PRIMARY KEY,
+        format_version INTEGER NOT NULL,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    legacyDb.prepare(
+      'INSERT INTO mcp_oauth_stores (store_key, format_version, store_json, updated_at) VALUES (?, 1, ?, ?)',
+    ).run(
+      computeLegacyMcpOAuthStoreKey('Notion', 'https://mcp.notion.example/mcp'),
+      JSON.stringify({
+        tokens: { access_token: 'backfilled-notion-tok', refresh_token: 'backfilled-notion-ref', token_type: 'Bearer' },
+        tokenExpiresAt: nowMs + 3_600_000,
+        clientInformation: { client_id: 'notion-client' },
+        discoveryState: {
+          authorizationServerUrl: 'https://auth.notion.example',
+          authorizationServerMetadata: { token_endpoint: 'https://auth.notion.example/token' },
+        },
+      }),
+      nowMs - 5000,
+    );
+    legacyDb.prepare(
+      'INSERT INTO mcp_oauth_stores (store_key, format_version, store_json, updated_at) VALUES (?, 1, ?, ?)',
+    ).run(
+      computeLegacyMcpOAuthStoreKey('AlreadySignedIn', 'https://mcp.existing.example/mcp'),
+      JSON.stringify({
+        tokens: { access_token: 'stale-legacy-tok', token_type: 'Bearer' },
+        tokenExpiresAt: nowMs + 3_600_000,
+      }),
+      nowMs - 5000,
+    );
+    legacyDb.close();
+
+    const backupDir = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME, '2026-11-20T01-00-00-000Z');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const archivePath = path.join(backupDir, 'legacy-openclaw-state.tar.gz');
+    writeTarGzArchive(archivePath, collectDirectoryTarEntries(stagingStateDir, 'openclaw-state'));
+
+    // Seed an already-migrated v2 SQLite DB where Notion was previously marked for reauth.
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE mcp_servers (id TEXT PRIMARY KEY, name TEXT, transport_type TEXT, config_json TEXT);
+    `);
+    db.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?, ?)').run(
+      'srv-notion-uuid',
+      'Notion',
+      'http',
+      JSON.stringify({ url: 'https://mcp.notion.example/mcp', auth: 'oauth' }),
+    );
+    db.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?, ?)').run(
+      'srv-existing-uuid',
+      'AlreadySignedIn',
+      'http',
+      JSON.stringify({ url: 'https://mcp.existing.example/mcp', auth: 'oauth' }),
+    );
+
+    // Pre-existing v2 token must NOT be overwritten by backfill!
+    const kvPort = {
+      get: (k: string) => {
+        const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(k) as { value?: string } | undefined;
+        return typeof row?.value === 'string' ? row.value : null;
+      },
+      set: (k: string, v: string) => {
+        db.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(k, v, nowMs);
+      },
+      delete: (k: string) => {
+        db.prepare('DELETE FROM kv WHERE key = ?').run(k);
+      },
+    };
+    const oauthManager = new McpOAuthManager({ storage: kvPort, now: () => nowMs });
+    oauthManager.saveToken({
+      serverId: 'srv-existing-uuid',
+      accessToken: 'fresh-v2-token',
+      tokenType: 'Bearer',
+      updatedAt: nowMs,
+    });
+
+    const initialReport = {
+      version: 2,
+      migratedAt: '2026-11-20T01:00:00.000Z',
+      backupDir,
+      incompatibleArchivePath: path.join(backupDir, 'incompatible-modules-backup.tar.gz'),
+      legacyStateArchivePath: archivePath,
+      sqliteSnapshotPath: path.join(backupDir, 'lobsterai.pre-v2.sqlite'),
+      dismissed: false,
+      summary: {
+        workspacesMigrated: 1,
+        scheduledTasksMigrated: 0,
+        imAllowListsMigrated: 0,
+        sessionsPreservedForLazyBridge: 0,
+        mcpLaunchCachesCleared: 0,
+        disposableBytesFreed: 0,
+      },
+      archivedModules: [],
+      reauthRequired: [{ kind: 'mcp_oauth', id: 'srv-notion-uuid', label: 'Notion' }],
+    };
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: initialReport.migratedAt, backupDir }),
+      1,
+    );
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_REPORT_KV_KEY,
+      JSON.stringify(initialReport),
+      1,
+    );
+
+    const first = await backfillLegacyMcpOAuthTokensFromBackup({
+      userDataDir,
+      db,
+      now: () => now,
+    });
+    expect(first).toEqual({
+      status: 'completed',
+      tokensMigrated: 1,
+      migratedServerIds: ['srv-notion-uuid'],
+    });
+
+    expect(oauthManager.getToken('srv-notion-uuid')?.accessToken).toBe('backfilled-notion-tok');
+    expect(oauthManager.getToken('srv-existing-uuid')?.accessToken).toBe('fresh-v2-token');
+
+    const updatedReport = JSON.parse(
+      fs.readFileSync(path.join(backupDir, 'migration-report.json'), 'utf8'),
+    ) as { dismissed: boolean; reauthRequired: unknown[]; summary: { mcpOAuthTokensMigrated: number } };
+    expect(updatedReport.summary.mcpOAuthTokensMigrated).toBe(1);
+    expect(updatedReport.reauthRequired).toEqual([]);
+    expect(updatedReport.dismissed).toBe(true);
+
+    // Idempotent second run skips immediately.
+    const second = await backfillLegacyMcpOAuthTokensFromBackup({ userDataDir, db, now: () => now });
+    expect(second).toEqual({
+      status: 'skipped',
+      tokensMigrated: 0,
+      migratedServerIds: [],
+    });
+    db.close();
   });
 });
