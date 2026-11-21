@@ -160,16 +160,32 @@ const getMcpToolActionName = (toolName: string): string => (
   toolName.slice(toolName.lastIndexOf(MCP_TOOL_NAME_SEPARATOR) + MCP_TOOL_NAME_SEPARATOR.length)
 );
 
+const NormalizedShellToolName = {
+  Bash: 'bash',
+  Exec: 'exec',
+  Shell: 'shell',
+  Pwsh: 'pwsh',
+} as const;
+
+const NormalizedJobToolName = {
+  Process: 'process',
+  JobOutput: 'joboutput',
+  JobList: 'joblist',
+  JobKill: 'jobkill',
+} as const;
+
 export const getToolDisplayName = (toolName: string | undefined): string => {
   if (!toolName) return 'Tool';
   const normalized = normalizeToolName(toolName);
   switch (normalized) {
     case 'cron':
       return 'Cron';
-    case 'exec':
-    case 'bash':
-    case 'shell':
+    case NormalizedShellToolName.Exec:
+    case NormalizedShellToolName.Bash:
+    case NormalizedShellToolName.Shell:
       return 'Bash';
+    case NormalizedShellToolName.Pwsh:
+      return 'PowerShell';
     case 'read':
     case 'readfile':
       return 'Read';
@@ -181,7 +197,10 @@ export const getToolDisplayName = (toolName: string | undefined): string => {
       return 'Edit';
     case 'multiedit':
       return 'MultiEdit';
-    case 'process':
+    case NormalizedJobToolName.Process:
+    case NormalizedJobToolName.JobOutput:
+    case NormalizedJobToolName.JobList:
+    case NormalizedJobToolName.JobKill:
       return 'Process';
     case 'sessionsspawn':
       return 'Subagent';
@@ -198,7 +217,10 @@ export const getToolDisplayName = (toolName: string | undefined): string => {
 export const isBashLikeToolName = (toolName: string | undefined): boolean => {
   if (!toolName) return false;
   const normalized = normalizeToolName(toolName);
-  return normalized === 'bash' || normalized === 'exec' || normalized === 'shell';
+  return normalized === NormalizedShellToolName.Bash
+    || normalized === NormalizedShellToolName.Exec
+    || normalized === NormalizedShellToolName.Shell
+    || normalized === NormalizedShellToolName.Pwsh;
 };
 
 export const getToolInputString = (
@@ -245,14 +267,28 @@ export const isPlanToolName = (toolName: string | undefined): boolean => (
 );
 
 const PROCESS_OUTPUT_ACTIONS = new Set(['poll', 'log', 'list']);
+const DSH_JOB_OUTPUT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  NormalizedJobToolName.JobOutput,
+  NormalizedJobToolName.JobList,
+]);
+const PROCESS_TOOL_NAMES: ReadonlySet<string> = new Set([
+  NormalizedJobToolName.Process,
+  NormalizedJobToolName.JobOutput,
+  NormalizedJobToolName.JobList,
+  NormalizedJobToolName.JobKill,
+]);
 
 /**
- * A `process` call that only reads what a background command printed
- * (poll/log/list): waiting on a command already on screen, not a new step.
+ * A `process` call (OpenClaw) or `job_output`/`job_list` call (DSH) that only
+ * reads what a background command printed: waiting on a command already on
+ * screen, not a new step.
  */
 export const isProcessOutputCheck = (group: ToolGroupItem): boolean => {
   const rawName = group.toolUse.metadata?.toolName;
-  if (typeof rawName !== 'string' || normalizeToolName(rawName) !== 'process') return false;
+  if (typeof rawName !== 'string') return false;
+  const normalized = normalizeToolName(rawName);
+  if (DSH_JOB_OUTPUT_TOOL_NAMES.has(normalized)) return true;
+  if (normalized !== NormalizedJobToolName.Process) return false;
   const action = getToolInputString(group.toolUse.metadata?.toolInput ?? {}, ['action']);
   return action !== null && PROCESS_OUTPUT_ACTIONS.has(action.trim().toLowerCase());
 };
@@ -417,9 +453,10 @@ export const getToolInputSummary = (
   switch (normalizedToolName) {
     case 'cron':
       return getCronToolSummary(input);
-    case 'bash':
-    case 'exec':
-    case 'shell':
+    case NormalizedShellToolName.Bash:
+    case NormalizedShellToolName.Exec:
+    case NormalizedShellToolName.Shell:
+    case NormalizedShellToolName.Pwsh:
       return getToolInputString(input, ['command', 'cmd', 'script'])
         ?? getStringArray(input.commands);
     case 'read':
@@ -449,11 +486,21 @@ export const getToolInputSummary = (
       const target = getToolInputString(input, ['url', 'name', 'selector', 'text']);
       return [action, target ? truncatePreview(target, 60) : null].filter(Boolean).join(' · ') || null;
     }
-    case 'process': {
+    case NormalizedJobToolName.Process: {
       const action = getToolInputString(input, ['action']);
       const sessionId = getToolInputString(input, ['sessionId', 'session_id']);
       if (action && sessionId) return `${action} · ${sessionId}`;
       return action ?? sessionId;
+    }
+    case NormalizedJobToolName.JobOutput: {
+      const jobId = getToolInputString(input, ['job_id', 'jobId']);
+      return jobId ? `output · ${jobId}` : 'output';
+    }
+    case NormalizedJobToolName.JobList:
+      return 'list';
+    case NormalizedJobToolName.JobKill: {
+      const jobId = getToolInputString(input, ['job_id', 'jobId']);
+      return jobId ? `kill · ${jobId}` : 'kill';
     }
     case 'sessionsspawn': {
       const spawnAgent = getToolInputString(input, ['agentId', 'agent_id', 'name']);
@@ -2035,7 +2082,7 @@ const getDescriptiveStepLabel = (group: ToolGroupItem, isLive: boolean): string 
       .replace('{done}', String(doneCount))
       .replace('{total}', String(plan.steps.length));
   }
-  if (normalized === 'process') {
+  if (PROCESS_TOOL_NAMES.has(normalized)) {
     return isProcessOutputCheck(group)
       ? pick('coworkActivityStatusCommandOutput', 'coworkActivityDoneProcessOutput')
       : pick('coworkActivityLiveProcess', 'coworkActivityDoneProcess');
@@ -2096,7 +2143,14 @@ export const getActivityLiveStatusText = (item: ConsolidatedItem): string => {
     );
   }
   if (isBashLikeToolName(toolName)) return i18nService.t('coworkActivityStatusCommand');
-  if (normalized === 'process') return i18nService.t('coworkActivityStatusCommandOutput');
+  if (PROCESS_TOOL_NAMES.has(normalized)) {
+    return i18nService.t(
+      isProcessOutputCheck(item.group)
+        || (normalized === NormalizedJobToolName.Process && !getToolInputString(toolInput ?? {}, ['action']))
+        ? 'coworkActivityStatusCommandOutput'
+        : 'coworkActivityLiveProcess',
+    );
+  }
   if (READ_TOOL_NAMES.has(normalized)) {
     const path = toolInput ? getToolInputString(toolInput, FILE_PATH_INPUT_KEYS) : null;
     return i18nService.t(isSkillInstructionPath(path) ? 'coworkActivityStatusReadingSkill' : 'coworkActivityStatusReading');
@@ -2130,7 +2184,7 @@ export const getActivityStepKind = (item: ConsolidatedItem): ActivityStepKind =>
   const rawName = item.group.toolUse.metadata?.toolName;
   const toolName = typeof rawName === 'string' ? rawName : undefined;
   const normalized = toolName ? normalizeToolName(toolName) : '';
-  if (isBashLikeToolName(toolName) || normalized === 'process') return ActivityStepKind.Command;
+  if (isBashLikeToolName(toolName) || PROCESS_TOOL_NAMES.has(normalized)) return ActivityStepKind.Command;
   if (READ_TOOL_NAMES.has(normalized)) return ActivityStepKind.Read;
   if (EDIT_TOOL_NAMES.has(normalized)) return ActivityStepKind.Edit;
   if (FILE_SEARCH_TOOL_NAMES.has(normalized) || MEMORY_TOOL_NAMES.has(normalized)) return ActivityStepKind.Search;

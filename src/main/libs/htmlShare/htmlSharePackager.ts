@@ -29,10 +29,12 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 ]);
 
 const COWORK_TEMP_DIRECTORY_NAME = COWORK_TEMP_DIR_NAME;
+const DSH_DIRECTORY_NAME = '.dsh';
 
 const SENSITIVE_DIRECTORY_NAMES = new Set([
   COWORK_TEMP_DIRECTORY_NAME,
   '.openclaw',
+  DSH_DIRECTORY_NAME,
   'memory',
 ]);
 
@@ -80,6 +82,7 @@ const SHARE_BOUNDARY_MARKER_NAMES = [
   'AGENTS.md',
   '.git',
   '.openclaw',
+  DSH_DIRECTORY_NAME,
   'MEMORY.md',
 ];
 

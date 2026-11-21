@@ -111,8 +111,14 @@
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:
               sampleOverCapGlobResults: false
+          # Keep background job completions quiet when the owner session is idle
+          # so an exiting/crashing dev server does not trigger an unobserved
+          # wakeup LLM turn; completions are still injected on the next turn
+          # and live output remains readable via job_output during active turns.
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
+            config:
+              completionDelivery: quiet
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill

@@ -19,6 +19,7 @@ const SHELL_TOOL_NAMES = new Set([
   'bash',
   'exec',
   'execcommand',
+  'pwsh',
   'shell',
 ]);
 const BROWSER_TOOL_NAME_PART = 'browser';
@@ -34,8 +35,10 @@ const TOOL_WORKING_DIRECTORY_KEYS = [
 ] as const;
 const TOOL_URL_KEYS = ['url', 'targetUrl', 'target_url', 'href'] as const;
 const ANSI_ESCAPE_RE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
-const EXPLICIT_WORKING_DIRECTORY_COMMAND_RE = /^\s*(?:(?:cd(?:\s+\/d)?\s+(?:"[^"]+"|'[^']+'|`[^`]+`|[^\s;&|]+))\s*(?:&&|;)\s*)?(?:pwd|get-location)\s*$/i;
-const SERVICE_START_COMMAND_RE = /(?:^|[\n;]|&&|\|\|)\s*(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b|(?:npx|pnpx|bunx)\s+(?:vite|next|nuxt|serve|http-server)\b|(?:vite|next|nuxt)\s+(?:dev|start|preview)\b|python(?:3)?\s+-m\s+http\.server\b|(?:uvicorn|gunicorn)\b|flask\s+run\b|rails\s+(?:server|s)\b|php\s+-S\b|cargo\s+run\b|go\s+run\b|node\s+[^\s;&|]+|\.\/[\w.-]*(?:start|serve)[\w.-]*\b|make\s+(?:start|serve|dev)\b)/i;
+const SHELL_LOCATION_COMMAND_RE = /(?:^|\r?\n|;|&&|\|\|)\s*(?:[$>]\s*)?(?:cd(?:\s+\/d)?|chdir(?:\s+\/d)?|set-location|sl|push-location|pushd)(?:\s+-(?:literal)?path(?:\s+|:)|\s+--\s+|\s+)(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s\r\n;&|-][^\s\r\n;&|]*))/gi;
+const EXPLICIT_WORKING_DIRECTORY_COMMAND_RE = /^\s*(?:(?:(?:cd(?:\s+\/d)?|chdir(?:\s+\/d)?|set-location|sl|push-location|pushd)(?:\s+-(?:literal)?path(?:\s+|:)|\s+--\s+|\s+)(?:"[^"]+"|'[^']+'|`[^`]+`|[^\s;&|-][^\s;&|]*))\s*(?:&&|;)\s*)?(?:pwd|get-location|gl)\s*$/i;
+const SERVICE_START_COMMAND_RE = /(?:^|[\r\n;]|&&|\|\|)\s*(?:&\s+)?(?:(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:run\s+)?(?:dev|start|serve|preview)\b|(?:npx|pnpx|bunx)(?:\.cmd)?\s+(?:vite|next|nuxt|serve|http-server)\b|(?:vite|next|nuxt)\s+(?:dev|start|preview)\b|(?:python(?:3)?(?:\.exe)?|py(?:\s+-3)?)\s+-m\s+http\.server\b|(?:uvicorn|gunicorn)\b|flask\s+run\b|rails\s+(?:server|s)\b|php\s+-S\b|cargo\s+run\b|go\s+run\b|node(?:\.exe)?\s+[^\s;&|]+|\.[/\\][\w.-]*(?:start|serve)[\w.-]*\b|make\s+(?:start|serve|dev)\b)/i;
+const PYTHON_HTTP_SERVER_PORT_RE = /\b(?:python(?:3)?(?:\.exe)?|py(?:\s+-3)?)\s+-m\s+http\.server\s+(?:(?:-d|--directory|-b|--bind)(?:\s+|=)(?:"[^"]+"|'[^']+'|\S+)\s+)*(\d{2,5})(?!\d)/gi;
 const ABSOLUTE_DIRECTORY_LINE_RE = /^(?:\/(?!\/).+|[A-Za-z]:[\\/].+|\\\\[^\\/]+[\\/][^\\/]+.*)$/;
 const MAX_TOOL_CONTEXT_TEXT_LENGTH = 32_000;
 
@@ -130,7 +133,9 @@ function collectPortsFromText(value: string): Set<number> {
   const ports = new Set<number>();
   const patterns = [
     /\bhttps?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\]):(\d{1,5})\b/gi,
-    /(?:^|[^\d])(?:--port(?:=|\s+)|-p\s+|PORT\s*=\s*|:)(\d{2,5})(?!\d)/g,
+    /(?:^|[^\d])(?:--port(?:=|\s+)|-p\s+|:)(\d{2,5})(?!\d)/g,
+    /(?:^|[\s;&|])(?:\$env:)?PORT\s*=\s*['"]?(\d{2,5})['"]?(?!\d)/gi,
+    new RegExp(PYTHON_HTTP_SERVER_PORT_RE.source, 'gi'),
   ];
   for (const pattern of patterns) {
     let match: RegExpExecArray | null;
@@ -149,7 +154,8 @@ function collectExplicitPortBindings(value: string): Set<number> {
   const patterns = [
     /(?:^|[\s;&|])--port(?:=|\s+)(\d{1,5})(?!\d)/gi,
     /(?:^|[\s;&|])-p(?:=|\s+)(\d{1,5})(?!\d)/g,
-    /(?:^|[\s;&|])PORT\s*=\s*(\d{1,5})(?!\d)/gi,
+    /(?:^|[\s;&|])(?:\$env:)?PORT\s*=\s*['"]?(\d{1,5})['"]?(?!\d)/gi,
+    new RegExp(PYTHON_HTTP_SERVER_PORT_RE.source, 'gi'),
   ];
   for (const pattern of patterns) {
     let match: RegExpExecArray | null;
@@ -187,7 +193,7 @@ function createToolDirectoryCandidate(
   evidence?: string,
 ): ShareDeploymentProjectCandidate | null {
   const sanitized = sanitizeDirectoryValue(directory);
-  if (!sanitized || /\$\(|\$\{|%[^%]+%/.test(sanitized)) return null;
+  if (!sanitized || /^\$|\$\(|\$\{|%[^%]+%|\$env:/i.test(sanitized)) return null;
   const parsed = collectProjectDirectoryCandidatesFromText(
     `project directory: ${sanitized}`,
     fallbackProjectDirectory,
@@ -238,12 +244,25 @@ function getShellDirectoryEvidence(
   const cdCandidates: ShareDeploymentProjectCandidate[] = [];
 
   for (const command of commands) {
-    const commandCandidates = collectProjectDirectoryCandidatesFromText(
-      command,
-      fallbackDirectory,
-      message.id,
-    ).filter(candidate => candidate.source === ShareDeploymentCandidateSource.TextCdCommand);
-    cdCandidates.push(...commandCandidates);
+    const locationRe = new RegExp(SHELL_LOCATION_COMMAND_RE.source, 'gi');
+    let currentBase = fallbackDirectory;
+    let match: RegExpExecArray | null;
+    while ((match = locationRe.exec(command)) !== null) {
+      const rawDirectory = match[1] || match[2] || match[3] || match[4] || '';
+      const candidate = createToolDirectoryCandidate(
+        rawDirectory,
+        ShareDeploymentCandidateSource.ToolCdCommand,
+        94,
+        message.id,
+        currentBase,
+        'Matched the effective directory from a shell tool command.',
+        match[0],
+      );
+      if (candidate) {
+        cdCandidates.push(candidate);
+        currentBase = candidate.directory;
+      }
+    }
   }
 
   const orderedCdCandidates = cdCandidates.reverse().map((candidate, index) => ({

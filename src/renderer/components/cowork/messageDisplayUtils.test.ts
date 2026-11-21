@@ -50,6 +50,8 @@ import {
   isAbandonedToolPlaceholder,
   isActivityConsolidatedItem,
   isActivityItemLive,
+  isBashLikeToolName,
+  isProcessOutputCheck,
   isToolGroupSettled,
   isTransientActivityItem,
   parseActivityPlan,
@@ -1217,4 +1219,105 @@ test('a reply keeps its own preset and gets none without one on the user message
   expect(withTurnModelPreset(assistant, { modelPresetId: 'balanced' })).toBe(assistant);
   expect(withTurnModelPreset({ model: 'glm-5' }, {})).toEqual({ model: 'glm-5' });
   expect(withTurnModelPreset(undefined, { modelPresetId: 'balanced' })).toBeUndefined();
+});
+
+test('recognizes pwsh as a bash-like command tool with PowerShell display name and command card semantics', () => {
+  expect(isBashLikeToolName('pwsh')).toBe(true);
+  expect(isBashLikeToolName('PWSH')).toBe(true);
+  expect(getToolDisplayName('pwsh')).toBe('PowerShell');
+  expect(getToolInputSummary('pwsh', { command: 'npm run dev', description: 'Start dev server' }))
+    .toBe('npm run dev');
+  expect(getShellCommandDescription('pwsh', { command: 'npm run dev', description: 'Start dev server' }))
+    .toBe('Start dev server');
+  expect(getActivityStepKind(activityToolItem('pwsh-1', 'pwsh'))).toBe(ActivityStepKind.Command);
+  expect(getActivityStepDisplay(activityToolItem(
+    'pwsh-2',
+    'pwsh',
+    undefined,
+    { command: 'Get-ChildItem' },
+  ))).toEqual({ name: 'PowerShell', summary: 'Get-ChildItem' });
+  expect(getActivityStepDisplay(activityToolItem(
+    'pwsh-3',
+    'pwsh',
+    undefined,
+    { command: 'npm run dev', description: '启动本地开发服务' },
+  ))).toEqual({ name: '启动本地开发服务', summary: null });
+  expect(getActivityCurrentActionText(activityToolItem(
+    'pwsh-4',
+    'pwsh',
+    undefined,
+    { command: 'npm run dev', description: '启动本地开发服务' },
+  ))).toBe('启动本地开发服务');
+  expect(getActivityCurrentActionText(activityToolItem(
+    'pwsh-5',
+    'pwsh',
+    undefined,
+    { command: 'npm run dev' },
+  ))).toBe('正在运行命令');
+  expect(getActivityStepDoneLabel(activityToolItem(
+    'pwsh-6',
+    'pwsh',
+    { result: 1 },
+    { command: 'npm run dev', description: '启动本地开发服务' },
+  ))).toBe('启动本地开发服务');
+  expect(getActivityLiveStatusText(runningToolItem('pwsh', { command: 'npm run dev' }))).toBe('正在运行命令');
+  expect(getActivityLiveDetail(runningToolItem(
+    'pwsh',
+    { command: 'npm run dev' },
+    { content: 'VITE v6.0.0\n  Local: http://localhost:5173/\n', isFinal: false },
+  ))).toEqual({ kind: 'output', text: 'Local: http://localhost:5173/' });
+});
+
+test('recognizes DSH job_output, job_list, and job_kill tools alongside legacy process', () => {
+  expect(getToolDisplayName('job_output')).toBe('Process');
+  expect(getToolDisplayName('job_list')).toBe('Process');
+  expect(getToolDisplayName('job_kill')).toBe('Process');
+
+  expect(getToolInputSummary('job_output', { job_id: 'job-42', wait: true })).toBe('output · job-42');
+  expect(getToolInputSummary('job_list', {})).toBe('list');
+  expect(getToolInputSummary('job_kill', { job_id: 'job-42', reason: 'done' })).toBe('kill · job-42');
+
+  const jobOutputItem = activityToolItem('j-1', 'job_output', { result: 1 }, { job_id: 'job-42' });
+  const jobListItem = activityToolItem('j-2', 'job_list', { result: 1 }, {});
+  const jobKillItem = activityToolItem('j-3', 'job_kill', { result: 1 }, { job_id: 'job-42' });
+
+  expect(getActivityStepKind(jobOutputItem)).toBe(ActivityStepKind.Command);
+  expect(getActivityStepKind(jobListItem)).toBe(ActivityStepKind.Command);
+  expect(getActivityStepKind(jobKillItem)).toBe(ActivityStepKind.Command);
+
+  expect(isProcessOutputCheck((jobOutputItem as Extract<ConsolidatedItem, { type: 'tool_group' }>).group)).toBe(true);
+  expect(isProcessOutputCheck((jobListItem as Extract<ConsolidatedItem, { type: 'tool_group' }>).group)).toBe(true);
+  expect(isProcessOutputCheck((jobKillItem as Extract<ConsolidatedItem, { type: 'tool_group' }>).group)).toBe(false);
+
+  expect(isTransientActivityItem(jobOutputItem)).toBe(true);
+  expect(isTransientActivityItem(jobListItem)).toBe(true);
+  expect(isTransientActivityItem(jobKillItem)).toBe(false);
+
+  expect(getActivityCurrentActionText(activityToolItem('j-4', 'job_output', undefined, { job_id: 'job-42', wait: true })))
+    .toBe('正在等待命令输出');
+  expect(getActivityStepDoneLabel(jobOutputItem)).toBe('查看了命令输出');
+  expect(getActivityCurrentActionText(activityToolItem('j-5', 'job_list', undefined, {})))
+    .toBe('正在等待命令输出');
+  expect(getActivityStepDoneLabel(jobListItem)).toBe('查看了命令输出');
+  expect(getActivityCurrentActionText(activityToolItem('j-6', 'job_kill', undefined, { job_id: 'job-42' })))
+    .toBe('正在操作后台命令');
+  expect(getActivityStepDoneLabel(jobKillItem)).toBe('操作了后台命令');
+
+  expect(getActivityLiveStatusText(runningToolItem('job_output', { job_id: 'job-42', wait: true }))).toBe('正在等待命令输出');
+  expect(getActivityLiveStatusText(runningToolItem('job_list', {}))).toBe('正在等待命令输出');
+  expect(getActivityLiveStatusText(runningToolItem('job_kill', { job_id: 'job-42' }))).toBe('正在操作后台命令');
+
+  expect(getActivityGroupHeaderLabel([
+    activityToolItem('pwsh-start', 'pwsh', { result: 1 }, { command: 'npm run dev', description: '启动本地开发服务' }),
+    jobOutputItem,
+    jobListItem,
+  ])).toBe('启动本地开发服务');
+
+  const liveWindow = getLiveActivityWindow([
+    windowEntry(0, activityToolItem('pwsh-1', 'pwsh', { result: 1 }, { command: 'npm run dev' })),
+    windowEntry(1, jobOutputItem),
+    windowEntry(2, jobListItem),
+    windowEntry(3, activityToolItem('pwsh-2', 'pwsh', undefined, { command: 'curl http://localhost:5173' })),
+  ]);
+  expect(liveWindow.recent.map((entry) => entry.index)).toEqual([0, 3]);
 });

@@ -745,6 +745,25 @@ describe('parseLocalServiceUrlsFromText', () => {
     );
   });
 
+  test('extracts project directory from PowerShell Set-Location command in text', () => {
+    const content = [
+      '启动方式',
+      '```powershell',
+      'Set-Location -Path "C:\\work\\my app"',
+      'npm run dev',
+      '```',
+      '预览地址：http://localhost:5173',
+    ].join('\n');
+    const artifacts = parseLocalServiceUrlsFromText(
+      content,
+      'msg1',
+      'sess1',
+      { projectDirectory: 'C:\\work' },
+    );
+
+    expect(artifacts[0].localService?.projectDirectory).toBe('C:\\work\\my app');
+  });
+
   test('prefers labeled project directory over session cwd', () => {
     const content = [
       '项目目录： `/Users/admin/lobsterai/project/fanren/fanren-vote/`',
