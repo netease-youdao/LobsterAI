@@ -58,9 +58,12 @@ import {
   clampCompanionBounds,
   type CompanionComposerLayout,
   companionDragGrabOffset,
+  type CompanionOrbPosition,
   type CompanionPoint,
   type CompanionRect,
   companionStageOpensLeft,
+  createCompanionOrbPosition,
+  normalizeCompanionOrbPosition,
   resolveCompanionBounds,
   resolveCompanionComposerLayout,
   resolveCompanionLoginLayout,
@@ -91,7 +94,12 @@ import {
 } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
 import { CompanionStageController } from './companionStage';
-import { type CompanionWindowEnvironment, createCompanionWindow, dismissCompanionPanelOnBlur } from './companionWindow';
+import {
+  type CompanionWindowEnvironment,
+  createCompanionWindow,
+  dismissCompanionPanelOnBlur,
+  onCompanionWindowReadyToShow,
+} from './companionWindow';
 import { CompanionFileDragMonitor, FileDragEvent, type FileDragMonitor, type FileDragStart } from './fileDragMonitor';
 import { CompanionFileDragProximity } from './fileDragProximity';
 import { CompanionForegroundMonitor, type ForegroundAppMonitor } from './foregroundAppMonitor';
@@ -217,7 +225,9 @@ export class DesktopCompanionManager {
   private preferences: DesktopCompanionPreferences;
   private draft: DesktopCompanionDraft;
   private sessionId: string | null;
-  private position: CompanionPoint | undefined;
+  private position: CompanionOrbPosition | undefined;
+  /** The display currently hosting an open orb, kept in memory so undragged orbs stay on their display. */
+  private activeOrbDisplayId: number | undefined;
   private snooze: DesktopCompanionSnooze | null;
   private revision = 0;
   private shortcutUnavailable = false;
@@ -259,7 +269,7 @@ export class DesktopCompanionManager {
     this.draft = normalizeCompanionDraft(store.get(DesktopCompanionStoreKey.Draft));
     const sessionId = store.get(DesktopCompanionStoreKey.Session);
     this.sessionId = typeof sessionId === 'string' ? sessionId : null;
-    this.position = store.get<CompanionPoint>(DesktopCompanionStoreKey.Position);
+    this.position = normalizeCompanionOrbPosition(store.get(DesktopCompanionStoreKey.Position));
     this.snooze = normalizeSnooze(store.get(DesktopCompanionStoreKey.Snooze), Date.now());
     this.env = {
       preloadPath: options.preloadPath,
@@ -369,6 +379,7 @@ export class DesktopCompanionManager {
     this.fileDrag.on(FileDragEvent.Start, this.onGlobalDragStart);
     this.fileDrag.on(FileDragEvent.End, this.onGlobalDragEnd);
     this.registerIpc();
+    screen.on('display-added', this.reposition);
     screen.on('display-removed', this.reposition);
     screen.on('display-metrics-changed', this.reposition);
     this.shortcutUnavailable = !this.registerShortcut(this.preferences.shortcut);
@@ -547,6 +558,7 @@ export class DesktopCompanionManager {
     this.flushDraft();
     if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
     clearTimeout(this.snoozeTimer);
+    screen.removeListener('display-added', this.reposition);
     screen.removeListener('display-removed', this.reposition);
     screen.removeListener('display-metrics-changed', this.reposition);
     for (const channel of [
@@ -639,27 +651,53 @@ export class DesktopCompanionManager {
     return createCompanionWindow(this.env, { surface, focusable, bounds: { ...anchor } });
   }
 
+  private displayIdOf(display: Electron.Display): number | undefined {
+    return typeof display.id === 'number' && Number.isFinite(display.id) ? display.id : undefined;
+  }
+
+  private findDisplayById(id: number | undefined): Electron.Display | undefined {
+    if (id === undefined || typeof screen.getAllDisplays !== 'function') return undefined;
+    return screen.getAllDisplays().find(display => this.displayIdOf(display) === id);
+  }
+
+  private resolveOrbDisplay(): Electron.Display {
+    if (this.position) {
+      return this.findDisplayById(this.position.displayId) ?? screen.getDisplayNearestPoint(this.position);
+    }
+    if (this.orb && !this.orb.isDestroyed()) {
+      const active = this.findDisplayById(this.activeOrbDisplayId);
+      if (active) return active;
+    }
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  }
+
   private defaultOrbBounds(): Rectangle {
-    const point = this.position;
-    const display = point && Number.isFinite(point.x) && Number.isFinite(point.y)
-      ? screen.getDisplayNearestPoint(point)
-      : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    return resolveCompanionBounds(point, display.workArea, this.orbSize());
+    return resolveCompanionBounds(this.position, this.resolveOrbDisplay().workArea, this.orbSize());
   }
 
   private orbSize(): { width: number; height: number } {
     return companionOrbSize(this.preferences.skin);
   }
 
-  /** A skin with a different window size keeps the orb centered where it was. */
+  /** A skin with a different window size keeps a free orb centered and a docked orb flush against its edge. */
   private resizeOrb(previous: { width: number; height: number }): void {
     const size = this.orbSize();
     if (size.width === previous.width && size.height === previous.height) return;
-    if (this.position && Number.isFinite(this.position.x) && Number.isFinite(this.position.y)) {
-      this.savePosition({
-        x: Math.round(this.position.x + (previous.width - size.width) / 2),
-        y: Math.round(this.position.y + (previous.height - size.height) / 2),
-      });
+    if (this.position) {
+      if (this.position.edge) {
+        if (this.position.yRatio === undefined) {
+          this.savePosition({
+            ...this.position,
+            y: Math.round(this.position.y + (previous.height - size.height) / 2),
+          });
+        }
+      } else {
+        this.savePosition({
+          ...this.position,
+          x: Math.round(this.position.x + (previous.width - size.width) / 2),
+          y: Math.round(this.position.y + (previous.height - size.height) / 2),
+        });
+      }
     }
     if (this.orb && !this.orb.isDestroyed()) this.reposition();
   }
@@ -667,12 +705,15 @@ export class DesktopCompanionManager {
   /** Where the orb sits, or null when it is not on screen. */
   private orbBounds(): Rectangle | null {
     if (!this.orb || this.orb.isDestroyed()) return null;
+    if (this.drag?.placed) return this.drag.placed;
     return this.defaultOrbBounds();
   }
 
   private showOrb(): void {
     if (!this.orb || this.orb.isDestroyed()) {
-      const bounds = this.defaultOrbBounds();
+      const display = this.resolveOrbDisplay();
+      this.activeOrbDisplayId = this.displayIdOf(display);
+      const bounds = resolveCompanionBounds(this.position, display.workArea, this.orbSize());
       // Electron's macOS panel only emulates a nonactivating panel: clicking a window
       // that cannot become key half-activates LobsterAI, so the quick panel loses key
       // focus at once and the main window can come forward. A key-capable orb takes
@@ -680,9 +721,21 @@ export class DesktopCompanionManager {
       const win = this.createWindow(DesktopCompanionSurface.Mascot, process.platform === 'darwin', bounds);
       // A key orb receives the app menu's Close (Cmd+W); only dispose removes it.
       win.on('close', event => { if (!this.disposing) event.preventDefault(); });
-      win.on('closed', () => { if (this.orb === win) this.orb = null; });
-      win.once('ready-to-show', () => {
+      win.on('closed', () => {
+        if (this.orb === win) {
+          this.orb = null;
+          this.activeOrbDisplayId = undefined;
+        }
+      });
+      onCompanionWindowReadyToShow(win, () => {
         if (this.disposing || win.isDestroyed() || !this.isPresent()) return;
+        if (process.platform === 'win32') {
+          const target = this.orbBounds();
+          const actual = win.getBounds();
+          if (target && (actual.x !== target.x || actual.y !== target.y || actual.width !== target.width || actual.height !== target.height)) {
+            win.setBounds(target);
+          }
+        }
         const wasVisible = win.isVisible();
         win.showInactive();
         if (!wasVisible) this.analytics.report({ action: AnalyticsAction.Action, source: AnalyticsSource.System,
@@ -701,10 +754,13 @@ export class DesktopCompanionManager {
     this.launcher.reset();
     if (this.orb && !this.orb.isDestroyed()) this.orb.destroy();
     this.orb = null;
+    this.activeOrbDisplayId = undefined;
   }
 
-  private savePosition(point: CompanionPoint): void {
-    this.position = { x: point.x, y: point.y };
+  private savePosition(position: CompanionOrbPosition): void {
+    const normalized = normalizeCompanionOrbPosition(position);
+    if (!normalized) return;
+    this.position = normalized;
     this.options.store.set(DesktopCompanionStoreKey.Position, this.position);
   }
 
@@ -728,7 +784,8 @@ export class DesktopCompanionManager {
       return;
     }
     if (!this.drag) return;
-    const workArea = screen.getDisplayNearestPoint(cursor).workArea;
+    const display = screen.getDisplayNearestPoint(cursor);
+    const workArea = display.workArea;
     const moved = clampCompanionBounds({ ...size, x: cursor.x - this.drag.grab.x, y: cursor.y - this.drag.grab.y }, workArea);
     // Moving the window under a still cursor produces pointer events too. Moving again for
     // them would fight anything else that places the window, which shows as flicker.
@@ -739,11 +796,11 @@ export class DesktopCompanionManager {
     this.orb.setBounds(settled, settled.x !== moved.x);
     if (phase === DesktopCompanionDragPhase.End) {
       this.drag = null;
-      this.savePosition(settled);
+      this.activeOrbDisplayId = this.displayIdOf(display);
+      this.savePosition(createCompanionOrbPosition(settled, workArea, this.activeOrbDisplayId));
       this.publish();
     } else {
       this.drag.placed = moved;
-      this.position = { x: moved.x, y: moved.y };
     }
     this.stage.reposition();
     this.positionPanel();
@@ -752,9 +809,10 @@ export class DesktopCompanionManager {
 
   private reposition = (): void => {
     if (this.orb && !this.orb.isDestroyed()) {
-      const bounds = this.defaultOrbBounds();
+      const display = this.resolveOrbDisplay();
+      this.activeOrbDisplayId = this.displayIdOf(display);
+      const bounds = resolveCompanionBounds(this.position, display.workArea, this.orbSize());
       this.orb.setBounds(bounds);
-      this.savePosition(bounds);
     }
     if (this.panelWorkArea && this.panel && !this.panel.isDestroyed()) {
       this.panelWorkArea = screen.getDisplayMatching(this.panel.getBounds()).workArea;

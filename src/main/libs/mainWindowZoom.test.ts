@@ -1,8 +1,12 @@
-import { describe, expect, test } from 'vitest';
+import type { BrowserWindow } from 'electron';
+import { EventEmitter } from 'events';
+import { describe, expect, test, vi } from 'vitest';
 
+import { WindowIpcChannel } from '../../shared/app/constants';
 import {
   getMacTrafficLightPosition,
   getNextZoomFactor,
+  installMainWindowZoom,
   MAC_TRAFFIC_LIGHT_POSITION,
   MAIN_WINDOW_ZOOM_FACTORS,
   MainWindowZoomAction,
@@ -94,5 +98,81 @@ describe('scaleRendererCoordinates', () => {
     expect(scaleRendererCoordinates(rect, Number.NaN)).toBe(rect);
     expect(scaleRendererCoordinates(undefined, 1.5)).toBeUndefined();
     expect(scaleRendererCoordinates({ x: undefined, y: 3 }, 2)).toEqual({ x: undefined, y: 6 });
+  });
+});
+
+class MockZoomWindow extends EventEmitter {
+  visible = false;
+  destroyed = false;
+  loadingMainFrame = true;
+  setWindowButtonPosition = vi.fn();
+  webContents = Object.assign(new EventEmitter(), {
+    send: vi.fn(),
+    isDestroyed: () => this.destroyed,
+    isLoadingMainFrame: () => this.loadingMainFrame,
+  });
+  isVisible = () => this.visible;
+  isDestroyed = () => this.destroyed;
+}
+
+describe('installMainWindowZoom', () => {
+  test('waits until ready-to-show before sending initial per-window zoom on a hidden window', () => {
+    const win = new MockZoomWindow();
+    installMainWindowZoom(win as unknown as BrowserWindow, { isMac: false });
+
+    // Initial load while still hidden must not trigger setZoomFactor (Electron #51972).
+    win.loadingMainFrame = false;
+    win.webContents.emit('did-finish-load');
+    expect(win.webContents.send).not.toHaveBeenCalled();
+
+    // Once ready-to-show fires, per-window zoom isolation is initialized once at 100%.
+    win.emit('ready-to-show');
+    expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith(WindowIpcChannel.ApplyZoom, 1);
+
+    // Subsequent show does not send a duplicate reset.
+    win.visible = true;
+    win.emit('show');
+    expect(win.webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  test('if shown before did-finish-load, initializes per-window zoom once the load finishes', () => {
+    const win = new MockZoomWindow();
+    installMainWindowZoom(win as unknown as BrowserWindow, { isMac: true });
+
+    win.visible = true;
+    win.emit('show');
+    expect(win.webContents.send).not.toHaveBeenCalled();
+
+    win.loadingMainFrame = false;
+    win.webContents.emit('did-finish-load');
+    expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith(WindowIpcChannel.ApplyZoom, 1);
+    expect(win.setWindowButtonPosition).toHaveBeenCalledWith(MAC_TRAFFIC_LIGHT_POSITION);
+  });
+
+  test('steps zoom via ApplyZoom and resets to 100% on subsequent reloads', () => {
+    const win = new MockZoomWindow();
+    installMainWindowZoom(win as unknown as BrowserWindow, { isMac: true });
+    win.loadingMainFrame = false;
+    win.emit('ready-to-show');
+    win.webContents.send.mockClear();
+    win.setWindowButtonPosition.mockClear();
+
+    const preventDefault = vi.fn();
+    win.webContents.emit('before-input-event', { preventDefault }, keyDown({ key: '=', meta: true }));
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(win.webContents.send).toHaveBeenNthCalledWith(1, WindowIpcChannel.ApplyZoom, 1.1);
+    expect(win.webContents.send).toHaveBeenNthCalledWith(2, WindowIpcChannel.ZoomChanged, { zoomFactor: 1.1 });
+    expect(win.setWindowButtonPosition).toHaveBeenCalledWith(getMacTrafficLightPosition(1.1));
+
+    // Rapid second zoom steps from 1.1 to 1.25 without waiting for an IPC round-trip.
+    win.webContents.emit('before-input-event', { preventDefault }, keyDown({ key: '=', meta: true }));
+    expect(win.webContents.send).toHaveBeenNthCalledWith(3, WindowIpcChannel.ApplyZoom, 1.25);
+    expect(win.webContents.send).toHaveBeenNthCalledWith(4, WindowIpcChannel.ZoomChanged, { zoomFactor: 1.25 });
+
+    // Reloading resets zoom to 100% and restores traffic light position.
+    win.webContents.send.mockClear();
+    win.webContents.emit('did-finish-load');
+    expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith(WindowIpcChannel.ApplyZoom, 1);
+    expect(win.setWindowButtonPosition).toHaveBeenLastCalledWith(MAC_TRAFFIC_LIGHT_POSITION);
   });
 });

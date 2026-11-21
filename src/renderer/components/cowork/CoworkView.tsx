@@ -955,7 +955,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           {/* Main content */}
           <div
             data-session-swipe-area="true"
-            className={`relative z-10 flex-1 overflow-y-auto min-h-0 ${selectedActionId === PptCreation.ActionId ? 'scrollbar-hidden' : ''}`}
+            className="relative z-10 flex-1 overflow-y-auto min-h-0 scrollbar-hidden"
           >
             <div className="relative flex min-h-full w-full min-w-[320px] flex-col items-center px-4 py-8">
               {/* Flexible spacers (2:3) keep the welcome block at the optical
@@ -1012,9 +1012,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                 />
               </div>
 
-              {/* Quick Actions. Stays `relative`: the home image examples anchor
-                  to this block and hang below it without taking part in the
-                  vertical centering. */}
+              {/* Quick Actions. Stays `relative`: all quick-action panels
+                  (prompt panel, PPT gallery, and image examples) anchor to this
+                  block and hang below it without taking part in the vertical
+                  centering. */}
               <div
                 className="relative z-0 mt-8 flex w-full max-w-3xl flex-col items-center animate-fade-in-up"
                 style={{ animationDelay: '260ms', animationFillMode: 'both' }}
@@ -1032,7 +1033,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   <HomePptCreation active={selectedActionId === PptCreation.ActionId} onClose={handleQuickActionDeselect}
                     onDraftReady={prompt => { promptInputRef.current?.setValue(prompt, 'template'); promptInputRef.current?.focus(); }}>
                     {selectedAction && (
-                      <div className="mt-4 w-full">
+                      <div className="absolute inset-x-0 top-full pb-8 pt-4">
                         <PromptPanel
                           action={selectedAction}
                           onPromptSelect={handleQuickActionPromptSelect}

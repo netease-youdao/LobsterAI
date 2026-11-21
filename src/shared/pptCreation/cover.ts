@@ -10,7 +10,33 @@ export const PptCoverIpc = { Template: 'ppt-cover:template', Export: 'ppt-cover:
 export const CoverIllustration = { Reuse: 'reuse', Generate: 'generate' } as const;
 export type CoverIllustration = typeof CoverIllustration[keyof typeof CoverIllustration];
 export const CoverStep = { Content: 0, Preview: 1, Export: 2 } as const;
+export type CoverStep = typeof CoverStep[keyof typeof CoverStep];
 export const CoverTaskState = { Running: 'running', Ready: 'ready', Failed: 'failed' } as const;
+export interface CoverStepNavigationState {
+  step: CoverStep;
+  disabled: boolean;
+  hasBackground: boolean;
+  hasTitle: boolean;
+  hasPreview: boolean;
+  illustration: CoverIllustration;
+  hasMatchingImage: boolean;
+  hasExported: boolean;
+}
+export function previousCoverStep(step: CoverStep): CoverStep | null {
+  if (step === CoverStep.Export) return CoverStep.Preview;
+  if (step === CoverStep.Preview) return CoverStep.Content;
+  return null;
+}
+export function canNavigateToCoverStep(target: CoverStep, state: CoverStepNavigationState): boolean {
+  if (state.disabled || target === state.step) return false;
+  if (target === CoverStep.Content) return true;
+  if (target === CoverStep.Preview) {
+    if (state.step === CoverStep.Export) return true;
+    return state.hasBackground && state.hasTitle && state.hasPreview
+      && (state.illustration === CoverIllustration.Reuse || state.hasMatchingImage);
+  }
+  return state.hasExported;
+}
 export interface PptCoverRecipe {
   file: PptAsset; title: PptText; subtitle: PptText; footer: PptText; subject: PptText;
 }

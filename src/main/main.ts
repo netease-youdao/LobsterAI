@@ -14193,9 +14193,23 @@ if (!gotTheLock) {
     // 兜底显示:首帧迟迟不来时,宁可让用户看到纯背景色的窗口,也不能看起来
     // "应用没打开"。开机自启保持仅托盘,不弹窗。
     const SHOW_FALLBACK_DELAY_MS = 10_000;
+    const READY_TO_SHOW_FALLBACK_DELAY_MS = 1_500;
+    const MainWindowReadySource = {
+      ReadyToShow: 'ready-to-show',
+      DidFinishLoadFallback: 'did-finish-load-fallback',
+    } as const;
+    type MainWindowReadySource = (typeof MainWindowReadySource)[keyof typeof MainWindowReadySource];
+    let hasCompletedInitialReady = false;
+    let readyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearReadyFallback = () => {
+      if (readyFallbackTimer) {
+        clearTimeout(readyFallbackTimer);
+        readyFallbackTimer = null;
+      }
+    };
     const showFallbackTimer = setTimeout(() => {
       if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
-      if (mainWindow.isVisible() || hasRenderedFirstFrame) return;
+      if (mainWindow.isVisible() || hasCompletedInitialReady) return;
       if (isAutoLaunched()) return;
       console.warn(
         `[Main] window not ready after ${SHOW_FALLBACK_DELAY_MS}ms, showing it before first paint`,
@@ -14203,6 +14217,40 @@ if (!gotTheLock) {
       pendingShowOnFirstFrame = false;
       mainWindow.show();
     }, SHOW_FALLBACK_DELAY_MS);
+
+    const completeInitialReady = (source: MainWindowReadySource) => {
+      if (hasCompletedInitialReady) return;
+      hasCompletedInitialReady = true;
+      clearTimeout(showFallbackTimer);
+      clearReadyFallback();
+      if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return;
+      if (source !== MainWindowReadySource.ReadyToShow) {
+        console.warn(`[Main] ready-to-show did not fire after did-finish-load, completing startup via ${source}`);
+      }
+      // 开机自启时不显示窗口，仅显示托盘图标
+      if (!isAutoLaunched() && !mainWindow.isVisible()) {
+        mainWindow.show();
+      }
+      markFirstFrameRendered(source);
+      // Initialize main-process i18n from stored language before creating UI elements.
+      const initLang = getStore().get<{ language?: string }>('app_config')?.language;
+      setLanguage(initLang === 'en' ? 'en' : 'zh');
+      // 窗口就绪后创建系统托盘
+      createTray(() => isQuitting ? null : mainWindow, {
+        isEnabled: () => desktopCompanionManager?.getState().preferences.enabled ?? false,
+        toggleEnabled: () => desktopCompanionManager?.setPreferences({
+          enabled: !desktopCompanionManager.getState().preferences.enabled,
+        }, CompanionAnalyticsSource.Tray),
+        openPanel: () => desktopCompanionManager?.togglePanel(),
+      });
+
+      // Start scheduler polling after the window is ready.
+      try {
+        getCronJobService().startPolling();
+      } catch (err) {
+        console.warn('[Main] LobsterScheduler not available yet:', err);
+      }
+    };
 
     let hasOpenedDevelopmentTools = false;
     const developmentLoadRecovery: DevelopmentMainWindowLoadRecovery | null = isDev
@@ -14220,6 +14268,12 @@ if (!gotTheLock) {
       clearLoadWatchdog();
       loadRecoveryAttempts = 0;
       markFirstFrameRendered('did-finish-load');
+      if (!hasCompletedInitialReady && !readyFallbackTimer) {
+        readyFallbackTimer = setTimeout(() => {
+          readyFallbackTimer = null;
+          completeInitialReady(MainWindowReadySource.DidFinishLoadFallback);
+        }, READY_TO_SHOW_FALLBACK_DELAY_MS);
+      }
       if (
         shouldOpenDevTools
         && !hasOpenedDevelopmentTools
@@ -14326,6 +14380,7 @@ if (!gotTheLock) {
       developmentLoadRecovery?.dispose();
       clearLoadWatchdog();
       clearTimeout(showFallbackTimer);
+      clearReadyFallback();
       windowStatePersist.cleanup();
       authCallbackRouter.markRendererUnavailable();
       isOpenSessionFromNotificationReady = false;
@@ -14337,31 +14392,7 @@ if (!gotTheLock) {
 
     // 等待内容加载完成后再显示窗口
     mainWindow.once('ready-to-show', () => {
-      clearTimeout(showFallbackTimer);
-      if (isQuitting) return;
-      // 开机自启时不显示窗口，仅显示托盘图标
-      if (!isAutoLaunched()) {
-        mainWindow?.show();
-      }
-      markFirstFrameRendered('ready-to-show');
-      // Initialize main-process i18n from stored language before creating UI elements.
-      const initLang = getStore().get<{ language?: string }>('app_config')?.language;
-      setLanguage(initLang === 'en' ? 'en' : 'zh');
-      // 窗口就绪后创建系统托盘
-      createTray(() => isQuitting ? null : mainWindow, {
-        isEnabled: () => desktopCompanionManager?.getState().preferences.enabled ?? false,
-        toggleEnabled: () => desktopCompanionManager?.setPreferences({
-          enabled: !desktopCompanionManager.getState().preferences.enabled,
-        }, CompanionAnalyticsSource.Tray),
-        openPanel: () => desktopCompanionManager?.togglePanel(),
-      });
-
-      // Start scheduler polling after the window is ready.
-      try {
-        getCronJobService().startPolling();
-      } catch (err) {
-        console.warn('[Main] LobsterScheduler not available yet:', err);
-      }
+      completeInitialReady(MainWindowReadySource.ReadyToShow);
     });
   };
 
