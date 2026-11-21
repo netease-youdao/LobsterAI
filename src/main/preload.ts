@@ -1330,35 +1330,6 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(AppUpdateIpc.StateChanged, handler);
     },
   },
-  plugins: {
-    list: () => ipcRenderer.invoke('plugins:list'),
-    detect: () => ipcRenderer.invoke('plugins:detect'),
-    sync: () => ipcRenderer.invoke('plugins:sync'),
-    install: (params: {
-      source: 'npm' | 'clawhub' | 'git' | 'local';
-      spec: string;
-      registry?: string;
-      version?: string;
-    }) => ipcRenderer.invoke('plugins:install', params),
-    uninstall: (pluginId: string) => ipcRenderer.invoke('plugins:uninstall', pluginId),
-    setEnabled: (pluginId: string, enabled: boolean) =>
-      ipcRenderer.invoke('plugins:set-enabled', pluginId, enabled),
-    getConfigSchema: (pluginId: string) =>
-      ipcRenderer.invoke('plugins:get-config-schema', pluginId),
-    saveConfig: (pluginId: string, config: Record<string, unknown>) =>
-      ipcRenderer.invoke('plugins:save-config', pluginId, config),
-    batchSave: (changes: {
-      toggles?: Array<{ pluginId: string; enabled: boolean }>;
-      configs?: Array<{ pluginId: string; config: Record<string, unknown> }>;
-    }) => ipcRenderer.invoke('plugins:batch-save', changes),
-    checkUpdates: (pluginIds?: string[]) => ipcRenderer.invoke('plugins:check-updates', pluginIds),
-    update: (pluginId: string) => ipcRenderer.invoke('plugins:update', pluginId),
-    onInstallLog: (callback: (line: string) => void) => {
-      const handler = (_event: any, line: string) => callback(line);
-      ipcRenderer.on('plugins:install-log', handler);
-      return () => ipcRenderer.removeListener('plugins:install-log', handler);
-    },
-  },
   log: {
     getPath: () => ipcRenderer.invoke('log:getPath'),
     openFolder: () => ipcRenderer.invoke('log:openFolder'),
@@ -1771,6 +1742,8 @@ contextBridge.exposeInMainWorld('electron', {
     listPlugins: () => ipcRenderer.invoke(DshHostIpc.ListPlugins),
     installPlugin: (packageSpec: string) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, packageSpec),
     removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
+    setPluginEnabled: (packageName: string, enabled: boolean) =>
+      ipcRenderer.invoke(DshHostIpc.SetPluginEnabled, packageName, enabled),
     openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),
     getPermissionPreset: (sessionId?: string) => ipcRenderer.invoke(DshHostIpc.GetPermissionPreset, sessionId),
     setPermissionPreset: (preset: string, sessionId?: string) =>

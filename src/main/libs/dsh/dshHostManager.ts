@@ -39,10 +39,14 @@ import type {
   ModelThinkingConfig,
   ModelThinkingLevel,
 } from '../../../shared/providers/modelThinking';
-import { DSH_NODE_EXEC_ARGV } from '../dshRuntime';
+import { DSH_NODE_EXEC_ARGV, DSH_RUNTIME_ENTRY_RELPATH } from '../dshRuntime';
 import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from '../webSearchBridgeFile';
 import {
+  buildIsolatedPnpmCacheEnv,
+  type DshNodeToolchain,
   ensureAppOwnedProfile,
+  type EnsureAppOwnedProfileResult,
+  ensureDshLauncher,
   resolveLobsterDshProfileDir,
   writeDshCliShim,
 } from './dshProfileManager';
@@ -285,6 +289,8 @@ export interface DshHostManagerOptions {
   maxAutoRestarts?: number;
   /** Optional pre-built client (useful in unit tests). */
   clientFactory?: () => DshTypertClient;
+  /** Optional Node/npm/Git toolchain shims passed to the bundled pnpm launcher. */
+  nodeToolchain?: DshNodeToolchain | null;
   /** Set true in pure Node tests when running plain node instead of Electron binary. */
   skipElectronRunAsNode?: boolean;
 }
@@ -390,7 +396,7 @@ export function buildIsolatedDshChildEnv(params: {
     // ambient DEEPSEEK_API_KEY (which would otherwise accidentally activate
     // `dsh-web-search-deepseek` on non-DeepSeek routes).
     if (/^dsh_/i.test(key)) continue;
-    if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+    if (/^(?:npm|pnpm)_config_(?:store_dir|cache|cache_dir)$/i.test(key)) continue;
     if (/^deepseek_api_key$/i.test(key)) continue;
     env[key] = value;
   }
@@ -399,7 +405,7 @@ export function buildIsolatedDshChildEnv(params: {
     for (const [key, value] of Object.entries(params.extraEnv)) {
       if (value === undefined) continue;
       if (/^dsh_/i.test(key)) continue;
-      if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+      if (/^(?:npm|pnpm)_config_(?:store_dir|cache|cache_dir)$/i.test(key)) continue;
       if (/^deepseek_api_key$/i.test(key)) continue;
       if (key.toLowerCase() === 'path') continue;
       env[key] = value;
@@ -411,8 +417,7 @@ export function buildIsolatedDshChildEnv(params: {
   env.DSH_HOME = params.dshHomeDir;
   env.DSH_AGENTS_HOME = path.join(params.dshHomeDir, 'agents-home');
   env.DSH_TELEMETRY_DISABLED = '1';
-  env.npm_config_store_dir = path.join(params.dshHomeDir, 'cache', 'pnpm-store');
-  env.npm_config_cache = path.join(params.dshHomeDir, 'cache', 'npm-cache');
+  Object.assign(env, buildIsolatedPnpmCacheEnv(params.dshHomeDir));
   env[DshHostBundleEnvVar.BridgeUrl] = params.bridgeUrl;
   env[DshHostBundleEnvVar.BridgeSecret] = params.bridgeSecret;
   env[DshHostBundleEnvVar.WorkspacesDir] = params.workspacesDir;
@@ -443,7 +448,6 @@ export function buildIsolatedDshChildEnv(params: {
   if (params.instanceId) {
     env[DshHostBundleEnvVar.InstanceId] = params.instanceId;
   }
-
   const prependPathDirs: string[] = [];
   // Prepend bundled package-manager dir (`pnpm`) and Electron Node/npm/npx shim
   // dir so `dsh-plugin-manager`, skill scripts (e.g. `web-search`, `imap.js`),
@@ -552,6 +556,23 @@ export class DshHostManager extends EventEmitter {
 
   isReady(): boolean {
     return this.phase === DshHostPhase.Ready && this.client !== null && this.client.isConnected();
+  }
+
+  /**
+   * Ensures LobsterAI's App-Owned Profile manifest and managed bundle symlinks
+   * (`@lobsterai/dsh-bundle`, `@lobsterai/dsh-channels`) remain intact after
+   * external package-manager operations such as `dsh plugin add/remove`.
+   */
+  ensureProfileIntegrity(): EnsureAppOwnedProfileResult {
+    return ensureAppOwnedProfile({
+      profileDir: this.profileDir,
+      hostBundleDir: this.options.hostBundleDir,
+      channelsBundleDir: this.options.channelsBundleDir,
+    });
+  }
+
+  getNodeToolchain(): DshNodeToolchain | null {
+    return this.options.nodeToolchain ?? null;
   }
 
   registerBridgeToolHandler(toolName: string, handler: DshBridgeToolHandler): () => void {
@@ -720,29 +741,33 @@ export class DshHostManager extends EventEmitter {
     this.setPhase(DshHostPhase.Starting);
 
     try {
-      const runtimeBinPath = path.join(this.options.runtimeDir, 'lib', 'bin.js');
+      const runtimeBinPath = path.join(this.options.runtimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/'));
       if (!fs.existsSync(runtimeBinPath)) {
         throw new Error(`DSH runtime binary not found at ${runtimeBinPath}`);
       }
       this.runtimeVersion = this.readRuntimeVersion();
 
       fs.mkdirSync(this.workspacesDir, { recursive: true });
-      ensureAppOwnedProfile({
-        profileDir: this.profileDir,
-        hostBundleDir: this.options.hostBundleDir,
-        channelsBundleDir: this.options.channelsBundleDir,
+      this.ensureProfileIntegrity();
+
+      const launchEntryPath = ensureDshLauncher({
+        dshHomeDir: this.dshHomeDir,
+        runtimeDir: this.options.runtimeDir,
+        executablePath: this.options.executablePath,
+        toolchain: this.options.nodeToolchain,
       });
 
       this.cliShimPath = writeDshCliShim({
         binDir: path.join(this.dshHomeDir, 'bin'),
         electronPath: this.options.executablePath,
         runtimeEntryPath: runtimeBinPath,
+        launcherPath: launchEntryPath,
         profileDir: this.profileDir,
         dshHomeDir: this.dshHomeDir,
       });
 
       await this.ensureBridgeServer();
-      const launchUrl = await this.spawnAndWaitForLaunchUrl(runtimeBinPath);
+      const launchUrl = await this.spawnAndWaitForLaunchUrl(launchEntryPath);
 
       const client = this.options.clientFactory
         ? this.options.clientFactory()
@@ -825,8 +850,8 @@ export class DshHostManager extends EventEmitter {
       executablePath: this.options.executablePath,
       webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile ?? getWebSearchBridgeFilePath(this.options.userDataDir),
       timeZone: additions?.timeZone ?? this.options.timeZone,
-      nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir,
-      npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir,
+      nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir ?? this.options.nodeToolchain?.nodeShimDir,
+      npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir ?? this.options.nodeToolchain?.npmBinDir,
       prependPathDirs: additions?.prependPathDirs,
       appendPathDirs: additions?.appendPathDirs,
       extraEnv: additions?.extraEnv,

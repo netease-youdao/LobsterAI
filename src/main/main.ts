@@ -9382,6 +9382,7 @@ if (!gotTheLock) {
     getHostManager: () => getDshBootstrap().hostManager,
     getRuntimeDir: () => getDshBootstrap().runtimeDir,
     getExecutablePath: () => getDshBootstrap().executablePath,
+    getNodeToolchain: () => getDshBootstrap().nodeToolchain,
     openEcosystemWindow: (authenticatedUrl, routeHash) => {
       getDshBootstrap().openEcosystemWindow(authenticatedUrl, routeHash);
     },

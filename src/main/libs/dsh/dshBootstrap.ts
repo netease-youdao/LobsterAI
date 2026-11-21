@@ -59,6 +59,7 @@ import {
   resolveUserShellPath,
 } from '../coworkUtil';
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
+import { resolveDshBundledGitBinDir } from '../dshRuntime';
 import { appendPythonRuntimeToEnv } from '../pythonRuntime';
 import { getWebSearchBridgeFilePath } from '../webSearchBridgeFile';
 import {
@@ -74,6 +75,7 @@ import {
   type DshHostWebAccessPolicy,
   resolveBundledDshPaths,
 } from './dshHostManager';
+import type { DshNodeToolchain } from './dshProfileManager';
 import {
   buildDshMcpServerSpecs,
   buildDshProvidersPayload,
@@ -311,11 +313,37 @@ function webOrigin(url: string): string | null {
   }
 }
 
+function resolveDshNodeToolchain(electronPath: string): DshNodeToolchain {
+  const npmBinDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  const hasNpm = fs.existsSync(npmBinDir);
+  let nodeShimDir: string | null = null;
+  try {
+    nodeShimDir = ensureElectronNodeShim(electronPath, hasNpm ? npmBinDir : undefined);
+  } catch (error) {
+    console.warn('[DshBootstrap] Failed to prepare Electron Node shims for DSH pnpm:', error);
+  }
+  const gitBinDir = resolveDshBundledGitBinDir(
+    app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'),
+    process.platform,
+    fs.existsSync,
+    path.join,
+  );
+  return {
+    electronPath,
+    nodeShimDir,
+    npmBinDir: hasNpm ? npmBinDir : null,
+    gitBinDir,
+  };
+}
+
 export class DshBootstrap {
   readonly runtimeDir: string;
   readonly hostBundleDir: string;
   readonly channelsBundleDir: string | null;
   readonly executablePath: string;
+  readonly nodeToolchain: DshNodeToolchain;
   readonly workspacesDir: string;
 
   readonly memoryService: LobsterMemoryService;
@@ -351,6 +379,7 @@ export class DshBootstrap {
     this.hostBundleDir = bundled.hostBundleDir;
     this.channelsBundleDir = bundled.channelsBundleDir;
     this.executablePath = getElectronNodeRuntimePath();
+    this.nodeToolchain = resolveDshNodeToolchain(this.executablePath);
     this.workspacesDir = path.join(options.userDataDir, WORKSPACES_DIR_NAME);
 
     fs.mkdirSync(this.workspacesDir, { recursive: true });
@@ -379,6 +408,7 @@ export class DshBootstrap {
       executablePath: this.executablePath,
       webSearchBridgeFile: getWebSearchBridgeFilePath(options.userDataDir),
       resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath, options.userDataDir),
+      nodeToolchain: this.nodeToolchain,
       instanceId: options.instanceId,
     });
 

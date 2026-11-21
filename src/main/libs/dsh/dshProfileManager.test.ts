@@ -10,8 +10,12 @@ import {
   DSH_WEB_APP_BUNDLE_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import {
+  buildIsolatedPnpmCacheEnv,
   ensureAppOwnedProfile,
+  ensureDshLauncher,
   mergeAppOwnedProfileManifest,
+  resolveBundledPnpmEntry,
+  resolveDshLauncherPath,
   writeDshCliShim,
 } from './dshProfileManager';
 
@@ -102,12 +106,20 @@ describe('ensureAppOwnedProfile', () => {
     const first = ensureAppOwnedProfile({ profileDir, hostBundleDir });
     expect(fs.existsSync(first.manifestPath)).toBe(true);
     expect(fs.readFileSync(first.patchPath, 'utf8')).toBe('[]\n');
+    const pnpmWorkspacePath = path.join(profileDir, 'pnpm-workspace.yaml');
+    expect(fs.existsSync(pnpmWorkspacePath)).toBe(true);
+    const workspaceYaml = fs.readFileSync(pnpmWorkspacePath, 'utf8');
+    expect(workspaceYaml).toContain('nodeLinker: hoisted');
+    expect(workspaceYaml).toContain('autoInstallPeers: false');
 
     const userPatch = '- id: custom-user-row\n  config:\n    foo: bar\n';
     fs.writeFileSync(first.patchPath, userPatch, 'utf8');
+    const userWorkspace = `${workspaceYaml}allowBuilds:\n  esbuild: true\n`;
+    fs.writeFileSync(pnpmWorkspacePath, userWorkspace, 'utf8');
 
     ensureAppOwnedProfile({ profileDir, hostBundleDir });
     expect(fs.readFileSync(first.patchPath, 'utf8')).toBe(userPatch);
+    expect(fs.readFileSync(pnpmWorkspacePath, 'utf8')).toBe(userWorkspace);
   });
 });
 
@@ -128,6 +140,8 @@ describe('writeDshCliShim', () => {
     expect(posixText).toContain('ELECTRON_RUN_AS_NODE=1');
     expect(posixText).toContain('DSH_AGENTS_HOME=');
     expect(posixText).toContain('DSH_TELEMETRY_DISABLED=1');
+    expect(posixText).toContain('pnpm_config_store_dir=');
+    expect(posixText).toContain('pnpm_config_cache_dir=');
     expect(posixText).toContain('npm_config_store_dir=');
     expect(posixText).toContain('--expose-internals');
 
@@ -144,7 +158,100 @@ describe('writeDshCliShim', () => {
     expect(winText).toContain('set ELECTRON_RUN_AS_NODE=1');
     expect(winText).toContain('set "DSH_AGENTS_HOME=');
     expect(winText).toContain('set "DSH_TELEMETRY_DISABLED=1"');
+    expect(winText).toContain('set "pnpm_config_store_dir=');
+    expect(winText).toContain('set "pnpm_config_cache_dir=');
     expect(winText).toContain('set "npm_config_store_dir=');
     expect(winText).toContain('--expose-internals');
+  });
+
+  test('points CLI shim at generated bundled-pnpm launcher when launcherPath is supplied', () => {
+    const root = createTempDir();
+    const binDir = path.join(root, 'bin');
+    const dshHomeDir = path.join(root, 'dsh-home');
+    const launcherPath = resolveDshLauncherPath(dshHomeDir);
+
+    const shim = writeDshCliShim({
+      binDir,
+      electronPath: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      runtimeEntryPath: '/runtime/lib/bin.js',
+      launcherPath,
+      profileDir: path.join(dshHomeDir, 'profiles', 'lobsterai'),
+      dshHomeDir,
+      platform: 'darwin',
+    });
+    const text = fs.readFileSync(shim, 'utf8');
+    expect(text).toContain(launcherPath);
+    expect(text).not.toContain('/runtime/lib/bin.js');
+  });
+});
+
+describe('ensureDshLauncher & buildIsolatedPnpmCacheEnv', () => {
+  test('pins both pnpm_config_* and npm_config_* under <dshHomeDir>/cache', () => {
+    const posixEnv = buildIsolatedPnpmCacheEnv('/tmp/dsh-home', 'darwin');
+    expect(posixEnv).toEqual({
+      pnpm_config_store_dir: '/tmp/dsh-home/cache/pnpm-store',
+      pnpm_config_cache_dir: '/tmp/dsh-home/cache/pnpm-cache',
+      npm_config_store_dir: '/tmp/dsh-home/cache/pnpm-store',
+      npm_config_cache: '/tmp/dsh-home/cache/npm-cache',
+    });
+
+    const winEnv = buildIsolatedPnpmCacheEnv('C:\\Users\\demo\\dsh-home', 'win32');
+    expect(winEnv.pnpm_config_store_dir).toBe('C:\\Users\\demo\\dsh-home\\cache\\pnpm-store');
+    expect(winEnv.pnpm_config_cache_dir).toBe('C:\\Users\\demo\\dsh-home\\cache\\pnpm-cache');
+  });
+
+  test('generates <dshHomeDir>/dsh-launcher/launch.mjs wired with bundled pnpm and isolated caches', () => {
+    const root = createTempDir();
+    const dshHomeDir = path.join(root, 'dsh-home');
+    const runtimeDir = path.join(root, 'runtime');
+    const binPath = path.join(runtimeDir, 'lib', 'bin.js');
+    const pnpmDir = path.join(runtimeDir, 'package-manager', 'pnpm');
+    const pnpmBin = path.join(pnpmDir, 'bin', 'pnpm.mjs');
+
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.writeFileSync(binPath, 'export async function runCli() {}\n', 'utf8');
+    fs.mkdirSync(path.dirname(pnpmBin), { recursive: true });
+    fs.writeFileSync(
+      path.join(pnpmDir, 'package.json'),
+      JSON.stringify({ name: 'pnpm', bin: { pnpm: 'bin/pnpm.mjs' } }),
+      'utf8',
+    );
+    fs.writeFileSync(pnpmBin, '// fake pnpm\n', 'utf8');
+
+    expect(resolveBundledPnpmEntry(runtimeDir)).toBe(fs.realpathSync(pnpmBin));
+
+    const launchEntry = ensureDshLauncher({
+      dshHomeDir,
+      runtimeDir,
+      executablePath: '/Apps/Electron',
+      toolchain: { nodeShimDir: '/shims', npmBinDir: '/npm/bin', gitBinDir: null },
+      baseEnv: { PATH: '' },
+      delimiter: ':',
+      platform: 'darwin',
+    });
+
+    expect(launchEntry).toBe(resolveDshLauncherPath(dshHomeDir));
+    const source = fs.readFileSync(launchEntry, 'utf8');
+    expect(source).toContain('runCli');
+    expect(source).toContain(fs.realpathSync(pnpmBin));
+    expect(source).toContain('"pnpm_config_store_dir"');
+    expect(source).toContain('"pnpm_config_cache_dir"');
+    expect(source).toContain('/shims');
+  });
+
+  test('falls back to runtime lib/bin.js when runtime bundles no pnpm', () => {
+    const root = createTempDir();
+    const dshHomeDir = path.join(root, 'dsh-home');
+    const runtimeDir = path.join(root, 'runtime');
+    const binPath = path.join(runtimeDir, 'lib', 'bin.js');
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.writeFileSync(binPath, 'export async function runCli() {}\n', 'utf8');
+
+    const launchEntry = ensureDshLauncher({
+      dshHomeDir,
+      runtimeDir,
+      executablePath: '/Apps/Electron',
+    });
+    expect(launchEntry).toBe(fs.realpathSync(binPath));
   });
 });

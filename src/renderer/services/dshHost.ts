@@ -26,6 +26,7 @@ export interface DshPluginEntry {
   name: string;
   specifier: string;
   managed: boolean;
+  enabled: boolean;
 }
 
 export const dshHostService = {
@@ -72,6 +73,16 @@ export const dshHostService = {
     plugins?: DshPluginEntry[];
   }> {
     return window.electron.dshHost.removePlugin(packageName);
+  },
+
+  setPluginEnabled(packageName: string, enabled: boolean): Promise<{
+    ok: boolean;
+    changed?: boolean;
+    enabled?: boolean;
+    error?: string;
+    plugins?: DshPluginEntry[];
+  }> {
+    return window.electron.dshHost.setPluginEnabled(packageName, enabled);
   },
 
   openProfileDir(): Promise<{ ok: boolean; profileDir?: string }> {

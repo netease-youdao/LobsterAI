@@ -154,6 +154,7 @@ export const DshHostIpc = {
   ListPlugins: 'dshHost:listPlugins',
   InstallPlugin: 'dshHost:installPlugin',
   RemovePlugin: 'dshHost:removePlugin',
+  SetPluginEnabled: 'dshHost:setPluginEnabled',
   OpenProfileDir: 'dshHost:openProfileDir',
   CopyCliShimCommand: 'dshHost:copyCliShimCommand',
   GetPermissionPreset: 'dshHost:getPermissionPreset',

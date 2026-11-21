@@ -169,6 +169,8 @@ describe('DshHostManager', () => {
         DSH_PROFILE: 'desktop',
         DEEPSEEK_API_KEY: 'sk-ambient-leak',
         deepseek_api_key: 'sk-ambient-leak-lower',
+        pnpm_config_store_dir: '/Users/alice/.local/share/pnpm/store',
+        pnpm_config_cache_dir: '/Users/alice/.cache/pnpm',
         npm_config_store_dir: '/Users/alice/.local/share/pnpm/store',
         npm_config_cache: '/Users/alice/.npm',
         HOME: '/Users/alice',
@@ -199,6 +201,8 @@ describe('DshHostManager', () => {
     expect(env.LOBSTERAI_WEB_SEARCH_BRIDGE_FILE).toBe(bridgeFile);
     expect(env.LOBSTERAI_NPM_BIN_DIR).toBe(npmBinDir);
     expect(env.PATH?.split(path.delimiter)[0]).toBe(nodeShimDir);
+    expect(env.pnpm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
+    expect(env.pnpm_config_cache_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-cache'));
     expect(env.npm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
     expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
     expect(env.HOME).toBe('/Users/alice');
@@ -519,5 +523,52 @@ describe('DshHostManager', () => {
     );
     expect(smtpRun.status, smtpRun.stderr).toBe(0);
     assertDiscoveredMigratedAccount(smtpRun.stdout);
+  });
+
+  test('ensureProfileIntegrity restores managed bundle symlinks while preserving disabled user plugins', () => {
+    const temp = createTempDir();
+    const userDataDir = path.join(temp, 'userData');
+    const hostBundleDir = path.join(temp, 'host-bundle');
+    const channelsBundleDir = path.join(temp, 'channels-bundle');
+    fs.mkdirSync(hostBundleDir, { recursive: true });
+    fs.mkdirSync(channelsBundleDir, { recursive: true });
+
+    const manager = new DshHostManager({
+      userDataDir,
+      runtimeDir: path.join(temp, 'runtime'),
+      hostBundleDir,
+      channelsBundleDir,
+      skillsDir: path.join(temp, 'skills'),
+      executablePath: process.execPath,
+      skipElectronRunAsNode: true,
+    });
+
+    manager.ensureProfileIntegrity();
+    const { profileDir } = manager.getStatus();
+    const hostLink = path.join(profileDir, 'node_modules', '@lobsterai', 'dsh-bundle');
+    const channelsLink = path.join(profileDir, 'node_modules', '@lobsterai', 'dsh-channels');
+    expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(channelsLink).isSymbolicLink()).toBe(true);
+
+    // Simulate pnpm removing managed symlinks and adding a disabled user plugin dependency.
+    fs.rmSync(hostLink, { recursive: true, force: true });
+    fs.rmSync(channelsLink, { recursive: true, force: true });
+    const pkgPath = path.join(profileDir, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+      dependencies: Record<string, string>;
+      dsh: { profile: { bundles: string[] } };
+    };
+    manifest.dependencies['disabled-user-plugin'] = 'file:/tmp/disabled-user-plugin';
+    fs.writeFileSync(pkgPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+    manager.ensureProfileIntegrity();
+    expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(channelsLink).isSymbolicLink()).toBe(true);
+    const restored = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+      dependencies: Record<string, string>;
+      dsh: { profile: { bundles: string[] } };
+    };
+    expect(restored.dependencies['disabled-user-plugin']).toBe('file:/tmp/disabled-user-plugin');
+    expect(restored.dsh.profile.bundles).not.toContain('disabled-user-plugin');
   });
 });
