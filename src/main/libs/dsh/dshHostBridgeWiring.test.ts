@@ -4,10 +4,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { DECISION_EVALUATE_TOOL_NAME, DecisionModelProvider } from '../../../shared/decisionModel/constants';
 import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
 import { detectDisallowedOfficeGuiLaunch } from '../commandSafety';
+import { type DecisionModelConfig, DEFAULT_DECISION_MODEL_CONFIG } from '../decisionModelConfig';
+import { createDshDecisionToolProvider } from './dshDecisionTool';
 import {
   buildApprovalScopeKey,
   BUILTIN_MEMORY_TOOL_NAMES,
@@ -19,6 +22,7 @@ import {
 import type {
   DshBridgeApprovalEvaluator,
   DshBridgeToolHandler,
+  DshHostToolDescriptor,
 } from './dshHostManager';
 
 const cleanupPaths: string[] = [];
@@ -349,6 +353,88 @@ describe('wireDshHostBridge', () => {
     });
     expect(scheduler.listTasks()).toHaveLength(0);
     expect(onScheduleMutated).toHaveBeenCalledTimes(6);
+
+    wired.dispose();
+  });
+
+  test('hot-syncs conditional decision_evaluate provider on enable and disable without restart', async () => {
+    const workspacesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-bridge-decision-'));
+    cleanupPaths.push(workspacesDir);
+    const memoryService = new LobsterMemoryService(workspacesDir);
+    openServices.push(memoryService);
+
+    let config: DecisionModelConfig = { ...DEFAULT_DECISION_MODEL_CONFIG };
+    let fallback: DshBridgeToolHandler | null = null;
+    const syncedToolLists: DshHostToolDescriptor[][] = [];
+
+    const wired = wireDshHostBridge({
+      hostManager: {
+        registerBridgeToolHandler: () => () => undefined,
+        setFallbackBridgeToolHandler: (fn) => {
+          fallback = fn;
+        },
+        setApprovalEvaluator: () => undefined,
+        syncHostTools: async (tools) => {
+          syncedToolLists.push(tools);
+          return { dynamicTools: tools.map(t => t.name) };
+        },
+      },
+      memoryService,
+      toolProviders: [
+        createDshDecisionToolProvider({
+          getConfig: () => config,
+          fetch: async () => ({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+              model: 'jev-test',
+              answers: { q1: { type: 'noul', noul: 0.92 } },
+            }),
+          }),
+        }),
+      ],
+    });
+
+    // 1. Disabled: syncDynamicHostTools registers nothing and fallback rejects decision_evaluate.
+    await wired.syncDynamicHostTools();
+    expect(syncedToolLists[0]).toEqual([]);
+    await expect(
+      fallback!({ toolName: DECISION_EVALUATE_TOOL_NAME, args: {}, agentId: 'main' }),
+    ).rejects.toThrow(/No native host tool provider registered/);
+
+    // 2. Enabled: syncDynamicHostTools registers decision_evaluate and fallback dispatches it.
+    config = {
+      enabled: true,
+      provider: DecisionModelProvider.Compatible,
+      endpoint: 'http://127.0.0.1:41999/v1/systemone',
+      apiKey: 'secret-key',
+      apiKeys: { [DecisionModelProvider.Compatible]: 'secret-key' },
+    };
+    await wired.syncDynamicHostTools();
+    expect(syncedToolLists[1].map(t => t.name)).toEqual([DECISION_EVALUATE_TOOL_NAME]);
+
+    const evalRes = await fallback!({
+      toolName: DECISION_EVALUATE_TOOL_NAME,
+      args: {
+        state: 'Hot-sync test',
+        questions: [{ id: 'q1', type: 'boolean', instructions: 'Active?' }],
+      },
+      agentId: 'main',
+      coworkSessionId: 'cw-1',
+      callId: 'call-1',
+    }) as { content: Array<{ text: string }> };
+    expect(JSON.parse(evalRes.content[0].text)).toMatchObject({
+      status: 'ok',
+      answers: { q1: { type: 'boolean', probability: 0.92 } },
+    });
+
+    // 3. Disabled again: syncDynamicHostTools removes decision_evaluate from descriptors & routing map.
+    config = { ...config, enabled: false };
+    await wired.syncDynamicHostTools();
+    expect(syncedToolLists[2]).toEqual([]);
+    await expect(
+      fallback!({ toolName: DECISION_EVALUATE_TOOL_NAME, args: {}, agentId: 'main' }),
+    ).rejects.toThrow(/No native host tool provider registered/);
 
     wired.dispose();
   });

@@ -312,7 +312,7 @@ import {
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
-import { registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
+import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerImageCreationHandlers } from './ipcHandlers/imageCreation';
@@ -443,6 +443,7 @@ import {
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
+import { createDshDecisionToolProvider } from './libs/dsh/dshDecisionTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
@@ -2276,6 +2277,10 @@ const getDshBootstrap = (): DshBootstrap => {
             return session ? { cwd: session.cwd, userMessage: storeInstance.getLatestUserMessage(id)?.content } : null;
           },
           ask: (...args) => getMcpRuntime().askUserInternal(...args),
+        }),
+        createDshDecisionToolProvider({
+          getConfig: () => readDecisionModelConfig(getStore()),
+          fetch: (url, init) => session.defaultSession.fetch(url, init),
         }),
       ],
       userDataDir,

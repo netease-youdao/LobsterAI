@@ -27,6 +27,12 @@ function toDshValueSchema(raw) {
   if (!raw || typeof raw !== 'object') return { type: 'json' };
   const desc = typeof raw.description === 'string' ? { description: raw.description } : {};
   const t = raw.type;
+  if (!t && Array.isArray(raw.oneOf) && raw.oneOf.length >= 2) {
+    return {
+      oneOf: raw.oneOf.map((branch) => toDshValueSchema(branch)),
+      ...desc,
+    };
+  }
   if (t === 'string' || t === 'number' || t === 'integer' || t === 'boolean' || t === 'null') {
     const out = { type: t, ...desc };
     if (Array.isArray(raw.enum) && raw.enum.length > 0) out.enum = raw.enum;

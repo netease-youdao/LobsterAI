@@ -534,6 +534,7 @@ export class DshBootstrap {
       );
       await this.hostManager.syncMcpServers(servers);
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
+      await this.bridgeWiring.syncDynamicHostTools();
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);
       }
