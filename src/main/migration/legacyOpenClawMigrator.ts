@@ -29,6 +29,7 @@ import type {
   TaskState,
 } from '../../scheduledTask/types';
 import { AgentId } from '../../shared/agent/constants';
+import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   RETAINED_IM_PLATFORM_LIST,
@@ -1190,6 +1191,58 @@ function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string)
   setKv(db, marker, '1');
 }
 
+const PENDING_MESSAGE_EDITS_CLEARED_KV_KEY = 'engine.migration.v2.pendingMessageEditsCleared';
+
+/**
+ * Archive (when `incompatibleEntries` is provided) and clear stale legacy
+ * in-place message edit / version switch rows. LobsterAI v2 retires in-place
+ * edit recovery in favor of session forking, so uncommitted rows left over
+ * from OpenClaw must be cleared to avoid leaving sessions permanently stuck.
+ */
+function archiveAndClearLegacyPendingMessageEdits(
+  db: Database.Database,
+  incompatibleEntries?: TarEntryInput[],
+): void {
+  if (tableExists(db, 'cowork_message_edits')) {
+    const editCols = getTableColumns(db, 'cowork_message_edits');
+    const pendingEdits = editCols.has('phase')
+      ? db
+          .prepare('SELECT * FROM cowork_message_edits WHERE phase IS NULL OR phase NOT IN (?, ?)')
+          .all(CoworkMessageEditPhase.Committed, CoworkMessageEditPhase.Restored)
+      : db.prepare('SELECT * FROM cowork_message_edits').all();
+    if (pendingEdits.length > 0) {
+      incompatibleEntries?.push({
+        archivePath: 'sqlite/cowork_message_edits.json',
+        content: Buffer.from(JSON.stringify(pendingEdits, null, 2), 'utf8'),
+      });
+      if (editCols.has('phase')) {
+        db.prepare('DELETE FROM cowork_message_edits WHERE phase IS NULL OR phase NOT IN (?, ?)')
+          .run(CoworkMessageEditPhase.Committed, CoworkMessageEditPhase.Restored);
+      } else {
+        db.prepare('DELETE FROM cowork_message_edits').run();
+      }
+    }
+  }
+
+  if (tableExists(db, 'cowork_message_version_switches')) {
+    const pendingSwitches = db.prepare('SELECT * FROM cowork_message_version_switches').all();
+    if (pendingSwitches.length > 0) {
+      incompatibleEntries?.push({
+        archivePath: 'sqlite/cowork_message_version_switches.json',
+        content: Buffer.from(JSON.stringify(pendingSwitches, null, 2), 'utf8'),
+      });
+      db.prepare('DELETE FROM cowork_message_version_switches').run();
+    }
+  }
+}
+
+/** One-shot cleanup for already-migrated v2 DBs that still have stale legacy edit rows. */
+function clearLegacyPendingMessageEditsOnce(db: Database.Database): void {
+  if (getKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY)) return;
+  archiveAndClearLegacyPendingMessageEdits(db);
+  setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+}
+
 /**
  * Read pending v2 migration report for `MigrationReportModal.tsx`.
  */
@@ -1245,6 +1298,7 @@ export function runLegacyOpenClawMigration(
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
+      clearLegacyPendingMessageEditsOnce(db);
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1257,6 +1311,7 @@ export function runLegacyOpenClawMigration(
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1478,6 +1533,11 @@ export function runLegacyOpenClawMigration(
         }
       }
 
+      // 3f. Archive and clear stale pending `cowork_message_edits` and
+      // `cowork_message_version_switches` rows so upgraded sessions are never
+      // blocked waiting for retired in-place edit recovery.
+      archiveAndClearLegacyPendingMessageEdits(db, incompatibleEntries);
+
       // Write incompatible modules archive (even if empty, guarantees manifest exists).
       const incompatibleArchivePath = path.join(backupDir, 'incompatible-modules-backup.tar.gz');
       writeTarGzArchive(incompatibleArchivePath, incompatibleEntries);
@@ -1552,6 +1612,7 @@ export function runLegacyOpenClawMigration(
             runsImported: scheduledTaskRunsMigrated,
           }),
         );
+        setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
       });
       commitTx();
 

@@ -9711,10 +9711,8 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        if (!options.editRequest && (getCoworkStore().messageEdits.pending(options.sessionId)
-          || getCoworkEngineRouter().hasPendingMessageEdit(options.sessionId))) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
+        // In-place message editing and recovery are retired in DSH v2 (replaced by Fork),
+        // so leftover `cowork_message_edits` rows must never block follow-up messages.
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -9868,10 +9866,6 @@ if (!gotTheLock) {
           return { success: true };
         }
         const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
-        // Model/runtime preparation awaits above can overlap a second window starting an edit.
-        if (runtime.hasPendingMessageEdit(options.sessionId)) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
         runtime
           .continueSession(options.sessionId, options.prompt, {
             analytics: options.analytics,
@@ -10587,6 +10581,7 @@ if (!gotTheLock) {
           }) : null;
         if (forkedDsh?.storedSessionId) {
           coworkStoreInstance.updateSession(session.id, { claudeSessionId: forkedDsh.storedSessionId }, { touchUpdatedAt: false });
+          session.claudeSessionId = forkedDsh.storedSessionId;
         }
         console.log(`[CoworkFork] created local conversation fork ${session.id} successfully`);
         return { success: true, session };

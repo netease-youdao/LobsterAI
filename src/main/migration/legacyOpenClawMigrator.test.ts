@@ -5,6 +5,7 @@ import * as path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { DeliveryMode, TaskStatus } from '../../scheduledTask/constants';
+import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   WORKSPACES_DIR_NAME,
@@ -14,6 +15,8 @@ import {
   MIGRATION_V2_REPORT_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { CoworkMessageEditStore } from '../libs/coworkMessageEditStore';
+import { CoworkMessageVersionStore } from '../libs/coworkMessageVersionStore';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
   backfillLegacyScheduledTasksFromBackup,
@@ -21,7 +24,11 @@ import {
   getPendingMigrationV2Report,
   runLegacyOpenClawMigration,
 } from './legacyOpenClawMigrator';
-import { collectDirectoryTarEntries, writeTarGzArchive } from './tarGzUtil';
+import {
+  collectDirectoryTarEntries,
+  extractMatchingEntriesFromTarGz,
+  writeTarGzArchive,
+} from './tarGzUtil';
 
 const tempDirs: string[] = [];
 
@@ -661,5 +668,191 @@ describe('runLegacyOpenClawMigration', () => {
       runsImported: 0,
     });
     db.close();
+  });
+
+  test('archives and clears uncommitted cowork_message_edits and pending cowork_message_version_switches during migration', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_sessions (id TEXT PRIMARY KEY, claude_session_id TEXT);
+      CREATE TABLE cowork_message_edits (
+        operation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        operation_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL
+      );
+      CREATE TABLE cowork_message_version_switches (
+        session_id TEXT PRIMARY KEY,
+        switch_json TEXT NOT NULL
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?)').run('cw-stuck-1', 'agent:main:legacy-1');
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?)').run('cw-stuck-2', 'agent:main:legacy-2');
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?)').run('cw-done', 'agent:main:legacy-3');
+
+    const insertEdit = db.prepare('INSERT INTO cowork_message_edits VALUES (?, ?, ?, ?, ?)');
+    insertEdit.run(
+      'op-editing',
+      'cw-stuck-1',
+      'editing',
+      JSON.stringify({ operationId: 'op-editing', sessionId: 'cw-stuck-1', messageId: 'm1', prompt: 'edited', phase: 'editing' }),
+      JSON.stringify({ messages: [{ id: 'm1', content: 'orig' }] }),
+    );
+    insertEdit.run(
+      'op-truncating',
+      'cw-stuck-2',
+      'truncating',
+      JSON.stringify({ operationId: 'op-truncating', sessionId: 'cw-stuck-2', messageId: 'm2', prompt: 'edited-2', phase: 'truncating' }),
+      JSON.stringify({ messages: [{ id: 'm2', content: 'orig-2' }] }),
+    );
+    insertEdit.run(
+      'op-rewound',
+      'cw-stuck-2',
+      CoworkMessageEditPhase.Rewound,
+      JSON.stringify({
+        operationId: 'op-rewound',
+        sessionId: 'cw-stuck-2',
+        messageId: 'm3',
+        prompt: 'edited-3',
+        phase: CoworkMessageEditPhase.Rewound,
+      }),
+      JSON.stringify({ messages: [{ id: 'm3', content: 'orig-3' }] }),
+    );
+    insertEdit.run(
+      'op-committed',
+      'cw-done',
+      CoworkMessageEditPhase.Committed,
+      JSON.stringify({
+        operationId: 'op-committed',
+        sessionId: 'cw-done',
+        messageId: 'm4',
+        prompt: 'done',
+        phase: CoworkMessageEditPhase.Committed,
+      }),
+      JSON.stringify({ messages: [{ id: 'm4', content: 'orig-4' }] }),
+    );
+
+    db.prepare('INSERT INTO cowork_message_version_switches VALUES (?, ?)').run(
+      'cw-stuck-1',
+      JSON.stringify({ sessionId: 'cw-stuck-1', fromVersionId: 'v1', toVersionId: 'v2', activeLeafEntryId: 'l1', targetLeafEntryId: 'l2' }),
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report).toBeDefined();
+
+    // Verify all non-terminal pending edits and pending version switches were archived before deletion.
+    const extractDir = createTempDir();
+    const extracted = await extractMatchingEntriesFromTarGz(
+      result.report!.incompatibleArchivePath,
+      extractDir,
+      (archivePath) =>
+        archivePath === 'sqlite/cowork_message_edits.json'
+        || archivePath === 'sqlite/cowork_message_version_switches.json',
+    );
+    expect(extracted.sort()).toEqual([
+      'sqlite/cowork_message_edits.json',
+      'sqlite/cowork_message_version_switches.json',
+    ]);
+
+    const archivedEdits = JSON.parse(
+      fs.readFileSync(path.join(extractDir, 'sqlite', 'cowork_message_edits.json'), 'utf8'),
+    ) as Array<{ operation_id: string; phase: string }>;
+    expect(archivedEdits.map((row) => row.operation_id).sort()).toEqual([
+      'op-editing',
+      'op-rewound',
+      'op-truncating',
+    ]);
+
+    const archivedSwitches = JSON.parse(
+      fs.readFileSync(path.join(extractDir, 'sqlite', 'cowork_message_version_switches.json'), 'utf8'),
+    ) as Array<{ session_id: string }>;
+    expect(archivedSwitches.map((row) => row.session_id)).toEqual(['cw-stuck-1']);
+
+    // Verify CoworkMessageEditStore & CoworkMessageVersionStore report zero pending records,
+    // while terminal committed rows are untouched.
+    const verifyDb = new Database(sqlitePath);
+    const editStore = new CoworkMessageEditStore(verifyDb, (_sessionId, op) => verifyDb.transaction(op)());
+    const versionStore = new CoworkMessageVersionStore(verifyDb, (_sessionId, op) => verifyDb.transaction(op)());
+
+    expect(editStore.pending('cw-stuck-1')).toBeNull();
+    expect(editStore.pending('cw-stuck-2')).toBeNull();
+    expect(editStore.pending('cw-done')).toBeNull();
+    expect(versionStore.pendingSwitch('cw-stuck-1')).toBeNull();
+
+    const remainingEdits = verifyDb
+      .prepare('SELECT operation_id, phase FROM cowork_message_edits')
+      .all() as Array<{ operation_id: string; phase: string }>;
+    expect(remainingEdits).toEqual([
+      { operation_id: 'op-committed', phase: CoworkMessageEditPhase.Committed },
+    ]);
+    verifyDb.close();
+  });
+
+  test('clears leftover pending cowork_message_edits and switches on already-migrated v2 databases', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_sessions (id TEXT PRIMARY KEY, claude_session_id TEXT);
+      CREATE TABLE cowork_message_edits (
+        operation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        operation_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL
+      );
+      CREATE TABLE cowork_message_version_switches (
+        session_id TEXT PRIMARY KEY,
+        switch_json TEXT NOT NULL
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T00:00:00.000Z' }),
+      1,
+    );
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?)').run('cw-legacy', 'dsh:sess-1');
+    db.prepare('INSERT INTO cowork_message_edits VALUES (?, ?, ?, ?, ?)').run(
+      'op-stale',
+      'cw-legacy',
+      CoworkMessageEditPhase.Sending,
+      JSON.stringify({
+        operationId: 'op-stale',
+        sessionId: 'cw-legacy',
+        messageId: 'm1',
+        prompt: 'stuck',
+        phase: CoworkMessageEditPhase.Sending,
+      }),
+      JSON.stringify({ messages: [] }),
+    );
+    db.prepare('INSERT INTO cowork_message_version_switches VALUES (?, ?)').run(
+      'cw-legacy',
+      JSON.stringify({ sessionId: 'cw-legacy', fromVersionId: 'v1', toVersionId: 'v2' }),
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Skipped);
+
+    const verifyDb = new Database(sqlitePath);
+    const editStore = new CoworkMessageEditStore(verifyDb, (_sessionId, op) => verifyDb.transaction(op)());
+    const versionStore = new CoworkMessageVersionStore(verifyDb, (_sessionId, op) => verifyDb.transaction(op)());
+    expect(editStore.pending('cw-legacy')).toBeNull();
+    expect(versionStore.pendingSwitch('cw-legacy')).toBeNull();
+    verifyDb.close();
   });
 });
