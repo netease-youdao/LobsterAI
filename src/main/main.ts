@@ -147,6 +147,7 @@ import {
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
+import { DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -2369,7 +2370,7 @@ let openClawLoopbackState: OpenClawLoopbackState | null = null;
 const getOpenClawLoopbackState = (): OpenClawLoopbackState => {
   if (!openClawLoopbackState) {
     openClawLoopbackState = new OpenClawLoopbackState(
-      path.join(app.getPath('userData'), 'openclaw', OPENCLAW_LOOPBACK_STATE_FILE),
+      path.join(app.getPath('userData'), DSH_PROFILE_DIR_NAME, OPENCLAW_LOOPBACK_STATE_FILE),
       app.getVersion(),
     );
   }
@@ -2522,21 +2523,43 @@ const getEngineNotReadyResponse = (status: DshCompatEngineStatus) => {
   };
 };
 
+let activeBootstrapEnginePromise: Promise<DshCompatEngineStatus> | null = null;
+
 const bootstrapOpenClawEngine = async (
   options: { forceReinstall?: boolean; reason?: string } = {},
 ): Promise<DshCompatEngineStatus> => {
-  const bootstrap = getDshBootstrap();
-  try {
-    ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
-  } catch (err) {
-    console.warn("[DSH] ensureDefaultIdentity failed (non-fatal):", err);
+  if (!options.forceReinstall && activeBootstrapEnginePromise) {
+    return activeBootstrapEnginePromise;
   }
-  await startAskUserServer().catch((err: unknown) => {
-    console.error("[DSH] AskUser server startup failed (non-fatal):", err);
-  });
-  const status = options.forceReinstall ? await bootstrap.restart() : await bootstrap.start();
-  await syncOpenClawConfig({ reason: `bootstrap:${options.reason || "startup"}` });
-  return status;
+
+  const run = (async (): Promise<DshCompatEngineStatus> => {
+    const bootstrap = getDshBootstrap();
+    try {
+      ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
+    } catch (err) {
+      console.warn("[DSH] ensureDefaultIdentity failed (non-fatal):", err);
+    }
+    await startAskUserServer().catch((err: unknown) => {
+      console.error("[DSH] AskUser server startup failed (non-fatal):", err);
+    });
+    const syncInitialConfig = () => syncOpenClawConfig({
+      reason: `bootstrap:${options.reason || "startup"}`,
+    });
+    return options.forceReinstall
+      ? await bootstrap.restart({ syncInitialConfig })
+      : await bootstrap.start({ syncInitialConfig });
+  })();
+
+  if (!options.forceReinstall) {
+    activeBootstrapEnginePromise = run.finally(() => {
+      if (activeBootstrapEnginePromise === run) {
+        activeBootstrapEnginePromise = null;
+      }
+    });
+    return activeBootstrapEnginePromise;
+  }
+
+  return run;
 };
 
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
@@ -2557,8 +2580,11 @@ const ensureOpenClawRunningForCowork = async (
   _admission: CoworkEngineAdmission = {},
 ): Promise<DshCompatEngineStatus> => {
   await waitForPendingTokenRefresh();
+  if (activeBootstrapEnginePromise) {
+    return activeBootstrapEnginePromise;
+  }
   const bootstrap = getDshBootstrap();
-  if (bootstrap.hostManager.isReady()) {
+  if (bootstrap.isReadyForTurns()) {
     return bootstrap.getEngineStatus();
   }
   return bootstrapOpenClawEngine({ reason: "ensure-running-for-cowork" });

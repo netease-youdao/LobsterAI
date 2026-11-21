@@ -624,9 +624,12 @@ export class DshHostManager extends EventEmitter {
       this.authenticatedWebUrl = launchUrl;
       this.origin = new URL(launchUrl).origin;
       this.startedAt = Date.now();
-      this.setPhase(DshHostPhase.Ready);
 
-      await this.replayCachedSyncs();
+      // Replay cached sync state (providers, skills, host tools, MCP, agents,
+      // subagent bindings, permission preset) BEFORE transitioning to Ready so
+      // callers waiting on host readiness never race against replay.
+      await this.replayCachedSyncs(client);
+      this.setPhase(DshHostPhase.Ready);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
@@ -637,30 +640,30 @@ export class DshHostManager extends EventEmitter {
     }
   }
 
-  private async replayCachedSyncs(): Promise<void> {
-    if (!this.isReady()) return;
+  private async replayCachedSyncs(client: DshTypertClient): Promise<void> {
+    if (!client.isConnected()) return;
     if (this.lastProvidersPayload) {
-      await this.getClient().callOps(DshOpsAction.SyncProviders, this.lastProvidersPayload);
+      await client.callOps(DshOpsAction.SyncProviders, this.lastProvidersPayload);
     }
     if (this.lastSkillsPolicy) {
-      await this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, this.lastSkillsPolicy);
+      await client.callOps(DshOpsAction.SyncSkillsPolicy, this.lastSkillsPolicy);
     }
     if (this.lastHostTools) {
-      await this.getClient().callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
+      await client.callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
     }
     if (this.lastMcpServers) {
-      await this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      await client.callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
     }
     if (this.lastAgents) {
-      await this.getClient().callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
+      await client.callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
     }
     if (this.lastSubagentBindings.size > 0) {
-      await this.getClient().callOps(DshOpsAction.SyncSubagentBindings, {
+      await client.callOps(DshOpsAction.SyncSubagentBindings, {
         bindings: [...this.lastSubagentBindings.values()],
         replace: true,
       });
     }
-    await this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
+    await client.callOps(DshOpsAction.SetPermissionPreset, {
       preset: this.lastPermissionPreset,
     });
   }

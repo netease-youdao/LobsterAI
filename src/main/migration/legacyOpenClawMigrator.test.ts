@@ -662,4 +662,78 @@ describe('runLegacyOpenClawMigration', () => {
     });
     db.close();
   });
+
+  test('pre-seeds legacy cowork sessions into DSH v4 storage before window open and records report counts', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const projectDir = path.join(userDataDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        claude_session_id TEXT,
+        cwd TEXT,
+        created_at INTEGER
+      );
+      CREATE TABLE cowork_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        metadata TEXT,
+        created_at INTEGER,
+        sequence INTEGER
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, ?, ?, ?)').run(
+      'cw-seeded',
+      'Migrated Multi-Turn',
+      'agent:main:legacy-rich',
+      projectDir,
+      1_700_000_000_000,
+    );
+    db.prepare('INSERT INTO cowork_sessions VALUES (?, ?, ?, ?, ?)').run(
+      'cw-empty',
+      'Empty Draft',
+      null,
+      projectDir,
+      1_700_000_000_500,
+    );
+    db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      'm1', 'cw-seeded', 'user', 'Remember project Apollo-42.', null, 1_700_000_001_000, 1,
+    );
+    db.prepare('INSERT INTO cowork_messages VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      'm2', 'cw-seeded', 'assistant', 'Noted Apollo-42.', null, 1_700_000_002_000, 2,
+    );
+    db.close();
+
+    fs.mkdirSync(path.join(userDataDir, 'openclaw', 'state', 'workspace-main'), { recursive: true });
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.sessionsPreSeeded).toBe(1);
+    expect(result.report?.summary.sessionsPreservedForLazyBridge).toBe(1);
+
+    const verifyDb = new Database(sqlitePath);
+    const seededRow = verifyDb
+      .prepare('SELECT claude_session_id FROM cowork_sessions WHERE id = ?')
+      .get('cw-seeded') as { claude_session_id: string | null };
+    const emptyRow = verifyDb
+      .prepare('SELECT claude_session_id FROM cowork_sessions WHERE id = ?')
+      .get('cw-empty') as { claude_session_id: string | null };
+    verifyDb.close();
+
+    expect(seededRow.claude_session_id).toMatch(/^dsh:[0-9a-f-]{36}$/);
+    expect(emptyRow.claude_session_id).toBeNull();
+  });
 });

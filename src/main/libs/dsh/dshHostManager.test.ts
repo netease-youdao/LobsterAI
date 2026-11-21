@@ -173,4 +173,65 @@ describe('DshHostManager', () => {
     expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
     expect(env.HOME).toBe('/Users/alice');
   });
+
+  test('replays cached sync payloads before transitioning phase to Ready', async () => {
+    const temp = createTempDir();
+    const runtimeDir = path.join(temp, 'runtime');
+    const hostBundleDir = path.join(temp, 'host-bundle');
+    fs.mkdirSync(path.join(runtimeDir, 'lib'), { recursive: true });
+    fs.mkdirSync(hostBundleDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'lib', 'bin.js'), '// stub\n');
+    fs.writeFileSync(path.join(runtimeDir, 'package.json'), '{"version":"0.2.2-rc.5"}');
+
+    const order: string[] = [];
+    const fakeClient = {
+      connect: vi.fn(async () => ({ origin: 'http://127.0.0.1:41234', hostHome: temp })),
+      isConnected: vi.fn(() => true),
+      callOps: vi.fn(async (action: string) => {
+        order.push(`ops:${action}`);
+        return { ok: true };
+      }),
+      close: vi.fn(async () => undefined),
+    };
+
+    const manager = new DshHostManager({
+      userDataDir: path.join(temp, 'userData'),
+      runtimeDir,
+      hostBundleDir,
+      skillsDir: path.join(temp, 'skills'),
+      executablePath: process.execPath,
+      skipElectronRunAsNode: true,
+      clientFactory: () => fakeClient as unknown as ReturnType<DshHostManager['getClient']>,
+    });
+
+    vi.spyOn(manager as unknown as { spawnAndWaitForLaunchUrl: () => Promise<string> }, 'spawnAndWaitForLaunchUrl')
+      .mockResolvedValue('http://127.0.0.1:41234/?token=test');
+
+    manager.on('phaseChange', (phase: DshHostPhase) => {
+      order.push(`phase:${phase}`);
+    });
+
+    // Pre-cache a providers payload before start.
+    await manager.syncProviders({
+      providers: [
+        {
+          id: 'p1',
+          api: 'openai-completions',
+          baseURL: 'http://127.0.0.1:9999/v1',
+          models: [{ id: 'm1' }],
+        },
+      ],
+    });
+
+    try {
+      await manager.start();
+      const syncIdx = order.indexOf('ops:syncProviders');
+      const readyIdx = order.indexOf('phase:ready');
+      expect(syncIdx).toBeGreaterThan(-1);
+      expect(readyIdx).toBeGreaterThan(-1);
+      expect(syncIdx).toBeLessThan(readyIdx);
+    } finally {
+      await manager.stop();
+    }
+  });
 });
