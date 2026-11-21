@@ -6,6 +6,15 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import { DeliveryMode, TaskStatus } from '../../scheduledTask/constants';
 import {
+  BrowserCredentialSaveMode,
+  BrowserCredentialUseMode,
+} from '../../shared/browserCredentials/constants';
+import {
+  BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+  BrowserDisplayMode,
+  BrowserNetworkMode,
+} from '../../shared/browserWebAccess/constants';
+import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   WORKSPACES_DIR_NAME,
 } from '../../shared/dshEngine/hostConstants';
@@ -14,6 +23,7 @@ import {
   MIGRATION_V2_REPORT_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { APP_CONFIG_KEY } from '../libs/browserDisplayModeMigration';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
   backfillLegacyScheduledTasksFromBackup,
@@ -21,7 +31,11 @@ import {
   getPendingMigrationV2Report,
   runLegacyOpenClawMigration,
 } from './legacyOpenClawMigrator';
-import { collectDirectoryTarEntries, writeTarGzArchive } from './tarGzUtil';
+import {
+  collectDirectoryTarEntries,
+  extractMatchingEntriesFromTarGz,
+  writeTarGzArchive,
+} from './tarGzUtil';
 
 const tempDirs: string[] = [];
 
@@ -661,5 +675,200 @@ describe('runLegacyOpenClawMigration', () => {
       runsImported: 0,
     });
     db.close();
+  });
+
+  test('migrates external browser config (version 1) to in-app during offline v2 migration, archiving legacy fields and preserving reusable settings', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE browser_credentials (id TEXT PRIMARY KEY, origin TEXT NOT NULL, username TEXT NOT NULL);
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      APP_CONFIG_KEY,
+      JSON.stringify({
+        theme: 'dark',
+        browserDisplayModeMigrationVersion: 1,
+        browserWebAccess: {
+          displayMode: BrowserDisplayMode.External,
+          networkMode: BrowserNetworkMode.Strict,
+          credentialUseMode: BrowserCredentialUseMode.OncePerTask,
+          credentialSaveMode: BrowserCredentialSaveMode.Never,
+          blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
+          executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          cdpUrl: 'http://127.0.0.1:9222',
+          headless: false,
+          attachOnly: true,
+          remoteCdpTimeoutMs: 15000,
+          remoteCdpHandshakeTimeoutMs: 5000,
+          extraArgs: ['--remote-debugging-port=9222'],
+        },
+      }),
+      1,
+    );
+    db.prepare('INSERT INTO browser_credentials VALUES (?, ?, ?)').run(
+      'cred-1',
+      'https://example.com',
+      'alice',
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T12:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    const report = result.report!;
+    expect(report.summary.externalBrowserConfigsMigrated).toBe(1);
+    expect(report.archivedModules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'external_chrome',
+          count: 1,
+        }),
+      ]),
+    );
+
+    const verifyDb = new Database(sqlitePath);
+    const rawAppConfig = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(APP_CONFIG_KEY) as { value: string };
+    const migratedAppConfig = JSON.parse(rawAppConfig.value) as Record<string, unknown>;
+    expect(migratedAppConfig).toEqual({
+      theme: 'dark',
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserWebAccess: {
+        displayMode: BrowserDisplayMode.InApp,
+        networkMode: BrowserNetworkMode.Strict,
+        credentialUseMode: BrowserCredentialUseMode.OncePerTask,
+        credentialSaveMode: BrowserCredentialSaveMode.Never,
+        blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
+      },
+    });
+
+    // Saved browser credentials table must remain untouched.
+    const savedCred = verifyDb
+      .prepare('SELECT id, origin, username FROM browser_credentials WHERE id = ?')
+      .get('cred-1');
+    expect(savedCred).toEqual({ id: 'cred-1', origin: 'https://example.com', username: 'alice' });
+    verifyDb.close();
+
+    // Verify legacy external browser fields were safely archived in incompatible-modules-backup.tar.gz.
+    const extractDir = createTempDir();
+    await extractMatchingEntriesFromTarGz(
+      report.incompatibleArchivePath,
+      extractDir,
+      (entryPath) => entryPath === 'sqlite/external_browser_config.json',
+    );
+    const archivedExternal = JSON.parse(
+      fs.readFileSync(path.join(extractDir, 'sqlite', 'external_browser_config.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(archivedExternal).toEqual({
+      displayMode: BrowserDisplayMode.External,
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      cdpUrl: 'http://127.0.0.1:9222',
+      headless: false,
+      attachOnly: true,
+      remoteCdpTimeoutMs: 15000,
+      remoteCdpHandshakeTimeoutMs: 5000,
+      extraArgs: ['--remote-debugging-port=9222'],
+    });
+  });
+
+  test('does not archive external_chrome when legacy DB was already using in-app browser', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      APP_CONFIG_KEY,
+      JSON.stringify({
+        browserDisplayModeMigrationVersion: 1,
+        browserWebAccess: {
+          displayMode: BrowserDisplayMode.InApp,
+          networkMode: BrowserNetworkMode.Strict,
+          blockedHostnames: ['https://blocked.example.com'],
+        },
+      }),
+      1,
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T12:05:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.externalBrowserConfigsMigrated).toBe(0);
+    expect(result.report?.archivedModules.map((m) => m.category)).not.toContain('external_chrome');
+
+    const verifyDb = new Database(sqlitePath);
+    const rawAppConfig = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(APP_CONFIG_KEY) as { value: string };
+    expect(JSON.parse(rawAppConfig.value)).toEqual({
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserWebAccess: {
+        displayMode: BrowserDisplayMode.InApp,
+        networkMode: BrowserNetworkMode.Strict,
+        blockedHostnames: ['https://blocked.example.com'],
+      },
+    });
+    verifyDb.close();
+  });
+
+  test('repairs stuck external displayMode even when v2 migration was previously marked completed', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T00:00:00.000Z' }),
+      1,
+    );
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      APP_CONFIG_KEY,
+      JSON.stringify({
+        browserDisplayModeMigrationVersion: 1,
+        browserWebAccess: {
+          displayMode: BrowserDisplayMode.External,
+          credentialUseMode: BrowserCredentialUseMode.Disabled,
+          credentialSaveMode: BrowserCredentialSaveMode.Never,
+          blockedHostnames: ['https://blocked.example.com'],
+          cdpUrl: 'http://127.0.0.1:9222',
+        },
+      }),
+      1,
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Skipped);
+
+    const verifyDb = new Database(sqlitePath);
+    const rawAppConfig = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(APP_CONFIG_KEY) as { value: string };
+    expect(JSON.parse(rawAppConfig.value)).toEqual({
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserWebAccess: {
+        displayMode: BrowserDisplayMode.InApp,
+        credentialUseMode: BrowserCredentialUseMode.Disabled,
+        credentialSaveMode: BrowserCredentialSaveMode.Never,
+        blockedHostnames: ['https://blocked.example.com'],
+      },
+    });
+    verifyDb.close();
   });
 });

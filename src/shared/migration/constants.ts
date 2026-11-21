@@ -55,6 +55,7 @@ export interface MigrationV2Report {
     sessionsPreservedForLazyBridge: number;
     mcpLaunchCachesCleared: number;
     disposableBytesFreed: number;
+    externalBrowserConfigsMigrated?: number;
   };
   archivedModules: MigrationV2ArchivedItem[];
   reauthRequired: MigrationV2ReauthItem[];

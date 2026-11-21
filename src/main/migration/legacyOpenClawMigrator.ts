@@ -47,6 +47,10 @@ import {
 import { type Platform, PlatformRegistry } from '../../shared/platform';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
 import {
+  APP_CONFIG_KEY,
+  migrateBrowserDisplayModeConfig,
+} from '../libs/browserDisplayModeMigration';
+import {
   LobsterMemoryService,
   sanitizeAgentId,
   stripManagedAgentsSection,
@@ -1191,6 +1195,50 @@ function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string)
 }
 
 /**
+ * Resets any persisted `app_config.browserWebAccess` external browser mode to
+ * `in-app`, strips dead external-only fields, and preserves all reusable
+ * browser settings (`networkMode`, `credentialUseMode`, `credentialSaveMode`,
+ * `blockedHostnames`, etc.).
+ *
+ * When `incompatibleEntries` / `archivedModules` are supplied during the full
+ * v2 migration and an external browser configuration was active, archives the
+ * removed external browser fields and records an `external_chrome` notice.
+ */
+function migrateLegacyBrowserDisplayModeConfig(
+  db: Database.Database,
+  incompatibleEntries?: TarEntryInput[],
+  archivedModules?: MigrationV2ArchivedItem[],
+): number {
+  const rawAppConfig = getKv(db, APP_CONFIG_KEY);
+  if (!rawAppConfig) return 0;
+
+  const parsedAppConfig = safeParseJsonObject(rawAppConfig);
+  if (!parsedAppConfig) return 0;
+
+  const result = migrateBrowserDisplayModeConfig(parsedAppConfig);
+  if (!result.changed) return 0;
+
+  setKv(db, APP_CONFIG_KEY, JSON.stringify(result.nextConfig));
+
+  if (!result.migratedExternalConfig) return 0;
+
+  if (incompatibleEntries) {
+    incompatibleEntries.push({
+      archivePath: 'sqlite/external_browser_config.json',
+      content: Buffer.from(JSON.stringify(result.archivedExternalConfig ?? {}, null, 2), 'utf8'),
+    });
+  }
+  if (archivedModules) {
+    archivedModules.push({
+      category: 'external_chrome',
+      label: 'External browser configuration (migrated to in-app browser)',
+      count: 1,
+    });
+  }
+  return 1;
+}
+
+/**
  * Read pending v2 migration report for `MigrationReportModal.tsx`.
  */
 export function getPendingMigrationV2Report(db: Database.Database): MigrationV2Report | null {
@@ -1245,6 +1293,7 @@ export function runLegacyOpenClawMigration(
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
+      migrateLegacyBrowserDisplayModeConfig(db);
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1254,6 +1303,7 @@ export function runLegacyOpenClawMigration(
     if (!hasOpenClawState && !hasLegacyEngineKv) {
       backfillAgentPersonaFiles(db, workspacesDir);
       migrateLegacyConversationImages(db, userDataDir);
+      migrateLegacyBrowserDisplayModeConfig(db);
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
@@ -1287,6 +1337,11 @@ export function runLegacyOpenClawMigration(
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
+      const externalBrowserConfigsMigrated = migrateLegacyBrowserDisplayModeConfig(
+        db,
+        incompatibleEntries,
+        archivedModules,
+      );
       const workspacesMigrated = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,
@@ -1534,6 +1589,7 @@ export function runLegacyOpenClawMigration(
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
           disposableBytesFreed,
+          externalBrowserConfigsMigrated,
         },
         archivedModules,
         reauthRequired,
