@@ -51,14 +51,21 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
-import { getElectronNodeRuntimePath } from '../coworkUtil';
+import {
+  ensureElectronNodeShim,
+  getElectronNodeRuntimePath,
+  resolveUserShellPath,
+} from '../coworkUtil';
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
+import { appendPythonRuntimeToEnv } from '../pythonRuntime';
+import { getWebSearchBridgeFilePath } from '../webSearchBridgeFile';
 import {
   type ApprovalAllowRulePort,
   type HostToolProvider,
   wireDshHostBridge,
 } from './dshHostBridgeWiring';
 import {
+  type DshChildEnvAdditions,
   type DshHostAgentSpec,
   DshHostManager,
   type DshHostStatus,
@@ -242,6 +249,56 @@ function createSafeStorageCipher(): {
   };
 }
 
+function resolveBundledNpmBinDir(): string | undefined {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+function resolveDshChildEnvAdditions(
+  executablePath: string,
+  userDataDir: string,
+): DshChildEnvAdditions {
+  const npmBinDir = resolveBundledNpmBinDir();
+  const nodeShimDir = ensureElectronNodeShim(executablePath, npmBinDir);
+  const prependPathDirs: string[] = [];
+  const appendPathDirs: string[] = [];
+  const extraEnv: Record<string, string | undefined> = {};
+
+  if (process.platform !== 'win32' && app.isPackaged) {
+    const shellPath = resolveUserShellPath();
+    if (shellPath) {
+      appendPathDirs.push(...shellPath.split(path.delimiter).filter(Boolean));
+    }
+  }
+
+  try {
+    const pyEnv: Record<string, string | undefined> = { PATH: '' };
+    appendPythonRuntimeToEnv(pyEnv);
+    const pyPathDirs = (pyEnv.PATH || '').split(path.delimiter).filter(Boolean);
+    if (pyPathDirs.length > 0) {
+      // On Windows, keep bundled Python ahead of Microsoft Store WindowsApps stubs.
+      prependPathDirs.push(...pyPathDirs);
+    }
+    for (const [key, value] of Object.entries(pyEnv)) {
+      if (key.toLowerCase() === 'path' || value === undefined) continue;
+      extraEnv[key] = value;
+    }
+  } catch (error) {
+    console.warn('[DshBootstrap] Failed to resolve bundled Python runtime env:', error);
+  }
+
+  return {
+    webSearchBridgeFile: getWebSearchBridgeFilePath(userDataDir),
+    nodeShimDir,
+    npmBinDir,
+    prependPathDirs,
+    appendPathDirs,
+    extraEnv,
+  };
+}
+
 function webOrigin(url: string): string | null {
   try {
     return new URL(url).origin;
@@ -316,6 +373,8 @@ export class DshBootstrap {
       channelsBundleDir: this.channelsBundleDir,
       skillsDir: options.skillsDir,
       executablePath: this.executablePath,
+      webSearchBridgeFile: getWebSearchBridgeFilePath(options.userDataDir),
+      resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath, options.userDataDir),
       instanceId: options.instanceId,
     });
 

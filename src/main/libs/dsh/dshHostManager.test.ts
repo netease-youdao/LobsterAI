@@ -172,5 +172,73 @@ describe('DshHostManager', () => {
     expect(env.npm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
     expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
     expect(env.HOME).toBe('/Users/alice');
+    expect(env.SKILLS_ROOT).toBe(path.join(temp, 'userData', 'SKILLs'));
+    expect(env.LOBSTERAI_SKILLS_ROOT).toBe(path.join(temp, 'userData', 'SKILLs'));
+  });
+
+  test('buildIsolatedDshChildEnv injects skill runtime vars, preserves TZ, and merges runtime PATH dirs without leaking DSH_*', () => {
+    const temp = createTempDir();
+    const dshHomeDir = path.join(temp, 'userData', 'dsh-profile');
+    const runtimeDir = path.join(temp, 'runtime');
+    const pmDir = path.join(runtimeDir, 'package-manager');
+    fs.mkdirSync(pmDir, { recursive: true });
+    const skillsDir = path.join(temp, 'userData', 'SKILLs');
+    const bridgeFile = path.join(temp, 'userData', 'web-search-bridge.json');
+    const nodeShimDir = path.join(temp, 'userData', 'cowork', 'bin');
+    const pythonDir = path.join(temp, 'userData', 'runtimes', 'python-win');
+
+    const withInheritedTz = buildIsolatedDshChildEnv({
+      baseEnv: {
+        PATH: `/usr/bin${path.delimiter}/bin`,
+        TZ: 'America/Los_Angeles',
+      },
+      dshHomeDir,
+      bridgeUrl: 'http://127.0.0.1:41234',
+      bridgeSecret: 'secret',
+      workspacesDir: path.join(temp, 'userData', 'workspaces'),
+      skillsDir,
+      searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
+      runtimeDir,
+      executablePath: '/Apps/LobsterAI Helper',
+      webSearchBridgeFile: bridgeFile,
+      timeZone: 'Asia/Shanghai',
+      nodeShimDir,
+      npmBinDir: '/Apps/resources/npm/bin',
+      prependPathDirs: [pythonDir],
+      appendPathDirs: ['/opt/homebrew/bin', '/usr/bin'],
+      extraEnv: {
+        LOBSTERAI_PYTHON_ROOT: pythonDir,
+        PYTHONUTF8: '1',
+        DSH_HOME: '/should/be/ignored',
+        npm_config_cache: '/should/be/ignored',
+      },
+    });
+
+    expect(withInheritedTz.SKILLS_ROOT).toBe(skillsDir);
+    expect(withInheritedTz.LOBSTERAI_SKILLS_ROOT).toBe(skillsDir);
+    expect(withInheritedTz.LOBSTERAI_ELECTRON_PATH).toBe('/Apps/LobsterAI Helper');
+    expect(withInheritedTz.LOBSTERAI_WEB_SEARCH_BRIDGE_FILE).toBe(bridgeFile);
+    expect(withInheritedTz.LOBSTERAI_NPM_BIN_DIR).toBe('/Apps/resources/npm/bin');
+    expect(withInheritedTz.LOBSTERAI_PYTHON_ROOT).toBe(pythonDir);
+    expect(withInheritedTz.PYTHONUTF8).toBe('1');
+    expect(withInheritedTz.DSH_HOME).toBe(dshHomeDir);
+    expect(withInheritedTz.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
+    expect(withInheritedTz.TZ).toBe('America/Los_Angeles');
+
+    const pathParts = (withInheritedTz.PATH ?? '').split(path.delimiter);
+    expect(pathParts).toEqual([pmDir, pythonDir, '/usr/bin', '/bin', nodeShimDir, '/opt/homebrew/bin']);
+
+    const withoutInheritedTz = buildIsolatedDshChildEnv({
+      baseEnv: { PATH: '/usr/bin' },
+      dshHomeDir,
+      bridgeUrl: 'http://127.0.0.1:41234',
+      bridgeSecret: 'secret',
+      workspacesDir: path.join(temp, 'userData', 'workspaces'),
+      skillsDir,
+      searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
+      runtimeDir,
+      timeZone: 'Asia/Shanghai',
+    });
+    expect(withoutInheritedTz.TZ).toBe('Asia/Shanghai');
   });
 });

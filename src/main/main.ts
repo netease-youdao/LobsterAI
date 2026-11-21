@@ -434,7 +434,7 @@ import {
   DevelopmentProtocolSwitch,
   resolveDevelopmentLaunchContext,
 } from './libs/developmentProtocolContext';
-import { buildDshHostAgentSpecs } from './libs/dsh/dshAgentSync';
+import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
 import {
   DshBootstrap,
   type DshCompatEngineStatus,
@@ -2346,14 +2346,14 @@ const getDshBootstrap = (): DshBootstrap => {
         };
       },
       resolveAllowedSkillIds: (_sessionId, agentId, optionSkillIds) => {
-        if (optionSkillIds && optionSkillIds.length > 0) return optionSkillIds;
-        if (agentId && agentId !== AgentId.Main) {
-          const agent = getAgentManager().getAgent(agentId);
-          if (agent && Array.isArray(agent.skillIds) && agent.skillIds.length > 0) {
-            return agent.skillIds;
-          }
-        }
-        return null;
+        const agent = agentId && agentId !== AgentId.Main
+          ? getAgentManager().getAgent(agentId)
+          : undefined;
+        return resolveAllowedSkillIdsForTurn({
+          agentId,
+          agentSkillIds: agent?.skillIds,
+          optionSkillIds,
+        });
       },
       instanceId: getStore().get<string>('installation_uuid') ?? undefined,
       ecosystemWindowTitle: t('dshEcosystemTitle'),

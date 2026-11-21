@@ -662,4 +662,97 @@ describe('runLegacyOpenClawMigration', () => {
     });
     db.close();
   });
+
+  test('migrates custom skills from openclaw/state/skills and workspace-*/skills without overwriting existing SKILLs or wiping SQLite skill bindings', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE agents (id TEXT PRIMARY KEY, skill_ids TEXT);
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      'skills_state',
+      JSON.stringify({ docx: false, 'custom-report': true }),
+      1,
+    );
+    db.prepare('INSERT INTO agents VALUES (?, ?)').run('expert-a', JSON.stringify(['custom-report']));
+    db.close();
+
+    // Seed pre-existing skill in <userData>/SKILLs that must NOT be overwritten.
+    const userSkillsDir = path.join(userDataDir, 'SKILLs');
+    fs.mkdirSync(path.join(userSkillsDir, 'already-here'), { recursive: true });
+    fs.writeFileSync(
+      path.join(userSkillsDir, 'already-here', 'SKILL.md'),
+      '---\nname: already-here\ndescription: New version in userData\n---\nKeep me.\n',
+      'utf8',
+    );
+
+    // Seed legacy skills in openclaw/state/skills and workspace-*/skills.
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    const legacyShared = path.join(stateDir, 'skills', 'legacy-shared');
+    const legacyConflict = path.join(stateDir, 'skills', 'already-here');
+    const legacyNotSkill = path.join(stateDir, 'skills', 'not-a-skill');
+    const legacyMainSkill = path.join(stateDir, 'workspace-main', 'skills', 'legacy-main-skill');
+    const legacyExpertSkill = path.join(stateDir, 'workspace-expert-a', 'skills', 'legacy-expert-skill');
+
+    for (const dir of [legacyShared, legacyConflict, legacyNotSkill, legacyMainSkill, legacyExpertSkill]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.mkdirSync(path.join(legacyShared, 'scripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyShared, 'SKILL.md'),
+      '---\nname: 共享旧技能\ndescription: Legacy shared skill\n---\nBody\n',
+      'utf8',
+    );
+    fs.writeFileSync(path.join(legacyShared, 'scripts', 'run.sh'), '#!/bin/sh\necho ok\n', 'utf8');
+    fs.writeFileSync(
+      path.join(legacyConflict, 'SKILL.md'),
+      '---\nname: already-here\ndescription: Stale openclaw copy\n---\nOverwrite attempt.\n',
+      'utf8',
+    );
+    fs.writeFileSync(path.join(legacyNotSkill, 'README.md'), 'No SKILL.md here', 'utf8');
+    fs.writeFileSync(
+      path.join(legacyMainSkill, 'SKILL.md'),
+      '---\nname: legacy-main-skill\ndescription: Main workspace skill\n---\nMain\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(legacyExpertSkill, 'SKILL.md'),
+      '---\nname: legacy-expert-skill\ndescription: Expert workspace skill\n---\nExpert\n',
+      'utf8',
+    );
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.skillsMigrated).toBe(3);
+
+    // OpenClaw dir is cleaned up after migration.
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+
+    // All three legacy skills + nested scripts landed in <userData>/SKILLs/.
+    expect(fs.readFileSync(path.join(userSkillsDir, 'legacy-shared', 'SKILL.md'), 'utf8')).toContain('共享旧技能');
+    expect(fs.readFileSync(path.join(userSkillsDir, 'legacy-shared', 'scripts', 'run.sh'), 'utf8')).toContain('echo ok');
+    expect(fs.existsSync(path.join(userSkillsDir, 'legacy-main-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(userSkillsDir, 'legacy-expert-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(userSkillsDir, 'not-a-skill'))).toBe(false);
+
+    // Existing skill in <userData>/SKILLs/ was NOT overwritten.
+    expect(fs.readFileSync(path.join(userSkillsDir, 'already-here', 'SKILL.md'), 'utf8')).toContain('Keep me.');
+
+    // SQLite skills_state and agents.skill_ids survived intact.
+    const verifyDb = new Database(sqlitePath, { readonly: true });
+    const skillsStateRow = verifyDb.prepare('SELECT value FROM kv WHERE key = ?').get('skills_state') as { value: string };
+    expect(JSON.parse(skillsStateRow.value)).toEqual({ docx: false, 'custom-report': true });
+    const agentRow = verifyDb.prepare('SELECT skill_ids FROM agents WHERE id = ?').get('expert-a') as { skill_ids: string };
+    expect(JSON.parse(agentRow.skill_ids)).toEqual(['custom-report']);
+    verifyDb.close();
+  });
 });

@@ -49,6 +49,7 @@ export interface MigrationV2Report {
   dismissed: boolean;
   summary: {
     workspacesMigrated: number;
+    skillsMigrated?: number;
     scheduledTasksMigrated: number;
     scheduledTaskRunsMigrated?: number;
     imAllowListsMigrated: number;

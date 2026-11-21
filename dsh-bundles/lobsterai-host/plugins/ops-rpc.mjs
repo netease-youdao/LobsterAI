@@ -35,6 +35,16 @@ function jsonResponse(body, status = 200) {
   });
 }
 
+function sameSkillAllowlist(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /**
  * Find and delete all directories matching an encoded DSH sessionId under
  * `<dshHome>/sessions/<project>/<encodedId>` so deleting a LobsterAI session
@@ -361,6 +371,9 @@ export function apply(ctx) {
               });
               syncedCount += 1;
             }
+            if (replace || syncedCount > 0) {
+              state.invalidateSkills?.();
+            }
             return jsonResponse({
               ok: true,
               result: {
@@ -377,10 +390,14 @@ export function apply(ctx) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
             if (p.unbind === true) {
-              state.sessionContexts.delete(sessionId);
-              state.delegatedChildAgents.delete(sessionId);
+              const removedSession = state.sessionContexts.delete(sessionId);
+              const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+              if (removedSession || removedDelegated) {
+                state.invalidateSkills?.();
+              }
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
+            const hadPrev = state.sessionContexts.has(sessionId);
             const prev = state.sessionContexts.get(sessionId) ?? {};
             const nextPreset = typeof p.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(p.permissionPreset)
               ? p.permissionPreset
@@ -391,7 +408,7 @@ export function apply(ctx) {
                 ? p.unlockedCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0)
                 : []),
             ]);
-            state.sessionContexts.set(sessionId, {
+            const nextContext = {
               ...prev,
               ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
               ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
@@ -406,7 +423,18 @@ export function apply(ctx) {
               ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
               ...(nextPreset ? { permissionPreset: nextPreset } : {}),
               ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
-            });
+            };
+            state.sessionContexts.set(sessionId, nextContext);
+            // Invalidate DSH's SkillRegistry collectCache whenever a session's
+            // agent binding or allowedSkillIds changes so Turn 2+ never serves
+            // a stale skill catalog from Turn 1.
+            if (
+              !hadPrev
+              || prev.agentId !== nextContext.agentId
+              || !sameSkillAllowlist(prev.allowedSkillIds, nextContext.allowedSkillIds)
+            ) {
+              state.invalidateSkills?.();
+            }
             state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);
@@ -469,8 +497,11 @@ export function apply(ctx) {
             if (!sessionId) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
-            state.sessionContexts.delete(sessionId);
-            state.delegatedChildAgents.delete(sessionId);
+            const removedSession = state.sessionContexts.delete(sessionId);
+            const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+            if (removedSession || removedDelegated) {
+              state.invalidateSkills?.();
+            }
             // Stop live agent if running before deleting files.
             const liveAgent = ctx.get('agents')?.get(sessionId);
             if (liveAgent && typeof liveAgent.cancel === 'function') {

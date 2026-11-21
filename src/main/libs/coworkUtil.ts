@@ -104,7 +104,7 @@ let cachedUserShellPath: string | null | undefined;
  * Packaged Electron apps on macOS don't inherit the user's shell profile,
  * so node/npm and other tools won't be in PATH unless we resolve it.
  */
-function resolveUserShellPath(): string | null {
+export function resolveUserShellPath(): string | null {
   if (cachedUserShellPath !== undefined) return cachedUserShellPath;
 
   if (process.platform === 'win32') {

@@ -40,6 +40,7 @@ import type {
   ModelThinkingLevel,
 } from '../../../shared/providers/modelThinking';
 import { DSH_NODE_EXEC_ARGV } from '../dshRuntime';
+import { WEB_SEARCH_BRIDGE_FILE_ENV } from '../webSearchBridgeFile';
 import {
   ensureAppOwnedProfile,
   resolveLobsterDshProfileDir,
@@ -234,6 +235,16 @@ export interface DshHostStatus {
   restartCount: number;
 }
 
+export interface DshChildEnvAdditions {
+  webSearchBridgeFile?: string | null;
+  timeZone?: string;
+  nodeShimDir?: string | null;
+  npmBinDir?: string | null;
+  prependPathDirs?: readonly string[];
+  appendPathDirs?: readonly string[];
+  extraEnv?: Record<string, string | undefined>;
+}
+
 export interface DshHostManagerOptions {
   /** Electron userData directory (e.g. `app.getPath('userData')`). */
   userDataDir: string;
@@ -247,6 +258,12 @@ export interface DshHostManagerOptions {
   skillsDir: string;
   /** Path to Electron (or Node in tests) executable used with `ELECTRON_RUN_AS_NODE=1`. */
   executablePath: string;
+  /** Optional path to LobsterAI's web-search in-app bridge JSON file. */
+  webSearchBridgeFile?: string | null;
+  /** Optional fallback IANA timezone when `TZ` is unset in the inherited environment. */
+  timeZone?: string;
+  /** Optional callback resolving Electron/bundled runtime PATH and env additions at spawn time. */
+  resolveChildEnvAdditions?: () => DshChildEnvAdditions;
   /** Optional stable instance ID sent via `X-LobsterAI-Instance`. */
   instanceId?: string;
   /** Search routing policy passed to `@lobsterai/dsh-bundle`. */
@@ -266,6 +283,43 @@ const DEFAULT_MAX_AUTO_RESTARTS = 3;
 const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
 const BRIDGE_KEEPALIVE_MS = 30_000;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
+
+function resolveSystemTimeZone(): string | undefined {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof tz === 'string' && tz.trim().length > 0 ? tz.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeEnvPathEntries(
+  existingPath: string | undefined,
+  prependDirs: readonly string[],
+  appendDirs: readonly string[],
+): string | undefined {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const normalize = (entry: string): string => (
+    process.platform === 'win32'
+      ? entry.toLowerCase().replace(/[\\/]+$/, '')
+      : entry.replace(/\/+$/, '') || '/'
+  );
+  const add = (raw: string | undefined): void => {
+    const trimmed = raw?.trim();
+    if (!trimmed) return;
+    const key = normalize(trimmed);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(trimmed);
+  };
+
+  for (const dir of prependDirs) add(dir);
+  for (const entry of (existingPath ?? '').split(path.delimiter)) add(entry);
+  for (const dir of appendDirs) add(dir);
+
+  return merged.length > 0 ? merged.join(path.delimiter) : existingPath;
+}
 
 /**
  * Resolve runtime and bundle directories for packaged vs dev layouts.
@@ -308,6 +362,14 @@ export function buildIsolatedDshChildEnv(params: {
   skillsDir: string;
   searchPolicy: DshSearchPolicy;
   runtimeDir: string;
+  executablePath?: string;
+  webSearchBridgeFile?: string | null;
+  timeZone?: string;
+  nodeShimDir?: string | null;
+  npmBinDir?: string | null;
+  prependPathDirs?: readonly string[];
+  appendPathDirs?: readonly string[];
+  extraEnv?: Record<string, string | undefined>;
   instanceId?: string;
   skipElectronRunAsNode?: boolean;
 }): NodeJS.ProcessEnv {
@@ -319,6 +381,16 @@ export function buildIsolatedDshChildEnv(params: {
     env[key] = value;
   }
 
+  if (params.extraEnv) {
+    for (const [key, value] of Object.entries(params.extraEnv)) {
+      if (value === undefined) continue;
+      if (/^dsh_/i.test(key)) continue;
+      if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+      if (key.toLowerCase() === 'path') continue;
+      env[key] = value;
+    }
+  }
+
   env.DSH_HOME = params.dshHomeDir;
   env.DSH_AGENTS_HOME = path.join(params.dshHomeDir, 'agents-home');
   env.DSH_TELEMETRY_DISABLED = '1';
@@ -328,7 +400,25 @@ export function buildIsolatedDshChildEnv(params: {
   env[DshHostBundleEnvVar.BridgeSecret] = params.bridgeSecret;
   env[DshHostBundleEnvVar.WorkspacesDir] = params.workspacesDir;
   env[DshHostBundleEnvVar.SkillsDir] = params.skillsDir;
+  env.SKILLS_ROOT = params.skillsDir;
+  env.LOBSTERAI_SKILLS_ROOT = params.skillsDir;
   env[DshHostBundleEnvVar.SearchPolicy] = params.searchPolicy;
+
+  if (params.executablePath?.trim()) {
+    env.LOBSTERAI_ELECTRON_PATH = params.executablePath.trim();
+  }
+  if (params.webSearchBridgeFile?.trim()) {
+    env[WEB_SEARCH_BRIDGE_FILE_ENV] = params.webSearchBridgeFile.trim();
+  }
+  if (params.npmBinDir?.trim()) {
+    env.LOBSTERAI_NPM_BIN_DIR = params.npmBinDir.trim();
+  }
+  if (!env.TZ?.trim()) {
+    const resolvedTz = params.timeZone?.trim() || resolveSystemTimeZone();
+    if (resolvedTz) {
+      env.TZ = resolvedTz;
+    }
+  }
 
   if (!params.skipElectronRunAsNode) {
     env.ELECTRON_RUN_AS_NODE = '1';
@@ -336,11 +426,28 @@ export function buildIsolatedDshChildEnv(params: {
   if (params.instanceId) {
     env[DshHostBundleEnvVar.InstanceId] = params.instanceId;
   }
+
+  const prependPathDirs: string[] = [];
   // Prepend bundled package-manager dir so `dsh-plugin-manager` finds bundled pnpm.
   const pmDir = path.join(params.runtimeDir, 'package-manager');
   if (fs.existsSync(pmDir)) {
+    prependPathDirs.push(pmDir);
+  }
+  if (params.prependPathDirs) {
+    prependPathDirs.push(...params.prependPathDirs);
+  }
+
+  const appendPathDirs: string[] = [];
+  if (params.nodeShimDir?.trim()) {
+    appendPathDirs.push(params.nodeShimDir.trim());
+  }
+  if (params.appendPathDirs) {
+    appendPathDirs.push(...params.appendPathDirs);
+  }
+
+  if (prependPathDirs.length > 0 || appendPathDirs.length > 0) {
     const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
-    env[pathKey] = env[pathKey] ? `${pmDir}${path.delimiter}${env[pathKey]}` : pmDir;
+    env[pathKey] = mergeEnvPathEntries(env[pathKey], prependPathDirs, appendPathDirs);
   }
   return env;
 }
@@ -676,6 +783,7 @@ export class DshHostManager extends EventEmitter {
   }
 
   private buildChildEnv(): NodeJS.ProcessEnv {
+    const additions = this.options.resolveChildEnvAdditions?.();
     return buildIsolatedDshChildEnv({
       baseEnv: process.env,
       dshHomeDir: this.dshHomeDir,
@@ -685,6 +793,14 @@ export class DshHostManager extends EventEmitter {
       skillsDir: this.options.skillsDir,
       searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.DeepSeekNativeOnly,
       runtimeDir: this.options.runtimeDir,
+      executablePath: this.options.executablePath,
+      webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile,
+      timeZone: additions?.timeZone ?? this.options.timeZone,
+      nodeShimDir: additions?.nodeShimDir,
+      npmBinDir: additions?.npmBinDir,
+      prependPathDirs: additions?.prependPathDirs,
+      appendPathDirs: additions?.appendPathDirs,
+      extraEnv: additions?.extraEnv,
       instanceId: this.options.instanceId,
       skipElectronRunAsNode: this.options.skipElectronRunAsNode,
     });

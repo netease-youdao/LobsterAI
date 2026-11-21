@@ -3,10 +3,13 @@
  * frontmatter parsing. Zero DSH peer imports so Vitest can test them directly.
  */
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 export const DEFAULT_AGENT_ID = 'main';
+export const LOBSTERAI_SKILL_RANK = 260;
+export const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const MAX_PERSONA_FILE_BYTES = 128 * 1024;
 export const MAX_INLINE_MEMORY_CHARS = 3_000;
 
@@ -182,4 +185,235 @@ export function parseSkillFrontmatter(markdown) {
     meta[key] = rawValue;
   }
   return { meta, body };
+}
+
+export function toKebabSkillName(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Resolve a DSH-compliant kebab-case skill name from a directory ID (`rawId`)
+ * and optional frontmatter `name` (`metaName`).
+ *
+ * - For LobsterAI-managed roots (`preferRawId: true`), `rawId` is preferred so
+ *   the registered DSH name always matches `SkillManager`'s `skill.id`,
+ *   `agents.skill_ids`, and `selectedSkillRoutingPrompt`'s `<id>` even when
+ *   frontmatter `name` is non-ASCII (e.g. `周报助手`) or differs from the
+ *   directory name (e.g. `remotion` vs `remotion-best-practices`).
+ * - For project-local `.dsh/skills` / `.agents/skills` (`preferRawId: false`),
+ *   `metaName` is checked first and falls back to `rawId` when `metaName`
+ *   contains no ASCII characters.
+ * - If both yield empty kebab names, generates a deterministic `skill-<hash>`
+ *   fallback so custom non-ASCII skills are never silently dropped.
+ */
+export function resolveDshSkillName(rawId, metaName, options = {}) {
+  const preferRawId = options.preferRawId !== false;
+  const rawCandidate = toKebabSkillName(rawId);
+  const metaCandidate = toKebabSkillName(metaName);
+  const primary = preferRawId ? rawCandidate : metaCandidate;
+  const secondary = preferRawId ? metaCandidate : rawCandidate;
+  if (primary) return primary;
+  if (secondary) return secondary;
+  const seed = String(rawId || metaName || '').trim();
+  if (!seed) return '';
+  return `skill-${createHash('sha1').update(seed).digest('hex').slice(0, 8)}`;
+}
+
+function collectSkillIdentifiers(rawId, skillName, metaName) {
+  const result = [];
+  const seen = new Set();
+  for (const candidate of [rawId, skillName, metaName, toKebabSkillName(metaName)]) {
+    const trimmed = typeof candidate === 'string' ? candidate.trim() : '';
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function matchesAnyIdentifier(set, identifiers) {
+  if (!set) return false;
+  for (const id of identifiers) {
+    if (set.has(id)) return true;
+  }
+  return false;
+}
+
+function findProjectRootForSkills(cwd) {
+  let current = resolve(cwd);
+  while (true) {
+    if (
+      existsSync(join(current, '.git'))
+      || existsSync(join(current, '.dsh', 'skills'))
+      || existsSync(join(current, '.agents', 'skills'))
+    ) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) return resolve(cwd);
+    current = parent;
+  }
+}
+
+export function resolveProjectSkillRoots(cwd) {
+  if (typeof cwd !== 'string' || !cwd.trim()) return [];
+  const resolvedCwd = resolve(cwd);
+  if (!existsSync(resolvedCwd)) return [];
+  const projectRoot = findProjectRootForSkills(resolvedCwd);
+  const candidates = [
+    join(resolvedCwd, '.dsh', 'skills'),
+    join(resolvedCwd, '.agents', 'skills'),
+    ...(projectRoot !== resolvedCwd
+      ? [join(projectRoot, '.dsh', 'skills'), join(projectRoot, '.agents', 'skills')]
+      : []),
+  ];
+  const seen = new Set();
+  const roots = [];
+  for (const dir of candidates) {
+    const norm = resolve(dir);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    if (existsSync(norm)) {
+      roots.push(norm);
+    }
+  }
+  return roots;
+}
+
+function scanSkillEntries(rootDir) {
+  if (!rootDir || !existsSync(rootDir)) return [];
+  try {
+    return readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Discover skills across LobsterAI's managed roots (`skillsDir` + `extraDirs`)
+ * and optional project-local roots (`<projectRoot>/.dsh/skills`, `.agents/skills`),
+ * strictly enforcing `policy.disabledIds`, `policy.enabledIds`, and per-session
+ * `allowedSkillIds`.
+ */
+export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options = {}) {
+  const validateName = typeof options.isSkillName === 'function'
+    ? options.isSkillName
+    : (candidate) => SKILL_NAME_RE.test(candidate);
+  const disabledIds = policy?.disabledIds instanceof Set ? policy.disabledIds : new Set();
+  const enabledIds = policy?.enabledIds instanceof Set ? policy.enabledIds : null;
+  const candidates = [];
+  const seen = new Set();
+  const blockedByManagedPolicy = new Set();
+  const scannedRoots = new Set();
+
+  const pushCandidate = (skillName, meta, skillDir, skillFile) => {
+    const description = (meta.description || meta.name || '').trim() || `LobsterAI skill: ${skillName}`;
+    seen.add(skillName);
+    candidates.push({
+      name: skillName,
+      description,
+      provider: 'lobsterai-skills',
+      source: skillFile,
+      rank: LOBSTERAI_SKILL_RANK,
+      invocation: {
+        modelInvocable: true,
+        userInvocable: true,
+      },
+      resourceBase: {
+        kind: 'directory',
+        path: skillDir,
+      },
+      locator: {
+        filePath: skillFile,
+        dirPath: skillDir,
+        skillName,
+        description,
+      },
+    });
+  };
+
+  // 1. LobsterAI-managed skill roots (`skillsDir` + `extraDirs`).
+  for (const rootDir of rootDirs ?? []) {
+    if (!rootDir) continue;
+    const normRoot = resolve(rootDir);
+    if (scannedRoots.has(normRoot)) continue;
+    scannedRoots.add(normRoot);
+
+    for (const entry of scanSkillEntries(normRoot)) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const skillDir = join(normRoot, entry.name);
+      const skillFile = join(skillDir, 'SKILL.md');
+      if (!existsSync(skillFile)) continue;
+
+      const rawId = entry.name;
+      const content = readTextCached(skillFile);
+      if (!content) continue;
+      const { meta } = parseSkillFrontmatter(content);
+      const skillName = resolveDshSkillName(rawId, meta.name, { preferRawId: true });
+      if (!validateName(skillName)) continue;
+
+      const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name);
+
+      // Apply global LobsterAI skill toggle policy.
+      if (matchesAnyIdentifier(disabledIds, identifiers)) {
+        for (const id of identifiers) blockedByManagedPolicy.add(id);
+        continue;
+      }
+      if (enabledIds !== null && !matchesAnyIdentifier(enabledIds, identifiers)) {
+        for (const id of identifiers) blockedByManagedPolicy.add(id);
+        continue;
+      }
+
+      // Apply per-agent / per-turn skill allowlist when the session restricts skills.
+      if (allowedSkillIds !== null && !matchesAnyIdentifier(allowedSkillIds, identifiers)) {
+        continue;
+      }
+
+      if (seen.has(skillName)) continue;
+      pushCandidate(skillName, meta, skillDir, skillFile);
+    }
+  }
+
+  // 2. Project-local `.dsh/skills` and `.agents/skills` filtered by LobsterAI policy.
+  for (const projectSkillRoot of resolveProjectSkillRoots(options.cwd)) {
+    const normRoot = resolve(projectSkillRoot);
+    if (scannedRoots.has(normRoot)) continue;
+    scannedRoots.add(normRoot);
+
+    for (const entry of scanSkillEntries(normRoot)) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const skillDir = join(normRoot, entry.name);
+      const skillFile = join(skillDir, 'SKILL.md');
+      if (!existsSync(skillFile)) continue;
+
+      const rawId = entry.name;
+      const content = readTextCached(skillFile);
+      if (!content) continue;
+      const { meta } = parseSkillFrontmatter(content);
+      const skillName = resolveDshSkillName(rawId, meta.name, { preferRawId: false });
+      if (!validateName(skillName)) continue;
+
+      const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name);
+
+      // Never allow project-local skills to resurrect a LobsterAI-disabled skill.
+      if (
+        matchesAnyIdentifier(disabledIds, identifiers)
+        || matchesAnyIdentifier(blockedByManagedPolicy, identifiers)
+      ) {
+        continue;
+      }
+      if (allowedSkillIds !== null && !matchesAnyIdentifier(allowedSkillIds, identifiers)) {
+        continue;
+      }
+
+      if (seen.has(skillName)) continue;
+      pushCandidate(skillName, meta, skillDir, skillFile);
+    }
+  }
+
+  return candidates;
 }

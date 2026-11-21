@@ -45,6 +45,7 @@ import {
   MigrationV2Status,
 } from '../../shared/migration/constants';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
+import { cpRecursiveSync } from '../fsCompat';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
 import {
   LobsterMemoryService,
@@ -1173,6 +1174,85 @@ function migrateLegacyWorkspaces(
   return migratedCount;
 }
 
+/**
+ * Copy legacy custom skill directories out of `<openclawStateDir>/skills/`
+ * and `<openclawStateDir>/workspace-<agentId>/skills/` into `<userData>/SKILLs/`
+ * before deleting `openclaw/`. Never overwrites existing skills in `SKILLs/`.
+ */
+function migrateLegacyOpenClawSkills(
+  openclawStateDir: string,
+  userSkillsDir: string,
+): number {
+  if (!fs.existsSync(openclawStateDir)) return 0;
+
+  const candidateSkillRoots: string[] = [];
+  const sharedSkillsDir = path.join(openclawStateDir, 'skills');
+  if (fs.existsSync(sharedSkillsDir)) {
+    candidateSkillRoots.push(sharedSkillsDir);
+  }
+
+  let stateEntries: fs.Dirent[];
+  try {
+    stateEntries = fs.readdirSync(openclawStateDir, { withFileTypes: true });
+  } catch {
+    stateEntries = [];
+  }
+
+  const workspaceNames = stateEntries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('workspace-'))
+    .map((entry) => entry.name)
+    .sort((a, b) => {
+      if (a === 'workspace-main') return -1;
+      if (b === 'workspace-main') return 1;
+      return a.localeCompare(b);
+    });
+
+  for (const workspaceName of workspaceNames) {
+    const wsSkillsDir = path.join(openclawStateDir, workspaceName, 'skills');
+    if (fs.existsSync(wsSkillsDir)) {
+      candidateSkillRoots.push(wsSkillsDir);
+    }
+  }
+
+  let migratedCount = 0;
+  for (const sourceRoot of candidateSkillRoots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(sourceRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const skillId = entry.name.trim();
+      if (!skillId || skillId.startsWith('.') || skillId.includes('/') || skillId.includes('\\')) {
+        continue;
+      }
+      const srcSkillDir = path.join(sourceRoot, entry.name);
+      try {
+        if (!fs.statSync(srcSkillDir).isDirectory()) continue;
+        const skillManifestPath = path.join(srcSkillDir, 'SKILL.md');
+        if (!fs.existsSync(skillManifestPath) || !fs.statSync(skillManifestPath).isFile()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      const targetSkillDir = path.join(userSkillsDir, skillId);
+      if (fs.existsSync(targetSkillDir)) {
+        continue;
+      }
+
+      fs.mkdirSync(userSkillsDir, { recursive: true });
+      cpRecursiveSync(srcSkillDir, targetSkillDir, { dereference: true, force: false });
+      migratedCount += 1;
+    }
+  }
+
+  return migratedCount;
+}
+
 /** Legacy workspaces can have just one persona file. SQLite supplies only missing files. */
 function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string): void {
   const marker = 'engine.migration.v2.expertPersonas';
@@ -1292,6 +1372,10 @@ export function runLegacyOpenClawMigration(
         workspacesDir,
         incompatibleEntries,
         archivedModules,
+      );
+      const skillsMigrated = migrateLegacyOpenClawSkills(
+        openclawStateDir,
+        path.join(userDataDir, 'SKILLs'),
       );
       backfillAgentPersonaFiles(db, workspacesDir);
 
@@ -1528,6 +1612,7 @@ export function runLegacyOpenClawMigration(
         dismissed: archivedModules.length === 0 && reauthRequired.length === 0,
         summary: {
           workspacesMigrated,
+          skillsMigrated,
           scheduledTasksMigrated,
           scheduledTaskRunsMigrated,
           imAllowListsMigrated,
