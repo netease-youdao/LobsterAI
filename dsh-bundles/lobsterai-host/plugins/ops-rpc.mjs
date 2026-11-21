@@ -403,6 +403,9 @@ export function apply(ctx) {
               ...(typeof p.customSystemPrompt === 'string'
                 ? { customSystemPrompt: p.customSystemPrompt }
                 : {}),
+              ...(typeof p.officeAgentPrompt === 'string' && p.officeAgentPrompt.trim().length > 0
+                ? { officeAgentPrompt: p.officeAgentPrompt }
+                : {}),
               ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
               ...(nextPreset ? { permissionPreset: nextPreset } : {}),
               ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),

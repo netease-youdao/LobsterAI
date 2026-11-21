@@ -10,21 +10,30 @@ const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'shell', 'exec', 'terminal_exe
 
 const OFFICE_GUI_APP_NAMES =
   'Keynote|Pages|Numbers|WPS\\s*Office|wpsoffice|Microsoft\\s+Word|Microsoft\\s+PowerPoint|Microsoft\\s+Excel|LibreOffice|OpenOffice';
+const OFFICE_DOC_EXTENSIONS = 'pptx|pptm|ppt|docx|docm|doc|xlsx|xlsm|xls';
 
 const OSASCRIPT_OFFICE_GUI_RE = new RegExp(
   `\\bosascript\\b[\\s\\S]*\\btell\\s+(?:application|app)\\s+['"]?(${OFFICE_GUI_APP_NAMES})\\b`,
   'i',
 );
 const MAC_OPEN_OFFICE_GUI_RE = new RegExp(
-  `(?:^|[;&|]\\s*)open\\b[^\\n;|&]*\\s-a\\s+['"]?(?:\\/[^\\s'"]*\\/)?(${OFFICE_GUI_APP_NAMES})(?:\\.app)?['"]?`,
+  `(?:^|[\\n;&|(]\\s*)(?:\\/usr\\/bin\\/)?open\\b[^\\n;|&]*\\s-a\\s+['"]?(?:\\/[^\\s'"]*\\/)?(${OFFICE_GUI_APP_NAMES})(?:\\.app)?['"]?`,
+  'i',
+);
+const MAC_OPEN_OFFICE_FILE_RE = new RegExp(
+  `(?:^|[\\n;&|(]\\s*)(?:\\/usr\\/bin\\/)?open\\s+(?![^\\n;|&]*\\bhttps?:\\/\\/)[^\\n;|&]*\\.(${OFFICE_DOC_EXTENSIONS})(?=['"\\s;|&)\\n]|$)`,
   'i',
 );
 const DIRECT_OFFICE_MACOS_BINARY_RE =
   /(wpsoffice|Keynote|Pages|Numbers|Microsoft\s+Word|Microsoft\s+PowerPoint|Microsoft\s+Excel)\.app\/Contents\/MacOS\//i;
 const WIN_START_OFFICE_GUI_RE =
-  /(?:^|[;&|]\s*)start\b[^\n;|&]*\b(WINWORD|POWERPNT|EXCEL|wps|et|wpp)(?:\.exe)?\b/i;
+  /(?:^|[\n;&|(]\s*)start\b[^\n;|&]*\b(WINWORD|POWERPNT|EXCEL|wps|et|wpp)(?:\.exe)?\b/i;
+const PWSH_INVOKE_ITEM_OFFICE_FILE_RE = new RegExp(
+  `(?:^|[\\n;&|(]\\s*|-(?:Command|c)\\s+['"]?\\s*)(Invoke-Item|ii)\\s+(?![^\\n;|&]*\\bhttps?:\\/\\/)[^\\n;|&]*\\.(${OFFICE_DOC_EXTENSIONS})(?=['"\\s;|&)\\n]|$)`,
+  'i',
+);
 const INTERACTIVE_SOFFICE_CMD_RE =
-  /(?:^|[;&|]\s*|(?:timeout\s+\d+\s+))(?:\/[^\s]*\/)?(soffice|libreoffice)\b(?!\s+(?:--version|--help|-h)\b)/i;
+  /(?:^|[\n;&|(]\s*|(?:timeout\s+\d+\s+))(?:\/[^\s]*\/)?(soffice|libreoffice)\b(?!\s+(?:--version|--help|-h)\b)/i;
 
 /**
  * Extract the shell command text from a DSH tool execution's arguments.
@@ -65,6 +74,11 @@ export function evaluateOfficeGuiGuard(toolName, args) {
     return `禁止使用 open -a 启动桌面办公软件「${openMatch[1]}」。请勿通过桌面 GUI 预览或检查文档；向用户交付文件时直接提供 Markdown 链接 [文件名](file:///绝对路径) 即可。`;
   }
 
+  const openFileMatch = MAC_OPEN_OFFICE_FILE_RE.exec(command);
+  if (openFileMatch) {
+    return `禁止使用 open 直接打开办公文档（.${openFileMatch[1]}），会弹出桌面办公软件窗口。请勿通过桌面 GUI 预览或检查文档；向用户交付文件时直接提供 Markdown 链接 [文件名](file:///绝对路径) 即可。`;
+  }
+
   const directBinMatch = DIRECT_OFFICE_MACOS_BINARY_RE.exec(command);
   if (directBinMatch) {
     return `禁止直接执行桌面办公软件「${directBinMatch[1]}」的可执行文件（会弹出桌面窗口）。请改用无头命令行校验或直接交付。`;
@@ -73,6 +87,11 @@ export function evaluateOfficeGuiGuard(toolName, args) {
   const winStartMatch = WIN_START_OFFICE_GUI_RE.exec(command);
   if (winStartMatch) {
     return `禁止启动桌面办公软件「${winStartMatch[1]}」预览或校验文档，请使用无头校验或直接提供文件链接。`;
+  }
+
+  const invokeItemMatch = PWSH_INVOKE_ITEM_OFFICE_FILE_RE.exec(command);
+  if (invokeItemMatch) {
+    return `禁止使用 ${invokeItemMatch[1]} 直接打开办公文档（.${invokeItemMatch[2]}），会弹出桌面办公软件窗口。请勿通过桌面 GUI 预览或检查文档；向用户交付文件时直接提供 Markdown 链接 [文件名](file:///绝对路径) 即可。`;
   }
 
   const sofficeMatch = INTERACTIVE_SOFFICE_CMD_RE.exec(command);

@@ -51,6 +51,7 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
+import { BrowserAnnotationAssetStore } from '../browserAnnotationAssetStore';
 import { getElectronNodeRuntimePath } from '../coworkUtil';
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
 import {
@@ -341,6 +342,9 @@ export class DshBootstrap {
     if (persistedBindings.length > 0) {
       void this.hostManager.syncSubagentBindings(persistedBindings, { replace: true }).catch((): void => undefined);
     }
+    const browserAnnotationAssetStore = new BrowserAnnotationAssetStore(
+      path.join(options.userDataDir, 'browser-annotation-assets'),
+    );
     this.runtimeAdapter = new DshRuntimeAdapter({
       subagentSessions: this.subagentSessions,
       hostManager: this.hostManager,
@@ -352,6 +356,13 @@ export class DshBootstrap {
         if (!coworkSessionId) {
           this.defaultPermissionPreset = preset;
           this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, preset);
+        }
+      },
+      readBrowserAnnotationAsset: (identity) => {
+        try {
+          return browserAnnotationAssetStore.read(identity);
+        } catch {
+          return null;
         }
       },
     });

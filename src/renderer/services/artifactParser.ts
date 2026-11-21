@@ -1152,6 +1152,12 @@ const WRITE_TOOL_NAMES = new Set([
   'editfile',
   'multiedit',
   'createfile',
+  'wordedit',
+  'exceledit',
+  'pptedit',
+  'mcplobster-wordwordedit',
+  'mcplobster-excelexceledit',
+  'mcplobster-pptpptedit',
 ]);
 
 /**

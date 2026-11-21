@@ -8,6 +8,12 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import {
+  BrowserAnnotationScreenshotStatus,
+  buildBrowserAnnotationPromptSection,
+  type CoworkBrowserAnnotationMessageBatch,
+  normalizeBrowserAnnotationBatches,
+} from '../../../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortResponse,
   CoworkBtwSubmitResponse,
@@ -16,7 +22,15 @@ import { CoworkBtwStatus } from '../../../shared/cowork/btw';
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
-import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
+import {
+  buildCoworkImageAttachmentPreviews,
+  CoworkImageAttachmentRole,
+  stripDataUrlPrefix,
+} from '../../../shared/cowork/imageAttachments';
+import {
+  buildSelectedTextPromptSection,
+  CoworkSelectedTextSource,
+} from '../../../shared/cowork/selectedText';
 import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import {
@@ -27,6 +41,12 @@ import {
   DshPermissionPreset,
   DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
+import { buildOfficeAgentPrompt } from '../../../shared/office/core/officeAgentPrompt';
+import {
+  SHEET_EDITOR,
+  SLIDES_EDITOR,
+  WORD_EDITOR,
+} from '../../../shared/office/editors';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
 import {
@@ -115,6 +135,13 @@ export interface DshModelSelection {
   reasoningEffort?: string;
 }
 
+export type DshReadBrowserAnnotationAsset = (identity: {
+  draftKey: string;
+  batchId: string;
+  annotationId: string;
+  assetId: string;
+}) => { dataUrl: string; byteSize?: number } | null | undefined;
+
 export interface DshRuntimeAdapterDeps {
   subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>
     & Partial<Pick<DshSubagentSessions, 'setDelegatedAgent'>>;
@@ -138,6 +165,7 @@ export interface DshRuntimeAdapterDeps {
     preset: DshPermissionPreset,
     coworkSessionId?: string,
   ) => Promise<void> | void;
+  readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
 }
 
 interface ActiveTurnState {
@@ -268,14 +296,52 @@ const SKILL_TO_PROGRESSIVE_CAPABILITY: Readonly<Record<string, DshProgressiveCap
   pptx: DshProgressiveCapability.Ppt,
 };
 
+const SELECTED_TEXT_SOURCE_TO_CAPABILITY: Readonly<Record<string, DshProgressiveCapability>> = {
+  [CoworkSelectedTextSource.ArtifactWord]: DshProgressiveCapability.Word,
+  [CoworkSelectedTextSource.ArtifactSheet]: DshProgressiveCapability.Excel,
+  [CoworkSelectedTextSource.ArtifactSlides]: DshProgressiveCapability.Ppt,
+};
+
+const OFFICE_EXTENSION_CAPABILITY_PATTERNS: ReadonlyArray<{
+  pattern: RegExp;
+  capability: DshProgressiveCapability;
+}> = [
+  { pattern: /\.docx\b/i, capability: DshProgressiveCapability.Word },
+  { pattern: /\.xlsx\b/i, capability: DshProgressiveCapability.Excel },
+  { pattern: /\.pptx\b/i, capability: DshProgressiveCapability.Ppt },
+];
+
+const OFFICE_CAPABILITY_TO_EDITOR = [
+  { capability: DshProgressiveCapability.Word, editor: WORD_EDITOR },
+  { capability: DshProgressiveCapability.Excel, editor: SHEET_EDITOR },
+  { capability: DshProgressiveCapability.Ppt, editor: SLIDES_EDITOR },
+] as const;
+
+function collectOfficeCapabilitiesFromText(
+  text: string | undefined,
+  target: Set<DshProgressiveCapability>,
+): void {
+  if (typeof text !== 'string' || text.length === 0) return;
+  for (const { pattern, capability } of OFFICE_EXTENSION_CAPABILITY_PATTERNS) {
+    if (pattern.test(text)) {
+      target.add(capability);
+    }
+  }
+}
+
 /**
  * Determine which built-in progressive MCP capability groups should be
- * pre-unlocked for this turn based on explicit user-selected skills or
- * attached browser annotations.
+ * pre-unlocked for this turn based on explicit user-selected skills,
+ * attached browser annotations, selected text excerpts, or Office file
+ * references in the prompt/attachments/legacy bridge.
  */
 export function resolveUnlockedCapabilitiesForTurn(params: {
   messageSkillIds?: string[];
   browserAnnotations?: CoworkStartOptions['browserAnnotations'];
+  selectedTextSnippets?: CoworkStartOptions['selectedTextSnippets'];
+  prompt?: string;
+  localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
+  lazyBridgePrefix?: string;
 }): DshProgressiveCapability[] {
   const unlocked = new Set<DshProgressiveCapability>();
   if (Array.isArray(params.messageSkillIds)) {
@@ -288,7 +354,43 @@ export function resolveUnlockedCapabilitiesForTurn(params: {
   if (Array.isArray(params.browserAnnotations) && params.browserAnnotations.length > 0) {
     unlocked.add(DshProgressiveCapability.Browser);
   }
+  if (Array.isArray(params.selectedTextSnippets)) {
+    for (const snippet of params.selectedTextSnippets) {
+      if (!snippet || typeof snippet !== 'object') continue;
+      const sourceType = snippet.sourceType ?? snippet.sourceMessageType;
+      if (typeof sourceType === 'string') {
+        const cap = SELECTED_TEXT_SOURCE_TO_CAPABILITY[sourceType];
+        if (cap) unlocked.add(cap);
+      }
+      collectOfficeCapabilitiesFromText(snippet.sourcePath, unlocked);
+      collectOfficeCapabilitiesFromText(snippet.sourceTitle, unlocked);
+    }
+  }
+  collectOfficeCapabilitiesFromText(params.prompt, unlocked);
+  collectOfficeCapabilitiesFromText(params.lazyBridgePrefix, unlocked);
+  if (Array.isArray(params.localMediaAttachments)) {
+    for (const att of params.localMediaAttachments) {
+      if (!att || typeof att !== 'object') continue;
+      collectOfficeCapabilitiesFromText(att.localPath, unlocked);
+      collectOfficeCapabilitiesFromText(att.name, unlocked);
+    }
+  }
   return [...unlocked];
+}
+
+/**
+ * Build concise in-place Office editing guidance from `buildOfficeAgentPrompt`
+ * scoped to the Office capability groups unlocked for this session.
+ */
+export function resolveOfficeAgentPromptForTurn(
+  unlockedCapabilities: Iterable<DshProgressiveCapability>,
+): string {
+  const unlockedSet = new Set(unlockedCapabilities);
+  const editors = OFFICE_CAPABILITY_TO_EDITOR
+    .filter(({ capability }) => unlockedSet.has(capability))
+    .map(({ editor }) => editor);
+  if (editors.length === 0) return '';
+  return buildOfficeAgentPrompt(editors);
 }
 
 function resolveLocalTimeZone(): string | undefined {
@@ -349,6 +451,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly resolveAllowedSkillIds?: DshRuntimeAdapterDeps['resolveAllowedSkillIds'];
   private readonly resolveDefaultPermissionPreset?: DshRuntimeAdapterDeps['resolveDefaultPermissionPreset'];
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
+  private readonly readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
   private readonly startingAbortControllers = new Map<string, AbortController>();
@@ -358,6 +461,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly btwAbortControllers = new Map<string, AbortController>();
   private readonly sessionAllowedScopes = new Map<string, Set<string>>();
   private readonly sessionPermissionPresets = new Map<string, DshPermissionPreset>();
+  private readonly sessionUnlockedCapabilities = new Map<string, Set<DshProgressiveCapability>>();
   private wiredClient: DshTypertClient | null = null;
   private unwireClientHandlers: Array<() => void> = [];
 
@@ -370,6 +474,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.resolveAllowedSkillIds = deps.resolveAllowedSkillIds;
     this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
+    this.readBrowserAnnotationAsset = deps.readBrowserAnnotationAsset;
   }
 
   getEffectivePermissionPreset(coworkSessionId?: string): DshPermissionPreset {
@@ -439,6 +544,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
       messageSkillIds: options.messageSkillIds,
+      selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
@@ -463,6 +569,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
       messageSkillIds: options.messageSkillIds,
+      selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
@@ -936,6 +1043,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.stopSession(sessionId);
     this.sessionAllowedScopes.delete(sessionId);
     this.sessionPermissionPresets.delete(sessionId);
+    this.sessionUnlockedCapabilities.delete(sessionId);
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
     if (dshSessionId) {
       this.dshToCoworkSession.delete(dshSessionId);
@@ -1123,6 +1231,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       userMessageContent?: string;
       skillIds?: string[];
       messageSkillIds?: string[];
+      selectedTextSnippets?: CoworkStartOptions['selectedTextSnippets'];
       browserAnnotations?: CoworkStartOptions['browserAnnotations'];
       systemPrompt?: string;
       confirmationMode: 'modal' | 'text';
@@ -1181,18 +1290,28 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const localMediaAttachments = params.localMediaAttachments?.length
         ? params.localMediaAttachments
         : undefined;
+      const selectedTextSnippets = params.selectedTextSnippets?.length
+        ? params.selectedTextSnippets
+        : undefined;
+      const browserAnnotations = params.browserAnnotations?.length
+        ? params.browserAnnotations
+        : undefined;
       const imageAttachmentPreviews = !localMediaAttachments && params.imageAttachments?.length
         ? buildCoworkImageAttachmentPreviews(params.imageAttachments)
         : undefined;
       const hasPersistableUserMessage = persistedContent.trim().length > 0
         || Boolean(localMediaAttachments?.length)
-        || Boolean(imageAttachmentPreviews?.length);
+        || Boolean(imageAttachmentPreviews?.length)
+        || Boolean(selectedTextSnippets?.length)
+        || Boolean(browserAnnotations?.length);
 
       if (!params.skipInitialUserMessage && hasPersistableUserMessage) {
         const userMetadata: Record<string, unknown> = {
           llmTrace,
           ...(localMediaAttachments ? { localMediaAttachments } : {}),
           ...(imageAttachmentPreviews ? { imageAttachmentPreviews } : {}),
+          ...(selectedTextSnippets ? { selectedTextSnippets } : {}),
+          ...(browserAnnotations ? { browserAnnotations } : {}),
         };
         turnUserMessage = this.store.addMessage(sessionId, {
           type: 'user',
@@ -1260,10 +1379,26 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const allowedSkillIds = this.resolveAllowedSkillIds
         ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
         : params.skillIds ?? null;
-      const unlockedCapabilities = resolveUnlockedCapabilitiesForTurn({
+      const turnUnlockedCapabilities = resolveUnlockedCapabilitiesForTurn({
         messageSkillIds: params.messageSkillIds,
         browserAnnotations: params.browserAnnotations,
+        selectedTextSnippets: params.selectedTextSnippets,
+        prompt,
+        localMediaAttachments: params.localMediaAttachments,
+        lazyBridgePrefix,
       });
+      if (turnUnlockedCapabilities.length > 0) {
+        let sessionSet = this.sessionUnlockedCapabilities.get(sessionId);
+        if (!sessionSet) {
+          sessionSet = new Set<DshProgressiveCapability>();
+          this.sessionUnlockedCapabilities.set(sessionId, sessionSet);
+        }
+        for (const cap of turnUnlockedCapabilities) {
+          sessionSet.add(cap);
+        }
+      }
+      const unlockedCapabilities = [...(this.sessionUnlockedCapabilities.get(sessionId) ?? [])];
+      const officeAgentPrompt = resolveOfficeAgentPromptForTurn(unlockedCapabilities);
       const contextPayload: DshHostSessionContext = {
         sessionId: dshSessionId,
         agentId,
@@ -1274,6 +1409,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         ...(params.systemPrompt || session.systemPrompt
           ? { customSystemPrompt: params.systemPrompt || session.systemPrompt }
           : {}),
+        ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: this.getEffectivePermissionPreset(sessionId),
         ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
@@ -1345,8 +1481,20 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         abortController.signal,
       );
 
-      const turnPrefix = [lazyBridgePrefix, params.mediaInstruction].filter(Boolean).join('\n\n');
-      const contentParts = buildPromptContentParts(prompt, turnPrefix, params.imageAttachments);
+      const selectedTextSection = buildSelectedTextPromptSection(params.selectedTextSnippets);
+      const preparedBrowser = prepareBrowserAnnotationsForPrompt(
+        sessionId,
+        params.browserAnnotations,
+        params.imageAttachments,
+        this.readBrowserAnnotationAsset,
+      );
+      const turnPrefix = [
+        lazyBridgePrefix,
+        params.mediaInstruction,
+        selectedTextSection,
+        preparedBrowser.browserAnnotationSection,
+      ].filter(Boolean).join('\n\n');
+      const contentParts = buildPromptContentParts(prompt, turnPrefix, preparedBrowser.imageAttachments);
       const streamTask = this.consumeFollowStream(turn, followStream);
 
       const clientTimeZone = resolveLocalTimeZone();
@@ -1849,6 +1997,131 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 }
 
+function extractInlineScreenshotImage(
+  asset: unknown,
+): { mimeType: string; base64Data: string; byteSize?: number } | null {
+  if (!asset || typeof asset !== 'object') return null;
+  const record = asset as Record<string, unknown>;
+  const fallbackMime = typeof record.mimeType === 'string' && record.mimeType.trim()
+    ? record.mimeType.trim()
+    : 'image/png';
+  if (typeof record.dataUrl === 'string' && record.dataUrl.trim()) {
+    const match = /^data:([^;]+);base64,(.*)$/s.exec(record.dataUrl.trim());
+    const base64Data = stripDataUrlPrefix(record.dataUrl);
+    if (base64Data) {
+      return { mimeType: match?.[1] || fallbackMime, base64Data };
+    }
+  }
+  if (typeof record.base64Data === 'string' && record.base64Data.trim()) {
+    const base64Data = stripDataUrlPrefix(record.base64Data);
+    if (base64Data) {
+      return { mimeType: fallbackMime, base64Data };
+    }
+  }
+  return null;
+}
+
+function readAnnotationAssetData(
+  readAsset: DshReadBrowserAnnotationAsset | undefined,
+  sessionId: string,
+  batchId: string,
+  annotationId: string,
+  assetId: string,
+  fallbackMime: string,
+): { mimeType: string; base64Data: string; byteSize?: number } | null {
+  if (!readAsset || !batchId || !annotationId || !assetId) return null;
+  const candidateDraftKeys = sessionId && sessionId !== 'home' ? [sessionId, 'home'] : ['home'];
+  for (const draftKey of candidateDraftKeys) {
+    try {
+      const loaded = readAsset({ draftKey, batchId, annotationId, assetId });
+      if (!loaded || typeof loaded.dataUrl !== 'string' || !loaded.dataUrl.trim()) continue;
+      const match = /^data:([^;]+);base64,(.*)$/s.exec(loaded.dataUrl.trim());
+      const base64Data = stripDataUrlPrefix(loaded.dataUrl);
+      if (!base64Data) continue;
+      return {
+        mimeType: match?.[1] || fallbackMime,
+        base64Data,
+        ...(typeof loaded.byteSize === 'number' ? { byteSize: loaded.byteSize } : {}),
+      };
+    } catch {
+      // Try next fallback draftKey or continue without screenshot attachment.
+    }
+  }
+  return null;
+}
+
+function prepareBrowserAnnotationsForPrompt(
+  sessionId: string,
+  browserAnnotations: CoworkStartOptions['browserAnnotations'],
+  imageAttachments: CoworkStartOptions['imageAttachments'],
+  readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset,
+): {
+  browserAnnotationSection: string;
+  imageAttachments: NonNullable<CoworkStartOptions['imageAttachments']>;
+} {
+  const effectiveImages = [...(imageAttachments ?? [])];
+  const normalized = normalizeBrowserAnnotationBatches(browserAnnotations);
+  if (normalized.length === 0) {
+    return { browserAnnotationSection: '', imageAttachments: effectiveImages };
+  }
+
+  const preparedBatches: CoworkBrowserAnnotationMessageBatch[] = normalized.map((batch) => ({
+    ...batch,
+    annotations: batch.annotations.map((annotation) => {
+      if (annotation.screenshot.status !== BrowserAnnotationScreenshotStatus.Ready) {
+        return annotation;
+      }
+      const existingIndex = annotation.screenshot.asset.transportImageIndex;
+      const alreadyAttached = typeof existingIndex === 'number'
+        && Number.isInteger(existingIndex)
+        && existingIndex >= 1
+        && existingIndex <= effectiveImages.length;
+      if (alreadyAttached) {
+        return annotation;
+      }
+
+      const fallbackMime = annotation.screenshot.asset.mimeType || 'image/png';
+      const resolved = extractInlineScreenshotImage(annotation.screenshot.asset)
+        ?? readAnnotationAssetData(
+          readBrowserAnnotationAsset,
+          sessionId,
+          batch.id,
+          annotation.id,
+          annotation.screenshot.asset.assetId,
+          fallbackMime,
+        );
+      if (!resolved) {
+        return annotation;
+      }
+
+      const nextIndex = effectiveImages.length + 1;
+      effectiveImages.push({
+        name: `browser-annotation-${nextIndex}.png`,
+        mimeType: resolved.mimeType,
+        base64Data: resolved.base64Data,
+        ...(typeof resolved.byteSize === 'number' && resolved.byteSize > 0 ? { sizeBytes: resolved.byteSize } : {}),
+        role: CoworkImageAttachmentRole.BrowserAnnotation,
+      });
+
+      return {
+        ...annotation,
+        screenshot: {
+          ...annotation.screenshot,
+          asset: {
+            ...annotation.screenshot.asset,
+            transportImageIndex: nextIndex,
+          },
+        },
+      };
+    }),
+  }));
+
+  return {
+    browserAnnotationSection: buildBrowserAnnotationPromptSection(preparedBatches),
+    imageAttachments: effectiveImages,
+  };
+}
+
 function buildPromptContentParts(
   prompt: string,
   turnPrefix: string,
@@ -1862,11 +2135,13 @@ function buildPromptContentParts(
     parts.push({ type: 'text', text: fullText });
   }
   for (const img of imageAttachments ?? []) {
-    if (!img || typeof img.base64Data !== 'string' || !img.base64Data) continue;
+    if (!img || typeof img.base64Data !== 'string') continue;
+    const data = stripDataUrlPrefix(img.base64Data);
+    if (!data) continue;
     parts.push({
       type: 'image',
       mediaType: img.mimeType || 'image/png',
-      data: img.base64Data,
+      data,
     });
   }
   return parts;

@@ -165,6 +165,7 @@ export interface DshHostSessionContext {
   workspaceDir?: string;
   allowedSkillIds?: string[] | null;
   customSystemPrompt?: string;
+  officeAgentPrompt?: string;
   executionMode?: string;
   permissionPreset?: DshPermissionPreset;
   unlockedCapabilities?: DshProgressiveCapability[];
