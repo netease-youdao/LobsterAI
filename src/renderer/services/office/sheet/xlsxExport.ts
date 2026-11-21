@@ -18,10 +18,10 @@ import { CellType, pixelsToColumnWidth, pixelsToPoints, STYLE_ID_PREFIX, type Wo
 import { noteChanges, notesOf, rewriteNotes } from './xlsxNotes';
 import { relationshipsPath, RelationshipType, removeContentType, writePackage, XlsxPackage } from './xlsxPackage';
 import {
-  alignSheetSnapshot, allocateSheetParts, AxisGeometry, blankWorksheet, dropStaleTitles, type NewSheetPart, patchSheetView, relatedParts,
-  RelationshipTypes, resizeTable, rewriteWorkbookSheets, setTabSelected, sheetViewState, StructurePlan, transformChart, transformCommentRefs,
-  transformDrawing, transformHyperlinkTargets, transformTable, transformVml, transformWorksheet, updateWorkbookRelationships, viewChanged,
-  type WorkbookSheetState,
+  alignSheetSnapshot, allocateSheetParts, AxisGeometry, blankWorksheet, dropStaleTitles, ensureWorkbookSheetNamespaces, type NewSheetPart,
+  patchSheetView, relatedParts, RelationshipTypes, resizeTable, rewriteWorkbookSheets, setTabSelected, sheetViewState, StructurePlan,
+  transformChart, transformCommentRefs, transformDrawing, transformHyperlinkTargets, transformTable, transformVml, transformWorksheet,
+  updateWorkbookRelationships, viewChanged, type WorkbookSheetState,
 } from './xlsxStructureExport';
 import { effectiveStyle, XlsxStyleWriter } from './xlsxStyles';
 import {
@@ -998,6 +998,7 @@ export function exportXlsx(request: ExportRequest, originalBytes: Uint8Array): E
     removeCalcChain(files, baseline);
     if (formulas) workbookXml = requestFullCalculation(workbookXml);
   }
+  workbookXml = ensureWorkbookSheetNamespaces(workbookXml);
   if (workbookXml !== baseline.pkg.text(baseline.workbookPart)) files.set(baseline.workbookPart, encoder.encode(workbookXml));
   if (newParts.length || plan.deleted.length) updateWorkbookRelationships(files, baseline, newParts, plan.deleted);
   if (plan.sheetsChanged) dropStaleTitles(files);
