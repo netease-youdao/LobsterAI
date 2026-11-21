@@ -1,18 +1,11 @@
 import { CheckIcon, ExclamationTriangleIcon } from '@heroicons/react/20/solid';
 import { type CSSProperties } from 'react';
 
-import { type PetAction } from '../../../../shared/desktopCompanion/petAtlas';
+import { computePetAtlasLayout, type PetAction } from '../../../../shared/desktopCompanion/petAtlas';
 import { CompanionSkinKind, getCompanionSkin } from '../../../../shared/desktopCompanion/skins';
 import { CompanionMood } from './companionMood';
 import LobsterMark from './LobsterMark';
 import PetAtlasPlayer, { type LoadedPetAtlas } from './PetAtlasPlayer';
-
-/**
- * Matches the standing character height inside a 192x208 Codex atlas cell
- * (~73% fill) closely to the 64px static `.webp` while keeping jump headroom
- * inside the 84x84 transparent orb window.
- */
-const ATLAS_HEIGHT_SCALE = 1.25;
 
 interface CompanionCharacterProps {
   skin: string;
@@ -42,7 +35,16 @@ export default function CompanionCharacter({
   const definition = getCompanionSkin(skin);
   const isImageSkin = definition.kind === CompanionSkinKind.Image;
   const showingAtlas = isImageSkin && !!atlas && action !== null;
-  const atlasHeight = Math.round(size * ATLAS_HEIGHT_SCALE);
+  const atlasLayout = showingAtlas && atlas
+    ? computePetAtlasLayout({
+      boxSize: size,
+      cellWidth: atlas.manifest.cellWidth,
+      cellHeight: atlas.manifest.cellHeight,
+      staticWidth: atlas.staticWidth,
+      staticHeight: atlas.staticHeight,
+      standingBounds: atlas.standingBounds,
+    })
+    : null;
   const badge = mood === CompanionMood.Done ? 'done' : mood === CompanionMood.Attention ? 'attention' : mood === CompanionMood.Error ? 'error' : null;
 
   return (
@@ -61,11 +63,13 @@ export default function CompanionCharacter({
       } as CSSProperties}
     >
       {definition.kind === CompanionSkinKind.Brand && <LobsterMark size={size} />}
-      {showingAtlas && atlas && action && (
+      {showingAtlas && atlas && action && atlasLayout && (
         <PetAtlasPlayer
           atlas={atlas}
           action={action}
-          displayHeight={atlasHeight}
+          displayWidth={atlasLayout.displayWidth}
+          displayHeight={atlasLayout.displayHeight}
+          offsetY={atlasLayout.offsetY}
           onCycleComplete={onActionCycleComplete}
         />
       )}

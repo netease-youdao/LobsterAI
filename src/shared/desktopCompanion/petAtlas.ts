@@ -7,6 +7,15 @@ export const PET_ATLAS_CELL_HEIGHT = 208;
 export const PET_ATLAS_V1_ROWS = 9;
 export const PET_ATLAS_V2_ROWS = 11;
 
+/**
+ * Default standing vertical bounds inside a 192x208 Codex Pets cell:
+ * characters stand from y=42 to y=194 (~73.1% fill), leaving headroom above
+ * for jumps/waves and placing the standing midpoint at y=118 (below cell center 104).
+ */
+export const PET_ATLAS_STANDING_TOP_RATIO = 42 / PET_ATLAS_CELL_HEIGHT;
+export const PET_ATLAS_STANDING_BOTTOM_RATIO = 194 / PET_ATLAS_CELL_HEIGHT;
+export const PET_ATLAS_ALPHA_THRESHOLD = 16;
+
 export const PetAtlasVersion = {
   V1: 1,
   V2: 2,
@@ -176,4 +185,105 @@ export function resolvePetAction(input: PetActionResolutionInput): PetAction | n
   if (input.mood === 'done') return PetAction.Review;
 
   return null;
+}
+
+export interface PetAtlasVerticalBounds {
+  /** Top-most opaque pixel row in cell coordinates (inclusive). */
+  top: number;
+  /** Bottom-most opaque pixel row in cell coordinates (exclusive). */
+  bottom: number;
+}
+
+export interface PetAtlasLayoutInput {
+  /** Square character box size in CSS pixels that the static `.webp` fits into via `object-fit: contain`. */
+  boxSize: number;
+  cellWidth: number;
+  cellHeight: number;
+  /** Natural dimensions of the static skin image (if loaded) to match its `object-fit: contain` height. */
+  staticWidth?: number;
+  staticHeight?: number;
+  /** Measured standing-frame vertical bounds inside one atlas cell; falls back to standard Codex ratios. */
+  standingBounds?: PetAtlasVerticalBounds | null;
+}
+
+export interface PetAtlasLayout {
+  displayWidth: number;
+  displayHeight: number;
+  /** Vertical CSS offset from box center so the standing pose aligns with the static image center. */
+  offsetY: number;
+}
+
+/** Scans an RGBA pixel buffer of one atlas cell to find the opaque vertical span `[top, bottom)`. */
+export function findVerticalAlphaBounds(
+  rgba: Uint8ClampedArray | Uint8Array,
+  width: number,
+  height: number,
+  alphaThreshold = PET_ATLAS_ALPHA_THRESHOLD,
+): PetAtlasVerticalBounds | null {
+  if (width <= 0 || height <= 0 || rgba.length < width * height * 4) return null;
+
+  const rowHasOpaquePixel = (y: number): boolean => {
+    const rowOffset = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      if (rgba[rowOffset + x * 4 + 3] > alphaThreshold) return true;
+    }
+    return false;
+  };
+
+  let top = -1;
+  for (let y = 0; y < height; y++) {
+    if (rowHasOpaquePixel(y)) {
+      top = y;
+      break;
+    }
+  }
+  if (top < 0) return null;
+
+  let bottom = top + 1;
+  for (let y = height - 1; y >= top; y--) {
+    if (rowHasOpaquePixel(y)) {
+      bottom = y + 1;
+      break;
+    }
+  }
+  return { top, bottom };
+}
+
+/**
+ * Computes canvas size and vertical offset so an atlas cell's standing character
+ * matches the static `.webp` skin in both visual height and vertical center.
+ */
+export function computePetAtlasLayout(input: PetAtlasLayoutInput): PetAtlasLayout {
+  const { boxSize, cellWidth, cellHeight } = input;
+  if (boxSize <= 0 || cellWidth <= 0 || cellHeight <= 0) {
+    return { displayWidth: 0, displayHeight: 0, offsetY: 0 };
+  }
+
+  const staticHeightRatio =
+    typeof input.staticWidth === 'number' && input.staticWidth > 0
+    && typeof input.staticHeight === 'number' && input.staticHeight > 0
+      ? Math.min(1, input.staticHeight / input.staticWidth)
+      : 1;
+  const targetStandingHeight = boxSize * staticHeightRatio;
+
+  const bounds = input.standingBounds;
+  const hasValidBounds =
+    !!bounds
+    && Number.isFinite(bounds.top)
+    && Number.isFinite(bounds.bottom)
+    && bounds.top >= 0
+    && bounds.bottom <= cellHeight
+    && bounds.bottom > bounds.top;
+
+  const standingTop = hasValidBounds ? bounds.top : cellHeight * PET_ATLAS_STANDING_TOP_RATIO;
+  const standingBottom = hasValidBounds ? bounds.bottom : cellHeight * PET_ATLAS_STANDING_BOTTOM_RATIO;
+  const standingHeight = standingBottom - standingTop;
+  const standingCenterY = (standingTop + standingBottom) / 2;
+
+  const displayHeight = Math.round(cellHeight * (targetStandingHeight / standingHeight));
+  const displayWidth = Math.round(displayHeight * (cellWidth / cellHeight));
+  const rawOffsetY = -((standingCenterY - cellHeight / 2) * (displayHeight / cellHeight));
+  const offsetY = Math.round(rawOffsetY * 2) / 2;
+
+  return { displayWidth, displayHeight, offsetY };
 }
