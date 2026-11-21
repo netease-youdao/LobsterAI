@@ -7,6 +7,7 @@ import { expect, test } from 'vitest';
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../../../shared/cowork/llmTurnUsage';
 import { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { i18nService } from '../../services/i18n';
+import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from './AssistantTurnBlock';
 import ConversationTurnsView from './ConversationTurnsView';
@@ -16,10 +17,15 @@ const renderTurn = (
   messages: CoworkMessage[],
   isStreamingTurn: boolean,
   showActivityIndicator = false,
+  options: {
+    artifacts?: Artifact[];
+    enableMessageSpeech?: boolean;
+    showCopyButtons?: boolean;
+  } = {},
 ): string => {
   const store = configureStore({
     reducer: {
-      auth: () => ({ creditQuotaSnapshot: null }),
+      auth: () => ({ creditQuotaSnapshot: null, isLoggedIn: true }),
       cowork: () => ({ isStreaming: isStreamingTurn, currentSession: null }),
       enterpriseAccount: () => ({ context: null }),
     },
@@ -28,7 +34,13 @@ const renderTurn = (
   return renderToStaticMarkup(React.createElement(Provider, {
     store,
     children: React.createElement(AssistantTurnBlock, {
-      turn, isStreamingTurn, showActivityIndicator, onForkMessage: () => {},
+      turn,
+      isStreamingTurn,
+      showActivityIndicator,
+      artifacts: options.artifacts,
+      enableMessageSpeech: options.enableMessageSpeech,
+      showCopyButtons: options.showCopyButtons,
+      onForkMessage: () => {},
     }),
   }));
 };
@@ -280,4 +292,119 @@ test('a turn stopped during a tool step still shows its credits after usage sett
     ...process.slice(1),
   ], true);
   expect(live).not.toContain('cowork-message-meta');
+});
+
+test('places result file cards above the reply time, model, credits, and actions row', () => {
+  const artifact: Artifact = {
+    id: 'artifact-md-1',
+    messageId: 'reply-1',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Markdown,
+    title: 'report.md',
+    fileName: 'report.md',
+    filePath: '/tmp/report.md',
+    content: '# Report',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    ...process.slice(1),
+    {
+      id: 'reply-1',
+      type: 'assistant',
+      content: 'Report is ready.',
+      timestamp: 55_000,
+      metadata: { model: 'deepseek-flash', modelPresetId: ModelPresetId.Balanced },
+    },
+  ], false, false, { artifacts: [artifact], enableMessageSpeech: true });
+
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html.match(/12\.5 积分/g)).toHaveLength(1);
+  expect(html).toContain('report.md');
+  expect(html).toContain(`aria-label="${i18nService.t('coworkForkFromMessage')}"`);
+  expect(html).toContain(`aria-label="${i18nService.t('copyToClipboard')}"`);
+  expect(html).toContain(`aria-label="${i18nService.t('coworkReadAloud')}"`);
+
+  const replyIndex = html.indexOf('Report is ready.');
+  const cardIndex = html.indexOf('artifact-preview-card-group');
+  const metaIndex = html.indexOf('class="cowork-message-meta ');
+  expect(replyIndex).toBeGreaterThan(-1);
+  expect(cardIndex).toBeGreaterThan(replyIndex);
+  expect(metaIndex).toBeGreaterThan(cardIndex);
+});
+
+test('places result file cards above the reply meta row even without credit usage', () => {
+  const artifact: Artifact = {
+    id: 'artifact-doc-1',
+    messageId: 'reply-no-usage',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Document,
+    title: 'summary.docx',
+    fileName: 'summary.docx',
+    filePath: '/tmp/summary.docx',
+    content: '',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    ...process,
+    {
+      id: 'reply-no-usage',
+      type: 'assistant',
+      content: 'Document created.',
+      timestamp: 55_000,
+      metadata: { model: 'claude-sonnet-4' },
+    },
+  ], false, false, { artifacts: [artifact] });
+
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html).toContain('claude-sonnet-4');
+  expect(html.indexOf('artifact-preview-card-group')).toBeLessThan(html.indexOf('class="cowork-message-meta '));
+});
+
+test('places inline image artifacts above the reply meta row', () => {
+  const imageArtifact: Artifact = {
+    id: 'artifact-img-1',
+    messageId: 'reply-img',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Image,
+    title: 'poster.png',
+    fileName: 'poster.png',
+    filePath: '/tmp/poster.png',
+    content: 'data:image/png;base64,iVBORw0KGgo=',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    {
+      id: 'reply-img',
+      type: 'assistant',
+      content: 'Here is your poster.',
+      timestamp: 55_000,
+    },
+  ], false, false, { artifacts: [imageArtifact] });
+
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html.indexOf('alt="poster.png"')).toBeGreaterThan(html.indexOf('Here is your poster.'));
+  expect(html.indexOf('alt="poster.png"')).toBeLessThan(html.indexOf('class="cowork-message-meta '));
+});
+
+test('keeps the reply meta row hidden while streaming even when artifacts are present', () => {
+  const artifact: Artifact = {
+    id: 'artifact-live-1',
+    messageId: 'reply-live',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Markdown,
+    title: 'draft.md',
+    fileName: 'draft.md',
+    filePath: '/tmp/draft.md',
+    content: '# Draft',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    { id: 'reply-live', type: 'assistant', content: 'Writing draft...', timestamp: 55_000 },
+  ], true, true, { artifacts: [artifact], showCopyButtons: false });
+
+  expect(html).toContain('draft.md');
+  expect(html).not.toContain('cowork-message-meta');
 });
