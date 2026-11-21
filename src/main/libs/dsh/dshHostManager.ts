@@ -19,8 +19,10 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 
+import type { SubagentCollaborationMode } from '../../../shared/agent/constants';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_BRIDGE_SUBAGENT_BINDING_PATH,
   DSH_PROFILE_DIR_NAME,
   DSH_PROFILE_NAME,
   DshHostBundleEnvVar,
@@ -92,6 +94,57 @@ export interface DshHostSkillsPolicy {
   extraDirs?: string[];
   skillsDir?: string;
 }
+
+export interface DshHostAgentSkillSummary {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface DshHostAgentSpec {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  presetId?: string;
+  systemPrompt?: string;
+  workingDirectory?: string;
+  allowedSkillIds: string[] | null;
+  modelSelection?: {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+  };
+  collaborationMode: SubagentCollaborationMode;
+  allowAgentIds: string[];
+  skillSummaries?: DshHostAgentSkillSummary[];
+}
+
+export interface DshSubagentAgentBinding {
+  childSessionId: string;
+  parentDshSessionId: string;
+  rootCoworkSessionId: string;
+  targetAgentId: string;
+  workspaceDir?: string;
+  createdAt?: number;
+}
+
+export type DshBridgeSubagentBindingRequest =
+  | {
+    action: 'set';
+    childSessionId: string;
+    parentDshSessionId: string;
+    rootCoworkSessionId: string;
+    targetAgentId: string;
+  }
+  | {
+    action: 'delete';
+    childSessionId: string;
+  };
+
+export type DshBridgeSubagentBindingHandler = (
+  request: DshBridgeSubagentBindingRequest,
+) => Promise<void> | void;
 
 export interface DshHostSessionContext {
   sessionId: string;
@@ -308,6 +361,7 @@ export class DshHostManager extends EventEmitter {
   private fallbackBridgeTool: DshBridgeTool | null = null;
   private approvalEvaluator: DshBridgeApprovalEvaluator | null = null;
   private channelEventHandler: DshBridgeChannelEventHandler | null = null;
+  private subagentBindingHandler: DshBridgeSubagentBindingHandler | null = null;
 
   // Cached sync payloads replayed automatically after any restart.
   private lastProvidersPayload: {
@@ -317,6 +371,8 @@ export class DshHostManager extends EventEmitter {
   private lastMcpServers: DshHostMcpServerSpec[] | null = null;
   private lastSkillsPolicy: DshHostSkillsPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
+  private lastAgents: DshHostAgentSpec[] | null = null;
+  private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
   private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
   private readonly approvalCallContexts = new Map<string, DshApprovalCallContext>();
 
@@ -382,6 +438,10 @@ export class DshHostManager extends EventEmitter {
     this.channelEventHandler = handler;
   }
 
+  setSubagentBindingHandler(handler: DshBridgeSubagentBindingHandler | null): void {
+    this.subagentBindingHandler = handler;
+  }
+
   /**
    * Ensure the DSH host is started, authenticated, and healthy. Concurrent
    * callers share a single in-flight boot promise.
@@ -441,6 +501,31 @@ export class DshHostManager extends EventEmitter {
     this.lastHostTools = tools;
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncHostTools, { tools });
+  }
+
+  async syncAgents(agents: DshHostAgentSpec[]): Promise<Record<string, unknown>> {
+    this.lastAgents = agents;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncAgents, { agents });
+  }
+
+  async syncSubagentBindings(
+    bindings: DshSubagentAgentBinding[],
+    options: { replace?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    if (options.replace) {
+      this.lastSubagentBindings.clear();
+    }
+    for (const binding of bindings) {
+      if (binding.childSessionId && binding.targetAgentId) {
+        this.lastSubagentBindings.set(binding.childSessionId, binding);
+      }
+    }
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncSubagentBindings, {
+      bindings,
+      replace: options.replace === true,
+    });
   }
 
   async bindSessionContext(context: DshHostSessionContext): Promise<Record<string, unknown>> {
@@ -554,6 +639,15 @@ export class DshHostManager extends EventEmitter {
     }
     if (this.lastMcpServers) {
       await this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+    }
+    if (this.lastAgents) {
+      await this.getClient().callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
+    }
+    if (this.lastSubagentBindings.size > 0) {
+      await this.getClient().callOps(DshOpsAction.SyncSubagentBindings, {
+        bindings: [...this.lastSubagentBindings.values()],
+        replace: true,
+      });
     }
     await this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
       preset: this.lastPermissionPreset,
@@ -884,6 +978,49 @@ export class DshHostManager extends EventEmitter {
         const result = this.channelEventHandler ? await this.channelEventHandler(body) : { ok: true };
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(result ?? { ok: true }));
+        return;
+      }
+
+      if (pathname === DSH_BRIDGE_SUBAGENT_BINDING_PATH) {
+        const action = body.action === 'delete' ? 'delete' : 'set';
+        const childSessionId = typeof body.childSessionId === 'string' ? body.childSessionId.trim() : '';
+        if (!childSessionId) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'childSessionId is required' }));
+          return;
+        }
+        if (action === 'delete') {
+          this.lastSubagentBindings.delete(childSessionId);
+          await this.subagentBindingHandler?.({ action: 'delete', childSessionId });
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        const parentDshSessionId = typeof body.parentDshSessionId === 'string' ? body.parentDshSessionId.trim() : '';
+        const rootCoworkSessionId = typeof body.rootCoworkSessionId === 'string' ? body.rootCoworkSessionId.trim() : '';
+        const targetAgentId = typeof body.targetAgentId === 'string' ? body.targetAgentId.trim() : '';
+        if (!parentDshSessionId || !rootCoworkSessionId || !targetAgentId) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'parentDshSessionId, rootCoworkSessionId, and targetAgentId are required' }));
+          return;
+        }
+        const binding: DshSubagentAgentBinding = {
+          childSessionId,
+          parentDshSessionId,
+          rootCoworkSessionId,
+          targetAgentId,
+          createdAt: Date.now(),
+        };
+        this.lastSubagentBindings.set(childSessionId, binding);
+        await this.subagentBindingHandler?.({
+          action: 'set',
+          childSessionId,
+          parentDshSessionId,
+          rootCoworkSessionId,
+          targetAgentId,
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
 

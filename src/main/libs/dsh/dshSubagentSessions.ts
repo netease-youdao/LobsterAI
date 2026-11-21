@@ -1,28 +1,38 @@
 import type Database from 'better-sqlite3';
 
 import { AgentId } from '../../../shared/agent/constants';
-import { DSH_SESSION_ID_PREFIX } from '../../../shared/dshEngine/hostConstants';
+import { DSH_DELEGATE_MAX_DEPTH, DSH_SESSION_ID_PREFIX } from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage } from '../../coworkStore';
 import { SubagentMessageStore } from '../../subagentMessageStore';
 import { type SubagentRun, SubagentRunStore } from '../../subagentRunStore';
 import { isDshBackedSessionId, stripDshSessionPrefix } from '../agentEngine/dshRuntimeAdapter';
 import { parseStoredMessageMetadata } from '../storedMessageMetadata';
-import type { DshHostManager } from './dshHostManager';
+import type { DshHostManager, DshSubagentAgentBinding } from './dshHostManager';
 import { DshChildEvent, readDshChildHistory, record } from './dshSubagentHistory';
 import type { DshTypertClient } from './dshTypertClient';
 
 const RunStatus = { Running: 'running', Done: 'done', Error: 'error' } as const;
 const ChildMode = { External: 'external', OneShot: 'one-shot', Continuable: 'continuable', Unknown: 'unknown' } as const;
+const DEFAULT_REPLAY_BINDING_LIMIT = 500;
 
 interface Parent {
   storedId: string | null;
   agentId: string | null;
 }
 
+interface BindingRow {
+  child_session_id: string;
+  parent_dsh_session_id: string;
+  root_cowork_session_id: string;
+  target_agent_id: string;
+  created_at: number;
+}
+
 export class DshSubagentSessions {
   private readonly runs: SubagentRunStore;
   private readonly messages: SubagentMessageStore;
   private readonly refreshing = new Map<string, Promise<void>>();
+  private readonly directParentByChildId = new Map<string, string>();
 
   constructor(
     private readonly db: Database.Database,
@@ -39,6 +49,15 @@ export class DshSubagentSessions {
       child_id TEXT NOT NULL,
       PRIMARY KEY (parent_session_id, child_id)
     )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS dsh_subagent_agent_bindings (
+      child_session_id TEXT PRIMARY KEY,
+      parent_dsh_session_id TEXT NOT NULL,
+      root_cowork_session_id TEXT NOT NULL,
+      target_agent_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_dsh_subagent_bindings_root
+      ON dsh_subagent_agent_bindings(root_cowork_session_id)`);
   }
 
   private parent(id: string): Parent | undefined {
@@ -46,17 +65,106 @@ export class DshSubagentSessions {
       .get(id) as Parent | undefined;
   }
 
-  private remember(parentId: string, entry: Record<string, unknown>): string | undefined {
+  private getAgentBinding(childSessionId: string): DshSubagentAgentBinding | undefined {
+    const row = this.db.prepare(
+      `SELECT child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at
+       FROM dsh_subagent_agent_bindings WHERE child_session_id = ?`,
+    ).get(childSessionId) as BindingRow | undefined;
+    if (!row) return undefined;
+    return {
+      childSessionId: row.child_session_id,
+      parentDshSessionId: row.parent_dsh_session_id,
+      rootCoworkSessionId: row.root_cowork_session_id,
+      targetAgentId: row.target_agent_id,
+      createdAt: row.created_at,
+    };
+  }
+
+  private getDirectParentDshSessionId(childSessionId: string, rootDshSessionId: string): string {
+    return this.getAgentBinding(childSessionId)?.parentDshSessionId
+      ?? this.directParentByChildId.get(childSessionId)
+      ?? rootDshSessionId;
+  }
+
+  recordAgentBinding(binding: DshSubagentAgentBinding): void {
+    const childSessionId = binding.childSessionId.trim();
+    const parentDshSessionId = binding.parentDshSessionId.trim();
+    const rootCoworkSessionId = binding.rootCoworkSessionId.trim();
+    const targetAgentId = binding.targetAgentId.trim();
+    if (!childSessionId || !parentDshSessionId || !rootCoworkSessionId || !targetAgentId) return;
+    const createdAt = typeof binding.createdAt === 'number' && Number.isFinite(binding.createdAt)
+      ? binding.createdAt
+      : Date.now();
+    this.db.prepare(
+      `INSERT OR REPLACE INTO dsh_subagent_agent_bindings (
+        child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at
+      ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(childSessionId, parentDshSessionId, rootCoworkSessionId, targetAgentId, createdAt);
+    this.directParentByChildId.set(childSessionId, parentDshSessionId);
+    const runId = DSH_SESSION_ID_PREFIX + childSessionId;
+    this.db.prepare('UPDATE subagent_runs SET agent_id = ? WHERE id = ? AND parent_session_id = ?')
+      .run(targetAgentId, runId, rootCoworkSessionId);
+  }
+
+  deleteAgentBinding(childSessionId: string): void {
+    const normalized = childSessionId.trim();
+    if (!normalized) return;
+    this.db.prepare('DELETE FROM dsh_subagent_agent_bindings WHERE child_session_id = ?').run(normalized);
+    this.directParentByChildId.delete(normalized);
+  }
+
+  listAgentBindings(limit = DEFAULT_REPLAY_BINDING_LIMIT): DshSubagentAgentBinding[] {
+    const size = Number.isFinite(limit) ? Math.max(1, Math.min(2_000, Math.floor(limit))) : DEFAULT_REPLAY_BINDING_LIMIT;
+    const rows = this.db.prepare(
+      `SELECT child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at
+       FROM dsh_subagent_agent_bindings
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    ).all(size) as BindingRow[];
+    return rows.map(row => ({
+      childSessionId: row.child_session_id,
+      parentDshSessionId: row.parent_dsh_session_id,
+      rootCoworkSessionId: row.root_cowork_session_id,
+      targetAgentId: row.target_agent_id,
+      createdAt: row.created_at,
+    }));
+  }
+
+  private remember(
+    parentId: string,
+    entry: Record<string, unknown>,
+    directParentDshSessionId?: string,
+  ): string | undefined {
     if (typeof entry.id !== 'string' || !entry.id || typeof entry.createdAt !== 'number') return;
+    if (directParentDshSessionId) {
+      this.directParentByChildId.set(entry.id, directParentDshSessionId);
+    }
     const id = DSH_SESSION_ID_PREFIX + entry.id;
+    const binding = this.getAgentBinding(entry.id);
     const existing = this.runs.getSubagentRun(id);
-    if (existing) return existing.parentSessionId === parentId ? id : undefined;
+    if (existing) {
+      if (existing.parentSessionId !== parentId) return undefined;
+      if (binding?.targetAgentId && existing.agentId !== binding.targetAgentId) {
+        this.db.prepare('UPDATE subagent_runs SET agent_id = ? WHERE id = ? AND parent_session_id = ?')
+          .run(binding.targetAgentId, id, parentId);
+      }
+      return id;
+    }
     const parent = this.parent(parentId);
     if (!parent || this.db.prepare('SELECT 1 FROM dsh_deleted_subagents WHERE parent_session_id = ? AND child_id = ?')
       .get(parentId, entry.id)) return;
     const label = typeof entry.label === 'string' ? entry.label : typeof entry.name === 'string' ? entry.name : null;
-    this.runs.insertSubagentRun({ id, parentSessionId: parentId, sessionKey: id, agentId: parent.agentId || AgentId.Main,
-      label, task: null, status: RunStatus.Running, createdAt: entry.createdAt });
+    const agentId = binding?.targetAgentId || parent.agentId || AgentId.Main;
+    this.runs.insertSubagentRun({
+      id,
+      parentSessionId: parentId,
+      sessionKey: id,
+      agentId,
+      label,
+      task: null,
+      status: RunStatus.Running,
+      createdAt: entry.createdAt,
+    });
     return id;
   }
 
@@ -65,12 +173,20 @@ export class DshSubagentSessions {
   }
 
   getOwningSessionId(nativeChildId: string): string | undefined {
-    return this.runs.getSubagentRun(DSH_SESSION_ID_PREFIX + nativeChildId)?.parentSessionId;
+    return this.runs.getSubagentRun(DSH_SESSION_ID_PREFIX + nativeChildId)?.parentSessionId
+      ?? this.getAgentBinding(nativeChildId)?.rootCoworkSessionId;
   }
 
   setTask(parentId: string, runId: string, task: string): void {
     this.db.prepare('UPDATE subagent_runs SET task = ? WHERE id = ? AND parent_session_id = ?')
       .run(task, runId, parentId);
+  }
+
+  setDelegatedAgent(parentId: string, runId: string, targetAgentId: string): void {
+    const normalized = targetAgentId.trim();
+    if (!normalized) return;
+    this.db.prepare('UPDATE subagent_runs SET agent_id = ? WHERE id = ? AND parent_session_id = ?')
+      .run(normalized, runId, parentId);
   }
 
   observeNotice(parentId: string, data: Record<string, unknown>, time: unknown): void {
@@ -103,20 +219,48 @@ export class DshSubagentSessions {
     const projection = await client.getSessionProjections(nativeId);
     const catalog = record(projection?.values).subagentCatalog;
     if (!Array.isArray(catalog)) return;
+    const visited = new Set<string>([nativeId]);
+    await this.syncCatalogEntries(client, parentId, nativeId, catalog, 1, visited);
+  }
+
+  private async syncCatalogEntries(
+    client: Pick<DshTypertClient, 'getSessionProjections'>,
+    rootCoworkSessionId: string,
+    directParentDshId: string,
+    catalog: unknown[],
+    depth: number,
+    visited: Set<string>,
+  ): Promise<void> {
     await Promise.all(catalog.map(async raw => {
       const entry = record(raw);
-      const id = this.remember(parentId, entry);
+      const id = this.remember(rootCoworkSessionId, entry, directParentDshId);
       if (!id || typeof entry.id !== 'string' || entry.mode === ChildMode.External) return;
       const child = await client.getSessionProjections(entry.id).catch((): null => null);
-      const timing = record(record(child?.values).subagentTiming);
+      const childValues = record(child?.values);
+      const timing = record(childValues.subagentTiming);
       const closed = timing.lastTurnCompleted;
       const run = this.runs.getSubagentRun(id);
-      if (!run) return;
-      if (timing.active) {
-        if (run.status !== RunStatus.Running) this.runs.updateSubagentRunStatus(id, RunStatus.Running, null);
-      } else if (typeof closed === 'boolean') {
-        const status = closed ? RunStatus.Done : RunStatus.Error;
-        if (status !== run.status) this.runs.updateSubagentRunStatus(id, status);
+      if (run) {
+        if (timing.active) {
+          if (run.status !== RunStatus.Running) this.runs.updateSubagentRunStatus(id, RunStatus.Running, null);
+        } else if (typeof closed === 'boolean') {
+          const status = closed ? RunStatus.Done : RunStatus.Error;
+          if (status !== run.status) this.runs.updateSubagentRunStatus(id, status);
+        }
+      }
+      if (depth < DSH_DELEGATE_MAX_DEPTH && !visited.has(entry.id)) {
+        const nestedCatalog = childValues.subagentCatalog;
+        if (Array.isArray(nestedCatalog) && nestedCatalog.length > 0) {
+          visited.add(entry.id);
+          await this.syncCatalogEntries(
+            client,
+            rootCoworkSessionId,
+            entry.id,
+            nestedCatalog,
+            depth + 1,
+            visited,
+          );
+        }
       }
     }));
   }
@@ -149,8 +293,16 @@ export class DshSubagentSessions {
     if (typeof identity.seq !== 'number') return [];
     const mode = identity.mode === ChildMode.Continuable || identity.mode === ChildMode.OneShot
       ? identity.mode : ChildMode.Unknown;
-    return readDshChildHistory(client, { kind: 'subagent', parentSessionId: stripDshSessionPrefix(parent.storedId),
-      childSessionId, mode }, identity.seq, runId);
+    const directParentDshId = this.getDirectParentDshSessionId(
+      childSessionId,
+      stripDshSessionPrefix(parent.storedId),
+    );
+    return readDshChildHistory(
+      client,
+      { kind: 'subagent', parentSessionId: directParentDshId, childSessionId, mode },
+      identity.seq,
+      runId,
+    );
   }
 
   async deleteSubagentSession(parentId: string, runId: string): Promise<boolean> {
@@ -162,7 +314,11 @@ export class DshSubagentSessions {
       await this.host.start();
       const parent = this.parent(parentId);
       if (!parent?.storedId || !isDshBackedSessionId(parent.storedId)) return false;
-      const parentProjection = await this.host.getClient().getSessionProjections(stripDshSessionPrefix(parent.storedId));
+      const directParentDshId = this.getDirectParentDshSessionId(
+        childId,
+        stripDshSessionPrefix(parent.storedId),
+      );
+      const parentProjection = await this.host.getClient().getSessionProjections(directParentDshId);
       const catalog = record(parentProjection?.values).subagentCatalog;
       if (!Array.isArray(catalog) || !catalog.some(entry => record(entry).id === childId)) return false;
       // Only local runtime-created UUIDs are valid targets for the host filesystem operation.
@@ -171,10 +327,14 @@ export class DshSubagentSessions {
       if (deletion.skipped) return false;
     }
     this.db.transaction(() => {
-      if (native) this.db.prepare('INSERT OR IGNORE INTO dsh_deleted_subagents VALUES (?, ?)').run(parentId, childId);
+      if (native) {
+        this.db.prepare('INSERT OR IGNORE INTO dsh_deleted_subagents VALUES (?, ?)').run(parentId, childId);
+        this.db.prepare('DELETE FROM dsh_subagent_agent_bindings WHERE child_session_id = ?').run(childId);
+      }
       this.messages.deleteByRunIds([runId]);
       this.runs.deleteSubagentRun(runId);
     })();
+    this.directParentByChildId.delete(childId);
     return true;
   }
 }

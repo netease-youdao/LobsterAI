@@ -51,6 +51,7 @@ const REQUIRED_LOBSTER_PLUGIN_IDS = [
   'lobster-persona-scope',
   'lobster-host-tools',
   'lobster-tool-disclosure',
+  'lobster-agent-delegation',
   'lobster-approval-guard',
   'lobster-ops-rpc',
 ];
@@ -364,15 +365,15 @@ async function checkLiveBoot(env) {
       throw new Error(`Expected 401 for unauthenticated /api/lobsterai/ops, got ${unauthRes.status}`);
     }
 
-    // 3. Verify health reports all 6 LobsterAI plugins ready.
+    // 3. Verify health reports all 7 LobsterAI plugins ready.
     const health = await callOps('health');
     if (!health.ok) throw new Error(`health returned ok=false: ${JSON.stringify(health)}`);
-    for (const key of ['modelBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'approvalGuard', 'opsRpc']) {
+    for (const key of ['modelBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'agentDelegation', 'approvalGuard', 'opsRpc']) {
       if (health.pluginsReady?.[key] !== true) {
         throw new Error(`Plugin "${key}" not ready: ${JSON.stringify(health.pluginsReady)}`);
       }
     }
-    log('All 6 LobsterAI Cordis plugins reported ready.');
+    log('All 7 LobsterAI Cordis plugins reported ready.');
 
     // 4. Verify syncProviders hot-registers provider and exposes it via Typert session.modelCatalog.
     const syncProv = await callOps('syncProviders', {
@@ -450,7 +451,46 @@ async function checkLiveBoot(env) {
     if (!toolsRes.result?.dynamicTools?.includes('lobster_smoke_tool')) {
       throw new Error(`syncHostTools failed: ${JSON.stringify(toolsRes)}`);
     }
-    log('bindSessionContext + syncSkillsPolicy + syncHostTools verified.');
+    const agentsRes = await callOps('syncAgents', {
+      agents: [
+        {
+          id: 'main',
+          name: '主 Agent',
+          description: '默认助手',
+          enabled: true,
+          allowedSkillIds: null,
+          collaborationMode: 'all',
+          allowAgentIds: [],
+        },
+        {
+          id: 'blog-publisher',
+          name: '博客自动发布',
+          description: '发布 Markdown 到博客仓库',
+          enabled: true,
+          allowedSkillIds: ['hugo-publish'],
+          collaborationMode: 'all',
+          allowAgentIds: [],
+        },
+      ],
+    });
+    if (agentsRes.result?.agentsCount !== 2) {
+      throw new Error(`syncAgents failed: ${JSON.stringify(agentsRes)}`);
+    }
+    const bindingsRes = await callOps('syncSubagentBindings', {
+      replace: true,
+      bindings: [
+        {
+          childSessionId: 'smoke-child-1',
+          parentDshSessionId: 'smoke-session-1',
+          rootCoworkSessionId: 'cw-smoke-1',
+          targetAgentId: 'blog-publisher',
+        },
+      ],
+    });
+    if (bindingsRes.result?.syncedCount !== 1) {
+      throw new Error(`syncSubagentBindings failed: ${JSON.stringify(bindingsRes)}`);
+    }
+    log('bindSessionContext + syncSkillsPolicy + syncHostTools + syncAgents + syncSubagentBindings verified.');
 
     // 6. Verify @lobsterai/dsh-channels exposes exactly the 7 retained platforms.
     const chRes = await httpRequest(`${origin}/api/lobsterai/channels`, {

@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import type { AgentModelSelectionMode } from '@shared/agent/constants';
+import type { AgentModelSelectionMode, SubagentCollaborationMode } from '@shared/agent/constants';
 import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 
 interface AgentSummary {
@@ -22,6 +22,7 @@ interface AgentSummary {
   presetRevision?: number;
   dismissedPresetRevision?: number;
   skillIds: string[];
+  subagentCollaborationMode?: SubagentCollaborationMode;
   subagentAllowAgentIds: string[];
 }
 

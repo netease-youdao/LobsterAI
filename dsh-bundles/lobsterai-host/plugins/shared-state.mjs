@@ -33,6 +33,18 @@ export function getHostState(ctx) {
       defaultPermissionPreset: 'workspace-write',
       /** @type {Map<string, Record<string, unknown>>} */
       sessionContexts: new Map(),
+      /** @type {Map<string, Record<string, unknown>>} */
+      agents: new Map(),
+      /** @type {string[]} */
+      agentOrder: [],
+      /**
+       * Durable child DSH session -> delegated LobsterAI target agent mapping
+       * (`{ targetAgentId, parentDshSessionId?, rootCoworkSessionId?, workspaceDir? }`).
+       * Kept separate from `sessionContexts` so cold resumes and follow-ups
+       * always pick up the parent's latest `traceId` while keeping target persona/skills.
+       * @type {Map<string, { targetAgentId: string, parentDshSessionId?: string, rootCoworkSessionId?: string, workspaceDir?: string }>}
+       */
+      delegatedChildAgents: new Map(),
       /** @type {{ enabledIds: Set<string> | null, disabledIds: Set<string>, extraDirs: string[] }} */
       skillsPolicy: {
         enabledIds: null,
@@ -47,6 +59,7 @@ export function getHostState(ctx) {
         approvalGuard: false,
         opsRpc: false,
         toolDisclosure: false,
+        agentDelegation: false,
       },
       /** @type {((payload: unknown) => Promise<unknown>) | null} */
       syncProviders: null,
@@ -84,16 +97,68 @@ export function resolveSessionId(candidate) {
   return undefined;
 }
 
-/** Follow only native delegation edges. An ordinary fork has its own Cowork context. */
+function resolveParentSessionId(ctx, state, sessionId) {
+  const header = ctx?.get?.('agents')?.get?.(sessionId)?.session?.header;
+  if (header?.origin === 'subagent' && typeof header.parentSession === 'string' && header.parentSession.length > 0) {
+    return header.parentSession;
+  }
+  const binding = state.delegatedChildAgents?.get?.(sessionId);
+  if (binding && typeof binding.parentDshSessionId === 'string' && binding.parentDshSessionId.length > 0) {
+    return binding.parentDshSessionId;
+  }
+  return undefined;
+}
+
+function findAncestorBoundContext(ctx, state, sessionId) {
+  const visited = new Set([sessionId]);
+  let nextId = resolveParentSessionId(ctx, state, sessionId);
+  while (nextId && !visited.has(nextId)) {
+    visited.add(nextId);
+    const bound = state.sessionContexts.get(nextId);
+    if (bound) return bound;
+    nextId = resolveParentSessionId(ctx, state, nextId);
+  }
+  return undefined;
+}
+
+/**
+ * Resolve LobsterAI session context for a root session, a cross-agent delegated
+ * subagent (live or cold-resumed), or an ordinary same-agent native subagent.
+ * An ordinary fork has its own Cowork context (`origin !== 'subagent'`).
+ */
 export function resolveSessionContext(ctx, state, sessionId) {
   const visited = new Set();
-  while (sessionId && !visited.has(sessionId)) {
-    const bound = state.sessionContexts.get(sessionId);
+  let currentId = sessionId;
+  while (currentId && !visited.has(currentId)) {
+    const bound = state.sessionContexts.get(currentId);
     if (bound) return bound;
-    visited.add(sessionId);
-    const header = ctx.get('agents')?.get(sessionId)?.session?.header;
+    visited.add(currentId);
+
+    const binding = state.delegatedChildAgents?.get?.(currentId);
+    if (binding && typeof binding.targetAgentId === 'string' && binding.targetAgentId.length > 0) {
+      const ancestor = findAncestorBoundContext(ctx, state, currentId);
+      const spec = state.agents?.get?.(binding.targetAgentId);
+      const coworkSessionId = ancestor?.coworkSessionId ?? binding.rootCoworkSessionId;
+      const workspaceDir = binding.workspaceDir
+        || (typeof spec?.workingDirectory === 'string' && spec.workingDirectory.length > 0 ? spec.workingDirectory : undefined)
+        || ancestor?.workspaceDir;
+      return {
+        agentId: binding.targetAgentId,
+        ...(coworkSessionId ? { coworkSessionId } : {}),
+        ...(ancestor?.traceId ? { traceId: ancestor.traceId } : {}),
+        ...(workspaceDir ? { workspaceDir } : {}),
+        allowedSkillIds: spec && Array.isArray(spec.allowedSkillIds) ? spec.allowedSkillIds : null,
+        ...(typeof spec?.systemPrompt === 'string' && spec.systemPrompt.length > 0
+          ? { customSystemPrompt: spec.systemPrompt }
+          : {}),
+        ...(ancestor?.executionMode ? { executionMode: ancestor.executionMode } : {}),
+        ...(ancestor?.permissionPreset ? { permissionPreset: ancestor.permissionPreset } : {}),
+      };
+    }
+
+    const header = ctx?.get?.('agents')?.get?.(currentId)?.session?.header;
     if (header?.origin !== 'subagent') return undefined;
-    sessionId = header.parentSession;
+    currentId = header.parentSession;
   }
   return undefined;
 }

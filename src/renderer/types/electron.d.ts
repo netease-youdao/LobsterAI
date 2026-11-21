@@ -10,7 +10,7 @@ import type {
   ActivityResult,
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
-import type { AgentModelSelectionMode } from '../../shared/agent/constants';
+import type { AgentModelSelectionMode, SubagentCollaborationMode } from '../../shared/agent/constants';
 import type { AgentModelSelection } from '../../shared/agent/modelSelection';
 import type { ExpertCatalog, ExpertUpgradeStatus } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
@@ -848,6 +848,7 @@ interface IElectronAPI {
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
+      subagentCollaborationMode?: SubagentCollaborationMode;
       subagentAllowAgentIds?: string[];
       source?: string;
       presetId?: string;
@@ -865,6 +866,7 @@ interface IElectronAPI {
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];
+        subagentCollaborationMode?: SubagentCollaborationMode;
         subagentAllowAgentIds?: string[];
         enabled?: boolean;
         pinned?: boolean;

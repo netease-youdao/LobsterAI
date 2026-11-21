@@ -4,7 +4,15 @@ import os from 'os';
 import path from 'path';
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { AgentAvatarSvg, AgentModelSelectionMode, AgentSource, DefaultAgentAvatarIcon, DefaultAgentProfile, encodeAgentAvatarIcon } from '../shared/agent';
+import {
+  AgentAvatarSvg,
+  AgentModelSelectionMode,
+  AgentSource,
+  DefaultAgentAvatarIcon,
+  DefaultAgentProfile,
+  encodeAgentAvatarIcon,
+  SubagentCollaborationMode,
+} from '../shared/agent';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 
@@ -658,4 +666,54 @@ test('restores tool call ids on forked messages once at startup', async () => {
   const thirdStore = await SqliteStore.create(userDataPath);
   expect(getToolUseIds(thirdStore.getDatabase())[0].tool_use_id).toBeNull();
   thirdStore.close();
+});
+
+test('migrates legacy agents to all collaboration mode unless an explicit allowlist exists', async () => {
+  const userDataPath = createTempUserDataPath();
+  const db = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  db.exec(`
+    CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    CREATE TABLE agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      system_prompt TEXT NOT NULL DEFAULT '',
+      identity TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      icon TEXT NOT NULL DEFAULT '',
+      skill_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'custom',
+      preset_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  const insert = db.prepare(`
+    INSERT INTO agents (
+      id, name, description, system_prompt, identity, model, icon, skill_ids,
+      subagent_allow_agent_ids, enabled, is_default, source, preset_id, created_at, updated_at
+    ) VALUES (?, ?, '', '', '', '', '', '[]', ?, 1, ?, 'custom', '', ?, ?)
+  `);
+  insert.run('main', '主 Agent', '[]', 1, now, now);
+  insert.run('translator', '翻译专家', '["translator"]', 0, now, now);
+  insert.run('curated', '精选调度', '["blog-publisher"]', 0, now, now);
+  db.close();
+
+  const migrated = await SqliteStore.create(userDataPath);
+  const coworkStore = new CoworkStore(migrated.getDatabase());
+  expect(coworkStore.getAgent('main')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(coworkStore.getAgent('translator')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(coworkStore.getAgent('curated')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Allowlist);
+  expect(coworkStore.getAgent('curated')?.subagentAllowAgentIds).toEqual(['blog-publisher']);
+
+  // Verify durable subagent agent bindings table was also created.
+  const bindingsTable = migrated.getDatabase()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dsh_subagent_agent_bindings'")
+    .get() as { name: string } | undefined;
+  expect(bindingsTable?.name).toBe('dsh_subagent_agent_bindings');
+  migrated.close();
 });

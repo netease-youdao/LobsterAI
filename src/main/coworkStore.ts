@@ -7,7 +7,14 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 import { CoworkSystemMessageKind } from '../common/coworkSystemMessages';
-import { AgentId, AgentModelSelectionMode, AgentSource, normalizeAgentAvatarIcon } from '../shared/agent';
+import {
+  AgentId,
+  AgentModelSelectionMode,
+  AgentSource,
+  normalizeAgentAvatarIcon,
+  normalizeSubagentCollaborationMode,
+  SubagentCollaborationMode,
+} from '../shared/agent';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
@@ -457,6 +464,7 @@ export interface Agent {
   icon: string;
   iconCustomized?: boolean;
   skillIds: string[];
+  subagentCollaborationMode: SubagentCollaborationMode;
   subagentAllowAgentIds: string[];
   enabled: boolean;
   pinned: boolean;
@@ -483,6 +491,7 @@ export interface CreateAgentRequest {
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
+  subagentCollaborationMode?: SubagentCollaborationMode;
   subagentAllowAgentIds?: string[];
   source?: AgentSource;
   presetId?: string;
@@ -500,6 +509,7 @@ export interface UpdateAgentRequest {
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
+  subagentCollaborationMode?: SubagentCollaborationMode;
   subagentAllowAgentIds?: string[];
   enabled?: boolean;
   pinned?: boolean;
@@ -1800,6 +1810,12 @@ export class CoworkStore {
       this.db.prepare(`DELETE FROM ${table} WHERE session_id IN (${placeholders})`).run(...ids);
     }
     this.db.prepare(`DELETE FROM cowork_messages WHERE session_id IN (${placeholders})`).run(...ids);
+    const hasSubagentBindingsTable = Boolean(
+      this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dsh_subagent_agent_bindings'").get(),
+    );
+    if (hasSubagentBindingsTable) {
+      this.db.prepare(`DELETE FROM dsh_subagent_agent_bindings WHERE root_cowork_session_id IN (${placeholders})`).run(...ids);
+    }
     this.db.prepare(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`).run(...ids);
     const affectedArtifactIds = affectedArtifactRows.map(row => row.artifact_id);
     this.sessionProjectionNotifications.recordDeletion(ids, affectedArtifactIds);
@@ -3683,6 +3699,7 @@ export class CoworkStore {
       icon: string;
       icon_customized?: number | null;
       skill_ids: string;
+      subagent_collaboration_mode?: string | null;
       subagent_allow_agent_ids?: string | null;
       enabled: number;
       pinned?: number | null;
@@ -3716,6 +3733,7 @@ export class CoworkStore {
       icon: string;
       icon_customized?: number | null;
       skill_ids: string;
+      subagent_collaboration_mode?: string | null;
       subagent_allow_agent_ids?: string | null;
       enabled: number;
       pinned?: number | null;
@@ -3757,8 +3775,8 @@ export class CoworkStore {
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_allow_agent_ids, enabled, is_default, source, preset_id, preset_revision, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_collaboration_mode, subagent_allow_agent_ids, enabled, is_default, source, preset_id, preset_revision, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -3774,6 +3792,7 @@ export class CoworkStore {
           normalizeAgentAvatarIcon(request.icon),
           usesManagedPresetAvatar({ id, source: request.source, iconCustomized: false }) ? 0 : 1,
           JSON.stringify(normalizeStringIdList(request.skillIds)),
+          normalizeSubagentCollaborationMode(request.subagentCollaborationMode),
           JSON.stringify(normalizeStringIdList(request.subagentAllowAgentIds)),
           request.source || 'custom',
           request.presetId || '',
@@ -3849,6 +3868,10 @@ export class CoworkStore {
     if (updates.skillIds !== undefined) {
       setClauses.push('skill_ids = ?');
       values.push(JSON.stringify(normalizeStringIdList(updates.skillIds)));
+    }
+    if (updates.subagentCollaborationMode !== undefined) {
+      setClauses.push('subagent_collaboration_mode = ?');
+      values.push(normalizeSubagentCollaborationMode(updates.subagentCollaborationMode));
     }
     if (updates.subagentAllowAgentIds !== undefined) {
       setClauses.push('subagent_allow_agent_ids = ?');
@@ -3983,6 +4006,7 @@ export class CoworkStore {
     icon: string;
     icon_customized?: number | null;
     skill_ids: string;
+    subagent_collaboration_mode?: string | null;
     subagent_allow_agent_ids?: string | null;
     enabled: number;
     pinned?: number | null;
@@ -3997,6 +4021,7 @@ export class CoworkStore {
     updated_at: number;
   }): Agent {
     const skillIds = parseStringIdList(row.skill_ids);
+    const subagentCollaborationMode = normalizeSubagentCollaborationMode(row.subagent_collaboration_mode);
     const subagentAllowAgentIds = parseStringIdList(row.subagent_allow_agent_ids);
     return {
       id: row.id,
@@ -4015,6 +4040,7 @@ export class CoworkStore {
         iconCustomized: row.icon_customized == null ? undefined : Boolean(row.icon_customized),
       }),
       skillIds,
+      subagentCollaborationMode,
       subagentAllowAgentIds,
       enabled: Boolean(row.enabled),
       pinned: Boolean(row.pinned),

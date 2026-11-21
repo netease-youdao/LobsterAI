@@ -1,4 +1,4 @@
-import type { AgentModelSelectionMode, AgentSource } from '@shared/agent/constants';
+import type { AgentModelSelectionMode, AgentSource, SubagentCollaborationMode } from '@shared/agent/constants';
 import type { ModelThinkingLevel } from '@shared/providers/modelThinking';
 
 export type { AgentSource } from '@shared/agent/constants';
@@ -16,6 +16,7 @@ export interface Agent {
   icon: string;
   iconCustomized?: boolean;
   skillIds: string[];
+  subagentCollaborationMode?: SubagentCollaborationMode;
   subagentAllowAgentIds: string[];
   enabled: boolean;
   pinned: boolean;
@@ -43,6 +44,7 @@ export interface CreateAgentRequest {
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
+  subagentCollaborationMode?: SubagentCollaborationMode;
   subagentAllowAgentIds?: string[];
   source?: string;
   presetId?: string;
@@ -59,6 +61,7 @@ export interface UpdateAgentRequest {
   workingDirectory?: string;
   icon?: string;
   skillIds?: string[];
+  subagentCollaborationMode?: SubagentCollaborationMode;
   subagentAllowAgentIds?: string[];
   enabled?: boolean;
   pinned?: boolean;

@@ -947,4 +947,127 @@ describe('DshRuntimeAdapter', () => {
       }),
     );
   });
+
+  test('tracks delegate_agent activation, updates target agentId, and awaits subagent-settled before finishing turn', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-delegate',
+      cwd: '/tmp/work',
+      agentId: 'translator',
+    });
+
+    const observeCatalog = vi.fn(() => 'dsh:child-blog-1');
+    const observeNotice = vi.fn();
+    const setTask = vi.fn();
+    const setDelegatedAgent = vi.fn();
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-translator-1' })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield {
+          type: 'event',
+          event: {
+            type: 'tool/call',
+            seq: 1,
+            data: {
+              callId: 'call-del-1',
+              name: 'delegate_agent',
+              arguments: JSON.stringify({
+                agent_id: 'blog-publisher',
+                description: '发布博客文章',
+                prompt: '请发布 /tmp/work/article.md 到 Hugo 博客',
+              }),
+            },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'subagent/catalog',
+            seq: 2,
+            data: {
+              childId: 'child-blog-1',
+              childCreatedAt: 1000,
+              name: 'blog-publisher',
+              label: '发布博客文章',
+              mode: 'continuable',
+            },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'tool/result',
+            seq: 3,
+            data: {
+              callId: 'call-del-1',
+              content: 'delegated task to specialist agent "博客自动发布" (blog-publisher) as subagent blog-publisher',
+              meta: {
+                kind: 'activation',
+                name: 'blog-publisher',
+                childId: 'child-blog-1',
+                agentId: 'blog-publisher',
+              },
+            },
+          },
+        };
+        // Parent yields its first turn while the delegated specialist is still working.
+        yield { type: 'event', event: { type: 'turn/end', seq: 4, data: {} } };
+        // Specialist finishes and delivers subagent-settled notice back to parent.
+        yield {
+          type: 'event',
+          event: {
+            type: 'user/message',
+            seq: 5,
+            time: 2000,
+            data: {
+              source: {
+                kind: 'subagent-settled',
+                stopReason: 'completed',
+                senderSessionId: 'child-blog-1',
+              },
+            },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 6,
+            data: { message: { content: '博客自动发布已完成发布。' } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 7, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      subagentSessions: {
+        observeCatalog,
+        observeNotice,
+        getOwningSessionId: vi.fn(),
+        setTask,
+        setDelegatedAgent,
+      },
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await adapter.startSession('cw-delegate', '把这篇文章通过博客自动发布 agent 发布到我的博客吧');
+
+    expect(observeCatalog).toHaveBeenCalledTimes(1);
+    expect(setTask).toHaveBeenCalledWith('cw-delegate', 'dsh:child-blog-1', '请发布 /tmp/work/article.md 到 Hugo 博客');
+    expect(setDelegatedAgent).toHaveBeenCalledWith('cw-delegate', 'dsh:child-blog-1', 'blog-publisher');
+    expect(observeNotice).toHaveBeenCalledTimes(1);
+    expect(messages.some(m => m.type === 'assistant' && m.content === '博客自动发布已完成发布。')).toBe(true);
+    const toolResult = messages.find(m => m.type === 'tool_result');
+    expect(toolResult?.metadata?.subagentRunId).toBe('dsh:child-blog-1');
+  });
 });

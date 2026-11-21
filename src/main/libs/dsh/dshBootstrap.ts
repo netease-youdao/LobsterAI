@@ -59,6 +59,7 @@ import {
   wireDshHostBridge,
 } from './dshHostBridgeWiring';
 import {
+  type DshHostAgentSpec,
   DshHostManager,
   type DshHostStatus,
   resolveBundledDshPaths,
@@ -91,6 +92,7 @@ export interface DshBootstrapSyncInput {
     extraDirs?: string[];
     skillsDir?: string;
   };
+  agents?: DshHostAgentSpec[];
   imInstances?: Array<{
     platform: string;
     instanceId?: string;
@@ -322,6 +324,22 @@ export class DshBootstrap {
 
     this.subagentSessions = new DshSubagentSessions(options.db, this.hostManager,
       id => options.coworkStore.getSession(id, Number.MAX_SAFE_INTEGER)?.messages ?? []);
+    this.hostManager.setSubagentBindingHandler((request) => {
+      if (request.action === 'delete') {
+        this.subagentSessions.deleteAgentBinding(request.childSessionId);
+        return;
+      }
+      this.subagentSessions.recordAgentBinding({
+        childSessionId: request.childSessionId,
+        parentDshSessionId: request.parentDshSessionId,
+        rootCoworkSessionId: request.rootCoworkSessionId,
+        targetAgentId: request.targetAgentId,
+      });
+    });
+    const persistedBindings = this.subagentSessions.listAgentBindings();
+    if (persistedBindings.length > 0) {
+      void this.hostManager.syncSubagentBindings(persistedBindings, { replace: true }).catch((): void => undefined);
+    }
     this.runtimeAdapter = new DshRuntimeAdapter({
       subagentSessions: this.subagentSessions,
       hostManager: this.hostManager,
@@ -504,6 +522,9 @@ export class DshBootstrap {
       );
       await this.hostManager.syncMcpServers(servers);
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
+      if (input.agents) {
+        await this.hostManager.syncAgents(input.agents);
+      }
 
       if (input.imInstances) {
         if (this.hostManager.isReady() && this.channelsBundleDir) {

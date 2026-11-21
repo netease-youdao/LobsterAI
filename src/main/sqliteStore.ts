@@ -5,7 +5,15 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { AgentId, AgentModelSelectionMode, DefaultAgentAvatarIcon, DefaultAgentProfile, LegacyAgentName, normalizeAgentAvatarIcon } from '../shared/agent';
+import {
+  AgentId,
+  AgentModelSelectionMode,
+  DefaultAgentAvatarIcon,
+  DefaultAgentProfile,
+  LegacyAgentName,
+  normalizeAgentAvatarIcon,
+  SubagentCollaborationMode,
+} from '../shared/agent';
 import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
@@ -230,6 +238,7 @@ export class SqliteStore {
         icon TEXT NOT NULL DEFAULT '',
         icon_customized INTEGER,
         skill_ids TEXT NOT NULL DEFAULT '[]',
+        subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}',
         subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
         enabled INTEGER NOT NULL DEFAULT 1,
         pinned INTEGER NOT NULL DEFAULT 0,
@@ -331,6 +340,21 @@ export class SqliteStore {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_subagent_messages_run_id
       ON subagent_messages(run_id);
+    `);
+    // Durable mapping from delegated DSH child sessions to their LobsterAI target agent IDs
+    // and direct parent DSH sessions (supporting cold resume and depth-2 history reads).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS dsh_subagent_agent_bindings (
+        child_session_id TEXT PRIMARY KEY,
+        parent_dsh_session_id TEXT NOT NULL,
+        root_cowork_session_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_dsh_subagent_bindings_root
+      ON dsh_subagent_agent_bindings(root_cowork_session_id);
     `);
 
     // Migration: add messages_persisted column to subagent_runs
@@ -695,6 +719,35 @@ export class SqliteStore {
       }
       if (!agentColNames.includes('subagent_allow_agent_ids')) {
         this.db.exec("ALTER TABLE agents ADD COLUMN subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]';");
+        this.didRunMigration = true;
+      }
+      if (!agentColNames.includes('subagent_collaboration_mode')) {
+        this.db.exec(
+          `ALTER TABLE agents ADD COLUMN subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}';`,
+        );
+        // Preserve explicitly curated legacy allowlists while upgrading unconfigured agents to `all`.
+        const legacyRows = this.db
+          .prepare('SELECT id, subagent_allow_agent_ids FROM agents')
+          .all() as Array<{ id: string; subagent_allow_agent_ids?: string | null }>;
+        const markAllowlist = this.db.prepare(
+          'UPDATE agents SET subagent_collaboration_mode = ? WHERE id = ?',
+        );
+        for (const row of legacyRows) {
+          if (!row.subagent_allow_agent_ids) continue;
+          try {
+            const parsed = JSON.parse(row.subagent_allow_agent_ids) as unknown;
+            if (!Array.isArray(parsed)) continue;
+            const selfId = row.id.trim();
+            const hasExplicitTarget = parsed.some(
+              item => typeof item === 'string' && item.trim().length > 0 && item.trim() !== selfId,
+            );
+            if (hasExplicitTarget) {
+              markAllowlist.run(SubagentCollaborationMode.Allowlist, row.id);
+            }
+          } catch {
+            // Malformed legacy JSON falls back to default `all`.
+          }
+        }
         this.didRunMigration = true;
       }
     } catch {

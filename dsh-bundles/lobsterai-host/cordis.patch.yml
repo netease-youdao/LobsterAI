@@ -180,6 +180,9 @@
     - id: lobster-tool-disclosure
       name: './plugins/tool-disclosure.mjs'
 
+    - id: lobster-agent-delegation
+      name: './plugins/agent-delegation.mjs'
+
     - id: lobster-approval-guard
       name: './plugins/approval-guard.mjs'
 
