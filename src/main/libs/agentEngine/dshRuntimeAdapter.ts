@@ -41,12 +41,22 @@ import {
   DshPermissionPreset,
   DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
+import {
+  modelPresetModelId,
+  parseModelPresetId,
+} from '../../../shared/modelPresets/constants';
 import { buildOfficeAgentPrompt } from '../../../shared/office/core/officeAgentPrompt';
 import {
   SHEET_EDITOR,
   SLIDES_EDITOR,
   WORD_EDITOR,
 } from '../../../shared/office/editors';
+import {
+  canonicalizeDshProviderId,
+  type ModelThinkingLevel,
+  parseModelThinkingLevel,
+} from '../../../shared/providers';
+import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/modelContextWindow';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
 import {
@@ -95,6 +105,8 @@ export interface DshAdapterSessionRecord {
   modelOverride?: string | null;
   modelPresetId?: string | null;
   thinkingLevel?: string | null;
+  contextWindowOverride?: number | null;
+  contextWindowOwnerKey?: string | null;
   systemPrompt?: string;
   messages?: CoworkMessage[];
 }
@@ -123,6 +135,7 @@ export interface DshCoworkStorePort {
       claudeSessionId?: string | null;
       status?: CoworkSessionStatus;
       modelOverride?: string | null;
+      thinkingLevel?: ModelThinkingLevel | '';
       goal?: CoworkGoal | null;
     },
   ): void;
@@ -133,6 +146,8 @@ export interface DshModelSelection {
   provider: string;
   model: string;
   reasoningEffort?: string;
+  modelPresetId?: string | null;
+  contextWindow?: number;
 }
 
 export type DshReadBrowserAnnotationAsset = (identity: {
@@ -226,6 +241,22 @@ const DSH_SUPPORTED_REASONING_EFFORTS = new Set([
   'max',
 ]);
 
+function parseContextWindowSelectionTokens(selection: string | null | undefined): number | null {
+  if (typeof selection !== 'string') return null;
+  const trimmed = selection.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith(USER_CONTEXT_WINDOW_SELECTION_PREFIX)) {
+    const rawTokens = trimmed.slice(trimmed.lastIndexOf(':') + 1);
+    const parsed = Number(rawTokens);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    const parsed = Number(trimmed);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
 function normalizeDshReasoningEffort(raw?: string | null): string | undefined {
   if (typeof raw !== 'string') return undefined;
   const normalized = raw.trim().toLowerCase();
@@ -237,11 +268,12 @@ async function selectModelWithReasoningFallback(
   client: Pick<DshTypertClient, 'selectModel'>,
   params: { sessionId: string; provider: string; model: string; reasoningEffort?: string },
 ): Promise<void> {
+  const provider = canonicalizeDshProviderId(params.provider);
   const effort = normalizeDshReasoningEffort(params.reasoningEffort);
   try {
     await client.selectModel({
       sessionId: params.sessionId,
-      provider: params.provider,
+      provider,
       model: params.model,
       ...(effort ? { reasoningEffort: effort } : {}),
     });
@@ -250,12 +282,12 @@ async function selectModelWithReasoningFallback(
     // Retry without reasoningEffort when the target model does not declare
     // reasoning support or does not accept the requested effort level.
     console.warn(
-      `[DshRuntimeAdapter] selectModel rejected reasoningEffort="${effort}" for ${params.provider}/${params.model}; retrying without reasoningEffort:`,
+      `[DshRuntimeAdapter] selectModel rejected reasoningEffort="${effort}" for ${provider}/${params.model}; retrying without reasoningEffort:`,
       error instanceof Error ? error.message : String(error),
     );
     await client.selectModel({
       sessionId: params.sessionId,
-      provider: params.provider,
+      provider,
       model: params.model,
     });
   }
@@ -462,6 +494,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly sessionAllowedScopes = new Map<string, Set<string>>();
   private readonly sessionPermissionPresets = new Map<string, DshPermissionPreset>();
   private readonly sessionUnlockedCapabilities = new Map<string, Set<DshProgressiveCapability>>();
+  private readonly sessionThinkingLevels = new Map<string, string>();
+  private readonly sessionContextWindows = new Map<string, string | null>();
+  private readonly sessionResolvedContextTokens = new Map<string, number>();
   private wiredClient: DshTypertClient | null = null;
   private unwireClientHandlers: Array<() => void> = [];
 
@@ -662,9 +697,38 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const thinkingPatchValue = typeof patch.thinkingLevel === 'string'
       ? patch.thinkingLevel.trim()
       : null;
+    const thinking = thinkingPatchValue ?? '';
+    const hasContextWindowPatch = patch.contextWindow !== undefined;
+    const normalizedContextWindow = typeof patch.contextWindow === 'string' && patch.contextWindow.trim().length > 0
+      ? patch.contextWindow.trim()
+      : null;
 
+    const sessionUpdates: Parameters<DshCoworkStorePort['updateSession']>[1] = {};
     if (modelStr) {
-      this.store.updateSession(sessionId, { modelOverride: modelStr });
+      sessionUpdates.modelOverride = modelStr;
+    }
+    if (hasThinkingPatch) {
+      if (thinking) {
+        this.sessionThinkingLevels.set(sessionId, thinking);
+        const parsedThinking = parseModelThinkingLevel(thinking.toLowerCase());
+        sessionUpdates.thinkingLevel = parsedThinking ?? '';
+      } else {
+        this.sessionThinkingLevels.delete(sessionId);
+        sessionUpdates.thinkingLevel = '';
+      }
+    }
+    if (Object.keys(sessionUpdates).length > 0) {
+      this.store.updateSession(sessionId, sessionUpdates);
+    }
+
+    if (hasContextWindowPatch) {
+      this.sessionContextWindows.set(sessionId, normalizedContextWindow);
+      const parsedTokens = parseContextWindowSelectionTokens(normalizedContextWindow);
+      if (parsedTokens !== null) {
+        this.sessionResolvedContextTokens.set(sessionId, parsedTokens);
+      } else {
+        this.sessionResolvedContextTokens.delete(sessionId);
+      }
     }
 
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
@@ -675,28 +739,49 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       };
     }
 
-    const selection = this.resolveModelSelection
-      ? await this.resolveModelSelection(
-          sessionId,
-          modelStr || undefined,
-          hasThinkingPatch ? thinkingPatchValue : undefined,
-        )
-      : parseProviderModelRef(modelStr);
-    if (selection) {
-      const resolverHandlesThinking = Boolean(
-        this.resolveModelSelection && this.resolveModelSelection.length >= 3,
-      );
-      const effectiveReasoningEffort = hasThinkingPatch
-        ? (resolverHandlesThinking
-            ? selection.reasoningEffort
-            : (selection.reasoningEffort ?? (thinkingPatchValue || undefined)))
-        : selection.reasoningEffort;
-      await selectModelWithReasoningFallback(this.hostManager.getClient(), {
+    if (hasContextWindowPatch) {
+      await this.hostManager.bindSessionContext({
         sessionId: dshSessionId,
-        provider: selection.provider,
-        model: selection.model,
-        reasoningEffort: effectiveReasoningEffort,
+        coworkSessionId: sessionId,
+        contextWindowSelection: normalizedContextWindow,
+        contextWindowOverride: parseContextWindowSelectionTokens(normalizedContextWindow),
       });
+    }
+
+    if (patch.model !== undefined || hasThinkingPatch) {
+      const session = this.store.getSession(sessionId, 0);
+      const selection = this.resolveModelSelection
+        ? await this.resolveModelSelection(
+            sessionId,
+            modelStr || undefined,
+            hasThinkingPatch ? thinkingPatchValue : undefined,
+          )
+        : parseProviderModelRef(modelStr || session?.modelOverride || '');
+      if (selection) {
+        const resolverHandlesThinking = Boolean(
+          this.resolveModelSelection && this.resolveModelSelection.length >= 3,
+        );
+        const resolvedEffort = hasThinkingPatch
+          ? (resolverHandlesThinking
+              ? selection.reasoningEffort
+              : (selection.reasoningEffort ?? (thinking || undefined)))
+          : (resolverHandlesThinking
+              ? selection.reasoningEffort
+              : (selection.reasoningEffort
+                ?? this.sessionThinkingLevels.get(sessionId)
+                ?? (typeof session?.thinkingLevel === 'string' && session.thinkingLevel.trim()
+                  ? session.thinkingLevel.trim()
+                  : undefined)));
+        if (typeof selection.contextWindow === 'number' && selection.contextWindow > 0 && !hasContextWindowPatch) {
+          this.sessionResolvedContextTokens.set(sessionId, selection.contextWindow);
+        }
+        await selectModelWithReasoningFallback(this.hostManager.getClient(), {
+          sessionId: dshSessionId,
+          provider: canonicalizeDshProviderId(selection.provider),
+          model: selection.model,
+          reasoningEffort: resolvedEffort,
+        });
+      }
     }
 
     return {
@@ -712,19 +797,33 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const projections = await this.hostManager.getClient().getSessionProjections(dshSessionId);
     if (!projections || typeof projections !== 'object') return null;
     const values = (projections.values as Record<string, unknown> | undefined) ?? projections;
-    const meter = values.tokenMeter as Record<string, unknown> | undefined;
+    const meter = (values.tokenMeter ?? values.contextPressure) as Record<string, unknown> | undefined;
     if (!meter || typeof meter !== 'object') return null;
 
     const usedTokens = typeof meter.usedTokens === 'number'
       ? meter.usedTokens
-      : typeof meter.inputTokens === 'number'
-        ? meter.inputTokens
-        : undefined;
-    const contextTokens = typeof meter.contextWindow === 'number'
+      : typeof meter.pressureTokens === 'number'
+        ? meter.pressureTokens
+        : typeof meter.projectedTokens === 'number'
+          ? meter.projectedTokens
+          : typeof meter.inputTokens === 'number'
+            ? meter.inputTokens
+            : undefined;
+    const session = this.store.getSession(sessionId, 0);
+    const patchedSelection = this.sessionContextWindows.get(sessionId);
+    const patchedTokens = patchedSelection !== undefined
+      ? parseContextWindowSelectionTokens(patchedSelection)
+      : null;
+    const persistedTokens = typeof session?.contextWindowOverride === 'number' && session.contextWindowOverride > 0
+      ? session.contextWindowOverride
+      : null;
+    const resolvedTokens = this.sessionResolvedContextTokens.get(sessionId);
+    const meterContextTokens = typeof meter.contextWindow === 'number'
       ? meter.contextWindow
       : typeof meter.contextTokens === 'number'
         ? meter.contextTokens
         : undefined;
+    const contextTokens = patchedTokens ?? persistedTokens ?? resolvedTokens ?? meterContextTokens;
     const percent = usedTokens !== undefined && contextTokens && contextTokens > 0
       ? Math.min(100, Math.round((usedTokens / contextTokens) * 100))
       : undefined;
@@ -1044,6 +1143,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.sessionAllowedScopes.delete(sessionId);
     this.sessionPermissionPresets.delete(sessionId);
     this.sessionUnlockedCapabilities.delete(sessionId);
+    this.sessionThinkingLevels.delete(sessionId);
+    this.sessionContextWindows.delete(sessionId);
+    this.sessionResolvedContextTokens.delete(sessionId);
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
     if (dshSessionId) {
       this.dshToCoworkSession.delete(dshSessionId);
@@ -1337,15 +1439,45 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       // resolvedModelId headers and DSH selectModel stay completely aligned.
       const modelSelection = this.resolveModelSelection
         ? await this.resolveModelSelection(sessionId, session.modelOverride)
-        : null;
+        : (session.modelOverride ? parseProviderModelRef(session.modelOverride) : null);
       if (abortController.signal.aborted) return;
+
+      const latestSessionMeta = this.store.getSession(sessionId, 0);
+      const effectiveModelPresetId =
+        turnUserMessage?.metadata?.modelPresetId
+        ?? modelSelection?.modelPresetId
+        ?? latestSessionMeta?.modelPresetId
+        ?? session.modelPresetId
+        ?? undefined;
+      const effectiveResolvedModelId =
+        (typeof turnUserMessage?.metadata?.resolvedModelId === 'string'
+          && turnUserMessage.metadata.resolvedModelId.trim()
+          ? turnUserMessage.metadata.resolvedModelId
+          : undefined)
+        ?? modelSelection?.model;
+
+      // Persist resolved preset attribution onto the turn's user message so
+      // `llmUsageContext` recovery and `x-lobster-model-preset` stay aligned.
+      if (
+        turnUserMessage
+        && (
+          (effectiveModelPresetId && !turnUserMessage.metadata?.modelPresetId)
+          || (effectiveResolvedModelId && !turnUserMessage.metadata?.resolvedModelId)
+        )
+      ) {
+        const attributedMetadata: Record<string, unknown> = {
+          ...(turnUserMessage.metadata ?? {}),
+          ...(effectiveModelPresetId ? { modelPresetId: effectiveModelPresetId } : {}),
+          ...(effectiveResolvedModelId ? { resolvedModelId: effectiveResolvedModelId } : {}),
+        };
+        this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, attributedMetadata);
+        turnUserMessage = { ...turnUserMessage, metadata: attributedMetadata };
+      }
 
       registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
         title: session.title,
-        modelPresetId: turnUserMessage?.metadata?.modelPresetId ?? session.modelPresetId ?? undefined,
-        resolvedModelId: (typeof turnUserMessage?.metadata?.resolvedModelId === 'string'
-          ? turnUserMessage.metadata.resolvedModelId
-          : undefined) ?? modelSelection?.model,
+        modelPresetId: effectiveModelPresetId,
+        resolvedModelId: effectiveResolvedModelId,
       });
 
       // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
@@ -1374,7 +1506,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       this.dshToCoworkSession.set(dshSessionId, sessionId);
 
-      // Bind LobsterAI session context (agent persona, skills filter, executionMode, turn traceId).
+      // Bind LobsterAI session context (agent persona, skills filter, executionMode,
+      // per-session contextWindow override, turn traceId).
       const agentId = params.agentId || session.agentId || 'main';
       const allowedSkillIds = this.resolveAllowedSkillIds
         ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
@@ -1399,6 +1532,31 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
       const unlockedCapabilities = [...(this.sessionUnlockedCapabilities.get(sessionId) ?? [])];
       const officeAgentPrompt = resolveOfficeAgentPromptForTurn(unlockedCapabilities);
+
+      const patchedContextWindow = this.sessionContextWindows.get(sessionId);
+      const effectivePresetId = parseModelPresetId(effectiveModelPresetId);
+      const persistedContextWindowOverride =
+        typeof (latestSessionMeta?.contextWindowOverride ?? session.contextWindowOverride) === 'number'
+        && (latestSessionMeta?.contextWindowOverride ?? session.contextWindowOverride)! > 0
+          ? (latestSessionMeta?.contextWindowOverride ?? session.contextWindowOverride)!
+          : null;
+      const contextWindowSelection = patchedContextWindow !== undefined
+        ? patchedContextWindow
+        : (!persistedContextWindowOverride && effectivePresetId
+          ? modelPresetModelId(effectivePresetId)
+          : undefined);
+      const contextWindowOverride = patchedContextWindow !== undefined
+        ? parseContextWindowSelectionTokens(patchedContextWindow)
+        : (persistedContextWindowOverride
+          ?? (typeof modelSelection?.contextWindow === 'number' && modelSelection.contextWindow > 0
+            ? modelSelection.contextWindow
+            : undefined));
+      if (typeof contextWindowOverride === 'number' && contextWindowOverride > 0) {
+        this.sessionResolvedContextTokens.set(sessionId, contextWindowOverride);
+      } else if (contextWindowOverride === null) {
+        this.sessionResolvedContextTokens.delete(sessionId);
+      }
+
       const contextPayload: DshHostSessionContext = {
         sessionId: dshSessionId,
         agentId,
@@ -1413,17 +1571,31 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: this.getEffectivePermissionPreset(sessionId),
         ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
+        ...(contextWindowSelection !== undefined ? { contextWindowSelection } : {}),
+        ...(contextWindowOverride !== undefined ? { contextWindowOverride } : {}),
       };
       await this.hostManager.bindSessionContext(contextPayload);
       if (abortController.signal.aborted) return;
 
-      // Ensure session uses the resolved LobsterAI model before sending prompt.
+      // Ensure session uses the resolved LobsterAI model AND preserves the
+      // user's thinkingLevel -> reasoningEffort across Turn 1, Turn 2, ...
       if (modelSelection) {
+        const persistedThinking = typeof (latestSessionMeta?.thinkingLevel ?? session.thinkingLevel) === 'string'
+          ? (latestSessionMeta?.thinkingLevel ?? session.thinkingLevel)!.trim()
+          : '';
+        const resolverHandlesThinking = Boolean(
+          this.resolveModelSelection && this.resolveModelSelection.length >= 3,
+        );
+        const resolvedEffort = resolverHandlesThinking
+          ? modelSelection.reasoningEffort
+          : (modelSelection.reasoningEffort
+            ?? this.sessionThinkingLevels.get(sessionId)
+            ?? (persistedThinking || undefined));
         await selectModelWithReasoningFallback(client, {
           sessionId: dshSessionId,
-          provider: modelSelection.provider,
+          provider: canonicalizeDshProviderId(modelSelection.provider),
           model: modelSelection.model,
-          reasoningEffort: modelSelection.reasoningEffort,
+          reasoningEffort: resolvedEffort,
         });
         if (abortController.signal.aborted) return;
       }
@@ -2151,7 +2323,7 @@ function parseProviderModelRef(ref: string): DshModelSelection | null {
   const idx = ref.indexOf('/');
   if (idx <= 0 || idx >= ref.length - 1) return null;
   return {
-    provider: ref.slice(0, idx),
+    provider: canonicalizeDshProviderId(ref.slice(0, idx)),
     model: ref.slice(idx + 1),
   };
 }

@@ -1,8 +1,8 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import { ModelPresetId, modelPresetModelId } from '../../shared/modelPresets/constants';
-import { ApiFormat } from '../../shared/providers';
-import { createModelPresetClient } from './modelPresets';
+import { ModelPresetId, ModelPresetIpc, modelPresetModelId } from '../../shared/modelPresets/constants';
+import { ApiFormat, ModelThinkingLevel, OpenClawThinkingLevel } from '../../shared/providers';
+import { createModelPresetClient, registerModelPresetIpc } from './modelPresets';
 
 vi.mock('./claudeSettings', () => ({ getServerModelMetadata: vi.fn(), resolveRawApiConfig: vi.fn() }));
 
@@ -44,5 +44,98 @@ describe('model preset resolve transport', () => {
     current = false;
     release(response());
     await expect(pending).rejects.toThrow('Account changed');
+  });
+});
+
+describe('registerModelPresetIpc thinkingLevel forwarding', () => {
+  test('forwards requested thinkingLevel in choose() and SelectSession instead of dropping to defaultLevel', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      }),
+    } as unknown as import('electron').IpcMain;
+
+    const sessionState: Record<string, unknown> = {
+      id: 'sess-1',
+      agentId: 'main',
+      status: 'idle',
+      modelOverride: '',
+      modelPresetId: null,
+      thinkingLevel: '',
+      messages: [],
+    };
+    const updateSession = vi.fn((_sid: string, updates: Record<string, unknown>) => {
+      Object.assign(sessionState, updates);
+    });
+    const patchSession = vi.fn(async (_sid: string, patch: { model?: string; thinkingLevel?: string | null }) => ({
+      modelOverride: patch.model,
+      resolvedModelRef: patch.model,
+      thinkingLevel: patch.thinkingLevel ?? undefined,
+    }));
+
+    const client = {
+      available: vi.fn(async () => []),
+      resolve: vi.fn(async () => ({
+        modelId: 'glm-5.3',
+        apiFormat: ApiFormat.OpenAI,
+        thinkingConfig: {
+          defaultLevel: ModelThinkingLevel.Medium,
+          options: [
+            { level: ModelThinkingLevel.Low, openclawLevel: OpenClawThinkingLevel.Low },
+            { level: ModelThinkingLevel.Medium, openclawLevel: OpenClawThinkingLevel.Medium },
+            { level: ModelThinkingLevel.High, openclawLevel: OpenClawThinkingLevel.High },
+          ],
+        },
+      })),
+    };
+
+    const { choose } = registerModelPresetIpc({
+      ipcMain,
+      client: client as unknown as ReturnType<typeof createModelPresetClient>,
+      getStore: () => ({ get: () => undefined, set: vi.fn() }) as unknown as import('../sqliteStore').SqliteStore,
+      getSessions: () => ({
+        getSession: () => sessionState,
+        getLatestUserMessage: () => null,
+        updateSession,
+        addMessage: vi.fn(),
+      }) as unknown as import('../coworkStore').CoworkStore,
+      getRuntime: () => ({
+        isSessionActive: () => false,
+        patchSession,
+      }) as unknown as import('./agentEngine/types').CoworkRuntime,
+      ownerAccountKey: () => 'acct-1',
+      ensureModelsReady: async () => undefined,
+      isAccountCurrent: () => () => true,
+      t: (k) => k,
+    });
+
+    // 1. Direct choose(..., initial = true, thinkingLevel = 'high') preserves 'high'
+    const initialSession = await choose('sess-1', ModelPresetId.Balanced, false, true, ModelThinkingLevel.High);
+    expect(initialSession.thinkingLevel).toBe(ModelThinkingLevel.High);
+    expect(updateSession).toHaveBeenCalledWith(
+      'sess-1',
+      expect.objectContaining({ thinkingLevel: ModelThinkingLevel.High }),
+      { touchUpdatedAt: false },
+    );
+
+    // 2. SelectSession IPC with 'low' forwards 'low' to patchSession & store
+    const selectHandler = handlers.get(ModelPresetIpc.SelectSession)!;
+    const ipcRes = await selectHandler({}, 'sess-1', ModelPresetId.Ultimate, ModelThinkingLevel.Low) as {
+      success: boolean;
+      data?: { thinkingLevel?: string };
+    };
+    expect(ipcRes.success).toBe(true);
+    expect(patchSession).toHaveBeenCalledWith('sess-1', expect.objectContaining({
+      model: 'lobsterai-server/glm-5.3',
+      thinkingLevel: ModelThinkingLevel.Low,
+    }));
+    expect(sessionState.thinkingLevel).toBe(ModelThinkingLevel.Low);
+
+    // 3. Unsupported level ('max' not in options) falls back to config.defaultLevel ('medium')
+    await selectHandler({}, 'sess-1', ModelPresetId.Balanced, ModelThinkingLevel.Max);
+    expect(patchSession).toHaveBeenLastCalledWith('sess-1', expect.objectContaining({
+      thinkingLevel: ModelThinkingLevel.Medium,
+    }));
   });
 });

@@ -44,6 +44,11 @@ import {
   type MigrationV2Report,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import {
+  XAI_AUTH_CREDENTIAL_TYPE,
+  XAI_AUTH_PROVIDER,
+  type XaiOAuthCredential,
+} from '../../shared/openclawEngine/xaiAuthStore';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
 import {
@@ -1177,6 +1182,176 @@ function migrateLegacyWorkspaces(
   return migratedCount;
 }
 
+const XAI_AUTH_DIR_NAME = 'auth';
+const XAI_AUTH_FILENAME = 'xai-oauth.json';
+
+function isValidXaiOAuthCredential(value: unknown): value is XaiOAuthCredential {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.provider === XAI_AUTH_PROVIDER
+    && record.type === XAI_AUTH_CREDENTIAL_TYPE
+    && typeof record.access === 'string'
+    && record.access.trim().length > 0
+  );
+}
+
+function extractXaiOAuthEntryFromStore(
+  rawStore: unknown,
+): { profileId: string; credential: XaiOAuthCredential } | null {
+  if (!rawStore || typeof rawStore !== 'object' || Array.isArray(rawStore)) return null;
+  const profiles = (rawStore as { profiles?: unknown }).profiles;
+  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) return null;
+  for (const [profileId, candidate] of Object.entries(profiles as Record<string, unknown>)) {
+    if (isValidXaiOAuthCredential(candidate)) {
+      return { profileId, credential: candidate };
+    }
+  }
+  return null;
+}
+
+function isXaiOAuthEnabledInAppConfig(db: Database.Database): boolean {
+  const raw = getKv(db, 'app_config');
+  if (!raw) return false;
+  const parsed = safeParseJsonObject(raw);
+  const providers = parsed?.providers;
+  if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return false;
+  const xai = (providers as Record<string, unknown>).xai;
+  if (!xai || typeof xai !== 'object' || Array.isArray(xai)) return false;
+  const record = xai as Record<string, unknown>;
+  return record.enabled === true && record.authType === XAI_AUTH_CREDENTIAL_TYPE;
+}
+
+function collectLegacyAgentNames(openclawStateDir: string): string[] {
+  const agentsRoot = path.join(openclawStateDir, 'agents');
+  if (!fs.existsSync(agentsRoot)) return [];
+  const names: string[] = [];
+  try {
+    for (const dirent of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+      if (dirent.isDirectory()) names.push(dirent.name);
+    }
+  } catch {
+    return [];
+  }
+  names.sort((a, b) => (a === 'main' ? -1 : b === 'main' ? 1 : a.localeCompare(b)));
+  return names;
+}
+
+export interface MigrateLegacyXaiOAuthResult {
+  status: 'migrated' | 'already_present' | 'reauth_required' | 'not_found';
+  profileId?: string;
+}
+
+/**
+ * Migrate legacy OpenClaw xAI OAuth credentials out of `<userData>/openclaw/state/`
+ * (checking both SQLite `auth_profile_store` tables and legacy `auth-profiles.json`
+ * files) into `<userData>/auth/xai-oauth.json` before the legacy directory is deleted.
+ */
+export function migrateLegacyXaiOAuthCredential(params: {
+  openclawStateDir: string;
+  userDataDir: string;
+  db: Database.Database;
+  nowMs?: number;
+}): MigrateLegacyXaiOAuthResult {
+  const { openclawStateDir, userDataDir, db } = params;
+  const targetDir = path.join(userDataDir, XAI_AUTH_DIR_NAME);
+  const targetPath = path.join(targetDir, XAI_AUTH_FILENAME);
+
+  if (fs.existsSync(targetPath)) {
+    const existing = safeReadJson(targetPath) as { credential?: unknown } | null;
+    if (existing && isValidXaiOAuthCredential(existing.credential)) {
+      return { status: 'already_present' };
+    }
+  }
+
+  let sawUnreadableStore = false;
+  const agentNames = collectLegacyAgentNames(openclawStateDir);
+
+  // 1. Canonical OpenClaw SQLite stores (`state/openclaw.sqlite` and `agents/*/agent/openclaw-agent.sqlite`)
+  const sqliteCandidates = [
+    path.join(openclawStateDir, 'state', 'openclaw.sqlite'),
+    ...agentNames.map((agentName) => path.join(openclawStateDir, 'agents', agentName, 'agent', 'openclaw-agent.sqlite')),
+  ];
+  for (const sqliteFile of sqliteCandidates) {
+    if (!fs.existsSync(sqliteFile)) continue;
+    const opened = openLegacyOpenClawDbReadOnly(sqliteFile);
+    if (!opened) {
+      sawUnreadableStore = true;
+      continue;
+    }
+    try {
+      if (!tableExists(opened.db, 'auth_profile_store')) continue;
+      const rows = opened.db
+        .prepare("SELECT store_key, store_json FROM auth_profile_store ORDER BY CASE WHEN store_key = 'primary' THEN 0 ELSE 1 END")
+        .all() as Array<{ store_key?: unknown; store_json?: unknown }>;
+      for (const row of rows) {
+        if (typeof row.store_json !== 'string' || !row.store_json.trim()) continue;
+        const parsed = safeParseJsonObject(row.store_json);
+        if (!parsed) {
+          sawUnreadableStore = true;
+          continue;
+        }
+        const entry = extractXaiOAuthEntryFromStore(parsed);
+        if (entry) {
+          fs.mkdirSync(targetDir, { recursive: true });
+          const tmpPath = `${targetPath}.tmp`;
+          const payload = {
+            profileId: entry.profileId,
+            credential: entry.credential,
+            updatedAt: params.nowMs ?? Date.now(),
+          };
+          fs.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+          fs.renameSync(tmpPath, targetPath);
+          return { status: 'migrated', profileId: entry.profileId };
+        }
+      }
+    } catch {
+      sawUnreadableStore = true;
+    } finally {
+      opened.close();
+    }
+  }
+
+  // 2. Legacy JSON files (`agents/main/agent/auth-profiles.json`, other agents, or state root)
+  const jsonCandidates = [
+    ...agentNames.map((agentName) => path.join(openclawStateDir, 'agents', agentName, 'agent', 'auth-profiles.json')),
+    path.join(openclawStateDir, 'auth-profiles.json'),
+  ];
+  for (const jsonFile of jsonCandidates) {
+    if (!fs.existsSync(jsonFile)) continue;
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      const raw = fs.readFileSync(jsonFile, 'utf8');
+      parsed = safeParseJsonObject(raw);
+    } catch {
+      sawUnreadableStore = true;
+      continue;
+    }
+    if (!parsed) {
+      sawUnreadableStore = true;
+      continue;
+    }
+    const entry = extractXaiOAuthEntryFromStore(parsed);
+    if (entry) {
+      fs.mkdirSync(targetDir, { recursive: true });
+      const tmpPath = `${targetPath}.tmp`;
+      const payload = {
+        profileId: entry.profileId,
+        credential: entry.credential,
+        updatedAt: params.nowMs ?? Date.now(),
+      };
+      fs.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+      fs.renameSync(tmpPath, targetPath);
+      return { status: 'migrated', profileId: entry.profileId };
+    }
+  }
+
+  if (sawUnreadableStore || isXaiOAuthEnabledInAppConfig(db)) {
+    return { status: 'reauth_required' };
+  }
+  return { status: 'not_found' };
+}
+
 /** Legacy workspaces can have just one persona file. SQLite supplies only missing files. */
 function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string): void {
   const marker = 'engine.migration.v2.expertPersonas';
@@ -1384,6 +1559,21 @@ export function runLegacyOpenClawMigration(
       }
       if (imAllowListsMigrated > 0) {
         setKv(db, 'im.migrated_allow_from.v2', JSON.stringify(allowListsByPlatform));
+      }
+
+      // Migrate legacy xAI OAuth credential out of `openclaw/state` before cleanup.
+      const xaiMigration = migrateLegacyXaiOAuthCredential({
+        openclawStateDir,
+        userDataDir,
+        db,
+        nowMs: now().getTime(),
+      });
+      if (xaiMigration.status === 'reauth_required') {
+        reauthRequired.push({
+          kind: 'xai_oauth',
+          id: XAI_AUTH_PROVIDER,
+          label: 'xAI (Grok) OAuth (re-login required)',
+        });
       }
 
       // Detect Weixin state requiring re-login on new DSH channel driver.

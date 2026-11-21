@@ -28,7 +28,8 @@ export function resolveDefaultOAuthProviderUpstream(
   providerId: string,
 ): OAuthProviderUpstream | null {
   switch (providerId) {
-    case 'github-copilot': {
+    case 'github-copilot':
+    case 'lobsterai-copilot': {
       const baseUrl = getCopilotLoopbackBaseUrl();
       if (!baseUrl) return null;
       const token = getCopilotLoopbackAuthToken();

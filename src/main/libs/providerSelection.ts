@@ -3,10 +3,21 @@
 // `openai-responses`, `anthropic-messages`, `google-generative-ai`) and baseURL.
 
 import {
+  canonicalizeDshProviderId,
   OpenAIApiMode,
   OpenClawApi,
   ProviderName,
 } from '../../shared/providers';
+
+/**
+ * Strip trailing OpenAI endpoint suffixes (`/chat/completions`, `/responses`)
+ * from a configured base URL so SDKs never double-append the endpoint path.
+ */
+export function stripOpenAIEndpointSuffix(rawBaseUrl: string): string {
+  const normalized = rawBaseUrl.trim().replace(/\/+$/, '');
+  if (!normalized) return normalized;
+  return normalized.replace(/\/(chat\/completions|responses)$/i, '').replace(/\/+$/, '');
+}
 
 export interface ProviderSelectionInput {
   apiKey: string;
@@ -42,17 +53,24 @@ export interface ProviderSelectionResult {
 export function buildProviderSelection(
   options: ProviderSelectionInput,
 ): ProviderSelectionResult {
-  const providerName = (options.providerName ?? '').trim();
+  const providerName = canonicalizeDshProviderId(options.providerName ?? '');
   let api: string = OpenClawApi.OpenAICompletions;
   if (options.geminiNative === true || providerName === ProviderName.Gemini) {
     api = OpenClawApi.GoogleGenerativeAI;
   } else if (options.apiType === 'anthropic' || providerName === ProviderName.Anthropic) {
     api = OpenClawApi.AnthropicMessages;
-  } else if (options.openaiApiMode === OpenAIApiMode.Responses) {
+  } else if (
+    options.openaiApiMode === OpenAIApiMode.Responses
+    || (providerName === ProviderName.OpenAI && options.authType === 'oauth')
+  ) {
     api = OpenClawApi.OpenAIResponses;
   }
 
-  const baseUrl = (options.baseURL || '').trim().replace(/\/+$/, '');
+  const rawBaseUrl = (options.baseURL || '').trim().replace(/\/+$/, '');
+  const baseUrl =
+    api === OpenClawApi.OpenAICompletions || api === OpenClawApi.OpenAIResponses
+      ? stripOpenAIEndpointSuffix(rawBaseUrl)
+      : rawBaseUrl;
   const usesProxyPlaceholder =
     providerName === ProviderName.LobsteraiServer
     || providerName === ProviderName.Copilot;

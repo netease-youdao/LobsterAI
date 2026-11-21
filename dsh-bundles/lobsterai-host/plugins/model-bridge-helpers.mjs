@@ -4,7 +4,18 @@
  */
 
 const OPENAI_COMPLETIONS_API = 'openai-completions';
+const OPENAI_RESPONSES_API = 'openai-responses';
 const ANTHROPIC_MESSAGES_API = 'anthropic-messages';
+const GOOGLE_GENERATIVE_AI_API = 'google-generative-ai';
+
+const PROVIDER_ID_ALIASES = Object.freeze({
+  zai: 'zhipu',
+  google: 'gemini',
+  'lobsterai-copilot': 'github-copilot',
+  'minimax-portal': 'minimax',
+  'openai-codex': 'openai',
+});
+
 const MOONSHOT_KIMI_K3_PROFILE = 'moonshot-kimi-k3';
 const KIMI_K3_REASONING_EFFORT = 'max';
 const KIMI_K3_FIXED_SAMPLING_FIELDS = [
@@ -20,9 +31,73 @@ const MAX_SAFE_DEFAULT_MAX_TOKENS = 131_072;
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const THINKING_LEVEL_SET = new Set(THINKING_LEVELS);
 const NON_OFF_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const USER_CONTEXT_WINDOW_PREFIX = 'user-context:';
 
 function isRecord(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+/**
+ * Canonicalize legacy/OpenClaw provider IDs to their canonical DSH provider IDs.
+ * @param {unknown} rawId
+ * @returns {string}
+ */
+export function canonicalizeProviderId(rawId) {
+  if (typeof rawId !== 'string') return '';
+  const trimmed = rawId.trim();
+  if (!trimmed) return '';
+  return PROVIDER_ID_ALIASES[trimmed] ?? trimmed;
+}
+
+/**
+ * Normalize a provider/model API format identifier into a pi-ai protocol key.
+ * @param {unknown} rawApi
+ * @returns {string}
+ */
+export function normalizeProtocol(rawApi) {
+  const api = typeof rawApi === 'string' ? rawApi.trim().toLowerCase() : '';
+  if (api === 'anthropic' || api === ANTHROPIC_MESSAGES_API) return ANTHROPIC_MESSAGES_API;
+  if (api === OPENAI_RESPONSES_API || api === 'responses') return OPENAI_RESPONSES_API;
+  if (api === 'google' || api === 'gemini' || api === GOOGLE_GENERATIVE_AI_API) {
+    return GOOGLE_GENERATIVE_AI_API;
+  }
+  return OPENAI_COMPLETIONS_API;
+}
+
+/**
+ * Strip trailing endpoint suffixes (`/chat/completions`, `/responses`) on
+ * OpenAI-family URLs and strip inherited `/v1` when an Anthropic model inherits
+ * a non-Anthropic provider's base URL (because `@anthropic-ai/sdk` appends `/v1/messages`).
+ *
+ * @param {unknown} rawBaseUrl
+ * @param {string} [modelApi]
+ * @param {string} [providerApi]
+ * @param {boolean} [hasExplicitModelBaseUrl]
+ * @returns {string}
+ */
+export function normalizeProviderBaseUrl(
+  rawBaseUrl,
+  modelApi = OPENAI_COMPLETIONS_API,
+  providerApi,
+  hasExplicitModelBaseUrl = false,
+) {
+  if (typeof rawBaseUrl !== 'string') return '';
+  let normalized = rawBaseUrl.trim().replace(/\/+$/, '');
+  if (!normalized) return '';
+
+  const resolvedApi = normalizeProtocol(modelApi);
+  if (resolvedApi === OPENAI_COMPLETIONS_API || resolvedApi === OPENAI_RESPONSES_API) {
+    normalized = normalized.replace(/\/(chat\/completions|responses)$/i, '').replace(/\/+$/, '');
+  } else if (
+    resolvedApi === ANTHROPIC_MESSAGES_API
+    && !hasExplicitModelBaseUrl
+    && providerApi
+    && normalizeProtocol(providerApi) !== ANTHROPIC_MESSAGES_API
+  ) {
+    normalized = normalized.replace(/\/v1$/i, '').replace(/\/+$/, '');
+  }
+
+  return normalized;
 }
 
 /**
@@ -61,7 +136,8 @@ export function resolveModelCompat(
   modelCompat,
   providerApi,
 ) {
-  const inheritProviderCompat = providerApi === undefined || providerApi === modelApi;
+  const inheritProviderCompat = !providerApi
+    || normalizeProtocol(providerApi) === normalizeProtocol(modelApi);
   const compat = {
     ...(inheritProviderCompat && isRecord(providerCompat) ? providerCompat : {}),
     ...(isRecord(modelCompat) ? modelCompat : {}),
@@ -157,6 +233,125 @@ export function resolveDefaultRequestMaxTokens(rawDefaultMaxTokens, rawMaxTokens
     ? Math.max(1, Math.floor(contextWindow / 2))
     : MAX_SAFE_DEFAULT_MAX_TOKENS;
   return Math.min(MAX_SAFE_DEFAULT_MAX_TOKENS, safeWindowHalf);
+}
+
+/**
+ * Parse a token budget out of a LobsterAI context window selection string
+ * (e.g. `user-context:1000000` or `user-context:yd-fast:400000`).
+ *
+ * @param {unknown} selectionId
+ * @returns {number | undefined}
+ */
+export function parseContextWindowSelectionTokens(selectionId) {
+  if (typeof selectionId !== 'string') return undefined;
+  const trimmed = selectionId.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith(USER_CONTEXT_WINDOW_PREFIX)) {
+    const suffix = trimmed.slice(trimmed.lastIndexOf(':') + 1);
+    const parsed = Number(suffix);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    const parsed = Number(trimmed);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the effective context window for a model given optional per-session
+ * context window selection ID or explicit numeric override.
+ *
+ * @param {{ contextWindow: number, contextWindows?: Array<{ id: string, contextWindow: number }> }} model
+ * @param {unknown} selectionId
+ * @param {unknown} overrideTokens
+ * @returns {number}
+ */
+export function resolveEffectiveContextWindow(model, selectionId, overrideTokens) {
+  if (typeof overrideTokens === 'number' && Number.isInteger(overrideTokens) && overrideTokens > 0) {
+    return overrideTokens;
+  }
+  if (typeof selectionId === 'string' && selectionId.trim().length > 0) {
+    const trimmed = selectionId.trim();
+    if (Array.isArray(model?.contextWindows)) {
+      const matched = model.contextWindows.find(
+        (entry) => entry && entry.id === trimmed && Number.isInteger(entry.contextWindow) && entry.contextWindow > 0,
+      );
+      if (matched) return matched.contextWindow;
+    }
+    const parsed = parseContextWindowSelectionTokens(trimmed);
+    if (parsed !== undefined) return parsed;
+  }
+  return model.contextWindow;
+}
+
+/**
+ * Select and cache the pi-ai protocol implementation for a model's `api`
+ * (falling back to the provider's `defaultApi`).
+ *
+ * @param {Record<string, () => unknown>} protocols
+ * @param {Map<string, unknown>} implCache
+ * @param {unknown} modelApi
+ * @param {string} defaultApi
+ * @returns {unknown}
+ */
+export function selectProtocolImpl(protocols, implCache, modelApi, defaultApi) {
+  const targetApi = normalizeProtocol(modelApi || defaultApi);
+  let impl = implCache.get(targetApi);
+  if (!impl) {
+    const factory = protocols[targetApi];
+    if (typeof factory !== 'function') {
+      throw new Error(`lobster-model-bridge: unsupported protocol "${targetApi}"`);
+    }
+    impl = factory();
+    implCache.set(targetApi, impl);
+  }
+  return impl;
+}
+
+/**
+ * Apply model-level payload transforms inside pi-ai's `onPayload` hook:
+ * 1. Flatten text-only array message contents to plain strings when
+ *    `model.compat.requiresStringContent === true` (e.g. Kimi K3).
+ * 2. Merge per-model `customParams` (`extra_body`) into the request payload.
+ *
+ * @param {unknown} params
+ * @param {{ compat?: Record<string, unknown> } | undefined} model
+ * @param {Record<string, unknown> | undefined} customParams
+ * @returns {unknown}
+ */
+export function applyModelPayloadTransforms(params, model, customParams) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    return params;
+  }
+
+  let next = /** @type {Record<string, unknown>} */ (params);
+
+  if (model?.compat?.requiresStringContent === true && Array.isArray(next.messages)) {
+    let messagesChanged = false;
+    const nextMessages = next.messages.map((msg) => {
+      if (!msg || typeof msg !== 'object' || !Array.isArray(msg.content)) return msg;
+      const isTextOnly = msg.content.every(
+        (part) => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string',
+      );
+      if (!isTextOnly) return msg;
+      messagesChanged = true;
+      const text = msg.content.map((part) => part.text).join('\n');
+      return { ...msg, content: text };
+    });
+    if (messagesChanged) {
+      next = { ...next, messages: nextMessages };
+    }
+  }
+
+  if (customParams && typeof customParams === 'object' && !Array.isArray(customParams)) {
+    const entries = Object.entries(customParams);
+    if (entries.length > 0) {
+      next = { ...next, ...customParams };
+    }
+  }
+
+  return next;
 }
 
 /**
@@ -264,7 +459,8 @@ export function applyLobsterAIRequestOptions(payload, thinkingLevel) {
 /**
  * Invoke a pi-ai protocol implementation (`stream` or `streamSimple`) with
  * LobsterAI's per-model payload contracts (Kimi K3, `lobsterai_options` v1,
- * and safe default Anthropic thinking omission when no thinkingConfig exists).
+ * `requiresStringContent` / `customParams`, and safe default Anthropic thinking
+ * omission when no thinkingConfig exists).
  *
  * @param {{
  *   method: 'stream' | 'streamSimple';
@@ -276,6 +472,7 @@ export function applyLobsterAIRequestOptions(payload, thinkingLevel) {
  *     runtimeProfile?: string;
  *     thinkingConfig?: Record<string, unknown>;
  *     requestOptionsVersion?: number;
+ *     customParams?: Record<string, unknown>;
  *   };
  *   requestContext?: {
  *     reasoningEffort?: string;
@@ -316,7 +513,19 @@ export function invokeModelApiStream({
     && !hasRequestOptionsV1
     && !isRecord(modelMeta?.thinkingConfig);
 
-  if (!isKimiK3 && !resolvedThinkingLevel && !shouldOmitSyntheticDisabledAnthropicThinking) {
+  const customParams = isRecord(modelMeta?.customParams) && Object.keys(modelMeta.customParams).length > 0
+    ? modelMeta.customParams
+    : undefined;
+  const needsPayloadTransform = Boolean(
+    customParams || model?.compat?.requiresStringContent === true,
+  );
+
+  if (
+    !isKimiK3
+    && !resolvedThinkingLevel
+    && !shouldOmitSyntheticDisabledAnthropicThinking
+    && !needsPayloadTransform
+  ) {
     return apiImpl[method](model, context, options);
   }
 
@@ -331,8 +540,18 @@ export function invokeModelApiStream({
   }
 
   const originalOnPayload = typeof options?.onPayload === 'function' ? options.onPayload : undefined;
-  const applyPostHooks = (candidate) => {
+  const applyPostHooks = (candidate, payloadModel) => {
     if (!isRecord(candidate)) return;
+    if (needsPayloadTransform) {
+      const transformed = applyModelPayloadTransforms(
+        candidate,
+        payloadModel ?? effectiveModel,
+        customParams,
+      );
+      if (transformed !== candidate && isRecord(transformed)) {
+        Object.assign(candidate, transformed);
+      }
+    }
     if (isKimiK3) {
       applyKimiK3PayloadContract(candidate);
     }
@@ -356,12 +575,12 @@ export function invokeModelApiStream({
     if (next && typeof next.then === 'function') {
       return Promise.resolve(next).then((resolved) => {
         const target = resolved !== undefined ? resolved : payload;
-        applyPostHooks(target);
+        applyPostHooks(target, payloadModel);
         return resolved !== undefined ? target : undefined;
       });
     }
     const target = next !== undefined ? next : payload;
-    applyPostHooks(target);
+    applyPostHooks(target, payloadModel);
     return next !== undefined ? target : undefined;
   };
 
@@ -397,9 +616,10 @@ export function dispatchProviderStream({
   modelRuntimeMeta,
   requestContext,
 }) {
-  const targetApi = typeof model?.api === 'string' && model.api.trim().length > 0
+  const rawTargetApi = typeof model?.api === 'string' && model.api.trim().length > 0
     ? model.api.trim()
     : spec.api;
+  const targetApi = protocols[rawTargetApi] ? rawTargetApi : normalizeProtocol(rawTargetApi);
   let apiImpl = apiImplCache.get(targetApi);
   if (!apiImpl) {
     const factory = protocols[targetApi];

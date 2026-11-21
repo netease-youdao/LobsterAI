@@ -1,23 +1,23 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
-  OpenClawApi,
-  OpenClawProviderId,
-} from '../../../shared/providers/constants';
-import {
+  KIMI_K3_RUNTIME_PROFILE,
   LOBSTERAI_REQUEST_OPTIONS_VERSION,
   LobsterAIRequestCapability,
-} from '../../../shared/providers/lobsterAIRequestOptions';
-import { ModelRuntimeProfile } from '../../../shared/providers/modelRuntimeProfiles';
-import {
+  ModelRuntimeProfile,
   ModelThinkingLevel,
+  OpenClawApi,
+  OpenClawProviderId,
   OpenClawThinkingLevel,
-} from '../../../shared/providers/modelThinking';
+} from '../../../shared/providers';
 import {
   buildDshMcpServerSpecs,
   buildDshProvidersPayload,
   buildDshThinkingLevelMap,
+  buildModelThinkingLevelMap,
+  clampModelMaxTokens,
   normalizeDshMcpServerName,
+  resolveDshReasoningEffort,
 } from './dshProviderSync';
 
 describe('buildDshProvidersPayload', () => {
@@ -327,6 +327,261 @@ describe('buildDshProvidersPayload', () => {
       high: ModelThinkingLevel.High,
       xhigh: null,
       max: ModelThinkingLevel.Max,
+    });
+  });
+
+  test('canonicalizes OpenClaw provider IDs and routes OAuth providers accurately', () => {
+    const payload = buildDshProvidersPayload({
+      modelAuthProxyUrl: 'http://127.0.0.1:45555',
+      modelAuthProxySecret: 'proxy-secret',
+      virtualAliases: {
+        'zai/glm-alias': { provider: 'zai', model: 'glm-5.3' },
+      },
+      providers: {
+        zai: {
+          enabled: true,
+          apiKey: 'sk-zhipu',
+          baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+          apiFormat: 'anthropic',
+          models: [{ id: 'glm-5.3' }],
+        },
+        google: {
+          enabled: true,
+          apiKey: 'sk-gem',
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+          apiFormat: 'gemini',
+          models: [{ id: 'gemini-3.1-pro-preview' }],
+        },
+        'lobsterai-copilot': {
+          enabled: true,
+          apiFormat: 'openai',
+          models: [{ id: 'gpt-5-mini' }],
+        },
+        openai: {
+          enabled: true,
+          authType: 'oauth',
+          apiFormat: 'openai',
+          models: [{ id: 'gpt-5.4', supportsThinking: true }],
+        },
+        xai: {
+          enabled: true,
+          authType: 'oauth',
+          apiFormat: 'openai',
+          models: [{ id: 'grok-4.5', supportsThinking: true }],
+        },
+        minimax: {
+          enabled: true,
+          authType: 'oauth',
+          apiKey: 'mm-direct-oauth-token',
+          baseUrl: 'https://api.minimaxi.com/anthropic',
+          apiFormat: 'anthropic',
+          models: [{ id: 'MiniMax-M3' }],
+        },
+      },
+    });
+
+    const byId = Object.fromEntries(payload.providers.map((p) => [p.id, p]));
+    expect(Object.keys(byId).sort()).toEqual([
+      'gemini',
+      'github-copilot',
+      'minimax',
+      'openai',
+      'xai',
+      'zhipu',
+    ]);
+    expect(byId.openai).toMatchObject({
+      id: 'openai',
+      api: OpenClawApi.OpenAIResponses,
+      baseURL: 'http://127.0.0.1:45555/v1/openai-codex',
+      apiKey: 'proxy-secret',
+    });
+    expect(byId.xai).toMatchObject({
+      id: 'xai',
+      api: OpenClawApi.OpenAICompletions,
+      baseURL: 'http://127.0.0.1:45555/v1/xai-oauth',
+      apiKey: 'proxy-secret',
+    });
+    expect(byId.minimax).toMatchObject({
+      id: 'minimax',
+      api: OpenClawApi.AnthropicMessages,
+      baseURL: 'https://api.minimaxi.com/anthropic',
+      apiKey: 'mm-direct-oauth-token',
+    });
+    expect(byId['github-copilot']).toMatchObject({
+      id: 'github-copilot',
+      baseURL: 'http://127.0.0.1:45555/v1/github-copilot',
+      apiKey: 'proxy-secret',
+    });
+    expect(payload.virtualAliases['zai/glm-alias']).toEqual({
+      provider: 'zhipu',
+      model: 'glm-5.3',
+    });
+  });
+
+  test('strips /chat/completions and /responses suffixes, clamps maxTokens, forwards customParams, and applies Kimi K3 compat', () => {
+    const payload = buildDshProvidersPayload({
+      providers: {
+        youdaozhiyun: {
+          enabled: true,
+          apiKey: 'sk-yd',
+          baseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions/',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'deepseek-reasoner',
+              contextWindow: 8192,
+              maxTokens: 32768,
+              customParams: { top_k: 40, repetition_penalty: 1.05 },
+            },
+          ],
+        },
+        customResponses: {
+          enabled: true,
+          apiKey: 'sk-resp',
+          baseUrl: 'https://gateway.example.com/v1/responses',
+          apiFormat: 'openai-responses',
+          models: [{ id: 'gpt-5.5' }],
+        },
+        moonshot: {
+          enabled: true,
+          apiKey: 'sk-kimi',
+          baseUrl: 'https://api.moonshot.cn/v1',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'kimi-k3',
+              customParams: {
+                temperature: 0.7,
+                top_k: 32,
+                requiresStringContent: false,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const byId = Object.fromEntries(payload.providers.map((p) => [p.id, p]));
+    expect(byId.youdaozhiyun.baseURL).toBe('https://openapi.youdao.com/llmgateway/api/v1');
+    expect(byId.youdaozhiyun.models[0]).toMatchObject({
+      contextWindow: 8192,
+      maxTokens: 8192,
+      customParams: { top_k: 40, repetition_penalty: 1.05 },
+    });
+
+    expect(byId.customResponses.baseURL).toBe('https://gateway.example.com/v1');
+
+    const kimiModel = byId.moonshot.models[0];
+    expect(kimiModel.reasoning).toBe(true);
+    expect(kimiModel.contextWindow).toBe(KIMI_K3_RUNTIME_PROFILE.contextWindow);
+    expect(kimiModel.maxTokens).toBe(KIMI_K3_RUNTIME_PROFILE.maxTokens);
+    expect(kimiModel.defaultMaxTokens).toBe(131_072);
+    expect(kimiModel.thinkingLevelMap).toEqual(KIMI_K3_RUNTIME_PROFILE.thinkingLevelMap);
+    expect(kimiModel.compat).toMatchObject({
+      maxTokensField: 'max_tokens',
+      supportsUsageInStreaming: false,
+      requiresStringContent: true,
+      supportsReasoningEffort: true,
+      requiresReasoningContentOnAssistantMessages: true,
+    });
+    // Kimi K3 reserved customParam keys (`temperature`, `requiresStringContent`) are stripped, non-reserved kept.
+    expect(kimiModel.customParams).toEqual({ top_k: 32 });
+  });
+
+  test('supports per-model Anthropic vs OpenAI format and preset context windows on lobsterai-server', () => {
+    const payload = buildDshProvidersPayload({
+      modelAuthProxyUrl: 'http://127.0.0.1:45555',
+      modelAuthProxySecret: 'proxy-secret',
+      providers: {
+        'lobsterai-server': {
+          enabled: true,
+          authType: 'lobster_plan',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'deepseek-v4',
+              apiFormat: 'openai',
+              supportsThinking: true,
+              contextWindow: 400_000,
+              maxTokens: 500_000,
+              contextWindowDefault: 'model-default',
+              contextWindows: [
+                { id: 'model-default', label: '400000', contextWindow: 400_000 },
+                { id: 'yd-fast', label: '400000', contextWindow: 400_000 },
+                { id: 'user-context:1000000', label: '1000000', contextWindow: 1_000_000 },
+              ],
+            },
+            {
+              id: 'claude-opus-4-7',
+              apiFormat: 'anthropic',
+              supportsThinking: true,
+              contextWindow: 200_000,
+              maxTokens: 16_384,
+            },
+          ],
+        },
+      },
+    });
+
+    const server = payload.providers[0];
+    expect(server.id).toBe('lobsterai-server');
+    expect(server.baseURL).toBe('http://127.0.0.1:45555/v1/lobsterai-server');
+
+    const openaiModel = server.models.find((m) => m.id === 'deepseek-v4')!;
+    expect(openaiModel.api).toBeUndefined();
+    expect(openaiModel.baseURL).toBeUndefined();
+    expect(openaiModel.maxTokens).toBe(400_000);
+    expect(openaiModel.contextWindowDefault).toBe('model-default');
+    expect(openaiModel.contextWindows).toHaveLength(3);
+
+    const anthropicModel = server.models.find((m) => m.id === 'claude-opus-4-7')!;
+    expect(anthropicModel.api).toBe(OpenClawApi.AnthropicMessages);
+    expect(anthropicModel.baseURL).toBe('http://127.0.0.1:45555');
+  });
+});
+
+describe('clampModelMaxTokens & reasoning helpers', () => {
+  test('clamps maxTokens to contextWindow and leaves undefined untouched', () => {
+    expect(clampModelMaxTokens(32768, 8192)).toBe(8192);
+    expect(clampModelMaxTokens(4096, 128000)).toBe(4096);
+    expect(clampModelMaxTokens(undefined, 8192)).toBeUndefined();
+    expect(clampModelMaxTokens(4096, undefined)).toBe(4096);
+  });
+
+  test('maps product thinking levels to DSH reasoningEffort cleanly', () => {
+    expect(resolveDshReasoningEffort({ thinkingLevel: ModelThinkingLevel.Max })).toBe(OpenClawThinkingLevel.XHigh);
+    expect(resolveDshReasoningEffort({ thinkingLevel: ModelThinkingLevel.High })).toBe(OpenClawThinkingLevel.High);
+    expect(resolveDshReasoningEffort({ thinkingLevel: ModelThinkingLevel.Off })).toBe(OpenClawThinkingLevel.Off);
+    expect(resolveDshReasoningEffort({ thinkingLevel: '' })).toBeUndefined();
+
+    const thinkingConfig = {
+      defaultLevel: ModelThinkingLevel.Medium,
+      options: [
+        { level: ModelThinkingLevel.Off, openclawLevel: OpenClawThinkingLevel.Off },
+        { level: ModelThinkingLevel.Medium, openclawLevel: OpenClawThinkingLevel.Medium },
+        { level: ModelThinkingLevel.Max, openclawLevel: OpenClawThinkingLevel.XHigh },
+      ],
+    };
+    expect(resolveDshReasoningEffort({ thinkingLevel: '', thinkingConfig })).toBe(OpenClawThinkingLevel.Medium);
+    expect(resolveDshReasoningEffort({ thinkingLevel: ModelThinkingLevel.Max, thinkingConfig })).toBe(OpenClawThinkingLevel.XHigh);
+    expect(resolveDshReasoningEffort({ thinkingLevel: ModelThinkingLevel.High, thinkingConfig })).toBe(OpenClawThinkingLevel.Medium);
+
+    expect(resolveDshReasoningEffort({
+      thinkingLevel: ModelThinkingLevel.Low,
+      runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+    })).toBe('max');
+    expect(resolveDshReasoningEffort({
+      thinkingLevel: ModelThinkingLevel.Off,
+      runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+    })).toBeUndefined();
+
+    expect(buildModelThinkingLevelMap({ thinkingConfig })).toEqual({
+      minimal: null,
+      low: null,
+      medium: 'medium',
+      high: null,
+      xhigh: 'xhigh',
+      max: 'xhigh',
     });
   });
 });

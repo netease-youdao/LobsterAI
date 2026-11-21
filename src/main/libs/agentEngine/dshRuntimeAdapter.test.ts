@@ -19,7 +19,7 @@ import {
 } from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage } from '../../coworkStore';
 import type { DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from '../dsh/dshTypertClient';
-import { hasLlmUsageContext } from '../llmUsageContext';
+import { getLlmUsageHeaders, hasLlmUsageContext } from '../llmUsageContext';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildLazyContextBridgePrefix,
@@ -74,6 +74,7 @@ function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
     updateSession: (_sid, updates) => {
       if (updates.claudeSessionId !== undefined) session.claudeSessionId = updates.claudeSessionId;
       if (updates.modelOverride !== undefined) session.modelOverride = updates.modelOverride;
+      if (updates.thinkingLevel !== undefined) session.thinkingLevel = updates.thinkingLevel;
     },
     getContinuityCapsule: () => ({
       version: 1,
@@ -1432,5 +1433,163 @@ describe('DshRuntimeAdapter', () => {
       },
     ]);
     expect(promptedContents[1]?.[0]?.text).toContain('Screenshot: transport image 1;');
+  });
+
+  test('preserves thinkingLevel -> reasoningEffort across Turn 1 & Turn 2, including pre-DSH patchSession, and canonicalizes provider aliases', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-thinking',
+      cwd: '/tmp/work',
+      modelOverride: 'zai/glm-5.3',
+    });
+
+    const selectModel = vi.fn(async () => ({ selected: {} }));
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-think-1' })),
+      selectModel,
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+      // Simulate resolveModelSelection returning only provider/model (without reasoningEffort)
+      resolveModelSelection: (_sid, override) => {
+        const [provider, model] = String(override || '').split('/');
+        return provider && model ? { provider, model } : null;
+      },
+    });
+
+    // Patch BEFORE dshSessionId exists!
+    await adapter.patchSession('cw-thinking', {
+      thinkingLevel: 'high',
+      contextWindow: 'user-context:1000000',
+    });
+    expect(session.thinkingLevel).toBe('high');
+
+    // Turn 1
+    await adapter.startSession('cw-thinking', 'First turn');
+    // Turn 2
+    await adapter.continueSession('cw-thinking', 'Second turn');
+
+    expect(selectModel).toHaveBeenNthCalledWith(1, {
+      sessionId: 'dsh-think-1',
+      provider: 'zhipu',
+      model: 'glm-5.3',
+      reasoningEffort: 'high',
+    });
+    expect(selectModel).toHaveBeenNthCalledWith(2, {
+      sessionId: 'dsh-think-1',
+      provider: 'zhipu',
+      model: 'glm-5.3',
+      reasoningEffort: 'high',
+    });
+    expect(bindSessionContext).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'dsh-think-1',
+      contextWindowSelection: 'user-context:1000000',
+      contextWindowOverride: 1_000_000,
+    }));
+  });
+
+  test('honors patch.contextWindow in bindSessionContext and getContextUsage (including DSH contextPressure projection)', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-ctx',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-ctx-1`,
+      modelOverride: 'lobsterai-server/deepseek-v4',
+    });
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      getSessionProjections: vi.fn(async () => ({
+        values: {
+          contextPressure: {
+            pressureTokens: 250_000,
+            contextWindow: 400_000,
+          },
+        },
+      })),
+      selectModel: vi.fn(async () => ({ selected: {} })),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await adapter.patchSession('cw-ctx', { contextWindow: 'user-context:yd-fast:1000000' });
+    expect(bindSessionContext).toHaveBeenCalledWith({
+      sessionId: 'dsh-ctx-1',
+      coworkSessionId: 'cw-ctx',
+      contextWindowSelection: 'user-context:yd-fast:1000000',
+      contextWindowOverride: 1_000_000,
+    });
+
+    const usage = await adapter.getContextUsage('cw-ctx');
+    expect(usage).toMatchObject({
+      usedTokens: 250_000,
+      contextTokens: 1_000_000,
+      percent: 25,
+      status: 'normal',
+    });
+  });
+
+  test('writes modelPresetId and resolvedModelId onto turnUserMessage metadata for x-lobster-model-preset attribution', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-preset-attr',
+      cwd: '/tmp/work',
+      modelOverride: 'lobsterai-server/yd-fast',
+    });
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-preset-1' })),
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+      resolveModelSelection: async () => ({
+        provider: 'lobsterai-server',
+        model: 'deepseek-v4-flash',
+        modelPresetId: 'balanced',
+      }),
+    });
+
+    await adapter.startSession('cw-preset-attr', 'Attribute preset');
+
+    const userMsg = messages.find((m) => m.type === 'user')!;
+    expect(userMsg.metadata?.modelPresetId).toBe('balanced');
+    expect(userMsg.metadata?.resolvedModelId).toBe('deepseek-v4-flash');
+    const trace = getCoworkLlmTrace(userMsg.metadata)!;
+    const headers = getLlmUsageHeaders(`00-${trace.traceId}-1111111111111111-01`, 'deepseek-v4-flash');
+    expect(headers['x-lobster-model-preset']).toBe('balanced');
   });
 });

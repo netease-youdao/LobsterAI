@@ -53,15 +53,18 @@ export interface DshHostProviderModelSpec {
   api?: DshHostProviderSpec['api'];
   baseURL?: string;
   contextWindow?: number;
+  contextWindows?: Array<{ id: string; label?: string; contextWindow: number }>;
+  contextWindowDefault?: string;
   maxTokens?: number;
   defaultMaxTokens?: number;
   input?: Array<'text' | 'image'>;
   supportsImage?: boolean;
   reasoning?: boolean;
-  thinkingLevelMap?: Partial<Record<ModelThinkingLevel, string | null>>;
+  thinkingLevelMap?: Partial<Record<ModelThinkingLevel, string | null>> | Record<string, string | null>;
   runtimeProfile?: ModelRuntimeProfile;
   thinkingConfig?: ModelThinkingConfig;
   requestOptionsVersion?: typeof LOBSTERAI_REQUEST_OPTIONS_VERSION;
+  customParams?: Record<string, unknown>;
   compat?: Record<string, unknown>;
 }
 
@@ -169,6 +172,8 @@ export interface DshHostSessionContext {
   executionMode?: string;
   permissionPreset?: DshPermissionPreset;
   unlockedCapabilities?: DshProgressiveCapability[];
+  contextWindowSelection?: string | null;
+  contextWindowOverride?: number | null;
   unbind?: boolean;
 }
 

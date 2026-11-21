@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { canonicalizeProviderId } from './model-bridge-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 
 export const name = 'lobster-ops-rpc';
@@ -283,7 +284,7 @@ export function apply(ctx) {
                 && typeof rawModel.provider === 'string' && rawModel.provider.trim().length > 0
                 && typeof rawModel.model === 'string' && rawModel.model.trim().length > 0
                 ? {
-                    provider: rawModel.provider.trim(),
+                    provider: canonicalizeProviderId(rawModel.provider),
                     model: rawModel.model.trim(),
                     ...(typeof rawModel.reasoningEffort === 'string' && rawModel.reasoningEffort.trim().length > 0
                       ? { reasoningEffort: rawModel.reasoningEffort.trim() }
@@ -391,7 +392,7 @@ export function apply(ctx) {
                 ? p.unlockedCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0)
                 : []),
             ]);
-            state.sessionContexts.set(sessionId, {
+            const nextContext = {
               ...prev,
               ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
               ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
@@ -409,7 +410,22 @@ export function apply(ctx) {
               ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
               ...(nextPreset ? { permissionPreset: nextPreset } : {}),
               ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
-            });
+            };
+            if (p.contextWindowSelection === null) {
+              delete nextContext.contextWindowSelection;
+            } else if (typeof p.contextWindowSelection === 'string' && p.contextWindowSelection.trim().length > 0) {
+              nextContext.contextWindowSelection = p.contextWindowSelection.trim();
+            }
+            if (p.contextWindowOverride === null) {
+              delete nextContext.contextWindowOverride;
+            } else if (
+              typeof p.contextWindowOverride === 'number'
+              && Number.isInteger(p.contextWindowOverride)
+              && p.contextWindowOverride > 0
+            ) {
+              nextContext.contextWindowOverride = p.contextWindowOverride;
+            }
+            state.sessionContexts.set(sessionId, nextContext);
             state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);

@@ -871,4 +871,114 @@ describe('runLegacyOpenClawMigration', () => {
     });
     verifyDb.close();
   });
+
+  test('migrates legacy xAI OAuth credential from auth-profiles.json into auth/xai-oauth.json before deleting openclaw/', () => {
+    const tmp = createTempDir();
+    const sqlitePath = path.join(tmp, 'lobsterai.sqlite');
+    const openclawState = path.join(tmp, 'openclaw', 'state');
+    const mainAgentDir = path.join(openclawState, 'agents', 'main', 'agent');
+    fs.mkdirSync(mainAgentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mainAgentDir, 'auth-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          'xai:alice@example.com': {
+            type: 'oauth',
+            provider: 'xai',
+            access: 'xai-legacy-access-token',
+            refresh: 'xai-legacy-refresh-token',
+            email: 'alice@example.com',
+            expires: 1_900_000_000_000,
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir: tmp,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(fs.existsSync(path.join(tmp, 'openclaw'))).toBe(false);
+
+    const migratedPath = path.join(tmp, 'auth', 'xai-oauth.json');
+    expect(fs.existsSync(migratedPath)).toBe(true);
+    const migrated = JSON.parse(fs.readFileSync(migratedPath, 'utf8')) as {
+      profileId: string;
+      credential: { provider: string; type: string; access: string; email?: string };
+    };
+    expect(migrated.profileId).toBe('xai:alice@example.com');
+    expect(migrated.credential).toMatchObject({
+      provider: 'xai',
+      type: 'oauth',
+      access: 'xai-legacy-access-token',
+      email: 'alice@example.com',
+    });
+    expect(result.report?.reauthRequired.some((r) => r.kind === 'xai_oauth')).toBe(false);
+  });
+
+  test('migrates legacy xAI OAuth credential from openclaw.sqlite auth_profile_store and flags reauth if unreadable', () => {
+    // Part A: valid SQLite auth_profile_store
+    const tmpOk = createTempDir();
+    const sqliteOk = path.join(tmpOk, 'lobsterai.sqlite');
+    const stateOk = path.join(tmpOk, 'openclaw', 'state', 'state');
+    fs.mkdirSync(stateOk, { recursive: true });
+    const legacyDb = new Database(path.join(stateOk, 'openclaw.sqlite'));
+    legacyDb.exec('CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL)');
+    legacyDb.prepare('INSERT INTO auth_profile_store VALUES (?, ?)').run(
+      'primary',
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          'xai:bob@example.com': {
+            type: 'oauth',
+            provider: 'xai',
+            access: 'xai-sqlite-access-token',
+            email: 'bob@example.com',
+          },
+        },
+      }),
+    );
+    legacyDb.close();
+    const dbOk = new Database(sqliteOk);
+    dbOk.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    dbOk.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    dbOk.close();
+
+    const resOk = runLegacyOpenClawMigration({ userDataDir: tmpOk, sqlitePath: sqliteOk });
+    expect(resOk.status).toBe(MigrationV2Status.Completed);
+    const migratedOk = JSON.parse(
+      fs.readFileSync(path.join(tmpOk, 'auth', 'xai-oauth.json'), 'utf8'),
+    ) as { profileId: string; credential: { access: string } };
+    expect(migratedOk.profileId).toBe('xai:bob@example.com');
+    expect(migratedOk.credential.access).toBe('xai-sqlite-access-token');
+
+    // Part B: corrupted auth-profiles.json flags xai in reauthRequired
+    const tmpBad = createTempDir();
+    const sqliteBad = path.join(tmpBad, 'lobsterai.sqlite');
+    const badAgentDir = path.join(tmpBad, 'openclaw', 'state', 'agents', 'main', 'agent');
+    fs.mkdirSync(badAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(badAgentDir, 'auth-profiles.json'), '{not-valid-json', 'utf8');
+    const dbBad = new Database(sqliteBad);
+    dbBad.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    dbBad.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    dbBad.close();
+
+    const resBad = runLegacyOpenClawMigration({ userDataDir: tmpBad, sqlitePath: sqliteBad });
+    expect(resBad.status).toBe(MigrationV2Status.Completed);
+    expect(resBad.report?.reauthRequired).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'xai_oauth', id: 'xai' }),
+      ]),
+    );
+  });
 });

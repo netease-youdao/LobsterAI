@@ -1,4 +1,10 @@
-import { OpenClawProviderId, ProviderName, ProviderRegistry } from '@shared/providers/constants';
+import {
+  canonicalizeDshModelRef,
+  canonicalizeDshProviderId,
+  OpenClawProviderId,
+  ProviderName,
+  ProviderRegistry,
+} from '@shared/providers/constants';
 
 import type { Model } from '../store/slices/modelSlice';
 import { logModelSelectionOnce } from './modelSelectionLog';
@@ -46,7 +52,9 @@ export function matchesOpenClawModelRef(
   const normalizedRef = modelRef.trim();
   if (!normalizedRef) return false;
   if (normalizedRef.includes('/')) {
-    return normalizedRef === toOpenClawModelRef(model);
+    const modelTargetRef = toOpenClawModelRef(model);
+    return normalizedRef === modelTargetRef
+      || canonicalizeDshModelRef(normalizedRef) === canonicalizeDshModelRef(modelTargetRef);
   }
   return normalizedRef === model.id;
 }
@@ -71,6 +79,16 @@ export function resolveOpenClawModelRef<T extends ModelRefInput>(
     const slashIndex = normalizedRef.indexOf('/');
     const providerId = normalizedRef.slice(0, slashIndex);
     const modelId = normalizedRef.slice(slashIndex + 1);
+
+    // Canonical provider alias compatibility across OpenClaw <-> DSH provider IDs:
+    // zai <-> zhipu, google <-> gemini, lobsterai-copilot <-> github-copilot,
+    // minimax-portal <-> minimax, openai-codex <-> openai.
+    const canonicalProviderId = canonicalizeDshProviderId(providerId);
+    const canonicalMatch = availableModels.find((model) => (
+      model.id === modelId
+      && canonicalizeDshProviderId(resolveModelOpenClawProviderId(model)) === canonicalProviderId
+    )) ?? null;
+    if (canonicalMatch) return canonicalMatch;
 
     // OpenAI OAuth provider migration compatibility between older
     // `openai-codex/*` refs and the current `openai/*` refs.

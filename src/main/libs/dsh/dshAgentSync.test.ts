@@ -126,4 +126,53 @@ describe('buildDshHostAgentSpecs', () => {
       },
     ]);
   });
+
+  test('canonicalizes legacy OpenClaw provider IDs on explicit specialist agent model selections', () => {
+    const agents: Agent[] = [
+      makeAgent({
+        id: 'glm-specialist',
+        name: 'GLM 专家',
+        model: 'zai/glm-5.3',
+        thinkingLevel: 'high',
+      }),
+      makeAgent({
+        id: 'gemini-specialist',
+        name: 'Gemini 专家',
+        model: 'google/gemini-3.1-pro-preview',
+      }),
+      makeAgent({
+        id: 'copilot-specialist',
+        name: 'Copilot 专家',
+        model: 'lobsterai-copilot/gpt-5-mini',
+      }),
+      makeAgent({
+        id: 'minimax-specialist',
+        name: 'MiniMax 专家',
+        model: 'minimax-portal/MiniMax-M3',
+      }),
+      makeAgent({
+        id: 'codex-specialist',
+        name: 'Codex 专家',
+        model: 'openai-codex/gpt-5.4',
+      }),
+    ];
+
+    const specs = buildDshHostAgentSpecs({
+      agents,
+      resolveExplicitModel: (agent) => {
+        const [provider, model] = agent.model.split('/');
+        return provider && model
+          ? { provider, model, ...(agent.thinkingLevel ? { reasoningEffort: agent.thinkingLevel } : {}) }
+          : null;
+      },
+    });
+
+    expect(specs.map((s) => ({ id: s.id, modelSelection: s.modelSelection }))).toEqual([
+      { id: 'glm-specialist', modelSelection: { provider: 'zhipu', model: 'glm-5.3', reasoningEffort: 'high' } },
+      { id: 'gemini-specialist', modelSelection: { provider: 'gemini', model: 'gemini-3.1-pro-preview' } },
+      { id: 'copilot-specialist', modelSelection: { provider: 'github-copilot', model: 'gpt-5-mini' } },
+      { id: 'minimax-specialist', modelSelection: { provider: 'minimax', model: 'MiniMax-M3' } },
+      { id: 'codex-specialist', modelSelection: { provider: 'openai', model: 'gpt-5.4' } },
+    ]);
+  });
 });
