@@ -1,9 +1,11 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { UsageStage } from '../../../shared/analytics/usage';
 import { buildManagedSessionKey } from '../../../shared/cowork/managedSessionKey';
 import { MediaDeliveryStatus, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { MediaPreferenceMode, type MediaSelection, MediaSelectionMode } from '../../../shared/media/defaultPolicy';
 import { SkinToolName, SkinWorkflowKind } from '../../../shared/skin/constants';
+import { t } from '../../i18n';
 import type { MediaGenerationRequest, MediaGenerationResponse } from '../../mcp/mcpRuntime';
 import { MediaGenerationAction, MediaGenerationTool } from '../../mediaGenerationPolicy';
 import { buildSkinPackInstruction } from '../agentEngine/mediaGenerationTurnInstruction';
@@ -60,7 +62,7 @@ const imageTool: DshHostToolDescriptor = {
 
 const videoTool: DshHostToolDescriptor = {
   name: MediaGenerationTool.Video,
-  description: 'Generate a video with the selected LobsterAI model. List models and supported parameters, generate once and check the returned task ID with status. The desktop asks the user to confirm the quote. Cancel a queued task only at the user’s request.',
+  description: 'Generate a video with the selected LobsterAI model. The desktop asks the user to confirm the quote. If it expires or the user declines, end this turn and wait for a new user request. Check status only with a returned task ID. Cancel a queued task only at the user’s request.',
   timeoutMs: savedVideoWaitMs + foregroundWaitMs,
   inputSchema: {
     type: 'object',
@@ -122,7 +124,9 @@ export function buildDshMediaTurnInstruction(
 
 export function createDshMediaGenerationProvider(
   submit: (request: MediaGenerationRequest) => Promise<MediaGenerationResponse>,
+  getTurnSignal?: (sessionId: string) => AbortSignal | undefined,
 ): HostToolProvider {
+  const videoQuotes = new WeakMap<AbortSignal, MediaGenerationResponse>();
   return {
     listDescriptors: () => [imageTool, videoTool, dshSkinTool],
     async execute(tool, args, context) {
@@ -142,6 +146,30 @@ export function createDshMediaGenerationProvider(
       const actions: readonly string[] = video ? videoActions : imageActions;
       if (args.action !== undefined && (typeof args.action !== 'string' || !actions.includes(args.action))) {
         throw new Error('Unsupported media generation action.');
+      }
+      const generatingVideo = video && (args.action ?? MediaGenerationAction.Generate) === MediaGenerationAction.Generate;
+      const turn = generatingVideo ? getTurnSignal?.(context.coworkSessionId) : undefined;
+      if (generatingVideo && getTurnSignal && !turn) throw new Error('Video generation requires an active chat turn.');
+      if (turn) {
+        turn.throwIfAborted();
+        context.signal?.throwIfAborted();
+        const previous = videoQuotes.get(turn);
+        if (previous) return previous;
+        videoQuotes.set(turn, {
+          isError: true, content: [{ type: 'text', text: t('mediaVideoQuotePending') }],
+        });
+        try {
+          const result = await submit(request);
+          if (result.details?.failureStage === UsageStage.Confirmation) {
+            videoQuotes.set(turn, result);
+            return result;
+          }
+          videoQuotes.delete(turn);
+          return { ...result, details: compactMediaDetails(result.details) };
+        } catch (error) {
+          videoQuotes.set(turn, { isError: true, content: [{ type: 'text', text: t('mediaVideoQuoteUnknown') }] });
+          throw error;
+        }
       }
       const savedWaitMs = video ? savedVideoWaitMs : savedImageWaitMs;
       const deadline = Date.now() + (args.waitForResult === true ? savedWaitMs : foregroundWaitMs);

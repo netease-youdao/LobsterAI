@@ -131,7 +131,10 @@ export async function callLobsterBridge(state, pathname, payload, signal) {
   try {
     body = await response.json();
   } catch {
-    body = undefined;
+    return { available: true, ok: false, status: response.status, error: 'Incomplete LobsterAI bridge response' };
+  }
+  if (typeof body?.bridgeError === 'string') {
+    return { available: true, ok: false, status: response.status, error: body.bridgeError };
   }
   if (!response.ok) {
     const message = (body && typeof body === 'object' && typeof body.error === 'string')

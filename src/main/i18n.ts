@@ -231,6 +231,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
+    skillChatAudit: '是否安装技能「{name}」？安全扫描风险等级为 {risk}。',
+    skillChatInstallDisabled: '安装并保持禁用',
+    skillChatInstall: '安装并启用',
+    skillChatInstallPermission: '将选中的本地技能安装到当前实例的「我的技能」。',
+    skillChatReadOnly: '只读会话无法安装技能。',
     skillErrInvalidSource:
       '无效的技能来源。支持 owner/repo、仓库链接、npm 包名、ClawHub 链接或 GitHub tree/blob 链接。',
     skillErrClawhubNotFound: '在 ClawHub 上未找到该技能，请检查链接是否正确。',
@@ -691,6 +696,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
+    skillChatAudit: 'Install skill “{name}”? The security scan reported a {risk} risk.',
+    skillChatInstallDisabled: 'Install disabled',
+    skillChatInstall: 'Install and enable',
+    skillChatInstallPermission: 'Install the selected local skill into My Skills for this instance.',
+    skillChatReadOnly: 'Skill installation requires a writable session.',
     skillErrInvalidSource:
       'Invalid skill source. Use owner/repo, repo URL, npm package spec, ClawHub URL, or a GitHub tree/blob URL.',
     skillErrClawhubNotFound: 'Skill not found on ClawHub. Please check the URL.',

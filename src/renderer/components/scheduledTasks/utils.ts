@@ -683,6 +683,7 @@ export const TaskDisplayStatus = {
   Success: 'success',
   Error: 'error',
   Skipped: 'skipped',
+  Stopped: 'stopped',
   Never: 'never',
 } as const;
 export type TaskDisplayStatus = typeof TaskDisplayStatus[keyof typeof TaskDisplayStatus];
@@ -694,6 +695,7 @@ export function getTaskDisplayStatus(task: ScheduledTask): TaskDisplayStatus {
   if (state.lastStatus === 'success') return TaskDisplayStatus.Success;
   if (state.lastStatus === 'error') return TaskDisplayStatus.Error;
   if (state.lastStatus === 'skipped') return TaskDisplayStatus.Skipped;
+  if (state.lastStatus === TaskDisplayStatus.Stopped) return TaskDisplayStatus.Stopped;
   return TaskDisplayStatus.Never;
 }
 
@@ -703,5 +705,6 @@ export const taskDisplayStatusLabelKey: Record<TaskDisplayStatus, string> = {
   [TaskDisplayStatus.Success]: 'scheduledTasksStatusSuccess',
   [TaskDisplayStatus.Error]: 'scheduledTasksStatusError',
   [TaskDisplayStatus.Skipped]: 'scheduledTasksStatusSkipped',
+  [TaskDisplayStatus.Stopped]: 'scheduledTasksStatusStopped',
   [TaskDisplayStatus.Never]: 'scheduledTasksStatusNever',
 };

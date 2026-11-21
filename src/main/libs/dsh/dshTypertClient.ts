@@ -74,6 +74,7 @@ export type DshWaterfallHandler = (
 ) => Promise<DshWaterfallOutcome> | DshWaterfallOutcome;
 
 export interface DshTypertClientOptions {
+  runtimePid?: number;
   /** Override HTTP transport for unit tests. */
   requester?: DshHttpRequester;
   /** Override WebSocket constructor for unit tests. */
@@ -277,6 +278,7 @@ export interface DshSessionUpdateQueueParams {
 }
 
 export class DshTypertClient extends EventEmitter {
+  private readonly runtimePid?: number;
   private readonly requester: DshHttpRequester;
   private readonly wsFactory: DshWebSocketFactory;
   private readonly reconnectBaseMs: number;
@@ -298,6 +300,7 @@ export class DshTypertClient extends EventEmitter {
 
   constructor(options: DshTypertClientOptions = {}) {
     super();
+    this.runtimePid = options.runtimePid;
     this.requester = options.requester ?? defaultHttpRequester;
     this.wsFactory = options.webSocketFactory ?? defaultWebSocketFactory;
     this.reconnectBaseMs = options.reconnectBaseMs ?? 500;
@@ -387,6 +390,9 @@ export class DshTypertClient extends EventEmitter {
     });
 
     if (res.status < 200 || res.status >= 300) {
+      if (res.status === 401) {
+        console.warn(`[DSH] RPC authorization failed (method=${endpoint}, pid=${this.runtimePid ?? 'unknown'}, muxConnected=${this.isConnected()})`);
+      }
       throw new DshRemoteError(
         `http/${res.status}`,
         `DSH RPC "${endpoint}" failed with HTTP ${res.status}: ${res.body}`,
@@ -672,9 +678,11 @@ export class DshTypertClient extends EventEmitter {
       this.handleMuxMessage(typeof data === 'string' ? data : String(data));
     });
 
-    socket.addEventListener('close', () => {
+    socket.addEventListener('close', (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
+      const code = (event as { code?: number } | null)?.code;
+      console.warn(`[DSH] Mux disconnected (pid=${this.runtimePid ?? 'unknown'}, closeCode=${code ?? 'unknown'}, activeStreams=${this.activeStreams.size})`);
       const lostError = new DshRemoteError('gateway/disconnected', 'DSH mux WebSocket disconnected');
       for (const queue of this.activeStreams.values()) {
         queue.fail(lostError);

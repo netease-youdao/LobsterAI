@@ -901,6 +901,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     return this.activeTurns.has(sessionId);
   }
 
+  getActiveTurnSignal(sessionId: string): AbortSignal | undefined {
+    return this.activeTurns.get(sessionId)?.abortController.signal;
+  }
+
   getTurnRunIds(sessionId: string): string[] {
     const turn = this.activeTurns.get(sessionId);
     return turn ? [turn.dshSessionId] : [];

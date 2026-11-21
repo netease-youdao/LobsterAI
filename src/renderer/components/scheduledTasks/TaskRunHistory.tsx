@@ -30,6 +30,7 @@ const STATUS_OPTIONS = [
   TaskStatus.Success,
   TaskStatus.Error,
   TaskStatus.Skipped,
+  TaskStatus.Stopped,
   TaskStatus.Running,
 ] as const;
 
@@ -37,6 +38,7 @@ const statusLabelKeys: Record<TaskStatus, string> = {
   [TaskStatus.Success]: 'scheduledTasksStatusSuccess',
   [TaskStatus.Error]: 'scheduledTasksStatusError',
   [TaskStatus.Skipped]: 'scheduledTasksStatusSkipped',
+  [TaskStatus.Stopped]: 'scheduledTasksStatusStopped',
   [TaskStatus.Running]: 'scheduledTasksStatusRunning',
 };
 

@@ -49,10 +49,6 @@ export function parseProcessTable(output: string): ProcessTableRow[] {
   return rows;
 }
 
-function isLaunchedBy(command: string, executablePath: string): boolean {
-  return command === executablePath || command.startsWith(`${executablePath} `);
-}
-
 // Only runtimes this same install spawned: the executable path keeps a dev
 // build and a packaged app from stopping each other's runtimes.
 export function isDshWebCommand(command: string, executablePath: string): boolean {
@@ -60,16 +56,16 @@ export function isDshWebCommand(command: string, executablePath: string): boolea
   return DSH_WEB_COMMAND_TAIL.test(command.slice(executablePath.length));
 }
 
-// A runtime is owned while its parent is a live main process of this install.
-// Orphans are reparented to launchd (pid 1) on macOS, and to init or a
-// subreaper on Linux, none of which run our executable.
+// macOS launches the runtime through Electron Helper, while its live parent
+// is the Electron main binary (and may have a relative argv[0]). Only reclaim
+// children demonstrably adopted by init or a known Linux subreaper.
 export function findOrphanedDshRuntimes(rows: readonly ProcessTableRow[], executablePath: string): ProcessTableRow[] {
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   return rows.filter((row) => {
     if (!isDshWebCommand(row.command, executablePath)) return false;
-    if (row.ppid <= 1) return true;
+    if (row.ppid === 1) return true;
     const parent = byPid.get(row.ppid);
-    return !parent || !isLaunchedBy(parent.command, executablePath);
+    return Boolean(parent && /^(?:\S*\/)?(?:systemd|tini|dumb-init)(?:\s|$)/.test(parent.command));
   });
 }
 
@@ -138,8 +134,19 @@ export async function reapOrphanedDshRuntimes(options: DshOrphanReapOptions = {}
     survivors = survivors.filter(isAlive);
   }
   if (survivors.length > 0) {
-    console.warn(`[DSH] Leftover runtime(s) ignored SIGTERM, killing: ${survivors.join(', ')}`);
-    signalAll(survivors, 'SIGKILL');
+    // A PID can be reused during the grace period. Check the executable,
+    // command line and adoptive parent again before escalating.
+    try {
+      const current = findOrphanedDshRuntimes(parseProcessTable(await listProcesses()), executablePath);
+      const verified = current.filter(row => survivors.includes(row.pid)
+        && orphans.some(original => original.pid === row.pid && original.command === row.command));
+      if (verified.length) {
+        console.warn(`[DSH] Leftover runtime(s) ignored SIGTERM, killing: ${verified.map(row => row.pid).join(', ')}`);
+        signalAll(verified.map(row => row.pid), 'SIGKILL');
+      }
+    } catch (error) {
+      console.warn('[DSH] Could not recheck orphaned runtimes before forced termination', error);
+    }
   }
   return orphans.length;
 }

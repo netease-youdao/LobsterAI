@@ -442,6 +442,7 @@ import {
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
+import { createDshSkillInstallProvider } from './libs/dsh/dshSkillInstallTool';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
   getExpertStoreUrl,
@@ -2254,7 +2255,20 @@ const getDshBootstrap = (): DshBootstrap => {
     const userDataDir = app.getPath('userData');
     const storeInstance = getCoworkStore();
     dshBootstrap = new DshBootstrap({
-      toolProviders: [createDshMediaGenerationProvider(request => getMcpRuntime().executeMediaGeneration(request))],
+      toolProviders: [
+        createDshMediaGenerationProvider(
+          request => getMcpRuntime().executeMediaGeneration(request),
+          sessionId => dshBootstrap?.runtimeAdapter.getActiveTurnSignal(sessionId),
+        ),
+        createDshSkillInstallProvider({
+          manager: () => getSkillManager(),
+          session: id => {
+            const session = storeInstance.getSession(id, 0);
+            return session ? { cwd: session.cwd, userMessage: storeInstance.getLatestUserMessage(id)?.content } : null;
+          },
+          ask: (...args) => getMcpRuntime().askUserInternal(...args),
+        }),
+      ],
       userDataDir,
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),

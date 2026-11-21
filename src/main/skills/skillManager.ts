@@ -2131,8 +2131,9 @@ export class SkillManager {
     }
   }
 
-  async downloadSkill(source: string): Promise<{
+  async downloadSkill(source: string, signal?: AbortSignal): Promise<{
     success: boolean;
+    installedIds?: string[];
     skills?: SkillRecord[];
     error?: string;
     auditReport?: SkillSecurityReport;
@@ -2140,6 +2141,7 @@ export class SkillManager {
   }> {
     let cleanupPath: string | null = null;
     try {
+      signal?.throwIfAborted();
       const trimmed = source.trim();
       if (!trimmed) {
         return { success: false, error: 'Missing skill source' };
@@ -2293,6 +2295,7 @@ export class SkillManager {
       }
 
       // If risk detected, cache for user confirmation instead of auto-installing
+      signal?.throwIfAborted();
       if (auditReport && auditReport.riskLevel !== 'safe') {
         const pendingId = crypto.randomUUID();
         console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
@@ -2323,14 +2326,14 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
-      installSkillDirs(root, skillDirs, installNameHints);
+      const installedIds = installSkillDirs(root, skillDirs, installNameHints);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
 
       this.startWatching();
       this.notifySkillsChanged(createSkillChangeBatch(SkillChangeSource.Install));
-      return { success: true, skills: this.listSkills() };
+      return { success: true, installedIds, skills: this.listSkills() };
     } catch (error) {
       cleanupPathSafely(cleanupPath);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to download skill' };
@@ -2544,7 +2547,7 @@ export class SkillManager {
   confirmPendingInstall(
     pendingId: string,
     action: SecurityReportAction
-  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+  ): { success: boolean; installedIds?: string[]; skills?: SkillRecord[]; error?: string } {
     console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
     const pending = this.pendingInstalls.get(pendingId);
     if (!pending) {
@@ -2592,7 +2595,7 @@ export class SkillManager {
 
     this.startWatching();
     this.notifySkillsChanged(createSkillChangeBatch(SkillChangeSource.ConfirmInstall));
-    return { success: true, skills: this.listSkills() };
+    return { success: true, installedIds, skills: this.listSkills() };
   }
 
   startWatching(): void {

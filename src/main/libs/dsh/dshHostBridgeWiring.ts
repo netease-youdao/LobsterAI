@@ -15,7 +15,8 @@ import {
   WakeMode,
 } from '../../../scheduledTask/constants';
 import type { Schedule, ScheduledTask, ScheduledTaskInput } from '../../../scheduledTask/types';
-import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
+import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
+import { t } from '../../i18n';
 import type { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import type { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
 import {
@@ -111,6 +112,10 @@ export function evaluateDshToolApproval(
   const toolName = request.toolName.trim();
   const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
   const command = isShellTool ? extractShellCommandFromArgs(request.args) : '';
+  if (toolName === DSH_SKILL_INSTALL_TOOL && (request.args as { action?: unknown } | null)?.action === DshSkillInstallAction.Install) {
+    if (request.permissionPreset === DshPermissionPreset.ReadOnly) return { kind: 'deny', reason: t('skillChatReadOnly') };
+    if (request.permissionPreset !== DshPermissionPreset.FullAccess) return { kind: 'ask', reason: t('skillChatInstallPermission') };
+  }
 
   // Never allow shell commands to pop up desktop Office GUI applications
   // (WPS / Keynote / Pages / Microsoft Office / non-headless soffice) even under

@@ -2,11 +2,9 @@
  * Shared dangerous-command detection used by Cowork and IM channel auto-approve logic.
  */
 
-// Delete patterns
-const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item|trash)\b/i;
-const FIND_DELETE_COMMAND_RE = /\bfind\b[\s\S]*\s-delete\b/i;
-const GIT_CLEAN_COMMAND_RE = /\bgit\s+clean\b/i;
-const OSASCRIPT_DELETE_RE = /\bosascript\b[\s\S]*\bdelete\b/i;
+import { isDeleteCommand } from '../../common/deleteCommand';
+
+export { isDeleteCommand };
 
 // Destructive patterns (high severity)
 const RM_RECURSIVE_RE = /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive)\b/i;
@@ -103,17 +101,6 @@ export function detectDisallowedOfficeGuiLaunch(command: string): DisallowedOffi
   }
 
   return { matched: false };
-}
-
-/**
- * Returns true if the command is a delete operation
- * (rm, rmdir, unlink, del, erase, remove-item, find -delete, git clean).
- */
-export function isDeleteCommand(command: string): boolean {
-  return DELETE_COMMAND_RE.test(command)
-    || FIND_DELETE_COMMAND_RE.test(command)
-    || GIT_CLEAN_COMMAND_RE.test(command)
-    || OSASCRIPT_DELETE_RE.test(command);
 }
 
 /**

@@ -30,6 +30,7 @@ import type {
 } from '../../scheduledTask/types';
 
 export interface LobsterSchedulerRunResult {
+  stopped?: boolean;
   sessionId?: string | null;
   sessionKey?: string | null;
   summary?: string | null;
@@ -371,6 +372,7 @@ export class LobsterScheduler extends EventEmitter {
 
   start(): void {
     if (this.timer) return;
+    this.reconcileInterruptedRuns();
     if (this.skipMissedJobs) {
       this.reconcileMissedJobs();
     }
@@ -387,7 +389,35 @@ export class LobsterScheduler extends EventEmitter {
     for (const controller of this.runningControllers.values()) {
       controller.abort(new Error('LobsterScheduler stopped'));
     }
-    this.runningControllers.clear();
+  }
+
+  private reconcileInterruptedRuns(): void {
+    const closeRuns = this.db.prepare(`
+      UPDATE lobster_scheduled_task_runs SET status = ?, finished_at = ?, delivery_status = ?
+      WHERE task_id = ? AND status = ?
+    `);
+    const now = this.now();
+    const finishedAt = new Date(now).toISOString();
+    this.db.transaction(() => {
+      for (const task of this.listTasks()) {
+        if (this.runningControllers.has(task.id)) continue;
+        closeRuns.run(TaskStatus.Stopped, finishedAt, RunDeliveryStatus.NotRequested, task.id, TaskStatus.Running);
+        if (task.state.runningAtMs !== null || task.state.lastStatus === TaskStatus.Running) {
+          const enabled = task.enabled && task.schedule.kind !== 'at';
+          const state: TaskState = {
+            ...task.state,
+            nextRunAtMs: enabled ? computeNextRunAtMs(task.schedule, now) : null,
+            lastRunAtMs: task.state.runningAtMs ?? task.state.lastRunAtMs,
+            lastStatus: TaskStatus.Stopped,
+            lastDurationMs: null,
+            lastError: null,
+            runningAtMs: null,
+          };
+          this.db.prepare('UPDATE lobster_scheduled_tasks SET enabled = ?, state_json = ?, updated_at = ? WHERE id = ?')
+            .run(enabled ? 1 : 0, JSON.stringify(state), finishedAt, task.id);
+        }
+      }
+    })();
   }
 
   /**
@@ -398,11 +428,7 @@ export class LobsterScheduler extends EventEmitter {
     const nowMs = this.now();
     let skipped = 0;
     for (const task of this.listTasks()) {
-      if (!task.enabled) continue;
-      if (task.state.runningAtMs !== null) {
-        // Clear any stale running flag left by a hard crash.
-        task.state.runningAtMs = null;
-      }
+      if (!task.enabled || this.runningControllers.has(task.id)) continue;
       if (task.state.nextRunAtMs !== null && task.state.nextRunAtMs < nowMs - this.tickIntervalMs) {
         task.state.nextRunAtMs = computeNextRunAtMs(task.schedule, nowMs);
         this.saveTaskState(task.id, task.state);
@@ -510,7 +536,6 @@ export class LobsterScheduler extends EventEmitter {
     const controller = this.runningControllers.get(taskId);
     if (controller) {
       controller.abort(new Error('Scheduled task deleted'));
-      this.runningControllers.delete(taskId);
     }
     const res = this.db.prepare('DELETE FROM lobster_scheduled_tasks WHERE id = ?').run(taskId);
     return res.changes > 0;
@@ -520,7 +545,6 @@ export class LobsterScheduler extends EventEmitter {
     const controller = this.runningControllers.get(taskId);
     if (!controller) return false;
     controller.abort(new Error('Scheduled task stopped by user'));
-    this.runningControllers.delete(taskId);
     return true;
   }
 
@@ -783,10 +807,12 @@ export class LobsterScheduler extends EventEmitter {
   async tick(): Promise<string[]> {
     const nowMs = this.now();
     const firedIds: string[] = [];
-    for (const task of this.listTasks()) {
-      if (!task.enabled) continue;
-      if (this.runningControllers.has(task.id)) continue;
-      if (task.state.nextRunAtMs === null || task.state.nextRunAtMs > nowMs) continue;
+    for (const candidate of this.listTasks()) {
+      if (!candidate.enabled || candidate.state.nextRunAtMs === null || candidate.state.nextRunAtMs > nowMs) continue;
+      if (this.runningControllers.has(candidate.id)) continue;
+      // Another tick or manual run may have finished while a preceding task was awaited.
+      const task = this.getTask(candidate.id);
+      if (!task?.enabled || task.state.nextRunAtMs !== candidate.state.nextRunAtMs) continue;
       firedIds.push(task.id);
       await this.executeTaskNow(task);
     }
@@ -802,35 +828,39 @@ export class LobsterScheduler extends EventEmitter {
   }
 
   private async executeTaskNow(task: ScheduledTask): Promise<ScheduledTaskRun> {
+    if (this.runningControllers.has(task.id)) {
+      throw new Error(`Scheduled task "${task.id}" is already running`);
+    }
     const startedMs = this.now();
     const startedIso = new Date(startedMs).toISOString();
     const runId = randomUUID();
     const controller = new AbortController();
-    this.runningControllers.set(task.id, controller);
 
     const nextState: TaskState = {
       ...task.state,
       runningAtMs: startedMs,
       lastStatus: TaskStatus.Running,
     };
-    this.saveTaskState(task.id, nextState);
+    this.db.transaction(() => {
+      this.saveTaskState(task.id, nextState);
+      this.db
+        .prepare(`
+          INSERT INTO lobster_scheduled_task_runs (
+            id, task_id, session_id, session_key, status, started_at, delivery_channel
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          runId,
+          task.id,
+          null,
+          task.sessionKey,
+          TaskStatus.Running,
+          startedIso,
+          task.delivery.channel ?? null,
+        );
+    })();
+    this.runningControllers.set(task.id, controller);
     this.emit('statusUpdate', { taskId: task.id, state: nextState });
-
-    this.db
-      .prepare(`
-        INSERT INTO lobster_scheduled_task_runs (
-          id, task_id, session_id, session_key, status, started_at, delivery_channel
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        runId,
-        task.id,
-        null,
-        task.sessionKey,
-        TaskStatus.Running,
-        startedIso,
-        task.delivery.channel ?? null,
-      );
 
     let status: TaskStatus = TaskStatus.Success;
     let errorMsg: string | null = null;
@@ -847,55 +877,54 @@ export class LobsterScheduler extends EventEmitter {
     } finally {
       this.runningControllers.delete(task.id);
     }
+    if (controller.signal.aborted || runResult.stopped) {
+      status = TaskStatus.Stopped;
+      errorMsg = null;
+      runResult.deliveryStatus ??= RunDeliveryStatus.NotRequested;
+    }
 
     const finishedMs = this.now();
     const finishedIso = new Date(finishedMs).toISOString();
     const durationMs = Math.max(0, finishedMs - startedMs);
 
-    this.db
-      .prepare(`
-        UPDATE lobster_scheduled_task_runs
-        SET session_id = ?, session_key = ?, status = ?, finished_at = ?, duration_ms = ?,
-            error = ?, summary = ?, delivery_error = ?, delivery_status = ?
-        WHERE id = ?
-      `)
-      .run(
-        runResult.sessionId ?? null,
-        runResult.sessionKey ?? task.sessionKey ?? null,
-        status,
-        finishedIso,
-        durationMs,
-        errorMsg,
-        runResult.summary ?? null,
-        runResult.deliveryError ?? null,
-        runResult.deliveryStatus ?? (task.delivery.mode === DeliveryMode.None ? RunDeliveryStatus.NotRequested : RunDeliveryStatus.Delivered),
-        runId,
-      );
+    const runRecord: ScheduledTaskRun = {
+      id: runId, taskId: task.id,
+      sessionId: runResult.sessionId ?? null,
+      sessionKey: runResult.sessionKey ?? task.sessionKey ?? null,
+      status, startedAt: startedIso, finishedAt: finishedIso, durationMs,
+      error: errorMsg, summary: runResult.summary ?? null,
+      deliveryError: runResult.deliveryError ?? null,
+      deliveryStatus: runResult.deliveryStatus ?? (status === TaskStatus.Success && task.delivery.mode !== DeliveryMode.None
+        ? RunDeliveryStatus.Delivered : RunDeliveryStatus.NotRequested),
+      deliveryChannel: task.delivery.channel ?? null,
+    };
 
     // One-shot `at` tasks disable automatically after firing; recurring tasks
     // compute the next slot after completion.
     const latestTask = this.getTask(task.id);
-    if (latestTask) {
-      const keepEnabled = latestTask.enabled && latestTask.schedule.kind !== 'at';
-      const updatedState: TaskState = {
-        nextRunAtMs: keepEnabled ? computeNextRunAtMs(latestTask.schedule, finishedMs) : null,
-        lastRunAtMs: startedMs,
-        lastStatus: status,
-        lastError: errorMsg,
-        lastDurationMs: durationMs,
-        runningAtMs: null,
-        consecutiveErrors: status === TaskStatus.Error ? latestTask.state.consecutiveErrors + 1 : 0,
-      };
-      this.db
-        .prepare('UPDATE lobster_scheduled_tasks SET enabled = ?, state_json = ?, updated_at = ? WHERE id = ?')
+    if (!latestTask) return runRecord;
+    const keepEnabled = latestTask.enabled && latestTask.schedule.kind !== 'at';
+    const updatedState: TaskState = {
+      nextRunAtMs: keepEnabled ? computeNextRunAtMs(latestTask.schedule, finishedMs) : null,
+      lastRunAtMs: startedMs,
+      lastStatus: status,
+      lastError: errorMsg,
+      lastDurationMs: durationMs,
+      runningAtMs: null,
+      consecutiveErrors: status === TaskStatus.Error ? latestTask.state.consecutiveErrors + 1 : 0,
+    };
+    this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE lobster_scheduled_task_runs
+        SET session_id = @sessionId, session_key = @sessionKey, status = @status, finished_at = @finishedAt,
+            duration_ms = @durationMs, error = @error, summary = @summary,
+            delivery_error = @deliveryError, delivery_status = @deliveryStatus
+        WHERE id = @id
+      `).run(runRecord);
+      this.db.prepare('UPDATE lobster_scheduled_tasks SET enabled = ?, state_json = ?, updated_at = ? WHERE id = ?')
         .run(keepEnabled ? 1 : 0, JSON.stringify(updatedState), finishedIso, task.id);
-      this.emit('statusUpdate', { taskId: task.id, state: updatedState });
-    }
-
-    const finalRunRow = this.db
-      .prepare('SELECT * FROM lobster_scheduled_task_runs WHERE id = ?')
-      .get(runId) as RunRow;
-    const runRecord = this.rowToRun(finalRunRow);
+    })();
+    this.emit('statusUpdate', { taskId: task.id, state: updatedState });
     this.emit('runUpdate', { run: { ...runRecord, taskName: task.name } });
     return runRecord;
   }
