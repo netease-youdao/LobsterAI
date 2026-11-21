@@ -218,3 +218,131 @@ test('a newer bundled web-search version replaces the stale copy and keeps user 
   expect(fs.existsSync(path.join(userDir, 'tsconfig.json'))).toBe(false);
   expect(fs.readFileSync(path.join(userDir, '.env'), 'utf8')).toBe('TOKEN=keep\n');
 });
+
+test('a newer bundled imap-smtp-email version preserves accounts.json and .env during sync', () => {
+  const writeEmailSkill = (root: string, version: string, scriptBody: string): string => {
+    const dir = path.join(root, 'imap-smtp-email');
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'SKILL.md'),
+      `---\nname: imap-smtp-email\ndescription: IMAP/SMTP email tool\nversion: ${version}\n---\n# Email\n`,
+    );
+    fs.writeFileSync(path.join(dir, 'scripts', 'imap.js'), scriptBody);
+    return dir;
+  };
+
+  const userDir = writeEmailSkill(userRoot, '1.0.6', '// old imap\n');
+  const savedAccounts = JSON.stringify({
+    version: 1,
+    defaultAccountId: 'work',
+    accounts: [
+      {
+        id: 'work',
+        name: 'Work Mail',
+        enabled: true,
+        provider: '163',
+        email: 'alice@163.com',
+        password: 'auth-code-123',
+        imapHost: 'imap.163.com',
+        imapPort: 993,
+        imapTls: true,
+        imapRejectUnauthorized: true,
+        smtpHost: 'smtp.163.com',
+        smtpPort: 465,
+        smtpSecure: true,
+        smtpRejectUnauthorized: true,
+        smtpFrom: 'alice@163.com',
+        mailbox: 'INBOX',
+        requireSendConfirmation: true,
+      },
+    ],
+  }, null, 2) + '\n';
+  fs.writeFileSync(path.join(userDir, 'accounts.json'), savedAccounts, 'utf8');
+  fs.writeFileSync(path.join(userDir, '.env'), 'IMAP_USER=legacy@163.com\nIMAP_PASS=legacy-pass\n', 'utf8');
+  writeEmailSkill(bundledRoot, '1.0.7', '// new imap\n');
+  writeConfig(bundledRoot, { 'imap-smtp-email': { enabled: true, order: 211 } });
+
+  manager.syncBundledSkillsToUserData();
+
+  expect(fs.readFileSync(path.join(userDir, 'scripts', 'imap.js'), 'utf8')).toBe('// new imap\n');
+  expect(fs.readFileSync(path.join(userDir, 'accounts.json'), 'utf8')).toBe(savedAccounts);
+  expect(fs.readFileSync(path.join(userDir, '.env'), 'utf8')).toBe('IMAP_USER=legacy@163.com\nIMAP_PASS=legacy-pass\n');
+});
+
+test('SkillManager persists and reads email accounts.json and falls back to legacy .env', () => {
+  writeSkill(userRoot, 'imap-smtp-email');
+  const skillDir = path.join(userRoot, 'imap-smtp-email');
+
+  // Legacy .env fallback when accounts.json does not exist yet
+  fs.writeFileSync(
+    path.join(skillDir, '.env'),
+    [
+      'IMAP_HOST=imap.163.com',
+      'IMAP_PORT=993',
+      'IMAP_USER=legacy@163.com',
+      'IMAP_PASS=legacy-secret',
+      'SMTP_HOST=smtp.163.com',
+      'SMTP_PORT=465',
+      'SMTP_SECURE=true',
+    ].join('\n') + '\n',
+    'utf8',
+  );
+  const migrated = manager.getEmailAccountsConfig('imap-smtp-email');
+  expect(migrated.success).toBe(true);
+  expect(migrated.config?.defaultAccountId).toBe('default');
+  expect(migrated.config?.accounts).toHaveLength(1);
+  expect(migrated.config?.accounts[0]).toMatchObject({
+    id: 'default',
+    enabled: true,
+    email: 'legacy@163.com',
+    password: 'legacy-secret',
+    imapHost: 'imap.163.com',
+    imapPort: 993,
+    smtpHost: 'smtp.163.com',
+    smtpPort: 465,
+    smtpSecure: true,
+  });
+
+  // Saving multi-account config writes accounts.json and reloads cleanly
+  const saveResult = manager.setEmailAccountsConfig('imap-smtp-email', {
+    version: 1,
+    defaultAccountId: 'personal',
+    accounts: [
+      {
+        id: 'work',
+        name: 'Work',
+        enabled: false,
+        provider: 'gmail',
+        email: 'work@gmail.com',
+        password: 'pw-1',
+        imapHost: 'imap.gmail.com',
+        imapPort: 993,
+        smtpHost: 'smtp.gmail.com',
+        smtpPort: 587,
+      },
+      {
+        id: 'personal',
+        name: 'Personal',
+        enabled: true,
+        provider: '163',
+        email: 'alice@163.com',
+        password: 'pw-2',
+        imapHost: 'imap.163.com',
+        imapPort: 993,
+        smtpHost: 'smtp.163.com',
+        smtpPort: 465,
+        smtpSecure: true,
+      },
+    ],
+  });
+  expect(saveResult).toEqual({ success: true });
+  expect(fs.existsSync(path.join(skillDir, 'accounts.json'))).toBe(true);
+
+  const reloaded = manager.getEmailAccountsConfig('imap-smtp-email');
+  expect(reloaded.success).toBe(true);
+  expect(reloaded.config?.defaultAccountId).toBe('personal');
+  expect(reloaded.config?.accounts.map((a) => ({ id: a.id, email: a.email, enabled: a.enabled }))).toEqual([
+    { id: 'work', email: 'work@gmail.com', enabled: false },
+    { id: 'personal', email: 'alice@163.com', enabled: true },
+  ]);
+});

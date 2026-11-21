@@ -262,6 +262,10 @@ export interface DshHostManagerOptions {
   webSearchBridgeFile?: string | null;
   /** Optional fallback IANA timezone when `TZ` is unset in the inherited environment. */
   timeZone?: string;
+  /** Optional directory containing Electron-backed `node`/`npm`/`npx` shims, prepended to PATH. */
+  nodeShimDir?: string | null;
+  /** Optional bundled npm bin directory used by Windows `npm.cmd`/`npx.cmd` shims. */
+  npmBinDir?: string | null;
   /** Optional callback resolving Electron/bundled runtime PATH and env additions at spawn time. */
   resolveChildEnvAdditions?: () => DshChildEnvAdditions;
   /** Optional stable instance ID sent via `X-LobsterAI-Instance`. */
@@ -428,19 +432,21 @@ export function buildIsolatedDshChildEnv(params: {
   }
 
   const prependPathDirs: string[] = [];
-  // Prepend bundled package-manager dir so `dsh-plugin-manager` finds bundled pnpm.
+  // Prepend bundled package-manager dir (`pnpm`) and Electron Node shim dir so
+  // `dsh-plugin-manager` and skill scripts (e.g. `node scripts/imap.js`) run
+  // reliably even without system Node.js.
   const pmDir = path.join(params.runtimeDir, 'package-manager');
   if (fs.existsSync(pmDir)) {
     prependPathDirs.push(pmDir);
+  }
+  if (params.nodeShimDir?.trim()) {
+    prependPathDirs.push(params.nodeShimDir.trim());
   }
   if (params.prependPathDirs) {
     prependPathDirs.push(...params.prependPathDirs);
   }
 
   const appendPathDirs: string[] = [];
-  if (params.nodeShimDir?.trim()) {
-    appendPathDirs.push(params.nodeShimDir.trim());
-  }
   if (params.appendPathDirs) {
     appendPathDirs.push(...params.appendPathDirs);
   }
@@ -796,8 +802,8 @@ export class DshHostManager extends EventEmitter {
       executablePath: this.options.executablePath,
       webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile,
       timeZone: additions?.timeZone ?? this.options.timeZone,
-      nodeShimDir: additions?.nodeShimDir,
-      npmBinDir: additions?.npmBinDir,
+      nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir,
+      npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir,
       prependPathDirs: additions?.prependPathDirs,
       appendPathDirs: additions?.appendPathDirs,
       extraEnv: additions?.extraEnv,

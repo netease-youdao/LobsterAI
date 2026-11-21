@@ -755,4 +755,88 @@ describe('runLegacyOpenClawMigration', () => {
     expect(JSON.parse(agentRow.skill_ids)).toEqual(['custom-report']);
     verifyDb.close();
   });
+
+  test('retires im_config.email while preserving SKILLs/imap-smtp-email/accounts.json, .env, and skills_state', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE im_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    const originalSkillsState = JSON.stringify({
+      'imap-smtp-email': { enabled: true },
+      weather: { enabled: false },
+    });
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('skills_state', originalSkillsState, 1);
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run(
+      'email',
+      JSON.stringify({ enabled: true, imapHost: 'imap.example.com' }),
+      1,
+    );
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run(
+      'feishu',
+      JSON.stringify({ enabled: true, appId: 'cli_keep' }),
+      1,
+    );
+    db.close();
+
+    // Seed legacy OpenClaw state so v2 migration runs.
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    fs.mkdirSync(path.join(stateDir, 'workspace-main'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'workspace-main', 'SOUL.md'), 'Legacy persona\n');
+
+    // Seed user-configured Email Skill files under <userData>/SKILLs/imap-smtp-email/.
+    const emailSkillDir = path.join(userDataDir, 'SKILLs', 'imap-smtp-email');
+    fs.mkdirSync(emailSkillDir, { recursive: true });
+    const accountsJsonContent = JSON.stringify({
+      version: 1,
+      defaultAccountId: 'migrated-work',
+      accounts: [
+        {
+          id: 'migrated-work',
+          name: 'Work Mailbox',
+          enabled: true,
+          email: 'alice@example.com',
+          password: 'app-password-xyz',
+          imapHost: 'imap.example.com',
+          imapPort: 993,
+          smtpHost: 'smtp.example.com',
+          smtpPort: 465,
+          smtpSecure: true,
+        },
+      ],
+    }, null, 2) + '\n';
+    const dotEnvContent = 'IMAP_USER=legacy@example.com\nIMAP_PASS=legacy-pw\n';
+    fs.writeFileSync(path.join(emailSkillDir, 'accounts.json'), accountsJsonContent, 'utf8');
+    fs.writeFileSync(path.join(emailSkillDir, '.env'), dotEnvContent, 'utf8');
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.archivedModules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: 'retired_im', count: 1 }),
+      ]),
+    );
+
+    // Email Skill files must remain completely untouched on disk.
+    expect(fs.readFileSync(path.join(emailSkillDir, 'accounts.json'), 'utf8')).toBe(accountsJsonContent);
+    expect(fs.readFileSync(path.join(emailSkillDir, '.env'), 'utf8')).toBe(dotEnvContent);
+
+    // kv['skills_state']['imap-smtp-email'] must remain completely intact.
+    const verifyDb = new Database(sqlitePath);
+    const kvRow = verifyDb.prepare('SELECT value FROM kv WHERE key = ?').get('skills_state') as
+      | { value?: string }
+      | undefined;
+    verifyDb.close();
+    expect(kvRow?.value).toBe(originalSkillsState);
+    expect(JSON.parse(kvRow!.value!)['imap-smtp-email']).toEqual({ enabled: true });
+  });
 });
