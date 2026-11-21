@@ -23,12 +23,14 @@
     "@deepseek-ai/dsh-home-paths": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-llm-pi-ai": "*",
+    "@deepseek-ai/dsh-mcp-client": "*",
     "@deepseek-ai/dsh-mcp-manager": "*",
     "@deepseek-ai/dsh-skill": "*",
     "@deepseek-ai/dsh-subagent": "*",
     "@deepseek-ai/dsh-system-prompt": "*",
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-web": "*",
-    "@earendil-works/pi-ai": "*"
+    "@earendil-works/pi-ai": "*",
+    "@modelcontextprotocol/client": "*"
   }
 }

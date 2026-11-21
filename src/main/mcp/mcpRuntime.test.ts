@@ -279,3 +279,50 @@ describe('McpRuntime resolved server IDs', () => {
     });
   });
 });
+
+describe('McpRuntime remote SSE resolution', () => {
+  test('preserves server id, transportType sse, headers, timeouts, and oauth mode', async () => {
+    const sqliteStore = {
+      get: vi.fn(() => undefined),
+      set: vi.fn(),
+      getDatabase: vi.fn(() => ({})),
+    };
+    const runtime = new McpRuntime({
+      getStore: () => sqliteStore as never,
+      syncOpenClawConfig: vi.fn(async () => ({ success: true, changed: false })),
+    });
+    vi.spyOn(runtime, 'getStore').mockReturnValue({
+      getEnabledServers: () => [
+        {
+          id: 'srv-uuid-sse-1',
+          name: 'Legacy SSE',
+          description: '',
+          enabled: true,
+          transportType: 'sse',
+          url: 'https://legacy.example.com/sse',
+          headers: { Authorization: 'Bearer tok-123' },
+          auth: McpAuthMode.OAuth,
+          requestTimeoutMs: 30_000,
+          connectionTimeoutMs: 10_000,
+          isBuiltIn: false,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    } as never);
+
+    const servers = await runtime.refreshResolvedServersCache();
+    expect(servers).toEqual([
+      {
+        id: 'srv-uuid-sse-1',
+        name: 'Legacy SSE',
+        transportType: 'sse',
+        url: 'https://legacy.example.com/sse',
+        headers: { Authorization: 'Bearer tok-123' },
+        auth: McpAuthMode.OAuth,
+        requestTimeoutMs: 30_000,
+        connectionTimeoutMs: 10_000,
+      },
+    ]);
+  });
+});

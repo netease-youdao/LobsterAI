@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 
@@ -69,6 +70,7 @@ export function apply(ctx) {
   const state = getHostState(ctx);
   /** @type {Map<string, { fingerprint: string, dispose: () => unknown }>} */
   const managedMcpEntries = new Map();
+  const sseBridge = createMcpSseBridge(ctx);
   /** Serialize concurrent `syncMcpServers` RPC calls so map/disposal ops never race. */
   let mcpSyncTail = Promise.resolve();
 
@@ -105,39 +107,102 @@ export function apply(ctx) {
     }
   }
 
-  function syncMcpServers(payload) {
-    const run = mcpSyncTail.then(async () => {
-      const mcpManager = ctx.get('mcpManager');
-      if (!mcpManager) {
-        const errors = ['mcpManager service is not mounted'];
-        ctx.logger.warn('[LobsterAI:OpsRpc] syncMcpServers skipped: mcpManager service is not mounted');
-        return {
-          available: false,
-          registered: [],
-          added: [],
-          updated: [],
-          removed: [],
-          unchanged: [],
-          errors,
-        };
-      }
-      const body = payload && typeof payload === 'object' ? payload : {};
-      const servers = Array.isArray(body.servers) ? body.servers : [];
+  async function runSyncMcpServers(payload) {
+    const mcpManager = ctx.get('mcpManager');
+    const tools = ctx.get('tools');
+    if (!mcpManager && !tools) {
+      const errors = ['mcpManager and tools services are not mounted'];
+      ctx.logger.warn('[LobsterAI:OpsRpc] syncMcpServers skipped: mcpManager and tools services are not mounted');
+      return {
+        available: false,
+        registered: [],
+        added: [],
+        updated: [],
+        removed: [],
+        unchanged: [],
+        errors,
+        statuses: [],
+      };
+    }
 
-      const outcome = await reconcileMcpServers({
+    const body = payload && typeof payload === 'object' ? payload : {};
+    const servers = Array.isArray(body.servers) ? body.servers : [];
+
+    const standardEntries = [];
+    const sseEntries = [];
+    const preErrors = [];
+    const seenNames = new Set();
+
+    for (const entry of servers) {
+      if (!entry || typeof entry !== 'object') continue;
+      const serverName = String(entry.name || '').trim();
+      if (!serverName || entry.enabled === false) continue;
+
+      if (seenNames.has(serverName)) {
+        preErrors.push(`${serverName}: duplicate MCP server name`);
+        continue;
+      }
+      seenNames.add(serverName);
+
+      const rawTransport = String(entry.transport || '').trim().toLowerCase();
+      if (rawTransport === 'sse') {
+        sseEntries.push({ ...entry, name: serverName });
+      } else {
+        standardEntries.push({ ...entry, name: serverName, transport: rawTransport });
+      }
+    }
+
+    // Release removed or transport-switched SSE servers before reconciling
+    // standard servers so namespaces never collide during transport changes.
+    await sseBridge.disposeRemovedOrChanged(sseEntries);
+
+    let standardOutcome = {
+      registered: [],
+      added: [],
+      updated: [],
+      removed: [],
+      unchanged: [],
+      errors: [],
+    };
+    if (mcpManager) {
+      standardOutcome = await reconcileMcpServers({
         managedEntries: managedMcpEntries,
-        servers,
+        servers: standardEntries,
         register: (serverName, config) => mcpManager.register(serverName, config),
         logger: ctx.logger,
         afterDispose: (removedNames) => waitForRemovedMcpUnmounted(mcpManager, removedNames),
       });
+    } else {
+      for (const existing of managedMcpEntries.values()) {
+        try {
+          await existing.dispose();
+        } catch {}
+      }
+      managedMcpEntries.clear();
+      for (const entry of standardEntries) {
+        standardOutcome.errors.push(`${entry.name}: mcpManager service is not mounted`);
+      }
+    }
 
-      return {
-        available: true,
-        ...outcome,
-        statuses: mcpManager.list(),
-      };
-    });
+    const sseResult = await sseBridge.sync(sseEntries);
+
+    return {
+      available: true,
+      registered: [...standardOutcome.registered, ...sseResult.registered],
+      added: standardOutcome.added,
+      updated: standardOutcome.updated,
+      removed: standardOutcome.removed,
+      unchanged: standardOutcome.unchanged,
+      errors: [...preErrors, ...standardOutcome.errors, ...sseResult.errors],
+      statuses: [
+        ...(mcpManager ? mcpManager.list() : []),
+        ...sseBridge.list(),
+      ],
+    };
+  }
+
+  function syncMcpServers(payload) {
+    const run = mcpSyncTail.then(() => runSyncMcpServers(payload));
     mcpSyncTail = run.then(() => undefined, () => undefined);
     return run;
   }
@@ -215,7 +280,10 @@ export function apply(ctx) {
               bootedAt: state.bootedAt,
               pluginsReady: { ...state.pluginsReady },
               providers: llm ? llm.listProviders() : [],
-              mcpServers: mcpManager ? mcpManager.list() : [],
+              mcpServers: [
+                ...(mcpManager ? mcpManager.list() : []),
+                ...sseBridge.list(),
+              ],
               boundSessionsCount: state.sessionContexts.size,
               agentsCount: state.agents.size,
               delegatedBindingsCount: state.delegatedChildAgents.size,
@@ -508,6 +576,7 @@ export function apply(ctx) {
   });
 
   ctx.effect(() => async () => {
+    await sseBridge.disposeAll();
     for (const entry of managedMcpEntries.values()) {
       try {
         await entry.dispose();

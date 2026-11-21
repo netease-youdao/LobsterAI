@@ -6,6 +6,7 @@
 
 import crypto from 'crypto';
 
+import { DshMcpTransport } from '../../../shared/dshEngine/hostConstants';
 import {
   OpenClawApi,
   OpenClawProviderId,
@@ -402,6 +403,18 @@ const DSH_MCP_MAX_TIMEOUT_MS = 2_147_483_647;
 const DSH_TEMPLATE_SUSPECT_RE = /\$\{[^}]*\}/g;
 const DSH_CREDENTIAL_TOKEN_EXACT_RE = /^\$\{credential:[A-Za-z_][A-Za-z0-9_]*\}$/;
 
+/**
+ * Map a LobsterAI MCP transport type (`stdio`, `sse`, `http`, `streamable-http`)
+ * to the DSH host transport discriminant, preserving legacy `sse` instead of
+ * coercing it to `streamable-http`.
+ */
+export function resolveDshMcpTransport(transportType: string): DshMcpTransport {
+  const normalized = transportType.trim().toLowerCase();
+  if (normalized === DshMcpTransport.Stdio) return DshMcpTransport.Stdio;
+  if (normalized === DshMcpTransport.Sse) return DshMcpTransport.Sse;
+  return DshMcpTransport.StreamableHttp;
+}
+
 function shortStableHash(input: string, length = DSH_MCP_NAME_HASH_LENGTH): string {
   return crypto.createHash('sha256').update(input).digest('hex').slice(0, length);
 }
@@ -448,7 +461,7 @@ export function findInvalidDshTemplateToken(value: string): string | null {
 }
 
 function findInvalidTemplateField(spec: DshHostMcpServerSpec): string | null {
-  if (spec.transport === 'stdio') {
+  if (spec.transport === DshMcpTransport.Stdio) {
     if (spec.command && findInvalidDshTemplateToken(spec.command)) return 'command';
     for (const [index, arg] of (spec.args ?? []).entries()) {
       if (findInvalidDshTemplateToken(arg)) return `args[${index}]`;
@@ -544,12 +557,13 @@ export async function buildDshMcpServerSpecs(
       ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
     };
 
-    if (rec.transportType === 'stdio') {
+    const transport = resolveDshMcpTransport(rec.transportType);
+    if (transport === DshMcpTransport.Stdio) {
       if (!rec.command) continue;
       const draft: DshHostMcpServerSpec = {
         name: 'placeholder',
         enabled: true,
-        transport: 'stdio',
+        transport: DshMcpTransport.Stdio,
         command: rec.command,
         args: rec.args ?? [],
         env: rec.env ?? {},
@@ -602,7 +616,7 @@ export async function buildDshMcpServerSpecs(
     const draft: DshHostMcpServerSpec = {
       name: 'placeholder',
       enabled: true,
-      transport: 'streamable-http',
+      transport,
       url: validatedUrl,
       headers,
       ...timeoutFields,

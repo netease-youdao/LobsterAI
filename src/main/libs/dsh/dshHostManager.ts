@@ -27,6 +27,7 @@ import {
   DSH_PROFILE_NAME,
   DshHostBundleEnvVar,
   DshHostPhase,
+  type DshMcpTransport,
   DshOpsAction,
   DshPermissionPreset,
   type DshProgressiveCapability,
@@ -79,7 +80,7 @@ export interface DshHostProviderSpec {
 export interface DshHostMcpServerSpec {
   name: string;
   enabled?: boolean;
-  transport: 'stdio' | 'streamable-http';
+  transport: DshMcpTransport;
   command?: string;
   args?: string[];
   env?: Record<string, string>;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { DshMcpTransport } from '../../../shared/dshEngine/hostConstants';
 import {
   OpenClawApi,
   OpenClawProviderId,
@@ -19,6 +20,7 @@ import {
   buildDshThinkingLevelMap,
   findInvalidDshTemplateToken,
   normalizeDshMcpServerName,
+  resolveDshMcpTransport,
 } from './dshProviderSync';
 
 const DSH_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
@@ -378,10 +380,10 @@ describe('buildDshMcpServerSpecs', () => {
     );
 
     expect(result.servers).toHaveLength(2);
-    expect(result.servers[0]).toMatchObject({ name: 'local-files', transport: 'stdio' });
+    expect(result.servers[0]).toMatchObject({ name: 'local-files', transport: DshMcpTransport.Stdio });
     expect(result.servers[1]).toMatchObject({
       name: 'linear-remote',
-      transport: 'streamable-http',
+      transport: DshMcpTransport.StreamableHttp,
       headers: { Authorization: 'Bearer fresh-tok' },
     });
     expect(result.needsReauthIds).toEqual(['mcp-oauth-expired']);
@@ -628,5 +630,104 @@ describe('buildDshMcpServerSpecs', () => {
       'Authorization',
     ]);
     expect(result.needsReauthIds).toEqual(['uuid-failing-refresh']);
+  });
+
+  test('preserves legacy sse transport, custom headers, OAuth headers, and timeouts without coercing to streamable-http', async () => {
+    expect(resolveDshMcpTransport('stdio')).toBe(DshMcpTransport.Stdio);
+    expect(resolveDshMcpTransport('sse')).toBe(DshMcpTransport.Sse);
+    expect(resolveDshMcpTransport(' SSE ')).toBe(DshMcpTransport.Sse);
+    expect(resolveDshMcpTransport('http')).toBe(DshMcpTransport.StreamableHttp);
+    expect(resolveDshMcpTransport('streamable-http')).toBe(DshMcpTransport.StreamableHttp);
+
+    const resolveAuthorizationHeaders = vi.fn(async (id: string) => {
+      if (id === 'uuid-sse-oauth') return { Authorization: 'Bearer sse-oauth-tok' };
+      return null;
+    });
+
+    const result = await buildDshMcpServerSpecs(
+      [
+        {
+          id: 'uuid-legacy-sse',
+          name: 'Legacy Warehouse SSE',
+          enabled: true,
+          transportType: 'sse',
+          url: 'https://legacy.example.com/sse',
+          headers: {
+            Authorization: 'Bearer static-sse-key',
+            'X-Tenant-Id': 'warehouse-cn',
+          },
+          connectionTimeoutMs: 15_000,
+          requestTimeoutMs: 45_000,
+        },
+        {
+          id: 'uuid-sse-oauth',
+          name: 'OAuth SSE',
+          enabled: true,
+          transportType: 'sse',
+          url: 'https://oauth-sse.example.com/sse',
+          headers: { 'X-Custom': 'yes' },
+          oauthEnabled: true,
+        },
+        {
+          id: 'uuid-sse-oauth-expired',
+          name: 'Expired OAuth SSE',
+          enabled: true,
+          transportType: 'sse',
+          url: 'https://expired-sse.example.com/sse',
+          oauthEnabled: true,
+        },
+        {
+          id: 'uuid-modern-http',
+          name: 'Modern HTTP',
+          enabled: true,
+          transportType: 'http',
+          url: 'https://modern.example.com/mcp',
+          headers: { 'X-Api-Key': 'modern-key' },
+        },
+        {
+          id: 'uuid-disabled-sse',
+          name: 'Disabled SSE',
+          enabled: false,
+          transportType: 'sse',
+          url: 'https://disabled.example.com/sse',
+        },
+      ],
+      { resolveAuthorizationHeaders },
+    );
+
+    expect(resolveAuthorizationHeaders).toHaveBeenCalledWith('uuid-sse-oauth');
+    expect(resolveAuthorizationHeaders).toHaveBeenCalledWith('uuid-sse-oauth-expired');
+    expect(result.needsReauthIds).toEqual(['uuid-sse-oauth-expired']);
+    expect(result.servers).toEqual([
+      {
+        name: 'legacy-warehouse-sse',
+        enabled: true,
+        transport: DshMcpTransport.Sse,
+        url: 'https://legacy.example.com/sse',
+        headers: {
+          Authorization: 'Bearer static-sse-key',
+          'X-Tenant-Id': 'warehouse-cn',
+        },
+        startupTimeoutMs: 15_000,
+        toolCallTimeoutMs: 45_000,
+      },
+      {
+        name: 'oauth-sse',
+        enabled: true,
+        transport: DshMcpTransport.Sse,
+        url: 'https://oauth-sse.example.com/sse',
+        headers: {
+          'X-Custom': 'yes',
+          Authorization: 'Bearer sse-oauth-tok',
+        },
+      },
+      {
+        name: 'modern-http',
+        enabled: true,
+        transport: DshMcpTransport.StreamableHttp,
+        url: 'https://modern.example.com/mcp',
+        headers: { 'X-Api-Key': 'modern-key' },
+      },
+    ]);
   });
 });

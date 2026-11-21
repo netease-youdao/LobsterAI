@@ -78,6 +78,13 @@ export const DshHostBundleEnvVar = {
 } as const;
 export type DshHostBundleEnvVar = typeof DshHostBundleEnvVar[keyof typeof DshHostBundleEnvVar];
 
+export const DshMcpTransport = {
+  Stdio: 'stdio',
+  StreamableHttp: 'streamable-http',
+  Sse: 'sse',
+} as const;
+export type DshMcpTransport = typeof DshMcpTransport[keyof typeof DshMcpTransport];
+
 export const DshOpsAction = {
   Health: 'health',
   SyncProviders: 'syncProviders',
