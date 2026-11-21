@@ -1,6 +1,11 @@
 import { EventEmitter } from 'events';
 import { describe, expect, test, vi } from 'vitest';
 
+import {
+  ContextCompactionMode,
+  ContextCompactionStatus,
+  CoworkSystemMessageKind,
+} from '../../../common/coworkSystemMessages';
 import { type CoworkGoal, CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { getCoworkLlmTrace, isValidLlmTraceId } from '../../../shared/cowork/llmTurnUsage';
 import { CoworkSteerStatus } from '../../../shared/cowork/steer';
@@ -26,6 +31,7 @@ import {
   resolveUnlockedCapabilitiesForTurn,
   translateLobsterGoalCommandToDsh,
 } from './dshRuntimeAdapter';
+import type { CoworkContextUsage } from './types';
 
 function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
   store: DshCoworkStorePort;
@@ -135,6 +141,86 @@ describe('dshRuntimeAdapter helpers', () => {
     expect(prefix).toContain('Ship v2 engine');
     expect(prefix).toContain('用户: Hello OpenClaw');
     expect(prefix).toContain('助手: Hi from legacy engine');
+  });
+
+  test('preserves both capsule summary and newest turns when Lazy Context Bridge exceeds max chars', () => {
+    const longCapsule = {
+      version: 1 as const,
+      sessionId: 'cw-long',
+      revision: 3,
+      updatedAt: 1,
+      lastSource: ContinuityCapsuleSource.PostRun,
+      currentObjective: 'CORE-OBJECTIVE-MARKER: Ship reliable context compaction',
+      recentUserRequests: Array.from({ length: 12 }, (_, i) => `User request #${i + 1}: ${'x'.repeat(200)}`),
+      userConstraints: Array.from({ length: 8 }, (_, i) => `Constraint #${i + 1}: ${'c'.repeat(180)}`),
+      decisions: Array.from({ length: 10 }, (_, i) => `Decision #${i + 1}: ${'d'.repeat(180)}`),
+      completedFacts: Array.from({ length: 10 }, (_, i) => `Completed #${i + 1}: ${'f'.repeat(180)}`),
+      recentActions: [],
+      touchedFiles: [],
+      keySymbols: [],
+      verification: [],
+      nextSteps: ['Verify E2E compaction'],
+      recentFailures: [],
+      activeCapabilities: [],
+      openQuestions: [],
+    };
+    const longMessages: CoworkMessage[] = Array.from({ length: 8 }, (_, i) => ({
+      id: `m-${i + 1}`,
+      type: i % 2 === 0 ? 'user' : 'assistant',
+      content: `TURN-MARKER-${i + 1} ${'m'.repeat(750)}`,
+      timestamp: i + 1,
+    }));
+
+    const prefix = buildLazyContextBridgePrefix(longCapsule, longMessages);
+    expect(prefix.length).toBeLessThanOrEqual(6_000);
+    expect(prefix.startsWith('<previous_conversation_context>\n')).toBe(true);
+    expect(prefix.endsWith('\n</previous_conversation_context>')).toBe(true);
+    // Capsule objective MUST survive.
+    expect(prefix).toContain('CORE-OBJECTIVE-MARKER: Ship reliable context compaction');
+    // Newest user/assistant turns MUST survive instead of being sliced off the end.
+    expect(prefix).toContain('[历史会话近期对话]');
+    expect(prefix).toContain('TURN-MARKER-8');
+    expect(prefix).toContain('TURN-MARKER-7');
+    // Oldest turns are dropped first to stay within budget.
+    expect(prefix).not.toContain('TURN-MARKER-1');
+
+    // When legacy goal and todo/plan are also present, all sections survive within budget.
+    const prefixWithGoalAndPlan = buildLazyContextBridgePrefix(
+      longCapsule,
+      [
+        {
+          id: 'todo-1',
+          type: 'tool_use',
+          content: 'TodoWrite',
+          timestamp: 0,
+          metadata: {
+            toolName: 'TodoWrite',
+            toolInput: {
+              todos: [
+                { content: 'LEGACY-PLAN-STEP-1', status: 'completed' },
+                { content: 'LEGACY-PLAN-STEP-2', status: 'in_progress' },
+              ],
+            },
+          },
+        },
+        ...longMessages,
+      ],
+      {
+        id: 'goal-legacy-1',
+        objective: 'LEGACY-GOAL-OBJECTIVE',
+        status: CoworkGoalStatus.Active,
+        createdAt: 1,
+        updatedAt: 2,
+        tokensUsed: 0,
+      },
+    );
+    expect(prefixWithGoalAndPlan.length).toBeLessThanOrEqual(6_000);
+    expect(prefixWithGoalAndPlan.endsWith('\n</previous_conversation_context>')).toBe(true);
+    expect(prefixWithGoalAndPlan).toContain('LEGACY-GOAL-OBJECTIVE');
+    expect(prefixWithGoalAndPlan).toContain('LEGACY-PLAN-STEP-2');
+    expect(prefixWithGoalAndPlan).toContain('CORE-OBJECTIVE-MARKER: Ship reliable context compaction');
+    expect(prefixWithGoalAndPlan).toContain('TURN-MARKER-8');
+    expect(prefixWithGoalAndPlan).not.toContain('TURN-MARKER-1');
   });
 });
 
@@ -1795,5 +1881,305 @@ describe('DshRuntimeAdapter', () => {
     expect(session.goal?.objective).toBe('Ship onboarding');
     expect(adapter.isSessionActive('cw-start-goal')).toBe(false);
     expect(completed).toEqual(['cw-start-goal']);
+  });
+
+  test('getContextUsage reads DSH contextPressure, tokenUsage, contextBreakdown, legacy tokenMeter, and respects contextWindowOverride', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-usage',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-usage-1`,
+    });
+
+    const getSessionProjections = vi.fn();
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => ({ getSessionProjections }) as unknown as DshTypertClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    // 1. Real DSH 0.2.2 projection: prefers projectedTokens over pressureTokens (crucial post-compaction).
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 14,
+      values: {
+        contextPressure: {
+          pressureTokens: 96_000,
+          projectedTokens: 32_000,
+          contextWindow: 128_000,
+        },
+        tokenUsage: {
+          uncachedInputTokens: 90_000,
+          outputTokens: 4_000,
+          cacheReadTokens: 6_000,
+          cacheWriteTokens: 0,
+        },
+        contextBreakdown: {
+          systemTokens: 1_200,
+          toolsTokens: 3_400,
+          messageTokens: 27_400,
+        },
+        modelSelection: {
+          lastUsed: { provider: 'lobster-openai', model: 'gpt-5' },
+          next: { provider: 'lobster-openai', model: 'gpt-5' },
+        },
+      },
+    });
+    const projected = await adapter.getContextUsage('cw-usage');
+    expect(projected).toMatchObject({
+      sessionId: 'cw-usage',
+      sessionKey: 'dsh-usage-1',
+      usedTokens: 32_000,
+      contextTokens: 128_000,
+      percent: 25,
+      status: 'normal',
+      model: 'lobster-openai/gpt-5',
+    });
+
+    // 2. Respects positive session.contextWindowOverride over DSH model contextWindow.
+    session.contextWindowOverride = 40_000;
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 15,
+      values: {
+        contextPressure: {
+          pressureTokens: 32_000,
+          contextWindow: 128_000,
+        },
+      },
+    });
+    const overridden = await adapter.getContextUsage('cw-usage');
+    expect(overridden).toMatchObject({
+      usedTokens: 32_000,
+      contextTokens: 40_000,
+      percent: 80,
+      status: 'warning',
+    });
+
+    // 3. Falls back to contextBreakdown when provider usage hasn't been sampled yet.
+    session.contextWindowOverride = null;
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 4,
+      values: {
+        contextPressure: { contextWindow: 100_000 },
+        tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        contextBreakdown: { systemTokens: 2_000, toolsTokens: 3_000, messageTokens: 5_000 },
+      },
+    });
+    const fromBreakdown = await adapter.getContextUsage('cw-usage');
+    expect(fromBreakdown).toMatchObject({
+      usedTokens: 10_000,
+      contextTokens: 100_000,
+      percent: 10,
+      status: 'normal',
+    });
+
+    // 4. Falls back to tokenUsage when neither contextPressure counts nor breakdown are present.
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 6,
+      values: {
+        contextPressure: { contextWindow: 100_000 },
+        tokenUsage: { uncachedInputTokens: 60_000, outputTokens: 500, cacheReadTokens: 32_000, cacheWriteTokens: 0 },
+      },
+    });
+    const fromTokenUsage = await adapter.getContextUsage('cw-usage');
+    expect(fromTokenUsage).toMatchObject({
+      usedTokens: 92_000,
+      contextTokens: 100_000,
+      percent: 92,
+      status: 'danger',
+    });
+
+    // 5. Returns null for empty/fresh projections with zero usage and no contextWindow.
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 0,
+      values: {
+        contextPressure: {},
+        tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 },
+      },
+    });
+    expect(await adapter.getContextUsage('cw-usage')).toBeNull();
+  });
+
+  test('compactContext invokes commands/execute /compact, distinguishes noop vs committed compaction, and persists notice', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-compact',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-compact-1`,
+    });
+
+    const executeCommand = vi.fn();
+    const promptSession = vi.fn();
+    const getSessionProjections = vi.fn(async () => ({
+      asOfSeq: 20,
+      values: {
+        contextPressure: {
+          pressureTokens: 80_000,
+          projectedTokens: 16_000,
+          contextWindow: 128_000,
+        },
+      },
+    }));
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => ({
+          executeCommand,
+          promptSession,
+          getSessionProjections,
+          onWaterfall: vi.fn(() => () => undefined),
+        }) as unknown as DshTypertClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const maintenanceEvents: boolean[] = [];
+    const usageUpdates: CoworkContextUsage[] = [];
+    const streamedMessages: CoworkMessage[] = [];
+    adapter.on('contextMaintenance', (_sid, active) => maintenanceEvents.push(active));
+    adapter.on('contextUsageUpdate', (_sid, usage) => usageUpdates.push(usage));
+    adapter.on('message', (_sid, msg) => streamedMessages.push(msg));
+
+    // Case 1: No compactable history yet (no sourceEventSeq).
+    executeCommand.mockResolvedValueOnce({
+      commandId: 'cmd-noop',
+      result: { kind: 'success', text: 'No compactable history yet.' },
+    });
+    const noopRes = await adapter.compactContext('cw-compact');
+    expect(executeCommand).toHaveBeenCalledWith({
+      agentId: 'dsh-compact-1',
+      line: '/compact',
+    });
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(noopRes.compacted).toBe(false);
+    expect(noopRes.reason).toBe('No compactable history yet.');
+    expect(noopRes.usage?.usedTokens).toBe(16_000);
+    expect(messages).toHaveLength(0);
+    expect(maintenanceEvents).toEqual([true, false]);
+
+    // Case 2: Actual compaction committed (sourceEventSeq returned).
+    executeCommand.mockResolvedValueOnce({
+      commandId: 'cmd-ok',
+      result: {
+        kind: 'success',
+        text: 'Compacted 6 history items (~64000 tokens).',
+        sourceEventSeq: 18,
+      },
+    });
+    const okRes = await adapter.compactContext('cw-compact');
+    expect(okRes.compacted).toBe(true);
+    expect(okRes.usage).toMatchObject({
+      usedTokens: 16_000,
+      contextTokens: 128_000,
+      percent: 13,
+      status: 'normal',
+    });
+    expect(usageUpdates).toHaveLength(2);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'system',
+      content: '',
+      metadata: {
+        kind: CoworkSystemMessageKind.ContextCompaction,
+        mode: ContextCompactionMode.Manual,
+        status: ContextCompactionStatus.Completed,
+        compacted: true,
+        seq: 18,
+        summary: 'Compacted 6 history items (~64000 tokens).',
+      },
+    });
+    expect(streamedMessages).toHaveLength(1);
+
+    // Case 3: Command returns error result -> throws and still clears contextMaintenance.
+    executeCommand.mockResolvedValueOnce({
+      commandId: 'cmd-err',
+      result: {
+        kind: 'error',
+        text: 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.',
+      },
+    });
+    await expect(adapter.compactContext('cw-compact')).rejects.toThrow(/active compaction/i);
+    expect(maintenanceEvents).toEqual([true, false, true, false, true, false]);
+  });
+
+  test('proactively emits contextUsageUpdate after assistant/message and persists ContextCompaction on auto compaction/end', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-auto-compact',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-auto-1`,
+    });
+
+    const getSessionProjections = vi.fn()
+      .mockResolvedValueOnce({
+        asOfSeq: 10,
+        values: {
+          contextPressure: { projectedTokens: 20_000, pressureTokens: 100_000, contextWindow: 128_000 },
+        },
+      })
+      .mockResolvedValueOnce({
+        asOfSeq: 12,
+        values: {
+          contextPressure: { projectedTokens: 24_000, pressureTokens: 23_500, contextWindow: 128_000 },
+        },
+      });
+
+    const fakeClient = {
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      getSessionProjections,
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'compaction/start', seq: 8, data: { compactionId: 'cmp-1', turn: 2 } } };
+        yield { type: 'event', event: { type: 'compaction/end', seq: 10, data: { compactionId: 'cmp-1', turn: 2 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 12,
+            data: { message: { role: 'assistant', content: [{ type: 'text', text: 'Done after compaction.' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 13, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const maintenance: boolean[] = [];
+    const usages: CoworkContextUsage[] = [];
+    adapter.on('contextMaintenance', (_sid, active) => maintenance.push(active));
+    adapter.on('contextUsageUpdate', (_sid, usage) => usages.push(usage));
+
+    await adapter.continueSession('cw-auto-compact', 'Keep going');
+
+    expect(maintenance).toEqual([true, false]);
+    expect(usages.map((u) => u.usedTokens)).toEqual([20_000, 24_000]);
+    const compactionMsg = messages.find(
+      (m) => m.type === 'system' && m.metadata?.kind === CoworkSystemMessageKind.ContextCompaction,
+    );
+    expect(compactionMsg).toBeDefined();
+    expect(compactionMsg?.metadata).toMatchObject({
+      kind: CoworkSystemMessageKind.ContextCompaction,
+      mode: ContextCompactionMode.Auto,
+      status: ContextCompactionStatus.Completed,
+      compacted: true,
+      compactionId: 'cmp-1',
+      seq: 10,
+    });
   });
 });

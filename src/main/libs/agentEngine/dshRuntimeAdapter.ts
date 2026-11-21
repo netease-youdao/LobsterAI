@@ -7,6 +7,11 @@
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
+import {
+  ContextCompactionMode,
+  ContextCompactionStatus,
+  CoworkSystemMessageKind,
+} from '../../../common/coworkSystemMessages';
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type {
   CoworkBtwAbortResponse,
@@ -76,6 +81,7 @@ export interface DshAdapterSessionRecord {
   modelOverride?: string | null;
   modelPresetId?: string | null;
   thinkingLevel?: string | null;
+  contextWindowOverride?: number | null;
   systemPrompt?: string;
   goal?: CoworkGoal | null;
   messages?: CoworkMessage[];
@@ -207,6 +213,8 @@ interface ActiveTurnState {
   turnAborted: boolean;
   /** Ignore a trailing aborted `turn/end` leaked from a just-cancelled previous turn. */
   ignoreStaleAbortedTurnEnd: boolean;
+  /** Latest in-flight context usage refresh kicked off by assistant/message or compaction/end. */
+  pendingContextUsageRefresh: Promise<void> | null;
 }
 
 interface CancelledTurnRecord {
@@ -467,59 +475,187 @@ function extractLatestLegacyPlanSummary(messages: CoworkMessage[] | undefined): 
   return '';
 }
 
+const LEGACY_BRIDGE_OPEN_TAG = '<previous_conversation_context>\n';
+const LEGACY_BRIDGE_CLOSE_TAG = '\n</previous_conversation_context>';
+const LEGACY_BRIDGE_IMAGES_HEADER = '[历史消息中的图片] 用户询问图片内容时，请使用 read_image 读取对应文件。\n';
+const LEGACY_BRIDGE_TURNS_HEADER = '[历史会话近期对话]\n';
+const LEGACY_BRIDGE_MAX_GOAL_CHARS_SHARED = 600;
+const LEGACY_BRIDGE_MAX_PLAN_CHARS_SHARED = 1_000;
+const LEGACY_BRIDGE_MAX_IMAGES_CHARS_SHARED = 1_200;
+const LEGACY_BRIDGE_CAPSULE_BUDGET_RATIO = 0.45;
+
+function fitNewestLinesToBudget(
+  header: string,
+  entries: string[],
+  separator: string,
+  maxChars: number,
+): string {
+  if (entries.length === 0 || maxChars <= header.length) return '';
+  const bodyBudget = maxChars - header.length;
+  const kept: string[] = [];
+  let used = 0;
+
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const addition = kept.length === 0 ? entry.length : entry.length + separator.length;
+    if (used + addition <= bodyBudget) {
+      kept.unshift(entry);
+      used += addition;
+      continue;
+    }
+    if (kept.length === 0 && bodyBudget > 0) {
+      const truncated = entry.slice(0, bodyBudget).trimEnd();
+      if (truncated) kept.unshift(truncated);
+    }
+    break;
+  }
+
+  return kept.length > 0 ? `${header}${kept.join(separator)}` : '';
+}
+
+function truncateBridgeText(text: string, maxChars: number): string {
+  if (maxChars <= 0) return '';
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars).trimEnd();
+}
+
 /**
  * Build a compact one-time context bridge prefix when resuming a historical
  * OpenClaw session inside DSH for the first time ("Lazy Context Bridge").
+ *
+ * Reserves budget for legacy goal/plan, history images, continuity capsule,
+ * and the most recent turns so oversized history drops older turns or excess
+ * capsule tail instead of slicing off the newest messages from the end.
  */
 export function buildLazyContextBridgePrefix(
   capsule: CoworkContinuityCapsule | null,
   messages: CoworkMessage[] | undefined,
   goal?: CoworkGoal | null,
 ): string {
-  const parts: string[] = [];
-  if (goal && typeof goal.objective === 'string' && goal.objective.trim().length > 0) {
-    const goalLines = [
-      '[历史会话目标]',
-      `状态: ${goal.status}`,
-      `目标: ${goal.objective.trim()}`,
-      ...(goal.lastStatusNote?.trim() ? [`备注: ${goal.lastStatusNote.trim()}`] : []),
-    ];
-    parts.push(goalLines.join('\n'));
-  }
-  const latestPlan = extractLatestLegacyPlanSummary(messages);
-  if (latestPlan) {
-    parts.push(latestPlan);
-  }
-  const images = (messages ?? [])
-    .filter(message => message.type === 'user')
-    .flatMap(message => message.metadata?.historyImageReferences ?? [])
-    .slice(-LEGACY_BRIDGE_MAX_MESSAGES);
-  if (images.length) {
-    parts.push('[历史消息中的图片] 用户询问图片内容时，请使用 read_image 读取对应文件。\n'
-      + images.map(image => JSON.stringify(image)).join('\n'));
-  }
-  if (capsule) {
-    const formatted = formatCoworkContinuityCapsuleBridge(capsule).trim();
-    if (formatted) parts.push(formatted);
-  }
-  const relevant = (messages ?? [])
+  const maxBodyChars = LEGACY_BRIDGE_MAX_CHARS
+    - LEGACY_BRIDGE_OPEN_TAG.length
+    - LEGACY_BRIDGE_CLOSE_TAG.length;
+
+  const goalSection = goal && typeof goal.objective === 'string' && goal.objective.trim().length > 0
+    ? [
+        '[历史会话目标]',
+        `状态: ${goal.status}`,
+        `目标: ${goal.objective.trim()}`,
+        ...(goal.lastStatusNote?.trim() ? [`备注: ${goal.lastStatusNote.trim()}`] : []),
+      ].join('\n')
+    : '';
+
+  const planSection = extractLatestLegacyPlanSummary(messages);
+
+  const imageLines = (messages ?? [])
+    .filter((message) => message.type === 'user')
+    .flatMap((message) => message.metadata?.historyImageReferences ?? [])
+    .slice(-LEGACY_BRIDGE_MAX_MESSAGES)
+    .map((image) => JSON.stringify(image));
+
+  const capsuleText = capsule ? formatCoworkContinuityCapsuleBridge(capsule).trim() : '';
+
+  const turnEntries = (messages ?? [])
     .filter((m) => (
       (m.type === 'user' || m.type === 'assistant')
       && m.metadata?.isThinking !== true
       && m.content.trim().length > 0
     ))
-    .slice(-LEGACY_BRIDGE_MAX_MESSAGES);
-  if (relevant.length > 0) {
-    const transcript = relevant
-      .map((m) => `${m.type === 'user' ? '用户' : '助手'}: ${m.content.trim().slice(0, 800)}`)
-      .join('\n\n');
-    parts.push(`[历史会话近期对话]\n${transcript}`);
+    .slice(-LEGACY_BRIDGE_MAX_MESSAGES)
+    .map((m) => `${m.type === 'user' ? '用户' : '助手'}: ${m.content.trim().slice(0, 800)}`);
+
+  const fullImagesSection = imageLines.length > 0
+    ? `${LEGACY_BRIDGE_IMAGES_HEADER}${imageLines.join('\n')}`
+    : '';
+  const fullTurnsSection = turnEntries.length > 0
+    ? `${LEGACY_BRIDGE_TURNS_HEADER}${turnEntries.join('\n\n')}`
+    : '';
+
+  const rawParts = [
+    goalSection,
+    planSection,
+    fullImagesSection,
+    capsuleText,
+    fullTurnsSection,
+  ].filter(Boolean);
+  if (rawParts.length === 0) return '';
+
+  const fullBody = rawParts.join('\n\n');
+  if (fullBody.length <= maxBodyChars) {
+    return `${LEGACY_BRIDGE_OPEN_TAG}${fullBody}${LEGACY_BRIDGE_CLOSE_TAG}`;
   }
-  if (parts.length === 0) return '';
-  const combined = `<previous_conversation_context>\n${parts.join('\n\n')}\n</previous_conversation_context>`;
-  return combined.length > LEGACY_BRIDGE_MAX_CHARS
-    ? `${combined.slice(0, LEGACY_BRIDGE_MAX_CHARS)}\n</previous_conversation_context>`
-    : combined;
+
+  const hasGoal = goalSection.length > 0;
+  const hasPlan = planSection.length > 0;
+  const hasImages = imageLines.length > 0;
+  const hasCapsule = capsuleText.length > 0;
+  const hasTurns = turnEntries.length > 0;
+  const sectionCount = Number(hasGoal)
+    + Number(hasPlan)
+    + Number(hasImages)
+    + Number(hasCapsule)
+    + Number(hasTurns);
+  const separatorChars = Math.max(0, sectionCount - 1) * 2;
+  let remaining = Math.max(0, maxBodyChars - separatorChars);
+
+  let fittedGoal = '';
+  if (hasGoal) {
+    const goalCap = hasPlan || hasImages || hasCapsule || hasTurns
+      ? Math.min(goalSection.length, LEGACY_BRIDGE_MAX_GOAL_CHARS_SHARED, remaining)
+      : remaining;
+    fittedGoal = truncateBridgeText(goalSection, goalCap);
+    remaining = Math.max(0, remaining - fittedGoal.length);
+  }
+
+  let fittedPlan = '';
+  if (hasPlan) {
+    const planCap = hasImages || hasCapsule || hasTurns
+      ? Math.min(planSection.length, LEGACY_BRIDGE_MAX_PLAN_CHARS_SHARED, remaining)
+      : remaining;
+    fittedPlan = truncateBridgeText(planSection, planCap);
+    remaining = Math.max(0, remaining - fittedPlan.length);
+  }
+
+  let imagesSection = '';
+  if (hasImages) {
+    const imagesCap = hasCapsule || hasTurns
+      ? Math.min(fullImagesSection.length, LEGACY_BRIDGE_MAX_IMAGES_CHARS_SHARED, remaining)
+      : remaining;
+    imagesSection = fitNewestLinesToBudget(LEGACY_BRIDGE_IMAGES_HEADER, imageLines, '\n', imagesCap);
+    remaining = Math.max(0, remaining - imagesSection.length);
+  }
+
+  let fittedCapsule = '';
+  let fittedTurns = '';
+  if (hasCapsule && hasTurns) {
+    const targetCapsuleBudget = Math.floor(remaining * LEGACY_BRIDGE_CAPSULE_BUDGET_RATIO);
+    const targetTurnsBudget = remaining - targetCapsuleBudget;
+    let capsuleBudget: number;
+    if (capsuleText.length <= targetCapsuleBudget) {
+      capsuleBudget = capsuleText.length;
+    } else if (fullTurnsSection.length <= targetTurnsBudget) {
+      capsuleBudget = remaining - fullTurnsSection.length;
+    } else {
+      capsuleBudget = targetCapsuleBudget;
+    }
+    fittedCapsule = truncateBridgeText(capsuleText, capsuleBudget);
+    const actualTurnsBudget = remaining - fittedCapsule.length;
+    fittedTurns = fitNewestLinesToBudget(LEGACY_BRIDGE_TURNS_HEADER, turnEntries, '\n\n', actualTurnsBudget);
+    if (fittedCapsule.length < capsuleText.length) {
+      const reclaimedCapsuleBudget = remaining - fittedTurns.length;
+      if (reclaimedCapsuleBudget > fittedCapsule.length) {
+        fittedCapsule = truncateBridgeText(capsuleText, reclaimedCapsuleBudget);
+      }
+    }
+  } else if (hasCapsule) {
+    fittedCapsule = truncateBridgeText(capsuleText, remaining);
+  } else if (hasTurns) {
+    fittedTurns = fitNewestLinesToBudget(LEGACY_BRIDGE_TURNS_HEADER, turnEntries, '\n\n', remaining);
+  }
+
+  const finalParts = [fittedGoal, fittedPlan, imagesSection, fittedCapsule, fittedTurns].filter(Boolean);
+  if (finalParts.length === 0) return '';
+  return `${LEGACY_BRIDGE_OPEN_TAG}${finalParts.join('\n\n')}${LEGACY_BRIDGE_CLOSE_TAG}`;
 }
 
 export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
@@ -841,42 +977,17 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
     if (!dshSessionId || !this.hostManager.isReady()) return null;
 
-    const projections = await this.hostManager.getClient().getSessionProjections(dshSessionId);
-    if (!projections || typeof projections !== 'object') return null;
-    const values = (projections.values as Record<string, unknown> | undefined) ?? projections;
-    const meter = values.tokenMeter as Record<string, unknown> | undefined;
-    if (!meter || typeof meter !== 'object') return null;
+    const client = this.hostManager.getClient();
+    if (typeof client.getSessionProjections !== 'function') return null;
 
-    const usedTokens = typeof meter.usedTokens === 'number'
-      ? meter.usedTokens
-      : typeof meter.inputTokens === 'number'
-        ? meter.inputTokens
-        : undefined;
-    const contextTokens = typeof meter.contextWindow === 'number'
-      ? meter.contextWindow
-      : typeof meter.contextTokens === 'number'
-        ? meter.contextTokens
-        : undefined;
-    const percent = usedTokens !== undefined && contextTokens && contextTokens > 0
-      ? Math.min(100, Math.round((usedTokens / contextTokens) * 100))
-      : undefined;
-    const status: CoworkContextUsage['status'] = percent === undefined
-      ? 'unknown'
-      : percent >= 90
-        ? 'danger'
-        : percent >= 75
-          ? 'warning'
-          : 'normal';
-
-    return {
+    const projections = await client.getSessionProjections(dshSessionId);
+    const contextWindowOverride = this.store.getSession(sessionId)?.contextWindowOverride;
+    return extractContextUsageFromProjections(
       sessionId,
-      sessionKey: dshSessionId,
-      usedTokens,
-      contextTokens,
-      percent,
-      status,
-      updatedAt: Date.now(),
-    };
+      dshSessionId,
+      projections,
+      contextWindowOverride,
+    );
   }
 
   async compactContext(
@@ -889,17 +1000,68 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const client = await this.ensureReadyClient();
     this.emit('contextMaintenance', sessionId, true);
     try {
-      await client.promptSession({
-        sessionId: dshSessionId,
-        requestId: randomUUID(),
-        content: [{ type: 'text', text: '/compact' }],
-        mode: 'queue',
+      const execution = await client.executeCommand({
+        agentId: dshSessionId,
+        line: '/compact',
       });
-      const usage = await this.getContextUsage(sessionId);
+      if (!execution) {
+        const usage = await this.getContextUsage(sessionId).catch((): null => null);
+        if (usage) this.emit('contextUsageUpdate', sessionId, usage);
+        return {
+          compacted: false,
+          reason: 'Compaction command is unavailable for this session',
+          usage,
+        };
+      }
+
+      if (execution.result.kind === 'error') {
+        throw new Error(execution.result.text || 'Context compaction failed');
+      }
+
+      // `@deepseek-ai/dsh-command-compact` attaches `sourceEventSeq` (the
+      // `compaction/summary` seq) when compaction committed, and omits it on
+      // the no-op `"No compactable history yet."` outcome.
+      const summarySeq = execution.result.sourceEventSeq;
+      const compacted = typeof summarySeq === 'number' && Number.isFinite(summarySeq);
+      const usage = await this.getContextUsage(sessionId).catch((): null => null);
       if (usage) this.emit('contextUsageUpdate', sessionId, usage);
+
+      if (!compacted) {
+        return {
+          compacted: false,
+          reason: execution.result.text?.trim() || 'No compactable history yet.',
+          usage,
+        };
+      }
+
+      const compactionMessage = this.store.addMessage(sessionId, {
+        type: 'system',
+        content: '',
+        metadata: {
+          kind: CoworkSystemMessageKind.ContextCompaction,
+          mode: ContextCompactionMode.Manual,
+          status: ContextCompactionStatus.Completed,
+          compacted: true,
+          seq: summarySeq,
+          ...(execution.result.text ? { summary: execution.result.text } : {}),
+        },
+      });
+      this.emit('message', sessionId, compactionMessage);
+
       return { compacted: true, usage };
     } finally {
       this.emit('contextMaintenance', sessionId, false);
+    }
+  }
+
+  private async refreshAndEmitContextUsage(sessionId: string): Promise<void> {
+    try {
+      const usage = await this.getContextUsage(sessionId);
+      if (usage) {
+        this.emit('contextUsageUpdate', sessionId, usage);
+      }
+    } catch {
+      // Non-fatal: UI polling or the next step will retry.
     }
   }
 
@@ -1985,6 +2147,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       turnError: null,
       turnAborted: false,
       ignoreStaleAbortedTurnEnd: params.ignoreStaleAbortedTurnEnd,
+      pendingContextUsageRefresh: null,
     };
   }
 
@@ -2099,6 +2262,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         });
         return;
       }
+      await (turn.pendingContextUsageRefresh ?? this.refreshAndEmitContextUsage(coworkSessionId));
       this.store.updateSession(coworkSessionId, { status: 'completed' });
       this.emit('sessionStatus', coworkSessionId, 'completed');
       this.emit('complete', coworkSessionId, formatStoredDshSessionId(dshSessionId));
@@ -2495,6 +2659,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         turn.lastFinalizedAssistantText = '';
         turn.suppressedPreSteerAssistantText = null;
         turn.lastCommittedAssistantSeq = null;
+        turn.pendingContextUsageRefresh = this.refreshAndEmitContextUsage(coworkSessionId);
         return false;
       }
 
@@ -2505,6 +2670,26 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       if (evType === 'compaction/end') {
         this.emit('contextMaintenance', coworkSessionId, false);
+        const isManualCommand = typeof data.sourceCommandId === 'string' && data.sourceCommandId.length > 0;
+        if (!isManualCommand) {
+          const hasError = data.error !== undefined && data.error !== null;
+          const compactionMessage = this.store.addMessage(coworkSessionId, {
+            type: 'system',
+            content: '',
+            metadata: {
+              kind: CoworkSystemMessageKind.ContextCompaction,
+              mode: ContextCompactionMode.Auto,
+              status: hasError
+                ? ContextCompactionStatus.Failed
+                : ContextCompactionStatus.Completed,
+              compacted: !hasError,
+              ...(typeof data.compactionId === 'string' ? { compactionId: data.compactionId } : {}),
+              ...(typeof ev.seq === 'number' ? { seq: ev.seq } : {}),
+            },
+          });
+          this.emit('message', coworkSessionId, compactionMessage);
+        }
+        turn.pendingContextUsageRefresh = this.refreshAndEmitContextUsage(coworkSessionId);
         return false;
       }
 
@@ -2820,6 +3005,112 @@ function extractReasoningFromContentBlocks(content: unknown): string {
     .map((block) => (typeof block.text === 'string' ? block.text : typeof block.thinking === 'string' ? block.thinking : ''))
     .filter(Boolean)
     .join('');
+}
+
+function asNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function asPositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function extractContextUsageFromProjections(
+  sessionId: string,
+  dshSessionId: string,
+  projections: Record<string, unknown> | null,
+  contextWindowOverride?: number | null,
+): CoworkContextUsage | null {
+  if (!projections || typeof projections !== 'object') return null;
+  const values = asPlainRecord(projections.values) ?? projections;
+
+  const contextPressure = asPlainRecord(values.contextPressure);
+  const tokenUsage = asPlainRecord(values.tokenUsage);
+  const contextBreakdown = asPlainRecord(values.contextBreakdown);
+  const legacyMeter = asPlainRecord(values.tokenMeter);
+
+  const projectedTokens = asNonNegativeNumber(contextPressure?.projectedTokens);
+  const pressureTokens = asNonNegativeNumber(contextPressure?.pressureTokens);
+  const pressureContextWindow = asPositiveNumber(contextPressure?.contextWindow);
+
+  const legacyUsed = asNonNegativeNumber(legacyMeter?.usedTokens)
+    ?? asNonNegativeNumber(legacyMeter?.inputTokens);
+  const legacyContextWindow = asPositiveNumber(legacyMeter?.contextWindow)
+    ?? asPositiveNumber(legacyMeter?.contextTokens);
+
+  let breakdownTotal: number | undefined;
+  if (contextBreakdown) {
+    const sys = asNonNegativeNumber(contextBreakdown.systemTokens);
+    const tools = asNonNegativeNumber(contextBreakdown.toolsTokens);
+    const msgs = asNonNegativeNumber(contextBreakdown.messageTokens);
+    if (sys !== undefined || tools !== undefined || msgs !== undefined) {
+      const sum = (sys ?? 0) + (tools ?? 0) + (msgs ?? 0);
+      if (sum > 0) breakdownTotal = sum;
+    }
+  }
+
+  let tokenUsageFallback: number | undefined;
+  if (tokenUsage) {
+    const uncached = asNonNegativeNumber(tokenUsage.uncachedInputTokens) ?? 0;
+    const cacheRead = asNonNegativeNumber(tokenUsage.cacheReadTokens) ?? 0;
+    const cacheWrite = asNonNegativeNumber(tokenUsage.cacheWriteTokens) ?? 0;
+    const output = asNonNegativeNumber(tokenUsage.outputTokens) ?? 0;
+    const promptSide = uncached + cacheRead + cacheWrite;
+    if (promptSide > 0) {
+      tokenUsageFallback = promptSide;
+    } else if (output > 0) {
+      tokenUsageFallback = output;
+    }
+  }
+
+  const usedTokens = projectedTokens
+    ?? pressureTokens
+    ?? legacyUsed
+    ?? breakdownTotal
+    ?? tokenUsageFallback;
+
+  const overrideWindow = asPositiveNumber(contextWindowOverride);
+  const resolvedProjectionWindow = pressureContextWindow ?? legacyContextWindow;
+  if (usedTokens === undefined && resolvedProjectionWindow === undefined) {
+    return null;
+  }
+
+  const contextTokens = overrideWindow ?? resolvedProjectionWindow;
+  const percent = usedTokens !== undefined && contextTokens && contextTokens > 0
+    ? Math.min(100, Math.max(0, Math.round((usedTokens / contextTokens) * 100)))
+    : undefined;
+  const status: CoworkContextUsage['status'] = percent === undefined
+    ? 'unknown'
+    : percent >= 90
+      ? 'danger'
+      : percent >= 75
+        ? 'warning'
+        : 'normal';
+
+  const modelSelection = asPlainRecord(values.modelSelection);
+  const selectedModel = asPlainRecord(modelSelection?.lastUsed) ?? asPlainRecord(modelSelection?.next);
+  const model = typeof selectedModel?.model === 'string' && selectedModel.model.trim()
+    ? (typeof selectedModel.provider === 'string' && selectedModel.provider.trim()
+        ? `${selectedModel.provider.trim()}/${selectedModel.model.trim()}`
+        : selectedModel.model.trim())
+    : undefined;
+
+  return {
+    sessionId,
+    sessionKey: dshSessionId,
+    usedTokens,
+    contextTokens,
+    percent,
+    status,
+    ...(model ? { model } : {}),
+    updatedAt: Date.now(),
+  };
 }
 
 function mapDshGoalPhaseToStatus(rawStatus: unknown): CoworkGoalStatus {

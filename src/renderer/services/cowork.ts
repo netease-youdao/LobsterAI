@@ -756,25 +756,27 @@ class CoworkService {
         } else {
           await this.refreshContextUsage(sessionId);
         }
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `context-compaction-manual-${sessionId}-${Date.now()}`,
-            type: 'system',
-            content: result.compacted
-              ? i18nService.t('coworkContextManualCompacted')
-              : i18nService.t('coworkContextManualCompactNoop'),
-            timestamp: Date.now(),
-            metadata: {
-              kind: CoworkSystemMessageKind.ContextCompaction,
-              mode: ContextCompactionMode.Manual,
-              status: result.compacted
-                ? ContextCompactionStatus.Completed
-                : ContextCompactionStatus.Failed,
-              compacted: result.compacted === true,
+        // When compaction actually ran, main persists and streams the durable
+        // ContextCompaction message via `onStreamMessage`. Only append an
+        // ephemeral notice here for no-op attempts so live chats never show
+        // duplicate compaction dividers.
+        if (!result.compacted) {
+          store.dispatch(addMessage({
+            sessionId,
+            message: {
+              id: `context-compaction-manual-${sessionId}-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkContextManualCompactNoop'),
+              timestamp: Date.now(),
+              metadata: {
+                kind: CoworkSystemMessageKind.ContextCompaction,
+                mode: ContextCompactionMode.Manual,
+                status: ContextCompactionStatus.Failed,
+                compacted: false,
+              },
             },
-          },
-        }));
+          }));
+        }
         return true;
       }
       console.warn(`[CoworkService] manual context compaction failed for session ${sessionId}: ${result.error ?? 'Unknown error'}`);

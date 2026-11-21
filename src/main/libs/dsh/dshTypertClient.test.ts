@@ -234,7 +234,7 @@ describe('DshTypertClient', () => {
     await client.close();
   });
 
-  test('executeCommand posts exact commands/execute contract and handles resolved and unresolved results', async () => {
+  test('executeCommand posts exact commands/execute contract and handles goal, compact, and unresolved results', async () => {
     const fakeWs = new FakeWebSocket();
     const commandRequests: Array<{ url: string; payload: Record<string, unknown> }> = [];
 
@@ -262,6 +262,27 @@ describe('DshTypertClient', () => {
               type: 'server-response',
               rpcId: parsed.rpcId,
               result: { ok: true },
+            }),
+          };
+        }
+        if (line === '/compact') {
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              type: 'server-response',
+              rpcId: parsed.rpcId,
+              result: {
+                ok: true,
+                value: {
+                  commandId: 'cmd-compact',
+                  result: {
+                    kind: 'success',
+                    text: 'Compacted 4 history items (~1200 tokens).',
+                    sourceEventSeq: 12,
+                  },
+                },
+              },
             }),
           };
         }
@@ -340,6 +361,30 @@ describe('DshTypertClient', () => {
     expect((commandRequests[1].payload.payload as { args: { submittedAttachments: unknown[] } }).args.submittedAttachments).toEqual([
       { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'spec.png' },
     ]);
+
+    const compactRes = await client.executeCommand({
+      agentId: 'session-99',
+      line: '/compact',
+    });
+    expect(compactRes).toEqual({
+      commandId: 'cmd-compact',
+      result: {
+        kind: 'success',
+        text: 'Compacted 4 history items (~1200 tokens).',
+        sourceEventSeq: 12,
+      },
+    });
+    expect(commandRequests[2].payload).toMatchObject({
+      type: 'client-request',
+      method: 'commands/execute',
+      payload: {
+        args: {
+          agentId: 'session-99',
+          line: '/compact',
+          submittedAttachments: [],
+        },
+      },
+    });
 
     const resUnknown = await client.executeCommand({
       agentId: 'session-42',

@@ -296,8 +296,15 @@ export interface DshExecuteCommandParams {
 }
 
 export type DshCommandResult =
-  | { kind: 'success'; text?: string; sourceEventSeq?: number }
-  | { kind: 'error'; text: string };
+  | {
+      kind: 'success';
+      text?: string;
+      sourceEventSeq?: number;
+    }
+  | {
+      kind: 'error';
+      text: string;
+    };
 
 export interface DshCommandExecution {
   commandId: string;
