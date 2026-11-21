@@ -19,6 +19,7 @@ import {
 } from '../../shared/cowork/llmTurnUsage';
 import { DSH_INSTANCE_HEADER } from '../../shared/dshEngine/analytics';
 import { EnterpriseApiErrorCode } from '../../shared/enterpriseAccount/constants';
+import { OpenClawProviderId, ProviderName } from '../../shared/providers/constants';
 import {
   LOBSTERAI_CLIENT_CAPABILITIES,
   LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
@@ -60,6 +61,17 @@ const PROXY_UPSTREAM_NETWORK_ERROR_TYPE = 'upstream_network_error';
 const CHROMIUM_NET_ERROR_PATTERN = /\bnet::(ERR_[A-Z0-9_]+)\b/;
 // Chat-style model requests whose prompt prefix is compared for cache diagnostics.
 const PROMPT_PREFIX_PATH_PATTERN = /\/(chat\/completions|messages)$/;
+const LOBSTER_SCOPED_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  OpenClawProviderId.Lobster,
+  'lobsterai',
+  ProviderName.LobsteraiServer,
+  'youdao',
+]);
+const OAUTH_SCOPED_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  ProviderName.Copilot,
+  OpenClawProviderId.OpenAICodex,
+  'xai-oauth',
+]);
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
@@ -575,24 +587,27 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   // Handle provider-scoped proxy routes `/v1/<providerId>/*` used by DSH's
-  // in-memory provider bridge. LobsterAI Plan aliases (`lobster`, `lobsterai`,
-  // `lobsterai-server`, `youdao`) rewrite to `/v1/*` and continue through the
-  // standard LobsterAI Server path; third-party OAuth providers (`github-copilot`,
-  // `openai-codex`, `xai-oauth`) forward through `oauthProviderUpstreamResolver`.
+  // in-memory provider bridge and Quick Answer one-shot calls. LobsterAI Plan
+  // aliases (`lobster`, `lobsterai`, `lobsterai-server`, `youdao`) rewrite to
+  // `/v1/*` and continue through the standard LobsterAI Server path;
+  // third-party OAuth providers (`github-copilot`, `openai-codex`, `xai-oauth`)
+  // forward through `oauthProviderUpstreamResolver`.
   let effectiveReqUrl = req.url ?? '/';
   const scopedMatch = /^\/v1\/([^/?]+)(\/.*)?$/.exec(effectiveReqUrl);
   if (scopedMatch) {
-    const providerId = decodeURIComponent(scopedMatch[1]);
+    let providerId: string;
+    try {
+      providerId = decodeURIComponent(scopedMatch[1]);
+    } catch {
+      providerId = scopedMatch[1];
+    }
     const restPath = scopedMatch[2] || '/';
-    if (
-      providerId === 'lobster'
-      || providerId === 'lobsterai'
-      || providerId === 'lobsterai-server'
-      || providerId === 'youdao'
-    ) {
+    if (LOBSTER_SCOPED_PROVIDER_IDS.has(providerId)) {
       effectiveReqUrl = normalizeScopedLobsterPlanPath(restPath);
-    } else if (oauthProviderUpstreamResolver) {
-      const upstream = await oauthProviderUpstreamResolver(providerId);
+    } else {
+      const upstream = oauthProviderUpstreamResolver
+        ? await oauthProviderUpstreamResolver(providerId)
+        : null;
       if (upstream) {
         try {
           const body = await collectRequestBody(req);
@@ -619,10 +634,15 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           res.writeHead(response.status, resHeaders);
           if (response.body) {
             const reader = response.body.getReader();
+            res.on('close', () => {
+              void reader.cancel().catch(() => {});
+            });
             const pump = async (): Promise<void> => {
               const { done, value } = await reader.read();
-              if (done) {
-                res.end();
+              if (done || res.destroyed || res.writableEnded) {
+                if (!res.destroyed && !res.writableEnded) {
+                  res.end();
+                }
                 return;
               }
               res.write(Buffer.from(value));
@@ -636,8 +656,21 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
           if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(buildUpstreamRequestFailureBody(error));
+          } else if (!res.destroyed && !res.writableEnded) {
+            res.destroy();
           }
         }
+        return;
+      }
+      if (OAUTH_SCOPED_PROVIDER_IDS.has(providerId)) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message: `OAuth provider proxy upstream unavailable for ${providerId}`,
+            type: 'service_unavailable',
+            code: 'oauth_upstream_unavailable',
+          },
+        }));
         return;
       }
     }

@@ -538,6 +538,7 @@ import { MediaUsageStore } from './libs/mediaUsageStore';
 import {
   getModelAuthProxyPort,
   getModelAuthProxyTraceStats,
+  getModelAuthProxyUrl,
   startModelAuthProxy,
   stopModelAuthProxy,
 } from './libs/modelAuthProxy';
@@ -15474,6 +15475,7 @@ if (!gotTheLock) {
         beforeSpeech: () => messageSpeechController?.stop(),
         quickAnswer: new CompanionQuickAnswerService({ getSessionKey: getAuthSessionKey,
           getProxyToken: () => getOpenClawLoopbackState().proxyToken,
+          getProxyBaseUrl: getModelAuthProxyUrl,
           resolvePreset: (presetId, signal) => modelPresetClient.resolve(crypto.randomUUID(), presetId, false, signal),
           reportAnalytics: event => getMainLogReporter().report(event) }),
       },

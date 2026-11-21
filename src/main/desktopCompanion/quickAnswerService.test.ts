@@ -78,12 +78,17 @@ describe('selection quick-answer authentication', () => {
     service.dispose();
   });
 
-  test('resolves the current model with the loopback proxy token', () => {
-    const service = new CompanionQuickAnswerService({ getSessionKey: () => 'signed-in', getProxyToken: () => 'loopback-token' });
+  test('resolves the current model with the loopback proxy token and proxy base URL', () => {
+    const service = new CompanionQuickAnswerService({
+      getSessionKey: () => 'signed-in',
+      getProxyToken: () => 'loopback-token',
+      getProxyBaseUrl: () => 'http://127.0.0.1:45555',
+    });
     const sender = { id: 31, isDestroyed: () => false, send: vi.fn() } as unknown as WebContents;
     service.start(sender, { requestId: 'ask', action: CompanionSelectionAction.Ask, text: 'Hello' });
-    const { getProxyToken } = vi.mocked(resolveOneShotTarget).mock.calls[0][0];
+    const { getProxyToken, getProxyBaseUrl } = vi.mocked(resolveOneShotTarget).mock.calls[0][0];
     expect(getProxyToken()).toBe('loopback-token');
+    expect(getProxyBaseUrl?.()).toBe('http://127.0.0.1:45555');
     service.dispose();
   });
 

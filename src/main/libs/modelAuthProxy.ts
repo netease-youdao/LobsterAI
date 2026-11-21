@@ -79,5 +79,9 @@ export function startModelAuthProxy(
 
 export const stopModelAuthProxy = stopOpenClawTokenProxy;
 export const getModelAuthProxyPort = getOpenClawTokenProxyPort;
+export function getModelAuthProxyUrl(): string | null {
+  const port = getOpenClawTokenProxyPort();
+  return port ? `http://127.0.0.1:${port}` : null;
+}
 export const getModelAuthProxyTraceStats = getOpenClawTokenProxyTraceStats;
 export const consumeRecentModelAuthProxyQuotaError = consumeRecentOpenClawTokenProxyQuotaError;
