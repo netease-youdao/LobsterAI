@@ -4,10 +4,14 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
+  computePetAtlasLayout,
+  findVerticalAlphaBounds,
   normalizePetManifest,
   PET_ATLAS_CELL_HEIGHT,
   PET_ATLAS_CELL_WIDTH,
   PET_ATLAS_COLUMNS,
+  PET_ATLAS_STANDING_BOTTOM_RATIO,
+  PET_ATLAS_STANDING_TOP_RATIO,
   PET_ATLAS_V1_ROWS,
   PET_ATLAS_V2_ROWS,
   PetAction,
@@ -82,6 +86,75 @@ describe('Codex pet action state machine', () => {
     expect(resolvePetAction({ ...base, landing: true, dragDirection: PetDragDirection.Right })).toBe(PetAction.RunningRight);
     expect(resolvePetAction({ ...base, dragDirection: PetDragDirection.Left })).toBe(PetAction.RunningLeft);
     expect(resolvePetAction({ ...base, dragDirection: PetDragDirection.Hold })).toBe(PetAction.Jumping);
+  });
+});
+
+describe('Codex pet atlas layout calibration', () => {
+  test('scans RGBA alpha channel to locate vertical standing bounds', () => {
+    const w = 4;
+    const h = 10;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    // Faint fringe at row 1 (below threshold 16) should be ignored.
+    rgba[(1 * w + 2) * 4 + 3] = 10;
+    // Opaque pixels from row 3 through row 7 -> [3, 8).
+    rgba[(3 * w + 1) * 4 + 3] = 200;
+    rgba[(7 * w + 0) * 4 + 3] = 255;
+
+    expect(findVerticalAlphaBounds(rgba, w, h)).toEqual({ top: 3, bottom: 8 });
+    expect(findVerticalAlphaBounds(new Uint8ClampedArray(w * h * 4), w, h)).toBeNull();
+    expect(findVerticalAlphaBounds(rgba, 0, h)).toBeNull();
+  });
+
+  test('matches standing character height and vertical center to the static skin box', () => {
+    // Tall skin (e.g. xingxingxing 220x256): static fills full 64px height.
+    const tall = computePetAtlasLayout({
+      boxSize: 64,
+      cellWidth: PET_ATLAS_CELL_WIDTH,
+      cellHeight: PET_ATLAS_CELL_HEIGHT,
+      staticWidth: 220,
+      staticHeight: 256,
+    });
+    expect(tall).toEqual({ displayWidth: 81, displayHeight: 88, offsetY: -6 });
+    const tallRenderedStandingHeight = tall.displayHeight * (PET_ATLAS_STANDING_BOTTOM_RATIO - PET_ATLAS_STANDING_TOP_RATIO);
+    expect(Math.abs(tallRenderedStandingHeight - 64)).toBeLessThan(0.5);
+
+    // Wide skin (e.g. ruanruanxia 276x256): static fits width=64, height=59.36px.
+    const wide = computePetAtlasLayout({
+      boxSize: 64,
+      cellWidth: PET_ATLAS_CELL_WIDTH,
+      cellHeight: PET_ATLAS_CELL_HEIGHT,
+      staticWidth: 276,
+      staticHeight: 256,
+    });
+    expect(wide).toEqual({ displayWidth: 75, displayHeight: 81, offsetY: -5.5 });
+    const wideStaticHeight = 64 * (256 / 276);
+    const wideRenderedStandingHeight = wide.displayHeight * (PET_ATLAS_STANDING_BOTTOM_RATIO - PET_ATLAS_STANDING_TOP_RATIO);
+    expect(Math.abs(wideRenderedStandingHeight - wideStaticHeight)).toBeLessThan(0.5);
+  });
+
+  test('respects custom standing bounds and falls back cleanly on invalid input', () => {
+    const custom = computePetAtlasLayout({
+      boxSize: 64,
+      cellWidth: 100,
+      cellHeight: 200,
+      standingBounds: { top: 40, bottom: 140 }, // height 100, center 90 (10px above cell center 100)
+    });
+    // target 64 / 100 * 200 = 128 height; center offset = -(90 - 100) * (128/200) = +6.4 -> +6.5
+    expect(custom).toEqual({ displayWidth: 64, displayHeight: 128, offsetY: 6.5 });
+
+    const fallback = computePetAtlasLayout({
+      boxSize: 64,
+      cellWidth: PET_ATLAS_CELL_WIDTH,
+      cellHeight: PET_ATLAS_CELL_HEIGHT,
+      standingBounds: { top: 200, bottom: 100 },
+    });
+    expect(fallback).toEqual({ displayWidth: 81, displayHeight: 88, offsetY: -6 });
+
+    expect(computePetAtlasLayout({ boxSize: 0, cellWidth: 192, cellHeight: 208 })).toEqual({
+      displayWidth: 0,
+      displayHeight: 0,
+      offsetY: 0,
+    });
   });
 });
 
