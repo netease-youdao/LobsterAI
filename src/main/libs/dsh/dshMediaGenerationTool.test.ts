@@ -118,3 +118,19 @@ describe('LobsterAI media generation in dsh', () => {
     expect(off).not.toContain('/project/v.mp4');
   });
 });
+
+test('an expired or declined video quote is terminal for its turn and the next user turn can request a new quote', async () => {
+  const response = { isError: true, content: [{ type: 'text', text: 'Quote expired' }], details: { failureStage: 'confirmation', reason: 'confirmation_timeout' } };
+  let scope = new AbortController();
+  const submit = vi.fn().mockResolvedValue(response);
+  const provider = createDshMediaGenerationProvider(submit, () => scope.signal);
+  const generate = (id: string) => provider.execute(MediaGenerationTool.Video,
+    { action: MediaGenerationAction.Generate, prompt: 'A sailboat' }, { ...context, callId: id });
+  const first = await generate('first');
+  expect(first).toMatchObject({ isError: true, details: response.details });
+  expect(await generate('automatic-retry')).toEqual(first);
+  expect(submit).toHaveBeenCalledTimes(1);
+  scope = new AbortController();
+  await generate('user-initiated-retry');
+  expect(submit).toHaveBeenCalledTimes(2);
+});

@@ -122,7 +122,9 @@ export function apply(ctx) {
       const customSystemPrompt = bound && typeof bound.customSystemPrompt === 'string'
         ? bound.customSystemPrompt
         : '';
-      return assembleWorkspacePersona(state.workspacesDir, agentId, customSystemPrompt);
+      const persona = assembleWorkspacePersona(state.workspacesDir, agentId, customSystemPrompt);
+      const install = 'For requests to install a local or attached skill into My Skills, use lobster_skill_install. Its inspect action reports this instance’s actual skill root and install performs desktop security review and registration.';
+      return [persona, install].filter(Boolean).join('\n\n');
     },
   });
 

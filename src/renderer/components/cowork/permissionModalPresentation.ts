@@ -2,6 +2,7 @@
 // `approval/request` payloads) into plain-language, non-technical confirmation
 // copy suitable for everyday users.
 
+import { isDeleteCommand } from '../../../common/deleteCommand';
 import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 
 export type ApprovalDangerLevel = 'safe' | 'caution' | 'destructive';
@@ -79,7 +80,7 @@ export function detectDangerFromCommand(command: string): {
   if (/\bmkfs\b/i.test(command)) {
     return { level: 'destructive', reason: 'disk-format' };
   }
-  if (/\b(rm|rmdir|unlink|del|erase|remove-item|trash)\b/i.test(command) || /\bgit\s+clean\b/i.test(command)) {
+  if (isDeleteCommand(command)) {
     return { level: 'caution', reason: 'file-delete' };
   }
   if (/\bgit\s+push\b/i.test(command)) {

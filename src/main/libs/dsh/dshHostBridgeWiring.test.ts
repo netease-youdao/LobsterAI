@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
+import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
 import { detectDisallowedOfficeGuiLaunch } from '../commandSafety';
@@ -24,6 +24,15 @@ import type {
 const cleanupPaths: string[] = [];
 const openServices: LobsterMemoryService[] = [];
 const openDbs: Database.Database[] = [];
+
+test('skill installation respects the desktop permission preset and inspecting the destination stays read-only', () => {
+  const req = { toolName: DSH_SKILL_INSTALL_TOOL, args: { action: DshSkillInstallAction.Install }, agentId: 'main' };
+  expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.ReadOnly }).kind).toBe('deny');
+  expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.WorkspaceWrite }).kind).toBe('ask');
+  expect(evaluateDshToolApproval({
+    ...req, args: { action: DshSkillInstallAction.Inspect }, permissionPreset: DshPermissionPreset.ReadOnly,
+  }).kind).toBe('passthrough');
+});
 
 afterEach(() => {
   while (openServices.length > 0) openServices.pop()!.close();

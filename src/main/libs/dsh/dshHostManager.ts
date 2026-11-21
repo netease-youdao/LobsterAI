@@ -200,6 +200,7 @@ export interface DshHostManagerOptions {
 const DEFAULT_BOOT_TIMEOUT_MS = 35_000;
 const DEFAULT_MAX_AUTO_RESTARTS = 3;
 const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
+const BRIDGE_KEEPALIVE_MS = 30_000;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
 
 /**
@@ -516,7 +517,7 @@ export class DshHostManager extends EventEmitter {
 
       const client = this.options.clientFactory
         ? this.options.clientFactory()
-        : new DshTypertClient();
+        : new DshTypertClient({ runtimePid: this.child?.pid });
       await client.connect(launchUrl);
       const health = await client.callOps<{ ok?: boolean }>(DshOpsAction.Health);
       if (health && 'ok' in health && health.ok === false) {
@@ -819,14 +820,21 @@ export class DshHostManager extends EventEmitter {
         const controller = new AbortController();
         const onDisconnect = () => controller.abort();
         res.once('close', onDisconnect);
+        // A desktop approval or a media render can outlast fetch's five-minute
+        // header and body deadlines. Whitespace keeps the JSON response open.
+        res.setHeader('content-type', 'application/json');
+        const keepalive = setInterval(() => {
+          if (!res.destroyed) res.write(' ');
+        }, BRIDGE_KEEPALIVE_MS);
+        keepalive.unref();
         try {
           if (res.destroyed) return;
           const data = await tool.execute({ ...request, signal: controller.signal });
           if (!res.destroyed) {
-            res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify(data ?? { ok: true }));
           }
         } finally {
+          clearInterval(keepalive);
           res.off('close', onDisconnect);
         }
         return;
@@ -883,8 +891,13 @@ export class DshHostManager extends EventEmitter {
       res.end(JSON.stringify({ error: `Unknown bridge route: ${pathname}` }));
     } catch (error) {
       if (res.destroyed) return;
-      res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      const message = error instanceof Error ? error.message : String(error);
+      if (res.headersSent) {
+        res.end(JSON.stringify({ bridgeError: message }));
+      } else {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: message }));
+      }
     }
   }
 

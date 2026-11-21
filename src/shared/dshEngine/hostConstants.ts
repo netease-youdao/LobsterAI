@@ -10,6 +10,8 @@ export const DSH_OPS_ROUTE_PATH = '/api/lobsterai/ops';
 export const DSH_CHANNELS_ROUTE_PATH = '/api/lobsterai/channels';
 export const DSH_SESSION_ID_PREFIX = 'dsh:';
 export const DSH_QUESTION_REQUEST_ID_PREFIX = 'dsh-question:';
+export const DSH_SKILL_INSTALL_TOOL = 'lobster_skill_install';
+export const DshSkillInstallAction = { Inspect: 'inspect', Install: 'install' } as const;
 
 export const RetainedImPlatform = {
   Feishu: 'feishu',

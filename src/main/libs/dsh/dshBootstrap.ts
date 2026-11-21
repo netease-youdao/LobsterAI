@@ -69,6 +69,7 @@ import {
   type LobsterMcpServerRecord,
   type LobsterProviderConfig,
 } from './dshProviderSync';
+import { runScheduledTurn } from './dshScheduledTurn';
 import { DshSubagentSessions } from './dshSubagentSessions';
 
 export interface DshCompatEngineStatus {
@@ -575,11 +576,13 @@ export class DshBootstrap {
 
   private async executeScheduledTask(
     task: ScheduledTask,
-    _signal: AbortSignal,
+    signal: AbortSignal,
   ): Promise<LobsterSchedulerRunResult> {
+    signal.throwIfAborted();
     if (!this.hostManager.isReady()) {
       await this.hostManager.start();
     }
+    signal.throwIfAborted();
 
     const promptText =
       task.payload.kind === 'agentTurn'
@@ -589,54 +592,21 @@ export class DshBootstrap {
     const agentId = task.agentId || 'main';
     const cwd = this.options.getDefaultCwd(agentId);
 
-    // Create or reuse a `[定时]` Cowork session for visibility in LobsterAI's sidebar.
-    let sessionId: string | null = null;
-    if (this.options.coworkStore.createSession) {
-      const created = this.options.coworkStore.createSession(
-        `[定时] ${task.name}`,
-        cwd,
-        undefined,
-        'auto',
-        undefined,
-        agentId,
-      );
-      sessionId = created.id;
+    const sessionId = this.options.coworkStore.createSession?.(
+      `[定时] ${task.name}`, cwd, undefined, 'auto', undefined, agentId,
+    ).id;
+    if (!sessionId) throw new Error('Unable to create a Cowork session for the scheduled task.');
+
+    const stopped = await runScheduledTurn(this.runtimeAdapter, sessionId, agentId, promptText, signal);
+    if (stopped || signal.aborted) {
+      return { sessionId, stopped: true, deliveryStatus: RunDeliveryStatus.NotRequested };
     }
 
-    let summary = '';
-    if (sessionId) {
-      await new Promise<void>((resolve, reject) => {
-        const onComplete = (completedSessionId: string) => {
-          if (completedSessionId !== sessionId) return;
-          cleanup();
-          resolve();
-        };
-        const onError = (erroredSessionId: string, errMsg: string) => {
-          if (erroredSessionId !== sessionId) return;
-          cleanup();
-          reject(new Error(errMsg));
-        };
-        const cleanup = () => {
-          this.runtimeAdapter.off('complete', onComplete);
-          this.runtimeAdapter.off('error', onError);
-        };
-        this.runtimeAdapter.on('complete', onComplete);
-        this.runtimeAdapter.on('error', onError);
-        void this.runtimeAdapter.startSession(sessionId, promptText, {
-          agentId,
-          autoApprove: true,
-        }).catch((err) => {
-          cleanup();
-          reject(err);
-        });
-      });
-
-      const session = this.options.coworkStore.getSession(sessionId);
-      const lastAssistant = [...(session?.messages ?? [])]
-        .reverse()
-        .find((m) => m.type === 'assistant' && m.content.trim().length > 0);
-      summary = lastAssistant?.content.trim() ?? '';
-    }
+    const session = this.options.coworkStore.getSession(sessionId);
+    const lastAssistant = [...(session?.messages ?? [])]
+      .reverse()
+      .find((m) => m.type === 'assistant' && m.content.trim().length > 0);
+    const summary = lastAssistant?.content.trim() ?? '';
 
     let deliveryStatus: RunDeliveryStatus = RunDeliveryStatus.NotRequested;
     let deliveryError: string | null = null;

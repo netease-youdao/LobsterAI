@@ -54,6 +54,15 @@ describe('findOrphanedDshRuntimes', () => {
     expect(findOrphanedDshRuntimes([main, owned], EXEC)).toEqual([]);
   });
 
+  test('preserves Helper children of a live Electron instance, including relative or unobserved parents', () => {
+    const helper = '/private/test/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper';
+    const child = { ...owned, command: `${helper} --expose-internals /runtime/bin.js --profile lobsterai --no-open` };
+    const relativeMain = { ...main, command: 'output/test/Electron.app/Contents/MacOS/Electron .' };
+    expect(findOrphanedDshRuntimes([relativeMain, child], helper)).toEqual([]);
+    expect(findOrphanedDshRuntimes([child], helper)).toEqual([]);
+    expect(findOrphanedDshRuntimes([{ ...child, ppid: 1 }], helper)).toHaveLength(1);
+  });
+
   test('reclaims a runtime reparented to launchd', () => {
     expect(findOrphanedDshRuntimes([main, owned, orphan], EXEC)).toEqual([orphan]);
   });
@@ -71,6 +80,17 @@ describe('findOrphanedDshRuntimes', () => {
 });
 
 describe('reapOrphanedDshRuntimes', () => {
+  test('does not force-kill a PID now owned by a live instance', async () => {
+    const command = dshCommand(EXEC, INSTALLED_ENTRY, 4000);
+    let scan = 0;
+    const signals: string[] = [];
+    await reapOrphanedDshRuntimes({
+      platform: 'darwin', executablePath: EXEC, graceMs: 0,
+      listProcesses: async () => `600 ${++scan === 1 ? 1 : 500} ${command}`,
+      isAlive: () => true, sendSignal: (_pid, signal) => { signals.push(signal); },
+    });
+    expect(signals).toEqual(['SIGTERM']);
+  });
   const table = `  500     1 ${EXEC}\n  501   500 ${dshCommand(EXEC, INSTALLED_ENTRY, 4000)}\n  600     1 ${dshCommand(EXEC, INSTALLED_ENTRY, 4001)}\n`;
 
   test('sends SIGTERM to orphans only and stops once they exit', async () => {

@@ -197,3 +197,71 @@ describe('LobsterScheduler', () => {
     expect(scheduler.getTask('legacy-job-1')!.name).toBe('Morning Briefing');
   });
 });
+
+const recurringJob = {
+  name: 'Cancellable task',
+  enabled: false,
+  schedule: { kind: 'every', everyMs: 60_000 },
+  sessionTarget: SessionTarget.Isolated,
+  wakeMode: WakeMode.Now,
+  payload: { kind: 'agentTurn', message: 'Wait' },
+} as const;
+
+test('scheduler and chat stops both close the run, including late completion and duplicate run requests', async () => {
+  const scheduler = new LobsterScheduler({
+    db: createMemoryDb(),
+    executor: (_task, signal) => new Promise(resolve => {
+      signal.addEventListener('abort', () => resolve({ sessionId: 'stopped-by-scheduler' }), { once: true });
+    }),
+  });
+  const task = scheduler.createTask(recurringJob);
+  const run = scheduler.runNow(task.id);
+  await expect(scheduler.runNow(task.id)).rejects.toThrow('already running');
+  expect(scheduler.stopTask(task.id)).toBe(true);
+  expect(await run).toMatchObject({ status: TaskStatus.Stopped, sessionId: 'stopped-by-scheduler', finishedAt: expect.any(String) });
+  expect(scheduler.getTask(task.id)?.state).toMatchObject({ runningAtMs: null, lastStatus: TaskStatus.Stopped });
+  const chat = new LobsterScheduler({ db: createMemoryDb(), executor: async () => ({ stopped: true, sessionId: 'stopped-in-chat' }) });
+  const other = chat.createTask(recurringJob);
+  expect(await chat.runNow(other.id)).toMatchObject({ status: TaskStatus.Stopped, sessionId: 'stopped-in-chat' });
+});
+
+test('startup closes an interrupted manual run of a disabled task without replaying it', () => {
+  const db = createMemoryDb();
+  const scheduler = new LobsterScheduler({ db, skipMissedJobs: false });
+  const task = scheduler.createTask(recurringJob);
+  const started = Date.now() - 1000;
+  db.prepare('UPDATE lobster_scheduled_tasks SET state_json = ? WHERE id = ?')
+    .run(JSON.stringify({ ...task.state, lastStatus: TaskStatus.Running, runningAtMs: started }), task.id);
+  db.prepare('INSERT INTO lobster_scheduled_task_runs (id, task_id, status, started_at) VALUES (?, ?, ?, ?)')
+    .run('interrupted-run', task.id, TaskStatus.Running, new Date(started).toISOString());
+  scheduler.start();
+  try {
+    expect(scheduler.listRuns(task.id)[0]).toMatchObject({ status: TaskStatus.Stopped, finishedAt: expect.any(String), durationMs: null });
+    expect(scheduler.getTask(task.id)).toMatchObject({ enabled: false, state: { runningAtMs: null, lastStatus: TaskStatus.Stopped } });
+  } finally {
+    scheduler.stop();
+  }
+});
+
+test('overlapping ticks do not replay a job completed while another job was pending', async () => {
+  let clock = 100_000;
+  const completions = new Map<string, () => void>();
+  const scheduler = new LobsterScheduler({
+    db: createMemoryDb(), now: () => clock,
+    executor: task => new Promise(resolve => { completions.set(task.id, () => resolve({})); }),
+  });
+  const jobs = ['a', 'b'].map(name => scheduler.createTask({
+    ...recurringJob, name, enabled: true, schedule: { kind: 'at', at: new Date(clock + 1000).toISOString() },
+  }));
+  clock += 1000;
+  const firstTick = scheduler.tick();
+  const first = [...completions.keys()][0];
+  const secondTick = scheduler.tick();
+  const second = [...completions.keys()].find(id => id !== first);
+  expect(second).toBeDefined();
+  completions.get(second!)!();
+  await secondTick;
+  completions.get(first)!();
+  await firstTick;
+  expect(jobs.map(task => scheduler.countRuns(task.id))).toEqual([1, 1]);
+});
