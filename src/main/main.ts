@@ -8966,6 +8966,11 @@ if (!gotTheLock) {
       rendererReleased = true;
       await showDataMigrationRestoreProgressWindow();
       await runAppCleanup('data migration restore', { requireGatewayStopped: true });
+      try {
+        dshBootstrap?.memoryService.close();
+      } catch (error) {
+        console.warn('[DataMigration] failed to close memory service before restore:', error);
+      }
       isCleanupFinished = true;
       isCleanupInProgress = false;
 
@@ -14728,6 +14733,13 @@ if (!gotTheLock) {
       getStore().close();
     } catch {
       // Store may not have been initialized — safe to ignore.
+    }
+
+    // Ensure workspaces/memory-fts.sqlite WAL handle is also closed before exit or restore.
+    try {
+      dshBootstrap?.memoryService.close();
+    } catch {
+      // Memory service may not have been initialized or already closed — safe to ignore.
     }
 
     // Destroyed last so the tray icon keeps reflecting that the process is

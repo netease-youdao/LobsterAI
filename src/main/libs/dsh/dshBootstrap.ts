@@ -687,7 +687,15 @@ export class DshBootstrap {
     this.closeEcosystemWindow();
     this.runtimeAdapter.stopAllSessions();
     this.bridgeWiring.dispose();
-    await this.hostManager.stop();
+    try {
+      await this.hostManager.stop();
+    } finally {
+      try {
+        this.memoryService.close();
+      } catch (error) {
+        console.warn('[DshBootstrap] Failed to close memory service:', error);
+      }
+    }
   }
 
   async syncAllConfig(input: DshBootstrapSyncInput): Promise<{

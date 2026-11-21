@@ -494,10 +494,15 @@ export class LobsterMemoryService {
   }
 
   close(): void {
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+    const db = this.db;
+    if (!db) return;
+    this.db = null;
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      // Best-effort WAL flush before releasing the SQLite handle.
     }
+    db.close();
   }
 
   private ensureIndexDb(): Database.Database {
