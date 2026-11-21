@@ -4,6 +4,7 @@
 //
 // Zero Electron imports — directly testable under Vitest.
 
+import { OpenClawApi } from '../../../shared/providers/constants';
 import type { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import type {
   DshHostMcpServerSpec,
@@ -63,6 +64,14 @@ function mapApiFormat(
   if (providerId === 'anthropic') return 'anthropic-messages';
   if (providerId === 'google' || providerId === 'gemini') return 'google-generative-ai';
   return 'openai-completions';
+}
+
+function isNativeOpenAIEndpoint(baseURL: string): boolean {
+  try {
+    return new URL(baseURL).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
 }
 
 function defaultBaseUrlForProvider(providerId: string): string | undefined {
@@ -152,9 +161,20 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
     if (models.length === 0) continue;
 
     const compat: Record<string, unknown> = {};
-    // Kimi / Moonshot thinking compatibility in OpenAI-compat mode.
-    if (providerId === 'moonshot' || providerId === 'kimi' || providerId === 'kimi-coding') {
-      compat.requiresReasoningContentOnAssistantMessages = true;
+    if (api === OpenClawApi.OpenAICompletions) {
+      if (!isNativeOpenAIEndpoint(baseURL)) {
+        // pi-ai auto-enables supportsDeveloperRole and supportsStore for any
+        // openai-completions URL outside its small built-in non-standard list.
+        // Reasoning models then send system prompts with `role: "developer"`,
+        // which OpenAI-compatible gateways (including lobsterai-server / Qwen /
+        // custom proxies) reject.
+        compat.supportsDeveloperRole = false;
+        compat.supportsStore = false;
+      }
+      // Kimi / Moonshot thinking compatibility in OpenAI-compat mode.
+      if (providerId === 'moonshot' || providerId === 'kimi' || providerId === 'kimi-coding') {
+        compat.requiresReasoningContentOnAssistantMessages = true;
+      }
     }
 
     specs.push({

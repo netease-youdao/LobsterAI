@@ -18,6 +18,7 @@ import {
 } from '@deepseek-ai/dsh-llm';
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai';
 import { DEFAULT_LOBSTER_RETRY_POLICY, guardEmptyStopStream } from './empty-stop-guard.mjs';
+import { resolveModelCompat } from './model-bridge-helpers.mjs';
 import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-model-bridge';
@@ -159,10 +160,7 @@ function buildResolvedProfile(entry, protocols) {
       : (rawModel.supportsImage ? ['text', 'image'] : ['text']);
     const reasoning = Boolean(rawModel.reasoning || rawModel.supportsThinking);
 
-    const compat = {
-      ...(entry.compat && typeof entry.compat === 'object' ? entry.compat : {}),
-      ...(rawModel.compat && typeof rawModel.compat === 'object' ? rawModel.compat : {}),
-    };
+    const compat = resolveModelCompat(modelApi, modelBaseUrl, entry.compat, rawModel.compat);
 
     const thinkingLevelMap = reasoning
       ? {

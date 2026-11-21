@@ -40,11 +40,87 @@ describe('buildDshProvidersPayload', () => {
     const openai = payload.providers.find((p) => p.id === 'openai')!;
     expect(openai.baseURL).toBe('https://api.openai.com/v1');
     expect(openai.models[0].input).toEqual(['text', 'image']);
+    expect(openai.compat).toBeUndefined();
 
     const lobster = payload.providers.find((p) => p.id === 'lobster')!;
     expect(lobster.baseURL).toBe('http://127.0.0.1:45555/v1/lobster');
     expect(lobster.apiKey).toBe('proxy-secret');
+    expect(lobster.compat).toEqual({
+      supportsDeveloperRole: false,
+      supportsStore: false,
+    });
     expect(payload.virtualAliases['yd-fast']).toEqual({ provider: 'lobster', model: 'deepseek-chat' });
+  });
+
+  test('disables developer role and store for non-native openai-completions endpoints while preserving native and non-completions protocols', () => {
+    const payload = buildDshProvidersPayload({
+      modelAuthProxyUrl: 'http://127.0.0.1:45555',
+      modelAuthProxySecret: 'proxy-secret',
+      providers: {
+        'lobsterai-server': {
+          enabled: true,
+          authType: 'lobster_plan',
+          apiFormat: 'openai',
+          models: [{ id: 'qwen4-max-YoudaoInner', supportsThinking: true }],
+        },
+        qwen: {
+          enabled: true,
+          apiKey: 'sk-qwen',
+          baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          apiFormat: 'openai',
+          models: [{ id: 'qwen3.8-max', supportsThinking: true }],
+        },
+        moonshot: {
+          enabled: true,
+          apiKey: 'sk-kimi',
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          apiFormat: 'openai',
+          models: [{ id: 'kimi-for-coding', supportsThinking: true }],
+        },
+        openai: {
+          enabled: true,
+          apiKey: 'sk-proxy',
+          baseUrl: 'https://proxy.example.com/v1',
+          apiFormat: 'openai',
+          models: [{ id: 'gpt-5', supportsThinking: true }],
+        },
+        anthropic: {
+          enabled: true,
+          apiKey: 'sk-ant',
+          baseUrl: 'https://api.anthropic.com',
+          apiFormat: 'anthropic',
+          models: [{ id: 'claude-sonnet-4-6', supportsThinking: true }],
+        },
+        customResponses: {
+          enabled: true,
+          apiKey: 'sk-resp',
+          baseUrl: 'https://proxy.example.com/v1',
+          apiFormat: 'openai-responses',
+          models: [{ id: 'gpt-5', supportsThinking: true }],
+        },
+      },
+    });
+
+    const byId = Object.fromEntries(payload.providers.map((p) => [p.id, p]));
+    expect(byId['lobsterai-server'].compat).toEqual({
+      supportsDeveloperRole: false,
+      supportsStore: false,
+    });
+    expect(byId.qwen.compat).toEqual({
+      supportsDeveloperRole: false,
+      supportsStore: false,
+    });
+    expect(byId.moonshot.compat).toEqual({
+      supportsDeveloperRole: false,
+      supportsStore: false,
+      requiresReasoningContentOnAssistantMessages: true,
+    });
+    expect(byId.openai.compat).toEqual({
+      supportsDeveloperRole: false,
+      supportsStore: false,
+    });
+    expect(byId.anthropic.compat).toBeUndefined();
+    expect(byId.customResponses.compat).toBeUndefined();
   });
 });
 
