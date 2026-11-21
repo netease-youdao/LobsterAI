@@ -85,18 +85,19 @@ describe('Codex pet action state machine', () => {
   });
 });
 
-describe('bundled Codex v2 pet package integrity', () => {
+describe('bundled Codex pet package integrity', () => {
   const publicDir = path.resolve(process.cwd(), 'public');
 
-  test('brand skin never declares a pet atlas while bundled manifests match exact 1536x2288 v2 WebP assets', () => {
+  test('brand skin never declares a pet atlas while every sea-friend skin ships a valid Codex WebP atlas on disk', () => {
     const brand = COMPANION_SKINS.find(skin => skin.kind === CompanionSkinKind.Brand);
     expect(brand?.petManifest).toBeUndefined();
     expect(skinHasPetAtlas(brand!.id)).toBe(false);
 
-    const atlasSkins = COMPANION_SKINS.filter(skin => !!skin.petManifest);
-    expect(atlasSkins.length).toBeGreaterThanOrEqual(1);
+    const imageSkins = COMPANION_SKINS.filter(skin => skin.kind === CompanionSkinKind.Image);
+    expect(imageSkins).toHaveLength(8);
 
-    for (const skin of atlasSkins) {
+    for (const skin of imageSkins) {
+      expect(skin.petManifest, `missing petManifest for ${skin.id}`).toBeDefined();
       expect(skinHasPetAtlas(skin.id)).toBe(true);
       const manifestRel = skin.petManifest!.replace(/^\.\//, '');
       const manifestPath = path.join(publicDir, manifestRel);
