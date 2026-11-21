@@ -21,10 +21,11 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { isUserMcpToolDenied } from './mcp-tool-filter-helpers.mjs';
 import { getHostState, resolveSessionContext } from './shared-state.mjs';
 import {
   collectAdmittedCapabilitiesFromTools,
-  computeDeniedProgressiveTools,
+  computeCombinedDeniedTools,
   groupMountedProgressiveTools,
   hasAnyProgressiveToolMounted,
   listMountedToolsForCapability,
@@ -124,7 +125,12 @@ export function apply(ctx) {
       return;
     }
 
-    const denyList = computeDeniedProgressiveTools(restrictableNames, record.unlocked);
+    const denyList = computeCombinedDeniedTools(
+      restrictableNames,
+      record.unlocked,
+      state.mcpToolFilters,
+      state.mcpRegisteredServers,
+    );
     const denyKey = denyList.join('\0');
     if (denyKey === record.lastDenyKey) return;
 
@@ -137,6 +143,7 @@ export function apply(ctx) {
           // Agent context may already be disposing.
         }
         record.disposeRestriction = null;
+        record.lastDenyKey = '';
       }
       if (denyList.length > 0) {
         record.disposeRestriction = agent.ctx.tools.restrict({ deny: denyList });
@@ -236,7 +243,8 @@ export function apply(ctx) {
         const enabledTools = {};
         const unavailable = [];
         for (const cap of requested) {
-          const tools = listMountedToolsForCapability(restrictableNames, cap);
+          const tools = listMountedToolsForCapability(restrictableNames, cap)
+            .filter((toolName) => !isUserMcpToolDenied(toolName, state.mcpToolFilters, state.mcpRegisteredServers));
           if (tools.length > 0) {
             enabledTools[cap] = tools;
             lines.push(`- ${cap} 已启用（${tools.length} 个工具）：${tools.join(', ')}`);
@@ -247,7 +255,9 @@ export function apply(ctx) {
         }
 
         if (unavailable.length > 0) {
-          const availableGroups = Object.keys(groupMountedProgressiveTools(restrictableNames));
+          const allowedNames = [...restrictableNames]
+            .filter((toolName) => !isUserMcpToolDenied(toolName, state.mcpToolFilters, state.mcpRegisteredServers));
+          const availableGroups = Object.keys(groupMountedProgressiveTools(allowedNames));
           if (availableGroups.length > 0) {
             lines.push(`当前可启用的工具组：${availableGroups.join(', ')}`);
           }
@@ -269,13 +279,35 @@ export function apply(ctx) {
           return true;
         }
         try {
-          return hasAnyProgressiveToolMounted(ctx.tools.view(agent).restrictableNames);
+          const allowedNames = [...ctx.tools.view(agent).restrictableNames]
+            .filter((toolName) => !isUserMcpToolDenied(toolName, state.mcpToolFilters, state.mcpRegisteredServers));
+          return hasAnyProgressiveToolMounted(allowedNames);
         } catch {
           return false;
         }
       },
     },
   );
+
+  // Defense-in-depth synchronous guard: even during async registration races,
+  // direct/nested tool invocations, or hallucinated tool calls, a user-filtered
+  // MCP tool can never execute.
+  const disposeMcpFilterGuard = ctx.tools.guard((exec) => {
+    const toolName = exec?.name;
+    if (
+      typeof toolName !== 'string'
+      || !isUserMcpToolDenied(toolName, state.mcpToolFilters, state.mcpRegisteredServers)
+    ) {
+      return undefined;
+    }
+    return {
+      reason: `MCP tool "${toolName}" is disabled by the server's toolFilter policy.`,
+      info: {
+        name: 'McpToolFilterError',
+        code: 'MCP_TOOL_FILTER_DENIED',
+      },
+    };
+  });
 
   // Restrict locked progressive MCP tools when any agent is created or tools change.
   ctx.on('agent/created', ({ agent }) => {
@@ -321,6 +353,7 @@ export function apply(ctx) {
   reconcileAllAgents();
 
   ctx.effect(() => () => {
+    disposeMcpFilterGuard();
     enableToolsDisposer();
     for (const record of tracked.values()) {
       if (record.disposeRestriction) {

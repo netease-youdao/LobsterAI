@@ -1,15 +1,11 @@
 import type { McpAuthMode } from '../../shared/mcp/auth';
 import type { McpMarketplaceConnector } from '../../shared/mcp/marketplace';
+import type { McpToolFilter } from '../../shared/mcp/toolFilter';
+
+export type { McpToolFilter };
 
 // MCP Server type definitions
 export type McpTransportType = 'stdio' | 'sse' | 'http';
-
-// Per-server MCP tool selection, forwarded to OpenClaw's mcp.servers.*.toolFilter.
-// Excluded tools never reach the model payload (~350 prompt tokens saved per tool).
-export interface McpToolFilter {
-  include?: string[];
-  exclude?: string[];
-}
 
 export const McpRegistryEntryKind = {
   Server: 'server',

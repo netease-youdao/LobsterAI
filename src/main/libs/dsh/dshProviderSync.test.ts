@@ -730,4 +730,75 @@ describe('buildDshMcpServerSpecs', () => {
       },
     ]);
   });
+
+  test('propagates and normalizes toolFilter for stdio and remote servers while omitting empty filters', async () => {
+    const result = await buildDshMcpServerSpecs([
+      {
+        id: 'srv-stdio-filtered',
+        name: 'Filter Demo',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['server.mjs'],
+        toolFilter: {
+          include: [' allowed_echo ', 'sheet.*', '', 'allowed_echo'],
+          exclude: [' blocked_secret '],
+        },
+      },
+      {
+        id: 'srv-http-filtered',
+        name: 'Docs HTTP',
+        enabled: true,
+        transportType: 'http',
+        url: 'https://mcp.example.com/mcp',
+        toolFilter: {
+          exclude: ['dangerous_delete', '  '],
+        },
+      },
+      {
+        id: 'srv-sse-filtered',
+        name: 'Legacy SSE Filtered',
+        enabled: true,
+        transportType: 'sse',
+        url: 'https://legacy.example.com/sse',
+        toolFilter: {
+          exclude: ['secret_tool'],
+        },
+      },
+      {
+        id: 'srv-empty-filter',
+        name: 'No Filter',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['plain.mjs'],
+        toolFilter: { include: ['  '], exclude: [] },
+      },
+    ]);
+
+    expect(result.servers).toHaveLength(4);
+    expect(result.servers[0]).toMatchObject({
+      name: 'filter-demo',
+      transport: 'stdio',
+      toolFilter: {
+        include: ['allowed_echo', 'sheet.*'],
+        exclude: ['blocked_secret'],
+      },
+    });
+    expect(result.servers[1]).toMatchObject({
+      name: 'docs-http',
+      transport: 'streamable-http',
+      toolFilter: {
+        exclude: ['dangerous_delete'],
+      },
+    });
+    expect(result.servers[2]).toMatchObject({
+      name: 'legacy-sse-filtered',
+      transport: DshMcpTransport.Sse,
+      toolFilter: {
+        exclude: ['secret_tool'],
+      },
+    });
+    expect(result.servers[3].toolFilter).toBeUndefined();
+  });
 });

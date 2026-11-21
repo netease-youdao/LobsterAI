@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
+import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 
 export const name = 'lobster-ops-rpc';
@@ -130,6 +131,8 @@ export function apply(ctx) {
 
     const standardEntries = [];
     const sseEntries = [];
+    /** @type {Map<string, ReturnType<typeof normalizeMcpToolFilter>>} */
+    const desiredToolFilters = new Map();
     const preErrors = [];
     const seenNames = new Set();
 
@@ -143,12 +146,25 @@ export function apply(ctx) {
         continue;
       }
       seenNames.add(serverName);
+      desiredToolFilters.set(serverName, normalizeMcpToolFilter(entry.toolFilter));
 
       const rawTransport = String(entry.transport || '').trim().toLowerCase();
       if (rawTransport === 'sse') {
         sseEntries.push({ ...entry, name: serverName });
       } else {
         standardEntries.push({ ...entry, name: serverName, transport: rawTransport });
+      }
+    }
+
+    // Publish incoming user MCP tool filters before registering new servers so
+    // any immediate `tools/change` event observes the updated filter policy,
+    // while retaining existing filters for removed servers until after disposal.
+    for (const [serverName, filter] of desiredToolFilters.entries()) {
+      state.mcpRegisteredServers.add(serverName);
+      if (filter) {
+        state.mcpToolFilters.set(serverName, filter);
+      } else {
+        state.mcpToolFilters.delete(serverName);
       }
     }
 
@@ -185,6 +201,20 @@ export function apply(ctx) {
     }
 
     const sseResult = await sseBridge.sync(sseEntries);
+
+    // Prune removed or failed-to-register servers from active toolFilter state,
+    // then immediately reconcile restrictions across all live agents.
+    const activeRegistered = new Set([...standardOutcome.registered, ...sseResult.registered]);
+    state.mcpRegisteredServers.clear();
+    state.mcpToolFilters.clear();
+    for (const serverName of activeRegistered) {
+      state.mcpRegisteredServers.add(serverName);
+      const filter = desiredToolFilters.get(serverName);
+      if (filter) {
+        state.mcpToolFilters.set(serverName, filter);
+      }
+    }
+    state.reconcileToolDisclosure?.();
 
     return {
       available: true,
@@ -583,6 +613,8 @@ export function apply(ctx) {
       } catch {}
     }
     managedMcpEntries.clear();
+    state.mcpToolFilters.clear();
+    state.mcpRegisteredServers.clear();
     state.syncMcpServers = null;
     state.pluginsReady.opsRpc = false;
   }, 'lobster-ops-rpc cleanup');

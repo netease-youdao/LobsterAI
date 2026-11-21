@@ -34,6 +34,7 @@ import {
   DshSearchPolicy,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import type { McpToolFilter } from '../../../shared/mcp/toolFilter';
 import type { LOBSTERAI_REQUEST_OPTIONS_VERSION } from '../../../shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '../../../shared/providers/modelRuntimeProfiles';
 import type {
@@ -87,6 +88,7 @@ export interface DshHostMcpServerSpec {
   cwd?: string;
   url?: string;
   headers?: Record<string, string>;
+  toolFilter?: McpToolFilter;
   startupTimeoutMs?: number;
   toolCallTimeoutMs?: number;
 }

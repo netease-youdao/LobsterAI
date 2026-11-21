@@ -51,6 +51,17 @@ export function getHostState(ctx) {
         disabledIds: new Set(),
         extraDirs: [],
       },
+      /**
+       * Active per-server user MCP tool filters keyed by normalized DSH server
+       * name (`serverName -> { include?, exclude? }`).
+       * @type {Map<string, Readonly<{ include?: readonly string[], exclude?: readonly string[] }>>}
+       */
+      mcpToolFilters: new Map(),
+      /**
+       * Normalized DSH server names currently registered via LobsterAI `syncMcpServers`.
+       * @type {Set<string>}
+       */
+      mcpRegisteredServers: new Set(),
       /** @type {Record<string, boolean>} */
       pluginsReady: {
         modelBridge: false,

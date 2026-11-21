@@ -2771,6 +2771,7 @@ const syncOpenClawConfig = async (options: {
           url: srv.url,
           headers: srv.headers,
           oauthEnabled: srv.auth === McpAuthMode.OAuth,
+          ...(srv.toolFilter ? { toolFilter: srv.toolFilter } : {}),
           ...(srv.requestTimeoutMs ? { requestTimeoutMs: srv.requestTimeoutMs } : {}),
           ...(srv.connectionTimeoutMs ? { connectionTimeoutMs: srv.connectionTimeoutMs } : {}),
         });

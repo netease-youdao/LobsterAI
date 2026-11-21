@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 
 import { DshMcpTransport } from '../../../shared/dshEngine/hostConstants';
+import { type McpToolFilter, normalizeMcpToolFilter } from '../../../shared/mcp/toolFilter';
 import {
   OpenClawApi,
   OpenClawProviderId,
@@ -389,6 +390,7 @@ export interface LobsterMcpServerRecord {
   url?: string;
   headers?: Record<string, string>;
   oauthEnabled?: boolean;
+  toolFilter?: McpToolFilter;
   requestTimeoutMs?: number;
   connectionTimeoutMs?: number;
 }
@@ -556,6 +558,7 @@ export async function buildDshMcpServerSpecs(
       ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
       ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
     };
+    const toolFilter = normalizeMcpToolFilter(rec.toolFilter);
 
     const transport = resolveDshMcpTransport(rec.transportType);
     if (transport === DshMcpTransport.Stdio) {
@@ -568,6 +571,7 @@ export async function buildDshMcpServerSpecs(
         args: rec.args ?? [],
         env: rec.env ?? {},
         ...(rec.cwd ? { cwd: rec.cwd } : {}),
+        ...(toolFilter ? { toolFilter } : {}),
         ...timeoutFields,
       };
       const invalidField = findInvalidTemplateField(draft);
@@ -619,6 +623,7 @@ export async function buildDshMcpServerSpecs(
       transport,
       url: validatedUrl,
       headers,
+      ...(toolFilter ? { toolFilter } : {}),
       ...timeoutFields,
     };
     const invalidField = findInvalidTemplateField(draft);
