@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
+  findVerticalAlphaBounds,
   normalizePetManifest,
-  type PetAction,
+  PetAction,
+  type PetAtlasVerticalBounds,
   type PetManifest,
   type RawPetManifest,
 } from '../../../../shared/desktopCompanion/petAtlas';
@@ -10,6 +12,9 @@ import {
 export interface LoadedPetAtlas {
   manifest: PetManifest;
   image: HTMLImageElement;
+  standingBounds: PetAtlasVerticalBounds | null;
+  staticWidth?: number;
+  staticHeight?: number;
 }
 
 type AtlasCacheEntry =
@@ -19,7 +24,50 @@ type AtlasCacheEntry =
 
 const atlasCache = new Map<string, AtlasCacheEntry>();
 
-async function loadPetAtlas(manifestUrl: string): Promise<LoadedPetAtlas | null> {
+function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise<HTMLImageElement | null>(resolve => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        void img.decode().then(() => resolve(img), () => resolve(img));
+      } else {
+        resolve(img);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function measureStandingBounds(image: HTMLImageElement, manifest: PetManifest): PetAtlasVerticalBounds | null {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = manifest.cellWidth;
+    canvas.height = manifest.cellHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    const idleRow = manifest.actions[PetAction.Idle].row;
+    ctx.drawImage(
+      image,
+      0,
+      idleRow * manifest.cellHeight,
+      manifest.cellWidth,
+      manifest.cellHeight,
+      0,
+      0,
+      manifest.cellWidth,
+      manifest.cellHeight,
+    );
+    const { data } = ctx.getImageData(0, 0, manifest.cellWidth, manifest.cellHeight);
+    return findVerticalAlphaBounds(data, manifest.cellWidth, manifest.cellHeight);
+  } catch {
+    // Tainted canvas under file:// falls back cleanly to standard Codex Pets standing ratios.
+    return null;
+  }
+}
+
+async function loadPetAtlas(manifestUrl: string, staticAssetUrl?: string): Promise<LoadedPetAtlas | null> {
   try {
     const response = await fetch(manifestUrl);
     if (!response.ok) return null;
@@ -27,40 +75,42 @@ async function loadPetAtlas(manifestUrl: string): Promise<LoadedPetAtlas | null>
     const manifest = normalizePetManifest(raw, manifestUrl);
     if (!manifest) return null;
 
-    const image = await new Promise<HTMLImageElement | null>(resolve => {
-      const img = new Image();
-      img.decoding = 'async';
-      img.onload = () => {
-        if (typeof img.decode === 'function') {
-          void img.decode().then(() => resolve(img), () => resolve(img));
-        } else {
-          resolve(img);
-        }
-      };
-      img.onerror = () => resolve(null);
-      img.src = manifest.spritesheetUrl;
-    });
+    const [image, staticImage] = await Promise.all([
+      loadImage(manifest.spritesheetUrl),
+      staticAssetUrl ? loadImage(staticAssetUrl) : Promise.resolve(null),
+    ]);
     if (!image) return null;
-    return { manifest, image };
+
+    return {
+      manifest,
+      image,
+      standingBounds: measureStandingBounds(image, manifest),
+      staticWidth: staticImage?.naturalWidth || undefined,
+      staticHeight: staticImage?.naturalHeight || undefined,
+    };
   } catch {
     return null;
   }
 }
 
 /** Loads and caches a Codex-compatible pet.json + spritesheet.webp atlas once per skin. */
-export function usePetAtlas(manifestUrl: string | undefined): LoadedPetAtlas | null {
+export function usePetAtlas(
+  manifestUrl: string | undefined,
+  staticAssetUrl?: string | undefined,
+): LoadedPetAtlas | null {
+  const cacheKey = manifestUrl ? `${manifestUrl}\0${staticAssetUrl ?? ''}` : '';
   const [loaded, setLoaded] = useState<LoadedPetAtlas | null>(() => {
-    if (!manifestUrl) return null;
-    const cached = atlasCache.get(manifestUrl);
+    if (!cacheKey) return null;
+    const cached = atlasCache.get(cacheKey);
     return cached?.status === 'ready' ? cached.atlas : null;
   });
 
   useEffect(() => {
-    if (!manifestUrl) {
+    if (!manifestUrl || !cacheKey) {
       setLoaded(null);
       return;
     }
-    const existing = atlasCache.get(manifestUrl);
+    const existing = atlasCache.get(cacheKey);
     if (existing?.status === 'ready') {
       setLoaded(existing.atlas);
       return;
@@ -71,17 +121,17 @@ export function usePetAtlas(manifestUrl: string | undefined): LoadedPetAtlas | n
     }
 
     let cancelled = false;
-    const promise = existing?.status === 'loading' ? existing.promise : loadPetAtlas(manifestUrl);
-    if (!existing) atlasCache.set(manifestUrl, { status: 'loading', promise });
+    const promise = existing?.status === 'loading' ? existing.promise : loadPetAtlas(manifestUrl, staticAssetUrl);
+    if (!existing) atlasCache.set(cacheKey, { status: 'loading', promise });
 
     void promise.then(result => {
-      if (result) atlasCache.set(manifestUrl, { status: 'ready', atlas: result });
-      else atlasCache.set(manifestUrl, { status: 'error' });
+      if (result) atlasCache.set(cacheKey, { status: 'ready', atlas: result });
+      else atlasCache.set(cacheKey, { status: 'error' });
       if (!cancelled) setLoaded(result);
     });
 
     return () => { cancelled = true; };
-  }, [manifestUrl]);
+  }, [cacheKey, manifestUrl, staticAssetUrl]);
 
   return loaded;
 }
@@ -89,8 +139,11 @@ export function usePetAtlas(manifestUrl: string | undefined): LoadedPetAtlas | n
 interface PetAtlasPlayerProps {
   atlas: LoadedPetAtlas;
   action: PetAction;
-  /** Target display height in CSS pixels; width preserves the atlas cell aspect ratio (192:208). */
+  /** Target canvas dimensions in CSS pixels (preserving atlas cell aspect ratio). */
+  displayWidth: number;
   displayHeight: number;
+  /** Vertical CSS offset from box center to align the standing character with the static `.webp`. */
+  offsetY?: number;
   onCycleComplete?: (action: PetAction) => void;
 }
 
@@ -101,7 +154,9 @@ interface PetAtlasPlayerProps {
 export default function PetAtlasPlayer({
   atlas,
   action,
+  displayWidth,
   displayHeight,
+  offsetY = 0,
   onCycleComplete,
 }: PetAtlasPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -109,11 +164,10 @@ export default function PetAtlasPlayer({
   onCycleRef.current = onCycleComplete;
 
   const { manifest, image } = atlas;
-  const displayWidth = Math.round(displayHeight * (manifest.cellWidth / manifest.cellHeight));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || displayWidth <= 0 || displayHeight <= 0) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -187,7 +241,11 @@ export default function PetAtlasPlayer({
     <canvas
       ref={canvasRef}
       className="character-atlas-canvas"
-      style={{ width: displayWidth, height: displayHeight }}
+      style={{
+        width: displayWidth,
+        height: displayHeight,
+        '--atlas-offset-y': `${offsetY}px`,
+      } as CSSProperties}
       aria-hidden="true"
     />
   );

@@ -72,7 +72,10 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
 
   const skin = getCompanionSkin(state.preferences.skin);
   const skinKind = skin.kind;
-  const atlas = usePetAtlas(skinKind === CompanionSkinKind.Image ? skin.petManifest : undefined);
+  const atlas = usePetAtlas(
+    skinKind === CompanionSkinKind.Image ? skin.petManifest : undefined,
+    skinKind === CompanionSkinKind.Image ? skin.asset ?? undefined : undefined,
+  );
 
   const action = resolvePetAction({
     skinKind,
