@@ -2890,7 +2890,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setGoalEditSaving(true);
     console.debug(`[CoworkGoal] submitting goal edit modal for session ${sessionId}.`);
     try {
-      const accepted = await Promise.resolve(onGoalCommand(`/goal set ${trimmedValue}`))
+      const accepted = await Promise.resolve(onGoalCommand(`/goal edit ${trimmedValue}`))
         .then((result) => result !== false);
       if (!accepted) {
         console.warn(`[CoworkGoal] goal edit modal command was rejected for session ${sessionId}.`);

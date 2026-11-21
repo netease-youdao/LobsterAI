@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 
 export const name = 'lobster-ops-rpc';
@@ -135,12 +136,6 @@ export function apply(ctx) {
   }
 
   state.syncMcpServers = syncMcpServers;
-
-  const VALID_PERMISSION_PRESETS = new Set([
-    'read-only',
-    'workspace-write',
-    'danger-full-access',
-  ]);
 
   function applyPermissionPresetToAgent(agent, preset) {
     if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
@@ -382,31 +377,8 @@ export function apply(ctx) {
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
             const prev = state.sessionContexts.get(sessionId) ?? {};
-            const nextPreset = typeof p.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(p.permissionPreset)
-              ? p.permissionPreset
-              : undefined;
-            const mergedUnlocked = new Set([
-              ...(Array.isArray(prev.unlockedCapabilities) ? prev.unlockedCapabilities : []),
-              ...(Array.isArray(p.unlockedCapabilities)
-                ? p.unlockedCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0)
-                : []),
-            ]);
-            state.sessionContexts.set(sessionId, {
-              ...prev,
-              ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
-              ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
-              ...(typeof p.traceId === 'string' && p.traceId.length > 0 ? { traceId: p.traceId } : {}),
-              ...(typeof p.workspaceDir === 'string' ? { workspaceDir: p.workspaceDir } : {}),
-              ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
-                ? { allowedSkillIds: p.allowedSkillIds }
-                : {}),
-              ...(typeof p.customSystemPrompt === 'string'
-                ? { customSystemPrompt: p.customSystemPrompt }
-                : {}),
-              ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
-              ...(nextPreset ? { permissionPreset: nextPreset } : {}),
-              ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
-            });
+            const { nextPreset, context } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
+            state.sessionContexts.set(sessionId, context);
             state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);

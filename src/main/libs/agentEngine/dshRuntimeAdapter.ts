@@ -41,6 +41,7 @@ import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import type {
+  DshCommandSubmitAttachment,
   DshPromptPart,
   DshSessionUpdateQueueParams,
   DshTypertClient,
@@ -76,6 +77,7 @@ export interface DshAdapterSessionRecord {
   modelPresetId?: string | null;
   thinkingLevel?: string | null;
   systemPrompt?: string;
+  goal?: CoworkGoal | null;
   messages?: CoworkMessage[];
 }
 
@@ -140,12 +142,40 @@ export interface DshRuntimeAdapterDeps {
   ) => Promise<void> | void;
 }
 
+export const DshGoalCommandKind = {
+  Create: 'create',
+  Edit: 'edit',
+  Pause: 'pause',
+  Resume: 'resume',
+  Clear: 'clear',
+  Show: 'show',
+} as const;
+export type DshGoalCommandKind = typeof DshGoalCommandKind[keyof typeof DshGoalCommandKind];
+
+export const DshGoalOperation = {
+  Create: 'create',
+  Edit: 'edit',
+  Pause: 'pause',
+  Resume: 'resume',
+  Complete: 'complete',
+  Block: 'block',
+  Clear: 'clear',
+} as const;
+export type DshGoalOperation = typeof DshGoalOperation[keyof typeof DshGoalOperation];
+
+export interface TranslatedDshGoalCommand {
+  kind: DshGoalCommandKind;
+  line: string;
+  objective?: string;
+}
+
 interface ActiveTurnState {
   subagentIdsByName: Map<string, string>;
   subagentTasksByCall: Map<string, string>;
   pendingSubagentResults: Set<string>;
   coworkSessionId: string;
   dshSessionId: string;
+  requestId?: string;
   userMessageId?: string;
   traceId: string;
   abortController: AbortController;
@@ -163,14 +193,29 @@ interface ActiveTurnState {
   reusableAssistantMessageId: string | null;
   lastFinalizedAssistantMessageId: string | null;
   lastFinalizedAssistantText: string;
+  suppressedPreSteerAssistantText: string | null;
   lastCommittedAssistantSeq: number | null;
   toolCallMessageIds: Map<string, string>;
+  currentDshTurnNumber: number | null;
+  cancelledDshTurnNumber: number | null;
+  goalArmed: boolean;
+  waitingForNextGoalRound: boolean;
+  disarmedBetweenRounds: boolean;
+  currentGoal: CoworkGoal | null;
   turnCompleted: boolean;
   turnError: string | null;
   turnAborted: boolean;
   /** Ignore a trailing aborted `turn/end` leaked from a just-cancelled previous turn. */
   ignoreStaleAbortedTurnEnd: boolean;
 }
+
+interface CancelledTurnRecord {
+  cancelledAt: number;
+  dshSessionId: string;
+  lastSeenTurnNumber: number | null;
+}
+
+const CANCEL_GRACE_WINDOW_MS = 30_000;
 
 interface PendingInteraction {
   requestId: string;
@@ -300,6 +345,128 @@ function resolveLocalTimeZone(): string | undefined {
   }
 }
 
+export function isGoalCommandPrompt(prompt: string): boolean {
+  return /^\/goal(?=$|\s)/i.test(prompt.trim());
+}
+
+/**
+ * Translate LobsterAI `/goal` syntax (`/goal start <obj>`, `/goal set <obj>`,
+ * `/goal edit <obj>`, `/goal pause`, `/goal resume`, `/goal clear`, `/goal status`)
+ * into DSH 0.2.2's exact `dsh-command-goal` grammar (`/goal <obj>`,
+ * `/goal edit <obj>`, `/goal pause`, `/goal resume`, `/goal clear`, `/goal`).
+ */
+export function translateLobsterGoalCommandToDsh(
+  command: string,
+  currentGoal?: CoworkGoal | null,
+): TranslatedDshGoalCommand {
+  const trimmed = command.trim();
+  const normalized = /^\/goal(?=$|\s)/i.test(trimmed)
+    ? trimmed
+    : trimmed.length > 0
+      ? `/goal ${trimmed}`
+      : '/goal';
+  const rest = normalized.replace(/^\/goal\b/i, '').trim();
+  if (!rest) {
+    return { kind: DshGoalCommandKind.Show, line: '/goal' };
+  }
+  const lower = rest.toLowerCase();
+  if (lower === 'status') {
+    return { kind: DshGoalCommandKind.Show, line: '/goal' };
+  }
+  if (lower === 'pause') {
+    return { kind: DshGoalCommandKind.Pause, line: '/goal pause' };
+  }
+  if (lower === 'resume') {
+    return { kind: DshGoalCommandKind.Resume, line: '/goal resume' };
+  }
+  if (lower === 'clear') {
+    return { kind: DshGoalCommandKind.Clear, line: '/goal clear' };
+  }
+  const subMatch = /^(start|create|set|edit)(?=$|\s)/i.exec(rest);
+  const sub = subMatch?.[1]?.toLowerCase();
+  const objective = sub ? rest.slice(sub.length).trim() : rest;
+  if (!objective) {
+    if (sub === 'edit') {
+      return { kind: DshGoalCommandKind.Edit, line: '/goal edit' };
+    }
+    throw new Error('Goal objective cannot be empty');
+  }
+
+  const hasNonCompleteGoal = Boolean(currentGoal && currentGoal.status !== CoworkGoalStatus.Complete);
+  if (hasNonCompleteGoal) {
+    return {
+      kind: DshGoalCommandKind.Edit,
+      line: `/goal edit ${objective}`,
+      objective,
+    };
+  }
+  return {
+    kind: DshGoalCommandKind.Create,
+    line: `/goal ${objective}`,
+    objective,
+  };
+}
+
+function normalizeBridgeToolName(raw: unknown): string {
+  return typeof raw === 'string' ? raw.trim().toLowerCase().replace(/[_-]/g, '') : '';
+}
+
+function extractLatestLegacyPlanSummary(messages: CoworkMessage[] | undefined): string {
+  if (!messages || messages.length === 0) return '';
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.type !== 'tool_use') continue;
+    const normalizedName = normalizeBridgeToolName(msg.metadata?.toolName ?? msg.content);
+    if (normalizedName !== 'todowrite' && normalizedName !== 'updateplan' && normalizedName !== 'progresscard') {
+      continue;
+    }
+    const input = msg.metadata?.toolInput;
+    if (!input || typeof input !== 'object' || Array.isArray(input)) continue;
+    const rec = input as Record<string, unknown>;
+    const rawItems = normalizedName === 'todowrite'
+      ? (Array.isArray(rec.todos) ? rec.todos : [])
+      : (Array.isArray(rec.plan) ? rec.plan : []);
+    const lines: string[] = [];
+    for (const item of rawItems) {
+      if (!item || typeof item !== 'object') continue;
+      const entry = item as Record<string, unknown>;
+      const text = (
+        (typeof entry.content === 'string' && entry.content.trim())
+        || (typeof entry.step === 'string' && entry.step.trim())
+        || (typeof entry.title === 'string' && entry.title.trim())
+        || (typeof entry.activeForm === 'string' && entry.activeForm.trim())
+        || ''
+      );
+      if (!text) continue;
+      const status = typeof entry.status === 'string' && entry.status.trim()
+        ? entry.status.trim()
+        : 'pending';
+      lines.push(`- [${status}] ${text}`);
+    }
+    const note = (
+      (typeof rec.markdown === 'string' && rec.markdown.trim())
+      || (typeof rec.explanation === 'string' && rec.explanation.trim())
+      || ''
+    );
+    if (lines.length === 0 && !note) return '';
+    return [
+      '[历史任务清单/计划]',
+      ...(note ? [note.slice(0, 800)] : []),
+      ...lines.slice(0, 20),
+    ].join('\n');
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.type !== 'assistant' || msg.metadata?.isThinking === true) continue;
+    const match = /<proposed_plan>([\s\S]*?)<\/proposed_plan>/i.exec(msg.content);
+    const planText = match?.[1]?.trim();
+    if (planText) {
+      return `[历史拟定方案]\n${planText.slice(0, 1_200)}`;
+    }
+  }
+  return '';
+}
+
 /**
  * Build a compact one-time context bridge prefix when resuming a historical
  * OpenClaw session inside DSH for the first time ("Lazy Context Bridge").
@@ -307,8 +474,22 @@ function resolveLocalTimeZone(): string | undefined {
 export function buildLazyContextBridgePrefix(
   capsule: CoworkContinuityCapsule | null,
   messages: CoworkMessage[] | undefined,
+  goal?: CoworkGoal | null,
 ): string {
   const parts: string[] = [];
+  if (goal && typeof goal.objective === 'string' && goal.objective.trim().length > 0) {
+    const goalLines = [
+      '[历史会话目标]',
+      `状态: ${goal.status}`,
+      `目标: ${goal.objective.trim()}`,
+      ...(goal.lastStatusNote?.trim() ? [`备注: ${goal.lastStatusNote.trim()}`] : []),
+    ];
+    parts.push(goalLines.join('\n'));
+  }
+  const latestPlan = extractLatestLegacyPlanSummary(messages);
+  if (latestPlan) {
+    parts.push(latestPlan);
+  }
   const images = (messages ?? [])
     .filter(message => message.type === 'user')
     .flatMap(message => message.metadata?.historyImageReferences ?? [])
@@ -353,6 +534,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly activeTurns = new Map<string, ActiveTurnState>();
   private readonly startingAbortControllers = new Map<string, AbortController>();
   private readonly pendingCancels = new Map<string, Promise<void>>();
+  private readonly lastCancelledTurnBySession = new Map<string, CancelledTurnRecord>();
   private readonly dshToCoworkSession = new Map<string, string>();
   private readonly pendingInteractions = new Map<string, PendingInteraction>();
   private readonly btwAbortControllers = new Map<string, AbortController>();
@@ -481,25 +663,82 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     if (!trimmed) {
       throw new Error('Steer text cannot be empty');
     }
-    const client = await this.ensureReadyClient();
-    const dshSessionId = this.resolveExistingDshSessionId(sessionId);
-    if (!dshSessionId) {
-      throw new Error(`No active DSH session found for ${sessionId}`);
+    const requestId = clientSteerId || randomUUID();
+
+    const fallbackToContinuation = async (): Promise<CoworkSteerResponse> => {
+      if (!this.store.getSession(sessionId)) {
+        throw new Error(`No active DSH session found for ${sessionId}`);
+      }
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const resolveOnce = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        const rejectOnce = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        };
+        void this.continueSession(sessionId, trimmed, {
+          requestId,
+          onAccepted: resolveOnce,
+        }).then(resolveOnce, rejectOnce);
+      });
+      return {
+        success: true,
+        status: CoworkSteerStatus.Accepted,
+        clientSteerId,
+      };
+    };
+
+    // Check active turn BEFORE issuing promptSession(mode:'steer'). If the prior
+    // turn finished milliseconds earlier, fall back cleanly to a followed
+    // continuation turn so DSH never runs an unfollowed turn that hangs in `running`.
+    if (!this.activeTurns.has(sessionId)) {
+      return fallbackToContinuation();
     }
+
+    const client = await this.ensureReadyClient();
+    const activeTurn = this.activeTurns.get(sessionId);
+    if (!activeTurn) {
+      return fallbackToContinuation();
+    }
+    const dshSessionId = activeTurn.dshSessionId;
+
+    // Finalize pre-steer thinking/assistant buffers before steering so pre-steer
+    // text remains above the steer bubble and post-steer output opens a fresh bubble below it.
+    this.flushTurnBuffersForSteer(activeTurn);
+
     const clientTimeZone = resolveLocalTimeZone();
     await client.promptSession({
       sessionId: dshSessionId,
-      requestId: clientSteerId || randomUUID(),
+      requestId,
       content: [{ type: 'text', text: trimmed }],
       mode: 'steer',
       ...(clientTimeZone ? { clientTimeZone } : {}),
     });
+
+    const liveTurn = this.activeTurns.get(sessionId);
+    if (liveTurn) {
+      this.flushTurnBuffersForSteer(liveTurn);
+    }
+
     const message = this.store.addMessage(sessionId, {
       type: 'user',
       content: trimmed,
       metadata: { steer: true, clientSteerId },
     });
     this.emit('message', sessionId, message);
+
+    if (!liveTurn) {
+      // Turn completed during the brief in-flight window of promptSession(mode:'steer'),
+      // causing DSH to wake a new turn. Attach a follow stream immediately so the reply
+      // streams cleanly and transitions back to `completed`.
+      this.attachFollowWatcherForWokenTurn(client, sessionId, dshSessionId, message.id, requestId);
+    }
+
     return {
       success: true,
       status: CoworkSteerStatus.Accepted,
@@ -665,22 +904,202 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 
   async runGoalCommand(sessionId: string, command: string): Promise<CoworkGoal | null> {
-    const client = await this.ensureReadyClient();
-    const dshSessionId = this.resolveExistingDshSessionId(sessionId);
-    if (!dshSessionId) {
-      throw new Error(`No DSH session found for goal command on ${sessionId}`);
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Cowork session "${sessionId}" not found`);
     }
-    const normalized = command.trim().startsWith('/goal')
-      ? command.trim()
-      : `/goal ${command.trim()}`;
-    await client.promptSession({
-      sessionId: dshSessionId,
-      requestId: randomUUID(),
-      content: [{ type: 'text', text: normalized }],
-      mode: 'queue',
+
+    const pendingCancel = this.pendingCancels.get(sessionId);
+    const hadPriorCancel = Boolean(pendingCancel);
+    if (pendingCancel) {
+      await pendingCancel;
+    }
+
+    const client = await this.ensureReadyClient();
+    const existingDshSessionId = this.resolveExistingDshSessionId(sessionId);
+    let dshSessionId = existingDshSessionId;
+    let lazyBridgePrefix = '';
+    let boundFreshSession = false;
+
+    if (!dshSessionId) {
+      const priorMessages = [...(session.messages ?? [])];
+      const created = await client.createSession({ cwd: session.cwd });
+      dshSessionId = created.sessionId;
+      this.store.updateSession(sessionId, {
+        claudeSessionId: formatStoredDshSessionId(dshSessionId),
+      });
+
+      const hasLegacyHistory = Boolean(
+        priorMessages.length > 0
+        || session.goal
+        || (session.claudeSessionId && !isDshBackedSessionId(session.claudeSessionId)),
+      );
+      if (hasLegacyHistory) {
+        const capsule = this.store.getContinuityCapsule?.(sessionId) ?? null;
+        lazyBridgePrefix = buildLazyContextBridgePrefix(capsule, priorMessages, session.goal);
+      }
+      boundFreshSession = true;
+    }
+
+    this.dshToCoworkSession.set(dshSessionId, sessionId);
+
+    const existingProjections = existingDshSessionId
+      ? await this.safeGetSessionProjections(client, dshSessionId)
+      : null;
+    const currentDshGoal = extractGoalFromProjections(existingProjections);
+
+    let translated = translateLobsterGoalCommandToDsh(command, currentDshGoal);
+    // Upgraded legacy session may carry a persisted SQLite goal before DSH has any
+    // goal events. Translate `/goal resume` into creating that goal in DSH, and
+    // settle `/goal pause` directly when DSH has not created the goal yet.
+    if (!currentDshGoal && session.goal) {
+      if (translated.kind === DshGoalCommandKind.Resume && session.goal.objective.trim()) {
+        const legacyObjective = session.goal.objective.trim();
+        translated = {
+          kind: DshGoalCommandKind.Create,
+          line: `/goal ${legacyObjective}`,
+          objective: legacyObjective,
+        };
+      } else if (translated.kind === DshGoalCommandKind.Pause) {
+        const now = Date.now();
+        const pausedGoal: CoworkGoal = {
+          ...session.goal,
+          status: CoworkGoalStatus.Paused,
+          updatedAt: now,
+          pausedAt: now,
+        };
+        this.store.updateSession(sessionId, { goal: pausedGoal });
+        this.emit('goalUpdate', sessionId, pausedGoal);
+        return pausedGoal;
+      }
+    }
+
+    const willStartGoalTurn =
+      (translated.kind === DshGoalCommandKind.Create || translated.kind === DshGoalCommandKind.Resume)
+      && !this.activeTurns.has(sessionId);
+
+    let llmTraceId = '';
+    if (boundFreshSession || willStartGoalTurn) {
+      const llmTrace = createCoworkLlmTrace();
+      llmTraceId = llmTrace.traceId;
+      const modelSelection = this.resolveModelSelection
+        ? await this.resolveModelSelection(sessionId, session.modelOverride)
+        : null;
+      registerLlmUsageContext(llmTrace.traceId, sessionId, translated.line, {
+        title: session.title,
+        modelPresetId: session.modelPresetId ?? undefined,
+        resolvedModelId: modelSelection?.model,
+      });
+
+      const agentId = session.agentId || 'main';
+      const allowedSkillIds = this.resolveAllowedSkillIds
+        ? this.resolveAllowedSkillIds(sessionId, agentId)
+        : null;
+      const effectiveSystemPrompt = [session.systemPrompt ?? '', lazyBridgePrefix]
+        .filter((part) => part.trim().length > 0)
+        .join('\n\n');
+      const contextPayload: DshHostSessionContext = {
+        sessionId: dshSessionId,
+        agentId,
+        coworkSessionId: sessionId,
+        traceId: llmTrace.traceId,
+        workspaceDir: session.cwd,
+        allowedSkillIds,
+        customSystemPrompt: effectiveSystemPrompt,
+        ...(session.executionMode ? { executionMode: session.executionMode } : {}),
+        permissionPreset: this.getEffectivePermissionPreset(sessionId),
+      };
+      await this.hostManager.bindSessionContext(contextPayload);
+
+      if (modelSelection) {
+        await selectModelWithReasoningFallback(client, {
+          sessionId: dshSessionId,
+          provider: modelSelection.provider,
+          model: modelSelection.model,
+          reasoningEffort: modelSelection.reasoningEffort,
+        });
+      }
+    }
+
+    if (willStartGoalTurn) {
+      const { hadRecentCancel, cancelledTurnNumber } = this.consumeRecentCancelState(
+        sessionId,
+        dshSessionId,
+        hadPriorCancel,
+      );
+      const abortController = new AbortController();
+      const turn = this.createActiveTurnState({
+        coworkSessionId: sessionId,
+        dshSessionId,
+        traceId: llmTraceId || createCoworkLlmTrace().traceId,
+        abortController,
+        confirmationMode: 'modal',
+        ignoreStaleAbortedTurnEnd: hadRecentCancel,
+        cancelledDshTurnNumber: cancelledTurnNumber,
+        goalArmed: true,
+        currentGoal: currentDshGoal,
+      });
+      this.activeTurns.set(sessionId, turn);
+      this.store.updateSession(sessionId, { status: 'running' });
+      this.emit('sessionStatus', sessionId, 'running');
+
+      const followStream = client.followSession<Record<string, unknown>>(
+        {
+          address: { kind: 'session', sessionId: dshSessionId },
+          assistantStream: true,
+          activate: true,
+        },
+        abortController.signal,
+      );
+      void this.consumeFollowStream(turn, followStream);
+
+      let execution: Awaited<ReturnType<DshTypertClient['executeCommand']>>;
+      try {
+        execution = await client.executeCommand({
+          agentId: dshSessionId,
+          line: translated.line,
+          submittedAttachments: [],
+        });
+        if (!execution || execution.result.kind === 'error') {
+          throw new Error(execution?.result.text ?? `DSH did not recognize goal command "${translated.line}"`);
+        }
+      } catch (error) {
+        abortController.abort(error);
+        if (this.activeTurns.get(sessionId) === turn) {
+          this.activeTurns.delete(sessionId);
+        }
+        this.store.updateSession(sessionId, { status: 'idle' });
+        this.emit('sessionStatus', sessionId, 'idle');
+        throw error;
+      }
+
+      const projections = await this.safeGetSessionProjections(client, dshSessionId);
+      const projectedGoal = extractGoalFromProjections(projections);
+      const goal = projectedGoal ?? turn.currentGoal;
+      turn.currentGoal = goal;
+      this.store.updateSession(sessionId, { goal });
+      this.emit('goalUpdate', sessionId, goal);
+      return goal;
+    }
+
+    const execution = await client.executeCommand({
+      agentId: dshSessionId,
+      line: translated.line,
+      submittedAttachments: [],
     });
-    const projections = await client.getSessionProjections(dshSessionId);
+    if (!execution || execution.result.kind === 'error') {
+      throw new Error(execution?.result.text ?? `DSH did not recognize goal command "${translated.line}"`);
+    }
+
+    const projections = await this.safeGetSessionProjections(client, dshSessionId);
     const goal = extractGoalFromProjections(projections);
+    const activeTurn = this.activeTurns.get(sessionId);
+    if (activeTurn) {
+      activeTurn.currentGoal = goal;
+      if (translated.kind === DshGoalCommandKind.Pause || translated.kind === DshGoalCommandKind.Clear) {
+        activeTurn.goalArmed = false;
+      }
+    }
     this.store.updateSession(sessionId, { goal });
     this.emit('goalUpdate', sessionId, goal);
     return goal;
@@ -820,6 +1239,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.discardReusableMessages(turn);
     this.cancelPendingInteractionsForSession(sessionId);
 
+    this.lastCancelledTurnBySession.set(sessionId, {
+      cancelledAt: Date.now(),
+      dshSessionId: turn.dshSessionId,
+      lastSeenTurnNumber: turn.currentDshTurnNumber,
+    });
+
     if (this.hostManager.isReady()) {
       const cancelPromise = this.hostManager
         .getClient()
@@ -934,6 +1359,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   onSessionDeleted(sessionId: string): void {
     this.stopSession(sessionId);
+    this.lastCancelledTurnBySession.delete(sessionId);
     this.sessionAllowedScopes.delete(sessionId);
     this.sessionPermissionPresets.delete(sessionId);
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
@@ -964,6 +1390,35 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       client.onWaterfall('approval/request', (evt) => this.handleHostWaterfall('approval', evt)),
       client.onWaterfall('user-questions/request', (evt) => this.handleHostWaterfall('user-questions', evt)),
     );
+
+    if (typeof client.on === 'function' && typeof client.off === 'function') {
+      const onGoalActivationChanged = (payload: unknown) => {
+        if (!payload || typeof payload !== 'object') return;
+        const rec = payload as {
+          sessionId?: unknown;
+          goal?: { activation?: unknown };
+        };
+        if (typeof rec.sessionId !== 'string') return;
+        const coworkSessionId = this.dshToCoworkSession.get(rec.sessionId);
+        if (!coworkSessionId) return;
+        const turn = this.activeTurns.get(coworkSessionId);
+        if (!turn) return;
+        if (rec.goal?.activation === 'armed') {
+          turn.goalArmed = true;
+        } else {
+          turn.goalArmed = false;
+          if (turn.waitingForNextGoalRound) {
+            turn.waitingForNextGoalRound = false;
+            turn.disarmedBetweenRounds = true;
+            turn.abortController.abort(new Error('Goal disarmed between rounds'));
+          }
+        }
+      };
+      client.on('remote:goal/activation-changed', onGoalActivationChanged);
+      this.unwireClientHandlers.push(() => {
+        client.off('remote:goal/activation-changed', onGoalActivationChanged);
+      });
+    }
   }
 
   private handleHostWaterfall(
@@ -1102,6 +1557,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     }
   }
 
+  private safeGetSessionProjections(
+    client: Pick<DshTypertClient, 'getSessionProjections'>,
+    dshSessionId: string,
+  ): Promise<Record<string, unknown> | null> {
+    if (typeof client.getSessionProjections !== 'function') {
+      return Promise.resolve(null);
+    }
+    return client.getSessionProjections(dshSessionId).catch((): null => null);
+  }
+
   private resolveExistingDshSessionId(coworkSessionId: string): string | null {
     const active = this.activeTurns.get(coworkSessionId);
     if (active) return active.dshSessionId;
@@ -1231,7 +1696,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
       // a legacy OpenClaw session for the first time.
-      let dshSessionId = this.resolveExistingDshSessionId(sessionId);
+      const existingDshSessionId = this.resolveExistingDshSessionId(sessionId);
+      let dshSessionId = existingDshSessionId;
       let lazyBridgePrefix = '';
       if (!dshSessionId) {
         const created = await client.createSession({
@@ -1245,17 +1711,26 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
         const hasLegacyHistory = Boolean(
           priorMessages.length > 0
+          || session.goal
           || (session.claudeSessionId && !isDshBackedSessionId(session.claudeSessionId)),
         );
         if (hasLegacyHistory) {
           const capsule = this.store.getContinuityCapsule?.(sessionId) ?? null;
-          lazyBridgePrefix = buildLazyContextBridgePrefix(capsule, priorMessages);
+          lazyBridgePrefix = buildLazyContextBridgePrefix(capsule, priorMessages, session.goal);
         }
       }
 
       this.dshToCoworkSession.set(dshSessionId, sessionId);
 
+      const goalPrompt = isGoalCommandPrompt(prompt);
+      const baseSystemPrompt = params.systemPrompt ?? session.systemPrompt ?? '';
+      const boundCustomSystemPrompt = goalPrompt && lazyBridgePrefix
+        ? [baseSystemPrompt, lazyBridgePrefix].filter((part) => part.trim().length > 0).join('\n\n')
+        : baseSystemPrompt;
+
       // Bind LobsterAI session context (agent persona, skills filter, executionMode, turn traceId).
+      // Always pass explicit `customSystemPrompt` (including `''`) so turning off Plan Mode
+      // clears the previous turn's `# Plan Mode` system prompt in `ops-rpc.mjs`.
       const agentId = params.agentId || session.agentId || 'main';
       const allowedSkillIds = this.resolveAllowedSkillIds
         ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
@@ -1271,9 +1746,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         traceId: llmTrace.traceId,
         workspaceDir: params.workspaceRoot || session.cwd,
         allowedSkillIds,
-        ...(params.systemPrompt || session.systemPrompt
-          ? { customSystemPrompt: params.systemPrompt || session.systemPrompt }
-          : {}),
+        customSystemPrompt: boundCustomSystemPrompt,
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: this.getEffectivePermissionPreset(sessionId),
         ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
@@ -1298,36 +1771,123 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         prevTurn.abortController.abort(new Error('Replaced by newer turn'));
       }
 
-      const turn: ActiveTurnState = {
+      const { hadRecentCancel, cancelledTurnNumber } = this.consumeRecentCancelState(
+        sessionId,
+        dshSessionId,
+        hadPriorCancel,
+      );
+
+      if (goalPrompt) {
+        const existingProjections = existingDshSessionId
+          ? await this.safeGetSessionProjections(client, dshSessionId)
+          : null;
+        const currentDshGoal = extractGoalFromProjections(existingProjections);
+        const translated = translateLobsterGoalCommandToDsh(prompt, currentDshGoal);
+        const submittedAttachments = buildCommandSubmitAttachments(params.imageAttachments);
+        const startsGoalTurn =
+          translated.kind === DshGoalCommandKind.Create
+          || translated.kind === DshGoalCommandKind.Resume;
+
+        if (!startsGoalTurn) {
+          clearStartingAbort();
+          const execution = await client.executeCommand({
+            agentId: dshSessionId,
+            line: translated.line,
+            submittedAttachments,
+          });
+          if (!execution || execution.result.kind === 'error') {
+            const msg = execution?.result.text ?? `DSH did not recognize goal command "${translated.line}"`;
+            this.store.updateSession(sessionId, { status: 'error' });
+            this.emit('sessionStatus', sessionId, 'error');
+            this.emit('error', sessionId, msg);
+            throw new Error(msg);
+          }
+          params.onAccepted?.();
+          const projections = await this.safeGetSessionProjections(client, dshSessionId);
+          const goal = extractGoalFromProjections(projections);
+          this.store.updateSession(sessionId, { goal, status: 'completed' });
+          this.emit('goalUpdate', sessionId, goal);
+          this.emit('sessionStatus', sessionId, 'completed');
+          this.emit('complete', sessionId, formatStoredDshSessionId(dshSessionId));
+          return;
+        }
+
+        const turn = this.createActiveTurnState({
+          coworkSessionId: sessionId,
+          dshSessionId,
+          requestId: params.requestId,
+          userMessageId: turnUserMessage?.id,
+          traceId: llmTrace.traceId,
+          abortController,
+          confirmationMode: params.confirmationMode,
+          ignoreStaleAbortedTurnEnd: hadRecentCancel,
+          cancelledDshTurnNumber: cancelledTurnNumber,
+          goalArmed: true,
+          currentGoal: currentDshGoal,
+        });
+        clearStartingAbort();
+        this.activeTurns.set(sessionId, turn);
+
+        this.store.updateSession(sessionId, { status: 'running' });
+        this.emit('sessionStatus', sessionId, 'running');
+
+        const followStream = client.followSession<Record<string, unknown>>(
+          {
+            address: { kind: 'session', sessionId: dshSessionId },
+            assistantStream: true,
+            activate: true,
+          },
+          abortController.signal,
+        );
+        const streamTask = this.consumeFollowStream(turn, followStream);
+
+        try {
+          const execution = await client.executeCommand({
+            agentId: dshSessionId,
+            line: translated.line,
+            submittedAttachments,
+          });
+          if (!execution || execution.result.kind === 'error') {
+            throw new Error(execution?.result.text ?? `DSH did not recognize goal command "${translated.line}"`);
+          }
+          params.onAccepted?.();
+        } catch (error) {
+          abortController.abort(error);
+          if (this.activeTurns.get(sessionId) === turn) {
+            this.activeTurns.delete(sessionId);
+          }
+          const msg = error instanceof Error ? error.message : String(error);
+          this.store.updateSession(sessionId, { status: 'error' });
+          this.emit('sessionStatus', sessionId, 'error');
+          this.emit('error', sessionId, msg);
+          throw error;
+        }
+
+        const projections = await this.safeGetSessionProjections(client, dshSessionId);
+        const projectedGoal = extractGoalFromProjections(projections);
+        const goal = projectedGoal ?? turn.currentGoal;
+        turn.currentGoal = goal;
+        this.store.updateSession(sessionId, { goal });
+        this.emit('goalUpdate', sessionId, goal);
+
+        await streamTask;
+        return;
+      }
+
+      const requestId = params.requestId || randomUUID();
+      const turn = this.createActiveTurnState({
         coworkSessionId: sessionId,
         dshSessionId,
+        requestId,
         userMessageId: turnUserMessage?.id,
         traceId: llmTrace.traceId,
         abortController,
         confirmationMode: params.confirmationMode,
-        startedAt: Date.now(),
-        currentThinkingMessageId: null,
-        currentThinkingText: '',
-        attemptThinkingMessageId: null,
-        reusableThinkingMessageId: null,
-        lastFinalizedThinkingMessageId: null,
-        lastFinalizedThinkingText: '',
-        currentAssistantMessageId: null,
-        currentAssistantText: '',
-        attemptAssistantMessageId: null,
-        reusableAssistantMessageId: null,
-        lastFinalizedAssistantMessageId: null,
-        lastFinalizedAssistantText: '',
-        lastCommittedAssistantSeq: null,
-        toolCallMessageIds: new Map(),
-        subagentIdsByName: new Map(),
-        subagentTasksByCall: new Map(),
-        pendingSubagentResults: new Set(),
-        turnCompleted: false,
-        turnError: null,
-        turnAborted: false,
-        ignoreStaleAbortedTurnEnd: hadPriorCancel,
-      };
+        ignoreStaleAbortedTurnEnd: hadRecentCancel,
+        cancelledDshTurnNumber: cancelledTurnNumber,
+        goalArmed: false,
+        currentGoal: session.goal ?? null,
+      });
       clearStartingAbort();
       this.activeTurns.set(sessionId, turn);
 
@@ -1353,7 +1913,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       try {
         await client.promptSession({
           sessionId: dshSessionId,
-          requestId: params.requestId || randomUUID(),
+          requestId,
           content: contentParts,
           mode: 'queue',
           ...(clientTimeZone ? { clientTimeZone } : {}),
@@ -1375,6 +1935,130 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     }
   }
 
+  private createActiveTurnState(params: {
+    coworkSessionId: string;
+    dshSessionId: string;
+    requestId?: string;
+    userMessageId?: string;
+    traceId: string;
+    abortController: AbortController;
+    confirmationMode: 'modal' | 'text';
+    ignoreStaleAbortedTurnEnd: boolean;
+    cancelledDshTurnNumber: number | null;
+    goalArmed: boolean;
+    currentGoal: CoworkGoal | null;
+  }): ActiveTurnState {
+    return {
+      coworkSessionId: params.coworkSessionId,
+      dshSessionId: params.dshSessionId,
+      requestId: params.requestId,
+      userMessageId: params.userMessageId,
+      traceId: params.traceId,
+      abortController: params.abortController,
+      confirmationMode: params.confirmationMode,
+      startedAt: Date.now(),
+      currentThinkingMessageId: null,
+      currentThinkingText: '',
+      attemptThinkingMessageId: null,
+      reusableThinkingMessageId: null,
+      lastFinalizedThinkingMessageId: null,
+      lastFinalizedThinkingText: '',
+      currentAssistantMessageId: null,
+      currentAssistantText: '',
+      attemptAssistantMessageId: null,
+      reusableAssistantMessageId: null,
+      lastFinalizedAssistantMessageId: null,
+      lastFinalizedAssistantText: '',
+      suppressedPreSteerAssistantText: null,
+      lastCommittedAssistantSeq: null,
+      toolCallMessageIds: new Map(),
+      subagentIdsByName: new Map(),
+      subagentTasksByCall: new Map(),
+      pendingSubagentResults: new Set(),
+      currentDshTurnNumber: null,
+      cancelledDshTurnNumber: params.cancelledDshTurnNumber,
+      goalArmed: params.goalArmed,
+      waitingForNextGoalRound: false,
+      disarmedBetweenRounds: false,
+      currentGoal: params.currentGoal,
+      turnCompleted: false,
+      turnError: null,
+      turnAborted: false,
+      ignoreStaleAbortedTurnEnd: params.ignoreStaleAbortedTurnEnd,
+    };
+  }
+
+  private consumeRecentCancelState(
+    sessionId: string,
+    dshSessionId: string,
+    hadPendingCancel: boolean,
+  ): { hadRecentCancel: boolean; cancelledTurnNumber: number | null } {
+    const lastCancel = this.lastCancelledTurnBySession.get(sessionId);
+    this.lastCancelledTurnBySession.delete(sessionId);
+    const matchesRecentCancel = Boolean(
+      lastCancel
+      && lastCancel.dshSessionId === dshSessionId
+      && (Date.now() - lastCancel.cancelledAt) < CANCEL_GRACE_WINDOW_MS,
+    );
+    return {
+      hadRecentCancel: hadPendingCancel || matchesRecentCancel,
+      cancelledTurnNumber: matchesRecentCancel ? (lastCancel?.lastSeenTurnNumber ?? null) : null,
+    };
+  }
+
+  private flushTurnBuffersForSteer(turn: ActiveTurnState): void {
+    const flushedAssistantText = turn.currentAssistantMessageId ? turn.currentAssistantText : '';
+    this.finalizeActiveThinkingMessage(turn);
+    this.finalizeActiveAssistantMessage(turn);
+    this.discardReusableMessages(turn);
+    turn.attemptThinkingMessageId = null;
+    turn.attemptAssistantMessageId = null;
+    turn.lastFinalizedThinkingMessageId = null;
+    turn.lastFinalizedThinkingText = '';
+    turn.lastFinalizedAssistantMessageId = null;
+    turn.lastFinalizedAssistantText = '';
+    turn.lastCommittedAssistantSeq = null;
+    if (flushedAssistantText) {
+      turn.suppressedPreSteerAssistantText = flushedAssistantText;
+    }
+  }
+
+  private attachFollowWatcherForWokenTurn(
+    client: DshTypertClient,
+    sessionId: string,
+    dshSessionId: string,
+    userMessageId: string,
+    requestId: string,
+  ): void {
+    const abortController = new AbortController();
+    const session = this.store.getSession(sessionId);
+    const turn = this.createActiveTurnState({
+      coworkSessionId: sessionId,
+      dshSessionId,
+      requestId,
+      userMessageId,
+      traceId: createCoworkLlmTrace().traceId,
+      abortController,
+      confirmationMode: 'modal',
+      ignoreStaleAbortedTurnEnd: false,
+      cancelledDshTurnNumber: null,
+      goalArmed: false,
+      currentGoal: session?.goal ?? null,
+    });
+    this.activeTurns.set(sessionId, turn);
+    this.store.updateSession(sessionId, { status: 'running' });
+    this.emit('sessionStatus', sessionId, 'running');
+    const followStream = client.followSession<Record<string, unknown>>(
+      {
+        address: { kind: 'session', sessionId: dshSessionId },
+        assistantStream: true,
+        activate: true,
+      },
+      abortController.signal,
+    );
+    void this.consumeFollowStream(turn, followStream);
+  }
+
   private async consumeFollowStream(
     turn: ActiveTurnState,
     stream: AsyncGenerator<Record<string, unknown>, void, void>,
@@ -1390,7 +2074,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         }
       }
 
-      if (turn.abortController.signal.aborted) return;
+      if (turn.abortController.signal.aborted && !turn.disarmedBetweenRounds) return;
 
       this.finalizeActiveThinkingMessage(turn);
       this.finalizeActiveAssistantMessage(turn);
@@ -1419,7 +2103,19 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       this.emit('sessionStatus', coworkSessionId, 'completed');
       this.emit('complete', coworkSessionId, formatStoredDshSessionId(dshSessionId));
     } catch (error) {
-      if (turn.abortController.signal.aborted) return;
+      if (turn.abortController.signal.aborted && !turn.disarmedBetweenRounds) return;
+      if (turn.disarmedBetweenRounds) {
+        this.finalizeActiveThinkingMessage(turn);
+        this.finalizeActiveAssistantMessage(turn);
+        this.discardReusableMessages(turn);
+        if (this.activeTurns.get(coworkSessionId) === turn) {
+          this.activeTurns.delete(coworkSessionId);
+        }
+        this.store.updateSession(coworkSessionId, { status: 'completed' });
+        this.emit('sessionStatus', coworkSessionId, 'completed');
+        this.emit('complete', coworkSessionId, formatStoredDshSessionId(dshSessionId));
+        return;
+      }
       this.discardReusableMessages(turn);
       if (this.activeTurns.get(coworkSessionId) === turn) {
         this.activeTurns.delete(coworkSessionId);
@@ -1441,17 +2137,32 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const { coworkSessionId } = turn;
 
     if (frame.type === 'assistant-stream') {
-      turn.ignoreStaleAbortedTurnEnd = false;
       const inner = frame.frame as Record<string, unknown> | undefined;
       if (!inner || typeof inner !== 'object') return false;
+      const streamTurnNumber = typeof inner.turn === 'number' ? inner.turn : null;
+      if (
+        turn.ignoreStaleAbortedTurnEnd
+        && streamTurnNumber !== null
+        && turn.cancelledDshTurnNumber !== null
+        && streamTurnNumber <= turn.cancelledDshTurnNumber
+      ) {
+        return false;
+      }
+      if (streamTurnNumber !== null) {
+        turn.currentDshTurnNumber = streamTurnNumber;
+      }
+      turn.ignoreStaleAbortedTurnEnd = false;
+      turn.waitingForNextGoalRound = false;
 
       if (inner.type === 'start') {
+        turn.suppressedPreSteerAssistantText = null;
         // Lazily create thinking/assistant rows when actual deltas arrive so
         // tool-only steps and failed retry attempts never leave empty rows.
         return false;
       }
 
       if (inner.type === 'chunk') {
+        turn.suppressedPreSteerAssistantText = null;
         const chunk = inner.chunk as Record<string, unknown> | undefined;
         if (!chunk) return false;
         const deltaText = extractStreamChunkDelta(chunk);
@@ -1498,6 +2209,34 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       if (!ev || typeof ev !== 'object') return false;
       const evType = typeof ev.type === 'string' ? ev.type : '';
       const data = (ev.data as Record<string, unknown> | undefined) ?? {};
+      const eventTurnNumber = typeof data.turn === 'number' ? data.turn : null;
+
+      if (evType === 'goal/change') {
+        const op = typeof data.operation === 'string' ? data.operation : '';
+        const updatedGoal = extractGoalFromDshPayload(data);
+        turn.currentGoal = updatedGoal;
+        this.store.updateSession(coworkSessionId, { goal: updatedGoal });
+        this.emit('goalUpdate', coworkSessionId, updatedGoal);
+
+        if (op === DshGoalOperation.Create || op === DshGoalOperation.Resume) {
+          turn.goalArmed = true;
+        } else if (
+          op === DshGoalOperation.Pause
+          || op === DshGoalOperation.Complete
+          || op === DshGoalOperation.Block
+          || op === DshGoalOperation.Clear
+        ) {
+          turn.goalArmed = false;
+          if (turn.waitingForNextGoalRound) {
+            turn.waitingForNextGoalRound = false;
+            if (op === DshGoalOperation.Pause) {
+              turn.turnAborted = true;
+            }
+            return true;
+          }
+        }
+        return false;
+      }
 
       if (evType === DshChildEvent.Catalog) {
         const id = this.subagentSessions?.observeCatalog(coworkSessionId, data);
@@ -1505,9 +2244,29 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         return false;
       }
       if (evType === DshChildEvent.User) {
-        turn.ignoreStaleAbortedTurnEnd = false;
-        this.subagentSessions?.observeNotice(coworkSessionId, data, ev.time);
+        turn.suppressedPreSteerAssistantText = null;
         const source = record(data.source);
+        if (source.kind === 'goal') {
+          turn.waitingForNextGoalRound = false;
+          turn.ignoreStaleAbortedTurnEnd = false;
+          if (typeof source.round === 'number' && turn.currentGoal) {
+            const updatedGoal: CoworkGoal = {
+              ...turn.currentGoal,
+              continuationTurns: source.round,
+              updatedAt: Date.now(),
+            };
+            turn.currentGoal = updatedGoal;
+            this.store.updateSession(coworkSessionId, { goal: updatedGoal });
+            this.emit('goalUpdate', coworkSessionId, updatedGoal);
+          }
+        } else if (
+          !turn.ignoreStaleAbortedTurnEnd
+          || (turn.requestId && source.rpcId === turn.requestId)
+          || source.kind === DshChildEvent.Settled
+        ) {
+          turn.ignoreStaleAbortedTurnEnd = false;
+        }
+        this.subagentSessions?.observeNotice(coworkSessionId, data, ev.time);
         if (source.kind === DshChildEvent.Settled && typeof source.senderSessionId === 'string') {
           turn.pendingSubagentResults.delete(formatStoredDshSessionId(source.senderSessionId));
         }
@@ -1515,12 +2274,35 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       if (evType === 'turn/start') {
-        turn.ignoreStaleAbortedTurnEnd = false;
+        if (eventTurnNumber !== null) {
+          turn.currentDshTurnNumber = eventTurnNumber;
+          if (turn.cancelledDshTurnNumber === null || eventTurnNumber > turn.cancelledDshTurnNumber) {
+            turn.ignoreStaleAbortedTurnEnd = false;
+          }
+        } else {
+          turn.ignoreStaleAbortedTurnEnd = false;
+        }
+        turn.waitingForNextGoalRound = false;
+        turn.lastFinalizedThinkingMessageId = null;
+        turn.lastFinalizedThinkingText = '';
+        turn.lastFinalizedAssistantMessageId = null;
+        turn.lastFinalizedAssistantText = '';
+        turn.lastCommittedAssistantSeq = null;
         return false;
       }
 
       if (evType === 'tool/call') {
+        if (
+          turn.ignoreStaleAbortedTurnEnd
+          && eventTurnNumber !== null
+          && turn.cancelledDshTurnNumber !== null
+          && eventTurnNumber <= turn.cancelledDshTurnNumber
+        ) {
+          return false;
+        }
         turn.ignoreStaleAbortedTurnEnd = false;
+        turn.waitingForNextGoalRound = false;
+        turn.suppressedPreSteerAssistantText = null;
         this.finalizeActiveThinkingMessage(turn);
         this.finalizeActiveAssistantMessage(turn);
         this.discardReusableMessages(turn);
@@ -1553,6 +2335,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       if (evType === 'tool/result') {
+        if (
+          turn.ignoreStaleAbortedTurnEnd
+          && eventTurnNumber !== null
+          && turn.cancelledDshTurnNumber !== null
+          && eventTurnNumber <= turn.cancelledDshTurnNumber
+        ) {
+          return false;
+        }
         const messageObj = data.message as Record<string, unknown> | undefined;
         const callId = String(messageObj?.callId ?? messageObj?.toolCallId ?? data.callId ?? '');
         const text = extractTextFromContentBlocks(messageObj?.content ?? data.content);
@@ -1590,7 +2380,26 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       if (evType === 'assistant/message') {
+        // A cancelled previous turn can flush an interrupted assistant/message
+        // just before its trailing aborted turn/end. Ignore it so we neither
+        // duplicate the previous turn's partial bubble nor disarm the stale
+        // aborted turn/end filter before turn/end arrives.
+        const isStalePreviousTurnAssistant = turn.ignoreStaleAbortedTurnEnd && (
+          data.interrupted === true
+          || (
+            eventTurnNumber !== null
+            && turn.cancelledDshTurnNumber !== null
+            && eventTurnNumber <= turn.cancelledDshTurnNumber
+          )
+        );
+        if (isStalePreviousTurnAssistant) {
+          return false;
+        }
+        if (eventTurnNumber !== null) {
+          turn.currentDshTurnNumber = eventTurnNumber;
+        }
         turn.ignoreStaleAbortedTurnEnd = false;
+        turn.waitingForNextGoalRound = false;
         const messageObj = data.message as Record<string, unknown> | undefined;
         const rawContent = messageObj?.content ?? data.content;
         const text = extractTextFromContentBlocks(rawContent);
@@ -1656,7 +2465,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
             this.emit('messageUpdate', coworkSessionId, msgId, finalText, meta);
           }
         } else if (text) {
-          if (turn.reusableAssistantMessageId) {
+          if (turn.suppressedPreSteerAssistantText !== null && text === turn.suppressedPreSteerAssistantText) {
+            turn.suppressedPreSteerAssistantText = null;
+          } else if (turn.reusableAssistantMessageId) {
             const msgId = turn.reusableAssistantMessageId;
             turn.reusableAssistantMessageId = null;
             const meta: Record<string, unknown> = {
@@ -1682,6 +2493,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         turn.lastFinalizedThinkingText = '';
         turn.lastFinalizedAssistantMessageId = null;
         turn.lastFinalizedAssistantText = '';
+        turn.suppressedPreSteerAssistantText = null;
         turn.lastCommittedAssistantSeq = null;
         return false;
       }
@@ -1700,18 +2512,38 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const turnError = extractTurnEndError(data.reason);
         if (turnError) {
           turn.ignoreStaleAbortedTurnEnd = false;
+          turn.goalArmed = false;
           turn.turnError = turnError;
         } else if (isAbortedTurnEndReason(data.reason)) {
-          if (turn.ignoreStaleAbortedTurnEnd) {
+          const isStaleCancelledTurn =
+            turn.ignoreStaleAbortedTurnEnd
+            || (
+              eventTurnNumber !== null
+              && turn.cancelledDshTurnNumber !== null
+              && eventTurnNumber <= turn.cancelledDshTurnNumber
+            );
+          if (isStaleCancelledTurn) {
             turn.ignoreStaleAbortedTurnEnd = false;
             return false;
           }
+          turn.goalArmed = false;
           turn.turnAborted = true;
+        } else if (isMaxTokensTurnEndReason(data.reason)) {
+          // DSH goal-round-driver disarms on max-tokens; do not wait for another round.
+          turn.ignoreStaleAbortedTurnEnd = false;
+          turn.goalArmed = false;
         } else {
           turn.ignoreStaleAbortedTurnEnd = false;
           // A model can yield the native turn after delegating. Each child's settlement
           // schedules another parent turn on this same stream.
           if (turn.pendingSubagentResults.size > 0) return false;
+          // While a DSH goal remains active and armed, goal-round-driver immediately
+          // schedules the next round after this turn ends; keep following until the
+          // goal completes, blocks, pauses, clears, or disarms.
+          if (turn.goalArmed) {
+            turn.waitingForNextGoalRound = true;
+            return false;
+          }
         }
         return true;
       }
@@ -1849,6 +2681,33 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 }
 
+const DSH_COMMAND_IMAGE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
+
+function buildCommandSubmitAttachments(
+  imageAttachments?: CoworkStartOptions['imageAttachments'],
+): DshCommandSubmitAttachment[] {
+  const attachments: DshCommandSubmitAttachment[] = [];
+  for (const img of imageAttachments ?? []) {
+    if (!img || typeof img.base64Data !== 'string' || !img.base64Data) continue;
+    const rawMedia = (img.mimeType || 'image/png').toLowerCase();
+    const mediaType = DSH_COMMAND_IMAGE_MEDIA_TYPES.has(rawMedia)
+      ? (rawMedia as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif')
+      : 'image/png';
+    attachments.push({
+      type: 'image',
+      mediaType,
+      data: img.base64Data,
+      ...(img.name ? { name: img.name } : {}),
+    });
+  }
+  return attachments;
+}
+
 function buildPromptContentParts(
   prompt: string,
   turnPrefix: string,
@@ -1938,6 +2797,11 @@ function isAbortedTurnEndReason(reason: unknown): boolean {
   return (reason as { kind?: unknown }).kind === 'aborted';
 }
 
+function isMaxTokensTurnEndReason(reason: unknown): boolean {
+  if (!reason || typeof reason !== 'object') return false;
+  return (reason as { kind?: unknown }).kind === 'max-tokens';
+}
+
 function extractTextFromContentBlocks(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -1958,28 +2822,101 @@ function extractReasoningFromContentBlocks(content: unknown): string {
     .join('');
 }
 
-function extractGoalFromProjections(projections: Record<string, unknown> | null): CoworkGoal | null {
+function mapDshGoalPhaseToStatus(rawStatus: unknown): CoworkGoalStatus {
+  if (rawStatus === CoworkGoalStatus.Complete || rawStatus === 'completed') {
+    return CoworkGoalStatus.Complete;
+  }
+  if (rawStatus === CoworkGoalStatus.Paused || rawStatus === 'cancelled') {
+    return CoworkGoalStatus.Paused;
+  }
+  if (rawStatus === CoworkGoalStatus.Blocked) {
+    return CoworkGoalStatus.Blocked;
+  }
+  if (rawStatus === CoworkGoalStatus.UsageLimited) {
+    return CoworkGoalStatus.UsageLimited;
+  }
+  if (rawStatus === CoworkGoalStatus.BudgetLimited) {
+    return CoworkGoalStatus.BudgetLimited;
+  }
+  return CoworkGoalStatus.Active;
+}
+
+export function extractGoalFromDshPayload(raw: unknown): CoworkGoal | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const container = raw as Record<string, unknown>;
+  if (container.operation === DshGoalOperation.Clear) return null;
+
+  // DSH 0.2.2-rc.5 real shape:
+  // `{ goal: { id, revision, objective, phase, maxGoalRounds, blockedReason? }, roundsStarted, createdAt, updatedAt }`
+  // Also stays tolerant of flat legacy mock shapes (`{ id, text/objective, status, createdAt, tokensUsed }`).
+  const nested = container.goal && typeof container.goal === 'object' && !Array.isArray(container.goal)
+    ? container.goal as Record<string, unknown>
+    : null;
+  const source = nested ?? container;
+
+  const objective = typeof source.objective === 'string' && source.objective.trim()
+    ? source.objective.trim()
+    : typeof source.text === 'string' && source.text.trim()
+      ? source.text.trim()
+      : '';
+  if (!objective) return null;
+
+  const now = Date.now();
+  const status = mapDshGoalPhaseToStatus(source.phase ?? source.status ?? container.phase ?? container.status);
+  const createdAt = typeof container.createdAt === 'number'
+    ? container.createdAt
+    : typeof source.createdAt === 'number'
+      ? source.createdAt
+      : now;
+  const updatedAt = typeof container.updatedAt === 'number'
+    ? container.updatedAt
+    : typeof source.updatedAt === 'number'
+      ? source.updatedAt
+      : now;
+  const roundsStarted = typeof container.roundsStarted === 'number'
+    ? container.roundsStarted
+    : typeof source.roundsStarted === 'number'
+      ? source.roundsStarted
+      : typeof container.continuationTurns === 'number'
+        ? container.continuationTurns
+        : undefined;
+  const rawBlocked = source.blockedReason && typeof source.blockedReason === 'object' && !Array.isArray(source.blockedReason)
+    ? source.blockedReason as Record<string, unknown>
+    : null;
+  const blockedNote = rawBlocked
+    ? (typeof rawBlocked.message === 'string' && rawBlocked.message.trim()
+        ? rawBlocked.message.trim()
+        : typeof rawBlocked.code === 'string' && rawBlocked.code.trim()
+          ? rawBlocked.code.trim()
+          : undefined)
+    : undefined;
+  const lastStatusNote = blockedNote
+    ?? (typeof container.lastStatusNote === 'string' && container.lastStatusNote.trim()
+      ? container.lastStatusNote.trim()
+      : undefined);
+
+  return {
+    id: typeof source.id === 'string' && source.id ? source.id : `goal-${now}`,
+    objective,
+    status,
+    createdAt,
+    updatedAt,
+    tokensUsed: typeof container.tokensUsed === 'number'
+      ? container.tokensUsed
+      : typeof source.tokensUsed === 'number'
+        ? source.tokensUsed
+        : 0,
+    ...(roundsStarted !== undefined ? { continuationTurns: Math.max(0, Math.floor(roundsStarted)) } : {}),
+    ...(lastStatusNote ? { lastStatusNote } : {}),
+    ...(status === CoworkGoalStatus.Paused ? { pausedAt: updatedAt } : {}),
+    ...(status === CoworkGoalStatus.Blocked ? { blockedAt: updatedAt } : {}),
+    ...(status === CoworkGoalStatus.Complete ? { completedAt: updatedAt } : {}),
+  };
+}
+
+export function extractGoalFromProjections(projections: Record<string, unknown> | null): CoworkGoal | null {
   if (!projections || typeof projections !== 'object') return null;
   const values = (projections.values as Record<string, unknown> | undefined) ?? projections;
-  const raw = values.goal as Record<string, unknown> | null | undefined;
-  if (!raw || typeof raw !== 'object') return null;
-  const text = typeof raw.text === 'string'
-    ? raw.text
-    : typeof raw.objective === 'string'
-      ? raw.objective
-      : '';
-  if (!text) return null;
-  const now = Date.now();
-  return {
-    id: typeof raw.id === 'string' && raw.id ? raw.id : `goal-${now}`,
-    objective: text,
-    status: raw.status === CoworkGoalStatus.Complete || raw.status === 'completed'
-      ? CoworkGoalStatus.Complete
-      : raw.status === CoworkGoalStatus.Paused || raw.status === 'cancelled'
-        ? CoworkGoalStatus.Paused
-        : CoworkGoalStatus.Active,
-    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
-    updatedAt: now,
-    tokensUsed: typeof raw.tokensUsed === 'number' ? raw.tokensUsed : 0,
-  };
+  if (!values || typeof values !== 'object') return null;
+  return extractGoalFromDshPayload(values.goal);
 }

@@ -1,6 +1,9 @@
+import { EventEmitter } from 'events';
 import { describe, expect, test, vi } from 'vitest';
 
+import { type CoworkGoal, CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { getCoworkLlmTrace, isValidLlmTraceId } from '../../../shared/cowork/llmTurnUsage';
+import { CoworkSteerStatus } from '../../../shared/cowork/steer';
 import {
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
@@ -15,9 +18,13 @@ import {
   buildLazyContextBridgePrefix,
   type DshAdapterSessionRecord,
   type DshCoworkStorePort,
+  DshGoalCommandKind,
   DshRuntimeAdapter,
+  extractGoalFromDshPayload,
+  extractGoalFromProjections,
   isDshBackedSessionId,
   resolveUnlockedCapabilitiesForTurn,
+  translateLobsterGoalCommandToDsh,
 } from './dshRuntimeAdapter';
 
 function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
@@ -63,6 +70,7 @@ function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
     updateSession: (_sid, updates) => {
       if (updates.claudeSessionId !== undefined) session.claudeSessionId = updates.claudeSessionId;
       if (updates.modelOverride !== undefined) session.modelOverride = updates.modelOverride;
+      if (updates.goal !== undefined) session.goal = updates.goal;
     },
     getContinuityCapsule: () => ({
       version: 1,
@@ -1116,5 +1124,676 @@ describe('DshRuntimeAdapter', () => {
     expect(messages.some(m => m.type === 'assistant' && m.content === '博客自动发布已完成发布。')).toBe(true);
     const toolResult = messages.find(m => m.type === 'tool_result');
     expect(toolResult?.metadata?.subagentRunId).toBe('dsh:child-blog-1');
+  });
+
+  test('translates LobsterAI /goal syntax to DSH parseGoalCommand grammar for fresh, active, and complete goals', () => {
+    const activeGoal: CoworkGoal = {
+      id: 'goal-1',
+      objective: 'Old goal',
+      status: CoworkGoalStatus.Active,
+      createdAt: 1000,
+      updatedAt: 1000,
+      tokensUsed: 0,
+    };
+    const completeGoal: CoworkGoal = {
+      ...activeGoal,
+      status: CoworkGoalStatus.Complete,
+      completedAt: 2000,
+    };
+
+    expect(translateLobsterGoalCommandToDsh('/goal start Build a release checklist', null)).toEqual({
+      kind: DshGoalCommandKind.Create,
+      line: '/goal Build a release checklist',
+      objective: 'Build a release checklist',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal set Ship v2', null)).toEqual({
+      kind: DshGoalCommandKind.Create,
+      line: '/goal Ship v2',
+      objective: 'Ship v2',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal set Updated objective', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Edit,
+      line: '/goal edit Updated objective',
+      objective: 'Updated objective',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal edit New goal after done', completeGoal)).toEqual({
+      kind: DshGoalCommandKind.Create,
+      line: '/goal New goal after done',
+      objective: 'New goal after done',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal pause', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Pause,
+      line: '/goal pause',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal resume', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Resume,
+      line: '/goal resume',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal clear', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Clear,
+      line: '/goal clear',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal status', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Show,
+      line: '/goal',
+    });
+  });
+
+  test('parses REAL DSH 0.2.2 nested goal projections and goal/change payloads (plus legacy flat fallback)', () => {
+    const realDshProjection = {
+      seq: 12,
+      values: {
+        goal: {
+          goal: {
+            id: 'goal-uuid-1',
+            revision: 3,
+            objective: 'Build a release checklist',
+            phase: 'blocked',
+            maxGoalRounds: 256,
+            blockedReason: {
+              code: 'missing-credentials',
+              message: 'Need npm publish token',
+            },
+          },
+          roundsStarted: 4,
+          createdAt: 1700000000000,
+          updatedAt: 1700000005000,
+        },
+      },
+    };
+    expect(extractGoalFromProjections(realDshProjection)).toEqual({
+      id: 'goal-uuid-1',
+      objective: 'Build a release checklist',
+      status: CoworkGoalStatus.Blocked,
+      createdAt: 1700000000000,
+      updatedAt: 1700000005000,
+      blockedAt: 1700000005000,
+      tokensUsed: 0,
+      continuationTurns: 4,
+      lastStatusNote: 'Need npm publish token',
+    });
+
+    expect(extractGoalFromDshPayload({
+      kind: 'goal/change',
+      version: 1,
+      operation: 'clear',
+      cleared: { id: 'goal-uuid-1', revision: 4 },
+      clearedAt: 1700000009000,
+    })).toBeNull();
+
+    expect(extractGoalFromProjections({
+      values: {
+        goal: {
+          id: 'legacy-flat-1',
+          text: 'Legacy objective',
+          status: 'paused',
+          createdAt: 100,
+          updatedAt: 200,
+          tokensUsed: 55,
+        },
+      },
+    })).toEqual({
+      id: 'legacy-flat-1',
+      objective: 'Legacy objective',
+      status: CoworkGoalStatus.Paused,
+      createdAt: 100,
+      updatedAt: 200,
+      pausedAt: 200,
+      tokensUsed: 55,
+    });
+  });
+
+  test('includes legacy session goal and latest todo/plan items in Lazy Context Bridge', () => {
+    const legacyGoal: CoworkGoal = {
+      id: 'g-old',
+      objective: 'Complete release migration',
+      status: CoworkGoalStatus.Paused,
+      createdAt: 1000,
+      updatedAt: 2000,
+      tokensUsed: 0,
+      lastStatusNote: 'Waiting for QA sign-off',
+    };
+    const prefix = buildLazyContextBridgePrefix(
+      null,
+      [
+        { id: 'm1', type: 'user', content: 'Plan the release', timestamp: 1 },
+        {
+          id: 'm2',
+          type: 'tool_use',
+          content: 'TodoWrite',
+          timestamp: 2,
+          metadata: {
+            toolName: 'TodoWrite',
+            toolInput: {
+              todos: [
+                { content: 'Fix /goal routing', status: 'completed' },
+                { content: 'Verify E2E with real DSH', status: 'in_progress' },
+              ],
+            },
+          },
+        },
+      ],
+      legacyGoal,
+    );
+    expect(prefix).toContain('[历史会话目标]');
+    expect(prefix).toContain('Complete release migration');
+    expect(prefix).toContain('Waiting for QA sign-off');
+    expect(prefix).toContain('[历史任务清单/计划]');
+    expect(prefix).toContain('[completed] Fix /goal routing');
+    expect(prefix).toContain('[in_progress] Verify E2E with real DSH');
+  });
+
+  test('routes runGoalCommand and startSession(/goal ...) via executeCommand, handles multi-round goal/change, and supports legacy sessions', async () => {
+    const { store, session, messages } = createInMemoryStore({
+      id: 'cw-goal-legacy',
+      cwd: '/tmp/work',
+      claudeSessionId: 'agent:main:legacy-openclaw',
+      goal: {
+        id: 'old-goal',
+        objective: 'Legacy objective',
+        status: CoworkGoalStatus.Paused,
+        createdAt: 1000,
+        updatedAt: 1000,
+        tokensUsed: 0,
+      },
+      messages: [
+        { id: 'u-old', type: 'user', content: 'Previous legacy turn', timestamp: 1 },
+        {
+          id: 't-old',
+          type: 'tool_use',
+          content: 'update_plan',
+          timestamp: 2,
+          metadata: {
+            toolName: 'update_plan',
+            toolInput: {
+              explanation: 'Migration checklist',
+              plan: [{ step: 'Run E2E tests', status: 'pending' }],
+            },
+          },
+        },
+      ],
+    });
+
+    const executeCommand = vi.fn(async () => ({
+      commandId: 'cmd-1',
+      result: { kind: 'success' as const, text: 'Goal created' },
+    }));
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const clientEmitter = new EventEmitter();
+
+    const fakeClient = Object.assign(clientEmitter, {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-goal-1' })),
+      executeCommand,
+      promptSession,
+      getSessionProjections: vi.fn(async () => ({
+        values: {
+          goal: {
+            goal: {
+              id: 'goal-dsh-1',
+              revision: 1,
+              objective: 'Legacy objective',
+              phase: 'active',
+              maxGoalRounds: 256,
+            },
+            roundsStarted: 0,
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        },
+      })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield {
+          type: 'event',
+          event: {
+            type: 'goal/change',
+            seq: 1,
+            data: {
+              kind: 'goal/change',
+              version: 1,
+              operation: 'create',
+              goal: {
+                id: 'goal-dsh-1',
+                revision: 1,
+                objective: 'Legacy objective',
+                phase: 'active',
+                maxGoalRounds: 256,
+              },
+              roundsStarted: 0,
+              createdAt: 1000,
+              updatedAt: 1000,
+            },
+          },
+        };
+        // Round 1 completes while goal stays armed -> stream stays open for Round 2!
+        yield { type: 'event', event: { type: 'turn/start', seq: 2, data: { turn: 1 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'user/message',
+            seq: 3,
+            data: { source: { kind: 'goal', goalId: 'goal-dsh-1', revision: 1, round: 1 } },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 4,
+            data: { turn: 1, message: { content: [{ type: 'text', text: 'Round 1 done' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 5, data: { turn: 1, reason: { kind: 'stop' } } } };
+
+        // Round 2 marks goal complete -> turn/end closes the follow stream cleanly!
+        yield { type: 'event', event: { type: 'turn/start', seq: 6, data: { turn: 2 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'user/message',
+            seq: 7,
+            data: { source: { kind: 'goal', goalId: 'goal-dsh-1', revision: 1, round: 2 } },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'goal/change',
+            seq: 8,
+            data: {
+              kind: 'goal/change',
+              version: 1,
+              operation: 'complete',
+              goal: {
+                id: 'goal-dsh-1',
+                revision: 2,
+                objective: 'Legacy objective',
+                phase: 'complete',
+                maxGoalRounds: 256,
+              },
+              roundsStarted: 2,
+              createdAt: 1000,
+              updatedAt: 2000,
+            },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 9,
+            data: { turn: 2, message: { content: [{ type: 'text', text: 'Round 2 complete!' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 10, data: { turn: 2, reason: { kind: 'stop' } } } };
+      }),
+    }) as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const goalEvents: Array<CoworkGoal | null> = [];
+    const statuses: string[] = [];
+    adapter.on('goalUpdate', (_sid, g) => goalEvents.push(g));
+    adapter.on('sessionStatus', (_sid, st) => statuses.push(st));
+
+    const resumed = await adapter.runGoalCommand('cw-goal-legacy', '/goal resume');
+    expect(resumed?.objective).toBe('Legacy objective');
+    expect(executeCommand).toHaveBeenCalledWith({
+      agentId: 'dsh-goal-1',
+      line: '/goal Legacy objective',
+      submittedAttachments: [],
+    });
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(bindSessionContext).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'dsh-goal-1',
+      customSystemPrompt: expect.stringContaining('Run E2E tests'),
+    }));
+
+    await vi.waitFor(() => {
+      expect(adapter.isSessionActive('cw-goal-legacy')).toBe(false);
+    });
+    expect(session.goal?.status).toBe(CoworkGoalStatus.Complete);
+    expect(session.goal?.continuationTurns).toBe(2);
+    expect(messages.some((m) => m.content === 'Round 1 done')).toBe(true);
+    expect(messages.some((m) => m.content === 'Round 2 complete!')).toBe(true);
+    expect(statuses.at(-1)).toBe('completed');
+    expect(goalEvents.some((g) => g?.status === CoworkGoalStatus.Complete)).toBe(true);
+  });
+
+  test('always binds explicit customSystemPrompt so turning off Plan Mode clears previous turn prompt', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-plan-sticky',
+      cwd: '/tmp/work',
+      systemPrompt: '',
+    });
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-plan-1' })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await adapter.startSession('cw-plan-sticky', 'Plan first', {
+      systemPrompt: '# Plan Mode\nDo not write files.',
+    });
+    expect(bindSessionContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      customSystemPrompt: '# Plan Mode\nDo not write files.',
+    }));
+
+    // Turn 2: Confirm & Execute turns off Plan Mode (`systemPrompt: ''`).
+    await adapter.continueSession('cw-plan-sticky', 'Confirm & Execute', {
+      systemPrompt: '',
+    });
+    expect(bindSessionContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      customSystemPrompt: '',
+    }));
+  });
+
+  test('submitSteer finalizes pre-steer assistant text above steer bubble and falls back cleanly when turn already ended', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-steer',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-steer-1`,
+    });
+
+    let releaseAfterSteer!: () => void;
+    const steerGate = new Promise<void>((resolve) => {
+      releaseAfterSteer = resolve;
+    });
+    let followCount = 0;
+
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const fakeClient = {
+      promptSession,
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        followCount += 1;
+        if (followCount === 1) {
+          yield { type: 'assistant-stream', frame: { type: 'start' } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'Before steer' } } };
+          await steerGate;
+          // Step 1's committed assistant/message matching flushed pre-steer text must NOT duplicate.
+          yield {
+            type: 'event',
+            event: {
+              type: 'assistant/message',
+              seq: 2,
+              data: { message: { content: [{ type: 'text', text: 'Before steer' }] } },
+            },
+          };
+          // Step 2 streams post-steer answer in a NEW assistant bubble below the steer message.
+          yield { type: 'assistant-stream', frame: { type: 'start' } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'After steer' } } };
+          yield { type: 'assistant-stream', frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/message', seq: 3 } } };
+          yield { type: 'event', event: { type: 'turn/end', seq: 4, data: {} } };
+          return;
+        }
+        // Second turn started by idle-turn steer fallback.
+        yield { type: 'assistant-stream', frame: { type: 'start' } };
+        yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'Fallback reply' } } };
+        yield { type: 'assistant-stream', frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/message', seq: 5 } } };
+        yield { type: 'event', event: { type: 'turn/end', seq: 6, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const turn1 = adapter.continueSession('cw-steer', 'Initial question');
+    await vi.waitFor(() => {
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Before steer')).toBe(true);
+    });
+
+    const midSteer = await adapter.submitSteer('cw-steer', 'Change direction', 'steer-1');
+    expect(midSteer).toEqual({
+      success: true,
+      status: CoworkSteerStatus.Accepted,
+      clientSteerId: 'steer-1',
+    });
+    releaseAfterSteer();
+    await turn1;
+
+    expect(messages.map((m) => ({
+      type: m.type,
+      content: m.content,
+      isStreaming: m.metadata?.isStreaming,
+    }))).toEqual([
+      { type: 'user', content: 'Initial question', isStreaming: undefined },
+      { type: 'assistant', content: 'Before steer', isStreaming: false },
+      { type: 'user', content: 'Change direction', isStreaming: undefined },
+      { type: 'assistant', content: 'After steer', isStreaming: false },
+    ]);
+
+    // Idle-turn race: turn already finished before steer arrives -> falls back cleanly to continueSession.
+    expect(adapter.isSessionActive('cw-steer')).toBe(false);
+    const lateSteer = await adapter.submitSteer('cw-steer', 'Late steer', 'steer-2');
+    expect(lateSteer).toEqual({
+      success: true,
+      status: CoworkSteerStatus.Accepted,
+      clientSteerId: 'steer-2',
+    });
+    await vi.waitFor(() => {
+      expect(adapter.isSessionActive('cw-steer')).toBe(false);
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Fallback reply')).toBe(true);
+    });
+    expect(promptSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 'queue',
+      requestId: 'steer-2',
+    }));
+  });
+
+  test('ignores delayed interrupted assistant/message and aborted turn/end even after cancelSession RPC already resolved', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-queue-delayed-abort',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    let followInvocation = 0;
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-q-race-1' })),
+      // cancelSession acks immediately (clearing pendingCancels long before continueSession runs).
+      cancelSession: vi.fn(async () => ({ accepted: true })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* (_req: unknown, signal?: AbortSignal) {
+        followInvocation += 1;
+        if (followInvocation === 1) {
+          yield { type: 'event', event: { type: 'turn/start', seq: 1, data: { turn: 1 } } };
+          yield { type: 'assistant-stream', frame: { type: 'start', turn: 1 } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', turn: 1, chunk: { type: 'text-delta', index: 0, text: 'Turn 1 partial' } } };
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted) {
+              resolve();
+              return;
+            }
+            signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          return;
+        }
+        // Delayed Turn 1 interrupted assistant/message AND Turn 1 aborted turn/end arrive on Turn 2's stream!
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 2,
+            data: { turn: 1, interrupted: true, message: { content: [{ type: 'text', text: 'Turn 1 partial' }] } },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'turn/end',
+            seq: 3,
+            data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+          },
+        };
+        // Then Turn 2 runs and completes cleanly!
+        yield { type: 'event', event: { type: 'turn/start', seq: 4, data: { turn: 2 } } };
+        yield { type: 'assistant-stream', frame: { type: 'start', turn: 2 } };
+        yield { type: 'assistant-stream', frame: { type: 'chunk', turn: 2, chunk: { type: 'text-delta', index: 0, text: 'Turn 2 queued answer' } } };
+        yield { type: 'assistant-stream', frame: { type: 'end', turn: 2, outcome: { kind: 'committed', eventType: 'assistant/message', seq: 5 } } };
+        yield { type: 'event', event: { type: 'turn/end', seq: 6, data: { turn: 2, reason: { kind: 'stop' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const completed: string[] = [];
+    adapter.on('complete', (sid) => completed.push(sid));
+
+    const turn1Promise = adapter.startSession('cw-queue-delayed-abort', 'slow turn 1');
+    await vi.waitFor(() => {
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Turn 1 partial')).toBe(true);
+    });
+
+    adapter.stopSession('cw-queue-delayed-abort');
+    await turn1Promise;
+    // Allow cancelSession promise microtask & finally() cleanup to delete pendingCancels!
+    await new Promise((r) => setTimeout(r, 15));
+
+    await adapter.continueSession('cw-queue-delayed-abort', 'urgent queued turn 2');
+
+    expect(completed).toEqual(['cw-queue-delayed-abort']);
+    expect(messages.filter((m) => m.type === 'assistant' && m.content === 'Turn 1 partial')).toHaveLength(1);
+    expect(messages.some((m) => m.type === 'assistant' && m.content === 'Turn 2 queued answer')).toBe(true);
+  });
+
+  test('routes startSession(/goal ...) via executeCommand with attachments and exits cleanly when goal disarms between rounds', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-start-goal',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    const clientEmitter = new EventEmitter();
+    const executeCommand = vi.fn(async () => ({
+      commandId: 'cmd-start-1',
+      result: { kind: 'success' as const, text: 'Goal created' },
+    }));
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const fakeClient = Object.assign(clientEmitter, {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-start-goal-1' })),
+      executeCommand,
+      promptSession,
+      getSessionProjections: vi.fn(async () => ({
+        values: {
+          goal: {
+            goal: {
+              id: 'goal-start-1',
+              revision: 1,
+              objective: 'Ship onboarding',
+              phase: 'active',
+              maxGoalRounds: 256,
+            },
+            roundsStarted: 0,
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        },
+      })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* (_req: unknown, signal?: AbortSignal) {
+        yield { type: 'event', event: { type: 'turn/start', seq: 1, data: { turn: 1 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 2,
+            data: { turn: 1, message: { content: [{ type: 'text', text: 'Round 1 note' }] } },
+          },
+        };
+        // Turn 1 ends while goal is still armed -> waits for next round or disarm.
+        yield { type: 'event', event: { type: 'turn/end', seq: 3, data: { turn: 1, reason: { kind: 'stop' } } } };
+        // Simulate DSH disarming between rounds via forwarded remote event.
+        queueMicrotask(() => {
+          clientEmitter.emit('remote:goal/activation-changed', {
+            sessionId: 'dsh-start-goal-1',
+            goal: { id: 'goal-start-1', revision: 1, activation: 'disarmed' },
+          });
+        });
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }),
+    }) as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const completed: string[] = [];
+    adapter.on('complete', (sid) => completed.push(sid));
+
+    await adapter.startSession('cw-start-goal', '/goal start Ship onboarding', {
+      imageAttachments: [
+        { name: 'mock.png', mimeType: 'image/png', base64Data: 'iVBORw0KGgo=', sizeBytes: 8 },
+      ],
+    });
+
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(executeCommand).toHaveBeenCalledWith({
+      agentId: 'dsh-start-goal-1',
+      line: '/goal Ship onboarding',
+      submittedAttachments: [
+        { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'mock.png' },
+      ],
+    });
+    expect(session.goal?.objective).toBe('Ship onboarding');
+    expect(adapter.isSessionActive('cw-start-goal')).toBe(false);
+    expect(completed).toEqual(['cw-start-goal']);
   });
 });

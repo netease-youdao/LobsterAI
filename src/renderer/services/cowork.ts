@@ -21,7 +21,7 @@ import {
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
-import { normalizeCoworkGoal } from '../../shared/cowork/goal';
+import { CoworkGoalStatus, normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
   CoworkMessageEditRequest,
@@ -1569,11 +1569,6 @@ class CoworkService {
     const command = options.command.trim();
     const action = command.split(/\s+/, 2)[1] ?? 'status';
     const normalizedAction = action.toLowerCase();
-    const mayStartRun =
-      normalizedAction === 'start'
-      || normalizedAction === 'create'
-      || normalizedAction === 'set'
-      || normalizedAction === 'resume';
     this.logDiagnostic(
       'debug',
       `running goal command for session ${options.sessionId}, action ${action}`,
@@ -1586,6 +1581,16 @@ class CoworkService {
       session => session.id === options.sessionId,
     );
     const previousStatus = currentSessionBeforeGoalCommand?.status ?? listedSessionBeforeGoalCommand?.status;
+    const existingGoal = currentSessionBeforeGoalCommand?.goal ?? listedSessionBeforeGoalCommand?.goal ?? null;
+    const hasNonCompleteGoal = Boolean(existingGoal && existingGoal.status !== CoworkGoalStatus.Complete);
+    const isNonStartingAction =
+      normalizedAction === 'status'
+      || normalizedAction === 'pause'
+      || normalizedAction === 'clear'
+      || normalizedAction === 'edit';
+    const mayStartRun =
+      normalizedAction === 'resume'
+      || (!isNonStartingAction && !hasNonCompleteGoal);
     if (mayStartRun) {
       this.setCurrentSessionStreaming(options.sessionId, true, 'goal_command_requested');
       store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
@@ -1613,6 +1618,19 @@ class CoworkService {
     }
 
     store.dispatch(updateSessionGoal({ sessionId: options.sessionId, goal: result.goal ?? null }));
+    if (mayStartRun && result.isRunning === false) {
+      const latestCoworkState = store.getState().cowork;
+      const latestStatus = latestCoworkState.currentSession?.id === options.sessionId
+        ? latestCoworkState.currentSession.status
+        : latestCoworkState.sessions.find(session => session.id === options.sessionId)?.status;
+      if (latestStatus === 'running') {
+        this.setCurrentSessionStreaming(options.sessionId, false, 'goal_command_no_turn');
+        store.dispatch(updateSessionStatus({
+          sessionId: options.sessionId,
+          status: previousStatus && previousStatus !== 'running' ? previousStatus : 'idle',
+        }));
+      }
+    }
     return true;
   }
 

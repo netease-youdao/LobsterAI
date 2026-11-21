@@ -277,6 +277,33 @@ export interface DshSessionUpdateQueueParams {
     | { kind: 'steer' };
 }
 
+export type DshCommandSubmitAttachment =
+  | {
+      type: 'image';
+      mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+      data: string;
+      name?: string;
+    }
+  | {
+      type: 'file';
+      receiptId: string;
+    };
+
+export interface DshExecuteCommandParams {
+  agentId: string;
+  line: string;
+  submittedAttachments?: DshCommandSubmitAttachment[];
+}
+
+export type DshCommandResult =
+  | { kind: 'success'; text?: string; sourceEventSeq?: number }
+  | { kind: 'error'; text: string };
+
+export interface DshCommandExecution {
+  commandId: string;
+  result: DshCommandResult;
+}
+
 export class DshTypertClient extends EventEmitter {
   private readonly runtimePid?: number;
   private readonly requester: DshHttpRequester;
@@ -555,6 +582,21 @@ export class DshTypertClient extends EventEmitter {
 
   updateQueue(params: DshSessionUpdateQueueParams): Promise<{ accepted: boolean }> {
     return this.call('session/updateQueue', { request: params });
+  }
+
+  executeCommand(
+    params: DshExecuteCommandParams,
+    signal?: AbortSignal,
+  ): Promise<DshCommandExecution | undefined> {
+    return this.call<DshCommandExecution | undefined>(
+      'commands/execute',
+      {
+        agentId: params.agentId,
+        line: params.line,
+        submittedAttachments: params.submittedAttachments ?? [],
+      },
+      signal,
+    );
   }
 
   getSessionState(sessionId: string): Promise<Record<string, unknown>> {

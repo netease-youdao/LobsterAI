@@ -10233,7 +10233,8 @@ if (!gotTheLock) {
         `Action ${action}.`,
       );
       const goal = await runtime.runGoalCommand(sessionId, command);
-      return { success: true, goal };
+      const isRunning = runtime.isSessionActive(sessionId);
+      return { success: true, goal, isRunning };
     } catch (error) {
       console.error('[CoworkGoal] goal command IPC failed:', error);
       return {
