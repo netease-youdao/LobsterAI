@@ -1221,6 +1221,164 @@ export function dismissMigrationV2Report(db: Database.Database): void {
   }
 }
 
+const LEGACY_MCP_PACKAGES_SEGMENT_RE = /([\\/])openclaw[\\/]mcp-packages(?=$|[\\/])/gi;
+const OPENCLAW_PATH_SEGMENT_RE = /(?:^|[\\/])openclaw(?:$|[\\/])/i;
+
+function rewriteLegacyMcpPackagePath(value: string): string {
+  return value.replace(LEGACY_MCP_PACKAGES_SEGMENT_RE, '$1mcp-packages');
+}
+
+function relocateLegacyMcpPackagesDir(
+  legacyDir: string,
+  targetDir: string,
+): { movedWholeDir: boolean } {
+  if (!fs.existsSync(legacyDir)) {
+    return { movedWholeDir: false };
+  }
+  if (!fs.existsSync(targetDir)) {
+    try {
+      fs.renameSync(legacyDir, targetDir);
+      return { movedWholeDir: true };
+    } catch {
+      // Fall through to per-entry copy/move if atomic rename fails (e.g. EXDEV).
+    }
+  }
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(legacyDir, { withFileTypes: true })) {
+    const from = path.join(legacyDir, entry.name);
+    const to = path.join(targetDir, entry.name);
+    if (fs.existsSync(to)) continue;
+    try {
+      fs.renameSync(from, to);
+    } catch {
+      fs.cpSync(from, to, { recursive: true, force: false });
+      fs.rmSync(from, { recursive: true, force: true });
+    }
+  }
+  return { movedWholeDir: false };
+}
+
+function migrateLegacyMcpLaunchResolutions(db: Database.Database): {
+  rewritten: number;
+  cleared: number;
+} {
+  if (!tableExists(db, 'mcp_launch_resolutions')) {
+    return { rewritten: 0, cleared: 0 };
+  }
+  const cols = getTableColumns(db, 'mcp_launch_resolutions');
+  const pathCols = ['install_dir', 'command', 'args_json', 'resolved_path'].filter((c) => cols.has(c));
+  if (pathCols.length === 0) {
+    return { rewritten: 0, cleared: 0 };
+  }
+
+  const keyCol = cols.has('server_id') ? 'server_id' : 'rowid';
+  const selectCols = [keyCol, ...pathCols].join(', ');
+  const whereClause = pathCols
+    .map((c) => `LOWER(COALESCE(${c}, '')) LIKE '%openclaw%' OR LOWER(COALESCE(${c}, '')) LIKE '%mcp-packages%'`)
+    .join(' OR ');
+
+  const rows = db
+    .prepare(`SELECT ${selectCols} FROM mcp_launch_resolutions WHERE ${whereClause}`)
+    .all() as Array<Record<string, unknown>>;
+
+  let rewritten = 0;
+  let cleared = 0;
+
+  const deleteStmt = db.prepare(`DELETE FROM mcp_launch_resolutions WHERE ${keyCol} = ?`);
+  const setClause = pathCols.map((c) => `${c} = ?`).join(', ');
+  const updateStmt = db.prepare(`UPDATE mcp_launch_resolutions SET ${setClause} WHERE ${keyCol} = ?`);
+
+  for (const row of rows) {
+    const keyVal = row[keyCol];
+    const nextValues: Record<string, string | null> = {};
+    let broken = false;
+    let parsedArgs: string[] | null = null;
+
+    for (const col of pathCols) {
+      const raw = row[col];
+      if (raw === null || raw === undefined) {
+        nextValues[col] = null;
+        continue;
+      }
+      const str = String(raw);
+      if (col === 'args_json') {
+        try {
+          const parsed = JSON.parse(str) as unknown;
+          if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+            broken = true;
+            break;
+          }
+          const nextArgs = (parsed as string[]).map((arg) => rewriteLegacyMcpPackagePath(arg));
+          if (nextArgs.some((arg) => OPENCLAW_PATH_SEGMENT_RE.test(arg))) {
+            broken = true;
+            break;
+          }
+          parsedArgs = nextArgs;
+          nextValues[col] = JSON.stringify(nextArgs);
+        } catch {
+          broken = true;
+          break;
+        }
+      } else {
+        const nextStr = rewriteLegacyMcpPackagePath(str);
+        if (OPENCLAW_PATH_SEGMENT_RE.test(nextStr)) {
+          broken = true;
+          break;
+        }
+        nextValues[col] = nextStr;
+      }
+    }
+
+    if (!broken) {
+      const nextInstallDir = nextValues.install_dir;
+      const nextCommand = nextValues.command;
+      const nextResolvedPath = nextValues.resolved_path;
+      const primaryBinArg = parsedArgs && parsedArgs.length > 0 ? parsedArgs[0] : null;
+
+      let verifiedTargetBinary = false;
+      if (nextInstallDir && !fs.existsSync(nextInstallDir)) {
+        broken = true;
+      }
+      if (!broken && nextResolvedPath) {
+        if (fs.existsSync(nextResolvedPath)) {
+          verifiedTargetBinary = true;
+        } else {
+          broken = true;
+        }
+      }
+      if (!broken && primaryBinArg) {
+        if (fs.existsSync(primaryBinArg)) {
+          verifiedTargetBinary = true;
+        } else {
+          broken = true;
+        }
+      }
+      if (!broken && nextCommand && path.isAbsolute(nextCommand)) {
+        if (fs.existsSync(nextCommand)) {
+          if (!primaryBinArg) verifiedTargetBinary = true;
+        } else {
+          broken = true;
+        }
+      }
+      if (!verifiedTargetBinary) {
+        broken = true;
+      }
+    }
+
+    if (broken) {
+      const res = deleteStmt.run(keyVal);
+      cleared += res.changes;
+      continue;
+    }
+
+    const params = [...pathCols.map((c) => nextValues[c] ?? null), keyVal];
+    updateStmt.run(...params);
+    rewritten += 1;
+  }
+
+  return { rewritten, cleared };
+}
+
 /**
  * Run the 6-step pure offline atomic OpenClaw -> DSH migration.
  */
@@ -1278,6 +1436,10 @@ export function runLegacyOpenClawMigration(
     db.close();
     fs.copyFileSync(sqlitePath, sqliteSnapshotPath);
     db = new Database(sqlitePath);
+
+    const legacyMcpPackagesDir = path.join(openclawRootDir, 'mcp-packages');
+    const targetMcpPackagesDir = path.join(userDataDir, 'mcp-packages');
+    let mcpPackagesMovedWholeDir = false;
 
     try {
       const incompatibleEntries: TarEntryInput[] = [];
@@ -1340,19 +1502,16 @@ export function runLegacyOpenClawMigration(
         });
       }
 
-      // Clear stale `mcp_launch_resolutions` pointing to `openclaw/mcp-packages`.
-      let mcpLaunchCachesCleared = 0;
-      if (tableExists(db, 'mcp_launch_resolutions')) {
-        const cols = getTableColumns(db, 'mcp_launch_resolutions');
-        const pathCols = ['install_dir', 'command', 'args_json', 'resolved_path'].filter((c) => cols.has(c));
-        if (pathCols.length > 0) {
-          const whereClause = pathCols
-            .map((c) => `LOWER(COALESCE(${c}, '')) LIKE '%openclaw%' OR LOWER(COALESCE(${c}, '')) LIKE '%mcp-packages%'`)
-            .join(' OR ');
-          const res = db.prepare(`DELETE FROM mcp_launch_resolutions WHERE ${whereClause}`).run();
-          mcpLaunchCachesCleared = res.changes;
-        }
-      }
+      // Relocate cached MCP packages out of `openclaw/mcp-packages` to
+      // `<userData>/mcp-packages` and rewrite valid `mcp_launch_resolutions`
+      // paths in place so offline upgrades reuse installed binaries; delete
+      // only broken rows whose target binary no longer exists.
+      const relocateMcpResult = relocateLegacyMcpPackagesDir(
+        legacyMcpPackagesDir,
+        targetMcpPackagesDir,
+      );
+      mcpPackagesMovedWholeDir = relocateMcpResult.movedWholeDir;
+      const { cleared: mcpLaunchCachesCleared } = migrateLegacyMcpLaunchResolutions(db);
 
       // Inspect Remote MCP OAuth servers needing reauth after migration.
       if (tableExists(db, 'mcp_servers')) {
@@ -1495,7 +1654,6 @@ export function runLegacyOpenClawMigration(
       let disposableBytesFreed = 0;
       const disposableDirs = [
         path.join(openclawRootDir, 'logs'),
-        path.join(openclawRootDir, 'mcp-packages'),
         path.join(openclawRootDir, '.compile-cache'),
         path.join(openclawRootDir, 'repair-backups'),
         path.join(openclawStateDir, '.compile-cache'),
@@ -1584,6 +1742,17 @@ export function runLegacyOpenClawMigration(
         }
       } catch {
         // best-effort rollback
+      }
+      if (
+        mcpPackagesMovedWholeDir
+        && !fs.existsSync(legacyMcpPackagesDir)
+        && fs.existsSync(targetMcpPackagesDir)
+      ) {
+        try {
+          fs.renameSync(targetMcpPackagesDir, legacyMcpPackagesDir);
+        } catch {
+          // best-effort rollback
+        }
       }
       return {
         status: MigrationV2Status.Failed,

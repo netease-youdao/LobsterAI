@@ -259,6 +259,18 @@ export interface DshHostManagerOptions {
   clientFactory?: () => DshTypertClient;
   /** Set true in pure Node tests when running plain node instead of Electron binary. */
   skipElectronRunAsNode?: boolean;
+  /** Optional resolver returning runtime PATH dirs and env vars at spawn time (e.g. Node/npx shims, Python runtime). */
+  resolveRuntimeEnv?: () => {
+    prependPathDirs?: string[];
+    extraPathDirs?: string[];
+    extraEnv?: Record<string, string>;
+  };
+  /** Additional PATH entries prepended after the bundled package-manager directory. */
+  prependPathDirs?: string[];
+  /** Additional PATH entries appended as runtime fallbacks (e.g. bundled Electron Node/npx shims). */
+  extraPathDirs?: string[];
+  /** Additional non-DSH runtime environment variables merged into the DSH child env. */
+  extraEnv?: Record<string, string>;
 }
 
 const DEFAULT_BOOT_TIMEOUT_MS = 35_000;
@@ -293,6 +305,29 @@ export function resolveBundledDshPaths(options: {
   return { runtimeDir, hostBundleDir, channelsBundleDir };
 }
 
+function mergeDedupPathEntries(
+  delimiter: string,
+  groups: Array<readonly string[] | undefined>,
+): string {
+  const isWin = delimiter === ';';
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const group of groups) {
+    if (!group) continue;
+    for (const rawEntry of group) {
+      const trimmed = rawEntry.trim();
+      if (!trimmed) continue;
+      const key = isWin ? trimmed.toLowerCase().replace(/[\\/]+$/, '') : trimmed;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(trimmed);
+    }
+  }
+
+  return merged.join(delimiter);
+}
+
 /**
  * Build a strictly isolated environment for LobsterAI's embedded DSH child
  * process so a co-installed standalone native DSH (using `~/.dsh`, `~/.agents`,
@@ -310,12 +345,27 @@ export function buildIsolatedDshChildEnv(params: {
   runtimeDir: string;
   instanceId?: string;
   skipElectronRunAsNode?: boolean;
+  prependPathDirs?: string[];
+  extraPathDirs?: string[];
+  extraEnv?: Record<string, string>;
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(params.baseEnv ?? process.env)) {
     // Strip any inherited native DSH or global pnpm/npm store overrides.
     if (/^dsh_/i.test(key)) continue;
     if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+    env[key] = value;
+  }
+
+  const extraEnvPathDirs: string[] = [];
+  for (const [key, value] of Object.entries(params.extraEnv ?? {})) {
+    if (value === undefined) continue;
+    if (/^dsh_/i.test(key)) continue;
+    if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
+    if (key.toLowerCase() === 'path') {
+      extraEnvPathDirs.push(...value.split(path.delimiter));
+      continue;
+    }
     env[key] = value;
   }
 
@@ -336,11 +386,22 @@ export function buildIsolatedDshChildEnv(params: {
   if (params.instanceId) {
     env[DshHostBundleEnvVar.InstanceId] = params.instanceId;
   }
-  // Prepend bundled package-manager dir so `dsh-plugin-manager` finds bundled pnpm.
+
+  // Compose PATH: bundled pnpm first, then runtime prepends (e.g. Windows
+  // Python / packaged Node shim), existing PATH, and runtime fallbacks.
   const pmDir = path.join(params.runtimeDir, 'package-manager');
-  if (fs.existsSync(pmDir)) {
-    const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
-    env[pathKey] = env[pathKey] ? `${pmDir}${path.delimiter}${env[pathKey]}` : pmDir;
+  const pmDirs = fs.existsSync(pmDir) ? [pmDir] : [];
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+  const existingPathDirs = typeof env[pathKey] === 'string' ? env[pathKey].split(path.delimiter) : [];
+  const mergedPath = mergeDedupPathEntries(path.delimiter, [
+    pmDirs,
+    params.prependPathDirs,
+    existingPathDirs,
+    params.extraPathDirs,
+    extraEnvPathDirs,
+  ]);
+  if (mergedPath) {
+    env[pathKey] = mergedPath;
   }
   return env;
 }
@@ -649,7 +710,16 @@ export class DshHostManager extends EventEmitter {
       await this.getClient().callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
     }
     if (this.lastMcpServers) {
-      await this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      const mcpResult = await this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      if (mcpResult && typeof mcpResult === 'object') {
+        if (mcpResult.available === false) {
+          console.warn('[DshHostManager] replay syncMcpServers reported mcpManager unavailable');
+        }
+        const errors = Array.isArray(mcpResult.errors) ? mcpResult.errors : [];
+        if (errors.length > 0) {
+          console.warn(`[DshHostManager] replay syncMcpServers reported ${errors.length} error(s): ${errors.join('; ')}`);
+        }
+      }
     }
     if (this.lastAgents) {
       await this.getClient().callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
@@ -676,6 +746,7 @@ export class DshHostManager extends EventEmitter {
   }
 
   private buildChildEnv(): NodeJS.ProcessEnv {
+    const resolvedRuntimeEnv = this.options.resolveRuntimeEnv?.();
     return buildIsolatedDshChildEnv({
       baseEnv: process.env,
       dshHomeDir: this.dshHomeDir,
@@ -687,6 +758,18 @@ export class DshHostManager extends EventEmitter {
       runtimeDir: this.options.runtimeDir,
       instanceId: this.options.instanceId,
       skipElectronRunAsNode: this.options.skipElectronRunAsNode,
+      prependPathDirs: [
+        ...(this.options.prependPathDirs ?? []),
+        ...(resolvedRuntimeEnv?.prependPathDirs ?? []),
+      ],
+      extraPathDirs: [
+        ...(this.options.extraPathDirs ?? []),
+        ...(resolvedRuntimeEnv?.extraPathDirs ?? []),
+      ],
+      extraEnv: {
+        ...(this.options.extraEnv ?? {}),
+        ...(resolvedRuntimeEnv?.extraEnv ?? {}),
+      },
     });
   }
 

@@ -433,6 +433,7 @@ export class McpRuntime {
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
       const r = await resolveStdioCommand(server);
       resolved.push({
+        id: server.id,
         name: server.name,
         transportType: 'stdio',
         command: r.command,
@@ -450,6 +451,7 @@ export class McpRuntime {
           if (readyResolution) {
             optimizedCount++;
             resolved.push({
+              id: server.id,
               name: server.name,
               transportType: 'stdio',
               command: readyResolution.command,
@@ -503,6 +505,7 @@ export class McpRuntime {
         await pushRawStdioServer(server);
       } else {
         resolved.push({
+          id: server.id,
           name: server.name,
           transportType: server.transportType,
           url: server.url,

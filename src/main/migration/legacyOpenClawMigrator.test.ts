@@ -662,4 +662,85 @@ describe('runLegacyOpenClawMigration', () => {
     });
     db.close();
   });
+
+  test('relocates cached openclaw/mcp-packages to <userData>/mcp-packages and rewrites valid mcp_launch_resolutions rows while clearing broken ones', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const legacyPkgDir = path.join(userDataDir, 'openclaw', 'mcp-packages', 'srv-valid-demo-mcp');
+    const legacyBinPath = path.join(legacyPkgDir, 'node_modules', 'demo-mcp', 'bin.js');
+    fs.mkdirSync(path.dirname(legacyBinPath), { recursive: true });
+    fs.writeFileSync(legacyBinPath, '#!/usr/bin/env node\nconsole.log("ok");\n', 'utf8');
+    fs.mkdirSync(path.join(userDataDir, 'openclaw', 'state'), { recursive: true });
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE mcp_launch_resolutions (
+        server_id TEXT PRIMARY KEY,
+        status TEXT,
+        install_dir TEXT,
+        command TEXT,
+        args_json TEXT
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO mcp_launch_resolutions VALUES (?, ?, ?, ?, ?)').run(
+      'srv-valid',
+      'ready',
+      legacyPkgDir,
+      process.execPath,
+      JSON.stringify([legacyBinPath, '--stdio']),
+    );
+    db.prepare('INSERT INTO mcp_launch_resolutions VALUES (?, ?, ?, ?, ?)').run(
+      'srv-missing-bin',
+      'ready',
+      path.join(userDataDir, 'openclaw', 'mcp-packages', 'srv-missing'),
+      process.execPath,
+      JSON.stringify([path.join(userDataDir, 'openclaw', 'mcp-packages', 'srv-missing', 'bin.js')]),
+    );
+    db.prepare('INSERT INTO mcp_launch_resolutions VALUES (?, ?, ?, ?, ?)').run(
+      'srv-legacy-state',
+      'ready',
+      path.join(userDataDir, 'openclaw', 'state', 'legacy-bin'),
+      'node',
+      JSON.stringify([path.join(userDataDir, 'openclaw', 'state', 'legacy-bin', 'index.js')]),
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-22T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.mcpLaunchCachesCleared).toBe(2);
+
+    const expectedPkgDir = path.join(userDataDir, 'mcp-packages', 'srv-valid-demo-mcp');
+    const expectedBinPath = path.join(expectedPkgDir, 'node_modules', 'demo-mcp', 'bin.js');
+    expect(fs.existsSync(expectedBinPath)).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+
+    const verifyDb = new Database(sqlitePath);
+    const rows = verifyDb
+      .prepare('SELECT server_id, status, install_dir, command, args_json FROM mcp_launch_resolutions')
+      .all() as Array<{
+      server_id: string;
+      status: string;
+      install_dir: string;
+      command: string;
+      args_json: string;
+    }>;
+    verifyDb.close();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      server_id: 'srv-valid',
+      status: 'ready',
+      install_dir: expectedPkgDir,
+      command: process.execPath,
+      args_json: JSON.stringify([expectedBinPath, '--stdio']),
+    });
+  });
 });

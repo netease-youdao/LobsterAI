@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 
 export const name = 'lobster-ops-rpc';
@@ -66,72 +67,79 @@ async function removeSessionDirectories(sessionId) {
 
 export function apply(ctx) {
   const state = getHostState(ctx);
-  /** @type {Map<string, () => void>} */
-  const managedMcpDisposers = new Map();
+  /** @type {Map<string, { fingerprint: string, dispose: () => unknown }>} */
+  const managedMcpEntries = new Map();
+  /** Serialize concurrent `syncMcpServers` RPC calls so map/disposal ops never race. */
+  let mcpSyncTail = Promise.resolve();
 
-  async function syncMcpServers(payload) {
-    const mcpManager = ctx.get('mcpManager');
-    if (!mcpManager) {
-      return { available: false, registered: [], errors: ['mcpManager service is not mounted'] };
-    }
-    const body = payload && typeof payload === 'object' ? payload : {};
-    const servers = Array.isArray(body.servers) ? body.servers : [];
+  const REMOVED_UNMOUNT_WAIT_MS = 5_000;
 
-    // Dispose all previously LobsterAI-managed MCP registrations cleanly.
-    for (const dispose of managedMcpDisposers.values()) {
-      try {
-        await dispose();
-      } catch {
-        // best-effort unmount
-      }
-    }
-    managedMcpDisposers.clear();
-
-    const registered = [];
-    const errors = [];
-    for (const entry of servers) {
-      if (!entry || typeof entry !== 'object') continue;
-      const serverName = String(entry.name || '').trim();
-      if (!serverName || entry.enabled === false) continue;
-
-      const transport = entry.transport === 'streamable-http' ? 'streamable-http' : 'stdio';
-      const config = transport === 'stdio'
-        ? {
-            transport: 'stdio',
-            command: String(entry.command || ''),
-            args: Array.isArray(entry.args) ? entry.args.map(String) : [],
-            env: entry.env && typeof entry.env === 'object'
-              ? Object.fromEntries(Object.entries(entry.env).map(([k, v]) => [k, String(v)]))
-              : {},
-            cwd: typeof entry.cwd === 'string' ? entry.cwd : '',
-            ...(typeof entry.startupTimeoutMs === 'number' ? { startupTimeoutMs: entry.startupTimeoutMs } : {}),
-            ...(typeof entry.toolCallTimeoutMs === 'number' ? { toolCallTimeoutMs: entry.toolCallTimeoutMs } : {}),
-          }
-        : {
-            transport: 'streamable-http',
-            url: String(entry.url || ''),
-            headers: entry.headers && typeof entry.headers === 'object'
-              ? Object.fromEntries(Object.entries(entry.headers).map(([k, v]) => [k, String(v)]))
-              : {},
-            ...(typeof entry.startupTimeoutMs === 'number' ? { startupTimeoutMs: entry.startupTimeoutMs } : {}),
-            ...(typeof entry.toolCallTimeoutMs === 'number' ? { toolCallTimeoutMs: entry.toolCallTimeoutMs } : {}),
-          };
-
-      try {
-        const disposer = mcpManager.register(serverName, config);
-        managedMcpDisposers.set(serverName, disposer);
-        registered.push(serverName);
-      } catch (error) {
-        errors.push(`${serverName}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-
-    return {
-      available: true,
-      registered,
-      errors,
-      statuses: mcpManager.list(),
+  async function waitForRemovedMcpUnmounted(mcpManager, removedNames) {
+    if (!Array.isArray(removedNames) || removedNames.length === 0) return;
+    const isSettled = (views) => {
+      const byName = new Map(views.map((view) => [view.name, view]));
+      return removedNames.every((serverName) => {
+        const view = byName.get(serverName);
+        // Settled once removed from list(), re-configured, or retained only due to failed cleanup.
+        return !view || view.configured === true || view.status?.state === 'failed';
+      });
     };
+
+    if (isSettled(mcpManager.list())) return;
+    if (typeof mcpManager.watch !== 'function') return;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOVED_UNMOUNT_WAIT_MS);
+    timer.unref?.();
+    try {
+      for await (const views of mcpManager.watch(controller.signal)) {
+        if (isSettled(views)) {
+          controller.abort();
+          break;
+        }
+      }
+    } catch {
+      // Ignore abort / stream shutdown errors; bounded best-effort unmount wait.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function syncMcpServers(payload) {
+    const run = mcpSyncTail.then(async () => {
+      const mcpManager = ctx.get('mcpManager');
+      if (!mcpManager) {
+        const errors = ['mcpManager service is not mounted'];
+        ctx.logger.warn('[LobsterAI:OpsRpc] syncMcpServers skipped: mcpManager service is not mounted');
+        return {
+          available: false,
+          registered: [],
+          added: [],
+          updated: [],
+          removed: [],
+          unchanged: [],
+          errors,
+        };
+      }
+      const body = payload && typeof payload === 'object' ? payload : {};
+      const servers = Array.isArray(body.servers) ? body.servers : [];
+
+      const outcome = await reconcileMcpServers({
+        managedEntries: managedMcpEntries,
+        servers,
+        register: (serverName, config) => mcpManager.register(serverName, config),
+        logger: ctx.logger,
+        afterDispose: (removedNames) => waitForRemovedMcpUnmounted(mcpManager, removedNames),
+      });
+
+      return {
+        available: true,
+        ...outcome,
+        statuses: mcpManager.list(),
+      };
+    });
+    mcpSyncTail = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   state.syncMcpServers = syncMcpServers;
@@ -500,12 +508,12 @@ export function apply(ctx) {
   });
 
   ctx.effect(() => async () => {
-    for (const dispose of managedMcpDisposers.values()) {
+    for (const entry of managedMcpEntries.values()) {
       try {
-        await dispose();
+        await entry.dispose();
       } catch {}
     }
-    managedMcpDisposers.clear();
+    managedMcpEntries.clear();
     state.syncMcpServers = null;
     state.pluginsReady.opsRpc = false;
   }, 'lobster-ops-rpc cleanup');

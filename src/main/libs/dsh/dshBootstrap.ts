@@ -51,8 +51,9 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
-import { getElectronNodeRuntimePath } from '../coworkUtil';
+import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../coworkUtil';
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
+import { appendPythonRuntimeToEnv } from '../pythonRuntime';
 import {
   type ApprovalAllowRulePort,
   type HostToolProvider,
@@ -250,6 +251,48 @@ function webOrigin(url: string): string | null {
   }
 }
 
+function resolveDshChildRuntimeEnv(executablePath: string): {
+  prependPathDirs: string[];
+  extraPathDirs: string[];
+  extraEnv: Record<string, string>;
+} {
+  const prependPathDirs: string[] = [];
+  const extraPathDirs: string[] = [];
+  const extraEnv: Record<string, string> = {};
+
+  const npmBinDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+
+  const nodeShimDir = ensureElectronNodeShim(executablePath, npmBinDir);
+  if (nodeShimDir) {
+    if (app.isPackaged || process.platform === 'win32') {
+      prependPathDirs.push(nodeShimDir);
+    } else {
+      extraPathDirs.push(nodeShimDir);
+    }
+    extraEnv.LOBSTERAI_ELECTRON_PATH = executablePath;
+    if (fs.existsSync(npmBinDir)) {
+      extraEnv.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+    }
+  }
+
+  const pyEnv: Record<string, string | undefined> = { PATH: '' };
+  appendPythonRuntimeToEnv(pyEnv);
+  if (pyEnv.PATH) {
+    for (const dir of pyEnv.PATH.split(path.delimiter)) {
+      const trimmed = dir.trim();
+      if (trimmed) prependPathDirs.push(trimmed);
+    }
+  }
+  for (const [key, value] of Object.entries(pyEnv)) {
+    if (key.toLowerCase() === 'path' || !value) continue;
+    extraEnv[key] = value;
+  }
+
+  return { prependPathDirs, extraPathDirs, extraEnv };
+}
+
 export class DshBootstrap {
   readonly runtimeDir: string;
   readonly hostBundleDir: string;
@@ -317,6 +360,7 @@ export class DshBootstrap {
       skillsDir: options.skillsDir,
       executablePath: this.executablePath,
       instanceId: options.instanceId,
+      resolveRuntimeEnv: () => resolveDshChildRuntimeEnv(this.executablePath),
     });
 
     this.channelsBridge = new DshChannelsBridge({
@@ -521,7 +565,16 @@ export class DshBootstrap {
         input.mcpServers,
         this.mcpOAuthManager,
       );
-      await this.hostManager.syncMcpServers(servers);
+      const mcpSyncResult = await this.hostManager.syncMcpServers(servers);
+      if (mcpSyncResult && typeof mcpSyncResult === 'object') {
+        if (mcpSyncResult.available === false) {
+          console.warn('[DshBootstrap] syncMcpServers reported mcpManager unavailable');
+        }
+        const mcpErrors = Array.isArray(mcpSyncResult.errors) ? mcpSyncResult.errors : [];
+        if (mcpErrors.length > 0) {
+          console.warn(`[DshBootstrap] syncMcpServers reported ${mcpErrors.length} error(s): ${mcpErrors.join('; ')}`);
+        }
+      }
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);

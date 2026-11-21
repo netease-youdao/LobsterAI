@@ -2,6 +2,7 @@
 // built-in MCP servers (Office, Computer Use, Web Search, etc.).
 
 export interface ResolvedMcpServer {
+  id?: string;
   name: string;
   transportType: 'stdio' | 'sse' | 'http';
   command?: string;

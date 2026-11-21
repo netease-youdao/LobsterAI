@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   OpenClawApi,
@@ -17,8 +17,15 @@ import {
   buildDshMcpServerSpecs,
   buildDshProvidersPayload,
   buildDshThinkingLevelMap,
+  findInvalidDshTemplateToken,
   normalizeDshMcpServerName,
 } from './dshProviderSync';
+
+const DSH_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('buildDshProvidersPayload', () => {
   test('translates standard API-key providers and routes OAuth/Plan providers through local modelAuthProxy', () => {
@@ -378,5 +385,202 @@ describe('buildDshMcpServerSpecs', () => {
       headers: { Authorization: 'Bearer fresh-tok' },
     });
     expect(result.needsReauthIds).toEqual(['mcp-oauth-expired']);
+    expect(result.warnings).toEqual([]);
+  });
+
+  test('enforces DSH <=32 char pattern, truncates long names deterministically, and differentiates non-ASCII names', async () => {
+    const longAlpha = 'enterprise-filesystem-connector-production-alpha-v2';
+    const longBeta = 'enterprise-filesystem-connector-production-beta-v2';
+    const normAlpha = normalizeDshMcpServerName(longAlpha);
+    const normBeta = normalizeDshMcpServerName(longBeta);
+
+    expect(normAlpha).toMatch(DSH_SERVER_NAME_PATTERN);
+    expect(normBeta).toMatch(DSH_SERVER_NAME_PATTERN);
+    expect(normAlpha.length).toBeLessThanOrEqual(32);
+    expect(normBeta.length).toBeLessThanOrEqual(32);
+    expect(normAlpha).not.toBe(normBeta);
+    expect(normalizeDshMcpServerName(longAlpha)).toBe(normAlpha);
+
+    const exact32 = 'a'.repeat(32);
+    expect(normalizeDshMcpServerName(exact32)).toBe(exact32);
+
+    const result = await buildDshMcpServerSpecs([
+      {
+        id: 'uuid-gaode-1',
+        name: '高德地图',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['gaode.js'],
+      },
+      {
+        id: 'uuid-baidu-2',
+        name: '百度地图',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['baidu.js'],
+      },
+      {
+        id: 'uuid-weather-3',
+        name: '天气查询',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['weather.js'],
+      },
+      {
+        id: 'uuid-dup-1',
+        name: exact32,
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['dup1.js'],
+      },
+      {
+        id: 'uuid-dup-2',
+        name: exact32,
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['dup2.js'],
+      },
+      {
+        id: 'uuid-long-zh-ascii',
+        name: '超长中文前缀-my-enterprise-mcp-server-with-very-long-name-exceeding-limit',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['long.js'],
+      },
+    ]);
+
+    expect(result.servers).toHaveLength(6);
+    const names = result.servers.map((s) => s.name);
+    expect(new Set(names).size).toBe(6);
+    for (const name of names) {
+      expect(name).toMatch(DSH_SERVER_NAME_PATTERN);
+      expect(name.length).toBeLessThanOrEqual(32);
+      expect(name).not.toBe('mcp-server-2');
+    }
+    // Non-ASCII servers keep deterministic names regardless of input ordering.
+    const reversed = await buildDshMcpServerSpecs([
+      {
+        id: 'uuid-weather-3',
+        name: '天气查询',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['weather.js'],
+      },
+      {
+        id: 'uuid-gaode-1',
+        name: '高德地图',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['gaode.js'],
+      },
+    ]);
+    expect(reversed.servers[0].name).toBe(names[2]);
+    expect(reversed.servers[1].name).toBe(names[0]);
+  });
+
+  test('detects invalid DSH template tokens, skips bad template/URL entries with warnings, and forwards per-server timeouts', async () => {
+    expect(findInvalidDshTemplateToken('Bearer ${credential:API_KEY_1}')).toBeNull();
+    expect(findInvalidDshTemplateToken('$PLAIN_VAR')).toBeNull();
+    expect(findInvalidDshTemplateToken('${API_KEY}')).toBe('${API_KEY}');
+    expect(findInvalidDshTemplateToken('$${API_KEY}')).toBe('${API_KEY}');
+    expect(findInvalidDshTemplateToken('${x${credential:A}')).toBe('${x${credential:A}');
+    expect(findInvalidDshTemplateToken('${credential:123}')).toBe('${credential:123}');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await buildDshMcpServerSpecs([
+      {
+        id: 'valid-stdio',
+        name: 'Valid Stdio',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['server.js'],
+        env: { TOKEN: '${credential:VALID_REF}' },
+        requestTimeoutMs: 90_000,
+        connectionTimeoutMs: 15_000,
+      },
+      {
+        id: 'bad-env-template',
+        name: 'Bad Env Template',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['server.js'],
+        env: { API_KEY: '${UNSUPPORTED_ENV_REF}' },
+      },
+      {
+        id: 'bad-arg-template',
+        name: 'Bad Arg Template',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['--fmt', '$${ESCAPED_STILL_REJECTED}'],
+      },
+      {
+        id: 'malformed-url',
+        name: 'Broken Legacy URL',
+        enabled: true,
+        transportType: 'http',
+        url: 'not-a-valid-url',
+      },
+      {
+        id: 'non-http-url',
+        name: 'FTP URL',
+        enabled: true,
+        transportType: 'http',
+        url: 'ftp://example.com/mcp',
+      },
+      {
+        id: 'bad-header-template',
+        name: 'Bad Header Template',
+        enabled: true,
+        transportType: 'http',
+        url: 'https://mcp.example.com/mcp',
+        headers: { Authorization: 'Bearer ${LEGACY_TOKEN}' },
+      },
+      {
+        id: 'valid-http',
+        name: 'Valid Remote',
+        enabled: true,
+        transportType: 'http',
+        url: 'https://mcp.example.com/v1',
+        headers: { 'X-Api-Key': 'literal-key' },
+        requestTimeoutMs: 120_000,
+        connectionTimeoutMs: 45_000,
+      },
+    ]);
+
+    expect(result.servers).toHaveLength(2);
+    expect(result.servers[0]).toMatchObject({
+      name: 'valid-stdio',
+      transport: 'stdio',
+      toolCallTimeoutMs: 90_000,
+      startupTimeoutMs: 15_000,
+    });
+    expect(result.servers[1]).toMatchObject({
+      name: 'valid-remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/v1',
+      toolCallTimeoutMs: 120_000,
+      startupTimeoutMs: 45_000,
+    });
+    expect(result.warnings).toHaveLength(5);
+    expect(result.warnings[0]).toContain('env.API_KEY');
+    expect(result.warnings[0]).not.toContain('UNSUPPORTED_ENV_REF');
+    expect(result.warnings[1]).toContain('args[1]');
+    expect(result.warnings[2]).toContain('malformed or unsupported URL');
+    expect(result.warnings[3]).toContain('malformed or unsupported URL');
+    expect(result.warnings[4]).toContain('headers.Authorization');
+    expect(result.warnings[4]).not.toContain('LEGACY_TOKEN');
+    expect(warnSpy).toHaveBeenCalledTimes(5);
   });
 });

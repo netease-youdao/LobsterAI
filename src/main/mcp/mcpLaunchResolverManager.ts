@@ -54,8 +54,22 @@ function log(level: 'INFO' | 'WARN' | 'ERROR', message: string, error?: unknown)
   }
 }
 
+export const MCP_PACKAGES_DIR_NAME = 'mcp-packages';
+
 function sanitizeForPath(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'mcp';
+}
+
+export function resolveMcpPackageInstallDir(
+  userDataDir: string,
+  serverId: string,
+  packageName: string,
+): string {
+  return path.join(
+    userDataDir,
+    MCP_PACKAGES_DIR_NAME,
+    `${sanitizeForPath(serverId)}-${sanitizeForPath(packageName)}`,
+  );
 }
 
 function prependPathEntries(
@@ -360,11 +374,10 @@ export class McpLaunchResolverManager {
       return;
     }
 
-    const installDir = path.join(
+    const installDir = resolveMcpPackageInstallDir(
       app.getPath('userData'),
-      'openclaw',
-      'mcp-packages',
-      `${sanitizeForPath(server.id)}-${sanitizeForPath(parsed.packageName)}`,
+      server.id,
+      parsed.packageName,
     );
     fs.mkdirSync(installDir, { recursive: true });
 
