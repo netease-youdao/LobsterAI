@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import {
   LobsterMemoryService,
   MEMORY_FTS_DB_NAME,
+  parseMemoryMarkdown,
   stripManagedAgentsSection,
   WorkspaceFileName,
 } from './lobsterMemoryService';
@@ -257,6 +258,236 @@ describe('LobsterMemoryService', () => {
     expect(service.search('main', 'Global surviving fact')).toHaveLength(1);
     expect(service.search('main', 'Stale old schema entry')).toHaveLength(0);
     expect(service.search('main', 'Migrated entry')).toHaveLength(0);
+  });
+
+  test('strips blank lines inside multi-line addMemory and updateMemory so entries never split', () => {
+    const service = createService();
+
+    const added = service.addMemory('main', 'Line 1\n\nLine 2\n\n\nLine 3');
+    expect(added.text).toBe('Line 1\nLine 2\nLine 3');
+    expect(service.listMemories('main')).toHaveLength(1);
+    expect(service.listMemories('main')[0].text).toBe('Line 1\nLine 2\nLine 3');
+
+    const updated = service.updateMemory('main', added.id, 'Updated 1\n\n\nUpdated 2\n\nUpdated 3');
+    expect(updated?.text).toBe('Updated 1\nUpdated 2\nUpdated 3');
+    const afterEdit = service.listMemories('main');
+    expect(afterEdit).toHaveLength(1);
+    expect(afterEdit[0].text).toBe('Updated 1\nUpdated 2\nUpdated 3');
+  });
+
+  test('avoids double-bulleting inputs starting with "- "', () => {
+    const service = createService();
+
+    const added = service.addMemory('main', '- Prefers TypeScript strict mode');
+    expect(added.text).toBe('Prefers TypeScript strict mode');
+    const rawAfterAdd = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(rawAfterAdd).toContain('- Prefers TypeScript strict mode');
+    expect(rawAfterAdd).not.toContain('- - ');
+
+    const updated = service.updateMemory('main', added.id, '- Prefers Rust and TypeScript');
+    expect(updated?.text).toBe('Prefers Rust and TypeScript');
+    const rawAfterUpdate = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(rawAfterUpdate).toContain('- Prefers Rust and TypeScript');
+    expect(rawAfterUpdate).not.toContain('- - ');
+  });
+
+  test('maintains stable indentation across repeated multi-line edits', () => {
+    const service = createService();
+    const initialText = 'Release flow:\n- bump version\n  - patch minor\n- run tests';
+
+    let entry = service.addMemory('main', initialText);
+    expect(entry.text).toBe(initialText);
+
+    for (let i = 1; i <= 5; i += 1) {
+      const nextText = `Release flow v${i}:\n- bump version\n  - patch minor\n- run tests`;
+      const updated = service.updateMemory('main', entry.id, nextText);
+      expect(updated).not.toBeNull();
+      entry = updated!;
+      expect(entry.text).toBe(nextText);
+    }
+
+    const raw = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(raw).toContain('- Release flow v5:\n  - bump version\n    - patch minor\n  - run tests');
+    expect(service.listMemories('main')).toHaveLength(1);
+    expect(service.listMemories('main')[0].text).toBe(
+      'Release flow v5:\n- bump version\n  - patch minor\n- run tests',
+    );
+  });
+
+  test('assigns unique disambiguated IDs for duplicate text and updates/deletes only the targeted entry', () => {
+    const service = createService();
+    const duplicateMd = [
+      '# User Memories',
+      '',
+      '## Work',
+      '',
+      '- Prefers concise answers',
+      '',
+      '## Personal',
+      '',
+      '- Prefers concise answers',
+      '',
+    ].join('\n');
+    service.writeWorkspaceFile('main', WorkspaceFileName.Memory, duplicateMd);
+
+    const entries = service.listMemories('main');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].id).not.toBe(entries[1].id);
+    expect(entries[0].section).toBe('Work');
+    expect(entries[1].section).toBe('Personal');
+
+    // Update only the second duplicate entry
+    const updatedSecond = service.updateMemory('main', entries[1].id, 'Prefers detailed stories');
+    expect(updatedSecond?.section).toBe('Personal');
+    const afterUpdate = service.listMemories('main');
+    expect(afterUpdate).toHaveLength(2);
+    expect(afterUpdate[0].text).toBe('Prefers concise answers');
+    expect(afterUpdate[1].text).toBe('Prefers detailed stories');
+
+    // Re-seed duplicates and verify deleteMemory removes only the targeted one
+    service.writeWorkspaceFile('main', WorkspaceFileName.Memory, duplicateMd);
+    const dupesAgain = service.listMemories('main');
+    expect(service.deleteMemory('main', dupesAgain[1].id)).toBe(true);
+    const afterDelete = service.listMemories('main');
+    expect(afterDelete).toHaveLength(1);
+    expect(afterDelete[0].section).toBe('Work');
+    expect(afterDelete[0].text).toBe('Prefers concise answers');
+  });
+
+  test('keeps multi-line HTML comments verbatim without turning lines 2..N into entries', () => {
+    const service = createService();
+    const md = [
+      '# User Memories',
+      '',
+      '<!-- multi-line header comment',
+      'line 2 inside comment',
+      'line 3 closing -->',
+      '',
+      '## Notes',
+      '',
+      '<!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:74:74',
+      'extra metadata line -->',
+      '- Real memory fact',
+      '',
+      '# Reset Heading',
+      '',
+      '- Top level fact',
+      '',
+    ].join('\n');
+    service.writeWorkspaceFile('main', WorkspaceFileName.Memory, md);
+
+    const entries = service.listMemories('main');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].text).toBe('Real memory fact');
+    expect(entries[0].section).toBe('Notes');
+    expect(entries[1].text).toBe('Top level fact');
+    expect(entries[1].section).toBeUndefined();
+
+    // Comments survive edits verbatim
+    service.updateMemory('main', entries[0].id, 'Edited real memory fact');
+    const raw = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(raw).toContain('<!-- multi-line header comment\nline 2 inside comment\nline 3 closing -->');
+    expect(raw).toContain('<!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:74:74\nextra metadata line -->');
+    expect(raw).toContain('- Edited real memory fact');
+  });
+
+  test('strips inline metadata comments from display text while preserving them safely on edit', () => {
+    const service = createService();
+    const md = [
+      '# User Memories',
+      '',
+      '- Uses dark theme <!-- project: lobsterai --> <!-- importance: high -->',
+      '- Deploy checklist: <!-- trigger: release -->',
+      '  - run unit tests',
+      '  <!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:10:12 -->',
+      '',
+    ].join('\n');
+    service.writeWorkspaceFile('main', WorkspaceFileName.Memory, md);
+
+    const entries = service.listMemories('main');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].text).toBe('Uses dark theme');
+    expect(entries[1].text).toBe('Deploy checklist:\n- run unit tests');
+
+    // Unmodified edit leaves inline metadata untouched byte-for-byte
+    const unchanged = service.updateMemory('main', entries[1].id, entries[1].text);
+    expect(unchanged?.text).toBe('Deploy checklist:\n- run unit tests');
+    expect(service.readWorkspaceFile('main', WorkspaceFileName.Memory)).toBe(md);
+
+    // Modified edit updates entry.text cleanly and preserves inline metadata comments
+    const edited = service.updateMemory('main', entries[0].id, 'Uses system theme');
+    expect(edited?.text).toBe('Uses system theme');
+    const rawAfterEdit = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(rawAfterEdit).toContain(
+      '- Uses system theme <!-- project: lobsterai --> <!-- importance: high -->',
+    );
+    expect(service.listMemories('main')[0].text).toBe('Uses system theme');
+
+    // Standalone parsed segments ignore metadata-only lines
+    const parsed = parseMemoryMarkdown('- <!-- project: empty -->\n- Valid entry\n');
+    const parsedEntries = parsed.segments.filter((s) => s.kind === 'entry').map((s) => s.entry?.text);
+    expect(parsedEntries).toEqual(['Valid entry']);
+  });
+
+  test('create -> edit -> delete immediately updates BOTH MEMORY.md and FTS5 search index', () => {
+    const service = createService();
+
+    const created = service.addMemory('main', 'AlphaQuantumProject uses PostgreSQL 17');
+    expect(service.readWorkspaceFile('main', WorkspaceFileName.Memory)).toContain('AlphaQuantumProject');
+    expect(service.search('main', 'AlphaQuantumProject')).toHaveLength(1);
+
+    const edited = service.updateMemory('main', created.id, 'BetaNebulaProject uses SQLite FTS5');
+    expect(edited).not.toBeNull();
+    const rawAfterEdit = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(rawAfterEdit).not.toContain('AlphaQuantumProject');
+    expect(rawAfterEdit).toContain('BetaNebulaProject');
+    expect(service.search('main', 'AlphaQuantumProject')).toHaveLength(0);
+    expect(service.search('main', 'BetaNebulaProject')).toHaveLength(1);
+
+    expect(service.deleteMemory('main', edited!.id)).toBe(true);
+    expect(service.readWorkspaceFile('main', WorkspaceFileName.Memory)).not.toContain('BetaNebulaProject');
+    expect(service.search('main', 'BetaNebulaProject')).toHaveLength(0);
+    expect(service.listMemories('main')).toHaveLength(0);
+  });
+
+  test('editing a project-tagged memory preserves its project tag and FTS5 project isolation', () => {
+    const service = createService();
+    const projA = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-edit-proj-a-'));
+    const projB = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-edit-proj-b-'));
+    tempDirs.push(projA, projB);
+
+    fs.mkdirSync(path.join(projA, '.git'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projA, '.git', 'config'),
+      '[remote "origin"]\n\turl = git@github.com:acme/project-alpha.git\n',
+      'utf8',
+    );
+
+    const keyA = resolvePrimaryProjectKey(projA)!;
+    expect(keyA).toBe('github.com/acme/project-alpha');
+
+    const added = service.addMemory('main', appendProjectTag('AlphaOriginalDeploy uses pnpm build', keyA));
+    expect(added.text).toBe('AlphaOriginalDeploy uses pnpm build');
+    expect(service.listMemories('main').map((e) => e.text)).toEqual(['AlphaOriginalDeploy uses pnpm build']);
+
+    // Edit via updateMemory with clean display text (no tag passed by caller / UI)
+    const updated = service.updateMemory('main', added.id, 'AlphaUpdatedDeploy uses pnpm release');
+    expect(updated).not.toBeNull();
+    expect(updated?.text).toBe('AlphaUpdatedDeploy uses pnpm release');
+
+    // Disk file retains the <!-- project: ... --> tag, while listMemories stays clean
+    const rawOnDisk = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(rawOnDisk).toContain('- AlphaUpdatedDeploy uses pnpm release <!-- project: github.com/acme/project-alpha -->');
+    expect(service.listMemories('main').map((e) => e.text)).toEqual(['AlphaUpdatedDeploy uses pnpm release']);
+
+    // FTS5 recall remains isolated to Project A and never leaks into Project B or global scope
+    const hitsInA = service.search('main', 'AlphaUpdatedDeploy', 10, { workspaceDir: projA });
+    expect(hitsInA).toHaveLength(1);
+    expect(hitsInA[0].snippet).toBe('- AlphaUpdatedDeploy uses pnpm release');
+    expect(hitsInA[0].snippet).not.toContain('<!-- project:');
+    expect(service.search('main', 'AlphaOriginalDeploy', 10, { workspaceDir: projA })).toHaveLength(0);
+    expect(service.search('main', 'AlphaUpdatedDeploy', 10, { workspaceDir: projB })).toHaveLength(0);
+    expect(service.search('main', 'AlphaUpdatedDeploy', 10)).toHaveLength(0);
   });
 });
 

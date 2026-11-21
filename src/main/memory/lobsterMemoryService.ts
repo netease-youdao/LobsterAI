@@ -38,7 +38,10 @@ const TOP_BULLET_RE = /^-\s+\S/;
 const ANY_BULLET_RE = /^\s*-\s+(.*)$/;
 const HEADING_RE = /^(#{1,6})\s+(.*\S)\s*$/;
 const FENCE_RE = /^\s*(```|~~~)/;
-const HTML_COMMENT_OPEN_RE = /^<!--/;
+const TOP_HTML_COMMENT_OPEN_RE = /^<!--/;
+const ANY_HTML_COMMENT_OPEN_RE = /^\s*<!--/;
+const INLINE_METADATA_COMMENT_RE =
+  /<!--\s*(?:(?:project|trigger|importance)\s*:|openclaw-memory-promotion:)[\s\S]*?-->/gi;
 
 export interface MemoryEntry {
   id: string;
@@ -79,133 +82,266 @@ interface MemorySegment {
   kind: 'entry' | 'verbatim';
   lines: string[];
   entry?: MemoryEntry;
+  metadataComments?: string[];
 }
 
-interface ParsedMemoryFile {
+export interface ParsedMemoryFile {
   segments: MemorySegment[];
   trailingSection?: string;
 }
 
-function normalizeForFingerprint(text: string): string {
+export function normalizeMemoryTextForFingerprint(text: string): string {
   return text
     .toLowerCase()
+    .replace(/[\u0000-\u001f]/g, ' ')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function memoryFingerprint(text: string): string {
-  return crypto.createHash('sha1').update(normalizeForFingerprint(text)).digest('hex');
+export function memoryFingerprint(text: string): string {
+  return crypto.createHash('sha1').update(normalizeMemoryTextForFingerprint(text)).digest('hex');
 }
 
-function blockDisplayText(lines: string[]): string {
+export function getMemoryBaseFingerprint(id: string): string {
+  const hashIdx = id.indexOf('#');
+  return hashIdx >= 0 ? id.slice(0, hashIdx) : id;
+}
+
+function extractBlockDisplayAndMetadata(lines: string[]): {
+  text: string;
+  metadataComments: string[];
+} {
   const [first, ...rest] = lines;
-  const match = first.match(ANY_BULLET_RE);
-  return [match ? match[1] : first, ...rest].join('\n');
+  const bulletMatch = first.match(ANY_BULLET_RE);
+  const displayLines = bulletMatch
+    ? [bulletMatch[1], ...rest.map((line) => (line.startsWith('  ') ? line.slice(2) : line))]
+    : [first, ...rest];
+
+  const rawJoined = displayLines.join('\n');
+  INLINE_METADATA_COMMENT_RE.lastIndex = 0;
+  if (!INLINE_METADATA_COMMENT_RE.test(rawJoined)) {
+    INLINE_METADATA_COMMENT_RE.lastIndex = 0;
+    return {
+      text: bulletMatch ? rawJoined.trimEnd() : rawJoined.trim(),
+      metadataComments: [],
+    };
+  }
+
+  INLINE_METADATA_COMMENT_RE.lastIndex = 0;
+  const metadataComments: string[] = [];
+  const cleanedJoined = rawJoined.replace(INLINE_METADATA_COMMENT_RE, (match) => {
+    metadataComments.push(match.trim());
+    return '\u0000';
+  });
+
+  const cleanedLines: string[] = [];
+  for (const rawLine of cleanedJoined.split('\n')) {
+    if (!rawLine.includes('\u0000')) {
+      cleanedLines.push(rawLine);
+      continue;
+    }
+    const withoutSentinel = rawLine.replace(/\u0000/g, ' ').replace(/[ \t]+$/u, '');
+    const leadingMatch = withoutSentinel.match(/^[ \t]*/);
+    const leading = leadingMatch ? leadingMatch[0] : '';
+    const body = withoutSentinel
+      .slice(leading.length)
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+    if (body) {
+      cleanedLines.push(`${leading}${body}`);
+    }
+  }
+
+  return {
+    text: cleanedLines.join('\n').trim(),
+    metadataComments,
+  };
+}
+
+function assignUniqueEntryIds(segments: MemorySegment[]): void {
+  const occurrenceCounts = new Map<string, number>();
+  for (const segment of segments) {
+    if (segment.kind !== 'entry' || !segment.entry) continue;
+    const baseId = memoryFingerprint(segment.entry.text);
+    const count = (occurrenceCounts.get(baseId) ?? 0) + 1;
+    occurrenceCounts.set(baseId, count);
+    segment.entry.id = count === 1 ? baseId : `${baseId}#${count}`;
+  }
+}
+
+function serializeEntryLines(text: string, preservedComments?: string[]): string[] {
+  const lines = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+$/u, ''))
+    .filter((line) => line.trim() !== '');
+  if (lines.length === 0) {
+    throw new Error('Memory text must not be empty');
+  }
+
+  const firstTrimmed = lines[0].trim();
+  const bulletMatch = firstTrimmed.match(ANY_BULLET_RE);
+  let head = bulletMatch ? `- ${bulletMatch[1]}` : `- ${firstTrimmed}`;
+
+  if (preservedComments && preservedComments.length > 0) {
+    const joinedInput = lines.join('\n');
+    INLINE_METADATA_COMMENT_RE.lastIndex = 0;
+    const inputHasMetadata = INLINE_METADATA_COMMENT_RE.test(joinedInput);
+    INLINE_METADATA_COMMENT_RE.lastIndex = 0;
+    if (!inputHasMetadata) {
+      head = `${head} ${preservedComments.join(' ')}`;
+    }
+  }
+
+  const rest = lines.slice(1).map((line) => `  ${line}`);
+  return [head, ...rest];
 }
 
 export function parseMemoryMarkdown(content: string): ParsedMemoryFile {
-  const rawLines = content.replace(/\r\n/g, '\n').split('\n');
+  const rawLines = content.replace(/\r\n?/g, '\n').split('\n');
   const segments: MemorySegment[] = [];
+  let verbatim: string[] = [];
+  let block: string[] | null = null;
   let currentSection: string | undefined;
-  let inFence = false;
-  let index = 0;
+  let blockSection: string | undefined;
+  let fence: 'verbatim' | 'block' | null = null;
+  let inComment: 'verbatim' | 'block' | null = null;
 
-  while (index < rawLines.length) {
-    const line = rawLines[index];
+  const flushVerbatim = () => {
+    if (verbatim.length > 0) {
+      segments.push({ kind: 'verbatim', lines: verbatim });
+      verbatim = [];
+    }
+  };
+
+  const closeBlock = () => {
+    if (!block) return;
+    const lines = block;
+    block = null;
+    const { text, metadataComments } = extractBlockDisplayAndMetadata(lines);
+    if (!text) {
+      segments.push({ kind: 'verbatim', lines });
+      return;
+    }
+    segments.push({
+      kind: 'entry',
+      lines,
+      metadataComments,
+      entry: {
+        id: memoryFingerprint(text),
+        text,
+        ...(blockSection ? { section: blockSection } : {}),
+      },
+    });
+  };
+
+  const openBlock = (line: string) => {
+    closeBlock();
+    flushVerbatim();
+    blockSection = currentSection;
+    block = [line];
+  };
+
+  for (const line of rawLines) {
+    if (fence === 'block') {
+      block!.push(line);
+      if (FENCE_RE.test(line)) fence = null;
+      continue;
+    }
+    if (fence === 'verbatim') {
+      verbatim.push(line);
+      if (FENCE_RE.test(line)) fence = null;
+      continue;
+    }
+
+    if (inComment === 'block') {
+      block!.push(line);
+      if (line.includes('-->')) inComment = null;
+      continue;
+    }
+    if (inComment === 'verbatim') {
+      verbatim.push(line);
+      if (line.includes('-->')) inComment = null;
+      continue;
+    }
+
+    // Column-0 HTML comments (or indented comments outside an open block) are verbatim metadata.
+    if (TOP_HTML_COMMENT_OPEN_RE.test(line) || (!block && ANY_HTML_COMMENT_OPEN_RE.test(line))) {
+      closeBlock();
+      verbatim.push(line);
+      if (!line.includes('-->')) inComment = 'verbatim';
+      continue;
+    }
+
     if (FENCE_RE.test(line)) {
-      const fenceLines = [line];
-      inFence = !inFence;
-      index += 1;
-      while (index < rawLines.length && inFence) {
-        fenceLines.push(rawLines[index]);
-        if (FENCE_RE.test(rawLines[index])) inFence = false;
-        index += 1;
+      if (block && /^\s/.test(line)) {
+        block.push(line);
+        fence = 'block';
+      } else {
+        closeBlock();
+        verbatim.push(line);
+        fence = 'verbatim';
       }
-      segments.push({ kind: 'verbatim', lines: fenceLines });
+      continue;
+    }
+
+    if (line.trim() === '') {
+      closeBlock();
+      verbatim.push(line);
       continue;
     }
 
     const heading = line.match(HEADING_RE);
     if (heading) {
-      if (heading[1].length >= 2) {
-        currentSection = heading[2].trim();
-      }
-      segments.push({ kind: 'verbatim', lines: [line] });
-      index += 1;
-      continue;
-    }
-
-    if (line.trim() === '' || HTML_COMMENT_OPEN_RE.test(line)) {
-      segments.push({ kind: 'verbatim', lines: [line] });
-      index += 1;
+      closeBlock();
+      currentSection = heading[1].length >= 2 ? heading[2].trim() : undefined;
+      verbatim.push(line);
       continue;
     }
 
     if (TOP_BULLET_RE.test(line)) {
-      const entryLines = [line];
-      index += 1;
-      while (index < rawLines.length) {
-        const next = rawLines[index];
-        if (
-          next.trim() === ''
-          || TOP_BULLET_RE.test(next)
-          || HEADING_RE.test(next)
-          || FENCE_RE.test(next)
-          || HTML_COMMENT_OPEN_RE.test(next)
-        ) {
-          break;
-        }
-        entryLines.push(next);
-        index += 1;
-      }
-      const text = blockDisplayText(entryLines);
-      segments.push({
-        kind: 'entry',
-        lines: entryLines,
-        entry: {
-          id: memoryFingerprint(text),
-          text,
-          section: currentSection,
-        },
-      });
+      openBlock(line);
       continue;
     }
 
-    const proseLines = [line];
-    index += 1;
-    while (index < rawLines.length) {
-      const next = rawLines[index];
-      if (
-        next.trim() === ''
-        || TOP_BULLET_RE.test(next)
-        || HEADING_RE.test(next)
-        || FENCE_RE.test(next)
-        || HTML_COMMENT_OPEN_RE.test(next)
-      ) {
-        break;
+    if (block) {
+      block.push(line);
+      if (ANY_HTML_COMMENT_OPEN_RE.test(line) && !line.includes('-->')) {
+        inComment = 'block';
       }
-      proseLines.push(next);
-      index += 1;
+      continue;
     }
-    const text = proseLines.join('\n').trim();
-    segments.push({
-      kind: 'entry',
-      lines: proseLines,
-      entry: {
-        id: memoryFingerprint(text),
-        text,
-        section: currentSection,
-      },
-    });
+
+    openBlock(line);
   }
 
+  closeBlock();
+  flushVerbatim();
+  assignUniqueEntryIds(segments);
   return { segments, trailingSection: currentSection };
 }
 
 function serializeMemorySegments(segments: MemorySegment[]): string {
-  const joined = segments.map((segment) => segment.lines.join('\n')).join('\n');
+  const joined = segments.flatMap((segment) => segment.lines).join('\n');
+  if (!joined) return '';
   return joined.endsWith('\n') ? joined : `${joined}\n`;
+}
+
+function collectExistingFingerprints(segments: MemorySegment[]): Set<string> {
+  const fps = new Set<string>();
+  for (const segment of segments) {
+    if (segment.kind !== 'entry' || !segment.entry) continue;
+    fps.add(getMemoryBaseFingerprint(segment.entry.id));
+    for (const line of segment.entry.text.split('\n')) {
+      const match = line.match(ANY_BULLET_RE);
+      const lineText = (match ? match[1] : line).trim();
+      if (lineText) {
+        fps.add(memoryFingerprint(lineText));
+      }
+    }
+  }
+  return fps;
 }
 
 const MANAGED_BLOCK_RE = /<!--\s*LOBSTERAI_MANAGED_START\s*-->[\s\S]*?<!--\s*LOBSTERAI_MANAGED_END\s*-->\s*/g;
@@ -310,58 +446,136 @@ export class LobsterMemoryService {
   }
 
   addMemory(agentId: string, text: string, section?: string): MemoryEntry {
-    const trimmed = text.trim();
-    if (!trimmed) throw new Error('Memory text must not be empty');
+    const bulletLines = serializeEntryLines(text);
+    const { text: displayText } = extractBlockDisplayAndMetadata(bulletLines);
+    if (!displayText) {
+      throw new Error('Memory text must not be empty');
+    }
+
     const safeId = sanitizeAgentId(agentId);
     const existing = this.readWorkspaceFile(safeId, WorkspaceFileName.Memory);
-    const bulletLines = trimmed.split('\n').map((line, idx) => (idx === 0 ? `- ${line}` : `  ${line}`));
-    const entry: MemoryEntry = {
-      id: memoryFingerprint(trimmed),
-      text: trimmed,
-      section: section?.trim() || undefined,
-    };
+    const normalizedSection = section?.trim() || undefined;
+    const baseId = memoryFingerprint(displayText);
 
     let nextContent: string;
+    let resolvedSection = normalizedSection;
+
     if (!existing.trim()) {
       const parts = [MEMORY_HEADER, ''];
-      if (entry.section) parts.push(`## ${entry.section}`, '');
+      if (normalizedSection) parts.push(`## ${normalizedSection}`, '');
       parts.push(...bulletLines, '');
       nextContent = parts.join('\n');
     } else {
       const parsed = parseMemoryMarkdown(existing);
-      const duplicate = parsed.segments.find((segment) => segment.entry?.id === entry.id);
+      const duplicate = parsed.segments.find(
+        (segment) => segment.kind === 'entry' && segment.entry && getMemoryBaseFingerprint(segment.entry.id) === baseId,
+      );
       if (duplicate?.entry) return duplicate.entry;
 
       const trimmedExisting = existing.replace(/\s+$/, '');
-      if (entry.section && parsed.trailingSection !== entry.section) {
-        nextContent = `${trimmedExisting}\n\n## ${entry.section}\n\n${bulletLines.join('\n')}\n`;
+      if (normalizedSection && parsed.trailingSection !== normalizedSection) {
+        nextContent = `${trimmedExisting}\n\n## ${normalizedSection}\n\n${bulletLines.join('\n')}\n`;
       } else {
+        resolvedSection = normalizedSection ?? parsed.trailingSection;
         nextContent = `${trimmedExisting}\n${bulletLines.join('\n')}\n`;
       }
     }
 
     this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, nextContent);
-    return entry;
+    return {
+      id: baseId,
+      text: displayText,
+      ...(resolvedSection ? { section: resolvedSection } : {}),
+    };
+  }
+
+  /**
+   * Bulk-append memory texts into `MEMORY.md`, skipping duplicates already present
+   * (either as standalone entries or individual lines inside existing blocks).
+   * Writes the file and updates FTS5 at most once.
+   */
+  importMemories(agentId: string, texts: string[], section?: string): number {
+    if (texts.length === 0) return 0;
+
+    const safeId = sanitizeAgentId(agentId);
+    const existing = this.readWorkspaceFile(safeId, WorkspaceFileName.Memory);
+    const parsed = parseMemoryMarkdown(existing);
+    const existingFingerprints = collectExistingFingerprints(parsed.segments);
+
+    const blocks: string[] = [];
+    for (const rawText of texts) {
+      let bulletLines: string[];
+      try {
+        bulletLines = serializeEntryLines(rawText);
+      } catch {
+        continue;
+      }
+      const { text: displayText } = extractBlockDisplayAndMetadata(bulletLines);
+      if (!displayText) continue;
+      const fp = memoryFingerprint(displayText);
+      if (existingFingerprints.has(fp)) continue;
+      existingFingerprints.add(fp);
+      blocks.push(bulletLines.join('\n'));
+    }
+
+    if (blocks.length === 0) return 0;
+
+    const normalizedSection = section?.trim() || undefined;
+    let nextContent: string;
+    if (!existing.trim()) {
+      const parts = [MEMORY_HEADER, ''];
+      if (normalizedSection) parts.push(`## ${normalizedSection}`, '');
+      parts.push(blocks.join('\n'), '');
+      nextContent = parts.join('\n');
+    } else {
+      const trimmedExisting = existing.replace(/\s+$/, '');
+      if (normalizedSection && parsed.trailingSection !== normalizedSection) {
+        nextContent = `${trimmedExisting}\n\n## ${normalizedSection}\n\n${blocks.join('\n')}\n`;
+      } else {
+        nextContent = `${trimmedExisting}\n\n${blocks.join('\n')}\n`;
+      }
+    }
+
+    this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, nextContent);
+    return blocks.length;
   }
 
   updateMemory(agentId: string, id: string, nextText: string): MemoryEntry | null {
-    const trimmed = nextText.trim();
-    if (!trimmed) throw new Error('Memory text must not be empty');
     const safeId = sanitizeAgentId(agentId);
     const existing = this.readWorkspaceFile(safeId, WorkspaceFileName.Memory);
     if (!existing.trim()) return null;
 
     const parsed = parseMemoryMarkdown(existing);
-    const target = parsed.segments.find((segment) => segment.kind === 'entry' && segment.entry?.id === id);
-    if (!target || !target.entry) return null;
+    const targetIndex = parsed.segments.findIndex(
+      (segment) => segment.kind === 'entry' && segment.entry?.id === id,
+    );
+    if (targetIndex === -1) return null;
 
-    const bulletLines = trimmed.split('\n').map((line, idx) => (idx === 0 ? `- ${line}` : `  ${line}`));
+    const target = parsed.segments[targetIndex];
+    if (!target.entry) return null;
+
+    const bulletLines = serializeEntryLines(nextText, target.metadataComments);
+    const { text: displayText, metadataComments } = extractBlockDisplayAndMetadata(bulletLines);
+    if (!displayText) {
+      throw new Error('Memory text must not be empty');
+    }
+
+    // Preserve the original block lines byte-for-byte when display text & metadata are unchanged.
+    const commentsUnchanged =
+      metadataComments.length === (target.metadataComments?.length ?? 0)
+      && metadataComments.every((c, idx) => c === target.metadataComments?.[idx]);
+    if (target.entry.text === displayText && commentsUnchanged) {
+      return target.entry;
+    }
+
     target.lines = bulletLines;
+    target.metadataComments = metadataComments;
     target.entry = {
-      id: memoryFingerprint(trimmed),
-      text: trimmed,
-      section: target.entry.section,
+      id: memoryFingerprint(displayText),
+      text: displayText,
+      ...(target.entry.section ? { section: target.entry.section } : {}),
     };
+    assignUniqueEntryIds(parsed.segments);
 
     this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, serializeMemorySegments(parsed.segments));
     return target.entry;
@@ -373,10 +587,26 @@ export class LobsterMemoryService {
     if (!existing.trim()) return false;
 
     const parsed = parseMemoryMarkdown(existing);
-    const nextSegments = parsed.segments.filter((segment) => !(segment.kind === 'entry' && segment.entry?.id === id));
-    if (nextSegments.length === parsed.segments.length) return false;
+    const index = parsed.segments.findIndex(
+      (segment) => segment.kind === 'entry' && segment.entry?.id === id,
+    );
+    if (index === -1) return false;
 
-    this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, serializeMemorySegments(nextSegments));
+    parsed.segments.splice(index, 1);
+
+    // Collapse doubled blank separators around the removed block.
+    const prev = index > 0 ? parsed.segments[index - 1] : undefined;
+    const next = index < parsed.segments.length ? parsed.segments[index] : undefined;
+    if (
+      prev?.kind === 'verbatim'
+      && next?.kind === 'verbatim'
+      && prev.lines[prev.lines.length - 1]?.trim() === ''
+      && next.lines[0]?.trim() === ''
+    ) {
+      prev.lines.pop();
+    }
+
+    this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, serializeMemorySegments(parsed.segments));
     return true;
   }
 

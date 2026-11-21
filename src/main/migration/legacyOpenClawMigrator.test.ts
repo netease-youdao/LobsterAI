@@ -12,12 +12,14 @@ import {
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
+  MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
-import { LobsterMemoryService } from '../memory/lobsterMemoryService';
+import { LobsterMemoryService, memoryFingerprint } from '../memory/lobsterMemoryService';
 import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
   backfillLegacyScheduledTasksFromBackup,
+  backfillLegacyUserMemories,
   dismissMigrationV2Report,
   getPendingMigrationV2Report,
   runLegacyOpenClawMigration,
@@ -737,5 +739,323 @@ describe('runLegacyOpenClawMigration', () => {
     );
     expect(migratedMem).toContain('Canonical workspace-main');
     expect(migratedMem).not.toContain('Old bare workspace');
+  });
+
+  test('migrates ALL (>200) active SQLite user_memories without cap, excludes deleted/stale, and preserves user_memory_sources', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE user_memories (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.75,
+        is_explicit INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'created',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_used_at INTEGER
+      );
+      CREATE TABLE user_memory_sources (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        session_id TEXT,
+        message_id TEXT,
+        role TEXT NOT NULL DEFAULT 'system',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+
+    const insertMem = db.prepare(
+      'INSERT INTO user_memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+    );
+    const insertSrc = db.prepare(
+      'INSERT INTO user_memory_sources VALUES (?, ?, ?, ?, ?, ?, ?)',
+    );
+
+    // 230 active SQLite memories (exceeding the legacy 200-row cap), where #1 duplicates MEMORY.md
+    for (let i = 1; i <= 230; i += 1) {
+      const text = i === 1 ? 'Already exists in MEMORY.md' : `Legacy active SQLite memory #${i}`;
+      insertMem.run(`m-${i}`, text, memoryFingerprint(text), 0.9, i % 2, 'created', 1000 + i, 2000 + i);
+      insertSrc.run(`s-${i}`, `m-${i}`, `sess-${i}`, `msg-${i}`, 'user', 1, 1000 + i);
+    }
+
+    // Deleted and stale rows that MUST NOT be resurrected into MEMORY.md
+    insertMem.run(
+      'm-del-1',
+      'Deleted secret memory must stay deleted',
+      memoryFingerprint('Deleted secret memory must stay deleted'),
+      0.8,
+      1,
+      'deleted',
+      500,
+      600,
+    );
+    insertSrc.run('s-del-1', 'm-del-1', 'sess-del', 'msg-del', 'user', 0, 500);
+
+    insertMem.run(
+      'm-stale-1',
+      'Stale implicit memory must not be resurrected',
+      memoryFingerprint('Stale implicit memory must not be resurrected'),
+      0.6,
+      0,
+      'stale',
+      501,
+      601,
+    );
+    insertSrc.run('s-stale-1', 'm-stale-1', 'sess-stale', 'msg-stale', 'assistant', 0, 501);
+    db.close();
+
+    // Seed legacy workspace-main/MEMORY.md with 1 overlapping entry + 1 file-only entry
+    const wsMain = path.join(userDataDir, 'openclaw', 'state', 'workspace-main');
+    fs.mkdirSync(wsMain, { recursive: true });
+    fs.writeFileSync(
+      path.join(wsMain, 'MEMORY.md'),
+      '# User Memories\n\n- Already exists in MEMORY.md\n- File only memory entry\n',
+      'utf8',
+    );
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    // 230 active rows minus 1 duplicate already in MEMORY.md = 229 newly imported
+    expect(result.report?.summary.userMemoriesMigrated).toBe(229);
+
+    const memService = new LobsterMemoryService(path.join(userDataDir, WORKSPACES_DIR_NAME));
+    try {
+      const migratedEntries = memService.listMemories('main');
+      // 2 original MEMORY.md entries + 229 SQLite-only active entries = 231 total
+      expect(migratedEntries).toHaveLength(231);
+      expect(migratedEntries.some((e) => e.text === 'Legacy active SQLite memory #230')).toBe(true);
+      expect(migratedEntries.some((e) => e.text === 'Deleted secret memory must stay deleted')).toBe(false);
+      expect(migratedEntries.some((e) => e.text === 'Stale implicit memory must not be resurrected')).toBe(false);
+      // FTS5 index is immediately searchable for migrated SQLite memories
+      expect(memService.search('main', 'Legacy active SQLite memory #230')).toHaveLength(1);
+    } finally {
+      memService.close();
+    }
+
+    // Verify user_memories and user_memory_sources rows remain intact in SQLite
+    const verifyDb = new Database(sqlitePath);
+    const memCount = verifyDb.prepare('SELECT COUNT(*) AS cnt FROM user_memories').get() as { cnt: number };
+    const srcCount = verifyDb.prepare('SELECT COUNT(*) AS cnt FROM user_memory_sources').get() as { cnt: number };
+    const kvRow = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY) as { value?: string } | undefined;
+    expect(memCount.cnt).toBe(232);
+    expect(srcCount.cnt).toBe(232);
+    expect(kvRow?.value).toBeTruthy();
+    verifyDb.close();
+  });
+
+  test('backfillLegacyUserMemories recovers SQLite-only memories idempotently for already-migrated v2 DBs', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+    const backupDir = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME, '2026-11-20T01-00-00-000Z');
+    fs.mkdirSync(backupDir, { recursive: true });
+
+    // Pre-existing v2 workspaces/main/MEMORY.md has only first 5 entries
+    const preMem = new LobsterMemoryService(workspacesDir);
+    for (let i = 1; i <= 5; i += 1) {
+      preMem.addMemory('main', `Recovered active memory #${i}`);
+    }
+    preMem.close();
+
+    // Seed an already-migrated v2 DB where engine.migration.v2.completed is set,
+    // but engine.migration.v2.userMemoriesMigrated is NOT set yet.
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE user_memories (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.75,
+        is_explicit INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'created',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_used_at INTEGER
+      );
+      CREATE TABLE user_memory_sources (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        session_id TEXT,
+        message_id TEXT,
+        role TEXT NOT NULL DEFAULT 'user',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    const initialReport = {
+      version: 2,
+      migratedAt: '2026-11-20T01:00:00.000Z',
+      backupDir,
+      incompatibleArchivePath: path.join(backupDir, 'incompatible-modules-backup.tar.gz'),
+      legacyStateArchivePath: null,
+      sqliteSnapshotPath: path.join(backupDir, 'lobsterai.pre-v2.sqlite'),
+      dismissed: true,
+      summary: {
+        workspacesMigrated: 1,
+        scheduledTasksMigrated: 0,
+        imAllowListsMigrated: 0,
+        sessionsPreservedForLazyBridge: 0,
+        mcpLaunchCachesCleared: 0,
+        disposableBytesFreed: 0,
+      },
+      archivedModules: [],
+      reauthRequired: [],
+    };
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: initialReport.migratedAt, backupDir }),
+      1,
+    );
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_REPORT_KV_KEY,
+      JSON.stringify(initialReport),
+      1,
+    );
+
+    const insertMem = db.prepare(
+      'INSERT INTO user_memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+    );
+    const insertSrc = db.prepare(
+      'INSERT INTO user_memory_sources VALUES (?, ?, ?, ?, ?, ?, ?)',
+    );
+    for (let i = 1; i <= 215; i += 1) {
+      const text = `Recovered active memory #${i}`;
+      insertMem.run(`um-${i}`, text, memoryFingerprint(text), 0.85, 1, 'created', 100 + i, 200 + i);
+      insertSrc.run(`us-${i}`, `um-${i}`, `session-${i}`, `message-${i}`, 'user', 1, 100 + i);
+    }
+    insertMem.run(
+      'um-del',
+      'Historical deleted memory',
+      memoryFingerprint('Historical deleted memory'),
+      0.8,
+      1,
+      'deleted',
+      50,
+      60,
+    );
+    insertMem.run(
+      'um-stale',
+      'Historical stale memory',
+      memoryFingerprint('Historical stale memory'),
+      0.7,
+      0,
+      'stale',
+      51,
+      61,
+    );
+
+    // First backfill imports 210 missing active rows (215 - 5 existing)
+    const first = backfillLegacyUserMemories({
+      userDataDir,
+      db,
+      now: () => new Date('2026-11-21T02:00:00.000Z'),
+    });
+    expect(first).toEqual({
+      status: 'completed',
+      memoriesImported: 210,
+    });
+
+    const memService = new LobsterMemoryService(workspacesDir);
+    try {
+      const entries = memService.listMemories('main');
+      expect(entries).toHaveLength(215);
+      expect(entries.some((e) => e.text === 'Recovered active memory #215')).toBe(true);
+      expect(entries.some((e) => e.text === 'Historical deleted memory')).toBe(false);
+      expect(entries.some((e) => e.text === 'Historical stale memory')).toBe(false);
+    } finally {
+      memService.close();
+    }
+
+    // Updated report written to disk & kv
+    const updatedReport = JSON.parse(
+      fs.readFileSync(path.join(backupDir, 'migration-report.json'), 'utf8'),
+    ) as { summary: { userMemoriesMigrated?: number } };
+    expect(updatedReport.summary.userMemoriesMigrated).toBe(210);
+
+    // Sources and rows stay intact in SQLite
+    const srcCount = db.prepare('SELECT COUNT(*) AS cnt FROM user_memory_sources').get() as { cnt: number };
+    expect(srcCount.cnt).toBe(215);
+
+    // Second run is a fast idempotent no-op
+    const second = backfillLegacyUserMemories({ userDataDir, db });
+    expect(second).toEqual({
+      status: 'skipped',
+      memoriesImported: 0,
+    });
+    db.close();
+  });
+
+  test('runLegacyOpenClawMigration automatically backfills legacy user_memories on already-migrated v2 DBs', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE user_memories (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.75,
+        is_explicit INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'created',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_used_at INTEGER
+      );
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T01:00:00.000Z' }),
+      1,
+    );
+    db.prepare('INSERT INTO user_memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(
+      'um-auto-1',
+      'Recovered automatically on startup',
+      memoryFingerprint('Recovered automatically on startup'),
+      0.9,
+      1,
+      'created',
+      100,
+      100,
+    );
+    db.prepare('INSERT INTO user_memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(
+      'um-auto-del',
+      'Deleted entry stays excluded',
+      memoryFingerprint('Deleted entry stays excluded'),
+      0.9,
+      1,
+      'deleted',
+      101,
+      101,
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Skipped);
+
+    const memService = new LobsterMemoryService(path.join(userDataDir, WORKSPACES_DIR_NAME));
+    try {
+      const entries = memService.listMemories('main');
+      expect(entries.map((e) => e.text)).toEqual(['Recovered automatically on startup']);
+      expect(memService.search('main', 'Recovered automatically')).toHaveLength(1);
+    } finally {
+      memService.close();
+    }
   });
 });

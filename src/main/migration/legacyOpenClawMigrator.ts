@@ -39,6 +39,7 @@ import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
+  MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
   type MigrationV2Report,
@@ -1258,6 +1259,117 @@ function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string)
   setKv(db, marker, '1');
 }
 
+export interface LegacyUserMemoriesBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  memoriesImported: number;
+  error?: string;
+}
+
+/**
+ * Migrate ALL active (`status = 'created'`) legacy SQLite `user_memories` rows
+ * into `<workspacesDir>/main/MEMORY.md`, deduplicating by normalized fingerprint.
+ *
+ * Never resurrects `deleted` or `stale` rows and keeps `user_memories` and
+ * `user_memory_sources` intact in SQLite for provenance & audit inspection.
+ */
+export function migrateLegacySqliteUserMemories(params: {
+  db: Database.Database;
+  workspacesDir: string;
+  memoryService?: LobsterMemoryService;
+}): number {
+  const { db, workspacesDir } = params;
+  if (!tableExists(db, 'user_memories')) return 0;
+
+  const columns = getTableColumns(db, 'user_memories');
+  if (!columns.has('text')) return 0;
+
+  const whereClause = columns.has('status') ? "WHERE status = 'created'" : '';
+  const orderClause = columns.has('created_at')
+    ? 'ORDER BY created_at ASC, ROWID ASC'
+    : 'ORDER BY ROWID ASC';
+
+  const rows = db
+    .prepare(`SELECT text FROM user_memories ${whereClause} ${orderClause}`)
+    .all() as Array<{ text?: unknown }>;
+
+  const texts = rows
+    .map((row) => (typeof row.text === 'string' ? row.text.trim() : ''))
+    .filter((text) => text.length > 0);
+  if (texts.length === 0) return 0;
+
+  const ownedService = !params.memoryService;
+  const memoryService = params.memoryService ?? new LobsterMemoryService(workspacesDir);
+  try {
+    return memoryService.importMemories(AgentId.Main, texts);
+  } finally {
+    if (ownedService) {
+      memoryService.close();
+    }
+  }
+}
+
+/**
+ * One-shot idempotent backfill for already-migrated v2 DBs (or upgraded DBs
+ * that previously only ran the capped 200-row lazy migration) so all active
+ * SQLite-only `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
+ */
+export function backfillLegacyUserMemories(options: {
+  userDataDir: string;
+  db: Database.Database;
+  memoryService?: LobsterMemoryService;
+  now?: () => Date;
+}): LegacyUserMemoriesBackfillResult {
+  const { userDataDir, db, memoryService } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', memoriesImported: 0 };
+  }
+
+  try {
+    const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+    const memoriesImported = migrateLegacySqliteUserMemories({
+      db,
+      workspacesDir,
+      memoryService,
+    });
+
+    const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+    if (rawReport && memoriesImported > 0) {
+      try {
+        const report = JSON.parse(rawReport) as MigrationV2Report;
+        if (report && report.version === 2 && report.summary) {
+          report.summary.userMemoriesMigrated =
+            (report.summary.userMemoriesMigrated ?? 0) + memoriesImported;
+          setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
+          if (report.backupDir && fs.existsSync(report.backupDir)) {
+            fs.writeFileSync(
+              path.join(report.backupDir, 'migration-report.json'),
+              `${JSON.stringify(report, null, 2)}\n`,
+              'utf8',
+            );
+          }
+        }
+      } catch {
+        // Best-effort report metadata update.
+      }
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), memoriesImported }),
+    );
+    return { status: 'completed', memoriesImported };
+  } catch (error) {
+    return {
+      status: 'failed',
+      memoriesImported: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 /**
  * Read pending v2 migration report for `MigrationReportModal.tsx`.
  */
@@ -1308,11 +1420,12 @@ export function runLegacyOpenClawMigration(
 
   let db = new Database(sqlitePath);
   try {
-    // Idempotency guard: already migrated -> instant return.
+    // Idempotency guard: already migrated -> instant return (after one-shot backfills).
     if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
+      backfillLegacyUserMemories({ userDataDir, db, now });
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1322,6 +1435,7 @@ export function runLegacyOpenClawMigration(
     if (!hasOpenClawState && !hasLegacyEngineKv) {
       backfillAgentPersonaFiles(db, workspacesDir);
       migrateLegacyConversationImages(db, userDataDir);
+      backfillLegacyUserMemories({ userDataDir, db, now });
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
@@ -1361,6 +1475,10 @@ export function runLegacyOpenClawMigration(
         incompatibleEntries,
         archivedModules,
       );
+      const userMemoriesMigrated = migrateLegacySqliteUserMemories({
+        db,
+        workspacesDir,
+      });
       backfillAgentPersonaFiles(db, workspacesDir);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
@@ -1596,6 +1714,7 @@ export function runLegacyOpenClawMigration(
         dismissed: archivedModules.length === 0 && reauthRequired.length === 0,
         summary: {
           workspacesMigrated,
+          userMemoriesMigrated,
           scheduledTasksMigrated,
           scheduledTaskRunsMigrated,
           imAllowListsMigrated,
@@ -1618,6 +1737,14 @@ export function runLegacyOpenClawMigration(
             completedAt: report.migratedAt,
             tasksImported: scheduledTasksMigrated,
             runsImported: scheduledTaskRunsMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            memoriesImported: userMemoriesMigrated,
           }),
         );
       });

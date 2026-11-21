@@ -39,6 +39,7 @@ import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
   backfillLegacyScheduledTasksFromBackup,
+  backfillLegacyUserMemories,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -475,6 +476,23 @@ export class DshBootstrap {
       console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
       return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
     });
+
+    // One-shot idempotent backfill for already-migrated v2 DBs so SQLite-only
+    // active `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
+    try {
+      const memoryBackfill = backfillLegacyUserMemories({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+        memoryService: this.memoryService,
+      });
+      if (memoryBackfill.memoriesImported > 0) {
+        console.log(
+          `[MigrationV2] backfilled ${memoryBackfill.memoriesImported} legacy SQLite user_memories into MEMORY.md`,
+        );
+      }
+    } catch (error) {
+      console.warn('[MigrationV2] legacy user_memories backfill failed:', error);
+    }
 
     await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
     await this.hostManager.start();

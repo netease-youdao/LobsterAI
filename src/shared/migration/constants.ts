@@ -4,6 +4,7 @@
 export const MIGRATION_V2_COMPLETED_KV_KEY = 'engine.migration.v2.completed';
 export const MIGRATION_V2_REPORT_KV_KEY = 'engine.migration.v2.report';
 export const MIGRATION_V2_CRON_BACKFILL_KV_KEY = 'engine.migration.v2.cronBackfillCompleted';
+export const MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY = 'engine.migration.v2.userMemoriesMigrated';
 
 export const MigrationV2Status = {
   Skipped: 'skipped',
@@ -49,6 +50,7 @@ export interface MigrationV2Report {
   dismissed: boolean;
   summary: {
     workspacesMigrated: number;
+    userMemoriesMigrated?: number;
     scheduledTasksMigrated: number;
     scheduledTaskRunsMigrated?: number;
     imAllowListsMigrated: number;

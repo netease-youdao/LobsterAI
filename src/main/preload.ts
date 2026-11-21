@@ -63,6 +63,8 @@ import type {
 } from '../shared/cowork/btw';
 import {
   CoworkIpcChannel,
+  type CoworkMemoryStatus,
+  type CoworkMemoryStatusFilter,
   type CoworkSessionsChangedPayload,
 } from '../shared/cowork/constants';
 import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
@@ -861,27 +863,36 @@ contextBridge.exposeInMainWorld('electron', {
     getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
     cleanTempStorage: (options?: { cwds?: string[] }) =>
       ipcRenderer.invoke(CoworkIpcChannel.TempStorageClean, options),
-    listMemoryEntries: (input: {
+    listMemoryEntries: (input?: {
+      agentId?: string;
       query?: string;
-      status?: 'created' | 'stale' | 'deleted' | 'all';
+      status?: CoworkMemoryStatusFilter;
       includeDeleted?: boolean;
       limit?: number;
       offset?: number;
-    }) => ipcRenderer.invoke('cowork:memory:listEntries', input),
-    createMemoryEntry: (input: { text: string; confidence?: number; isExplicit?: boolean }) =>
-      ipcRenderer.invoke('cowork:memory:createEntry', input),
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryListEntries, input),
+    createMemoryEntry: (input: {
+      agentId?: string;
+      text: string;
+      section?: string;
+      confidence?: number;
+      isExplicit?: boolean;
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryCreateEntry, input),
     updateMemoryEntry: (input: {
+      agentId?: string;
       id: string;
       text?: string;
       confidence?: number;
-      status?: 'created' | 'stale' | 'deleted';
+      status?: CoworkMemoryStatus;
       isExplicit?: boolean;
-    }) => ipcRenderer.invoke('cowork:memory:updateEntry', input),
-    deleteMemoryEntry: (input: { id: string }) =>
-      ipcRenderer.invoke('cowork:memory:deleteEntry', input),
-    getMemoryStats: () => ipcRenderer.invoke('cowork:memory:getStats'),
-    readMemoryFileRaw: () => ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw),
-    writeMemoryFileRaw: (input: { content: string }) =>
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryUpdateEntry, input),
+    deleteMemoryEntry: (input: { agentId?: string; id: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryDeleteEntry, input),
+    getMemoryStats: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryGetStats, options),
+    readMemoryFileRaw: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw, options),
+    writeMemoryFileRaw: (input: { agentId?: string; content: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
     getDreamingStatus: (options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.DreamingStatus, options),
