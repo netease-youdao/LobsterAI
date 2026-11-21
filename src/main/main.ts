@@ -11114,7 +11114,7 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
-        runtime.respondToPermission(options.requestId, options.result);
+        await runtime.respondToPermission(options.requestId, options.result);
         // Close the desktop notification for this request regardless of which
         // subsystem handled it (runtime approvals emit permissionResolved on
         // their own; AskUserQuestion bridge requests do not).

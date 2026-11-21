@@ -77,6 +77,7 @@ function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
       if (updates.claudeSessionId !== undefined) session.claudeSessionId = updates.claudeSessionId;
       if (updates.modelOverride !== undefined) session.modelOverride = updates.modelOverride;
       if (updates.goal !== undefined) session.goal = updates.goal;
+      if (updates.permissionPreset !== undefined) session.permissionPreset = updates.permissionPreset;
     },
     getContinuityCapsule: () => ({
       version: 1,
@@ -2181,5 +2182,195 @@ describe('DshRuntimeAdapter', () => {
       compactionId: 'cmp-1',
       seq: 10,
     });
+  });
+
+  test('isolates per-session permission presets, persists to store, and survives reload without bleeding across sessions', async () => {
+    const sessions = new Map<string, DshAdapterSessionRecord>([
+      [
+        'sess-a',
+        {
+          id: 'sess-a',
+          cwd: '/tmp/a',
+          claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-a`,
+          permissionPreset: null,
+        },
+      ],
+      [
+        'sess-b',
+        {
+          id: 'sess-b',
+          cwd: '/tmp/b',
+          claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-b`,
+          permissionPreset: null,
+        },
+      ],
+    ]);
+    const multiStore: DshCoworkStorePort = {
+      getSession: (id) => sessions.get(id) ?? null,
+      addMessage: (_sid, msg) => ({
+        id: 'm1',
+        type: msg.type,
+        content: msg.content,
+        timestamp: Date.now(),
+        metadata: msg.metadata,
+      }),
+      updateMessageContent: () => undefined,
+      updateSession: (id, updates) => {
+        const s = sessions.get(id);
+        if (!s) return;
+        if (updates.claudeSessionId !== undefined) s.claudeSessionId = updates.claudeSessionId;
+        if (updates.modelOverride !== undefined) s.modelOverride = updates.modelOverride;
+        if (updates.permissionPreset !== undefined) s.permissionPreset = updates.permissionPreset;
+      },
+    };
+
+    const setPermissionPreset = vi.fn(async () => ({ ok: true }));
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    let defaultPreset: DshPermissionPreset = DshPermissionPreset.WorkspaceWrite;
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+      },
+      store: multiStore,
+      resolveDefaultPermissionPreset: () => defaultPreset,
+    });
+
+    // Switch Session A to FullAccess — must ONLY update Session A and NOT bleed to Session B or global default.
+    await adapter.setSessionPermissionPreset(DshPermissionPreset.FullAccess, 'sess-a');
+    expect(setPermissionPreset).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'dsh-a');
+    expect(sessions.get('sess-a')?.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+    expect(sessions.get('sess-b')?.permissionPreset).toBeNull();
+    expect(adapter.getEffectivePermissionPreset('sess-a')).toBe(DshPermissionPreset.FullAccess);
+    expect(adapter.getEffectivePermissionPreset('sess-b')).toBe(DshPermissionPreset.WorkspaceWrite);
+
+    // Changing global default must NOT wipe Session A's explicit override.
+    defaultPreset = DshPermissionPreset.ReadOnly;
+    await adapter.setSessionPermissionPreset(DshPermissionPreset.ReadOnly);
+    expect(adapter.getEffectivePermissionPreset('sess-a')).toBe(DshPermissionPreset.FullAccess);
+    expect(adapter.getEffectivePermissionPreset('sess-b')).toBe(DshPermissionPreset.ReadOnly);
+
+    // Simulate app reload with a fresh DshRuntimeAdapter reading from the same persisted store.
+    const reloadedAdapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+      },
+      store: multiStore,
+      resolveDefaultPermissionPreset: () => defaultPreset,
+    });
+    expect(reloadedAdapter.getEffectivePermissionPreset('sess-a')).toBe(DshPermissionPreset.FullAccess);
+    expect(reloadedAdapter.getEffectivePermissionPreset('sess-b')).toBe(DshPermissionPreset.ReadOnly);
+
+    await reloadedAdapter.continueSession('sess-a', 'Run turn after reload');
+    expect(bindSessionContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-a',
+        permissionPreset: DshPermissionPreset.FullAccess,
+        permissionPresetExplicit: true,
+      }),
+    );
+  });
+
+  test('awaits session-scoped setSessionPermissionPreset before resolving pending approval to avoid parallel tool race', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-race',
+      cwd: '/tmp/race',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-race-1`,
+    });
+
+    const waterfallMap = new Map<string, (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>>();
+    const fakeClient = {
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn((event: string, handler: (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>) => {
+        waterfallMap.set(event, handler);
+        return () => waterfallMap.delete(event);
+      }),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    let releaseHostPreset!: () => void;
+    const hostPresetDeferred = new Promise<Record<string, unknown>>((resolve) => {
+      releaseHostPreset = () => resolve({ ok: true });
+    });
+    const setPermissionPreset = vi.fn(() => hostPresetDeferred);
+    const onPermissionPresetChanged = vi.fn();
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+      },
+      store,
+      onPermissionPresetChanged,
+    });
+
+    await adapter.continueSession('cw-race', 'Trigger approval');
+
+    let capturedRequestId = '';
+    adapter.on('permissionRequest', (_sid, req) => {
+      capturedRequestId = req.requestId;
+    });
+
+    const approvalHandler = waterfallMap.get('approval/request')!;
+    let settledOutcome: DshWaterfallOutcome | null = null;
+    const approvalPromise = approvalHandler({
+      event: 'approval/request',
+      eventId: 'ev-race-1',
+      agentId: 'dsh-race-1',
+      request: { toolName: 'bash', callId: 'call-race-1', reason: 'Confirm rm' },
+      signal: new AbortController().signal,
+    }).then((out) => {
+      settledOutcome = out;
+      return out;
+    });
+
+    const respondPromise = adapter.respondToPermission(capturedRequestId, {
+      behavior: 'allow',
+      updatedPermissions: [
+        {
+          type: DshApprovalPermissionAction.SetPermissionPreset,
+          preset: DshPermissionPreset.FullAccess,
+          sessionId: 'cw-race',
+        },
+      ],
+    });
+
+    // Yield microtasks: pending approval MUST NOT resolve while host setPermissionPreset is still in flight.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(setPermissionPreset).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'dsh-race-1');
+    expect(settledOutcome).toBeNull();
+
+    // Once host preset RPC finishes, respondToPermission resolves the pending approval and persists session preset.
+    releaseHostPreset();
+    await respondPromise;
+    expect(await approvalPromise).toEqual({ kind: 'result', value: 'allowed-once' });
+    expect(session.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+    expect(onPermissionPresetChanged).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'cw-race');
   });
 });

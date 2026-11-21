@@ -15,6 +15,8 @@ import {
 import {
   DSH_PERMISSION_PRESET_CHANGED_EVENT,
   dshHostService,
+  type DshPermissionPresetChangedDetail,
+  shouldApplyPermissionPresetEvent,
 } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
 
@@ -68,33 +70,39 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
+    ? sessionId.trim()
+    : undefined;
+
   useEffect(() => {
     let active = true;
-    void dshHostService.getPermissionPreset(sessionId || undefined).then((res) => {
+    void dshHostService.getPermissionPreset(normalizedSessionId).then((res) => {
       if (active) setPreset(res.preset);
     });
     return () => {
       active = false;
     };
-  }, [sessionId]);
+  }, [normalizedSessionId]);
 
   useEffect(() => {
+    let active = true;
     const handlePresetChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        preset?: DshPermissionPreset;
-        defaultPreset?: DshPermissionPreset;
-        sessionId?: string;
-      }>).detail;
-      if (!detail) return;
-      if (!detail.sessionId || detail.sessionId === sessionId) {
-        if (detail.preset) setPreset(detail.preset);
+      const detail = (event as CustomEvent<DshPermissionPresetChangedDetail>).detail;
+      const reaction = shouldApplyPermissionPresetEvent(normalizedSessionId, detail);
+      if (reaction.apply && reaction.nextPreset) {
+        setPreset(reaction.nextPreset);
+      } else if (reaction.refetch && normalizedSessionId) {
+        void dshHostService.getPermissionPreset(normalizedSessionId).then((res) => {
+          if (active) setPreset(res.preset);
+        });
       }
     };
     window.addEventListener(DSH_PERMISSION_PRESET_CHANGED_EVENT, handlePresetChanged);
     return () => {
+      active = false;
       window.removeEventListener(DSH_PERMISSION_PRESET_CHANGED_EVENT, handlePresetChanged);
     };
-  }, [sessionId]);
+  }, [normalizedSessionId]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,9 +152,9 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     if (nextPreset === preset || updating) return;
     setUpdating(true);
     try {
-      // Update global default + apply live to all active sessions so the chosen
-      // mode stays consistent across current and subsequent conversations.
-      const res = await dshHostService.setPermissionPreset(nextPreset);
+      // Scope changes to the active session when inside a conversation; only
+      // update the global default preset when on the home / new-session composer.
+      const res = await dshHostService.setPermissionPreset(nextPreset, normalizedSessionId);
       if (res.ok) {
         setPreset(res.preset ?? nextPreset);
         const nextMeta = PRESET_OPTIONS.find((opt) => opt.value === nextPreset);

@@ -31,7 +31,11 @@ import type {
 import { AgentId } from '../../shared/agent/constants';
 import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
+  DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_PERMISSION_PRESET_KV_KEY,
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
+  mapLegacyExecutionModeToPermissionPreset,
+  parseDshPermissionPreset,
   RETAINED_IM_PLATFORM_LIST,
   RetiredImPlatform,
   WORKSPACES_DIR_NAME,
@@ -39,6 +43,7 @@ import {
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+  MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
@@ -1244,6 +1249,64 @@ function clearLegacyPendingMessageEditsOnce(db: Database.Database): void {
 }
 
 /**
+ * Migrate legacy OpenClaw `cowork_config.executionMode` and per-session
+ * `cowork_sessions.execution_mode` to DSH permission presets once.
+ *
+ * - `cowork_config.executionMode` -> `kv['dsh.permissionPreset.default']` when not already set
+ *   (`'auto'` -> `'danger-full-access'`, `'local'`/`'sandbox'` -> `'workspace-write'`).
+ * - Legacy `cowork_sessions.execution_mode` rows whose mapped preset differs from the
+ *   legacy default receive an explicit `cowork_sessions.permission_preset` so per-session
+ *   restrictions or auto approvals survive upgrade without relying on stale `execution_mode`.
+ */
+export function migrateLegacyPermissionPresets(db: Database.Database): void {
+  if (getKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY)) return;
+
+  let legacyConfigExecutionMode: string | null = null;
+  if (tableExists(db, 'cowork_config')) {
+    try {
+      const row = db
+        .prepare("SELECT value FROM cowork_config WHERE key = 'executionMode'")
+        .get() as { value?: unknown } | undefined;
+      if (typeof row?.value === 'string') {
+        legacyConfigExecutionMode = row.value;
+      }
+    } catch {
+      // Ignore unreadable legacy cowork_config table.
+    }
+  }
+
+  const mappedConfigPreset = mapLegacyExecutionModeToPermissionPreset(legacyConfigExecutionMode);
+  const existingDefaultPreset = parseDshPermissionPreset(getKv(db, DSH_PERMISSION_PRESET_KV_KEY));
+  if (!existingDefaultPreset && mappedConfigPreset) {
+    setKv(db, DSH_PERMISSION_PRESET_KV_KEY, mappedConfigPreset);
+  }
+
+  if (tableExists(db, 'cowork_sessions')) {
+    const cols = getTableColumns(db, 'cowork_sessions');
+    if (cols.has('execution_mode')) {
+      if (!cols.has('permission_preset')) {
+        db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+      }
+      const baselinePreset = mappedConfigPreset ?? existingDefaultPreset ?? DEFAULT_DSH_PERMISSION_PRESET;
+      const rows = db
+        .prepare(
+          'SELECT id, execution_mode FROM cowork_sessions WHERE permission_preset IS NULL AND execution_mode IS NOT NULL',
+        )
+        .all() as Array<{ id: string; execution_mode: string | null }>;
+      const updateStmt = db.prepare('UPDATE cowork_sessions SET permission_preset = ? WHERE id = ?');
+      for (const row of rows) {
+        const sessionPreset = mapLegacyExecutionModeToPermissionPreset(row.execution_mode);
+        if (sessionPreset && sessionPreset !== baselinePreset) {
+          updateStmt.run(sessionPreset, row.id);
+        }
+      }
+    }
+  }
+
+  setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
+}
+
+/**
  * Read pending v2 migration report for `MigrationReportModal.tsx`.
  */
 export function getPendingMigrationV2Report(db: Database.Database): MigrationV2Report | null {
@@ -1294,11 +1357,21 @@ export function runLegacyOpenClawMigration(
   let db = new Database(sqlitePath);
   try {
     // Idempotency guard: already migrated -> instant return.
-    if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
+    const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+    if (completedRaw) {
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
       clearLegacyPendingMessageEditsOnce(db);
+      let isFreshInstall = false;
+      try {
+        isFreshInstall = Boolean((JSON.parse(completedRaw) as { freshInstall?: boolean })?.freshInstall);
+      } catch {
+        // Non-JSON completion marker is treated as an upgraded database.
+      }
+      if (!isFreshInstall) {
+        migrateLegacyPermissionPresets(db);
+      }
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1312,6 +1385,7 @@ export function runLegacyOpenClawMigration(
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
       setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+      setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1349,6 +1423,7 @@ export function runLegacyOpenClawMigration(
         archivedModules,
       );
       backfillAgentPersonaFiles(db, workspacesDir);
+      migrateLegacyPermissionPresets(db);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
       const {

@@ -7,11 +7,14 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { DeliveryMode, TaskStatus } from '../../scheduledTask/constants';
 import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
+  DSH_PERMISSION_PRESET_KV_KEY,
+  DshPermissionPreset,
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   WORKSPACES_DIR_NAME,
 } from '../../shared/dshEngine/hostConstants';
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
+  MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
@@ -854,5 +857,112 @@ describe('runLegacyOpenClawMigration', () => {
     expect(editStore.pending('cw-legacy')).toBeNull();
     expect(versionStore.pendingSwitch('cw-legacy')).toBeNull();
     verifyDb.close();
+  });
+
+  test('migrates legacy cowork_config.executionMode and per-session execution_mode to DSH permission presets', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const openclawStateDir = path.join(userDataDir, 'openclaw', 'state');
+    fs.mkdirSync(openclawStateDir, { recursive: true });
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        claude_session_id TEXT,
+        execution_mode TEXT
+      );
+    `);
+    db.prepare("INSERT INTO cowork_config (key, value, updated_at) VALUES ('executionMode', 'auto', 1)").run();
+    db.prepare("INSERT INTO cowork_sessions (id, title, claude_session_id, execution_mode) VALUES ('s-auto', 'Auto', 'oc-1', 'auto')").run();
+    db.prepare("INSERT INTO cowork_sessions (id, title, claude_session_id, execution_mode) VALUES ('s-local', 'Local', 'oc-2', 'local')").run();
+    db.close();
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Completed);
+
+    const checkDb = new Database(sqlitePath, { readonly: true });
+    const defaultKv = checkDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(DSH_PERMISSION_PRESET_KV_KEY) as { value?: string } | undefined;
+    expect(defaultKv?.value).toBe(DshPermissionPreset.FullAccess);
+
+    const sessions = checkDb
+      .prepare('SELECT id, permission_preset FROM cowork_sessions ORDER BY id')
+      .all() as Array<{ id: string; permission_preset: string | null }>;
+    expect(sessions).toEqual([
+      { id: 's-auto', permission_preset: null },
+      { id: 's-local', permission_preset: DshPermissionPreset.WorkspaceWrite },
+    ]);
+    checkDb.close();
+  });
+
+  test('backfills legacy executionMode on already-migrated DB once without overwriting user-chosen preset', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE cowork_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        execution_mode TEXT
+      );
+    `);
+    db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, 1)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-01T00:00:00.000Z' }),
+    );
+    db.prepare("INSERT INTO cowork_config (key, value, updated_at) VALUES ('executionMode', 'local', 1)").run();
+    db.prepare("INSERT INTO cowork_sessions (id, title, execution_mode) VALUES ('s-auto', 'Auto', 'auto')").run();
+    db.prepare("INSERT INTO cowork_sessions (id, title, execution_mode) VALUES ('s-local', 'Local', 'local')").run();
+    db.close();
+
+    const first = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(first.status).toBe(MigrationV2Status.Skipped);
+
+    const afterFirst = new Database(sqlitePath);
+    const defaultKv = afterFirst
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(DSH_PERMISSION_PRESET_KV_KEY) as { value?: string } | undefined;
+    expect(defaultKv?.value).toBe(DshPermissionPreset.WorkspaceWrite);
+    const marker = afterFirst
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY) as { value?: string } | undefined;
+    expect(marker?.value).toBe('1');
+    const sessions = afterFirst
+      .prepare('SELECT id, permission_preset FROM cowork_sessions ORDER BY id')
+      .all() as Array<{ id: string; permission_preset: string | null }>;
+    expect(sessions).toEqual([
+      { id: 's-auto', permission_preset: DshPermissionPreset.FullAccess },
+      { id: 's-local', permission_preset: null },
+    ]);
+
+    // User switches global default to read-only and resets s-auto to workspace-write:
+    // re-running migration must NOT overwrite those changes.
+    afterFirst.prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, 2)').run(
+      DSH_PERMISSION_PRESET_KV_KEY,
+      DshPermissionPreset.ReadOnly,
+    );
+    afterFirst.prepare('UPDATE cowork_sessions SET permission_preset = ? WHERE id = ?').run(
+      DshPermissionPreset.WorkspaceWrite,
+      's-auto',
+    );
+    afterFirst.close();
+
+    runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    const afterSecond = new Database(sqlitePath, { readonly: true });
+    expect(
+      (afterSecond.prepare('SELECT value FROM kv WHERE key = ?').get(DSH_PERMISSION_PRESET_KV_KEY) as { value?: string })?.value,
+    ).toBe(DshPermissionPreset.ReadOnly);
+    expect(
+      (afterSecond.prepare("SELECT permission_preset FROM cowork_sessions WHERE id = 's-auto'").get() as { permission_preset?: string })?.permission_preset,
+    ).toBe(DshPermissionPreset.WorkspaceWrite);
+    afterSecond.close();
   });
 });

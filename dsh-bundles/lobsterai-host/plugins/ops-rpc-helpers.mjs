@@ -21,6 +21,11 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
   const nextPreset = typeof p.permissionPreset === 'string' && validPermissionPresets.has(p.permissionPreset)
     ? p.permissionPreset
     : undefined;
+  const permissionPresetExplicit = p.permissionPresetExplicit === true
+    ? true
+    : p.permissionPresetExplicit === false
+      ? false
+      : Boolean(base.permissionPresetExplicit);
   const mergedUnlocked = new Set([
     ...(Array.isArray(base.unlockedCapabilities) ? base.unlockedCapabilities : []),
     ...(Array.isArray(p.unlockedCapabilities)
@@ -48,6 +53,7 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
       ...customSystemPromptPatch,
       ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
       ...(nextPreset ? { permissionPreset: nextPreset } : {}),
+      permissionPresetExplicit,
       ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
     },
   };

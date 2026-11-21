@@ -80,5 +80,34 @@ describe('ops-rpc-helpers mergeBoundSessionContext', () => {
     expect(merged.context.permissionPreset).toBe('read-only');
     expect(merged.context.traceId).toBe('trace-123');
     expect(merged.context.unlockedCapabilities).toEqual(['browser', 'excel']);
+    expect(merged.context.permissionPresetExplicit).toBe(false);
+  });
+
+  test('preserves and overrides permissionPresetExplicit independently of customSystemPrompt clears', async () => {
+    const { mergeBoundSessionContext } = await loadHelpers();
+
+    const explicit = mergeBoundSessionContext(
+      {},
+      {
+        permissionPreset: 'danger-full-access',
+        permissionPresetExplicit: true,
+        customSystemPrompt: '# Plan Mode',
+      },
+    );
+    expect(explicit.context.permissionPreset).toBe('danger-full-access');
+    expect(explicit.context.permissionPresetExplicit).toBe(true);
+
+    // Subsequent turn clears Plan Mode without specifying permissionPresetExplicit -> stays explicit.
+    const nextTurn = mergeBoundSessionContext(explicit.context, {
+      customSystemPrompt: '',
+    });
+    expect(nextTurn.context.customSystemPrompt).toBe('');
+    expect(nextTurn.context.permissionPresetExplicit).toBe(true);
+
+    // Explicit false clears the flag.
+    const reset = mergeBoundSessionContext(nextTurn.context, {
+      permissionPresetExplicit: false,
+    });
+    expect(reset.context.permissionPresetExplicit).toBe(false);
   });
 });

@@ -31,6 +31,7 @@ import {
   DshApprovalPermissionAction,
   DshPermissionPreset,
   DshProgressiveCapability,
+  parseDshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
@@ -78,6 +79,7 @@ export interface DshAdapterSessionRecord {
   agentId?: string;
   claudeSessionId?: string | null;
   executionMode?: string;
+  permissionPreset?: DshPermissionPreset | null;
   modelOverride?: string | null;
   modelPresetId?: string | null;
   thinkingLevel?: string | null;
@@ -111,6 +113,7 @@ export interface DshCoworkStorePort {
       claudeSessionId?: string | null;
       status?: CoworkSessionStatus;
       modelOverride?: string | null;
+      permissionPreset?: DshPermissionPreset | null;
       goal?: CoworkGoal | null;
     },
   ): void;
@@ -690,11 +693,21 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
   }
 
-  getEffectivePermissionPreset(coworkSessionId?: string): DshPermissionPreset {
-    if (coworkSessionId) {
-      const override = this.sessionPermissionPresets.get(coworkSessionId);
-      if (override) return override;
+  private getExplicitPermissionPreset(coworkSessionId?: string): DshPermissionPreset | null {
+    if (!coworkSessionId) return null;
+    const cached = this.sessionPermissionPresets.get(coworkSessionId);
+    if (cached) return cached;
+    const persisted = parseDshPermissionPreset(this.store.getSession(coworkSessionId, 0)?.permissionPreset);
+    if (persisted) {
+      this.sessionPermissionPresets.set(coworkSessionId, persisted);
+      return persisted;
     }
+    return null;
+  }
+
+  getEffectivePermissionPreset(coworkSessionId?: string): DshPermissionPreset {
+    const explicit = this.getExplicitPermissionPreset(coworkSessionId);
+    if (explicit) return explicit;
     return this.resolveDefaultPermissionPreset?.() ?? DEFAULT_DSH_PERMISSION_PRESET;
   }
 
@@ -704,13 +717,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   ): Promise<void> {
     if (coworkSessionId) {
       this.sessionPermissionPresets.set(coworkSessionId, preset);
+      this.store.updateSession(coworkSessionId, { permissionPreset: preset });
       const dshSessionId = this.resolveExistingDshSessionId(coworkSessionId);
       if (dshSessionId && this.hostManager.setPermissionPreset) {
         await this.hostManager.setPermissionPreset(preset, dshSessionId);
       }
       return;
     }
-    this.sessionPermissionPresets.clear();
+    // Global default updates must NOT clear explicit per-session overrides.
     if (this.hostManager.setPermissionPreset) {
       await this.hostManager.setPermissionPreset(preset);
     }
@@ -1442,7 +1456,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     }
   }
 
-  respondToPermission(requestId: string, result: PermissionResult): void {
+  async respondToPermission(requestId: string, result: PermissionResult): Promise<void> {
     const pending = this.pendingInteractions.get(requestId);
     if (!pending) return;
     this.pendingInteractions.delete(requestId);
@@ -1467,17 +1481,27 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
               set.add(scope);
             }
           } else if (record.type === DshApprovalPermissionAction.SetPermissionPreset) {
-            const preset = record.preset;
-            if (
-              preset === DshPermissionPreset.ReadOnly
-              || preset === DshPermissionPreset.WorkspaceWrite
-              || preset === DshPermissionPreset.FullAccess
-            ) {
-              const targetSessionId = record.global === true ? undefined : pending.coworkSessionId;
-              void this.setSessionPermissionPreset(preset, targetSessionId).catch((): void => undefined);
-              void Promise.resolve(this.onPermissionPresetChanged?.(preset, targetSessionId)).catch(
-                (): void => undefined,
-              );
+            const preset = parseDshPermissionPreset(record.preset);
+            if (preset) {
+              const explicitSessionId = typeof record.sessionId === 'string' && record.sessionId.trim()
+                ? record.sessionId.trim()
+                : undefined;
+              const targetSessionId = record.global === true
+                ? undefined
+                : (explicitSessionId ?? pending.coworkSessionId);
+              // Await preset persistence & host RPC BEFORE resolving the pending
+              // approval so sibling/parallel tool calls in the same turn observe
+              // the upgraded preset without racing.
+              try {
+                await this.setSessionPermissionPreset(preset, targetSessionId);
+              } catch (error) {
+                console.warn('[DshRuntimeAdapter] Failed to apply permission preset from approval response:', error);
+              }
+              try {
+                await this.onPermissionPresetChanged?.(preset, targetSessionId);
+              } catch (error) {
+                console.warn('[DshRuntimeAdapter] Failed to notify permission preset change:', error);
+              }
             }
           }
         }
@@ -1901,6 +1925,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         messageSkillIds: params.messageSkillIds,
         browserAnnotations: params.browserAnnotations,
       });
+      const explicitPermissionPreset = this.getExplicitPermissionPreset(sessionId);
+      const effectivePermissionPreset = explicitPermissionPreset ?? this.getEffectivePermissionPreset(sessionId);
       const contextPayload: DshHostSessionContext = {
         sessionId: dshSessionId,
         agentId,
@@ -1910,7 +1936,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         allowedSkillIds,
         customSystemPrompt: boundCustomSystemPrompt,
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
-        permissionPreset: this.getEffectivePermissionPreset(sessionId),
+        permissionPreset: effectivePermissionPreset,
+        ...(explicitPermissionPreset ? { permissionPresetExplicit: true } : {}),
         ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
       };
       await this.hostManager.bindSessionContext(contextPayload);

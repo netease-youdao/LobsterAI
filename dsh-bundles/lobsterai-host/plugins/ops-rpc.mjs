@@ -137,7 +137,7 @@ export function apply(ctx) {
 
   state.syncMcpServers = syncMcpServers;
 
-  function applyPermissionPresetToAgent(agent, preset) {
+  function applyPermissionPresetToAgent(agent, preset, options = {}) {
     if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
     // dsh applies the delegation's sandbox on top of its parent's permissions.
     if (agent.session.header?.origin === 'subagent') return false;
@@ -148,14 +148,21 @@ export function apply(ctx) {
         ? permissionPresets.current(agent.session)
         : undefined;
       if (current === preset) return true;
-      permissionPresets.set(agent.session, preset);
-      const approval = ctx.get('approval');
-      if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
-        const spec = permissionPresets.resolve(preset);
-        if (spec?.approval) {
-          approval.setPolicy(agent, spec.approval);
+      // Call `approval.setPolicy` BEFORE `permissionPresets.set` so `setPolicy`
+      // observes the previous effective policy and emits its model switch notice
+      // instead of silently returning early after `permissionPresets.set` already
+      // appends `approval/policy`. `permissionPresets.set` then writes
+      // `permission/preset` and `sandbox/mode` without duplicating `approval/policy`.
+      if (options.notifyPolicyChange !== false) {
+        const approval = ctx.get('approval');
+        if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
+          const spec = permissionPresets.resolve(preset);
+          if (spec?.approval) {
+            approval.setPolicy(agent, spec.approval);
+          }
         }
       }
+      permissionPresets.set(agent.session, preset);
       return true;
     } catch (error) {
       ctx.logger.warn(
@@ -174,7 +181,7 @@ export function apply(ctx) {
       ? bound.permissionPreset
       : state.defaultPermissionPreset;
     if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
-      applyPermissionPresetToAgent(agent, targetPreset);
+      applyPermissionPresetToAgent(agent, targetPreset, { notifyPolicyChange: false });
     }
   });
 
@@ -398,7 +405,11 @@ export function apply(ctx) {
             const appliedSessions = [];
             if (sessionId) {
               const prev = state.sessionContexts.get(sessionId) ?? {};
-              state.sessionContexts.set(sessionId, { ...prev, permissionPreset: preset });
+              state.sessionContexts.set(sessionId, {
+                ...prev,
+                permissionPreset: preset,
+                permissionPresetExplicit: true,
+              });
               const liveAgent = ctx.get('agents')?.get(sessionId);
               if (liveAgent && applyPermissionPresetToAgent(liveAgent, preset)) {
                 appliedSessions.push(sessionId);
@@ -406,11 +417,14 @@ export function apply(ctx) {
             } else {
               state.defaultPermissionPreset = preset;
               for (const [sid, ctxEntry] of state.sessionContexts.entries()) {
+                if (ctxEntry?.permissionPresetExplicit) continue;
                 state.sessionContexts.set(sid, { ...ctxEntry, permissionPreset: preset });
               }
               const agents = ctx.get('agents');
               if (agents && typeof agents.list === 'function') {
                 for (const agent of agents.list()) {
+                  const ctxEntry = state.sessionContexts.get(agent.id);
+                  if (ctxEntry?.permissionPresetExplicit) continue;
                   if (applyPermissionPresetToAgent(agent, preset)) {
                     appliedSessions.push(agent.id);
                   }

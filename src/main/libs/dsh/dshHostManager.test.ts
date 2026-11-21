@@ -3,7 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { DshHostPhase, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
+import {
+  DshHostPhase,
+  DshOpsAction,
+  DshPermissionPreset,
+  DshSearchPolicy,
+} from '../../../shared/dshEngine/hostConstants';
 import {
   buildIsolatedDshChildEnv,
   DshHostManager,
@@ -172,5 +177,54 @@ describe('DshHostManager', () => {
     expect(env.npm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
     expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
     expect(env.HOME).toBe('/Users/alice');
+  });
+
+  test('caches per-session permission presets independently from default and replays both on restart', async () => {
+    const temp = createTempDir();
+    const manager = new DshHostManager({
+      userDataDir: temp,
+      runtimeDir: path.join(temp, 'runtime'),
+      hostBundleDir: path.join(temp, 'host-bundle'),
+      skillsDir: path.join(temp, 'skills'),
+      executablePath: process.execPath,
+      skipElectronRunAsNode: true,
+    });
+
+    await manager.setPermissionPreset(DshPermissionPreset.WorkspaceWrite);
+    await manager.setPermissionPreset(DshPermissionPreset.FullAccess, 'dsh-sess-a');
+    await manager.setPermissionPreset(DshPermissionPreset.ReadOnly, 'dsh-sess-b');
+
+    const callOps = vi.fn(async () => ({ ok: true }));
+    manager['phase'] = DshHostPhase.Ready;
+    manager['client'] = {
+      isConnected: () => true,
+      callOps,
+    } as never;
+
+    await manager['replayCachedSyncs']();
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.WorkspaceWrite,
+    });
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.FullAccess,
+      sessionId: 'dsh-sess-a',
+    });
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.ReadOnly,
+      sessionId: 'dsh-sess-b',
+    });
+
+    // Deleting a session evicts its cached per-session preset so it is not replayed.
+    callOps.mockClear();
+    await manager.deleteSessionFiles('dsh-sess-a');
+    await manager['replayCachedSyncs']();
+    expect(callOps).not.toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.FullAccess,
+      sessionId: 'dsh-sess-a',
+    });
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.ReadOnly,
+      sessionId: 'dsh-sess-b',
+    });
   });
 });

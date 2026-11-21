@@ -27,10 +27,10 @@ import type {
   ScheduledTaskStatusEvent,
 } from '../../../scheduledTask/types';
 import {
-  DEFAULT_DSH_PERMISSION_PRESET,
   DSH_PERMISSION_PRESET_KV_KEY,
   DshHostPhase,
-  DshPermissionPreset,
+  type DshPermissionPreset,
+  parseDshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
@@ -64,6 +64,7 @@ import {
   type DshHostStatus,
   resolveBundledDshPaths,
 } from './dshHostManager';
+import { resolveInitialDshPermissionPreset } from './dshPermissionPresetStorage';
 import {
   buildDshMcpServerSpecs,
   buildDshProvidersPayload,
@@ -295,13 +296,7 @@ export class DshBootstrap {
     fs.mkdirSync(this.workspacesDir, { recursive: true });
 
     this.kvStorage = createSqliteKvStoragePort(options.db);
-    const storedPreset = this.kvStorage.get(DSH_PERMISSION_PRESET_KV_KEY);
-    this.defaultPermissionPreset =
-      storedPreset === DshPermissionPreset.ReadOnly
-      || storedPreset === DshPermissionPreset.WorkspaceWrite
-      || storedPreset === DshPermissionPreset.FullAccess
-        ? storedPreset
-        : DEFAULT_DSH_PERMISSION_PRESET;
+    this.defaultPermissionPreset = resolveInitialDshPermissionPreset(options.db, this.kvStorage);
 
     this.memoryService = new LobsterMemoryService(this.workspacesDir);
     this.mcpOAuthManager = new McpOAuthManager({
@@ -427,21 +422,21 @@ export class DshBootstrap {
     preset: DshPermissionPreset,
     sessionId?: string,
   ): Promise<{ preset: DshPermissionPreset; defaultPreset: DshPermissionPreset }> {
-    if (
-      preset !== DshPermissionPreset.ReadOnly
-      && preset !== DshPermissionPreset.WorkspaceWrite
-      && preset !== DshPermissionPreset.FullAccess
-    ) {
+    const validated = parseDshPermissionPreset(preset);
+    if (!validated) {
       throw new Error(`Unsupported DSH permission preset: "${String(preset)}"`);
     }
-    // Always persist as default when global (no sessionId) OR when user switches
-    // from the composer/settings without specifying a session-only scope.
-    if (!sessionId) {
-      this.defaultPermissionPreset = preset;
-      this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, preset);
+    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
+      ? sessionId.trim()
+      : undefined;
+    // Update the persisted global default ONLY when switching without a session scope
+    // (home / new-session composer). Per-session switches stay isolated to that session.
+    if (!normalizedSessionId) {
+      this.defaultPermissionPreset = validated;
+      this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, validated);
     }
-    await this.runtimeAdapter.setSessionPermissionPreset(preset, sessionId);
-    return this.getPermissionPreset(sessionId);
+    await this.runtimeAdapter.setSessionPermissionPreset(validated, normalizedSessionId);
+    return this.getPermissionPreset(normalizedSessionId);
   }
 
   private broadcastScheduledTaskEvent(channel: string, payload?: unknown): void {

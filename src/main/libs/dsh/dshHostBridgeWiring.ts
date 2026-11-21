@@ -112,10 +112,8 @@ export function evaluateDshToolApproval(
   const toolName = request.toolName.trim();
   const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
   const command = isShellTool ? extractShellCommandFromArgs(request.args) : '';
-  if (toolName === DSH_SKILL_INSTALL_TOOL && (request.args as { action?: unknown } | null)?.action === DshSkillInstallAction.Install) {
-    if (request.permissionPreset === DshPermissionPreset.ReadOnly) return { kind: 'deny', reason: t('skillChatReadOnly') };
-    if (request.permissionPreset !== DshPermissionPreset.FullAccess) return { kind: 'ask', reason: t('skillChatInstallPermission') };
-  }
+  const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
+  const scopeKey = buildApprovalScopeKey(toolName, request.args, danger.reason);
 
   // Never allow shell commands to pop up desktop Office GUI applications
   // (WPS / Keynote / Pages / Microsoft Office / non-headless soffice) even under
@@ -130,14 +128,36 @@ export function evaluateDshToolApproval(
     }
   }
 
+  if (
+    toolName === DSH_SKILL_INSTALL_TOOL
+    && (request.args as { action?: unknown } | null)?.action === DshSkillInstallAction.Install
+  ) {
+    if (request.permissionPreset === DshPermissionPreset.ReadOnly) {
+      return { kind: 'deny', reason: t('skillChatReadOnly') };
+    }
+    if (request.permissionPreset === DshPermissionPreset.FullAccess) {
+      return { kind: 'allow' };
+    }
+    if (
+      allowRules?.isToolAllowedAlways({
+        toolName,
+        args: request.args,
+        sessionId: request.sessionId,
+        coworkSessionId: request.coworkSessionId,
+        agentId: request.agentId,
+        scopeKey,
+      })
+    ) {
+      return { kind: 'allow' };
+    }
+    return { kind: 'ask', reason: t('skillChatInstallPermission') };
+  }
+
   // Explicit DSH `danger-full-access` preset sets DSH approvalPolicy='never' and
   // bypasses all interactive popups so the user is never interrupted repeatedly.
   if (request.permissionPreset === DshPermissionPreset.FullAccess) {
     return { kind: 'allow' };
   }
-
-  const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
-  const scopeKey = buildApprovalScopeKey(toolName, request.args, danger.reason);
 
   // High-severity destructive shell commands require explicit confirmation unless
   // the user explicitly switched the session/default mode to `danger-full-access`.
@@ -163,10 +183,8 @@ export function evaluateDshToolApproval(
     return { kind: 'allow' };
   }
 
-  if (request.executionMode === 'auto') {
-    return { kind: 'allow' };
-  }
-
+  // `permissionPreset` is the single source of truth on DSH: never bypass
+  // caution-level approvals based on stale legacy `executionMode === 'auto'`.
   if (command && isDangerousCommand(command)) {
     return {
       kind: 'ask',

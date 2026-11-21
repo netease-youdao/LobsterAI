@@ -167,6 +167,7 @@ export interface DshHostSessionContext {
   customSystemPrompt?: string;
   executionMode?: string;
   permissionPreset?: DshPermissionPreset;
+  permissionPresetExplicit?: boolean;
   unlockedCapabilities?: DshProgressiveCapability[];
   unbind?: boolean;
 }
@@ -385,6 +386,7 @@ export class DshHostManager extends EventEmitter {
   private lastAgents: DshHostAgentSpec[] | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
   private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
+  private readonly lastSessionPermissionPresets = new Map<string, DshPermissionPreset>();
   private readonly approvalCallContexts = new Map<string, DshApprovalCallContext>();
 
   constructor(options: DshHostManagerOptions) {
@@ -540,10 +542,16 @@ export class DshHostManager extends EventEmitter {
   }
 
   async bindSessionContext(context: DshHostSessionContext): Promise<Record<string, unknown>> {
+    if (context.unbind) {
+      this.lastSessionPermissionPresets.delete(context.sessionId);
+    } else if (context.permissionPresetExplicit && context.permissionPreset) {
+      this.lastSessionPermissionPresets.set(context.sessionId, context.permissionPreset);
+    }
     return this.getClient().callOps(DshOpsAction.BindSessionContext, context);
   }
 
   async deleteSessionFiles(sessionId: string): Promise<Record<string, unknown>> {
+    this.lastSessionPermissionPresets.delete(sessionId);
     if (!this.isReady()) return { skipped: true };
     return this.getClient().callOps(DshOpsAction.DeleteSessionFiles, { sessionId });
   }
@@ -552,7 +560,9 @@ export class DshHostManager extends EventEmitter {
     preset: DshPermissionPreset,
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
-    if (!sessionId) {
+    if (sessionId) {
+      this.lastSessionPermissionPresets.set(sessionId, preset);
+    } else {
       this.lastPermissionPreset = preset;
     }
     if (!this.isReady()) return { deferred: true, preset };
@@ -663,6 +673,12 @@ export class DshHostManager extends EventEmitter {
     await this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
       preset: this.lastPermissionPreset,
     });
+    for (const [sessionId, sessionPreset] of this.lastSessionPermissionPresets.entries()) {
+      await this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
+        preset: sessionPreset,
+        sessionId,
+      });
+    }
   }
 
   private readRuntimeVersion(): string | null {
