@@ -51,8 +51,9 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
-import { getElectronNodeRuntimePath } from '../coworkUtil';
+import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../coworkUtil';
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
+import { resolveDshBundledGitBinDir } from '../dshRuntime';
 import {
   type ApprovalAllowRulePort,
   type HostToolProvider,
@@ -64,6 +65,7 @@ import {
   type DshHostStatus,
   resolveBundledDshPaths,
 } from './dshHostManager';
+import type { DshNodeToolchain } from './dshProfileManager';
 import {
   buildDshMcpServerSpecs,
   buildDshProvidersPayload,
@@ -346,6 +348,7 @@ export class DshBootstrap {
       instanceId: options.instanceId,
       skipElectronRunAsNode: options.skipElectronRunAsNode,
       bootTimeoutMs: options.bootTimeoutMs,
+      nodeToolchainSource: () => this.resolveNodeToolchain(),
     });
 
     this.channelsBridge = new DshChannelsBridge({
@@ -469,6 +472,34 @@ export class DshBootstrap {
    */
   isReadyForTurns(): boolean {
     return this.started && !this.startingInProgress && this.hostManager.isReady() && this.initialConfigSynced;
+  }
+
+  resolveNodeToolchain(): DshNodeToolchain {
+    const npmBinDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+      : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+    const hasNpm = fs.existsSync(npmBinDir);
+    let nodeShimDir: string | null = null;
+    try {
+      nodeShimDir = ensureElectronNodeShim(this.executablePath, hasNpm ? npmBinDir : undefined);
+    } catch (error) {
+      console.warn('[DshBootstrap] Could not prepare Electron node shims for bundled pnpm:', error);
+    }
+    const resourcesDir = app.isPackaged
+      ? process.resourcesPath
+      : path.join(app.getAppPath(), 'resources');
+    const gitBinDir = resolveDshBundledGitBinDir(
+      resourcesDir,
+      process.platform,
+      fs.existsSync,
+      path.join,
+    );
+    return {
+      electronPath: this.executablePath,
+      nodeShimDir,
+      npmBinDir: hasNpm ? npmBinDir : null,
+      gitBinDir,
+    };
   }
 
   getPermissionPreset(sessionId?: string): {

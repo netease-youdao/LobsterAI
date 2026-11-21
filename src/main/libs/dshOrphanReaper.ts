@@ -29,9 +29,11 @@ export interface ProcessTableRow {
   command: string;
 }
 
-// Matches both the App-Owned Profile host (`--expose-internals <entry> --profile lobsterai --no-open ...`)
-// and legacy `web --port <n> --no-open` runs spawned by this executable.
-const DSH_WEB_COMMAND_TAIL = /^ --expose-internals .+ (?:web --port \d+ --no-open|--profile \S+ --no-open\b.*)$/;
+// Matches both the App-Owned Profile host (through `lib/bin.js` or the generated
+// `dsh-launcher/launch.mjs`: `--expose-internals <entry> --profile lobsterai --no-open ...`)
+// and legacy `web --port <n> --no-open` runs spawned by this executable, while
+// excluding `dsh plugin --profile ...` CLI invocations.
+const DSH_WEB_COMMAND_TAIL = /^ --expose-internals (?!.+ plugin --profile ).+ (?:web --port \d+ --no-open|--profile \S+ --no-open\b.*)$/;
 
 // dsh shuts itself down within 5s of SIGTERM (PROCESS_SHUTDOWN_TIMEOUT_MS in
 // its profile boot), so a little over that before escalating.

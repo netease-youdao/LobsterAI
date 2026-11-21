@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -735,5 +736,116 @@ describe('runLegacyOpenClawMigration', () => {
 
     expect(seededRow.claude_session_id).toMatch(/^dsh:[0-9a-f-]{36}$/);
     expect(emptyRow.claude_session_id).toBeNull();
+  });
+
+  test('never reads or mutates co-installed official ~/.dsh or ~/.agents across fresh boot and legacy OpenClaw upgrade', () => {
+    const hashTree = (rootDir: string): Record<string, string> => {
+      const digestMap: Record<string, string> = {};
+      const walk = (dir: string): void => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          const full = path.join(dir, entry.name);
+          const rel = path.relative(rootDir, full).replace(/\\/g, '/');
+          if (entry.isDirectory()) {
+            walk(full);
+          } else if (entry.isFile()) {
+            digestMap[rel] = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+          }
+        }
+      };
+      walk(rootDir);
+      return digestMap;
+    };
+
+    const fakeHome = createTempDir();
+    const officialDshDir = path.join(fakeHome, '.dsh');
+    const officialAgentsDir = path.join(fakeHome, '.agents');
+
+    fs.mkdirSync(path.join(officialDshDir, 'profiles', 'web'), { recursive: true });
+    fs.mkdirSync(path.join(officialDshDir, 'sessions'), { recursive: true });
+    fs.mkdirSync(path.join(officialAgentsDir, 'skills', 'official-only'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(officialDshDir, '.credentials.yaml'),
+      'DEEPSEEK_API_KEY: sk-official-dsh-secret\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(officialDshDir, 'cordis.patch.yml'),
+      '- id: llm-deepseek\n  config:\n    model: deepseek-chat\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(officialDshDir, 'profiles', 'web', 'package.json'),
+      JSON.stringify({ name: 'official-web-profile', private: true }, null, 2),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(officialDshDir, 'sessions', 'official-session-1.jsonl'),
+      '{"role":"user","content":"official dsh session"}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(officialAgentsDir, 'skills', 'official-only', 'SKILL.md'),
+      '---\nname: official-only\ndescription: Official DSH skill\n---\n',
+      'utf8',
+    );
+
+    const beforeDsh = hashTree(officialDshDir);
+    const beforeAgents = hashTree(officialAgentsDir);
+
+    const prevEnv = {
+      HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
+      DSH_HOME: process.env.DSH_HOME,
+      DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME,
+    };
+
+    try {
+      process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
+      process.env.DSH_HOME = officialDshDir;
+      process.env.DSH_AGENTS_HOME = officialAgentsDir;
+
+      // 1. Fresh install boot check
+      const freshUserData = createTempDir();
+      const freshSqlite = path.join(freshUserData, 'lobsterai.sqlite');
+      const freshDb = new Database(freshSqlite);
+      freshDb.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+      freshDb.close();
+      expect(runLegacyOpenClawMigration({ userDataDir: freshUserData, sqlitePath: freshSqlite }).status).toBe(
+        MigrationV2Status.Skipped,
+      );
+      expect(hashTree(officialDshDir)).toEqual(beforeDsh);
+      expect(hashTree(officialAgentsDir)).toEqual(beforeAgents);
+
+      // 2. Legacy OpenClaw -> DSH v2 upgrade migration (including old userData/dsh-runtime cleanup)
+      const upgradeUserData = createTempDir();
+      const upgradeSqlite = path.join(upgradeUserData, 'lobsterai.sqlite');
+      const upgradeDb = new Database(upgradeSqlite);
+      upgradeDb.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+      upgradeDb.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+      upgradeDb.close();
+
+      const legacyWs = path.join(upgradeUserData, 'openclaw', 'state', 'workspace-main');
+      fs.mkdirSync(legacyWs, { recursive: true });
+      fs.writeFileSync(path.join(legacyWs, 'SOUL.md'), 'LobsterAI user persona\n', 'utf8');
+      fs.mkdirSync(path.join(upgradeUserData, 'dsh-runtime'), { recursive: true });
+      fs.writeFileSync(path.join(upgradeUserData, 'dsh-runtime', 'stale.bin'), 'stale-cache', 'utf8');
+
+      const upgradeRes = runLegacyOpenClawMigration({
+        userDataDir: upgradeUserData,
+        sqlitePath: upgradeSqlite,
+        now: () => new Date('2026-11-21T00:00:00.000Z'),
+      });
+      expect(upgradeRes.status).toBe(MigrationV2Status.Completed);
+      expect(fs.existsSync(path.join(upgradeUserData, 'dsh-runtime'))).toBe(false);
+      expect(hashTree(officialDshDir)).toEqual(beforeDsh);
+      expect(hashTree(officialAgentsDir)).toEqual(beforeAgents);
+    } finally {
+      for (const [key, val] of Object.entries(prevEnv)) {
+        if (val === undefined) delete process.env[key];
+        else process.env[key] = val;
+      }
+    }
   });
 });
