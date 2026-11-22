@@ -41,7 +41,9 @@ export const MigrationReportModal: React.FC = () => {
             <div className="text-[11px] opacity-70">{t('migrationV2SummaryTasks')}</div>
           </div>
           <div className="rounded-lg border p-2.5 text-center dark:border-neutral-700">
-            <div className="text-lg font-semibold">{report.summary.sessionsPreservedForLazyBridge}</div>
+            <div className="text-lg font-semibold">
+              {(report.summary.sessionsPreSeeded ?? 0) + report.summary.sessionsPreservedForLazyBridge}
+            </div>
             <div className="text-[11px] opacity-70">{t('migrationV2SummarySessions')}</div>
           </div>
         </div>

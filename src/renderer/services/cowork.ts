@@ -18,10 +18,12 @@ import {
   CoworkContextUsageRefreshMode,
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
+  type CoworkMemoryStatusFilter,
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
-import { normalizeCoworkGoal } from '../../shared/cowork/goal';
+import type { DreamDiaryData } from '../../shared/cowork/dreamDiary';
+import { CoworkGoalStatus, normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
   CoworkMessageEditRequest,
@@ -756,25 +758,27 @@ class CoworkService {
         } else {
           await this.refreshContextUsage(sessionId);
         }
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `context-compaction-manual-${sessionId}-${Date.now()}`,
-            type: 'system',
-            content: result.compacted
-              ? i18nService.t('coworkContextManualCompacted')
-              : i18nService.t('coworkContextManualCompactNoop'),
-            timestamp: Date.now(),
-            metadata: {
-              kind: CoworkSystemMessageKind.ContextCompaction,
-              mode: ContextCompactionMode.Manual,
-              status: result.compacted
-                ? ContextCompactionStatus.Completed
-                : ContextCompactionStatus.Failed,
-              compacted: result.compacted === true,
+        // When compaction actually ran, main persists and streams the durable
+        // ContextCompaction message via `onStreamMessage`. Only append an
+        // ephemeral notice here for no-op attempts so live chats never show
+        // duplicate compaction dividers.
+        if (!result.compacted) {
+          store.dispatch(addMessage({
+            sessionId,
+            message: {
+              id: `context-compaction-manual-${sessionId}-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkContextManualCompactNoop'),
+              timestamp: Date.now(),
+              metadata: {
+                kind: CoworkSystemMessageKind.ContextCompaction,
+                mode: ContextCompactionMode.Manual,
+                status: ContextCompactionStatus.Failed,
+                compacted: false,
+              },
             },
-          },
-        }));
+          }));
+        }
         return true;
       }
       console.warn(`[CoworkService] manual context compaction failed for session ${sessionId}: ${result.error ?? 'Unknown error'}`);
@@ -1569,11 +1573,6 @@ class CoworkService {
     const command = options.command.trim();
     const action = command.split(/\s+/, 2)[1] ?? 'status';
     const normalizedAction = action.toLowerCase();
-    const mayStartRun =
-      normalizedAction === 'start'
-      || normalizedAction === 'create'
-      || normalizedAction === 'set'
-      || normalizedAction === 'resume';
     this.logDiagnostic(
       'debug',
       `running goal command for session ${options.sessionId}, action ${action}`,
@@ -1586,6 +1585,16 @@ class CoworkService {
       session => session.id === options.sessionId,
     );
     const previousStatus = currentSessionBeforeGoalCommand?.status ?? listedSessionBeforeGoalCommand?.status;
+    const existingGoal = currentSessionBeforeGoalCommand?.goal ?? listedSessionBeforeGoalCommand?.goal ?? null;
+    const hasNonCompleteGoal = Boolean(existingGoal && existingGoal.status !== CoworkGoalStatus.Complete);
+    const isNonStartingAction =
+      normalizedAction === 'status'
+      || normalizedAction === 'pause'
+      || normalizedAction === 'clear'
+      || normalizedAction === 'edit';
+    const mayStartRun =
+      normalizedAction === 'resume'
+      || (!isNonStartingAction && !hasNonCompleteGoal);
     if (mayStartRun) {
       this.setCurrentSessionStreaming(options.sessionId, true, 'goal_command_requested');
       store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
@@ -1613,6 +1622,19 @@ class CoworkService {
     }
 
     store.dispatch(updateSessionGoal({ sessionId: options.sessionId, goal: result.goal ?? null }));
+    if (mayStartRun && result.isRunning === false) {
+      const latestCoworkState = store.getState().cowork;
+      const latestStatus = latestCoworkState.currentSession?.id === options.sessionId
+        ? latestCoworkState.currentSession.status
+        : latestCoworkState.sessions.find(session => session.id === options.sessionId)?.status;
+      if (latestStatus === 'running') {
+        this.setCurrentSessionStreaming(options.sessionId, false, 'goal_command_no_turn');
+        store.dispatch(updateSessionStatus({
+          sessionId: options.sessionId,
+          status: previousStatus && previousStatus !== 'running' ? previousStatus : 'idle',
+        }));
+      }
+    }
     return true;
   }
 
@@ -2448,66 +2470,98 @@ class CoworkService {
   }
 
   async listMemoryEntries(input: {
+    agentId?: string;
     query?: string;
+    status?: CoworkMemoryStatusFilter;
+    includeDeleted?: boolean;
     limit?: number;
     offset?: number;
-  }): Promise<CoworkUserMemoryEntry[]> {
+  } = {}): Promise<CoworkUserMemoryEntry[]> {
     const api = window.electron?.cowork?.listMemoryEntries;
     if (!api) return [];
     const result = await api(input);
-    if (!result?.success || !result.entries) return [];
+    if (!result?.success || !result.entries) {
+      throw new Error(result?.error || 'Failed to list memory entries');
+    }
     return result.entries;
   }
 
   async createMemoryEntry(input: {
+    agentId?: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+    section?: string;
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.createMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to create memory entry');
+    }
     return result.entry;
   }
 
   async updateMemoryEntry(input: {
+    agentId?: string;
     id: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.updateMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to update memory entry');
+    }
     return result.entry;
   }
 
-  async deleteMemoryEntry(input: { id: string }): Promise<boolean> {
+  async deleteMemoryEntry(input: { agentId?: string; id: string }): Promise<boolean> {
     const api = window.electron?.cowork?.deleteMemoryEntry;
-    if (!api) return false;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    return Boolean(result?.success);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to delete memory entry');
+    }
+    return true;
   }
 
-  async getMemoryStats(): Promise<CoworkMemoryStats | null> {
+  async getMemoryStats(options?: { agentId?: string }): Promise<CoworkMemoryStats | null> {
     const api = window.electron?.cowork?.getMemoryStats;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success || !result.stats) return null;
     return result.stats;
   }
 
-  async readMemoryFileRaw(): Promise<string | null> {
+  async readMemoryFileRaw(options?: { agentId?: string }): Promise<string | null> {
     const api = window.electron?.cowork?.readMemoryFileRaw;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success) return null;
     return result.content ?? '';
   }
 
-  async writeMemoryFileRaw(content: string): Promise<{ success: boolean; error?: string }> {
+  async writeMemoryFileRaw(
+    content: string,
+    options?: { agentId?: string },
+  ): Promise<{ success: boolean; error?: string }> {
     const api = window.electron?.cowork?.writeMemoryFileRaw;
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
-    const result = await api({ content });
+    const result = await api({ content, agentId: options?.agentId });
     return result ?? { success: false };
+  }
+
+  async getDreamingDiary(options?: { agentId?: string }): Promise<DreamDiaryData | null> {
+    const api = window.electron?.cowork?.getDreamDiary;
+    if (!api) return null;
+    const result = await api(options);
+    if (!result?.success || !result.data) return null;
+    return result.data;
   }
 
   async readBootstrapFile(filename: string, options?: { agentId?: string }): Promise<string> {

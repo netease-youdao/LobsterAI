@@ -80,6 +80,17 @@
   config:
     default: lobsterai
 
+# ── Context compaction policy ────────────────────────────────────────────────
+# DSH's default headroomTokens (65536) causes TargetPressureConfigError on
+# <=64K context windows (64000 - 16384 - 65536 <= 0, silently disabling
+# pre-step auto-compaction) and triggers premature compaction at ~36% on 128K
+# models. Setting 8192 keeps 64K, 128K, and 200K+ models compacting smoothly
+# around ~75-80% while keeping the derived summary maxTokens within 8K caps.
+
+- id: compaction-basic
+  config:
+    headroomTokens: 8192
+
 # ── LobsterAI Default Agent Preset & Host Cordis Plugins ─────────────────────
 
 - insert:
@@ -136,6 +147,8 @@
             config:
               - id: compaction-basic
                 name: '@deepseek-ai/dsh-compaction-basic'
+                config:
+                  headroomTokens: 8192
               - id: command-compact
                 name: '@deepseek-ai/dsh-command-compact'
               - id: tool-result-pruner

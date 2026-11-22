@@ -12,7 +12,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
 import {
   DshApprovalPermissionAction,
-  DshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
 import { DSH_PERMISSION_PRESET_CHANGED_EVENT } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
@@ -20,6 +19,7 @@ import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../type
 import {
   type ApprovalDangerLevel,
   buildPermissionModalPresentation,
+  buildSwitchFullAccessAction,
   detectDangerFromCommand,
 } from './permissionModalPresentation';
 import { stripQuestionRecommendation } from './questionOptionLabel';
@@ -412,12 +412,10 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   const handleSwitchFullAccess = () => {
+    const { eventDetail, response } = buildSwitchFullAccessAction(permission.sessionId, toolInput);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(DSH_PERMISSION_PRESET_CHANGED_EVENT, {
-        detail: {
-          preset: DshPermissionPreset.FullAccess,
-          defaultPreset: DshPermissionPreset.FullAccess,
-        },
+        detail: eventDetail,
       }));
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: i18nService
@@ -425,17 +423,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           .replace('{mode}', i18nService.t('coworkPermissionModeFullAccess')),
       }));
     }
-    onRespond({
-      behavior: 'allow',
-      updatedInput: toolInput && typeof toolInput === 'object' ? toolInput : {},
-      updatedPermissions: [
-        {
-          type: DshApprovalPermissionAction.SetPermissionPreset,
-          preset: DshPermissionPreset.FullAccess,
-          global: true,
-        },
-      ],
-    });
+    onRespond(response);
   };
 
   const handleDeny = () => {

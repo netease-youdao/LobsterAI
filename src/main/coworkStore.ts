@@ -64,6 +64,10 @@ import {
   COWORK_SESSION_FILTER_MAX_LIMIT,
   type CoworkSessionFilterQuery,
 } from '../shared/cowork/sessionFilter';
+import {
+  type DshPermissionPreset,
+  parseDshPermissionPreset,
+} from '../shared/dshEngine/hostConstants';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -618,6 +622,7 @@ export interface CoworkSession {
   contextWindowOwnerKey?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
+  permissionPreset?: DshPermissionPreset | null;
   activeSkillIds: string[];
   agentId: string;
   messages: CoworkMessage[];
@@ -900,6 +905,7 @@ const COWORK_SESSION_CONTENT_SEARCH_LIMIT = 50;
 export interface CreateCoworkSessionOptions {
   scheduledTaskId?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
+  permissionPreset?: DshPermissionPreset | null;
 }
 
 export class CoworkStore {
@@ -921,9 +927,25 @@ export class CoworkStore {
         [sessionId],
       ),
     });
+    this.ensurePermissionPresetColumn();
     this.ensureContinuityCapsuleTable();
     this.messageEdits = new CoworkMessageEditStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
     this.messageVersions = new CoworkMessageVersionStore(db, (sessionId, operation) => this.writeSessionProjections([sessionId], operation));
+  }
+
+  private ensurePermissionPresetColumn(): void {
+    try {
+      const table = this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cowork_sessions'")
+        .get();
+      if (!table) return;
+      const columns = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+      if (!columns.some((col) => col.name.toLowerCase() === 'permission_preset')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+      }
+    } catch {
+      // Ignore if database is read-only or schema already migrated.
+    }
   }
 
   onSessionProjectionChanges(listener: (changes: SessionProjectionChanges) => void): () => void {
@@ -1061,13 +1083,14 @@ export class CoworkStore {
     const now = Date.now();
     const scheduledTaskId = options.scheduledTaskId?.trim() || null;
     const thinkingLevel = options.thinkingLevel ?? '';
+    const permissionPreset = parseDshPermissionPreset(options.permissionPreset);
 
     this.writeSessionProjections([id], () => {
       this.db
         .prepare(
           `
-        INSERT INTO cowork_sessions (id, title, claude_session_id, scheduled_task_id, status, cwd, system_prompt, model_override, thinking_level, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
-        VALUES (?, ?, NULL, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        INSERT INTO cowork_sessions (id, title, claude_session_id, scheduled_task_id, status, cwd, system_prompt, model_override, thinking_level, execution_mode, permission_preset, active_skill_ids, agent_id, pinned, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `,
         )
         .run(
@@ -1079,6 +1102,7 @@ export class CoworkStore {
           modelOverride,
           thinkingLevel,
           executionMode,
+          permissionPreset,
           JSON.stringify(activeSkillIds),
           agentId,
           now,
@@ -1099,6 +1123,7 @@ export class CoworkStore {
       modelOverride,
       thinkingLevel,
       executionMode,
+      permissionPreset,
       activeSkillIds,
       agentId,
       messages: [],
@@ -1138,6 +1163,7 @@ export class CoworkStore {
       context_window_owner_key?: string | null;
       thinking_level?: string | null;
       execution_mode?: string | null;
+      permission_preset?: string | null;
       active_skill_ids?: string | null;
       agent_id?: string | null;
       goal_json?: string | null;
@@ -1147,7 +1173,7 @@ export class CoworkStore {
 
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, permission_preset, active_skill_ids, agent_id, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -1194,6 +1220,7 @@ export class CoworkStore {
       contextWindowOwnerKey: row.context_window_owner_key ?? null,
       thinkingLevel: parseModelThinkingLevel(row.thinking_level) ?? '',
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
+      permissionPreset: parseDshPermissionPreset(row.permission_preset),
       activeSkillIds,
       agentId: row.agent_id || 'main',
       messages,
@@ -1414,8 +1441,8 @@ export class CoworkStore {
         now,
       );
 
-      this.db.prepare('UPDATE cowork_sessions SET model_preset_id = ?, context_window_override = ?, context_window_owner_key = ? WHERE id = ?')
-        .run(source.modelPresetId ?? null, source.contextWindowOverride ?? null, source.contextWindowOwnerKey ?? null, id);
+      this.db.prepare('UPDATE cowork_sessions SET model_preset_id = ?, context_window_override = ?, context_window_owner_key = ?, permission_preset = ? WHERE id = ?')
+        .run(source.modelPresetId ?? null, source.contextWindowOverride ?? null, source.contextWindowOwnerKey ?? null, source.permissionPreset ?? null, id);
 
       for (const contextMessage of contextMessages) {
         const content = contextMessage.content.trim();
@@ -1677,7 +1704,7 @@ export class CoworkStore {
     updates: Partial<
       Pick<
         CoworkSession,
-        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'modelPresetId' | 'contextWindowOverride' | 'contextWindowOwnerKey' | 'thinkingLevel' | 'executionMode' | 'goal'
+        'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'modelOverride' | 'modelPresetId' | 'contextWindowOverride' | 'contextWindowOwnerKey' | 'thinkingLevel' | 'executionMode' | 'permissionPreset' | 'goal'
       >
     >,
     options: { touchUpdatedAt?: boolean } = {},
@@ -1744,6 +1771,10 @@ export class CoworkStore {
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');
       values.push(updates.executionMode);
+    }
+    if (updates.permissionPreset !== undefined) {
+      setClauses.push('permission_preset = ?');
+      values.push(updates.permissionPreset === null ? null : parseDshPermissionPreset(updates.permissionPreset));
     }
     if (updates.goal !== undefined) {
       setClauses.push('goal_json = ?');
@@ -4097,6 +4128,7 @@ export class CoworkStore {
     const systemPrompt = '';
     const modelOverride = existing?.modelOverride || '';
     const executionMode = parent?.executionMode || 'local';
+    const permissionPreset = existing?.permissionPreset ?? parent?.permissionPreset ?? null;
     const activeSkillIds = agent?.skillIds ?? [];
     const status = options.status ?? 'running';
 
@@ -4113,6 +4145,7 @@ export class CoworkStore {
                 system_prompt = ?,
                 model_override = ?,
                 execution_mode = ?,
+                permission_preset = ?,
                 active_skill_ids = ?,
                 agent_id = ?,
                 parent_session_id = ?,
@@ -4128,6 +4161,7 @@ export class CoworkStore {
             systemPrompt,
             modelOverride,
             executionMode,
+            permissionPreset,
             JSON.stringify(activeSkillIds),
             options.agentId,
             options.parentSessionId,
@@ -4140,10 +4174,10 @@ export class CoworkStore {
             `
             INSERT INTO cowork_sessions (
               id, title, claude_session_id, status, cwd, system_prompt, model_override,
-              execution_mode, active_skill_ids, agent_id, pinned, pin_order,
+              execution_mode, permission_preset, active_skill_ids, agent_id, pinned, pin_order,
               parent_session_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
           `,
           )
           .run(
@@ -4155,6 +4189,7 @@ export class CoworkStore {
             systemPrompt,
             modelOverride,
             executionMode,
+            permissionPreset,
             JSON.stringify(activeSkillIds),
             options.agentId,
             options.parentSessionId,

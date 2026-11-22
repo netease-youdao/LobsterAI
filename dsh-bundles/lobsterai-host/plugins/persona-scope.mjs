@@ -15,10 +15,16 @@ import {
   buildWebSearchRoutingGuidance,
   DEFAULT_AGENT_ID,
   discoverLobsterSkills,
+  MEMORY_WRITE_POLICY_PROMPT,
   parseSkillFrontmatter,
   readTextCached,
 } from './persona-helpers.mjs';
-import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
+import {
+  getHostState,
+  resolveSessionContext,
+  resolveSessionId,
+  resolveSessionWorkspaceDir,
+} from './shared-state.mjs';
 
 export const name = 'lobster-persona-scope';
 export const inject = ['systemPrompt', 'skills'];
@@ -41,7 +47,23 @@ export function apply(ctx) {
       const customSystemPrompt = bound && typeof bound.customSystemPrompt === 'string'
         ? bound.customSystemPrompt
         : '';
-      const persona = assembleWorkspacePersona(state.workspacesDir, agentId, customSystemPrompt);
+      const workspaceDir = resolveSessionWorkspaceDir(
+        ctx,
+        state,
+        sessionId,
+        bound,
+        assemblyCtx?.agent,
+      );
+      const memoryEnabled = typeof bound?.memoryEnabled === 'boolean'
+        ? bound.memoryEnabled
+        : state.memoryEnabled !== false;
+      const persona = assembleWorkspacePersona(
+        state.workspacesDir,
+        agentId,
+        customSystemPrompt,
+        { workspaceDir, memoryEnabled },
+      );
+      const memoryPolicy = memoryEnabled ? MEMORY_WRITE_POLICY_PROMPT : '';
       const allowedSkillIds = bound && Array.isArray(bound.allowedSkillIds)
         ? new Set(bound.allowedSkillIds.filter((s) => typeof s === 'string'))
         : null;
@@ -51,7 +73,7 @@ export function apply(ctx) {
       ];
       const webSearchGuidance = buildWebSearchRoutingGuidance(roots, state.skillsPolicy, allowedSkillIds);
       const install = 'For requests to install a local or attached skill into My Skills, use lobster_skill_install. Its inspect action reports this instance’s actual skill root and install performs desktop security review and registration.';
-      return [persona, webSearchGuidance, install].filter(Boolean).join('\n\n');
+      return [persona, memoryPolicy, webSearchGuidance, install].filter(Boolean).join('\n\n');
     },
   });
 

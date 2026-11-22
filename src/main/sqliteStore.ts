@@ -126,6 +126,7 @@ export class SqliteStore {
         context_window_owner_key TEXT,
         thinking_level TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
+        permission_preset TEXT,
         parent_session_id TEXT,
         forked_from_message_id TEXT,
         forked_at INTEGER,
@@ -402,8 +403,13 @@ export class SqliteStore {
         this.didRunMigration = true;
         console.log('[SqliteStore] added required cowork_sessions.thinking_level column');
       }
+      if (!sessionCols.some(column => column.name.toLowerCase() === 'permission_preset')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+        this.didRunMigration = true;
+        console.log('[SqliteStore] added required cowork_sessions.permission_preset column');
+      }
     } catch (error) {
-      console.error('[SqliteStore] failed to add cowork_sessions.thinking_level:', error);
+      console.error('[SqliteStore] failed to migrate required cowork_sessions columns:', error);
       throw error;
     }
 

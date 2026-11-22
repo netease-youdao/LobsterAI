@@ -2,6 +2,7 @@ import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLe
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { AgentId } from '../../shared/agent/constants';
 import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
@@ -10,6 +11,11 @@ import {
   defaultBrowserWebAccessConfig,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
+import {
+  CoworkMemoryStatus,
+  CoworkMemoryStatusFilter,
+  type CoworkMemoryStatusFilter as CoworkMemoryStatusFilterValue,
+} from '../../shared/cowork/constants';
 import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
 import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
@@ -59,12 +65,15 @@ import type {
   CoworkMemoryStats,
   CoworkTempDirPreview,
   CoworkUserMemoryEntry,
+  DreamDiaryData,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
   OpenClawSessionKeepAlive,
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
+import { getVisibleLegacyDreamDiaries } from './cowork/dreamDiaryParser';
+import LegacyDreamDiaryViewer from './cowork/LegacyDreamDiaryViewer';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
@@ -127,6 +136,12 @@ import SkinSettingsSection from './skin/SkinSettingsSection';
 import ThemedSelect from './ui/ThemedSelect';
 
 type TabType = SettingsTab;
+
+const MemorySubTab = {
+  Entries: 'entries',
+  LegacyDreamDiary: 'legacyDreamDiary',
+} as const;
+type MemorySubTab = typeof MemorySubTab[keyof typeof MemorySubTab];
 
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
   window.requestAnimationFrame(() => {
@@ -1715,6 +1730,7 @@ const Settings: React.FC<SettingsProps> = ({
   }, [isExportingLogs]);
 
   const coworkConfig = useSelector(selectCoworkConfig);
+  const agents = useSelector((state: RootState) => state.agent.agents);
 
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'dsh');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
@@ -1742,7 +1758,10 @@ const Settings: React.FC<SettingsProps> = ({
   const [dreamingFrequency, setDreamingFrequency] = useState<string>(coworkConfig.dreamingFrequency ?? '0 3 * * *');
   const [dreamingModel, setDreamingModel] = useState<string>(coworkConfig.dreamingModel ?? '');
   const [dreamingTimezone, setDreamingTimezone] = useState<string>(coworkConfig.dreamingTimezone ?? '');
-  const [memoryTab, setMemoryTab] = useState<'entries' | 'embedding'>('entries');
+  const [memoryTab, setMemoryTab] = useState<MemorySubTab>(MemorySubTab.Entries);
+  const [legacyDreamDiary, setLegacyDreamDiary] = useState<DreamDiaryData | null>(null);
+  const [legacyDreamDiaryLoading, setLegacyDreamDiaryLoading] = useState<boolean>(false);
+  const [legacyDreamDiaryError, setLegacyDreamDiaryError] = useState<string | null>(null);
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
     coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
@@ -1750,11 +1769,17 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
   const [coworkMemoryListLoading, setCoworkMemoryListLoading] = useState<boolean>(false);
   const [coworkMemoryQuery, setCoworkMemoryQuery] = useState<string>('');
+  const [coworkMemoryAgentId, setCoworkMemoryAgentId] = useState<string>(AgentId.Main);
+  const [coworkMemoryStatusFilter, setCoworkMemoryStatusFilter] = useState<CoworkMemoryStatusFilterValue>(
+    CoworkMemoryStatusFilter.Created,
+  );
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
+  const [coworkMemoryModalError, setCoworkMemoryModalError] = useState<string | null>(null);
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
   const [coworkMemoryRawMode, setCoworkMemoryRawMode] = useState<boolean>(false);
   const [coworkMemoryRawText, setCoworkMemoryRawText] = useState<string>('');
+  const [coworkMemoryRawError, setCoworkMemoryRawError] = useState<string | null>(null);
   const [coworkMemoryRawSaving, setCoworkMemoryRawSaving] = useState<boolean>(false);
   const [coworkMemoryExpandedIds, setCoworkMemoryExpandedIds] = useState<Set<string>>(new Set());
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
@@ -3094,14 +3119,40 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [isRestoringOpenClawData]);
 
+  const memoryAgentOptions = useMemo(() => {
+    const mainAgent = agents.find((agent) => agent.id === AgentId.Main);
+    const others = agents.filter((agent) => agent.id !== AgentId.Main);
+    return [
+      {
+        id: AgentId.Main,
+        name: mainAgent?.name?.trim() || i18nService.t('coworkMemoryMainAgentLabel'),
+      },
+      ...others.map((agent) => ({
+        id: agent.id,
+        name: agent.name?.trim() || agent.id,
+      })),
+    ];
+  }, [agents]);
+
   const loadCoworkMemoryData = useCallback(async () => {
     setCoworkMemoryListLoading(true);
     try {
+      const effectiveStatus =
+        coworkMemoryAgentId === AgentId.Main
+          ? coworkMemoryStatusFilter
+          : CoworkMemoryStatusFilter.Created;
+      const includeDeleted =
+        coworkMemoryAgentId === AgentId.Main
+        && (effectiveStatus === CoworkMemoryStatusFilter.All
+          || effectiveStatus === CoworkMemoryStatusFilter.Deleted);
       const [entries, stats] = await Promise.all([
         coworkService.listMemoryEntries({
+          agentId: coworkMemoryAgentId,
           query: coworkMemoryQuery.trim() || undefined,
+          status: effectiveStatus,
+          includeDeleted,
         }),
-        coworkService.getMemoryStats(),
+        coworkService.getMemoryStats({ agentId: coworkMemoryAgentId }),
       ]);
       setCoworkMemoryEntries(entries);
       setCoworkMemoryStats(stats);
@@ -3109,11 +3160,18 @@ const Settings: React.FC<SettingsProps> = ({
       console.error('Failed to load cowork memory data:', loadError);
       setCoworkMemoryEntries([]);
       setCoworkMemoryStats(null);
+      setError(
+        loadError instanceof Error && loadError.message
+          ? loadError.message
+          : i18nService.t('coworkMemoryLoadFailed'),
+      );
     } finally {
       setCoworkMemoryListLoading(false);
     }
   }, [
+    coworkMemoryAgentId,
     coworkMemoryQuery,
+    coworkMemoryStatusFilter,
   ]);
 
   useEffect(() => {
@@ -3121,64 +3179,135 @@ const Settings: React.FC<SettingsProps> = ({
     void loadCoworkMemoryData();
   }, [activeTab, loadCoworkMemoryData]);
 
+  const visibleLegacyDreamDiaries = useMemo(
+    () => getVisibleLegacyDreamDiaries(legacyDreamDiary),
+    [legacyDreamDiary],
+  );
+
+  const loadLegacyDreamDiary = useCallback(async () => {
+    setLegacyDreamDiaryLoading(true);
+    setLegacyDreamDiaryError(null);
+    try {
+      const diary = await coworkService.getDreamingDiary();
+      setLegacyDreamDiary(diary);
+    } catch (loadError) {
+      console.error('Failed to load historical dream diary:', loadError);
+      setLegacyDreamDiaryError(
+        loadError instanceof Error ? loadError.message : i18nService.t('coworkDreamingDiaryLoadError'),
+      );
+    } finally {
+      setLegacyDreamDiaryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'coworkMemory') return;
+    void loadLegacyDreamDiary();
+  }, [activeTab, loadLegacyDreamDiary]);
+
+  useEffect(() => {
+    if (memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length === 0) {
+      setMemoryTab(MemorySubTab.Entries);
+    }
+  }, [memoryTab, visibleLegacyDreamDiaries.length]);
+
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
     setCoworkMemoryDraftText('');
+    setCoworkMemoryModalError(null);
     setShowMemoryModal(false);
+  };
+
+  const handleSelectCoworkMemoryAgent = (nextAgentId: string) => {
+    setCoworkMemoryAgentId(nextAgentId);
+    setCoworkMemoryExpandedIds(new Set());
+    setCoworkMemoryRawError(null);
+    setCoworkMemoryRawMode(false);
+    if (nextAgentId !== AgentId.Main) {
+      setCoworkMemoryStatusFilter(CoworkMemoryStatusFilter.Created);
+    }
   };
 
   const handleSaveCoworkMemoryEntry = async () => {
     const text = coworkMemoryDraftText.trim();
     if (!text) return;
 
+    setError(null);
+    setCoworkMemoryModalError(null);
     setCoworkMemoryListLoading(true);
     try {
       const operation = coworkMemoryEditingId ? 'updated' : 'created';
       if (coworkMemoryEditingId) {
         await coworkService.updateMemoryEntry({
+          agentId: coworkMemoryAgentId,
           id: coworkMemoryEditingId,
           text,
         });
       } else {
         await coworkService.createMemoryEntry({
+          agentId: coworkMemoryAgentId,
           text,
         });
       }
       resetCoworkMemoryEditor();
-      await loadCoworkMemoryData();
+      if (
+        operation === 'created'
+        && (coworkMemoryStatusFilter === CoworkMemoryStatusFilter.Deleted
+          || coworkMemoryStatusFilter === CoworkMemoryStatusFilter.Stale)
+      ) {
+        setCoworkMemoryStatusFilter(CoworkMemoryStatusFilter.Created);
+      } else {
+        await loadCoworkMemoryData();
+      }
       reportMemoryEntryChanged(
         operation,
         operation === 'created'
-          ? (coworkMemoryStats?.total ?? coworkMemoryEntries.length) + 1
-          : coworkMemoryStats?.total,
+          ? (coworkMemoryStats?.created ?? coworkMemoryEntries.length) + 1
+          : coworkMemoryStats?.created,
       );
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : i18nService.t('coworkMemoryCrudSaveFailed'));
+      const message =
+        saveError instanceof Error && saveError.message
+          ? saveError.message
+          : i18nService.t('coworkMemoryCrudSaveFailed');
+      setCoworkMemoryModalError(message);
+      setError(message);
     } finally {
       setCoworkMemoryListLoading(false);
     }
   };
 
   const handleEditCoworkMemoryEntry = (entry: CoworkUserMemoryEntry) => {
+    if (entry.isLegacyReadOnly) return;
+    setCoworkMemoryModalError(null);
     setCoworkMemoryEditingId(entry.id);
     setCoworkMemoryDraftText(entry.text);
     setShowMemoryModal(true);
   };
 
   const handleDeleteCoworkMemoryEntry = async (entry: CoworkUserMemoryEntry) => {
+    if (entry.isLegacyReadOnly) return;
+    setError(null);
     setCoworkMemoryListLoading(true);
     try {
-      await coworkService.deleteMemoryEntry({ id: entry.id });
+      await coworkService.deleteMemoryEntry({
+        agentId: coworkMemoryAgentId,
+        id: entry.id,
+      });
       if (coworkMemoryEditingId === entry.id) {
         resetCoworkMemoryEditor();
       }
       await loadCoworkMemoryData();
       reportMemoryEntryChanged(
         'deleted',
-        Math.max(0, (coworkMemoryStats?.total ?? coworkMemoryEntries.length) - 1),
+        Math.max(0, (coworkMemoryStats?.created ?? coworkMemoryEntries.length) - 1),
       );
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : i18nService.t('coworkMemoryCrudDeleteFailed'));
+      setError(
+        deleteError instanceof Error && deleteError.message
+          ? deleteError.message
+          : i18nService.t('coworkMemoryCrudDeleteFailed'),
+      );
     } finally {
       setCoworkMemoryListLoading(false);
     }
@@ -3191,7 +3320,8 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleEnterCoworkMemoryRawMode = async () => {
     setError(null);
-    const content = await coworkService.readMemoryFileRaw();
+    setCoworkMemoryRawError(null);
+    const content = await coworkService.readMemoryFileRaw({ agentId: coworkMemoryAgentId });
     if (content === null) {
       setError(i18nService.t('coworkMemoryRawLoadFailed'));
       return;
@@ -3203,11 +3333,16 @@ const Settings: React.FC<SettingsProps> = ({
   const handleSaveCoworkMemoryRaw = async () => {
     if (coworkMemoryRawSaving) return;
     setError(null);
+    setCoworkMemoryRawError(null);
     setCoworkMemoryRawSaving(true);
     try {
-      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText);
+      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText, {
+        agentId: coworkMemoryAgentId,
+      });
       if (!result.success) {
-        setError(result.error || i18nService.t('coworkMemoryRawSaveFailed'));
+        const message = result.error || i18nService.t('coworkMemoryRawSaveFailed');
+        setCoworkMemoryRawError(message);
+        setError(message);
         return;
       }
       setCoworkMemoryRawMode(false);
@@ -5322,8 +5457,11 @@ const Settings: React.FC<SettingsProps> = ({
         );
 
       case 'coworkMemory': {
-        const memoryTabs = [
-          { key: 'entries' as const, titleKey: 'coworkMemoryTabEntries' },
+        const memoryTabs: Array<{ key: MemorySubTab; titleKey: string }> = [
+          { key: MemorySubTab.Entries, titleKey: 'coworkMemoryTabEntries' },
+          ...(visibleLegacyDreamDiaries.length > 0
+            ? [{ key: MemorySubTab.LegacyDreamDiary, titleKey: 'coworkMemoryTabLegacyDreamDiary' }]
+            : []),
         ];
         const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
         for (const entry of coworkMemoryEntries) {
@@ -5359,7 +5497,7 @@ const Settings: React.FC<SettingsProps> = ({
               ))}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
-              {memoryTab === 'entries' && (
+              {memoryTab === MemorySubTab.Entries && (
                 <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
@@ -5391,19 +5529,91 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
 
                     <>
-                      {coworkMemoryStats && (
-                        <div className="text-xs text-secondary">
-                          {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
-                        </div>
-                      )}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        {coworkMemoryStats && (
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-secondary">
+                            <span>{`${i18nService.t('coworkMemoryActiveLabel')}: ${coworkMemoryStats.created}`}</span>
+                            {coworkMemoryAgentId === AgentId.Main && coworkMemoryStats.stale > 0 && (
+                              <span>{`${i18nService.t('coworkMemoryStatusInactive')}: ${coworkMemoryStats.stale}`}</span>
+                            )}
+                            {coworkMemoryAgentId === AgentId.Main && coworkMemoryStats.deleted > 0 && (
+                              <span>{`${i18nService.t('coworkMemoryStatusDeleted')}: ${coworkMemoryStats.deleted}`}</span>
+                            )}
+                            <span>{`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}</span>
+                          </div>
+                        )}
+                        {memoryAgentOptions.length > 1 && (
+                          <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                            <span>{i18nService.t('coworkMemoryAgentSelectorLabel')}</span>
+                            <select
+                              value={coworkMemoryAgentId}
+                              onChange={(event) => handleSelectCoworkMemoryAgent(event.target.value)}
+                              className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary"
+                            >
+                              {memoryAgentOptions.map((agent) => (
+                                <option key={agent.id} value={agent.id}>
+                                  {agent.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </div>
 
-                      <input
-                        type="text"
-                        value={coworkMemoryQuery}
-                        onChange={(event) => setCoworkMemoryQuery(event.target.value)}
-                        placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
-                        className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
-                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          value={coworkMemoryQuery}
+                          onChange={(event) => setCoworkMemoryQuery(event.target.value)}
+                          placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
+                          className="min-w-[200px] flex-1 rounded-lg border px-3 py-2 text-sm border-border bg-surface"
+                        />
+                        {coworkMemoryAgentId === AgentId.Main && (
+                          <div className="inline-flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs">
+                            {(
+                              [
+                                {
+                                  key: CoworkMemoryStatusFilter.Created,
+                                  label: i18nService.t('coworkMemoryStatusActive'),
+                                  count: coworkMemoryStats?.created,
+                                },
+                                {
+                                  key: CoworkMemoryStatusFilter.Stale,
+                                  label: i18nService.t('coworkMemoryStatusInactive'),
+                                  count: coworkMemoryStats?.stale,
+                                },
+                                {
+                                  key: CoworkMemoryStatusFilter.Deleted,
+                                  label: i18nService.t('coworkMemoryStatusDeleted'),
+                                  count: coworkMemoryStats?.deleted,
+                                },
+                                {
+                                  key: CoworkMemoryStatusFilter.All,
+                                  label: i18nService.t('coworkMemoryStatusAll'),
+                                  count: coworkMemoryStats?.total,
+                                },
+                              ] as const
+                            ).map((chip) => {
+                              const active = coworkMemoryStatusFilter === chip.key;
+                              return (
+                                <button
+                                  key={chip.key}
+                                  type="button"
+                                  onClick={() => setCoworkMemoryStatusFilter(chip.key)}
+                                  className={`rounded-md px-2.5 py-1 transition-colors ${
+                                    active
+                                      ? 'bg-primary text-white font-medium'
+                                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                                  }`}
+                                >
+                                  {chip.label}
+                                  {typeof chip.count === 'number' && chip.count > 0 ? ` (${chip.count})` : ''}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
 
                       <div className="rounded-lg border border-border">
                         {coworkMemoryListLoading ? (
@@ -5428,17 +5638,57 @@ const Settings: React.FC<SettingsProps> = ({
                                   const isLongMemoryText =
                                     entry.text.split('\n').length > 3 || entry.text.length > 240;
                                   const isMemoryTextExpanded = coworkMemoryExpandedIds.has(entry.id);
+                                  const isDeleted = entry.status === CoworkMemoryStatus.Deleted;
+                                  const isStale = entry.status === CoworkMemoryStatus.Stale;
+                                  const hasSourceBadge = Boolean(
+                                    entry.sourceLabel || (entry.sourceCount && entry.sourceCount > 0),
+                                  );
+                                  const hasMetaRow = isDeleted || isStale || hasSourceBadge || entry.isLegacyReadOnly;
                                   return (
                                     <div key={entry.id} className="group px-3 py-3 text-xs transition-colors hover:bg-surface-raised/60">
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="flex-1 min-w-0">
                                           <div
-                                            className={`text-foreground break-words whitespace-pre-wrap leading-relaxed ${
+                                            className={`break-words whitespace-pre-wrap leading-relaxed ${
+                                              isDeleted || entry.isLegacyReadOnly
+                                                ? 'text-secondary'
+                                                : 'text-foreground'
+                                            } ${
                                               isLongMemoryText && !isMemoryTextExpanded ? 'line-clamp-3' : ''
                                             }`}
                                           >
                                             {entry.text}
                                           </div>
+                                          {hasMetaRow && (
+                                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                              {isDeleted && (
+                                                <span className="inline-flex items-center rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                                                  {i18nService.t('coworkMemoryStatusDeleted')}
+                                                </span>
+                                              )}
+                                              {isStale && (
+                                                <span className="inline-flex items-center rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                                                  {i18nService.t('coworkMemoryStatusInactive')}
+                                                </span>
+                                              )}
+                                              {hasSourceBadge && (
+                                                <span className="inline-flex items-center rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] text-secondary">
+                                                  {`${i18nService.t('coworkMemorySourcePrefix')}: ${
+                                                    entry.sourceLabel || entry.sources?.latestRole || ''
+                                                  }${
+                                                    entry.sourceCount && entry.sourceCount > 1
+                                                      ? ` (${entry.sourceCount} ${i18nService.t('coworkMemorySourceCountSuffix')})`
+                                                      : ''
+                                                  }`}
+                                                </span>
+                                              )}
+                                              {entry.isLegacyReadOnly && (
+                                                <span className="inline-flex items-center rounded-md border border-border px-1.5 py-0.5 text-[10px] text-secondary">
+                                                  {i18nService.t('coworkMemoryLegacyReadOnlyBadge')}
+                                                </span>
+                                              )}
+                                            </div>
+                                          )}
                                           {isLongMemoryText && (
                                             <button
                                               type="button"
@@ -5449,27 +5699,29 @@ const Settings: React.FC<SettingsProps> = ({
                                             </button>
                                           )}
                                         </div>
-                                        <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleEditCoworkMemoryEntry(entry)}
-                                            title={i18nService.t('edit')}
-                                            aria-label={i18nService.t('edit')}
-                                            className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
-                                          >
-                                            <EditIcon className="h-4 w-4" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
-                                            title={i18nService.t('delete')}
-                                            aria-label={i18nService.t('delete')}
-                                            className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
-                                            disabled={coworkMemoryListLoading}
-                                          >
-                                            <TrashIcon className="h-4 w-4" />
-                                          </button>
-                                        </div>
+                                        {!entry.isLegacyReadOnly && (
+                                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleEditCoworkMemoryEntry(entry)}
+                                              title={i18nService.t('edit')}
+                                              aria-label={i18nService.t('edit')}
+                                              className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
+                                            >
+                                              <EditIcon className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
+                                              title={i18nService.t('delete')}
+                                              aria-label={i18nService.t('delete')}
+                                              className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
+                                              disabled={coworkMemoryListLoading}
+                                            >
+                                              <TrashIcon className="h-4 w-4" />
+                                            </button>
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -5515,6 +5767,14 @@ const Settings: React.FC<SettingsProps> = ({
                         autoFocus
                         className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 pt-1 pb-4 text-xs font-mono leading-relaxed text-foreground focus:outline-none"
                       />
+                      {coworkMemoryRawError && (
+                        <div className="px-5 pb-2">
+                          <ErrorMessage
+                            message={coworkMemoryRawError}
+                            onClose={() => setCoworkMemoryRawError(null)}
+                          />
+                        </div>
+                      )}
                       <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
                         <button
                           type="button"
@@ -5535,6 +5795,15 @@ const Settings: React.FC<SettingsProps> = ({
                     </Modal>
                   )}
                 </div>
+              )}
+
+              {memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length > 0 && (
+                <LegacyDreamDiaryViewer
+                  diaries={visibleLegacyDreamDiaries}
+                  loading={legacyDreamDiaryLoading}
+                  error={legacyDreamDiaryError}
+                  onRefresh={() => { void loadLegacyDreamDiary(); }}
+                />
               )}
 
             </div>
@@ -6272,6 +6541,14 @@ const Settings: React.FC<SettingsProps> = ({
                   <div className="mt-1.5 text-[11px] leading-relaxed text-secondary">
                     {i18nService.t('coworkMemoryCrudMultilineHint')}
                   </div>
+                  {coworkMemoryModalError && (
+                    <div className="mt-2">
+                      <ErrorMessage
+                        message={coworkMemoryModalError}
+                        onClose={() => setCoworkMemoryModalError(null)}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-end space-x-2 px-5 py-4">

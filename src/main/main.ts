@@ -148,6 +148,7 @@ import {
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
+import { DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -437,6 +438,7 @@ import {
 } from './libs/developmentProtocolContext';
 import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
 import {
+  createSingleFlightAsyncTracker,
   DshBootstrap,
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
@@ -646,7 +648,20 @@ import {
   summarizeMediaGenerationParamsForLog,
 } from './mediaGenerationReferences';
 import { MediaRunAccountScopes, MediaRunLifecycle } from './mediaRunAccountScopes';
-import { WorkspaceFileName } from './memory/lobsterMemoryService';
+import { readLegacyDreamDiaries } from './memory/legacyDreamDiaryReader';
+import {
+  createManagedMemoryEntry,
+  type CreateMemoryEntryOptions,
+  deleteManagedMemoryEntry,
+  type DeleteMemoryEntryOptions,
+  getManagedMemoryStats,
+  listManagedMemoryEntries,
+  type ListMemoryEntriesOptions,
+  readManagedMemoryRaw,
+  updateManagedMemoryEntry,
+  type UpdateMemoryEntryOptions,
+  writeManagedMemoryRaw,
+} from './memory/memoryManagementService';
 import { MAIN_OFFICE_FORMATS } from './office/formats';
 import { OfficeEditing } from './office/officeEditing';
 import { OpenClawSessionIpc } from './openclawSession/constants';
@@ -2291,6 +2306,7 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.createSession(title, cwd, systemPrompt, executionMode, activeSkillIds, agentId),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
+      getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
       resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {
         const session = storeInstance.getSession(sessionId, 0);
         const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
@@ -2370,7 +2386,7 @@ let openClawLoopbackState: OpenClawLoopbackState | null = null;
 const getOpenClawLoopbackState = (): OpenClawLoopbackState => {
   if (!openClawLoopbackState) {
     openClawLoopbackState = new OpenClawLoopbackState(
-      path.join(app.getPath('userData'), 'openclaw', OPENCLAW_LOOPBACK_STATE_FILE),
+      path.join(app.getPath('userData'), DSH_PROFILE_DIR_NAME, OPENCLAW_LOOPBACK_STATE_FILE),
       app.getVersion(),
     );
   }
@@ -2532,22 +2548,30 @@ const getEngineNotReadyResponse = (status: DshCompatEngineStatus) => {
   };
 };
 
+const bootstrapEngineFlight = createSingleFlightAsyncTracker<DshCompatEngineStatus>();
+
 const bootstrapOpenClawEngine = async (
   options: { forceReinstall?: boolean; reason?: string } = {},
-): Promise<DshCompatEngineStatus> => {
-  const bootstrap = getDshBootstrap();
-  try {
-    ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
-  } catch (err) {
-    console.warn("[DSH] ensureDefaultIdentity failed (non-fatal):", err);
-  }
-  await startAskUserServer().catch((err: unknown) => {
-    console.error("[DSH] AskUser server startup failed (non-fatal):", err);
-  });
-  const status = options.forceReinstall ? await bootstrap.restart() : await bootstrap.start();
-  await syncOpenClawConfig({ reason: `bootstrap:${options.reason || "startup"}` });
-  return status;
-};
+): Promise<DshCompatEngineStatus> => bootstrapEngineFlight.run(
+  async (): Promise<DshCompatEngineStatus> => {
+    const bootstrap = getDshBootstrap();
+    try {
+      ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
+    } catch (err) {
+      console.warn("[DSH] ensureDefaultIdentity failed (non-fatal):", err);
+    }
+    await startAskUserServer().catch((err: unknown) => {
+      console.error("[DSH] AskUser server startup failed (non-fatal):", err);
+    });
+    const syncInitialConfig = () => syncOpenClawConfig({
+      reason: `bootstrap:${options.reason || "startup"}`,
+    });
+    return options.forceReinstall
+      ? await bootstrap.restart({ syncInitialConfig })
+      : await bootstrap.start({ syncInitialConfig });
+  },
+  { force: Boolean(options.forceReinstall) },
+);
 
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 let coworkTurnUsageService: CoworkTurnUsageService | null = null;
@@ -2567,8 +2591,12 @@ const ensureOpenClawRunningForCowork = async (
   _admission: CoworkEngineAdmission = {},
 ): Promise<DshCompatEngineStatus> => {
   await waitForPendingTokenRefresh();
+  const inFlightBootstrap = bootstrapEngineFlight.getInFlight();
+  if (inFlightBootstrap) {
+    return inFlightBootstrap;
+  }
   const bootstrap = getDshBootstrap();
-  if (bootstrap.hostManager.isReady()) {
+  if (bootstrap.isReadyForTurns()) {
     return bootstrap.getEngineStatus();
   }
   return bootstrapOpenClawEngine({ reason: "ensure-running-for-cowork" });
@@ -2885,6 +2913,7 @@ const syncOpenClawConfig = async (options: {
         blockedHostnames,
         allowedHostnames,
       },
+      memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       agents,
       imInstances,
     });
@@ -8971,6 +9000,11 @@ if (!gotTheLock) {
       rendererReleased = true;
       await showDataMigrationRestoreProgressWindow();
       await runAppCleanup('data migration restore', { requireGatewayStopped: true });
+      try {
+        dshBootstrap?.memoryService.close();
+      } catch (error) {
+        console.warn('[DataMigration] failed to close memory service before restore:', error);
+      }
       isCleanupFinished = true;
       isCleanupInProgress = false;
 
@@ -9382,7 +9416,7 @@ if (!gotTheLock) {
     getHostManager: () => getDshBootstrap().hostManager,
     getRuntimeDir: () => getDshBootstrap().runtimeDir,
     getExecutablePath: () => getDshBootstrap().executablePath,
-    getNodeToolchain: () => getDshBootstrap().nodeToolchain,
+    getNodeToolchain: () => getDshBootstrap().resolveNodeToolchain(),
     openEcosystemWindow: (authenticatedUrl, routeHash) => {
       getDshBootstrap().openEcosystemWindow(authenticatedUrl, routeHash);
     },
@@ -9743,10 +9777,8 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        if (!options.editRequest && (getCoworkStore().messageEdits.pending(options.sessionId)
-          || getCoworkEngineRouter().hasPendingMessageEdit(options.sessionId))) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
+        // In-place message editing and recovery are retired in DSH v2 (replaced by Fork),
+        // so leftover `cowork_message_edits` rows must never block follow-up messages.
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -9900,10 +9932,6 @@ if (!gotTheLock) {
           return { success: true };
         }
         const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
-        // Model/runtime preparation awaits above can overlap a second window starting an edit.
-        if (runtime.hasPendingMessageEdit(options.sessionId)) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
         runtime
           .continueSession(options.sessionId, options.prompt, {
             analytics: options.analytics,
@@ -10271,7 +10299,8 @@ if (!gotTheLock) {
         `Action ${action}.`,
       );
       const goal = await runtime.runGoalCommand(sessionId, command);
-      return { success: true, goal };
+      const isRunning = runtime.isSessionActive(sessionId);
+      return { success: true, goal, isRunning };
     } catch (error) {
       console.error('[CoworkGoal] goal command IPC failed:', error);
       return {
@@ -10619,6 +10648,7 @@ if (!gotTheLock) {
           }) : null;
         if (forkedDsh?.storedSessionId) {
           coworkStoreInstance.updateSession(session.id, { claudeSessionId: forkedDsh.storedSessionId }, { touchUpdatedAt: false });
+          session.claudeSessionId = forkedDsh.storedSessionId;
         }
         console.log(`[CoworkFork] created local conversation fork ${session.id} successfully`);
         return { success: true, session };
@@ -10916,6 +10946,7 @@ if (!gotTheLock) {
       if (committed && agentId && agentId !== AgentId.Main) {
         const wsDir = resolveAgentWorkspacePath(agentId);
         fs.rmSync(wsDir, { recursive: true, force: true });
+        getDshBootstrap().memoryService.deleteAgentIndex(agentId);
       }
       return committed;
     },
@@ -11150,7 +11181,7 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
-        runtime.respondToPermission(options.requestId, options.result);
+        await runtime.respondToPermission(options.requestId, options.result);
         // Close the desktop notification for this request regardless of which
         // subsystem handled it (runtime approvals emit permissionResolved on
         // their own; AskUserQuestion bridge requests do not).
@@ -11310,23 +11341,14 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(
-    'cowork:memory:listEntries',
-    async (
-      _event,
-      input: {
-        query?: string;
-        status?: 'created' | 'stale' | 'deleted' | 'all';
-        includeDeleted?: boolean;
-        limit?: number;
-        offset?: number;
-      },
-    ) => {
+    CoworkIpcChannel.MemoryListEntries,
+    async (_event, input?: ListMemoryEntriesOptions) => {
       try {
-        const mem = getDshBootstrap().memoryService;
-        const query = input?.query?.trim() || '';
-        const entries = query
-          ? mem.listMemories(AgentId.Main).filter(e => e.text.toLowerCase().includes(query.toLowerCase()))
-          : mem.listMemories(AgentId.Main);
+        const entries = listManagedMemoryEntries(
+          getDshBootstrap().memoryService,
+          store ? store.getDatabase() : null,
+          input ?? {},
+        );
         return { success: true, entries };
       } catch (error) {
         return {
@@ -11337,17 +11359,14 @@ if (!gotTheLock) {
     },
   );
   ipcMain.handle(
-    'cowork:memory:createEntry',
-    async (
-      _event,
-      input: {
-        text: string;
-        confidence?: number;
-        isExplicit?: boolean;
-      },
-    ) => {
+    CoworkIpcChannel.MemoryCreateEntry,
+    async (_event, input: CreateMemoryEntryOptions) => {
       try {
-        const entry = getDshBootstrap().memoryService.addMemory(AgentId.Main, input.text);
+        const entry = createManagedMemoryEntry(
+          getDshBootstrap().memoryService,
+          store ? store.getDatabase() : null,
+          input,
+        );
         return { success: true, entry };
       } catch (error) {
         return {
@@ -11358,22 +11377,17 @@ if (!gotTheLock) {
     },
   );
   ipcMain.handle(
-    'cowork:memory:updateEntry',
-    async (
-      _event,
-      input: {
-        id: string;
-        text?: string;
-        confidence?: number;
-        status?: 'created' | 'stale' | 'deleted';
-        isExplicit?: boolean;
-      },
-    ) => {
+    CoworkIpcChannel.MemoryUpdateEntry,
+    async (_event, input: UpdateMemoryEntryOptions) => {
       try {
-        if (!input.text) {
+        if (!input?.text) {
           return { success: false, error: 'Memory text is required' };
         }
-        const entry = getDshBootstrap().memoryService.updateMemory(AgentId.Main, input.id, input.text);
+        const entry = updateManagedMemoryEntry(
+          getDshBootstrap().memoryService,
+          store ? store.getDatabase() : null,
+          input,
+        );
         if (!entry) {
           return { success: false, error: 'Memory entry not found' };
         }
@@ -11387,10 +11401,14 @@ if (!gotTheLock) {
     },
   );
   ipcMain.handle(
-    'cowork:memory:deleteEntry',
-    async (_event, input: { id: string }) => {
+    CoworkIpcChannel.MemoryDeleteEntry,
+    async (_event, input: DeleteMemoryEntryOptions) => {
       try {
-        const success = getDshBootstrap().memoryService.deleteMemory(AgentId.Main, input.id);
+        const success = deleteManagedMemoryEntry(
+          getDshBootstrap().memoryService,
+          store ? store.getDatabase() : null,
+          input,
+        );
         return success ? { success: true } : { success: false, error: 'Memory entry not found' };
       } catch (error) {
         return {
@@ -11400,55 +11418,84 @@ if (!gotTheLock) {
       }
     },
   );
-  ipcMain.handle(CoworkIpcChannel.MemoryReadRaw, async () => {
-    try {
-      const content = getDshBootstrap().memoryService.readWorkspaceFile(AgentId.Main, WorkspaceFileName.Memory);
-      return { success: true, content };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to read memory file',
-      };
-    }
-  });
-  ipcMain.handle(CoworkIpcChannel.MemoryWriteRaw, async (_event, input: { content: string }) => {
-    try {
-      if (typeof input?.content !== 'string') {
-        return { success: false, error: 'Memory content is required' };
+  ipcMain.handle(
+    CoworkIpcChannel.MemoryReadRaw,
+    async (_event, options?: { agentId?: string }) => {
+      try {
+        const content = readManagedMemoryRaw(getDshBootstrap().memoryService, options);
+        return { success: true, content };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to read memory file',
+        };
       }
-      getDshBootstrap().memoryService.writeWorkspaceFile(AgentId.Main, WorkspaceFileName.Memory, input.content);
-      return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to write memory file',
-      };
-    }
-  });
-  ipcMain.handle('cowork:memory:getStats', async () => {
-    try {
-      const entries = getDshBootstrap().memoryService.listMemories(AgentId.Main);
-      return {
-        success: true,
-        stats: {
-          total: entries.length,
-          created: entries.length,
-          stale: 0,
-          deleted: 0,
-          explicit: entries.length,
-          implicit: 0,
-        },
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get memory stats',
-      };
-    }
-  });
-  // Dreaming retired in LobsterAI v2 (DSH cutover).
+    },
+  );
+  ipcMain.handle(
+    CoworkIpcChannel.MemoryWriteRaw,
+    async (_event, input: { content: string; agentId?: string }) => {
+      try {
+        if (typeof input?.content !== 'string') {
+          return { success: false, error: 'Memory content is required' };
+        }
+        writeManagedMemoryRaw(getDshBootstrap().memoryService, input);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to write memory file',
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    CoworkIpcChannel.MemoryGetStats,
+    async (_event, options?: { agentId?: string }) => {
+      try {
+        const stats = getManagedMemoryStats(
+          getDshBootstrap().memoryService,
+          store ? store.getDatabase() : null,
+          options,
+        );
+        return { success: true, stats };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to get memory stats',
+        };
+      }
+    },
+  );
+  // Dreaming generation is retired in LobsterAI v2 (DSH cutover);
+  // historical OpenClaw DREAMS.md diaries remain readable in read-only mode.
   ipcMain.handle(CoworkIpcChannel.DreamingStatus, async () => ({ success: true, data: null }));
-  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async () => ({ success: true, data: null }));
+  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async (
+    _event,
+    options?: { agentId?: string },
+  ) => {
+    try {
+      const bootstrap = getDshBootstrap();
+      await bootstrap.ensureDreamDiaryBackfilled();
+      const data = readLegacyDreamDiaries(bootstrap.workspacesDir, {
+        agentId: options?.agentId,
+        resolveAgentName: (agentId) => {
+          if (agentId === AgentId.Main) return undefined;
+          try {
+            return getAgentManager().getAgent(agentId)?.name?.trim() || undefined;
+          } catch {
+            return undefined;
+          }
+        },
+      });
+      return { success: true, data };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to read historical dream diary',
+      };
+    }
+  });
 
   ipcMain.handle(CoworkIpcChannel.BootstrapRead, async (
     _event,
@@ -14733,6 +14780,13 @@ if (!gotTheLock) {
       getStore().close();
     } catch {
       // Store may not have been initialized — safe to ignore.
+    }
+
+    // Ensure workspaces/memory-fts.sqlite WAL handle is also closed before exit or restore.
+    try {
+      dshBootstrap?.memoryService.close();
+    } catch {
+      // Memory service may not have been initialized or already closed — safe to ignore.
     }
 
     // Destroyed last so the tray icon keeps reflecting that the process is

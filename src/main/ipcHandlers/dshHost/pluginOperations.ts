@@ -15,7 +15,7 @@ import {
   DSH_WEB_APP_BUNDLE_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import {
-  buildIsolatedPnpmCacheEnv,
+  buildIsolatedDshBaseEnv,
   type DshNodeToolchain,
   ensureDshLauncher,
 } from '../../libs/dsh/dshProfileManager';
@@ -42,6 +42,7 @@ export interface RunDshPluginCommandOptions {
   dshHomeDir: string;
   args: string[];
   nodeToolchain?: DshNodeToolchain | null;
+  toolchain?: DshNodeToolchain | null;
   baseEnv?: NodeJS.ProcessEnv;
   skipElectronRunAsNode?: boolean;
   cwd?: string;
@@ -293,33 +294,37 @@ export function runDshPluginCommand(
 ): Promise<RunDshPluginCommandResult> {
   return new Promise((resolve) => {
     const sourceEnv = options.baseEnv ?? process.env;
-    const launchEntryPath = ensureDshLauncher({
-      dshHomeDir: options.dshHomeDir,
-      runtimeDir: options.runtimeDir,
-      executablePath: options.executablePath,
-      toolchain: options.nodeToolchain,
-      baseEnv: sourceEnv,
-    });
-
-    const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(sourceEnv)) {
-      if (/^dsh_/i.test(key)) continue;
-      if (/^(?:npm|pnpm)_config_(?:store_dir|cache|cache_dir)$/i.test(key)) continue;
-      env[key] = value;
+    let env: NodeJS.ProcessEnv;
+    let launchEntryPath: string;
+    try {
+      fs.mkdirSync(options.dshHomeDir, { recursive: true, mode: 0o700 });
+      env = buildIsolatedDshBaseEnv({
+        baseEnv: sourceEnv,
+        dshHomeDir: options.dshHomeDir,
+        skipElectronRunAsNode: options.skipElectronRunAsNode,
+      });
+      launchEntryPath = ensureDshLauncher({
+        dshHomeDir: options.dshHomeDir,
+        runtimeDir: options.runtimeDir,
+        executablePath: options.executablePath,
+        toolchain: options.nodeToolchain ?? options.toolchain,
+        baseEnv: env,
+      });
+    } catch (error) {
+      resolve({
+        ok: false,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+      });
+      return;
     }
-    if (!options.skipElectronRunAsNode) {
-      env.ELECTRON_RUN_AS_NODE = '1';
-    }
-    env.DSH_HOME = options.dshHomeDir;
-    env.DSH_AGENTS_HOME = path.join(options.dshHomeDir, 'agents-home');
-    env.DSH_TELEMETRY_DISABLED = '1';
-    Object.assign(env, buildIsolatedPnpmCacheEnv(options.dshHomeDir));
 
     const child = spawn(
       options.executablePath,
       [...DSH_NODE_EXEC_ARGV, launchEntryPath, 'plugin', '--profile', DSH_PROFILE_NAME, ...options.args],
       {
-        ...(options.cwd ? { cwd: options.cwd } : {}),
+        cwd: options.cwd ?? options.dshHomeDir,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,

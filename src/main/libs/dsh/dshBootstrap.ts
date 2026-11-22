@@ -27,10 +27,10 @@ import type {
   ScheduledTaskStatusEvent,
 } from '../../../scheduledTask/types';
 import {
-  DEFAULT_DSH_PERMISSION_PRESET,
   DSH_PERMISSION_PRESET_KV_KEY,
   DshHostPhase,
-  DshPermissionPreset,
+  type DshPermissionPreset,
+  parseDshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { McpIpcChannel } from '../../../shared/mcp/constants';
@@ -39,8 +39,11 @@ import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshCh
 import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  backfillLegacyDreamDiariesFromBackup,
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
+  backfillLegacyUserMemories,
+  type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -75,6 +78,7 @@ import {
   type DshHostWebAccessPolicy,
   resolveBundledDshPaths,
 } from './dshHostManager';
+import { resolveInitialDshPermissionPreset } from './dshPermissionPresetStorage';
 import type { DshNodeToolchain } from './dshProfileManager';
 import {
   buildDshMcpServerSpecs,
@@ -105,6 +109,7 @@ export interface DshBootstrapSyncInput {
     skillsDir?: string;
   };
   webAccessPolicy?: DshHostWebAccessPolicy;
+  memoryEnabled?: boolean;
   agents?: DshHostAgentSpec[];
   imInstances?: Array<{
     platform: string;
@@ -114,6 +119,16 @@ export interface DshBootstrapSyncInput {
     cwd?: string;
     config?: Record<string, unknown>;
   }>;
+}
+
+export type DshInitialConfigSyncFn = () => Promise<{ success?: boolean } | boolean | void>;
+
+export interface DshBootstrapStartOptions {
+  /**
+   * Optional initial config sync (providers, MCP, skills, agents, IM channels)
+   * executed before startup completes and before scheduled tasks begin firing.
+   */
+  syncInitialConfig?: DshInitialConfigSyncFn;
 }
 
 export interface DshBootstrapOptions {
@@ -131,6 +146,7 @@ export interface DshBootstrapOptions {
     ) => { id: string };
   };
   getDefaultCwd: (agentId?: string) => string;
+  getMemoryEnabled?: () => boolean;
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
@@ -146,6 +162,57 @@ export interface DshBootstrapOptions {
   instanceId?: string;
   ecosystemWindowTitle?: string;
   onStatusChange?: (status: DshCompatEngineStatus, hostStatus: DshHostStatus) => void;
+  /** Optional runtime/bundle path override (useful in tests). */
+  runtimePaths?: {
+    runtimeDir: string;
+    hostBundleDir: string;
+    channelsBundleDir: string | null;
+  };
+  /** Optional Node/Electron executable override (useful in tests). */
+  executablePath?: string;
+  /** Pass through to DshHostManager when spawning plain Node in tests. */
+  skipElectronRunAsNode?: boolean;
+  /** Optional boot timeout override for DshHostManager. */
+  bootTimeoutMs?: number;
+}
+
+export interface SingleFlightAsyncTracker<T> {
+  getInFlight(): Promise<T> | null;
+  run(factory: () => Promise<T>, options?: { force?: boolean }): Promise<T>;
+}
+
+/**
+ * Tracks a single in-flight async operation (such as main-process DSH engine
+ * bootstrap/retry), clearing the tracked reference as soon as the exact
+ * derived `.finally()` promise settles (fulfilled or rejected).
+ *
+ * Passing `force: true` bypasses any prior in-flight promise and replaces it
+ * with the newer attempt so concurrent waiters join the retry and an earlier
+ * attempt settling later never clears the newer reference.
+ */
+export function createSingleFlightAsyncTracker<T>(): SingleFlightAsyncTracker<T> {
+  let activePromise: Promise<T> | null = null;
+  return {
+    getInFlight: () => activePromise,
+    run(factory: () => Promise<T>, options?: { force?: boolean }): Promise<T> {
+      if (!options?.force && activePromise) {
+        return activePromise;
+      }
+      let inner: Promise<T>;
+      try {
+        inner = factory();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const pending = inner.finally(() => {
+        if (activePromise === pending) {
+          activePromise = null;
+        }
+      });
+      activePromise = pending;
+      return pending;
+    },
+  };
 }
 
 /**
@@ -367,10 +434,16 @@ export class DshBootstrap {
   };
   private ecosystemWindow: BrowserWindow | null = null;
   private lastImInstances: DshChannelInstanceConfig[] | null = null;
+  private dreamDiaryBackfillPromise: Promise<LegacyDreamDiaryBackfillResult> | null = null;
+  private startPromise: Promise<DshCompatEngineStatus> | null = null;
+  private started = false;
+  private startingInProgress = false;
+  private initialConfigSynced = false;
+  private initialSyncPromise: Promise<boolean> | null = null;
 
   constructor(options: DshBootstrapOptions) {
     this.options = options;
-    const bundled = resolveBundledDshPaths({
+    const bundled = options.runtimePaths ?? resolveBundledDshPaths({
       isPackaged: app.isPackaged,
       appRootDir: app.getAppPath(),
       resourcesDir: process.resourcesPath,
@@ -378,20 +451,14 @@ export class DshBootstrap {
     this.runtimeDir = bundled.runtimeDir;
     this.hostBundleDir = bundled.hostBundleDir;
     this.channelsBundleDir = bundled.channelsBundleDir;
-    this.executablePath = getElectronNodeRuntimePath();
+    this.executablePath = options.executablePath ?? getElectronNodeRuntimePath();
     this.nodeToolchain = resolveDshNodeToolchain(this.executablePath);
     this.workspacesDir = path.join(options.userDataDir, WORKSPACES_DIR_NAME);
 
     fs.mkdirSync(this.workspacesDir, { recursive: true });
 
     this.kvStorage = createSqliteKvStoragePort(options.db);
-    const storedPreset = this.kvStorage.get(DSH_PERMISSION_PRESET_KV_KEY);
-    this.defaultPermissionPreset =
-      storedPreset === DshPermissionPreset.ReadOnly
-      || storedPreset === DshPermissionPreset.WorkspaceWrite
-      || storedPreset === DshPermissionPreset.FullAccess
-        ? storedPreset
-        : DEFAULT_DSH_PERMISSION_PRESET;
+    this.defaultPermissionPreset = resolveInitialDshPermissionPreset(options.db, this.kvStorage);
 
     this.memoryService = new LobsterMemoryService(this.workspacesDir);
     this.mcpOAuthManager = new McpOAuthManager({
@@ -410,6 +477,9 @@ export class DshBootstrap {
       resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath, options.userDataDir),
       nodeToolchain: this.nodeToolchain,
       instanceId: options.instanceId,
+      skipElectronRunAsNode: options.skipElectronRunAsNode,
+      bootTimeoutMs: options.bootTimeoutMs,
+      nodeToolchainSource: () => this.resolveNodeToolchain(),
     });
 
     this.channelsBridge = new DshChannelsBridge({
@@ -471,6 +541,7 @@ export class DshBootstrap {
     this.bridgeWiring = wireDshHostBridge({
       hostManager: this.hostManager,
       memoryService: this.memoryService,
+      isMemoryEnabled: options.getMemoryEnabled,
       scheduler: this.scheduler,
       onScheduleMutated: () => {
         this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
@@ -479,11 +550,16 @@ export class DshBootstrap {
       toolProviders: options.toolProviders,
     });
 
-    // Seed initial persisted permission preset into DshHostManager so it replays on boot.
+    // Seed initial persisted permission preset & memory policy into DshHostManager so they replay on boot.
     void this.hostManager.setPermissionPreset(this.defaultPermissionPreset).catch((): void => undefined);
+    if (options.getMemoryEnabled) {
+      void this.hostManager
+        .syncMemoryPolicy({ enabled: options.getMemoryEnabled() !== false })
+        .catch((): void => undefined);
+    }
 
     this.hostManager.on('phaseChange', (_phase, hostStatus: DshHostStatus) => {
-      options.onStatusChange?.(mapDshHostStatusToEngineStatus(hostStatus), hostStatus);
+      options.onStatusChange?.(this.mapEffectiveEngineStatus(hostStatus), hostStatus);
       if (hostStatus.phase === DshHostPhase.Ready && this.lastImInstances) {
         void this.channelsBridge.syncInstances(this.lastImInstances).catch((error) => {
           console.warn('[DshBootstrap] Failed to replay IM channels after host ready:', error);
@@ -502,8 +578,65 @@ export class DshBootstrap {
     });
   }
 
+  private mapEffectiveEngineStatus(hostStatus: DshHostStatus): DshCompatEngineStatus {
+    const mapped = mapDshHostStatusToEngineStatus(hostStatus);
+    if (this.startingInProgress && mapped.phase === OpenClawEnginePhase.Running) {
+      return {
+        phase: OpenClawEnginePhase.Starting,
+        version: mapped.version,
+        message: 'Synchronizing DeepSeek Harness configuration...',
+      };
+    }
+    return mapped;
+  }
+
+  private emitStatusChange(): void {
+    const hostStatus = this.hostManager.getStatus();
+    this.options.onStatusChange?.(this.mapEffectiveEngineStatus(hostStatus), hostStatus);
+  }
+
   getEngineStatus(): DshCompatEngineStatus {
-    return mapDshHostStatusToEngineStatus(this.hostManager.getStatus());
+    return this.mapEffectiveEngineStatus(this.hostManager.getStatus());
+  }
+
+  isInitialConfigSynced(): boolean {
+    return this.initialConfigSynced;
+  }
+
+  /**
+   * True once the DSH host is healthy, bootstrap startup has completed, and the
+   * initial providers/MCP/skills/agents config sync has landed in the live host.
+   */
+  isReadyForTurns(): boolean {
+    return this.started && !this.startingInProgress && this.hostManager.isReady() && this.initialConfigSynced;
+  }
+
+  resolveNodeToolchain(): DshNodeToolchain {
+    const npmBinDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+      : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+    const hasNpm = fs.existsSync(npmBinDir);
+    let nodeShimDir: string | null = null;
+    try {
+      nodeShimDir = ensureElectronNodeShim(this.executablePath, hasNpm ? npmBinDir : undefined);
+    } catch (error) {
+      console.warn('[DshBootstrap] Could not prepare Electron node shims for bundled pnpm:', error);
+    }
+    const resourcesDir = app.isPackaged
+      ? process.resourcesPath
+      : path.join(app.getAppPath(), 'resources');
+    const gitBinDir = resolveDshBundledGitBinDir(
+      resourcesDir,
+      process.platform,
+      fs.existsSync,
+      path.join,
+    );
+    return {
+      electronPath: this.executablePath,
+      nodeShimDir,
+      npmBinDir: hasNpm ? npmBinDir : null,
+      gitBinDir,
+    };
   }
 
   getPermissionPreset(sessionId?: string): {
@@ -520,21 +653,21 @@ export class DshBootstrap {
     preset: DshPermissionPreset,
     sessionId?: string,
   ): Promise<{ preset: DshPermissionPreset; defaultPreset: DshPermissionPreset }> {
-    if (
-      preset !== DshPermissionPreset.ReadOnly
-      && preset !== DshPermissionPreset.WorkspaceWrite
-      && preset !== DshPermissionPreset.FullAccess
-    ) {
+    const validated = parseDshPermissionPreset(preset);
+    if (!validated) {
       throw new Error(`Unsupported DSH permission preset: "${String(preset)}"`);
     }
-    // Always persist as default when global (no sessionId) OR when user switches
-    // from the composer/settings without specifying a session-only scope.
-    if (!sessionId) {
-      this.defaultPermissionPreset = preset;
-      this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, preset);
+    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
+      ? sessionId.trim()
+      : undefined;
+    // Update the persisted global default ONLY when switching without a session scope
+    // (home / new-session composer). Per-session switches stay isolated to that session.
+    if (!normalizedSessionId) {
+      this.defaultPermissionPreset = validated;
+      this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, validated);
     }
-    await this.runtimeAdapter.setSessionPermissionPreset(preset, sessionId);
-    return this.getPermissionPreset(sessionId);
+    await this.runtimeAdapter.setSessionPermissionPreset(validated, normalizedSessionId);
+    return this.getPermissionPreset(normalizedSessionId);
   }
 
   private broadcastScheduledTaskEvent(channel: string, payload?: unknown): void {
@@ -549,65 +682,224 @@ export class DshBootstrap {
     }
   }
 
-  async start(): Promise<DshCompatEngineStatus> {
-    // One-shot idempotent backfill for users who completed v2 migration before
-    // `cron_jobs` / run-history extraction landed. Runs concurrently with DSH boot
-    // and returns instantaneously once `engine.migration.v2.cronBackfillCompleted` is set.
-    const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
-      userDataDir: this.options.userDataDir,
-      db: this.options.db,
-    }).catch((error) => {
-      console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
-      return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
-    });
-
-    const tavilyBackfillPromise = backfillLegacyTavilyFromBackup({
-      userDataDir: this.options.userDataDir,
-      db: this.options.db,
-    }).catch((error) => {
-      console.warn('[MigrationV2] legacy Tavily MCP backfill failed:', error);
-      return { status: 'failed' as const, migrated: false };
-    });
-
-    await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
-    await this.hostManager.start();
-    await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
-      console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
-    });
-
-    const [backfill, tavilyBackfill] = await Promise.all([
-      cronBackfillPromise,
-      tavilyBackfillPromise,
-    ]);
-    if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
-      console.log(
-        `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
-      );
-      this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+  /**
+   * Ensure one-shot idempotent backfill of legacy `DREAMS.md` files from
+   * `legacy-openclaw-state.tar.gz` has completed before reading diaries.
+   */
+  ensureDreamDiaryBackfilled(): Promise<LegacyDreamDiaryBackfillResult> {
+    if (!this.dreamDiaryBackfillPromise) {
+      this.dreamDiaryBackfillPromise = backfillLegacyDreamDiariesFromBackup({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+      })
+        .then((result) => {
+          if (result.status === 'failed') {
+            this.dreamDiaryBackfillPromise = null;
+          }
+          return result;
+        })
+        .catch((error) => {
+          console.warn('[MigrationV2] dream diary backup backfill failed:', error);
+          this.dreamDiaryBackfillPromise = null;
+          return {
+            status: 'failed' as const,
+            diariesRestored: 0,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        });
     }
-    if (tavilyBackfill.migrated) {
-      console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');
-      this.broadcastScheduledTaskEvent(McpIpcChannel.Changed);
-    }
-
-    this.scheduler.start();
-    return this.getEngineStatus();
+    return this.dreamDiaryBackfillPromise;
   }
 
-  async restart(): Promise<DshCompatEngineStatus> {
-    await this.hostManager.restart();
-    await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
-      console.warn('[DshBootstrap] Failed to sync dynamic host tools after restart:', error);
+  /**
+   * Deduplicated startup: concurrent callers share a single in-flight boot
+   * promise so orphan reaping, host startup, dynamic host tool registration,
+   * optional initial config sync, and scheduler activation never run twice
+   * concurrently. Failed boots clear the in-flight promise so retries succeed.
+   */
+  async start(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
+    if (this.started && this.hostManager.isReady()) {
+      if (options?.syncInitialConfig && !this.initialConfigSynced) {
+        await this.runInitialConfigSync(options.syncInitialConfig);
+      }
+      return this.getEngineStatus();
+    }
+
+    if (this.startPromise) {
+      await this.startPromise;
+      if (options?.syncInitialConfig && !this.initialConfigSynced && this.hostManager.isReady()) {
+        await this.runInitialConfigSync(options.syncInitialConfig);
+      }
+      return this.getEngineStatus();
+    }
+
+    const run = this.doStart(options).finally(() => {
+      if (this.startPromise === run) {
+        this.startPromise = null;
+      }
     });
-    return this.getEngineStatus();
+    this.startPromise = run;
+    return run;
+  }
+
+  private async doStart(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
+    this.startingInProgress = true;
+    try {
+      // One-shot idempotent backfills for users who completed v2 migration before
+      // `cron_jobs` / `DREAMS.md` / Tavily extraction landed. All run concurrently
+      // with DSH boot and return instantaneously once their completion keys are set.
+      const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+      }).catch((error) => {
+        console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
+        return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
+      });
+      const dreamDiaryBackfillPromise = this.ensureDreamDiaryBackfilled();
+      const tavilyBackfillPromise = backfillLegacyTavilyFromBackup({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+      }).catch((error) => {
+        console.warn('[MigrationV2] legacy Tavily MCP backfill failed:', error);
+        return { status: 'failed' as const, migrated: false };
+      });
+
+      // One-shot idempotent backfill for already-migrated v2 DBs so SQLite-only
+      // active `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
+      try {
+        const memoryBackfill = backfillLegacyUserMemories({
+          userDataDir: this.options.userDataDir,
+          db: this.options.db,
+          memoryService: this.memoryService,
+        });
+        if (memoryBackfill.memoriesImported > 0) {
+          console.log(
+            `[MigrationV2] backfilled ${memoryBackfill.memoriesImported} legacy SQLite user_memories into MEMORY.md`,
+          );
+        }
+      } catch (error) {
+        console.warn('[MigrationV2] legacy user_memories backfill failed:', error);
+      }
+
+      await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
+      await this.hostManager.start();
+      await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
+        console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
+      });
+
+      const [backfill, dreamDiaryBackfill, tavilyBackfill] = await Promise.all([
+        cronBackfillPromise,
+        dreamDiaryBackfillPromise,
+        tavilyBackfillPromise,
+      ]);
+      if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
+        console.log(
+          `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
+        );
+        this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+      }
+      if (dreamDiaryBackfill.diariesRestored > 0) {
+        console.log(
+          `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
+        );
+      }
+      if (tavilyBackfill.migrated) {
+        console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');
+        this.broadcastScheduledTaskEvent(McpIpcChannel.Changed);
+      }
+
+      if (options?.syncInitialConfig) {
+        await this.runInitialConfigSync(options.syncInitialConfig);
+      }
+
+      this.scheduler.start();
+      this.started = true;
+      this.startingInProgress = false;
+      this.emitStatusChange();
+      return this.getEngineStatus();
+    } catch (error) {
+      this.startingInProgress = false;
+      this.emitStatusChange();
+      throw error;
+    }
+  }
+
+  /**
+   * Run (or join) the initial config sync against the live DSH host.
+   * Deduplicates concurrent callers and allows retries when a previous attempt
+   * failed or returned `{ success: false }`.
+   */
+  async runInitialConfigSync(
+    syncFn: DshInitialConfigSyncFn,
+    options: { force?: boolean } = {},
+  ): Promise<boolean> {
+    if (!options.force && this.initialConfigSynced && this.hostManager.isReady()) {
+      return true;
+    }
+    if (!options.force && this.initialSyncPromise) {
+      return this.initialSyncPromise;
+    }
+    const run = (async (): Promise<boolean> => {
+      const outcome = await syncFn();
+      const ok = outcome === undefined
+        ? true
+        : typeof outcome === 'boolean'
+          ? outcome
+          : typeof outcome === 'object' && outcome !== null
+            ? outcome.success !== false
+            : true;
+      if (ok && this.hostManager.isReady()) {
+        this.initialConfigSynced = true;
+      }
+      return ok;
+    })().finally(() => {
+      if (this.initialSyncPromise === run) {
+        this.initialSyncPromise = null;
+      }
+    });
+    this.initialSyncPromise = run;
+    return run;
+  }
+
+  async restart(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
+    this.startingInProgress = true;
+    try {
+      await this.hostManager.restart();
+      await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
+        console.warn('[DshBootstrap] Failed to sync dynamic host tools after restart:', error);
+      });
+      if (options?.syncInitialConfig) {
+        await this.runInitialConfigSync(options.syncInitialConfig, { force: true });
+      }
+      this.started = true;
+      this.startingInProgress = false;
+      this.emitStatusChange();
+      return this.getEngineStatus();
+    } catch (error) {
+      this.startingInProgress = false;
+      this.emitStatusChange();
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
+    this.started = false;
+    this.startingInProgress = false;
+    this.initialConfigSynced = false;
+    this.initialSyncPromise = null;
     this.scheduler.stop();
     this.closeEcosystemWindow();
     this.runtimeAdapter.stopAllSessions();
     this.bridgeWiring.dispose();
-    await this.hostManager.stop();
+    try {
+      await this.hostManager.stop();
+    } finally {
+      try {
+        this.memoryService.close();
+      } catch (error) {
+        console.warn('[DshBootstrap] Failed to close memory service:', error);
+      }
+    }
   }
 
   async syncAllConfig(input: DshBootstrapSyncInput): Promise<{
@@ -634,6 +926,9 @@ export class DshBootstrap {
       if (input.webAccessPolicy) {
         await this.hostManager.syncWebAccessPolicy(input.webAccessPolicy);
       }
+      if (typeof input.memoryEnabled === 'boolean') {
+        await this.hostManager.syncMemoryPolicy({ enabled: input.memoryEnabled });
+      }
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);
       }
@@ -652,6 +947,10 @@ export class DshBootstrap {
               config: entry.config ?? {},
             }));
         }
+      }
+
+      if (this.hostManager.isReady()) {
+        this.initialConfigSynced = true;
       }
 
       return { success: true, changed: true, needsReauthMcpIds: needsReauthIds };
@@ -712,8 +1011,11 @@ export class DshBootstrap {
     signal: AbortSignal,
   ): Promise<LobsterSchedulerRunResult> {
     signal.throwIfAborted();
-    if (!this.hostManager.isReady()) {
-      await this.hostManager.start();
+    if (!this.started || !this.hostManager.isReady()) {
+      await this.start();
+    }
+    if (this.initialSyncPromise) {
+      await this.initialSyncPromise;
     }
     signal.throwIfAborted();
 

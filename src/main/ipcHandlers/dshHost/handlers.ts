@@ -116,11 +116,13 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       return { ok: false, error: 'Invalid package specifier' };
     }
     const status = manager.getStatus();
+    const toolchain = deps.getNodeToolchain?.() ?? manager.getNodeToolchain?.() ?? null;
     const res = await runDshPluginCommand({
       executablePath: deps.getExecutablePath(),
       runtimeDir: deps.getRuntimeDir(),
       dshHomeDir: status.dshHomeDir,
-      nodeToolchain: deps.getNodeToolchain?.() ?? manager.getNodeToolchain?.() ?? null,
+      nodeToolchain: toolchain,
+      toolchain,
       args: ['add', spec],
     });
     // Always restore LobsterAI managed bundles & symlinks before restarting DSH host.
@@ -146,11 +148,13 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       return { ok: false, error: 'Cannot remove managed or invalid plugin package' };
     }
     const status = manager.getStatus();
+    const toolchain = deps.getNodeToolchain?.() ?? manager.getNodeToolchain?.() ?? null;
     const res = await runDshPluginCommand({
       executablePath: deps.getExecutablePath(),
       runtimeDir: deps.getRuntimeDir(),
       dshHomeDir: status.dshHomeDir,
-      nodeToolchain: deps.getNodeToolchain?.() ?? manager.getNodeToolchain?.() ?? null,
+      nodeToolchain: toolchain,
+      toolchain,
       args: ['remove', name],
     });
     // Always restore LobsterAI managed bundles & symlinks before restarting DSH host.
