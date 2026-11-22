@@ -3,12 +3,19 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { DshHostPhase, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
+import {
+  DshHostPhase,
+  DshOpsAction,
+  DshPermissionPreset,
+  DshSearchPolicy,
+} from '../../../shared/dshEngine/hostConstants';
+import { isDshWebCommand } from '../dshOrphanReaper';
 import {
   buildIsolatedDshChildEnv,
   DshHostManager,
   resolveBundledDshPaths,
 } from './dshHostManager';
+import type { DshTypertClient } from './dshTypertClient';
 
 const tempDirs: string[] = [];
 
@@ -150,9 +157,12 @@ describe('DshHostManager', () => {
     expect(bindingsRes).toEqual({ deferred: true });
   });
 
-  test('buildIsolatedDshChildEnv strips inherited native DSH_* vars and isolates home, agents-home, and pnpm store', () => {
+  test('buildIsolatedDshChildEnv strips official DSH, DeepSeek, and global pnpm/npm config env vars without mutating PATH', () => {
     const temp = createTempDir();
     const dshHomeDir = path.join(temp, 'userData', 'dsh-profile');
+    const runtimeDir = path.join(temp, 'runtime');
+    fs.mkdirSync(path.join(runtimeDir, 'package-manager'), { recursive: true });
+
     const env = buildIsolatedDshChildEnv({
       baseEnv: {
         PATH: '/usr/bin',
@@ -160,8 +170,15 @@ describe('DshHostManager', () => {
         DSH_AGENTS_HOME: '/Users/alice/.agents',
         DSH_BUNDLED_SKILL_DIR: '/opt/native-dsh/skills',
         DSH_PROFILE: 'desktop',
+        DEEPSEEK_API_KEY: 'sk-official-secret',
+        DEEPSEEK_BASE_URL: 'https://official.example',
+        DEEPSEEK_SEARCH_BASE_URL: 'https://search.example',
+        PNPM_HOME: '/Users/alice/.local/share/pnpm',
         npm_config_store_dir: '/Users/alice/.local/share/pnpm/store',
         npm_config_cache: '/Users/alice/.npm',
+        npm_config_userconfig: '/Users/alice/.npmrc',
+        npm_config_globalconfig: '/etc/npmrc',
+        NPM_CONFIG_USERCONFIG: '/Users/alice/.npmrc-upper',
         HOME: '/Users/alice',
       },
       dshHomeDir,
@@ -170,7 +187,7 @@ describe('DshHostManager', () => {
       workspacesDir: path.join(temp, 'userData', 'workspaces'),
       skillsDir: path.join(temp, 'userData', 'SKILLs'),
       searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
-      runtimeDir: path.join(temp, 'runtime'),
+      runtimeDir,
     });
 
     expect(env.DSH_HOME).toBe(dshHomeDir);
@@ -178,8 +195,237 @@ describe('DshHostManager', () => {
     expect(env.DSH_TELEMETRY_DISABLED).toBe('1');
     expect(env.DSH_BUNDLED_SKILL_DIR).toBeUndefined();
     expect(env.DSH_PROFILE).toBeUndefined();
+    expect(env.DEEPSEEK_API_KEY).toBeUndefined();
+    expect(env.DEEPSEEK_BASE_URL).toBeUndefined();
+    expect(env.DEEPSEEK_SEARCH_BASE_URL).toBeUndefined();
+    expect(env.PNPM_HOME).toBeUndefined();
+    expect(env.npm_config_userconfig).toBeUndefined();
+    expect(env.npm_config_globalconfig).toBeUndefined();
+    expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.npm_config_store_dir).toBe(path.join(dshHomeDir, 'cache', 'pnpm-store'));
     expect(env.npm_config_cache).toBe(path.join(dshHomeDir, 'cache', 'npm-cache'));
+    expect(env.PATH).toBe('/usr/bin');
     expect(env.HOME).toBe('/Users/alice');
+  });
+
+  test('caches per-session permission presets independently from default and replays both on restart', async () => {
+    const temp = createTempDir();
+    const manager = new DshHostManager({
+      userDataDir: temp,
+      runtimeDir: path.join(temp, 'runtime'),
+      hostBundleDir: path.join(temp, 'host-bundle'),
+      skillsDir: path.join(temp, 'skills'),
+      executablePath: process.execPath,
+      skipElectronRunAsNode: true,
+    });
+
+    await manager.setPermissionPreset(DshPermissionPreset.WorkspaceWrite);
+    await manager.setPermissionPreset(DshPermissionPreset.FullAccess, 'dsh-sess-a');
+    await manager.setPermissionPreset(DshPermissionPreset.ReadOnly, 'dsh-sess-b');
+
+    const callOps = vi.fn(async () => ({ ok: true }));
+    manager['phase'] = DshHostPhase.Ready;
+    manager['client'] = {
+      isConnected: () => true,
+      callOps,
+    } as never;
+
+    await manager['replayCachedSyncs']();
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.WorkspaceWrite,
+    });
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.FullAccess,
+      sessionId: 'dsh-sess-a',
+    });
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.ReadOnly,
+      sessionId: 'dsh-sess-b',
+    });
+
+    // Deleting a session evicts its cached per-session preset so it is not replayed.
+    callOps.mockClear();
+    await manager.deleteSessionFiles('dsh-sess-a');
+    await manager['replayCachedSyncs']();
+    expect(callOps).not.toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.FullAccess,
+      sessionId: 'dsh-sess-a',
+    });
+    expect(callOps).toHaveBeenCalledWith(DshOpsAction.SetPermissionPreset, {
+      preset: DshPermissionPreset.ReadOnly,
+      sessionId: 'dsh-sess-b',
+    });
+  });
+
+  test('replays cached sync payloads before transitioning phase to Ready', async () => {
+    const temp = createTempDir();
+    const runtimeDir = path.join(temp, 'runtime');
+    const hostBundleDir = path.join(temp, 'host-bundle');
+    fs.mkdirSync(path.join(runtimeDir, 'lib'), { recursive: true });
+    fs.mkdirSync(hostBundleDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'lib', 'bin.js'), '// stub\n');
+    fs.writeFileSync(path.join(runtimeDir, 'package.json'), '{"version":"0.2.2-rc.5"}');
+
+    const order: string[] = [];
+    const fakeClient = {
+      connect: vi.fn(async () => ({ origin: 'http://127.0.0.1:41234', hostHome: temp })),
+      isConnected: vi.fn(() => true),
+      callOps: vi.fn(async (action: string) => {
+        order.push(`ops:${action}`);
+        return { ok: true };
+      }),
+      close: vi.fn(async () => undefined),
+    };
+
+    const manager = new DshHostManager({
+      userDataDir: path.join(temp, 'userData'),
+      runtimeDir,
+      hostBundleDir,
+      skillsDir: path.join(temp, 'skills'),
+      executablePath: process.execPath,
+      skipElectronRunAsNode: true,
+      clientFactory: () => fakeClient as unknown as ReturnType<DshHostManager['getClient']>,
+    });
+
+    vi.spyOn(manager as unknown as { spawnAndWaitForLaunchUrl: () => Promise<string> }, 'spawnAndWaitForLaunchUrl')
+      .mockResolvedValue('http://127.0.0.1:41234/?token=test');
+
+    manager.on('phaseChange', (phase: DshHostPhase) => {
+      order.push(`phase:${phase}`);
+    });
+
+    // Pre-cache a providers payload before start.
+    await manager.syncProviders({
+      providers: [
+        {
+          id: 'p1',
+          api: 'openai-completions',
+          baseURL: 'http://127.0.0.1:9999/v1',
+          models: [{ id: 'm1' }],
+        },
+      ],
+    });
+
+    try {
+      await manager.start();
+      const syncIdx = order.indexOf('ops:syncProviders');
+      const readyIdx = order.indexOf('phase:ready');
+      expect(syncIdx).toBeGreaterThan(-1);
+      expect(readyIdx).toBeGreaterThan(-1);
+      expect(syncIdx).toBeLessThan(readyIdx);
+    } finally {
+      await manager.stop();
+    }
+  });
+
+  test('spawns via bundled-pnpm launcher with cwd pinned to dshHomeDir, scrubbed env, and reaper-compatible argv', async () => {
+    const temp = createTempDir();
+    const userDataDir = path.join(temp, 'userData');
+    const runtimeDir = path.join(temp, 'mock-runtime');
+    const hostBundleDir = path.join(temp, 'host-bundle');
+    const skillsDir = path.join(temp, 'skills');
+    const probePath = path.join(temp, 'spawn-probe.json');
+
+    fs.mkdirSync(path.join(runtimeDir, 'lib'), { recursive: true });
+    fs.mkdirSync(path.join(runtimeDir, 'package-manager', 'pnpm', 'bin'), { recursive: true });
+    fs.mkdirSync(hostBundleDir, { recursive: true });
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    fs.writeFileSync(path.join(runtimeDir, 'package.json'), JSON.stringify({ version: '0.2.2-rc.5', type: 'module' }));
+    fs.writeFileSync(
+      path.join(runtimeDir, 'package-manager', 'pnpm', 'package.json'),
+      JSON.stringify({ name: 'pnpm', version: '11.28.5', bin: { pnpm: 'bin/pnpm.mjs' } }),
+    );
+    const pnpmEntry = path.join(runtimeDir, 'package-manager', 'pnpm', 'bin', 'pnpm.mjs');
+    fs.writeFileSync(pnpmEntry, 'console.log("11.28.5");\n');
+    fs.writeFileSync(
+      path.join(runtimeDir, 'lib', 'bin.js'),
+      [
+        'import * as fs from "node:fs";',
+        `const probePath = ${JSON.stringify(probePath)};`,
+        'export async function runCli(options = {}) {',
+        '  fs.writeFileSync(probePath, JSON.stringify({',
+        '    cwd: process.cwd(),',
+        '    execArgv: process.execArgv,',
+        '    argv: process.argv,',
+        '    packageManager: options.packageManager ?? null,',
+        '    env: {',
+        '      DSH_HOME: process.env.DSH_HOME ?? null,',
+        '      DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME ?? null,',
+        '      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ?? null,',
+        '      PNPM_HOME: process.env.PNPM_HOME ?? null,',
+        '      npm_config_userconfig: process.env.npm_config_userconfig ?? null,',
+        '      npm_config_globalconfig: process.env.npm_config_globalconfig ?? null,',
+        '      PATH: process.env.PATH ?? null,',
+        '    },',
+        '  }));',
+        '  console.log("dsh web: http://127.0.0.1:43210/?token=test-token");',
+        '  setInterval(() => {}, 1000);',
+        '}',
+        '',
+      ].join('\n'),
+    );
+
+    const fakeClient = {
+      connect: vi.fn(async () => undefined),
+      callOps: vi.fn(async () => ({ ok: true })),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined),
+    } as unknown as DshTypertClient;
+
+    const manager = new DshHostManager({
+      userDataDir,
+      runtimeDir,
+      hostBundleDir,
+      skillsDir,
+      executablePath: process.execPath,
+      skipElectronRunAsNode: true,
+      clientFactory: () => fakeClient,
+      baseEnv: {
+        PATH: '',
+        DSH_HOME: '/fake/official/.dsh',
+        DEEPSEEK_API_KEY: 'sk-official-leak-test',
+        PNPM_HOME: '/fake/global/pnpm',
+        npm_config_userconfig: '/fake/global/.npmrc',
+        npm_config_globalconfig: '/fake/global/npmrc',
+      },
+    });
+
+    try {
+      await manager.start();
+      const status = manager.getStatus();
+      const launcherPath = path.join(status.dshHomeDir, 'dsh-launcher', 'launch.mjs');
+      expect(fs.existsSync(launcherPath)).toBe(true);
+      expect(status.cliShimPath && fs.readFileSync(status.cliShimPath, 'utf8')).toContain(launcherPath);
+
+      const probe = JSON.parse(fs.readFileSync(probePath, 'utf8')) as {
+        cwd: string;
+        execArgv: string[];
+        argv: string[];
+        packageManager: { command: string; args: string[]; env: Record<string, string> } | null;
+        env: Record<string, string | null>;
+      };
+
+      expect(fs.realpathSync(probe.cwd)).toBe(fs.realpathSync(status.dshHomeDir));
+      expect(probe.execArgv).toContain('--expose-internals');
+      expect(fs.realpathSync(probe.argv[1])).toBe(fs.realpathSync(launcherPath));
+      expect(probe.packageManager?.command).toBe(process.execPath);
+      expect(probe.packageManager?.args.map((p) => fs.realpathSync(p))).toEqual([fs.realpathSync(pnpmEntry)]);
+      expect(probe.packageManager?.env.ELECTRON_RUN_AS_NODE).toBe('1');
+      expect(probe.env).toEqual({
+        DSH_HOME: status.dshHomeDir,
+        DSH_AGENTS_HOME: path.join(status.dshHomeDir, 'agents-home'),
+        DEEPSEEK_API_KEY: null,
+        PNPM_HOME: null,
+        npm_config_userconfig: null,
+        npm_config_globalconfig: null,
+        PATH: '',
+      });
+
+      const reconstructedCommand = [process.execPath, ...probe.execArgv, ...probe.argv.slice(1)].join(' ');
+      expect(isDshWebCommand(reconstructedCommand, process.execPath)).toBe(true);
+    } finally {
+      await manager.stop();
+    }
   });
 });

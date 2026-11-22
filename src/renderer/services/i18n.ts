@@ -1858,7 +1858,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawGoToSettingsInstall: '查看引擎设置',
     coworkOpenClawRestartGateway: '重新启动网关',
     coworkOpenClawNotInstalledNotice:
-      '未检测到内置 AI 引擎运行时（cfmind），请先执行打包前构建脚本。',
+      '未检测到内置 AI 引擎运行时（dsh-runtime），请先执行打包前构建脚本。',
     coworkOpenClawReadyNotice: 'AI 引擎已就绪。开始任务时会自动启动网关。',
     coworkOpenClawStarting: 'AI 引擎正在启动网关...',
     coworkOpenClawRunning: 'AI 引擎已就绪',
@@ -6868,7 +6868,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawGoToSettingsInstall: 'View Engine Settings',
     coworkOpenClawRestartGateway: 'Restart Gateway',
     coworkOpenClawNotInstalledNotice:
-      'Bundled AI engine runtime (cfmind) was not found. Build the runtime before packaging.',
+      'Bundled AI engine runtime (dsh-runtime) was not found. Build the runtime before packaging.',
     coworkOpenClawReadyNotice:
       'AI engine is ready. The gateway will auto-start when you run a task.',
     coworkOpenClawStarting: 'AI engine is starting the gateway...',

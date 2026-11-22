@@ -1096,6 +1096,7 @@ interface IElectronAPI {
     runGoalCommand: (options: { sessionId: string; command: string }) => Promise<{
       success: boolean;
       goal?: CoworkGoal | null;
+      isRunning?: boolean;
       error?: string;
       code?: string;
       engineStatus?: OpenClawEngineStatus;

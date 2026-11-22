@@ -33,8 +33,13 @@ import {
   LEGACY_DREAM_DIARY_FILENAME,
   LEGACY_DREAM_DIARY_LOWERCASE_FILENAME,
 } from '../../shared/cowork/dreamDiary';
+import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
+  DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_PERMISSION_PRESET_KV_KEY,
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
+  mapLegacyExecutionModeToPermissionPreset,
+  parseDshPermissionPreset,
   RETAINED_IM_PLATFORM_LIST,
   RetiredImPlatform,
   WORKSPACES_DIR_NAME,
@@ -43,6 +48,7 @@ import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
   MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+  MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   type MigrationV2ArchivedItem,
@@ -65,6 +71,7 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
+import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
   collectDirectoryTarEntries,
@@ -1455,6 +1462,116 @@ function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string)
   setKv(db, marker, '1');
 }
 
+const PENDING_MESSAGE_EDITS_CLEARED_KV_KEY = 'engine.migration.v2.pendingMessageEditsCleared';
+
+/**
+ * Archive (when `incompatibleEntries` is provided) and clear stale legacy
+ * in-place message edit / version switch rows. LobsterAI v2 retires in-place
+ * edit recovery in favor of session forking, so uncommitted rows left over
+ * from OpenClaw must be cleared to avoid leaving sessions permanently stuck.
+ */
+function archiveAndClearLegacyPendingMessageEdits(
+  db: Database.Database,
+  incompatibleEntries?: TarEntryInput[],
+): void {
+  if (tableExists(db, 'cowork_message_edits')) {
+    const editCols = getTableColumns(db, 'cowork_message_edits');
+    const pendingEdits = editCols.has('phase')
+      ? db
+          .prepare('SELECT * FROM cowork_message_edits WHERE phase IS NULL OR phase NOT IN (?, ?)')
+          .all(CoworkMessageEditPhase.Committed, CoworkMessageEditPhase.Restored)
+      : db.prepare('SELECT * FROM cowork_message_edits').all();
+    if (pendingEdits.length > 0) {
+      incompatibleEntries?.push({
+        archivePath: 'sqlite/cowork_message_edits.json',
+        content: Buffer.from(JSON.stringify(pendingEdits, null, 2), 'utf8'),
+      });
+      if (editCols.has('phase')) {
+        db.prepare('DELETE FROM cowork_message_edits WHERE phase IS NULL OR phase NOT IN (?, ?)')
+          .run(CoworkMessageEditPhase.Committed, CoworkMessageEditPhase.Restored);
+      } else {
+        db.prepare('DELETE FROM cowork_message_edits').run();
+      }
+    }
+  }
+
+  if (tableExists(db, 'cowork_message_version_switches')) {
+    const pendingSwitches = db.prepare('SELECT * FROM cowork_message_version_switches').all();
+    if (pendingSwitches.length > 0) {
+      incompatibleEntries?.push({
+        archivePath: 'sqlite/cowork_message_version_switches.json',
+        content: Buffer.from(JSON.stringify(pendingSwitches, null, 2), 'utf8'),
+      });
+      db.prepare('DELETE FROM cowork_message_version_switches').run();
+    }
+  }
+}
+
+/** One-shot cleanup for already-migrated v2 DBs that still have stale legacy edit rows. */
+function clearLegacyPendingMessageEditsOnce(db: Database.Database): void {
+  if (getKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY)) return;
+  archiveAndClearLegacyPendingMessageEdits(db);
+  setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+}
+
+/**
+ * Migrate legacy OpenClaw `cowork_config.executionMode` and per-session
+ * `cowork_sessions.execution_mode` to DSH permission presets once.
+ *
+ * - `cowork_config.executionMode` -> `kv['dsh.permissionPreset.default']` when not already set
+ *   (`'auto'` -> `'danger-full-access'`, `'local'`/`'sandbox'` -> `'workspace-write'`).
+ * - Legacy `cowork_sessions.execution_mode` rows whose mapped preset differs from the
+ *   legacy default receive an explicit `cowork_sessions.permission_preset` so per-session
+ *   restrictions or auto approvals survive upgrade without relying on stale `execution_mode`.
+ */
+export function migrateLegacyPermissionPresets(db: Database.Database): void {
+  if (getKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY)) return;
+
+  let legacyConfigExecutionMode: string | null = null;
+  if (tableExists(db, 'cowork_config')) {
+    try {
+      const row = db
+        .prepare("SELECT value FROM cowork_config WHERE key = 'executionMode'")
+        .get() as { value?: unknown } | undefined;
+      if (typeof row?.value === 'string') {
+        legacyConfigExecutionMode = row.value;
+      }
+    } catch {
+      // Ignore unreadable legacy cowork_config table.
+    }
+  }
+
+  const mappedConfigPreset = mapLegacyExecutionModeToPermissionPreset(legacyConfigExecutionMode);
+  const existingDefaultPreset = parseDshPermissionPreset(getKv(db, DSH_PERMISSION_PRESET_KV_KEY));
+  if (!existingDefaultPreset && mappedConfigPreset) {
+    setKv(db, DSH_PERMISSION_PRESET_KV_KEY, mappedConfigPreset);
+  }
+
+  if (tableExists(db, 'cowork_sessions')) {
+    const cols = getTableColumns(db, 'cowork_sessions');
+    if (cols.has('execution_mode')) {
+      if (!cols.has('permission_preset')) {
+        db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+      }
+      const baselinePreset = mappedConfigPreset ?? existingDefaultPreset ?? DEFAULT_DSH_PERMISSION_PRESET;
+      const rows = db
+        .prepare(
+          'SELECT id, execution_mode FROM cowork_sessions WHERE permission_preset IS NULL AND execution_mode IS NOT NULL',
+        )
+        .all() as Array<{ id: string; execution_mode: string | null }>;
+      const updateStmt = db.prepare('UPDATE cowork_sessions SET permission_preset = ? WHERE id = ?');
+      for (const row of rows) {
+        const sessionPreset = mapLegacyExecutionModeToPermissionPreset(row.execution_mode);
+        if (sessionPreset && sessionPreset !== baselinePreset) {
+          updateStmt.run(sessionPreset, row.id);
+        }
+      }
+    }
+  }
+
+  setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
+}
+
 export interface LegacyUserMemoriesBackfillResult {
   status: 'skipped' | 'completed' | 'failed';
   memoriesImported: number;
@@ -1617,11 +1734,22 @@ export function runLegacyOpenClawMigration(
   let db = new Database(sqlitePath);
   try {
     // Idempotency guard: already migrated -> instant return (after one-shot backfills).
-    if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
+    const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+    if (completedRaw) {
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
+      clearLegacyPendingMessageEditsOnce(db);
       backfillLegacyUserMemories({ userDataDir, db, now });
+      let isFreshInstall = false;
+      try {
+        isFreshInstall = Boolean((JSON.parse(completedRaw) as { freshInstall?: boolean })?.freshInstall);
+      } catch {
+        // Non-JSON completion marker is treated as an upgraded database.
+      }
+      if (!isFreshInstall) {
+        migrateLegacyPermissionPresets(db);
+      }
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1635,6 +1763,8 @@ export function runLegacyOpenClawMigration(
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+      setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
       setKv(
         db,
         MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
@@ -1662,6 +1792,7 @@ export function runLegacyOpenClawMigration(
     fs.copyFileSync(sqlitePath, sqliteSnapshotPath);
     db = new Database(sqlitePath);
 
+    const createdSeededSessionDirs: string[] = [];
     try {
       const incompatibleEntries: TarEntryInput[] = [];
       const archivedModules: MigrationV2ArchivedItem[] = [];
@@ -1681,6 +1812,7 @@ export function runLegacyOpenClawMigration(
         workspacesDir,
       });
       backfillAgentPersonaFiles(db, workspacesDir);
+      migrateLegacyPermissionPresets(db);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
       const {
@@ -1763,17 +1895,16 @@ export function runLegacyOpenClawMigration(
         }
       }
 
-      // Count historical sessions preserved for Lazy Context Bridge.
-      let sessionsPreservedForLazyBridge = 0;
-      if (tableExists(db, 'cowork_sessions')) {
-        const cols = getTableColumns(db, 'cowork_sessions');
-        const row = cols.has('claude_session_id')
-          ? (db
-              .prepare("SELECT COUNT(*) AS cnt FROM cowork_sessions WHERE claude_session_id IS NULL OR claude_session_id NOT LIKE 'dsh:%'")
-              .get() as { cnt: number })
-          : (db.prepare('SELECT COUNT(*) AS cnt FROM cowork_sessions').get() as { cnt: number });
-        sessionsPreservedForLazyBridge = row.cnt;
-      }
+      // Pre-seed historical OpenClaw sessions natively into DSH v4 JSONL-Zstd
+      // storage BEFORE initStore() and createWindow(); empty or unconvertible
+      // sessions remain safely preserved for Lazy Context Bridge fallback.
+      const sessionSeedResult = seedLegacySessionsToDsh({
+        db,
+        userDataDir,
+        nowMs: now().getTime(),
+      });
+      createdSeededSessionDirs.push(...sessionSeedResult.createdSessionDirs);
+      const { sessionsPreSeeded, sessionsPreservedForLazyBridge } = sessionSeedResult;
 
       // ── Step 3: Archive Incompatible & Retired Modules ───────────────────
       // 3a. Legacy OpenClaw `user_plugins` table
@@ -1865,6 +1996,11 @@ export function runLegacyOpenClawMigration(
         }
       }
 
+      // 3f. Archive and clear stale pending `cowork_message_edits` and
+      // `cowork_message_version_switches` rows so upgraded sessions are never
+      // blocked waiting for retired in-place edit recovery.
+      archiveAndClearLegacyPendingMessageEdits(db, incompatibleEntries);
+
       // Write incompatible modules archive (even if empty, guarantees manifest exists).
       const incompatibleArchivePath = path.join(backupDir, 'incompatible-modules-backup.tar.gz');
       writeTarGzArchive(incompatibleArchivePath, incompatibleEntries);
@@ -1919,6 +2055,7 @@ export function runLegacyOpenClawMigration(
           scheduledTasksMigrated,
           scheduledTaskRunsMigrated,
           imAllowListsMigrated,
+          sessionsPreSeeded,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
           disposableBytesFreed,
@@ -1940,6 +2077,7 @@ export function runLegacyOpenClawMigration(
             runsImported: scheduledTaskRunsMigrated,
           }),
         );
+        setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
         setKv(
           db,
           MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
@@ -1988,6 +2126,13 @@ export function runLegacyOpenClawMigration(
         }
       } catch {
         // best-effort rollback
+      }
+      for (const seededDir of createdSeededSessionDirs) {
+        try {
+          fs.rmSync(seededDir, { recursive: true, force: true });
+        } catch {
+          // best-effort rollback of pre-seeded DSH session artifacts
+        }
       }
       return {
         status: MigrationV2Status.Failed,

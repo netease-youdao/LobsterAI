@@ -147,6 +147,7 @@ import {
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
+import { DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -436,6 +437,7 @@ import {
 } from './libs/developmentProtocolContext';
 import { buildDshHostAgentSpecs } from './libs/dsh/dshAgentSync';
 import {
+  createSingleFlightAsyncTracker,
   DshBootstrap,
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
@@ -2383,7 +2385,7 @@ let openClawLoopbackState: OpenClawLoopbackState | null = null;
 const getOpenClawLoopbackState = (): OpenClawLoopbackState => {
   if (!openClawLoopbackState) {
     openClawLoopbackState = new OpenClawLoopbackState(
-      path.join(app.getPath('userData'), 'openclaw', OPENCLAW_LOOPBACK_STATE_FILE),
+      path.join(app.getPath('userData'), DSH_PROFILE_DIR_NAME, OPENCLAW_LOOPBACK_STATE_FILE),
       app.getVersion(),
     );
   }
@@ -2536,22 +2538,30 @@ const getEngineNotReadyResponse = (status: DshCompatEngineStatus) => {
   };
 };
 
+const bootstrapEngineFlight = createSingleFlightAsyncTracker<DshCompatEngineStatus>();
+
 const bootstrapOpenClawEngine = async (
   options: { forceReinstall?: boolean; reason?: string } = {},
-): Promise<DshCompatEngineStatus> => {
-  const bootstrap = getDshBootstrap();
-  try {
-    ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
-  } catch (err) {
-    console.warn("[DSH] ensureDefaultIdentity failed (non-fatal):", err);
-  }
-  await startAskUserServer().catch((err: unknown) => {
-    console.error("[DSH] AskUser server startup failed (non-fatal):", err);
-  });
-  const status = options.forceReinstall ? await bootstrap.restart() : await bootstrap.start();
-  await syncOpenClawConfig({ reason: `bootstrap:${options.reason || "startup"}` });
-  return status;
-};
+): Promise<DshCompatEngineStatus> => bootstrapEngineFlight.run(
+  async (): Promise<DshCompatEngineStatus> => {
+    const bootstrap = getDshBootstrap();
+    try {
+      ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
+    } catch (err) {
+      console.warn("[DSH] ensureDefaultIdentity failed (non-fatal):", err);
+    }
+    await startAskUserServer().catch((err: unknown) => {
+      console.error("[DSH] AskUser server startup failed (non-fatal):", err);
+    });
+    const syncInitialConfig = () => syncOpenClawConfig({
+      reason: `bootstrap:${options.reason || "startup"}`,
+    });
+    return options.forceReinstall
+      ? await bootstrap.restart({ syncInitialConfig })
+      : await bootstrap.start({ syncInitialConfig });
+  },
+  { force: Boolean(options.forceReinstall) },
+);
 
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 let coworkTurnUsageService: CoworkTurnUsageService | null = null;
@@ -2571,8 +2581,12 @@ const ensureOpenClawRunningForCowork = async (
   _admission: CoworkEngineAdmission = {},
 ): Promise<DshCompatEngineStatus> => {
   await waitForPendingTokenRefresh();
+  const inFlightBootstrap = bootstrapEngineFlight.getInFlight();
+  if (inFlightBootstrap) {
+    return inFlightBootstrap;
+  }
   const bootstrap = getDshBootstrap();
-  if (bootstrap.hostManager.isReady()) {
+  if (bootstrap.isReadyForTurns()) {
     return bootstrap.getEngineStatus();
   }
   return bootstrapOpenClawEngine({ reason: "ensure-running-for-cowork" });
@@ -8955,6 +8969,11 @@ if (!gotTheLock) {
       rendererReleased = true;
       await showDataMigrationRestoreProgressWindow();
       await runAppCleanup('data migration restore', { requireGatewayStopped: true });
+      try {
+        dshBootstrap?.memoryService.close();
+      } catch (error) {
+        console.warn('[DataMigration] failed to close memory service before restore:', error);
+      }
       isCleanupFinished = true;
       isCleanupInProgress = false;
 
@@ -9366,6 +9385,7 @@ if (!gotTheLock) {
     getHostManager: () => getDshBootstrap().hostManager,
     getRuntimeDir: () => getDshBootstrap().runtimeDir,
     getExecutablePath: () => getDshBootstrap().executablePath,
+    getNodeToolchain: () => getDshBootstrap().resolveNodeToolchain(),
     openEcosystemWindow: (authenticatedUrl, routeHash) => {
       getDshBootstrap().openEcosystemWindow(authenticatedUrl, routeHash);
     },
@@ -9726,10 +9746,8 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        if (!options.editRequest && (getCoworkStore().messageEdits.pending(options.sessionId)
-          || getCoworkEngineRouter().hasPendingMessageEdit(options.sessionId))) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
+        // In-place message editing and recovery are retired in DSH v2 (replaced by Fork),
+        // so leftover `cowork_message_edits` rows must never block follow-up messages.
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -9883,10 +9901,6 @@ if (!gotTheLock) {
           return { success: true };
         }
         const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
-        // Model/runtime preparation awaits above can overlap a second window starting an edit.
-        if (runtime.hasPendingMessageEdit(options.sessionId)) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
         runtime
           .continueSession(options.sessionId, options.prompt, {
             analytics: options.analytics,
@@ -10254,7 +10268,8 @@ if (!gotTheLock) {
         `Action ${action}.`,
       );
       const goal = await runtime.runGoalCommand(sessionId, command);
-      return { success: true, goal };
+      const isRunning = runtime.isSessionActive(sessionId);
+      return { success: true, goal, isRunning };
     } catch (error) {
       console.error('[CoworkGoal] goal command IPC failed:', error);
       return {
@@ -10602,6 +10617,7 @@ if (!gotTheLock) {
           }) : null;
         if (forkedDsh?.storedSessionId) {
           coworkStoreInstance.updateSession(session.id, { claudeSessionId: forkedDsh.storedSessionId }, { touchUpdatedAt: false });
+          session.claudeSessionId = forkedDsh.storedSessionId;
         }
         console.log(`[CoworkFork] created local conversation fork ${session.id} successfully`);
         return { success: true, session };
@@ -11134,7 +11150,7 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
-        runtime.respondToPermission(options.requestId, options.result);
+        await runtime.respondToPermission(options.requestId, options.result);
         // Close the desktop notification for this request regardless of which
         // subsystem handled it (runtime approvals emit permissionResolved on
         // their own; AskUserQuestion bridge requests do not).
@@ -14733,6 +14749,13 @@ if (!gotTheLock) {
       getStore().close();
     } catch {
       // Store may not have been initialized — safe to ignore.
+    }
+
+    // Ensure workspaces/memory-fts.sqlite WAL handle is also closed before exit or restore.
+    try {
+      dshBootstrap?.memoryService.close();
+    } catch {
+      // Memory service may not have been initialized or already closed — safe to ignore.
     }
 
     // Destroyed last so the tray icon keeps reflecting that the process is

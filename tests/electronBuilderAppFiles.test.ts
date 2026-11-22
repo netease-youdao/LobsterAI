@@ -14,7 +14,6 @@ const packageJson = require('../package.json');
 // Vite bundles the main and renderer code. Only modules loaded or resolved
 // from outside those bundles belong in dependencies.
 const RUNTIME_DEPENDENCIES: Record<string, string> = {
-  '@larksuite/openclaw-lark-tools': 'external in vite.config.ts',
   'better-sqlite3': 'native addon, external in vite.config.ts',
   bufferutil: 'optional ws native addon, external in vite.config.ts',
   'utf-8-validate': 'optional ws native addon, external in vite.config.ts',
@@ -94,6 +93,13 @@ test('production dependencies are only the modules loaded outside the Vite bundl
     Object.keys(packageJson.dependencies).sort(),
     'Bundled libraries go in devDependencies; a production dependency is copied into app.asar a second time.',
   ).toEqual(Object.keys(RUNTIME_DEPENDENCIES).sort());
+});
+
+test('production dependencies contain zero OpenClaw packages', () => {
+  const openclawDeps = Object.keys(packageJson.dependencies).filter((dep) =>
+    dep.toLowerCase().includes('openclaw'),
+  );
+  expect(openclawDeps).toEqual([]);
 });
 
 test('protobufjs follows the range the bundled Lark SDK declares', () => {

@@ -231,15 +231,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     }
     const engine = this.requestEngine.get(requestId);
     if (engine) {
-      this.runtime.respondToPermission(requestId, result);
+      const response = this.runtime.respondToPermission(requestId, result);
       if (result.behavior === 'allow' || result.behavior === 'deny') {
         this.requestEngine.delete(requestId);
         this.requestSession.delete(requestId);
       }
-      return;
+      return response;
     }
 
-    this.runtime.respondToPermission(requestId, result);
+    return this.runtime.respondToPermission(requestId, result);
   }
 
   isSessionActive(sessionId: string): boolean {

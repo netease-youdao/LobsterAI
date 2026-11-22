@@ -26,10 +26,18 @@ const cleanupPaths: string[] = [];
 const openServices: LobsterMemoryService[] = [];
 const openDbs: Database.Database[] = [];
 
-test('skill installation respects the desktop permission preset and inspecting the destination stays read-only', () => {
+test('skill installation respects the desktop permission preset, allow-session rules, and read-only inspect', () => {
   const req = { toolName: DSH_SKILL_INSTALL_TOOL, args: { action: DshSkillInstallAction.Install }, agentId: 'main' };
+  const allowSkillRule = {
+    isToolAllowedAlways: (p: { scopeKey?: string }) => p.scopeKey === `tool:${DSH_SKILL_INSTALL_TOOL}`,
+  };
   expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.ReadOnly }).kind).toBe('deny');
+  // ReadOnly strictly denies skill installs even if an allow-session rule exists.
+  expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.ReadOnly }, allowSkillRule).kind).toBe('deny');
   expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.WorkspaceWrite }).kind).toBe('ask');
+  // "Allow for this session" short-circuits repeated skill install prompts under WorkspaceWrite.
+  expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.WorkspaceWrite }, allowSkillRule).kind).toBe('allow');
+  expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.FullAccess }).kind).toBe('allow');
   expect(evaluateDshToolApproval({
     ...req, args: { action: DshSkillInstallAction.Inspect }, permissionPreset: DshPermissionPreset.ReadOnly,
   }).kind).toBe('passthrough');
@@ -52,23 +60,50 @@ describe('evaluateDshToolApproval', () => {
     expect(decision.kind).toBe('ask');
   });
 
-  test('allows safe commands in auto mode or when covered by allow-always rule', () => {
+  test('never bypasses caution approvals or sandbox checks based on stale legacy executionMode=auto', () => {
+    // Safe commands pass through to DSH's own sandbox/approval pipeline rather than short-circuiting.
     expect(
       evaluateDshToolApproval({
         toolName: 'bash',
         args: { command: 'ls -la' },
         agentId: 'main',
         executionMode: 'auto',
+        permissionPreset: DshPermissionPreset.WorkspaceWrite,
       }),
-    ).toEqual({ kind: 'allow' });
+    ).toEqual({ kind: 'passthrough' });
 
+    // Caution commands MUST still prompt under workspace-write and read-only even when legacy executionMode is 'auto'.
+    for (const preset of [DshPermissionPreset.WorkspaceWrite, DshPermissionPreset.ReadOnly]) {
+      expect(
+        evaluateDshToolApproval({
+          toolName: 'bash',
+          args: { command: 'rm /tmp/demo.txt' },
+          agentId: 'main',
+          executionMode: 'auto',
+          permissionPreset: preset,
+        }).kind,
+      ).toBe('ask');
+
+      expect(
+        evaluateDshToolApproval({
+          toolName: 'bash',
+          args: { command: 'git push origin main' },
+          agentId: 'main',
+          executionMode: 'auto',
+          permissionPreset: preset,
+        }).kind,
+      ).toBe('ask');
+    }
+
+    // Explicit allow-always rule still allows covered tools.
     expect(
       evaluateDshToolApproval(
         {
           toolName: 'edit',
           args: { path: 'a.ts' },
           agentId: 'main',
-          executionMode: 'default',
+          executionMode: 'local',
+          permissionPreset: DshPermissionPreset.WorkspaceWrite,
         },
         { isToolAllowedAlways: () => true },
       ),

@@ -67,4 +67,41 @@ describe('applyOptimisticGoalCommand', () => {
   test('ignores non-goal commands', () => {
     expect(applyOptimisticGoalCommand('hello', null, 'session-1', 1000)).toBeUndefined();
   });
+
+  test('supports bare /goal <objective> without dropping the first word', () => {
+    const goal = applyOptimisticGoalCommand('/goal Build a release checklist', null, 'session-1', 1000);
+    expect(goal).toMatchObject({
+      objective: 'Build a release checklist',
+      status: CoworkGoalStatus.Active,
+    });
+  });
+
+  test('supports /goal edit preserving non-complete status and resetting complete to active', () => {
+    const pausedGoal: CoworkGoal = {
+      id: 'goal-1',
+      objective: 'Old objective',
+      status: CoworkGoalStatus.Paused,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pausedAt: 1500,
+      tokensUsed: 12,
+    };
+    expect(applyOptimisticGoalCommand('/goal edit Updated objective', pausedGoal, 'session-1', 2000)).toMatchObject({
+      id: 'goal-1',
+      objective: 'Updated objective',
+      status: CoworkGoalStatus.Paused,
+      updatedAt: 2000,
+    });
+
+    const completedGoal: CoworkGoal = {
+      ...pausedGoal,
+      status: CoworkGoalStatus.Complete,
+      completedAt: 1800,
+    };
+    expect(applyOptimisticGoalCommand('/goal edit Next milestone', completedGoal, 'session-1', 3000)).toMatchObject({
+      objective: 'Next milestone',
+      status: CoworkGoalStatus.Active,
+      updatedAt: 3000,
+    });
+  });
 });

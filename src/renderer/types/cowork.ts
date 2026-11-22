@@ -30,6 +30,7 @@ import type { CoworkModelChange } from '../../shared/cowork/modelChange';
 import type { CoworkSessionContentMatch } from '../../shared/cowork/search';
 import type { CoworkSelectedTextSnippet } from '../../shared/cowork/selectedText';
 import type { CoworkTurnOutcome } from '../../shared/cowork/turnOutcome';
+import type { DshPermissionPreset } from '../../shared/dshEngine/hostConstants';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -196,6 +197,7 @@ export interface CoworkSession {
   contextWindowOverride?: number | null;
   thinkingLevel?: ModelThinkingLevel | '';
   executionMode: CoworkExecutionMode;
+  permissionPreset?: DshPermissionPreset | null;
   activeSkillIds: string[];
   activeKitIds?: string[];
   agentId: string;
