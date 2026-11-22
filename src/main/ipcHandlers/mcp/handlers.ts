@@ -17,7 +17,11 @@ import {
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
-import type { McpOAuthManager } from '../../mcp/mcpOAuthManager';
+import {
+  DEFAULT_MCP_OAUTH_CLIENT_ID,
+  type McpOAuthClientCredentials,
+  type McpOAuthManager,
+} from '../../mcp/mcpOAuthManager';
 import type { McpRuntime } from '../../mcp/mcpRuntime';
 import type { McpServerFormData, McpServerRecord } from '../../mcp/mcpStore';
 import {
@@ -93,11 +97,44 @@ function fetchText(url: string): Promise<string> {
   });
 }
 
-function syncMcpConfig(
+const MCP_SYNC_AWAIT_TIMEOUT_MS = 5_000;
+
+/**
+ * Serialize MCP config sync calls so rapid create/update/delete/toggle actions
+ * never race and overwrite DSH with stale state. Each returned promise settles
+ * cleanly without unhandled rejections and caps UI wait time.
+ */
+export function createSerializedMcpConfigSync(
   syncDshConfig: McpHandlerDeps['syncDshConfig'],
-  reason: string,
-): void {
-  syncDshConfig({ reason }).catch(err => console.error('[MCP] config sync error:', err));
+  awaitTimeoutMs = MCP_SYNC_AWAIT_TIMEOUT_MS,
+): (reason: string) => Promise<void> {
+  let tail: Promise<void> = Promise.resolve();
+  return async (reason: string): Promise<void> => {
+    const run = tail.then(async () => {
+      try {
+        const result = await syncDshConfig({ reason });
+        if (result && result.success === false) {
+          console.warn(`[MCP] config sync reported failure (reason=${reason})`);
+        }
+      } catch (err) {
+        console.error(`[MCP] config sync error (reason=${reason}):`, err);
+      }
+    });
+    tail = run;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        run,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, awaitTimeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
 }
 
 const sessionFetch: FetchLike = (url, init) =>
@@ -121,13 +158,17 @@ function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpS
  * Run a browser-based OAuth 2.1 PKCE login flow via an ephemeral loopback HTTP
  * callback listener and exchange the authorization code through `McpOAuthManager`.
  */
-async function runNativeMcpOAuthLogin(options: {
+export async function runNativeMcpOAuthLogin(options: {
   oauthManager: McpOAuthManager;
   serverId: string;
   serverUrl: string;
   signal: AbortSignal;
+  openExternal?: (url: string) => Promise<void>;
+  timeoutMs?: number;
 }): Promise<void> {
   const { oauthManager, serverId, serverUrl, signal } = options;
+  const openExternal = options.openExternal ?? openAuthorizationUrl;
+  const timeoutMs = options.timeoutMs ?? OAUTH_LOGIN_TIMEOUT_MS;
 
   let resolveCallback!: (params: { code: string; state: string }) => void;
   let rejectCallback!: (error: Error) => void;
@@ -177,20 +218,40 @@ async function runNativeMcpOAuthLogin(options: {
   const onAbort = () => {
     rejectCallback(new Error('CANCELLED'));
   };
+  if (signal.aborted) {
+    server.close();
+    throw new Error('CANCELLED');
+  }
   signal.addEventListener('abort', onAbort, { once: true });
   const timeout = setTimeout(() => {
-    rejectCallback(new Error('OAuth sign-in timed out.'));
-  }, OAUTH_LOGIN_TIMEOUT_MS);
+    rejectCallback(new Error('TIMEOUT'));
+  }, timeoutMs);
 
   try {
     const metadata = await oauthManager.discoverMetadata(serverUrl);
+    if (signal.aborted) throw new Error('CANCELLED');
+
+    let clientCredentials: McpOAuthClientCredentials = { clientId: DEFAULT_MCP_OAUTH_CLIENT_ID };
+    if (metadata.registrationEndpoint) {
+      clientCredentials = await oauthManager.registerDynamicClient({
+        registrationEndpoint: metadata.registrationEndpoint,
+        redirectUri,
+        scope: metadata.defaultScope,
+      });
+      if (signal.aborted) throw new Error('CANCELLED');
+    }
+
     const pkce = oauthManager.beginPkceFlow({
       serverId,
       metadata,
       redirectUri,
-      clientId: 'lobsterai-desktop',
+      clientId: clientCredentials.clientId,
+      clientSecret: clientCredentials.clientSecret,
+      tokenEndpointAuthMethod: clientCredentials.tokenEndpointAuthMethod,
+      scope: metadata.defaultScope,
+      resource: metadata.resource,
     });
-    await openAuthorizationUrl(pkce.authorizationUrl);
+    await openExternal(pkce.authorizationUrl);
     const { code, state } = await callbackPromise;
     await oauthManager.completePkceFlow(state, code);
   } finally {
@@ -258,6 +319,7 @@ function buildQichachaServerData(
 
 export function registerMcpHandlers(deps: McpHandlerDeps): void {
   const { getMcpRuntime, syncDshConfig, getMcpOAuthManager } = deps;
+  const syncMcpConfig = createSerializedMcpConfigSync(syncDshConfig);
 
   const clearOAuthCredentials = (server: McpServerRecord): void => {
     cancelMcpOAuthLogin(server.id);
@@ -305,7 +367,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-created');
         }
         const servers = mcpRuntime.getStore().listServers();
-        syncMcpConfig(syncDshConfig, 'mcp-server-created');
+        await syncMcpConfig('mcp-server-created');
         return { success: true, servers };
       } catch (error) {
         return {
@@ -350,7 +412,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-updated');
         }
         const servers = mcpRuntime.getStore().listServers();
-        syncMcpConfig(syncDshConfig, 'mcp-server-updated');
+        await syncMcpConfig('mcp-server-updated');
         return { success: true, servers };
       } catch (error) {
         return {
@@ -368,7 +430,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       if (isOAuthRemoteServer(existing)) clearOAuthCredentials(existing);
       mcpRuntime.getStore().deleteServer(id);
       const servers = mcpRuntime.getStore().listServers();
-      syncMcpConfig(syncDshConfig, 'mcp-server-deleted');
+      await syncMcpConfig('mcp-server-deleted');
       return { success: true, servers };
     } catch (error) {
       return {
@@ -394,7 +456,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         store.deleteServer(server.id);
       }
       const servers = store.listServers();
-      syncMcpConfig(syncDshConfig, 'mcp-registry-deleted');
+      await syncMcpConfig('mcp-registry-deleted');
       return { success: true, servers };
     } catch (error) {
       return {
@@ -414,7 +476,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         cancelMcpOAuthLogin(options.id);
       }
       const servers = mcpRuntime.getStore().listServers();
-      syncMcpConfig(syncDshConfig, 'mcp-server-toggled');
+      await syncMcpConfig('mcp-server-toggled');
       return { success: true, servers };
     } catch (error) {
       return {
@@ -446,7 +508,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
           }
         }
         const servers = store.listServers();
-        syncMcpConfig(syncDshConfig, 'mcp-registry-toggled');
+        await syncMcpConfig('mcp-registry-toggled');
         return { success: true, servers };
       } catch (error) {
         return {
@@ -462,7 +524,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       const mcpRuntime = getMcpRuntime();
       await mcpRuntime.getLaunchResolverManager().retry(id);
       const servers = mcpRuntime.getStore().listServers();
-      syncMcpConfig(syncDshConfig, 'mcp-launch-manual-retry');
+      await syncMcpConfig('mcp-launch-manual-retry');
       return { success: true, servers };
     } catch (error) {
       return {
@@ -485,6 +547,23 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         : McpToolDiscoveryTimeoutMs.Remote;
       try {
         const launch = await getMcpRuntime().resolveToolDiscoveryLaunch(request);
+        if (launch.transportType !== 'stdio' && request.serverId) {
+          const saved = getMcpRuntime().getStore().getServer(request.serverId);
+          if (isOAuthRemoteServer(saved)) {
+            const authHeaders = await getMcpOAuthManager()
+              ?.resolveAuthorizationHeaders(saved.id)
+              .catch((): null => null);
+            if (authHeaders) {
+              const mergedHeaders: Record<string, string> = { ...(launch.headers ?? {}) };
+              for (const key of Object.keys(mergedHeaders)) {
+                if (key.toLowerCase() === 'authorization') {
+                  delete mergedHeaders[key];
+                }
+              }
+              launch.headers = { ...mergedHeaders, ...authHeaders };
+            }
+          }
+        }
         const tools = await discoverMcpTools(launch, {
           timeoutMs,
           fetch: sessionFetch,
@@ -535,7 +614,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       }
 
       const servers = store.listServers();
-      syncMcpConfig(syncDshConfig, 'qichacha-mcp-connected');
+      await syncMcpConfig('qichacha-mcp-connected');
       return { success: true, servers };
     } catch (error) {
       return {
@@ -576,12 +655,15 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         serverUrl: server.url,
         signal: controller.signal,
       });
-      syncMcpConfig(syncDshConfig, 'mcp-oauth-authorized');
+      await syncMcpConfig('mcp-oauth-authorized');
       return { success: true, state: McpOAuthState.Authorized };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (msg === 'CANCELLED') {
         return { success: false, code: McpOAuthErrorCode.Cancelled, error: 'Sign-in cancelled.' };
+      }
+      if (msg === 'TIMEOUT') {
+        return { success: false, code: McpOAuthErrorCode.Timeout, error: 'OAuth sign-in timed out.' };
       }
       console.warn('[MCP] OAuth sign-in failed:', msg);
       return { success: false, code: McpOAuthErrorCode.Failed, error: msg };
@@ -606,8 +688,9 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     if (!oauthManager) {
       return { success: false, code: McpOAuthErrorCode.RuntimeUnavailable, error: 'MCP OAuth manager is not initialized.' };
     }
+    cancelMcpOAuthLogin(server.id);
     oauthManager.deleteToken(server.id);
-    syncMcpConfig(syncDshConfig, 'mcp-oauth-logout');
+    await syncMcpConfig('mcp-oauth-logout');
     return { success: true, state: McpOAuthState.RequiresAuthorization };
   });
 
@@ -616,15 +699,20 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     if (servers.length === 0) return { success: true, states: {} };
     const oauthManager = getMcpOAuthManager();
     const states: Record<string, McpOAuthState> = {};
+    let refreshedAny = false;
     for (const server of servers) {
       if (!server.enabled || !oauthManager) {
         states[server.id] = McpOAuthState.Unknown;
         continue;
       }
-      const token = oauthManager.getToken(server.id);
-      states[server.id] = token?.accessToken
+      const status = await oauthManager.checkAuthorizationStatus(server.id);
+      if (status.refreshed) refreshedAny = true;
+      states[server.id] = status.authorized
         ? McpOAuthState.Authorized
         : McpOAuthState.RequiresAuthorization;
+    }
+    if (refreshedAny) {
+      await syncMcpConfig('mcp-oauth-refreshed');
     }
     return { success: true, states };
   });

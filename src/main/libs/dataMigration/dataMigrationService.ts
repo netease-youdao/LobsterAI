@@ -15,6 +15,7 @@ import {
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import { MCP_PACKAGES_DIR_NAME } from '../../../shared/mcp/constants';
 import { MigrationV2Status } from '../../../shared/migration/constants';
 import { APP_NAME, APP_UPDATE_DOWNLOAD_DIR_NAME, DB_FILENAME } from '../../appConstants';
 import { MEMORY_FTS_DB_NAME } from '../../memory/lobsterMemoryService';
@@ -130,6 +131,7 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
   SQLITE_BACKUP_TOP_LEVEL_DIR_NAME,
   'logs',
   'lockfile',
+  MCP_PACKAGES_DIR_NAME,
   'runtimes',
   APP_UPDATE_DOWNLOAD_DIR_NAME,
   'skill-migrate.log',
@@ -165,6 +167,7 @@ const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   SQLITE_BACKUP_TOP_LEVEL_DIR_NAME,
   'logs',
   'lockfile',
+  MCP_PACKAGES_DIR_NAME,
   'runtimes',
   APP_UPDATE_DOWNLOAD_DIR_NAME,
   'skill-migrate.log',

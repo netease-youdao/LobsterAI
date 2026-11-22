@@ -17,6 +17,12 @@ type DisclosureHelpers = {
     restrictableNames: Iterable<string>,
     unlockedCapabilities: ReadonlySet<string>,
   ) => string[];
+  computeCombinedDeniedTools: (
+    restrictableNames: Iterable<string>,
+    unlockedCapabilities: ReadonlySet<string>,
+    mcpToolFilters: ReadonlyMap<string, { include?: readonly string[]; exclude?: readonly string[] }>,
+    registeredServerNames?: Iterable<string>,
+  ) => string[];
   listMountedToolsForCapability: (restrictableNames: Iterable<string>, capabilityId: string) => string[];
   groupMountedProgressiveTools: (restrictableNames: Iterable<string>) => Record<string, string[]>;
 };
@@ -113,5 +119,37 @@ describe('tool-disclosure-helpers', () => {
       { name: 'mcp__lobster-excel__write_cell' },
     ]);
     expect(admitted.sort()).toEqual(['browser', 'excel']);
+  });
+
+  test('combines progressive denials with user toolFilter denials and never lets unlock override user filters', async () => {
+    const h = await loadHelpers();
+
+    const mounted = [
+      'bash',
+      'mcp__filter-demo__allowed_echo',
+      'mcp__filter-demo__blocked_secret',
+      'mcp__lobster-word__word_read',
+      'mcp__lobster-word__word_delete',
+      'mcp__lobster-browser__navigate',
+    ];
+    const userFilters = new Map([
+      ['filter-demo', { include: ['allowed_echo'], exclude: ['blocked_secret'] }],
+      ['lobster-word', { exclude: ['word_delete'] }],
+    ]);
+
+    // Nothing unlocked: both locked progressive groups and user-filtered tools are denied.
+    expect(h.computeCombinedDeniedTools(mounted, new Set(), userFilters)).toEqual([
+      'mcp__filter-demo__blocked_secret',
+      'mcp__lobster-browser__navigate',
+      'mcp__lobster-word__word_delete',
+      'mcp__lobster-word__word_read',
+    ]);
+
+    // Unlock ALL progressive capabilities: progressive tools open up EXCEPT those denied by user toolFilter!
+    const allUnlocked = new Set(h.PROGRESSIVE_CAPABILITY_IDS);
+    expect(h.computeCombinedDeniedTools(mounted, allUnlocked, userFilters)).toEqual([
+      'mcp__filter-demo__blocked_secret',
+      'mcp__lobster-word__word_delete',
+    ]);
   });
 });

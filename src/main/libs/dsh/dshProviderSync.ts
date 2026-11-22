@@ -4,6 +4,10 @@
 //
 // Zero Electron imports — directly testable under Vitest.
 
+import crypto from 'crypto';
+
+import { DshMcpTransport } from '../../../shared/dshEngine/hostConstants';
+import { type McpToolFilter, normalizeMcpToolFilter } from '../../../shared/mcp/toolFilter';
 import {
   OpenClawApi,
   OpenClawProviderId,
@@ -386,20 +390,126 @@ export interface LobsterMcpServerRecord {
   url?: string;
   headers?: Record<string, string>;
   oauthEnabled?: boolean;
+  toolFilter?: McpToolFilter;
+  requestTimeoutMs?: number;
+  connectionTimeoutMs?: number;
+}
+
+const DSH_MCP_SERVER_NAME_MAX_LENGTH = 32;
+const DSH_MCP_NAME_HASH_LENGTH = 8;
+const DSH_MCP_MAX_TIMEOUT_MS = 2_147_483_647;
+
+// Mirrors `@deepseek-ai/dsh-mcp-client` (`templates.ts`): any `${...}` token
+// that is not strictly `${credential:<IDENT>}` throws during `mcpManager.register`.
+// DSH does not support template escaping (even `$${...}` still matches SUSPECT).
+const DSH_TEMPLATE_SUSPECT_RE = /\$\{[^}]*\}/g;
+const DSH_CREDENTIAL_TOKEN_EXACT_RE = /^\$\{credential:[A-Za-z_][A-Za-z0-9_]*\}$/;
+
+/**
+ * Map a LobsterAI MCP transport type (`stdio`, `sse`, `http`, `streamable-http`)
+ * to the DSH host transport discriminant, preserving legacy `sse` instead of
+ * coercing it to `streamable-http`.
+ */
+export function resolveDshMcpTransport(transportType: string): DshMcpTransport {
+  const normalized = transportType.trim().toLowerCase();
+  if (normalized === DshMcpTransport.Stdio) return DshMcpTransport.Stdio;
+  if (normalized === DshMcpTransport.Sse) return DshMcpTransport.Sse;
+  return DshMcpTransport.StreamableHttp;
+}
+
+function shortStableHash(input: string, length = DSH_MCP_NAME_HASH_LENGTH): string {
+  return crypto.createHash('sha256').update(input).digest('hex').slice(0, length);
+}
+
+function withStableHashSuffix(base: string, seed: string): string {
+  const suffix = shortStableHash(seed, DSH_MCP_NAME_HASH_LENGTH);
+  const maxPrefixLength = DSH_MCP_SERVER_NAME_MAX_LENGTH - suffix.length - 1;
+  const prefix = base.slice(0, maxPrefixLength).replace(/[-_]+$/, '') || 'mcp';
+  return `${prefix}-${suffix}`;
+}
+
+function normalizeDshTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+    return undefined;
+  }
+  return Math.min(Math.floor(value), DSH_MCP_MAX_TIMEOUT_MS);
+}
+
+function validateRemoteMcpUrl(rawUrl: string | undefined): string | null {
+  const trimmed = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Inspect a string against `@deepseek-ai/dsh-mcp-client`'s `assertTemplateSyntax`
+ * rules. Returns the first offending `${...}` occurrence or `null` when valid.
+ */
+export function findInvalidDshTemplateToken(value: string): string | null {
+  for (const match of value.matchAll(DSH_TEMPLATE_SUSPECT_RE)) {
+    if (!DSH_CREDENTIAL_TOKEN_EXACT_RE.test(match[0])) {
+      return match[0];
+    }
+  }
+  return null;
+}
+
+function findInvalidTemplateField(spec: DshHostMcpServerSpec): string | null {
+  if (spec.transport === DshMcpTransport.Stdio) {
+    if (spec.command && findInvalidDshTemplateToken(spec.command)) return 'command';
+    for (const [index, arg] of (spec.args ?? []).entries()) {
+      if (findInvalidDshTemplateToken(arg)) return `args[${index}]`;
+    }
+    for (const [key, value] of Object.entries(spec.env ?? {})) {
+      if (findInvalidDshTemplateToken(value)) return `env.${key}`;
+    }
+    if (spec.cwd && findInvalidDshTemplateToken(spec.cwd)) return 'cwd';
+    return null;
+  }
+  if (spec.url && findInvalidDshTemplateToken(spec.url)) return 'url';
+  for (const [key, value] of Object.entries(spec.headers ?? {})) {
+    if (findInvalidDshTemplateToken(value)) return `headers.${key}`;
+  }
+  return null;
 }
 
 /**
  * Sanitize an arbitrary LobsterAI MCP server name into DSH's strict
- * `SERVER_NAME_PATTERN` (`^[a-z0-9][a-z0-9_-]*$`).
+ * `SERVER_NAME_PATTERN` (`/^[A-Za-z0-9_-]{1,32}$/`).
+ *
+ * - Pure non-ASCII names (e.g. `高德地图`, `百度地图`) derive a deterministic
+ *   `mcp-<sha256-8>` identifier from `fallbackSeed || raw` so they never collide.
+ * - Names exceeding 32 characters are cleanly truncated with a deterministic
+ *   8-character SHA-256 suffix while staying within 32 characters.
  */
-export function normalizeDshMcpServerName(raw: string): string {
-  const cleaned = raw
-    .trim()
+export function normalizeDshMcpServerName(raw: string, fallbackSeed?: string): string {
+  const trimmed = raw.trim();
+  const cleaned = trimmed
     .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/[^a-z0-9_]+/g, '-')
     .replace(/^[^a-z0-9]+/, '')
     .replace(/-+$/, '');
-  return cleaned || 'mcp-server';
+
+  if (!cleaned) {
+    const seed = fallbackSeed?.trim() || trimmed;
+    if (!seed) return 'mcp-server';
+    return `mcp-${shortStableHash(seed, DSH_MCP_NAME_HASH_LENGTH)}`;
+  }
+
+  if (cleaned.length <= DSH_MCP_SERVER_NAME_MAX_LENGTH) {
+    return cleaned;
+  }
+
+  const truncationSeed = fallbackSeed?.trim() ? `${trimmed}:${fallbackSeed.trim()}` : trimmed;
+  return withStableHashSuffix(cleaned, truncationSeed);
 }
 
 /**
@@ -412,39 +522,90 @@ export async function buildDshMcpServerSpecs(
 ): Promise<{
   servers: DshHostMcpServerSpec[];
   needsReauthIds: string[];
+  warnings: string[];
 }> {
   const servers: DshHostMcpServerSpec[] = [];
   const needsReauthIds: string[] = [];
+  const warnings: string[] = [];
   const usedNames = new Set<string>();
+
+  const recordWarning = (message: string): void => {
+    warnings.push(message);
+    console.warn(`[DSH:MCP] ${message}`);
+  };
+
+  const reserveUniqueName = (rec: LobsterMcpServerRecord): string => {
+    const baseSeed = rec.id.trim() || rec.name.trim() || String(usedNames.size);
+    let candidate = normalizeDshMcpServerName(rec.name || rec.id, rec.id);
+    if (usedNames.has(candidate)) {
+      candidate = withStableHashSuffix(candidate, baseSeed);
+      let attempt = 2;
+      while (usedNames.has(candidate)) {
+        candidate = withStableHashSuffix(candidate, `${baseSeed}:${attempt}`);
+        attempt += 1;
+      }
+    }
+    usedNames.add(candidate);
+    return candidate;
+  };
 
   for (const rec of records) {
     if (!rec.enabled) continue;
-    let name = normalizeDshMcpServerName(rec.name || rec.id);
-    if (usedNames.has(name)) {
-      name = `${name}-${rec.id.slice(0, 6).toLowerCase().replace(/[^a-z0-9]/g, '') || '2'}`;
-    }
-    usedNames.add(name);
+    const label = rec.name || rec.id || '<unnamed>';
+    const toolCallTimeoutMs = normalizeDshTimeoutMs(rec.requestTimeoutMs);
+    const startupTimeoutMs = normalizeDshTimeoutMs(rec.connectionTimeoutMs);
+    const timeoutFields = {
+      ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
+      ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
+    };
+    const toolFilter = normalizeMcpToolFilter(rec.toolFilter);
 
-    if (rec.transportType === 'stdio') {
+    const transport = resolveDshMcpTransport(rec.transportType);
+    if (transport === DshMcpTransport.Stdio) {
       if (!rec.command) continue;
-      servers.push({
-        name,
+      const draft: DshHostMcpServerSpec = {
+        name: 'placeholder',
         enabled: true,
-        transport: 'stdio',
+        transport: DshMcpTransport.Stdio,
         command: rec.command,
         args: rec.args ?? [],
         env: rec.env ?? {},
         ...(rec.cwd ? { cwd: rec.cwd } : {}),
-      });
+        ...(toolFilter ? { toolFilter } : {}),
+        ...timeoutFields,
+      };
+      const invalidField = findInvalidTemplateField(draft);
+      if (invalidField) {
+        recordWarning(
+          `Skipping stdio MCP server "${label}": field "${invalidField}" contains unsupported \${...} syntax rejected by DSH (only \${credential:REF} is permitted).`,
+        );
+        continue;
+      }
+      draft.name = reserveUniqueName(rec);
+      servers.push(draft);
       continue;
     }
 
-    if (!rec.url) continue;
+    const validatedUrl = validateRemoteMcpUrl(rec.url);
+    if (!validatedUrl) {
+      if (rec.url) {
+        recordWarning(
+          `Skipping remote MCP server "${label}": malformed or unsupported URL (expected absolute http/https URL).`,
+        );
+      }
+      continue;
+    }
+
     const headers: Record<string, string> = { ...(rec.headers ?? {}) };
     if (rec.oauthEnabled && oauthManager) {
       try {
         const authHeaders = await oauthManager.resolveAuthorizationHeaders(rec.id);
         if (authHeaders) {
+          for (const existingKey of Object.keys(headers)) {
+            if (existingKey.toLowerCase() === 'authorization') {
+              delete headers[existingKey];
+            }
+          }
           Object.assign(headers, authHeaders);
         } else {
           needsReauthIds.push(rec.id);
@@ -456,14 +617,25 @@ export async function buildDshMcpServerSpecs(
       }
     }
 
-    servers.push({
-      name,
+    const draft: DshHostMcpServerSpec = {
+      name: 'placeholder',
       enabled: true,
-      transport: 'streamable-http',
-      url: rec.url,
+      transport,
+      url: validatedUrl,
       headers,
-    });
+      ...(toolFilter ? { toolFilter } : {}),
+      ...timeoutFields,
+    };
+    const invalidField = findInvalidTemplateField(draft);
+    if (invalidField) {
+      recordWarning(
+        `Skipping remote MCP server "${label}": field "${invalidField}" contains unsupported \${...} syntax rejected by DSH (only \${credential:REF} is permitted).`,
+      );
+      continue;
+    }
+    draft.name = reserveUniqueName(rec);
+    servers.push(draft);
   }
 
-  return { servers, needsReauthIds };
+  return { servers, needsReauthIds, warnings };
 }

@@ -793,4 +793,52 @@ describe('DshHostManager', () => {
     expect(restored.dependencies['disabled-user-plugin']).toBe('file:/tmp/disabled-user-plugin');
     expect(restored.dsh.profile.bundles).not.toContain('disabled-user-plugin');
   });
+
+  test('buildIsolatedDshChildEnv merges bundled Node/npx shim and Python runtime PATH entries and env vars cleanly', () => {
+    const temp = createTempDir();
+    const runtimeDir = path.join(temp, 'runtime');
+    const pmDir = path.join(runtimeDir, 'package-manager');
+    fs.mkdirSync(pmDir, { recursive: true });
+    const nodeShimDir = path.join(temp, 'cowork', 'bin');
+    const pythonDir = path.join(temp, 'runtimes', 'python-win');
+    const pythonScriptsDir = path.join(pythonDir, 'Scripts');
+
+    const env = buildIsolatedDshChildEnv({
+      baseEnv: {
+        PATH: ['/usr/bin', nodeShimDir, '/bin'].join(path.delimiter),
+      },
+      dshHomeDir: path.join(temp, 'userData', 'dsh-profile'),
+      bridgeUrl: 'http://127.0.0.1:41234',
+      bridgeSecret: 'secret',
+      workspacesDir: path.join(temp, 'userData', 'workspaces'),
+      skillsDir: path.join(temp, 'userData', 'SKILLs'),
+      searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
+      runtimeDir,
+      prependPathDirs: [pythonDir, pythonScriptsDir],
+      extraPathDirs: [nodeShimDir, path.join(temp, 'extra-bin')],
+      extraEnv: {
+        LOBSTERAI_ELECTRON_PATH: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+        LOBSTERAI_NPM_BIN_DIR: '/Resources/npm/bin',
+        LOBSTERAI_PYTHON_ROOT: pythonDir,
+        PYTHONUTF8: '1',
+        DSH_HOME: '/should-be-stripped',
+      },
+    });
+
+    const parts = (env.PATH ?? '').split(path.delimiter);
+    expect(parts).toEqual([
+      pmDir,
+      pythonDir,
+      pythonScriptsDir,
+      '/usr/bin',
+      nodeShimDir,
+      '/bin',
+      path.join(temp, 'extra-bin'),
+    ]);
+    expect(env.LOBSTERAI_ELECTRON_PATH).toBe('/Applications/LobsterAI.app/Contents/MacOS/LobsterAI');
+    expect(env.LOBSTERAI_NPM_BIN_DIR).toBe('/Resources/npm/bin');
+    expect(env.LOBSTERAI_PYTHON_ROOT).toBe(pythonDir);
+    expect(env.PYTHONUTF8).toBe('1');
+    expect(env.DSH_HOME).toBe(path.join(temp, 'userData', 'dsh-profile'));
+  });
 });

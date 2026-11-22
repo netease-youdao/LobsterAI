@@ -27,12 +27,14 @@ import {
   DSH_PROFILE_NAME,
   DshHostBundleEnvVar,
   DshHostPhase,
+  type DshMcpTransport,
   DshOpsAction,
   DshPermissionPreset,
   type DshProgressiveCapability,
   DshSearchPolicy,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import type { McpToolFilter } from '../../../shared/mcp/toolFilter';
 import type { LOBSTERAI_REQUEST_OPTIONS_VERSION } from '../../../shared/providers/lobsterAIRequestOptions';
 import type { ModelRuntimeProfile } from '../../../shared/providers/modelRuntimeProfiles';
 import type {
@@ -85,13 +87,14 @@ export interface DshHostProviderSpec {
 export interface DshHostMcpServerSpec {
   name: string;
   enabled?: boolean;
-  transport: 'stdio' | 'streamable-http';
+  transport: DshMcpTransport;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
   url?: string;
   headers?: Record<string, string>;
+  toolFilter?: McpToolFilter;
   startupTimeoutMs?: number;
   toolCallTimeoutMs?: number;
 }
@@ -305,6 +308,18 @@ export interface DshHostManagerOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** Set true in pure Node tests when running plain node instead of Electron binary. */
   skipElectronRunAsNode?: boolean;
+  /** Optional resolver returning runtime PATH dirs and env vars at spawn time (e.g. Node/npx shims, Python runtime). */
+  resolveRuntimeEnv?: () => {
+    prependPathDirs?: string[];
+    extraPathDirs?: string[];
+    extraEnv?: Record<string, string>;
+  };
+  /** Additional PATH entries prepended after the bundled package-manager directory. */
+  prependPathDirs?: string[];
+  /** Additional PATH entries appended as runtime fallbacks (e.g. bundled Electron Node/npx shims). */
+  extraPathDirs?: string[];
+  /** Additional non-DSH runtime environment variables merged into the DSH child env. */
+  extraEnv?: Record<string, string>;
 }
 
 const DEFAULT_BOOT_TIMEOUT_MS = 35_000;
@@ -399,6 +414,7 @@ export function buildIsolatedDshChildEnv(params: {
   npmBinDir?: string | null;
   prependPathDirs?: readonly string[];
   appendPathDirs?: readonly string[];
+  extraPathDirs?: readonly string[];
   extraEnv?: Record<string, string | undefined>;
   instanceId?: string;
   skipElectronRunAsNode?: boolean;
@@ -409,11 +425,15 @@ export function buildIsolatedDshChildEnv(params: {
     skipElectronRunAsNode: params.skipElectronRunAsNode,
   });
 
+  const extraEnvPathDirs: string[] = [];
   if (params.extraEnv) {
     for (const [key, value] of Object.entries(params.extraEnv)) {
       if (value === undefined) continue;
       if (shouldStripDshInheritedEnvKey(key)) continue;
-      if (key.toLowerCase() === 'path') continue;
+      if (key.toLowerCase() === 'path') {
+        extraEnvPathDirs.push(...value.split(path.delimiter));
+        continue;
+      }
       env[key] = value;
     }
   }
@@ -464,6 +484,12 @@ export function buildIsolatedDshChildEnv(params: {
   const appendPathDirs: string[] = [];
   if (params.appendPathDirs) {
     appendPathDirs.push(...params.appendPathDirs);
+  }
+  if (params.extraPathDirs) {
+    appendPathDirs.push(...params.extraPathDirs);
+  }
+  if (extraEnvPathDirs.length > 0) {
+    appendPathDirs.push(...extraEnvPathDirs);
   }
 
   if (prependPathDirs.length > 0 || appendPathDirs.length > 0) {
@@ -828,7 +854,16 @@ export class DshHostManager extends EventEmitter {
       await client.callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
     }
     if (this.lastMcpServers) {
-      await client.callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      const mcpResult = await client.callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      if (mcpResult && typeof mcpResult === 'object') {
+        if (mcpResult.available === false) {
+          console.warn('[DshHostManager] replay syncMcpServers reported mcpManager unavailable');
+        }
+        const errors = Array.isArray(mcpResult.errors) ? mcpResult.errors : [];
+        if (errors.length > 0) {
+          console.warn(`[DshHostManager] replay syncMcpServers reported ${errors.length} error(s): ${errors.join('; ')}`);
+        }
+      }
     }
     if (this.lastAgents) {
       await client.callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
@@ -862,6 +897,7 @@ export class DshHostManager extends EventEmitter {
 
   private buildChildEnv(): NodeJS.ProcessEnv {
     const additions = this.options.resolveChildEnvAdditions?.();
+    const resolvedRuntimeEnv = this.options.resolveRuntimeEnv?.();
     return buildIsolatedDshChildEnv({
       baseEnv: this.options.baseEnv ?? process.env,
       dshHomeDir: this.dshHomeDir,
@@ -876,9 +912,21 @@ export class DshHostManager extends EventEmitter {
       timeZone: additions?.timeZone ?? this.options.timeZone,
       nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir ?? this.options.nodeToolchain?.nodeShimDir,
       npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir ?? this.options.nodeToolchain?.npmBinDir,
-      prependPathDirs: additions?.prependPathDirs,
+      prependPathDirs: [
+        ...(additions?.prependPathDirs ?? []),
+        ...(this.options.prependPathDirs ?? []),
+        ...(resolvedRuntimeEnv?.prependPathDirs ?? []),
+      ],
       appendPathDirs: additions?.appendPathDirs,
-      extraEnv: additions?.extraEnv,
+      extraPathDirs: [
+        ...(this.options.extraPathDirs ?? []),
+        ...(resolvedRuntimeEnv?.extraPathDirs ?? []),
+      ],
+      extraEnv: {
+        ...(this.options.extraEnv ?? {}),
+        ...(resolvedRuntimeEnv?.extraEnv ?? {}),
+        ...(additions?.extraEnv ?? {}),
+      },
       instanceId: this.options.instanceId,
       skipElectronRunAsNode: this.options.skipElectronRunAsNode,
     });

@@ -8,6 +8,7 @@ export const MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY = 'engine.migration.
 export const MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY = 'engine.migration.v2.userMemoriesMigrated';
 export const MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY = 'engine.migration.v2.dreamDiaryBackfilled';
 export const MIGRATION_V2_TAVILY_BACKFILL_KV_KEY = 'engine.migration.v2.tavilyBackfillCompleted';
+export const MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY = 'engine.migration.v2.mcpOAuthBackfillCompleted';
 
 export const MigrationV2Status = {
   Skipped: 'skipped',
@@ -62,6 +63,7 @@ export interface MigrationV2Report {
     sessionsPreservedForLazyBridge: number;
     mcpLaunchCachesCleared: number;
     tavilyMcpMigrated?: number;
+    mcpOAuthTokensMigrated?: number;
     disposableBytesFreed: number;
   };
   archivedModules: MigrationV2ArchivedItem[];

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { buildDshMcpServerSpecs } from '../libs/dsh/dshProviderSync';
 import { McpStore, normalizeMcpToolFilter } from './mcpStore';
 
 describe('McpStore', () => {
@@ -114,6 +115,49 @@ describe('McpStore', () => {
     // An all-empty filter clears the setting.
     const cleared = store.updateServer(server.id, { toolFilter: { include: [], exclude: [] } });
     expect(cleared?.toolFilter).toBeUndefined();
+  });
+
+  test('preserves upgraded legacy mcp_servers toolFilter rows verbatim into buildDshMcpServerSpecs', async () => {
+    const now = Date.now();
+    db!.prepare(
+      `INSERT INTO mcp_servers (id, name, description, enabled, transport_type, config_json, created_at, updated_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+    ).run(
+      'legacy-row-1',
+      'Legacy Filter Demo',
+      'Migrated from OpenClaw',
+      'stdio',
+      JSON.stringify({
+        command: 'node',
+        args: ['demo-mcp.mjs'],
+        toolFilter: {
+          include: ['allowed_echo', 'sheet.*'],
+          exclude: ['blocked_secret'],
+        },
+      }),
+      now,
+      now,
+    );
+
+    const enabled = store.getEnabledServers();
+    expect(enabled).toHaveLength(1);
+    expect(enabled[0].toolFilter).toEqual({
+      include: ['allowed_echo', 'sheet.*'],
+      exclude: ['blocked_secret'],
+    });
+
+    const { servers } = await buildDshMcpServerSpecs(enabled);
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({
+      name: 'legacy-filter-demo',
+      transport: 'stdio',
+      command: 'node',
+      args: ['demo-mcp.mjs'],
+      toolFilter: {
+        include: ['allowed_echo', 'sheet.*'],
+        exclude: ['blocked_secret'],
+      },
+    });
   });
 
   test('roundtrips the OAuth auth mode and clears it on demand or when switching to stdio', () => {

@@ -1,8 +1,11 @@
 /**
  * Pure helpers for progressive on-demand disclosure of LobsterAI's built-in
- * heavy MCP tool groups (`computer-use`, `browser`, `word`, `excel`, `ppt`).
+ * heavy MCP tool groups (`computer-use`, `browser`, `word`, `excel`, `ppt`)
+ * combined with user-configured per-server MCP `toolFilter` denials.
  * Zero DSH peer imports so Vitest can test them directly.
  */
+
+import { computeDeniedUserMcpTools } from './mcp-tool-filter-helpers.mjs';
 
 export const PROGRESSIVE_TOOL_GROUPS = Object.freeze([
   {
@@ -142,6 +145,33 @@ export function computeDeniedProgressiveTools(restrictableNames, unlockedCapabil
   }
   denied.sort();
   return denied;
+}
+
+/**
+ * Compute the sorted union of global tool names that must be denied for an
+ * agent: locked built-in progressive MCP tool groups PLUS user-configured
+ * per-server MCP `toolFilter` denials.
+ *
+ * User `toolFilter` denials are strictly monotonic and are NEVER overridden by
+ * `unlockedCapabilities`.
+ *
+ * @param {Iterable<string>} restrictableNames
+ * @param {ReadonlySet<string>} unlockedCapabilities
+ * @param {ReadonlyMap<string, { include?: readonly string[], exclude?: readonly string[] }> | undefined} mcpToolFilters
+ * @param {Iterable<string> | undefined} [registeredServerNames]
+ * @returns {string[]}
+ */
+export function computeCombinedDeniedTools(
+  restrictableNames,
+  unlockedCapabilities,
+  mcpToolFilters,
+  registeredServerNames,
+) {
+  const denied = new Set(computeDeniedProgressiveTools(restrictableNames, unlockedCapabilities));
+  for (const name of computeDeniedUserMcpTools(restrictableNames, mcpToolFilters, registeredServerNames)) {
+    denied.add(name);
+  }
+  return [...denied].sort();
 }
 
 /**
