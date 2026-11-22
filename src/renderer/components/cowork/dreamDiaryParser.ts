@@ -16,7 +16,6 @@ export type DiaryEntry = {
 const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
 const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
 const DIARY_SEPARATOR_RE = /(?:^|\n)---[ \t]*(?:\n|$)/;
-const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 const EMPTY_DIARY_BOILERPLATE_LINE_RE = /^(?:#+\s*dream\s+diary\s*|---+)$/i;
 // Leading calendar date of OpenClaw's en-US diary stamps, e.g. "November 14, 2026".
 const DIARY_CALENDAR_DATE_RE = /^([A-Za-z]+\s+\d{1,2},\s*\d{4})/;
@@ -64,6 +63,27 @@ export function parseDiaryEntries(raw: string): DiaryEntry[] {
   return entries;
 }
 
+function stripHtmlCommentBlocks(input: string): string {
+  const chunks: string[] = [];
+  let cursor = 0;
+  while (cursor < input.length) {
+    const start = input.indexOf('<!--', cursor);
+    if (start === -1) {
+      chunks.push(input.slice(cursor));
+      break;
+    }
+    if (start > cursor) {
+      chunks.push(input.slice(cursor, start));
+    }
+    const end = input.indexOf('-->', start + 4);
+    if (end === -1) {
+      break;
+    }
+    cursor = end + 3;
+  }
+  return chunks.join('\n');
+}
+
 /**
  * Returns true when `raw` contains either parsed diary entries or non-empty
  * text beyond OpenClaw's freshly-seeded empty `# Dream Diary` markers.
@@ -71,9 +91,7 @@ export function parseDiaryEntries(raw: string): DiaryEntry[] {
 export function hasMeaningfulDiaryContent(raw?: string | null): boolean {
   if (!raw || !raw.trim()) return false;
   if (parseDiaryEntries(raw).length > 0) return true;
-  const remaining = raw
-    .replace(/\r\n?/g, '\n')
-    .replace(HTML_COMMENT_RE, '')
+  const remaining = stripHtmlCommentBlocks(raw.replace(/\r\n?/g, '\n'))
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !EMPTY_DIARY_BOILERPLATE_LINE_RE.test(line));
