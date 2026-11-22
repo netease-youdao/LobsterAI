@@ -7,6 +7,8 @@
 // 3. `tools/pre-execute` approval policy evaluation combining `commandSafety.ts`,
 //    session `executionMode`, and persistent `allow-always` rules.
 
+import { isAbsolute } from 'node:path';
+
 import {
   DeliveryMode,
   PayloadKind,
@@ -227,8 +229,12 @@ function formatScheduledTaskLine(task: ScheduledTask): string {
   const promptText = task.payload.kind === PayloadKind.AgentTurn
     ? task.payload.message
     : task.payload.text;
+  const workingDirectory = task.payload.kind === PayloadKind.AgentTurn
+    ? task.payload.workingDirectory?.trim()
+    : undefined;
   const preview = promptText.replace(/\s+/g, ' ').trim().slice(0, 80);
-  return `- [${task.id}] ${task.name}（${status}）| ${formatScheduleSummary(task.schedule)} | 下次执行: ${nextRun} | 指令: ${preview}`;
+  const cwdPart = workingDirectory ? ` | 目录: ${workingDirectory}` : '';
+  return `- [${task.id}] ${task.name}（${status}）| ${formatScheduleSummary(task.schedule)} | 下次执行: ${nextRun}${cwdPart} | 指令: ${preview}`;
 }
 
 function parseScheduleFromArgs(
@@ -306,6 +312,7 @@ export function executeLobsterScheduleTool(
   scheduler: LobsterSchedulerBridgePort,
   args: Record<string, unknown>,
   agentId: string,
+  workspaceDir?: string,
 ): { ok: boolean; mutated: boolean; text: string; task?: ScheduledTask; tasks?: ScheduledTask[]; deletedId?: string } {
   const action = typeof args.action === 'string' ? args.action.trim() : '';
 
@@ -330,6 +337,10 @@ export function executeLobsterScheduleTool(
       if (!prompt) throw new Error('创建定时任务时必须提供 prompt');
       const schedule = parseScheduleFromArgs(args);
       const enabled = typeof args.enabled === 'boolean' ? args.enabled : true;
+      const trimmedWorkspaceDir = workspaceDir?.trim();
+      const workingDirectory = trimmedWorkspaceDir && isAbsolute(trimmedWorkspaceDir)
+        ? trimmedWorkspaceDir
+        : undefined;
       const input: ScheduledTaskInput = {
         name,
         description: '',
@@ -340,6 +351,7 @@ export function executeLobsterScheduleTool(
         payload: {
           kind: PayloadKind.AgentTurn,
           message: prompt,
+          ...(workingDirectory ? { workingDirectory } : {}),
         },
         delivery: { mode: DeliveryMode.None },
         agentId: agentId || 'main',
@@ -364,7 +376,9 @@ export function executeLobsterScheduleTool(
         patch.name = args.name.trim();
       }
       if (typeof args.prompt === 'string' && args.prompt.trim().length > 0) {
-        patch.payload = { kind: PayloadKind.AgentTurn, message: args.prompt.trim() };
+        patch.payload = existing.payload.kind === PayloadKind.AgentTurn
+          ? { ...existing.payload, message: args.prompt.trim() }
+          : { kind: PayloadKind.AgentTurn, message: args.prompt.trim() };
       }
       if (typeof args.enabled === 'boolean') {
         patch.enabled = args.enabled;
@@ -556,7 +570,7 @@ export function wireDshHostBridge(options: {
     if (!scheduler) {
       throw new Error('当前环境未启用 LobsterScheduler 定时任务服务');
     }
-    const result = executeLobsterScheduleTool(scheduler, req.args, req.agentId);
+    const result = executeLobsterScheduleTool(scheduler, req.args, req.agentId, req.workspaceDir);
     if (result.mutated) {
       onScheduleMutated?.();
     }

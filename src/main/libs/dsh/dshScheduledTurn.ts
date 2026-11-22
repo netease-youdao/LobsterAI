@@ -1,3 +1,6 @@
+import { statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+
 import {
   DeliveryMode,
   PayloadKind,
@@ -270,7 +273,22 @@ export async function executeDshScheduledTask(
       : undefined;
 
   const agentId = task.agentId || 'main';
-  const cwd = deps.getDefaultCwd(agentId);
+  const workingDirectory =
+    payload.kind === PayloadKind.AgentTurn ? payload.workingDirectory?.trim() : undefined;
+  if (workingDirectory) {
+    let isValidDirectory = false;
+    if (isAbsolute(workingDirectory)) {
+      try {
+        isValidDirectory = statSync(workingDirectory, { throwIfNoEntry: false })?.isDirectory() === true;
+      } catch {
+        isValidDirectory = false;
+      }
+    }
+    if (!isValidDirectory) {
+      throw new Error(`Scheduled task working directory is unavailable: ${workingDirectory}`);
+    }
+  }
+  const cwd = workingDirectory || deps.getDefaultCwd(agentId);
 
   const sessionId = deps.coworkStore.createSession?.(
     `[定时] ${task.name}`,
