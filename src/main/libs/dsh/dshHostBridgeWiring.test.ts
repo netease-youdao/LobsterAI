@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { PayloadKind } from '../../../scheduledTask/constants';
 import { DECISION_EVALUATE_TOOL_NAME, DecisionModelProvider } from '../../../shared/decisionModel/constants';
 import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService, WorkspaceFileName } from '../../memory/lobsterMemoryService';
@@ -305,7 +306,7 @@ describe('wireDshHostBridge', () => {
     expect(emptyList.tasks).toHaveLength(0);
     expect(onScheduleMutated).toHaveBeenCalledTimes(0);
 
-    // Create a cron task.
+    // Create a cron task: binds trusted session workspaceDir and ignores model-supplied workingDirectory.
     const created = await schedHandler({
       toolName: BUILTIN_SCHEDULE_TOOL_NAME,
       args: {
@@ -315,25 +316,59 @@ describe('wireDshHostBridge', () => {
         scheduleKind: 'cron',
         cronExpr: '0 9 * * *',
         tz: 'Asia/Shanghai',
+        workingDirectory: path.join(workspacesDir, 'ignored-model-argument'),
       },
       agentId: 'main',
+      workspaceDir: `  ${workspacesDir}  `,
     }) as { ok: boolean; task: { id: string; name: string; enabled: boolean }; text: string };
     expect(created.ok).toBe(true);
     expect(created.task.name).toBe('每日早报');
     expect(created.task.enabled).toBe(true);
+    expect(created.text).toContain(workspacesDir);
+    expect(scheduler.getTask(created.task.id)?.payload).toEqual({
+      kind: PayloadKind.AgentTurn,
+      message: '汇总今日科技新闻',
+      workingDirectory: workspacesDir,
+    });
     expect(onScheduleMutated).toHaveBeenCalledTimes(1);
 
-    // Update timezone only without repeating cronExpr.
+    // Simulate UI setting model + timeoutSeconds on the task, then updating prompt from another workspace.
+    scheduler.updateTask(created.task.id, {
+      payload: {
+        kind: PayloadKind.AgentTurn,
+        message: '汇总今日科技新闻',
+        model: 'lobsterai-server/deepseek-flash',
+        timeoutSeconds: 180,
+      },
+    });
+    expect(scheduler.getTask(created.task.id)?.payload).toEqual({
+      kind: PayloadKind.AgentTurn,
+      message: '汇总今日科技新闻',
+      model: 'lobsterai-server/deepseek-flash',
+      timeoutSeconds: 180,
+      workingDirectory: workspacesDir,
+    });
+
+    // Replacing prompt + timezone from another workspace retains workingDirectory, model, and timeoutSeconds.
     const updated = await schedHandler({
       toolName: BUILTIN_SCHEDULE_TOOL_NAME,
       args: {
         action: LobsterScheduleAction.Update,
         taskId: created.task.id,
+        prompt: '汇总今日科技新闻并附上出处',
         tz: 'UTC',
       },
       agentId: 'main',
+      workspaceDir: path.join(workspacesDir, 'other-workspace'),
     }) as { ok: boolean; task: { schedule: { kind: string; expr: string; tz?: string } } };
     expect(updated.task.schedule).toEqual({ kind: 'cron', expr: '0 9 * * *', tz: 'UTC' });
+    expect(scheduler.getTask(created.task.id)?.payload).toEqual({
+      kind: PayloadKind.AgentTurn,
+      message: '汇总今日科技新闻并附上出处',
+      model: 'lobsterai-server/deepseek-flash',
+      timeoutSeconds: 180,
+      workingDirectory: workspacesDir,
+    });
     expect(onScheduleMutated).toHaveBeenCalledTimes(2);
 
     // Toggle pause.

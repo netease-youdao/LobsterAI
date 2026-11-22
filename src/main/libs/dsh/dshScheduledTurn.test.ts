@@ -1,6 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -263,6 +267,87 @@ describe('executeDshScheduledTask', () => {
       sessionId: 'cw-sched-1',
       summary: 'Service healthy.',
     });
+  });
+
+  test('uses the task working directory even when the default workspace changes', async () => {
+    const workingDirectory = tmpdir();
+    const runtime = new Runtime();
+    runtime.startSession.mockImplementation(async (sessionId: string) => {
+      queueMicrotask(() => runtime.emit('complete', sessionId));
+    });
+    const createSession = vi.fn(() => ({ id: 'cw-bound' }));
+    const getDefaultCwd = vi.fn(() => join(tmpdir(), 'different-workspace'));
+    const task = makeTask({
+      payload: { kind: PayloadKind.AgentTurn, message: 'Read project notes', workingDirectory },
+    });
+
+    await executeDshScheduledTask(
+      {
+        hostManager: { isReady: () => true, start: vi.fn(async () => undefined) },
+        runtimeAdapter: runtime,
+        coworkStore: { createSession, getSession: () => ({ id: 'cw-bound', cwd: workingDirectory, messages: [] }) },
+        getDefaultCwd,
+      },
+      task,
+      new AbortController().signal,
+    );
+
+    expect(createSession).toHaveBeenCalledWith(
+      '[定时] Nightly Check',
+      workingDirectory,
+      undefined,
+      'auto',
+      undefined,
+      'agent-ops',
+      undefined,
+      { scheduledTaskId: 'task-exec-1' },
+    );
+    expect(getDefaultCwd).not.toHaveBeenCalled();
+  });
+
+  test('fails before starting a turn when the bound workspace is missing, relative, or obstructed by a file', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'lobsterai-sched-cwd-'));
+    const regularFile = join(tempDir, 'not-a-dir');
+    writeFileSync(regularFile, 'plain file', 'utf8');
+    try {
+      const invalidPaths = [
+        join(tmpdir(), `lobsterai-missing-${randomUUID()}`),
+        'relative/project/path',
+        regularFile,
+        join(regularFile, 'nested-child'),
+      ];
+
+      for (const badPath of invalidPaths) {
+        const runtime = new Runtime();
+        const createSession = vi.fn(() => ({ id: 'cw-missing' }));
+        const getDefaultCwd = vi.fn(() => tmpdir());
+        const task = makeTask({
+          payload: {
+            kind: PayloadKind.AgentTurn,
+            message: 'Read project notes',
+            workingDirectory: badPath,
+          },
+        });
+
+        await expect(
+          executeDshScheduledTask(
+            {
+              hostManager: { isReady: () => true, start: vi.fn(async () => undefined) },
+              runtimeAdapter: runtime,
+              coworkStore: { createSession, getSession: () => null },
+              getDefaultCwd,
+            },
+            task,
+            new AbortController().signal,
+          ),
+        ).rejects.toThrow(`Scheduled task working directory is unavailable: ${badPath}`);
+
+        expect(createSession).not.toHaveBeenCalled();
+        expect(getDefaultCwd).not.toHaveBeenCalled();
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   test('enforces timeoutSeconds and preserves sessionId on timeout failure', async () => {

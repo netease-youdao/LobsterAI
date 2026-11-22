@@ -25,6 +25,7 @@ export interface AgentTurnPayload {
   message: string;
   timeoutSeconds?: number;
   model?: string;
+  workingDirectory?: string;
 }
 
 export interface SystemEventPayload {

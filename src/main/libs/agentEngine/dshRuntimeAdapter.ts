@@ -40,6 +40,7 @@ import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cow
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_APPROVAL_REQUEST_ID_PREFIX,
   DSH_QUESTION_REQUEST_ID_PREFIX,
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
@@ -1831,7 +1832,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       return Promise.resolve({ kind: 'result', value: 'allowed-once' });
     }
 
-    const requestId = `${kind === 'approval' ? 'dsh-approval:' : DSH_QUESTION_REQUEST_ID_PREFIX}${evt.eventId}`;
+    const requestId = `${kind === 'approval' ? DSH_APPROVAL_REQUEST_ID_PREFIX : DSH_QUESTION_REQUEST_ID_PREFIX}${evt.eventId}`;
     const toolName = kind === 'approval'
       ? String(evt.request.toolName ?? 'tool')
       : ASK_USER_QUESTION_TOOL_NAME;

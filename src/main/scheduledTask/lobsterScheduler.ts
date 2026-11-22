@@ -11,6 +11,7 @@ import { EventEmitter } from 'events';
 
 import {
   DeliveryMode,
+  PayloadKind,
   RunDeliveryStatus,
   ScheduleKind,
   SessionTarget,
@@ -753,6 +754,19 @@ export class LobsterScheduler extends EventEmitter {
       ...existing.state,
       nextRunAtMs: nextEnabled ? computeNextRunAtMs(nextSchedule, this.now()) : null,
     };
+    const rawPayload = patch.payload ?? existing.payload;
+    const nextPayload =
+      rawPayload.kind === PayloadKind.AgentTurn && existing.payload.kind === PayloadKind.AgentTurn
+        ? {
+            ...rawPayload,
+            ...(rawPayload.workingDirectory === undefined && existing.payload.workingDirectory
+              ? { workingDirectory: existing.payload.workingDirectory }
+              : {}),
+            ...(rawPayload.timeoutSeconds === undefined && existing.payload.timeoutSeconds !== undefined
+              ? { timeoutSeconds: existing.payload.timeoutSeconds }
+              : {}),
+          }
+        : rawPayload;
 
     const nowIso = new Date(this.now()).toISOString();
     this.db
@@ -770,7 +784,7 @@ export class LobsterScheduler extends EventEmitter {
         JSON.stringify(nextSchedule),
         patch.sessionTarget ?? existing.sessionTarget,
         patch.wakeMode ?? existing.wakeMode,
-        JSON.stringify(patch.payload ?? existing.payload),
+        JSON.stringify(nextPayload),
         JSON.stringify(patch.delivery ?? existing.delivery),
         patch.agentId !== undefined ? patch.agentId : existing.agentId,
         patch.sessionKey !== undefined ? patch.sessionKey : existing.sessionKey,

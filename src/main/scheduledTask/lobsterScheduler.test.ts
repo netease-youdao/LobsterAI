@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   DeliveryMode,
+  PayloadKind,
   RunDeliveryStatus,
   SessionTarget,
   TaskStatus,
@@ -503,4 +504,34 @@ test('startRunNow launches execution without blocking and records sessionId on e
   });
   expect(scheduler.getTask(task.id)?.state.consecutiveErrors).toBe(1);
   expect(runEvents.at(-1)).toEqual({ id: runId, status: TaskStatus.Error, taskName: 'Background Job' });
+});
+
+test('updateTask preserves bound workingDirectory and timeoutSeconds when partial UI payload omits them', () => {
+  const scheduler = new LobsterScheduler({ db: createMemoryDb() });
+  const created = scheduler.createTask({
+    ...recurringJob,
+    name: 'Project Meal Summary',
+    payload: {
+      kind: PayloadKind.AgentTurn,
+      message: 'Initial prompt',
+      workingDirectory: '/tmp/project-a',
+      timeoutSeconds: 120,
+    },
+  });
+
+  const updated = scheduler.updateTask(created.id, {
+    payload: {
+      kind: PayloadKind.AgentTurn,
+      message: 'Updated from UI form',
+      model: 'lobsterai-server/qwen3.8-flash',
+    },
+  });
+
+  expect(updated?.payload).toEqual({
+    kind: PayloadKind.AgentTurn,
+    message: 'Updated from UI form',
+    model: 'lobsterai-server/qwen3.8-flash',
+    workingDirectory: '/tmp/project-a',
+    timeoutSeconds: 120,
+  });
 });
