@@ -32,6 +32,7 @@ export type WebSearchEngine = typeof WebSearchEngine[keyof typeof WebSearchEngin
 /** Lets the skill server tell "use your own browser" apart from a failed search. */
 export const WebSearchPageErrorCode = {
   Disabled: 'in-app-disabled',
+  SkillDisabled: 'skill-disabled',
 } as const;
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
@@ -62,6 +63,7 @@ export interface WebSearchPageContext {
 export interface WebSearchHostDeps {
   getBrowserConfig: () => Partial<BrowserWebAccessConfig> | null | undefined;
   getPageContext: () => WebSearchPageContext;
+  isSkillEnabled?: () => boolean;
   createPage?: (context: WebSearchPageContext) => WebSearchPage;
 }
 
@@ -265,6 +267,14 @@ export class WebSearchHost {
   constructor(private readonly deps: WebSearchHostDeps) {}
 
   async handleRequest(request: WebSearchPageRequest): Promise<WebSearchPageResponse> {
+    if (this.deps.isSkillEnabled && !this.deps.isSkillEnabled()) {
+      this.dispose();
+      return {
+        success: false,
+        code: WebSearchPageErrorCode.SkillDisabled,
+        error: 'The LobsterAI web-search skill is disabled.',
+      };
+    }
     if (!this.isInAppMode()) {
       this.dispose();
       return {

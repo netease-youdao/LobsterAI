@@ -84,6 +84,7 @@ import {
   BrowserNetworkMode,
   BrowserRuntimeProfile,
   type BrowserWebAccessConfig,
+  normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
@@ -435,7 +436,7 @@ import {
   DevelopmentProtocolSwitch,
   resolveDevelopmentLaunchContext,
 } from './libs/developmentProtocolContext';
-import { buildDshHostAgentSpecs } from './libs/dsh/dshAgentSync';
+import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
 import {
   createSingleFlightAsyncTracker,
   DshBootstrap,
@@ -2362,14 +2363,14 @@ const getDshBootstrap = (): DshBootstrap => {
         };
       },
       resolveAllowedSkillIds: (_sessionId, agentId, optionSkillIds) => {
-        if (optionSkillIds && optionSkillIds.length > 0) return optionSkillIds;
-        if (agentId && agentId !== AgentId.Main) {
-          const agent = getAgentManager().getAgent(agentId);
-          if (agent && Array.isArray(agent.skillIds) && agent.skillIds.length > 0) {
-            return agent.skillIds;
-          }
-        }
-        return null;
+        const agent = agentId && agentId !== AgentId.Main
+          ? getAgentManager().getAgent(agentId)
+          : undefined;
+        return resolveAllowedSkillIdsForTurn({
+          agentId,
+          agentSkillIds: agent?.skillIds,
+          optionSkillIds,
+        });
       },
       instanceId: getStore().get<string>('installation_uuid') ?? undefined,
       ecosystemWindowTitle: t('dshEcosystemTitle'),
@@ -2450,11 +2451,20 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
   return agentBrowserHost;
 };
 
+const isWebSearchSkillEnabled = (): boolean => {
+  try {
+    return getSkillManager().isSkillEnabled('web-search');
+  } catch {
+    return true;
+  }
+};
+
 const getWebSearchHost = (): WebSearchHost => {
   if (!webSearchHost) {
     webSearchHost = new WebSearchHost({
       getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
       getPageContext: () => getAgentBrowserHost().getBackgroundPageContext(),
+      isSkillEnabled: isWebSearchSkillEnabled,
     });
   }
   return webSearchHost;
@@ -2877,6 +2887,17 @@ const syncOpenClawConfig = async (options: {
       // IM manager not initialized yet; skipped until ready.
     }
 
+    const rawBrowserWebAccess = getStore().get<AppConfigSettings>('app_config')?.browserWebAccess;
+    const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig(rawBrowserWebAccess);
+    const blockedHostnames = Array.from(new Set([
+      ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.blockedHostnames),
+      ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.blockedHostnames),
+    ]));
+    const allowedHostnames = Array.from(new Set([
+      ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.allowedHostnames),
+      ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.allowedHostnames),
+    ]));
+
     const result = await bootstrap.syncAllConfig({
       providers,
       modelAuthProxyUrl: proxyUrl,
@@ -2886,6 +2907,11 @@ const syncOpenClawConfig = async (options: {
         enabledIds,
         disabledIds,
         skillsDir: getSkillManager().getSkillsRoot(),
+      },
+      webAccessPolicy: {
+        webFetchEnabled: normalizedBrowserWebAccess.webFetch.enabled,
+        blockedHostnames,
+        allowedHostnames,
       },
       memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       agents,
@@ -8759,6 +8785,11 @@ if (!gotTheLock) {
     getSkillManager,
     getSkillStoreUrl,
     onSkillsPolicyChanged: async () => {
+      const webSearchEnabled = isWebSearchSkillEnabled();
+      if (!webSearchEnabled) {
+        webSearchHost?.dispose();
+      }
+      await getSkillServiceManager().syncWebSearchSkillEnabled(webSearchEnabled);
       await syncOpenClawConfig({ reason: 'skills-enabled-changed' });
     },
   });
@@ -15476,6 +15507,7 @@ if (!gotTheLock) {
     // No IPC handler or downstream init depends on this completing.
     try {
       const skillServices = getSkillServiceManager();
+      skillServices.setWebSearchEnabledResolver(isWebSearchSkillEnabled);
       console.log('[Main] initApp: getSkillServiceManager done');
       const t0 = performance.now();
       void skillServices

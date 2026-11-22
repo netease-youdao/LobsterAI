@@ -94,6 +94,32 @@ function resolveSkillServiceNodeRuntime(
 export class SkillServiceManager {
   private webSearchPid: number | null = null;
   private skillEnv: Record<string, string | undefined> | null = null;
+  private webSearchEnabledResolver: (() => boolean) | null = null;
+
+  setWebSearchEnabledResolver(resolver: (() => boolean) | null): void {
+    this.webSearchEnabledResolver = resolver;
+  }
+
+  isWebSearchSkillEnabled(): boolean {
+    if (!this.webSearchEnabledResolver) return true;
+    try {
+      return this.webSearchEnabledResolver();
+    } catch (error) {
+      console.warn('[SkillServices] Failed to evaluate web-search enabled state:', error);
+      return true;
+    }
+  }
+
+  async syncWebSearchSkillEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      await this.stopWebSearchService();
+      return;
+    }
+    if (!this.skillEnv) {
+      this.skillEnv = buildSkillServiceEnv();
+    }
+    await this.startWebSearchService();
+  }
 
   private hasWebSearchRuntimeScriptSupport(skillPath: string): boolean {
     const startServerScript = path.join(skillPath, 'scripts', 'start-server.sh');
@@ -329,6 +355,11 @@ export class SkillServiceManager {
    */
   async startWebSearchService(): Promise<void> {
     try {
+      if (!this.isWebSearchSkillEnabled()) {
+        console.log('[SkillServices] Web Search skill is disabled, skipping service start');
+        return;
+      }
+
       const skillPath = this.getWebSearchPath();
       if (!skillPath) {
         console.log('[SkillServices] Web Search skill not found, skipping');

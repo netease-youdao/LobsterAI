@@ -1,7 +1,9 @@
+import { AgentId } from '@shared/agent/constants';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { Skill } from '../types/skill';
 import {
+  filterSkillsForAgent,
   groupSkillsForPicker,
   MAX_RECENT_SKILLS_SHOWN,
   readRecentSkillIds,
@@ -138,5 +140,28 @@ describe('recent skill storage', () => {
     store.set('lobsterai.skill-picker-recent', JSON.stringify(['a', 1, 'a', null, 'b']));
 
     expect(readRecentSkillIds()).toEqual(['a', 'b']);
+  });
+});
+
+describe('filterSkillsForAgent', () => {
+  const skills = [
+    makeSkill('custom-a'),
+    makeSkill('other-skill'),
+    makeSkill('docx', { isBuiltIn: true }),
+  ];
+
+  test('returns all skills for main agent or unrestricted experts', () => {
+    expect(filterSkillsForAgent(skills, undefined).map(s => s.id)).toEqual(['custom-a', 'other-skill', 'docx']);
+    expect(filterSkillsForAgent(skills, { id: AgentId.Main, skillIds: ['custom-a'] }).map(s => s.id))
+      .toEqual(['custom-a', 'other-skill', 'docx']);
+    expect(filterSkillsForAgent(skills, { id: 'expert-free', skillIds: [] }).map(s => s.id))
+      .toEqual(['custom-a', 'other-skill', 'docx']);
+  });
+
+  test('restricts picker skills to the active expert skillIds allowlist', () => {
+    expect(filterSkillsForAgent(skills, { id: 'expert-a', skillIds: ['custom-a'] }).map(s => s.id))
+      .toEqual(['custom-a']);
+    expect(filterSkillsForAgent(skills, { id: 'expert-b', skillIds: ['other-skill'] }).map(s => s.id))
+      .toEqual(['other-skill']);
   });
 });

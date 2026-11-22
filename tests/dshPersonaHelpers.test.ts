@@ -265,4 +265,119 @@ describe('persona-helpers', () => {
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "project"');
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "global"');
   });
+
+  test('resolves non-ASCII frontmatter names and remotion ID mismatches without dropping custom skills', async () => {
+    const { resolveDshSkillName } = await loadHelpers();
+
+    // Pure Chinese frontmatter name falls back to kebab directory ID.
+    expect(resolveDshSkillName('custom-report', '周报助手')).toBe('custom-report');
+    expect(resolveDshSkillName('custom-report', '报告生成器', { preferRawId: false })).toBe('custom-report');
+
+    // Mixed Chinese + ASCII frontmatter does not mangle managed skill ID to 'v2'.
+    expect(resolveDshSkillName('custom-report', '周报助手 v2')).toBe('custom-report');
+
+    // Legacy remotion/SKILL.md with `name: remotion-best-practices` registers as `remotion`.
+    expect(resolveDshSkillName('remotion', 'remotion-best-practices')).toBe('remotion');
+
+    // Non-ASCII folder name falls back to ASCII frontmatter name, or deterministic hash if both non-ASCII.
+    expect(resolveDshSkillName('周报目录', 'weekly-report')).toBe('weekly-report');
+    expect(resolveDshSkillName('周报目录', '周报助手')).toMatch(/^skill-[0-9a-f]{8}$/);
+  });
+
+  test('discovers skills with policy filtering, expert allowlists, Plan Mode suppression, and no project-root shadowing of disabled skills', async () => {
+    const { discoverLobsterSkills } = await loadHelpers();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skill-discover-'));
+    tempDirs.push(root);
+
+    const skillsDir = path.join(root, 'SKILLs');
+    const projectDir = path.join(root, 'project');
+    const writeSkill = (baseDir: string, id: string, frontmatterName: string, desc: string) => {
+      const dir = path.join(baseDir, id);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${frontmatterName}\ndescription: ${desc}\n---\nInstructions for ${id}.\n`,
+        'utf8',
+      );
+    };
+
+    writeSkill(skillsDir, 'custom-report', '周报助手', '生成团队周报');
+    writeSkill(skillsDir, 'remotion', 'remotion-best-practices', 'Remotion video');
+    writeSkill(skillsDir, 'other-skill', 'other-skill', 'Other skill');
+    writeSkill(path.join(projectDir, '.dsh', 'skills'), 'other-skill', 'other-skill', 'Shadow attempt');
+    writeSkill(path.join(projectDir, '.dsh', 'skills'), 'project-only', '项目助手', 'Project-local skill');
+
+    // Unrestricted main session sees enabled managed + project-local skills,
+    // and disabled managed skill cannot be resurrected by `.dsh/skills`.
+    const unrestricted = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: new Set(['custom-report', 'remotion']), disabledIds: new Set(['other-skill']) },
+      null,
+      { cwd: projectDir },
+    );
+    expect(unrestricted.map(s => s.name).sort()).toEqual(['custom-report', 'project-only', 'remotion']);
+
+    // Even when disabledIds is empty, a managed skill omitted from enabledIds cannot be resurrected from `.dsh/skills`.
+    const enabledOnly = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: new Set(['custom-report']), disabledIds: new Set() },
+      null,
+      { cwd: projectDir },
+    );
+    expect(enabledOnly.map(s => s.name).sort()).toEqual(['custom-report', 'project-only']);
+
+    // Expert allowlist strictly restricts both managed and project-local skills.
+    const expertA = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: null, disabledIds: new Set() },
+      new Set(['custom-report']),
+      { cwd: projectDir },
+    );
+    expect(expertA.map(s => s.name)).toEqual(['custom-report']);
+
+    // Plan Mode explicit empty allowlist suppresses every skill including project-local skills.
+    const planMode = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: null, disabledIds: new Set() },
+      new Set(),
+      { cwd: projectDir },
+    );
+    expect(planMode).toEqual([]);
+  });
+
+  test('injects concise web-search routing guidance only when web-search skill is installed and enabled', async () => {
+    const { buildWebSearchRoutingGuidance, WEB_SEARCH_ROUTING_GUIDANCE } = await loadHelpers();
+
+    const skillsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-'));
+    tempDirs.push(skillsRoot);
+    fs.mkdirSync(path.join(skillsRoot, 'web-search'), { recursive: true });
+    fs.writeFileSync(path.join(skillsRoot, 'web-search', 'SKILL.md'), '---\nname: web-search\n---\n', 'utf8');
+
+    // Enabled globally and unrestricted for agent -> guidance included.
+    expect(buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe(
+      WEB_SEARCH_ROUTING_GUIDANCE,
+    );
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: new Set(['web-search']), disabledIds: new Set() }, null),
+    ).toBe(WEB_SEARCH_ROUTING_GUIDANCE);
+
+    // Disabled globally -> omitted.
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set(['web-search']) }, null),
+    ).toBe('');
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: new Set(['docx']), disabledIds: new Set() }, null),
+    ).toBe('');
+
+    // Excluded by per-agent allowlist -> omitted.
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, new Set(['docx'])),
+    ).toBe('');
+
+    // Missing from skills root -> omitted.
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-empty-'));
+    tempDirs.push(emptyRoot);
+    expect(buildWebSearchRoutingGuidance([emptyRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe('');
+  });
 });

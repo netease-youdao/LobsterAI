@@ -7,6 +7,7 @@ export const MIGRATION_V2_CRON_BACKFILL_KV_KEY = 'engine.migration.v2.cronBackfi
 export const MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY = 'engine.migration.v2.permissionPresetBackfill';
 export const MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY = 'engine.migration.v2.userMemoriesMigrated';
 export const MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY = 'engine.migration.v2.dreamDiaryBackfilled';
+export const MIGRATION_V2_TAVILY_BACKFILL_KV_KEY = 'engine.migration.v2.tavilyBackfillCompleted';
 
 export const MigrationV2Status = {
   Skipped: 'skipped',
@@ -53,12 +54,14 @@ export interface MigrationV2Report {
   summary: {
     workspacesMigrated: number;
     userMemoriesMigrated?: number;
+    skillsMigrated?: number;
     scheduledTasksMigrated: number;
     scheduledTaskRunsMigrated?: number;
     imAllowListsMigrated: number;
     sessionsPreSeeded?: number;
     sessionsPreservedForLazyBridge: number;
     mcpLaunchCachesCleared: number;
+    tavilyMcpMigrated?: number;
     disposableBytesFreed: number;
   };
   archivedModules: MigrationV2ArchivedItem[];

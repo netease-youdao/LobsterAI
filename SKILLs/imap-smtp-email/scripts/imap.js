@@ -87,9 +87,9 @@ async function connect(account) {
     const imap = new Imap(config);
 
     imap.once('ready', () => {
-      console.error('[imap-debug] Connection ready, sending ID command...');
-      // Send IMAP ID command for 163.com compatibility
-      if (typeof imap.id === 'function') {
+      // Send IMAP ID command for 163.com compatibility when advertised by the server
+      if (typeof imap.id === 'function' && typeof imap.serverSupports === 'function' && imap.serverSupports('ID')) {
+        console.error('[imap-debug] Connection ready, sending ID command...');
         imap.id(IMAP_ID, (err) => {
           if (err) {
             console.warn('[imap-debug] Warning: IMAP ID command failed:', err.message);

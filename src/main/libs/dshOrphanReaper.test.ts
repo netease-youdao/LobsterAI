@@ -36,6 +36,12 @@ describe('isDshWebCommand', () => {
   test('matches the spawned runtime, through bin.js, profile boot, or a generated launcher', () => {
     expect(isDshWebCommand(dshCommand(EXEC, INSTALLED_ENTRY, 57437), EXEC)).toBe(true);
     expect(isDshWebCommand(`${EXEC} --expose-internals ${INSTALLED_ENTRY} --profile lobsterai --no-open`, EXEC)).toBe(true);
+    expect(
+      isDshWebCommand(
+        `${EXEC} --expose-internals /Users/me/Library/Application Support/LobsterAI/dsh-profile/dsh-launcher/launch.mjs --profile lobsterai --no-open --host 127.0.0.1 --port 0`,
+        EXEC,
+      ),
+    ).toBe(true);
     expect(isDshWebCommand(dshCommand(EXEC, '/Users/me/Library/Application Support/LobsterAI/dsh-launcher/launch.mjs', 1), EXEC)).toBe(true);
     expect(
       isDshWebCommand(
@@ -55,6 +61,12 @@ describe('isDshWebCommand', () => {
     ).toBe(false);
     expect(
       isDshWebCommand(`${EXEC} --expose-internals ${LAUNCHER_ENTRY} plugin --profile lobsterai add --no-open`, EXEC),
+    ).toBe(false);
+    expect(
+      isDshWebCommand(
+        `${EXEC} --expose-internals /Users/me/Library/Application Support/LobsterAI/dsh-profile/dsh-launcher/launch.mjs plugin --profile lobsterai add foo`,
+        EXEC,
+      ),
     ).toBe(false);
   });
 });

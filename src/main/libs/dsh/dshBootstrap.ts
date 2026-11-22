@@ -33,6 +33,7 @@ import {
   parseDshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import { McpIpcChannel } from '../../../shared/mcp/constants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshChannelsBridge';
 import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
@@ -40,6 +41,7 @@ import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
   backfillLegacyDreamDiariesFromBackup,
   backfillLegacyScheduledTasksFromBackup,
+  backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
   type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
@@ -54,18 +56,26 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
-import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../coworkUtil';
+import {
+  ensureElectronNodeShim,
+  getElectronNodeRuntimePath,
+  resolveUserShellPath,
+} from '../coworkUtil';
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
 import { resolveDshBundledGitBinDir } from '../dshRuntime';
+import { appendPythonRuntimeToEnv } from '../pythonRuntime';
+import { getWebSearchBridgeFilePath } from '../webSearchBridgeFile';
 import {
   type ApprovalAllowRulePort,
   type HostToolProvider,
   wireDshHostBridge,
 } from './dshHostBridgeWiring';
 import {
+  type DshChildEnvAdditions,
   type DshHostAgentSpec,
   DshHostManager,
   type DshHostStatus,
+  type DshHostWebAccessPolicy,
   resolveBundledDshPaths,
 } from './dshHostManager';
 import { resolveInitialDshPermissionPreset } from './dshPermissionPresetStorage';
@@ -98,6 +108,7 @@ export interface DshBootstrapSyncInput {
     extraDirs?: string[];
     skillsDir?: string;
   };
+  webAccessPolicy?: DshHostWebAccessPolicy;
   memoryEnabled?: boolean;
   agents?: DshHostAgentSpec[];
   imInstances?: Array<{
@@ -311,6 +322,56 @@ function createSafeStorageCipher(): {
   };
 }
 
+function resolveBundledNpmBinDir(): string | undefined {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+function resolveDshChildEnvAdditions(
+  executablePath: string,
+  userDataDir: string,
+): DshChildEnvAdditions {
+  const npmBinDir = resolveBundledNpmBinDir();
+  const nodeShimDir = ensureElectronNodeShim(executablePath, npmBinDir);
+  const prependPathDirs: string[] = [];
+  const appendPathDirs: string[] = [];
+  const extraEnv: Record<string, string | undefined> = {};
+
+  if (process.platform !== 'win32' && app.isPackaged) {
+    const shellPath = resolveUserShellPath();
+    if (shellPath) {
+      appendPathDirs.push(...shellPath.split(path.delimiter).filter(Boolean));
+    }
+  }
+
+  try {
+    const pyEnv: Record<string, string | undefined> = { PATH: '' };
+    appendPythonRuntimeToEnv(pyEnv);
+    const pyPathDirs = (pyEnv.PATH || '').split(path.delimiter).filter(Boolean);
+    if (pyPathDirs.length > 0) {
+      // On Windows, keep bundled Python ahead of Microsoft Store WindowsApps stubs.
+      prependPathDirs.push(...pyPathDirs);
+    }
+    for (const [key, value] of Object.entries(pyEnv)) {
+      if (key.toLowerCase() === 'path' || value === undefined) continue;
+      extraEnv[key] = value;
+    }
+  } catch (error) {
+    console.warn('[DshBootstrap] Failed to resolve bundled Python runtime env:', error);
+  }
+
+  return {
+    webSearchBridgeFile: getWebSearchBridgeFilePath(userDataDir),
+    nodeShimDir,
+    npmBinDir,
+    prependPathDirs,
+    appendPathDirs,
+    extraEnv,
+  };
+}
+
 function webOrigin(url: string): string | null {
   try {
     return new URL(url).origin;
@@ -319,11 +380,37 @@ function webOrigin(url: string): string | null {
   }
 }
 
+function resolveDshNodeToolchain(electronPath: string): DshNodeToolchain {
+  const npmBinDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+    : path.join(app.getAppPath(), 'node_modules', 'npm', 'bin');
+  const hasNpm = fs.existsSync(npmBinDir);
+  let nodeShimDir: string | null = null;
+  try {
+    nodeShimDir = ensureElectronNodeShim(electronPath, hasNpm ? npmBinDir : undefined);
+  } catch (error) {
+    console.warn('[DshBootstrap] Failed to prepare Electron Node shims for DSH pnpm:', error);
+  }
+  const gitBinDir = resolveDshBundledGitBinDir(
+    app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources'),
+    process.platform,
+    fs.existsSync,
+    path.join,
+  );
+  return {
+    electronPath,
+    nodeShimDir,
+    npmBinDir: hasNpm ? npmBinDir : null,
+    gitBinDir,
+  };
+}
+
 export class DshBootstrap {
   readonly runtimeDir: string;
   readonly hostBundleDir: string;
   readonly channelsBundleDir: string | null;
   readonly executablePath: string;
+  readonly nodeToolchain: DshNodeToolchain;
   readonly workspacesDir: string;
 
   readonly memoryService: LobsterMemoryService;
@@ -365,6 +452,7 @@ export class DshBootstrap {
     this.hostBundleDir = bundled.hostBundleDir;
     this.channelsBundleDir = bundled.channelsBundleDir;
     this.executablePath = options.executablePath ?? getElectronNodeRuntimePath();
+    this.nodeToolchain = resolveDshNodeToolchain(this.executablePath);
     this.workspacesDir = path.join(options.userDataDir, WORKSPACES_DIR_NAME);
 
     fs.mkdirSync(this.workspacesDir, { recursive: true });
@@ -385,6 +473,9 @@ export class DshBootstrap {
       channelsBundleDir: this.channelsBundleDir,
       skillsDir: options.skillsDir,
       executablePath: this.executablePath,
+      webSearchBridgeFile: getWebSearchBridgeFilePath(options.userDataDir),
+      resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath, options.userDataDir),
+      nodeToolchain: this.nodeToolchain,
       instanceId: options.instanceId,
       skipElectronRunAsNode: options.skipElectronRunAsNode,
       bootTimeoutMs: options.bootTimeoutMs,
@@ -655,8 +746,8 @@ export class DshBootstrap {
     this.startingInProgress = true;
     try {
       // One-shot idempotent backfills for users who completed v2 migration before
-      // `cron_jobs` / `DREAMS.md` extraction landed. Both run concurrently with DSH
-      // boot and return instantaneously once their completion keys are set.
+      // `cron_jobs` / `DREAMS.md` / Tavily extraction landed. All run concurrently
+      // with DSH boot and return instantaneously once their completion keys are set.
       const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
         userDataDir: this.options.userDataDir,
         db: this.options.db,
@@ -665,6 +756,13 @@ export class DshBootstrap {
         return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
       });
       const dreamDiaryBackfillPromise = this.ensureDreamDiaryBackfilled();
+      const tavilyBackfillPromise = backfillLegacyTavilyFromBackup({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+      }).catch((error) => {
+        console.warn('[MigrationV2] legacy Tavily MCP backfill failed:', error);
+        return { status: 'failed' as const, migrated: false };
+      });
 
       // One-shot idempotent backfill for already-migrated v2 DBs so SQLite-only
       // active `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
@@ -689,9 +787,10 @@ export class DshBootstrap {
         console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
       });
 
-      const [backfill, dreamDiaryBackfill] = await Promise.all([
+      const [backfill, dreamDiaryBackfill, tavilyBackfill] = await Promise.all([
         cronBackfillPromise,
         dreamDiaryBackfillPromise,
+        tavilyBackfillPromise,
       ]);
       if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
         console.log(
@@ -703,6 +802,10 @@ export class DshBootstrap {
         console.log(
           `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
         );
+      }
+      if (tavilyBackfill.migrated) {
+        console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');
+        this.broadcastScheduledTaskEvent(McpIpcChannel.Changed);
       }
 
       if (options?.syncInitialConfig) {
@@ -820,6 +923,9 @@ export class DshBootstrap {
       );
       await this.hostManager.syncMcpServers(servers);
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
+      if (input.webAccessPolicy) {
+        await this.hostManager.syncWebAccessPolicy(input.webAccessPolicy);
+      }
       if (typeof input.memoryEnabled === 'boolean') {
         await this.hostManager.syncMemoryPolicy({ enabled: input.memoryEnabled });
       }

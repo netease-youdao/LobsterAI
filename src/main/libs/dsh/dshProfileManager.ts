@@ -102,7 +102,13 @@ export function buildIsolatedDshBaseEnv(params: {
  * Returns null if the runtime was built without a bundled pnpm package.
  */
 export function resolveBundledPnpmEntry(runtimeDir: string): string | null {
-  const packageRoot = path.join(runtimeDir, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
+  let resolvedRuntimeDir = runtimeDir;
+  try {
+    resolvedRuntimeDir = fs.realpathSync(runtimeDir);
+  } catch {
+    // Keep original path when runtimeDir does not exist yet.
+  }
+  const packageRoot = path.join(resolvedRuntimeDir, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
   let raw: string;
   try {
     raw = fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
@@ -212,19 +218,103 @@ export interface EnsureAppOwnedProfileResult {
   preservedUserBundles: string[];
 }
 
+export interface EnsureDshLauncherOptions {
+  dshHomeDir: string;
+  runtimeDir: string;
+  executablePath: string;
+  toolchain?: DshNodeToolchain | null;
+  baseEnv?: NodeJS.ProcessEnv;
+  delimiter?: string;
+  platform?: NodeJS.Platform;
+}
+
 export interface WriteDshCliShimOptions {
   binDir: string;
   electronPath: string;
-  /** Prepared launcher or runtime entry path. Optional when `runtimeDir` is provided. */
+  /** Prepared launcher or runtime entry path. Optional when `runtimeDir` or `launcherPath` is provided. */
   runtimeEntryPath?: string;
+  /** Explicit pre-generated launcher path. */
+  launcherPath?: string | null;
   /** When provided, generates `<dshHomeDir>/dsh-launcher/launch.mjs` for bundled pnpm. */
-  runtimeDir?: string;
+  runtimeDir?: string | null;
   toolchain?: DshNodeToolchain | null;
   baseEnv?: NodeJS.ProcessEnv;
   profileDir: string;
   dshHomeDir: string;
   platform?: NodeJS.Platform;
 }
+
+/**
+ * Returns isolated pnpm/npm store and cache environment variables pinned under
+ * `<dshHomeDir>/cache/`. pnpm 11 reads `pnpm_config_*` (ignoring `npm_config_*`),
+ * while older tools read `npm_config_*`, so both families are populated.
+ */
+export function buildIsolatedPnpmCacheEnv(
+  dshHomeDir: string,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const pathImpl = platform === 'win32' ? path.win32 : path.posix;
+  const pnpmStoreDir = pathImpl.join(dshHomeDir, 'cache', 'pnpm-store');
+  const pnpmCacheDir = pathImpl.join(dshHomeDir, 'cache', 'pnpm-cache');
+  const npmCacheDir = pathImpl.join(dshHomeDir, 'cache', 'npm-cache');
+  return {
+    pnpm_config_store_dir: pnpmStoreDir,
+    pnpm_config_cache_dir: pnpmCacheDir,
+    npm_config_store_dir: pnpmStoreDir,
+    npm_config_cache: npmCacheDir,
+  };
+}
+
+export function resolveDshLauncherPath(dshHomeDir: string): string {
+  return path.join(dshHomeDir, DSH_LAUNCHER_DIR_NAME, DSH_LAUNCHER_FILENAME);
+}
+
+/**
+ * Writes `<dshHomeDir>/dsh-launcher/launch.mjs` wiring DSH's `runCli` with the
+ * runtime's bundled pnpm so plugin operations succeed with no global `pnpm` on
+ * `PATH`. Falls back to `<runtimeDir>/lib/bin.js` if pnpm is not bundled.
+ */
+export function ensureDshLauncher(options: EnsureDshLauncherOptions): string {
+  let resolvedRuntimeDir = options.runtimeDir;
+  try {
+    resolvedRuntimeDir = fs.realpathSync(options.runtimeDir);
+  } catch {
+    // Fall back to provided path.
+  }
+  const runtimeEntryPath = path.join(resolvedRuntimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/'));
+  const pnpmEntry = resolveBundledPnpmEntry(resolvedRuntimeDir);
+  if (!pnpmEntry) {
+    return runtimeEntryPath;
+  }
+
+  const packageManager = buildDshPackageManager({
+    electronPath: options.toolchain?.electronPath ?? options.executablePath,
+    pnpmEntry,
+    nodeShimDir: options.toolchain?.nodeShimDir ?? null,
+    npmBinDir: options.toolchain?.npmBinDir ?? null,
+    gitBinDir: options.toolchain?.gitBinDir ?? null,
+    baseEnv: options.baseEnv ?? process.env,
+    delimiter: options.delimiter ?? path.delimiter,
+  });
+  Object.assign(packageManager.env, buildIsolatedPnpmCacheEnv(options.dshHomeDir, options.platform));
+
+  const launcherPath = resolveDshLauncherPath(options.dshHomeDir);
+  fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
+  writeIfChanged(
+    launcherPath,
+    buildDshLauncherSource(pathToFileURL(runtimeEntryPath).href, packageManager),
+  );
+  return launcherPath;
+}
+
+const PROFILE_PNPM_WORKSPACE = [
+  'packages:',
+  '  - .',
+  '',
+  'nodeLinker: hoisted',
+  'autoInstallPeers: false',
+  '',
+].join('\n');
 
 const CORE_MANAGED_BUNDLES = [
   DSH_BASE_BUNDLE_NAME,
@@ -346,6 +436,16 @@ export function ensureAppOwnedProfile(options: EnsureAppOwnedProfileOptions): En
     fs.writeFileSync(patchPath, '[]\n', { mode: 0o600 });
   }
 
+  // Matches dsh-app-boot's `initProfile`: pnpm >= 10 reads `nodeLinker` and
+  // `autoInstallPeers` from `pnpm-workspace.yaml` (not `.npmrc`). Without
+  // `autoInstallPeers: false`, `pnpm add` tries to fetch `@deepseek-ai/*`
+  // runtime peers from the public npm registry and fails with 404. Never
+  // overwrite an existing file so user `allowBuilds` approvals survive upgrades.
+  const pnpmWorkspacePath = path.join(profileDir, 'pnpm-workspace.yaml');
+  if (!fs.existsSync(pnpmWorkspacePath)) {
+    fs.writeFileSync(pnpmWorkspacePath, PROFILE_PNPM_WORKSPACE, { mode: 0o600 });
+  }
+
   // Link LobsterAI-managed local bundles into `<profileDir>/node_modules/` so
   // `dsh-app-boot` resolves them immediately without invoking pnpm or network.
   ensureScopedBundleLink(profileDir, DSH_HOST_BUNDLE_NAME, hostBundleDir);
@@ -366,26 +466,26 @@ export function ensureAppOwnedProfile(options: EnsureAppOwnedProfileOptions): En
  */
 export function writeDshCliShim(options: WriteDshCliShimOptions): string {
   const platform = options.platform ?? process.platform;
-  const launchEntryPath = options.runtimeDir
-    ? prepareDshLaunchEntry({
-        runtimeDir: options.runtimeDir,
-        dshHomeDir: options.dshHomeDir,
-        electronPath: options.electronPath,
-        toolchain: options.toolchain,
-        baseEnv: options.baseEnv,
-      }).entryPath
-    : options.runtimeEntryPath;
+  const launchEntryPath =
+    options.launcherPath
+    || (options.runtimeDir
+      ? prepareDshLaunchEntry({
+          runtimeDir: options.runtimeDir,
+          dshHomeDir: options.dshHomeDir,
+          electronPath: options.electronPath,
+          toolchain: options.toolchain,
+          baseEnv: options.baseEnv,
+        }).entryPath
+      : options.runtimeEntryPath);
   if (!launchEntryPath) {
-    throw new Error('writeDshCliShim requires either runtimeEntryPath or runtimeDir');
+    throw new Error('writeDshCliShim requires launcherPath, runtimeEntryPath, or runtimeDir');
   }
 
   fs.mkdirSync(options.binDir, { recursive: true });
   const execFlags = DSH_NODE_EXEC_ARGV.join(' ');
   const pathImpl = platform === 'win32' ? path.win32 : path.posix;
   const agentsHomeDir = pathImpl.join(options.dshHomeDir, 'agents-home');
-  const pnpmStoreDir = pathImpl.join(options.dshHomeDir, 'cache', 'pnpm-store');
-  const pnpmCacheDir = pathImpl.join(options.dshHomeDir, 'cache', 'pnpm-cache');
-  const npmCacheDir = pathImpl.join(options.dshHomeDir, 'cache', 'npm-cache');
+  const cacheEnv = buildIsolatedPnpmCacheEnv(options.dshHomeDir, platform);
 
   if (platform === 'win32') {
     const shimPath = path.join(options.binDir, 'dsh.cmd');
@@ -410,10 +510,10 @@ export function writeDshCliShim(options: WriteDshCliShimOptions): string {
       `set "DSH_HOME=${options.dshHomeDir}"`,
       `set "DSH_AGENTS_HOME=${agentsHomeDir}"`,
       'set "DSH_TELEMETRY_DISABLED=1"',
-      `set "pnpm_config_store_dir=${pnpmStoreDir}"`,
-      `set "pnpm_config_cache_dir=${pnpmCacheDir}"`,
-      `set "npm_config_store_dir=${pnpmStoreDir}"`,
-      `set "npm_config_cache=${npmCacheDir}"`,
+      `set "pnpm_config_store_dir=${cacheEnv.pnpm_config_store_dir}"`,
+      `set "pnpm_config_cache_dir=${cacheEnv.pnpm_config_cache_dir}"`,
+      `set "npm_config_store_dir=${cacheEnv.npm_config_store_dir}"`,
+      `set "npm_config_cache=${cacheEnv.npm_config_cache}"`,
       `set "LOBSTERAI_DSH_PROFILE_DIR=${options.profileDir}"`,
       'set "_DSH_HAS_PROFILE=0"',
       'set "_DSH_IS_HELP=0"',
@@ -494,10 +594,10 @@ export function writeDshCliShim(options: WriteDshCliShimOptions): string {
     `export DSH_HOME=${shellQuotePosix(options.dshHomeDir)}`,
     `export DSH_AGENTS_HOME=${shellQuotePosix(agentsHomeDir)}`,
     'export DSH_TELEMETRY_DISABLED=1',
-    `export pnpm_config_store_dir=${shellQuotePosix(pnpmStoreDir)}`,
-    `export pnpm_config_cache_dir=${shellQuotePosix(pnpmCacheDir)}`,
-    `export npm_config_store_dir=${shellQuotePosix(pnpmStoreDir)}`,
-    `export npm_config_cache=${shellQuotePosix(npmCacheDir)}`,
+    `export pnpm_config_store_dir=${shellQuotePosix(cacheEnv.pnpm_config_store_dir)}`,
+    `export pnpm_config_cache_dir=${shellQuotePosix(cacheEnv.pnpm_config_cache_dir)}`,
+    `export npm_config_store_dir=${shellQuotePosix(cacheEnv.npm_config_store_dir)}`,
+    `export npm_config_cache=${shellQuotePosix(cacheEnv.npm_config_cache)}`,
     `export LOBSTERAI_DSH_PROFILE_DIR=${shellQuotePosix(options.profileDir)}`,
     '_dsh_has_profile=0',
     'for _dsh_arg in "$@"; do',

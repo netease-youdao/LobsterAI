@@ -89,6 +89,7 @@ export const DshOpsAction = {
   BindSessionContext: 'bindSessionContext',
   DeleteSessionFiles: 'deleteSessionFiles',
   SyncHostTools: 'syncHostTools',
+  SyncWebAccessPolicy: 'syncWebAccessPolicy',
   SetPermissionPreset: 'setPermissionPreset',
 } as const;
 export type DshOpsAction = typeof DshOpsAction[keyof typeof DshOpsAction];
@@ -179,6 +180,7 @@ export const DshHostIpc = {
   ListPlugins: 'dshHost:listPlugins',
   InstallPlugin: 'dshHost:installPlugin',
   RemovePlugin: 'dshHost:removePlugin',
+  SetPluginEnabled: 'dshHost:setPluginEnabled',
   OpenProfileDir: 'dshHost:openProfileDir',
   CopyCliShimCommand: 'dshHost:copyCliShimCommand',
   GetPermissionPreset: 'dshHost:getPermissionPreset',

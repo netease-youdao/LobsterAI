@@ -13,10 +13,13 @@ import {
 } from '../../../shared/dshEngine/hostConstants';
 import {
   buildIsolatedDshBaseEnv,
+  buildIsolatedPnpmCacheEnv,
   ensureAppOwnedProfile,
+  ensureDshLauncher,
   mergeAppOwnedProfileManifest,
   prepareDshLaunchEntry,
   resolveBundledPnpmEntry,
+  resolveDshLauncherPath,
   writeDshCliShim,
 } from './dshProfileManager';
 
@@ -221,7 +224,7 @@ describe('prepareDshLaunchEntry', () => {
     const dshHomeDir = path.join(root, 'dsh-home');
     const { runtimeDir, pnpmEntry } = createMockRuntime(root, { withBundledPnpm: true });
 
-    expect(resolveBundledPnpmEntry(runtimeDir)).toBe(pnpmEntry);
+    expect(resolveBundledPnpmEntry(runtimeDir)).toBe(fs.realpathSync(pnpmEntry));
 
     const prepared = prepareDshLaunchEntry({
       runtimeDir,
@@ -245,7 +248,7 @@ describe('prepareDshLaunchEntry', () => {
     };
     expect(output.args).toEqual(['--profile', DSH_PROFILE_NAME, '--dump-config']);
     expect(output.packageManager.command).toBe(process.execPath);
-    expect(output.packageManager.args).toEqual([pnpmEntry]);
+    expect(output.packageManager.args.map((p) => fs.realpathSync(p))).toEqual([fs.realpathSync(pnpmEntry)]);
     expect(output.packageManager.env.ELECTRON_RUN_AS_NODE).toBe('1');
     expect(output.packageManager.env.LOBSTERAI_NPM_BIN_DIR).toBe('/fake/npm/bin');
     expect(output.packageManager.env.PATH).toBe('/fake/shims');
@@ -359,7 +362,7 @@ describe('writeDshCliShim', () => {
       const dumpRes = runShim(['--dump-config']);
       expect(dumpRes.args).toEqual(['--profile', DSH_PROFILE_NAME, '--dump-config']);
       expect(dumpRes.packageManager?.command).toBe(process.execPath);
-      expect(dumpRes.packageManager?.args).toEqual([pnpmEntry]);
+      expect(dumpRes.packageManager?.args.map((p) => fs.realpathSync(p))).toEqual([fs.realpathSync(pnpmEntry)]);
       expect(dumpRes.env).toEqual({
         DSH_HOME: dshHomeDir,
         DSH_AGENTS_HOME: path.join(dshHomeDir, 'agents-home'),
@@ -401,4 +404,95 @@ describe('writeDshCliShim', () => {
       expect(runShim(['headless', 'hello world']).args).toEqual(['headless', 'hello world']);
     },
   );
+
+  test('points CLI shim at generated bundled-pnpm launcher when launcherPath is supplied', () => {
+    const root = createTempDir();
+    const binDir = path.join(root, 'bin');
+    const dshHomeDir = path.join(root, 'dsh-home');
+    const launcherPath = resolveDshLauncherPath(dshHomeDir);
+
+    const shim = writeDshCliShim({
+      binDir,
+      electronPath: '/Applications/LobsterAI.app/Contents/MacOS/LobsterAI',
+      runtimeEntryPath: '/runtime/lib/bin.js',
+      launcherPath,
+      profileDir: path.join(dshHomeDir, 'profiles', 'lobsterai'),
+      dshHomeDir,
+      platform: 'darwin',
+    });
+    const text = fs.readFileSync(shim, 'utf8');
+    expect(text).toContain(launcherPath);
+    expect(text).not.toContain('/runtime/lib/bin.js');
+  });
+});
+
+describe('ensureDshLauncher & buildIsolatedPnpmCacheEnv', () => {
+  test('pins both pnpm_config_* and npm_config_* under <dshHomeDir>/cache', () => {
+    const posixEnv = buildIsolatedPnpmCacheEnv('/tmp/dsh-home', 'darwin');
+    expect(posixEnv).toEqual({
+      pnpm_config_store_dir: '/tmp/dsh-home/cache/pnpm-store',
+      pnpm_config_cache_dir: '/tmp/dsh-home/cache/pnpm-cache',
+      npm_config_store_dir: '/tmp/dsh-home/cache/pnpm-store',
+      npm_config_cache: '/tmp/dsh-home/cache/npm-cache',
+    });
+
+    const winEnv = buildIsolatedPnpmCacheEnv('C:\\Users\\demo\\dsh-home', 'win32');
+    expect(winEnv.pnpm_config_store_dir).toBe('C:\\Users\\demo\\dsh-home\\cache\\pnpm-store');
+    expect(winEnv.pnpm_config_cache_dir).toBe('C:\\Users\\demo\\dsh-home\\cache\\pnpm-cache');
+  });
+
+  test('generates <dshHomeDir>/dsh-launcher/launch.mjs wired with bundled pnpm and isolated caches', () => {
+    const root = createTempDir();
+    const dshHomeDir = path.join(root, 'dsh-home');
+    const runtimeDir = path.join(root, 'runtime');
+    const binPath = path.join(runtimeDir, 'lib', 'bin.js');
+    const pnpmDir = path.join(runtimeDir, 'package-manager', 'pnpm');
+    const pnpmBin = path.join(pnpmDir, 'bin', 'pnpm.mjs');
+
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.writeFileSync(binPath, 'export async function runCli() {}\n', 'utf8');
+    fs.mkdirSync(path.dirname(pnpmBin), { recursive: true });
+    fs.writeFileSync(
+      path.join(pnpmDir, 'package.json'),
+      JSON.stringify({ name: 'pnpm', bin: { pnpm: 'bin/pnpm.mjs' } }),
+      'utf8',
+    );
+    fs.writeFileSync(pnpmBin, '// fake pnpm\n', 'utf8');
+
+    expect(resolveBundledPnpmEntry(runtimeDir)).toBe(fs.realpathSync(pnpmBin));
+
+    const launchEntry = ensureDshLauncher({
+      dshHomeDir,
+      runtimeDir,
+      executablePath: '/Apps/Electron',
+      toolchain: { nodeShimDir: '/shims', npmBinDir: '/npm/bin', gitBinDir: null },
+      baseEnv: { PATH: '' },
+      delimiter: ':',
+      platform: 'darwin',
+    });
+
+    expect(launchEntry).toBe(resolveDshLauncherPath(dshHomeDir));
+    const source = fs.readFileSync(launchEntry, 'utf8');
+    expect(source).toContain('runCli');
+    expect(source).toContain(fs.realpathSync(pnpmBin));
+    expect(source).toContain('"pnpm_config_store_dir"');
+    expect(source).toContain('"pnpm_config_cache_dir"');
+    expect(source).toContain('/shims');
+  });
+
+  test('falls back to runtime lib/bin.js when runtime bundles no pnpm', () => {
+    const root = createTempDir();
+    const dshHomeDir = path.join(root, 'dsh-home');
+    const runtimeDir = path.join(root, 'runtime');
+    const binPath = path.join(runtimeDir, 'lib', 'bin.js');
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.writeFileSync(binPath, 'export async function runCli() {}\n', 'utf8');
+
+    const launchEntry = ensureDshLauncher({
+      dshHomeDir,
+      runtimeDir,
+      executablePath: '/Apps/Electron',
+    });
+    expect(launchEntry).toBe(fs.realpathSync(binPath));
+  });
 });

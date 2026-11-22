@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
+import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
 
 export const name = 'lobster-ops-rpc';
 export const inject = ['connection'];
@@ -35,6 +36,16 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+function sameSkillAllowlist(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 /**
@@ -378,6 +389,9 @@ export function apply(ctx) {
               });
               syncedCount += 1;
             }
+            if (replace || syncedCount > 0) {
+              state.invalidateSkills?.();
+            }
             return jsonResponse({
               ok: true,
               result: {
@@ -394,13 +408,27 @@ export function apply(ctx) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
             if (p.unbind === true) {
-              state.sessionContexts.delete(sessionId);
-              state.delegatedChildAgents.delete(sessionId);
+              const removedSession = state.sessionContexts.delete(sessionId);
+              const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+              if (removedSession || removedDelegated) {
+                state.invalidateSkills?.();
+              }
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
+            const hadPrev = state.sessionContexts.has(sessionId);
             const prev = state.sessionContexts.get(sessionId) ?? {};
-            const { nextPreset, context } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
-            state.sessionContexts.set(sessionId, context);
+            const { nextPreset, context: nextContext } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
+            state.sessionContexts.set(sessionId, nextContext);
+            // Invalidate DSH's SkillRegistry collectCache whenever a session's
+            // agent binding or allowedSkillIds changes so Turn 2+ never serves
+            // a stale skill catalog from Turn 1.
+            if (
+              !hadPrev
+              || prev.agentId !== nextContext.agentId
+              || !sameSkillAllowlist(prev.allowedSkillIds, nextContext.allowedSkillIds)
+            ) {
+              state.invalidateSkills?.();
+            }
             state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);
@@ -464,14 +492,39 @@ export function apply(ctx) {
             return jsonResponse({ ok: true, result });
           }
 
+          case 'syncWebAccessPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const validSearchPolicies = new Set(Object.values(DSH_SEARCH_POLICY));
+            state.webAccessPolicy = {
+              webFetchEnabled: p.webFetchEnabled !== false,
+              blockedHostnames: normalizeHostnamePolicyList(p.blockedHostnames),
+              allowedHostnames: normalizeHostnamePolicyList(p.allowedHostnames),
+            };
+            if (typeof p.searchPolicy === 'string' && validSearchPolicies.has(p.searchPolicy)) {
+              state.searchPolicy = p.searchPolicy;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+                blockedHostnamesCount: state.webAccessPolicy.blockedHostnames.length,
+                allowedHostnamesCount: state.webAccessPolicy.allowedHostnames.length,
+                searchPolicy: state.searchPolicy,
+              },
+            });
+          }
+
           case 'deleteSessionFiles': {
             const p = payload && typeof payload === 'object' ? payload : {};
             const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
             if (!sessionId) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
-            state.sessionContexts.delete(sessionId);
-            state.delegatedChildAgents.delete(sessionId);
+            const removedSession = state.sessionContexts.delete(sessionId);
+            const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+            if (removedSession || removedDelegated) {
+              state.invalidateSkills?.();
+            }
             // Stop live agent if running before deleting files.
             const liveAgent = ctx.get('agents')?.get(sessionId);
             if (liveAgent && typeof liveAgent.cancel === 'function') {

@@ -1,4 +1,4 @@
-import type { SettingsOpenOptions } from '../components/Settings';
+import { normalizeSettingsTab, type SettingsTab } from '../components/settings/settingsTabs';
 import { MainView } from '../types/navigation';
 
 /**
@@ -10,8 +10,6 @@ import { MainView } from '../types/navigation';
 export const AppDeepLinkEvent = {
   Navigate: 'app:deepLinkNavigate',
 } as const;
-
-type SettingsTab = NonNullable<SettingsOpenOptions['initialTab']>;
 
 const SETTINGS_TABS = [
   'general', 'appearance', 'desktopCompanion', 'coworkAgentEngine', 'model', 'im',
@@ -79,7 +77,7 @@ export const parseAppDeepLink = (url: string): AppDeepLinkTarget | null => {
   const [, kind, target] = match;
   if (kind === 'settings') {
     const tab = SETTINGS_TABS.find(item => item === target);
-    return tab ? { kind: 'settings', tab } : null;
+    return tab ? { kind: 'settings', tab: normalizeSettingsTab(tab) } : null;
   }
   if (kind === 'view') {
     const view = MAIN_VIEWS.find(item => item === target);

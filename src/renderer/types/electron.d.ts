@@ -1782,71 +1782,6 @@ interface IElectronAPI {
     }>;
     fromRenderer: (level: string, tag: string, message: string) => void;
   };
-  plugins: {
-    list: () => Promise<{
-      success: boolean;
-      plugins?: Array<{
-        pluginId: string;
-        version?: string;
-        description?: string;
-        source: 'npm' | 'clawhub' | 'git' | 'local' | 'bundled' | 'openclaw';
-        enabled: boolean;
-        canUninstall: boolean;
-        hasConfig: boolean;
-      }>;
-      error?: string;
-    }>;
-    install: (params: {
-      source: 'npm' | 'clawhub' | 'git' | 'local';
-      spec: string;
-      registry?: string;
-      version?: string;
-    }) => Promise<{ ok: boolean; pluginId?: string; version?: string; error?: string }>;
-    uninstall: (pluginId: string) => Promise<{ ok: boolean; error?: string }>;
-    setEnabled: (pluginId: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
-    getConfigSchema: (pluginId: string) => Promise<{
-      success: boolean;
-      schema?: {
-        configSchema: Record<string, unknown>;
-        uiHints: Record<
-          string,
-          {
-            label?: string;
-            help?: string;
-            sensitive?: boolean;
-            advanced?: boolean;
-            placeholder?: string;
-            order?: number;
-          }
-        >;
-      } | null;
-      config?: Record<string, unknown> | null;
-      error?: string;
-    }>;
-    saveConfig: (
-      pluginId: string,
-      config: Record<string, unknown>,
-    ) => Promise<{ ok: boolean; error?: string }>;
-    batchSave: (changes: {
-      toggles?: Array<{ pluginId: string; enabled: boolean }>;
-      configs?: Array<{ pluginId: string; config: Record<string, unknown> }>;
-    }) => Promise<{ ok: boolean; error?: string }>;
-    detect: () => Promise<{ plugins: string[]; error?: string }>;
-    sync: () => Promise<{ synced: string[]; error?: string }>;
-    checkUpdates: (pluginIds?: string[]) => Promise<{
-      success: boolean;
-      updates?: Array<{
-        pluginId: string;
-        currentVersion: string | null;
-        latestVersion: string | null;
-        hasUpdate: boolean;
-        error?: string;
-      }>;
-      error?: string;
-    }>;
-    update: (pluginId: string) => Promise<{ ok: boolean; version?: string; error?: string }>;
-    onInstallLog: (callback: (line: string) => void) => () => void;
-  };
   im: {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (
@@ -2456,21 +2391,28 @@ interface IElectronAPI {
       ok: boolean;
       profileDir?: string;
       cliShimPath?: string | null;
-      plugins: Array<{ name: string; specifier: string; managed: boolean }>;
+      plugins: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
     }>;
     installPlugin: (packageSpec: string) => Promise<{
       ok: boolean;
       stdout?: string;
       stderr?: string;
       error?: string;
-      plugins?: Array<{ name: string; specifier: string; managed: boolean }>;
+      plugins?: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
     }>;
     removePlugin: (packageName: string) => Promise<{
       ok: boolean;
       stdout?: string;
       stderr?: string;
       error?: string;
-      plugins?: Array<{ name: string; specifier: string; managed: boolean }>;
+      plugins?: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
+    }>;
+    setPluginEnabled: (packageName: string, enabled: boolean) => Promise<{
+      ok: boolean;
+      changed?: boolean;
+      enabled?: boolean;
+      error?: string;
+      plugins?: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
     }>;
     openProfileDir: () => Promise<{ ok: boolean; profileDir?: string }>;
     getPermissionPreset: (sessionId?: string) => Promise<{

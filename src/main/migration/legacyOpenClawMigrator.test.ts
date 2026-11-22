@@ -28,9 +28,12 @@ import { LobsterScheduler } from '../scheduledTask/lobsterScheduler';
 import {
   backfillLegacyDreamDiariesFromBackup,
   backfillLegacyScheduledTasksFromBackup,
+  backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
   dismissMigrationV2Report,
+  extractLegacyTavilyConfig,
   getPendingMigrationV2Report,
+  LegacyTavilySource,
   runLegacyOpenClawMigration,
 } from './legacyOpenClawMigrator';
 import {
@@ -1786,5 +1789,414 @@ describe('runLegacyOpenClawMigration', () => {
     expect(freshResult).toEqual({ status: 'skipped', diariesRestored: 0 });
     expect(fs.existsSync(path.join(freshDir, WORKSPACES_DIR_NAME))).toBe(false);
     freshDb.close();
+  });
+
+  test('migrates custom skills from openclaw/state/skills and workspace-*/skills without overwriting existing SKILLs or wiping SQLite skill bindings', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE agents (id TEXT PRIMARY KEY, skill_ids TEXT);
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      'skills_state',
+      JSON.stringify({ docx: false, 'custom-report': true }),
+      1,
+    );
+    db.prepare('INSERT INTO agents VALUES (?, ?)').run('expert-a', JSON.stringify(['custom-report']));
+    db.close();
+
+    // Seed pre-existing skill in <userData>/SKILLs that must NOT be overwritten.
+    const userSkillsDir = path.join(userDataDir, 'SKILLs');
+    fs.mkdirSync(path.join(userSkillsDir, 'already-here'), { recursive: true });
+    fs.writeFileSync(
+      path.join(userSkillsDir, 'already-here', 'SKILL.md'),
+      '---\nname: already-here\ndescription: New version in userData\n---\nKeep me.\n',
+      'utf8',
+    );
+
+    // Seed legacy skills in openclaw/state/skills and workspace-*/skills.
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    const legacyShared = path.join(stateDir, 'skills', 'legacy-shared');
+    const legacyConflict = path.join(stateDir, 'skills', 'already-here');
+    const legacyNotSkill = path.join(stateDir, 'skills', 'not-a-skill');
+    const legacyMainSkill = path.join(stateDir, 'workspace-main', 'skills', 'legacy-main-skill');
+    const legacyExpertSkill = path.join(stateDir, 'workspace-expert-a', 'skills', 'legacy-expert-skill');
+
+    for (const dir of [legacyShared, legacyConflict, legacyNotSkill, legacyMainSkill, legacyExpertSkill]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.mkdirSync(path.join(legacyShared, 'scripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyShared, 'SKILL.md'),
+      '---\nname: 共享旧技能\ndescription: Legacy shared skill\n---\nBody\n',
+      'utf8',
+    );
+    fs.writeFileSync(path.join(legacyShared, 'scripts', 'run.sh'), '#!/bin/sh\necho ok\n', 'utf8');
+    fs.writeFileSync(
+      path.join(legacyConflict, 'SKILL.md'),
+      '---\nname: already-here\ndescription: Stale openclaw copy\n---\nOverwrite attempt.\n',
+      'utf8',
+    );
+    fs.writeFileSync(path.join(legacyNotSkill, 'README.md'), 'No SKILL.md here', 'utf8');
+    fs.writeFileSync(
+      path.join(legacyMainSkill, 'SKILL.md'),
+      '---\nname: legacy-main-skill\ndescription: Main workspace skill\n---\nMain\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(legacyExpertSkill, 'SKILL.md'),
+      '---\nname: legacy-expert-skill\ndescription: Expert workspace skill\n---\nExpert\n',
+      'utf8',
+    );
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.skillsMigrated).toBe(3);
+
+    // OpenClaw dir is cleaned up after migration.
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+
+    // All three legacy skills + nested scripts landed in <userData>/SKILLs/.
+    expect(fs.readFileSync(path.join(userSkillsDir, 'legacy-shared', 'SKILL.md'), 'utf8')).toContain('共享旧技能');
+    expect(fs.readFileSync(path.join(userSkillsDir, 'legacy-shared', 'scripts', 'run.sh'), 'utf8')).toContain('echo ok');
+    expect(fs.existsSync(path.join(userSkillsDir, 'legacy-main-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(userSkillsDir, 'legacy-expert-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(userSkillsDir, 'not-a-skill'))).toBe(false);
+
+    // Existing skill in <userData>/SKILLs/ was NOT overwritten.
+    expect(fs.readFileSync(path.join(userSkillsDir, 'already-here', 'SKILL.md'), 'utf8')).toContain('Keep me.');
+
+    // SQLite skills_state and agents.skill_ids survived intact.
+    const verifyDb = new Database(sqlitePath, { readonly: true });
+    const skillsStateRow = verifyDb.prepare('SELECT value FROM kv WHERE key = ?').get('skills_state') as { value: string };
+    expect(JSON.parse(skillsStateRow.value)).toEqual({ docx: false, 'custom-report': true });
+    const agentRow = verifyDb.prepare('SELECT skill_ids FROM agents WHERE id = ?').get('expert-a') as { skill_ids: string };
+    expect(JSON.parse(agentRow.skill_ids)).toEqual(['custom-report']);
+    verifyDb.close();
+  });
+
+  test('retires im_config.email while preserving SKILLs/imap-smtp-email/accounts.json, .env, and skills_state', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE im_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    const originalSkillsState = JSON.stringify({
+      'imap-smtp-email': { enabled: true },
+      weather: { enabled: false },
+    });
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('skills_state', originalSkillsState, 1);
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run(
+      'email',
+      JSON.stringify({ enabled: true, imapHost: 'imap.example.com' }),
+      1,
+    );
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run(
+      'feishu',
+      JSON.stringify({ enabled: true, appId: 'cli_keep' }),
+      1,
+    );
+    db.close();
+
+    // Seed legacy OpenClaw state so v2 migration runs.
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    fs.mkdirSync(path.join(stateDir, 'workspace-main'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'workspace-main', 'SOUL.md'), 'Legacy persona\n');
+
+    // Seed user-configured Email Skill files under <userData>/SKILLs/imap-smtp-email/.
+    const emailSkillDir = path.join(userDataDir, 'SKILLs', 'imap-smtp-email');
+    fs.mkdirSync(emailSkillDir, { recursive: true });
+    const accountsJsonContent = JSON.stringify({
+      version: 1,
+      defaultAccountId: 'migrated-work',
+      accounts: [
+        {
+          id: 'migrated-work',
+          name: 'Work Mailbox',
+          enabled: true,
+          email: 'alice@example.com',
+          password: 'app-password-xyz',
+          imapHost: 'imap.example.com',
+          imapPort: 993,
+          smtpHost: 'smtp.example.com',
+          smtpPort: 465,
+          smtpSecure: true,
+        },
+      ],
+    }, null, 2) + '\n';
+    const dotEnvContent = 'IMAP_USER=legacy@example.com\nIMAP_PASS=legacy-pw\n';
+    fs.writeFileSync(path.join(emailSkillDir, 'accounts.json'), accountsJsonContent, 'utf8');
+    fs.writeFileSync(path.join(emailSkillDir, '.env'), dotEnvContent, 'utf8');
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.archivedModules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: 'retired_im', count: 1 }),
+      ]),
+    );
+
+    // Email Skill files must remain completely untouched on disk.
+    expect(fs.readFileSync(path.join(emailSkillDir, 'accounts.json'), 'utf8')).toBe(accountsJsonContent);
+    expect(fs.readFileSync(path.join(emailSkillDir, '.env'), 'utf8')).toBe(dotEnvContent);
+
+    // kv['skills_state']['imap-smtp-email'] must remain completely intact.
+    const verifyDb = new Database(sqlitePath);
+    const kvRow = verifyDb.prepare('SELECT value FROM kv WHERE key = ?').get('skills_state') as
+      | { value?: string }
+      | undefined;
+    verifyDb.close();
+    expect(kvRow?.value).toBe(originalSkillsState);
+    expect(JSON.parse(kvRow!.value!)['imap-smtp-email']).toEqual({ enabled: true });
+  });
+
+  test('migrates legacy enabled & disabled Tavily plugin config from user_plugins and openclaw.json without duplicating existing Tavily MCP', () => {
+    // 1. Pure extractor handles user_plugins, openclaw.user.json, and openclaw.json tools.web.search.
+    expect(extractLegacyTavilyConfig({
+      userPlugins: [
+        {
+          plugin_id: 'tavily-search',
+          spec: '@openclaw/tavily-search',
+          enabled: 0,
+          config: JSON.stringify({ apiKey: 'tvly-disabled-key' }),
+        },
+      ],
+    })).toEqual({
+      apiKey: 'tvly-disabled-key',
+      enabled: false,
+      source: LegacyTavilySource.UserPlugins,
+    });
+
+    expect(extractLegacyTavilyConfig({
+      openclawConfig: {
+        env: { TAVILY_API_KEY: 'tvly-env-resolved' },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: 'tavily',
+              apiKey: '${TAVILY_API_KEY}',
+            },
+          },
+        },
+      },
+    })).toEqual({
+      apiKey: 'tvly-env-resolved',
+      enabled: true,
+      source: LegacyTavilySource.OpenClawJson,
+    });
+
+    // 2. Full v2 migration from user_plugins (enabled = 1).
+    const userData1 = createTempDir();
+    const sqlite1 = path.join(userData1, 'lobsterai.sqlite');
+    const db1 = new Database(sqlite1);
+    db1.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE user_plugins (plugin_id TEXT PRIMARY KEY, source TEXT, spec TEXT, enabled INTEGER, config TEXT);
+      CREATE TABLE mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        transport_type TEXT NOT NULL DEFAULT 'stdio',
+        config_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db1.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db1.prepare('INSERT INTO user_plugins VALUES (?, ?, ?, ?, ?)').run(
+      'tavily',
+      'npm',
+      '@openclaw/tavily',
+      1,
+      JSON.stringify({ apiKey: 'tvly-user-plugin-123' }),
+    );
+    db1.close();
+    fs.mkdirSync(path.join(userData1, 'openclaw', 'state'), { recursive: true });
+
+    const res1 = runLegacyOpenClawMigration({ userDataDir: userData1, sqlitePath: sqlite1 });
+    expect(res1.status).toBe(MigrationV2Status.Completed);
+    expect(res1.report?.summary.tavilyMcpMigrated).toBe(1);
+
+    const verify1 = new Database(sqlite1, { readonly: true });
+    const row1 = verify1.prepare('SELECT name, enabled, transport_type, config_json FROM mcp_servers').get() as {
+      name: string;
+      enabled: number;
+      transport_type: string;
+      config_json: string;
+    };
+    verify1.close();
+    expect(row1.name).toBe('Tavily');
+    expect(row1.enabled).toBe(1);
+    expect(row1.transport_type).toBe('stdio');
+    expect(JSON.parse(row1.config_json)).toEqual({
+      command: 'npx',
+      args: ['-y', 'tavily-mcp@latest'],
+      env: { TAVILY_API_KEY: 'tvly-user-plugin-123' },
+      registryId: 'tavily',
+    });
+
+    // 3. Full v2 migration from openclaw.json with disabled Tavily preserves enabled = 0.
+    const userData2 = createTempDir();
+    const sqlite2 = path.join(userData2, 'lobsterai.sqlite');
+    const db2 = new Database(sqlite2);
+    db2.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db2.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db2.close();
+    const state2 = path.join(userData2, 'openclaw', 'state');
+    fs.mkdirSync(state2, { recursive: true });
+    fs.writeFileSync(
+      path.join(state2, 'openclaw.json'),
+      JSON.stringify({
+        plugins: {
+          entries: {
+            'tavily-search': {
+              enabled: false,
+              config: { apiKey: 'tvly-disabled-from-json' },
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const res2 = runLegacyOpenClawMigration({ userDataDir: userData2, sqlitePath: sqlite2 });
+    expect(res2.status).toBe(MigrationV2Status.Completed);
+    const verify2 = new Database(sqlite2, { readonly: true });
+    const row2 = verify2.prepare('SELECT name, enabled, config_json FROM mcp_servers').get() as {
+      name: string;
+      enabled: number;
+      config_json: string;
+    };
+    verify2.close();
+    expect(row2.name).toBe('Tavily');
+    expect(row2.enabled).toBe(0);
+    expect(JSON.parse(row2.config_json).env).toEqual({ TAVILY_API_KEY: 'tvly-disabled-from-json' });
+
+    // 4. Existing Tavily MCP server in mcp_servers is preserved untouched (no duplicate).
+    const userData3 = createTempDir();
+    const sqlite3 = path.join(userData3, 'lobsterai.sqlite');
+    const db3 = new Database(sqlite3);
+    db3.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE user_plugins (plugin_id TEXT PRIMARY KEY, source TEXT, spec TEXT, enabled INTEGER, config TEXT);
+      CREATE TABLE mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        transport_type TEXT NOT NULL DEFAULT 'stdio',
+        config_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db3.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db3.prepare('INSERT INTO user_plugins VALUES (?, ?, ?, ?, ?)').run(
+      'tavily',
+      'npm',
+      'tavily-plugin',
+      1,
+      JSON.stringify({ apiKey: 'tvly-plugin-old' }),
+    );
+    db3.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      'existing-tavily-id',
+      'My Custom Tavily',
+      'Custom',
+      0,
+      'stdio',
+      JSON.stringify({ command: 'npx', args: ['-y', 'tavily-mcp@latest'], env: { TAVILY_API_KEY: 'tvly-keep-me' } }),
+      100,
+      100,
+    );
+    db3.close();
+    fs.mkdirSync(path.join(userData3, 'openclaw', 'state'), { recursive: true });
+
+    const res3 = runLegacyOpenClawMigration({ userDataDir: userData3, sqlitePath: sqlite3 });
+    expect(res3.status).toBe(MigrationV2Status.Completed);
+    expect(res3.report?.summary.tavilyMcpMigrated).toBe(0);
+
+    const verify3 = new Database(sqlite3, { readonly: true });
+    const rows3 = verify3.prepare('SELECT id, name, enabled, config_json FROM mcp_servers').all() as Array<{
+      id: string;
+      name: string;
+      enabled: number;
+      config_json: string;
+    }>;
+    verify3.close();
+    expect(rows3).toHaveLength(1);
+    expect(rows3[0]).toMatchObject({ id: 'existing-tavily-id', name: 'My Custom Tavily', enabled: 0 });
+    expect(JSON.parse(rows3[0].config_json).env).toEqual({ TAVILY_API_KEY: 'tvly-keep-me' });
+  });
+
+  test('backfillLegacyTavilyFromBackup restores Tavily MCP from archived incompatible-modules backup idempotently', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const backupDir = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME, '2026-11-20T05-00-00Z');
+    fs.mkdirSync(backupDir, { recursive: true });
+
+    const archivePath = path.join(backupDir, 'incompatible-modules-backup.tar.gz');
+    writeTarGzArchive(archivePath, [
+      {
+        archivePath: 'openclaw-config/openclaw.user.json',
+        content: Buffer.from(
+          JSON.stringify({
+            tools: {
+              web: {
+                search: {
+                  provider: 'tavily',
+                  enabled: true,
+                  apiKey: 'tvly-backfill-secret',
+                },
+              },
+            },
+          }),
+          'utf8',
+        ),
+      },
+    ]);
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T05:00:00.000Z', backupDir }),
+      1,
+    );
+
+    const first = await backfillLegacyTavilyFromBackup({ userDataDir, db });
+    expect(first).toEqual({ status: 'completed', migrated: true });
+
+    const row = db.prepare('SELECT name, enabled, config_json FROM mcp_servers').get() as {
+      name: string;
+      enabled: number;
+      config_json: string;
+    };
+    expect(row.name).toBe('Tavily');
+    expect(row.enabled).toBe(1);
+    expect(JSON.parse(row.config_json).env).toEqual({ TAVILY_API_KEY: 'tvly-backfill-secret' });
+
+    const second = await backfillLegacyTavilyFromBackup({ userDataDir, db });
+    expect(second).toEqual({ status: 'skipped', migrated: false });
+    db.close();
   });
 });

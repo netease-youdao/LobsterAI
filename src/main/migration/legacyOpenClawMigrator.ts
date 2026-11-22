@@ -50,6 +50,7 @@ import {
   MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
   MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
+  MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
@@ -57,6 +58,7 @@ import {
   MigrationV2Status,
 } from '../../shared/migration/constants';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
+import { cpRecursiveSync } from '../fsCompat';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
 import { findLegacyDreamDiaryFile } from '../memory/legacyDreamDiaryReader';
 import {
@@ -74,11 +76,25 @@ import { migrateLegacyConversationImages } from './legacyConversationImages';
 import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
+  type ExtractedLegacyTavilyConfig,
+  extractLegacyTavilyConfig,
+  LegacyTavilySource,
+  type LegacyUserPluginRow,
+  migrateLegacyTavilyPluginToMcp,
+} from './legacyTavilyMigration';
+import {
   collectDirectoryTarEntries,
   extractMatchingEntriesFromTarGz,
   type TarEntryInput,
   writeTarGzArchive,
 } from './tarGzUtil';
+
+export {
+  type ExtractedLegacyTavilyConfig,
+  extractLegacyTavilyConfig,
+  LegacyTavilySource,
+  migrateLegacyTavilyPluginToMcp,
+};
 
 export interface RunLegacyOpenClawMigrationOptions {
   /** Electron userData root directory. */
@@ -1214,6 +1230,145 @@ function isDreamDiaryArchiveEntry(archivePath: string): boolean {
   return parseDreamDiaryArchiveEntry(archivePath) !== null;
 }
 
+function findIncompatibleModulesArchivePath(userDataDir: string, db: Database.Database): string | null {
+  const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+  if (rawReport) {
+    try {
+      const report = JSON.parse(rawReport) as MigrationV2Report;
+      if (report?.incompatibleArchivePath && fs.existsSync(report.incompatibleArchivePath)) {
+        return report.incompatibleArchivePath;
+      }
+    } catch {
+      // fall through to directory scan
+    }
+  }
+
+  const backupsRoot = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME);
+  if (!fs.existsSync(backupsRoot)) return null;
+  try {
+    const dirs = fs
+      .readdirSync(backupsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+      .reverse();
+    for (const dirName of dirs) {
+      const candidate = path.join(backupsRoot, dirName, 'incompatible-modules-backup.tar.gz');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isTavilyMigrationArchiveEntry(entryPath: string): boolean {
+  const normalized = entryPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return (
+    normalized === 'sqlite/user_plugins.json'
+    || normalized === 'openclaw-config/openclaw.user.json'
+    || normalized === 'openclaw-config/openclaw.json'
+  );
+}
+
+export interface LegacyTavilyBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  migrated: boolean;
+  error?: string;
+}
+
+/**
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before legacy plugin-based Tavily config extraction landed.
+ */
+export async function backfillLegacyTavilyFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyTavilyBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_TAVILY_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', migrated: false };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', migrated: false };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', migrated: false };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds.
+  }
+
+  const archivePath = findIncompatibleModulesArchivePath(userDataDir, db);
+  const tmpDir = archivePath ? fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-tavily-backfill-')) : null;
+
+  try {
+    let archivedUserPlugins: LegacyUserPluginRow[] | undefined;
+    let archivedOpenclawUserConfig: Record<string, unknown> | null = null;
+    let archivedOpenclawConfig: Record<string, unknown> | null = null;
+
+    if (archivePath && tmpDir) {
+      await extractMatchingEntriesFromTarGz(archivePath, tmpDir, isTavilyMigrationArchiveEntry);
+      const pluginsJson = safeReadJson(path.join(tmpDir, 'sqlite', 'user_plugins.json'));
+      if (Array.isArray(pluginsJson)) {
+        archivedUserPlugins = pluginsJson as LegacyUserPluginRow[];
+      }
+      const userCfg = safeReadJson(path.join(tmpDir, 'openclaw-config', 'openclaw.user.json'));
+      if (userCfg && typeof userCfg === 'object' && !Array.isArray(userCfg)) {
+        archivedOpenclawUserConfig = userCfg as Record<string, unknown>;
+      }
+      const mainCfg = safeReadJson(path.join(tmpDir, 'openclaw-config', 'openclaw.json'));
+      if (mainCfg && typeof mainCfg === 'object' && !Array.isArray(mainCfg)) {
+        archivedOpenclawConfig = mainCfg as Record<string, unknown>;
+      }
+    }
+
+    const res = migrateLegacyTavilyPluginToMcp({
+      db,
+      userPluginsOverride: archivedUserPlugins,
+      openclawUserConfigOverride: archivedOpenclawUserConfig,
+      openclawConfigOverride: archivedOpenclawConfig,
+      nowMs: now().getTime(),
+    });
+
+    setKv(
+      db,
+      MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+      JSON.stringify({
+        completedAt: now().toISOString(),
+        migrated: res.migrated,
+        ...(res.source ? { source: res.source } : {}),
+        ...(res.skippedReason ? { skippedReason: res.skippedReason } : {}),
+      }),
+    );
+
+    return { status: 'completed', migrated: res.migrated };
+  } catch (error) {
+    return {
+      status: 'failed',
+      migrated: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+}
+
 /**
  * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
  * migration before `DREAMS.md` preservation landed.
@@ -1443,6 +1598,85 @@ function migrateLegacyWorkspaces(
     workspacesMigrated: migratedAgentIds.size,
     dreamDiariesMigrated,
   };
+}
+
+/**
+ * Copy legacy custom skill directories out of `<openclawStateDir>/skills/`
+ * and `<openclawStateDir>/workspace-<agentId>/skills/` into `<userData>/SKILLs/`
+ * before deleting `openclaw/`. Never overwrites existing skills in `SKILLs/`.
+ */
+function migrateLegacyOpenClawSkills(
+  openclawStateDir: string,
+  userSkillsDir: string,
+): number {
+  if (!fs.existsSync(openclawStateDir)) return 0;
+
+  const candidateSkillRoots: string[] = [];
+  const sharedSkillsDir = path.join(openclawStateDir, 'skills');
+  if (fs.existsSync(sharedSkillsDir)) {
+    candidateSkillRoots.push(sharedSkillsDir);
+  }
+
+  let stateEntries: fs.Dirent[];
+  try {
+    stateEntries = fs.readdirSync(openclawStateDir, { withFileTypes: true });
+  } catch {
+    stateEntries = [];
+  }
+
+  const workspaceNames = stateEntries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('workspace-'))
+    .map((entry) => entry.name)
+    .sort((a, b) => {
+      if (a === 'workspace-main') return -1;
+      if (b === 'workspace-main') return 1;
+      return a.localeCompare(b);
+    });
+
+  for (const workspaceName of workspaceNames) {
+    const wsSkillsDir = path.join(openclawStateDir, workspaceName, 'skills');
+    if (fs.existsSync(wsSkillsDir)) {
+      candidateSkillRoots.push(wsSkillsDir);
+    }
+  }
+
+  let migratedCount = 0;
+  for (const sourceRoot of candidateSkillRoots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(sourceRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const skillId = entry.name.trim();
+      if (!skillId || skillId.startsWith('.') || skillId.includes('/') || skillId.includes('\\')) {
+        continue;
+      }
+      const srcSkillDir = path.join(sourceRoot, entry.name);
+      try {
+        if (!fs.statSync(srcSkillDir).isDirectory()) continue;
+        const skillManifestPath = path.join(srcSkillDir, 'SKILL.md');
+        if (!fs.existsSync(skillManifestPath) || !fs.statSync(skillManifestPath).isFile()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      const targetSkillDir = path.join(userSkillsDir, skillId);
+      if (fs.existsSync(targetSkillDir)) {
+        continue;
+      }
+
+      fs.mkdirSync(userSkillsDir, { recursive: true });
+      cpRecursiveSync(srcSkillDir, targetSkillDir, { dereference: true, force: false });
+      migratedCount += 1;
+    }
+  }
+
+  return migratedCount;
 }
 
 /** Legacy workspaces can have just one persona file. SQLite supplies only missing files. */
@@ -1770,6 +2004,7 @@ export function runLegacyOpenClawMigration(
         MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
         JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }),
       );
+      setKv(db, MIGRATION_V2_TAVILY_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1811,6 +2046,10 @@ export function runLegacyOpenClawMigration(
         db,
         workspacesDir,
       });
+      const skillsMigrated = migrateLegacyOpenClawSkills(
+        openclawStateDir,
+        path.join(userDataDir, 'SKILLs'),
+      );
       backfillAgentPersonaFiles(db, workspacesDir);
       migrateLegacyPermissionPresets(db);
 
@@ -1872,6 +2111,16 @@ export function runLegacyOpenClawMigration(
           mcpLaunchCachesCleared = res.changes;
         }
       }
+
+      // Migrate legacy plugin/search-based Tavily config into SQLite `mcp_servers`
+      // (`npx -y tavily-mcp@latest`, preserving API key & enabled state) if no
+      // Tavily MCP server already exists.
+      const tavilyMigration = migrateLegacyTavilyPluginToMcp({
+        db,
+        openclawStateDir,
+        nowMs: now().getTime(),
+      });
+      const tavilyMcpMigrated = tavilyMigration.migrated ? 1 : 0;
 
       // Inspect Remote MCP OAuth servers needing reauth after migration.
       if (tableExists(db, 'mcp_servers')) {
@@ -2052,12 +2301,14 @@ export function runLegacyOpenClawMigration(
         summary: {
           workspacesMigrated,
           userMemoriesMigrated,
+          skillsMigrated,
           scheduledTasksMigrated,
           scheduledTaskRunsMigrated,
           imAllowListsMigrated,
           sessionsPreSeeded,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
+          tavilyMcpMigrated,
           disposableBytesFreed,
         },
         archivedModules,
@@ -2092,6 +2343,16 @@ export function runLegacyOpenClawMigration(
           JSON.stringify({
             completedAt: report.migratedAt,
             diariesRestored: dreamDiariesMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            migrated: tavilyMigration.migrated,
+            ...(tavilyMigration.source ? { source: tavilyMigration.source } : {}),
+            ...(tavilyMigration.skippedReason ? { skippedReason: tavilyMigration.skippedReason } : {}),
           }),
         );
       });

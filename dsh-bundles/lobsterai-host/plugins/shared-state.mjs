@@ -52,6 +52,12 @@ export function getHostState(ctx) {
         disabledIds: new Set(),
         extraDirs: [],
       },
+      /** @type {{ webFetchEnabled: boolean, blockedHostnames: string[], allowedHostnames: string[] }} */
+      webAccessPolicy: {
+        webFetchEnabled: true,
+        blockedHostnames: [],
+        allowedHostnames: [],
+      },
       /** @type {Record<string, boolean>} */
       pluginsReady: {
         modelBridge: false,

@@ -124,8 +124,12 @@
               sampleOverCapGlobResults: false
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
-          - id: skill-filesystem
-            name: '@deepseek-ai/dsh-skill-filesystem'
+          # Omit `@deepseek-ai/dsh-skill-filesystem` in `preset-lobsterai`:
+          # `@deepseek-ai/dsh-web-app` already disables the host-plane row, and
+          # `lobster-persona-scope` owns skill discovery (LobsterAI SKILLs +
+          # project `.dsh/skills` / `.agents/skills`) under LobsterAI's
+          # `skillsPolicy` and per-agent `allowedSkillIds` allowlists so
+          # disabled or restricted skills can never be shadowed back in.
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
             config:
