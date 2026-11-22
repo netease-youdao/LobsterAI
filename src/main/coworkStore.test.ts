@@ -36,6 +36,7 @@ import {
 } from '../shared/cowork/constants';
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
+import { DshPermissionPreset } from '../shared/dshEngine/hostConstants';
 import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { CoworkStore } from './coworkStore';
@@ -2179,4 +2180,30 @@ test('agent CRUD persists subagentCollaborationMode and defaults new agents to a
   });
   expect(updated?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Disabled);
   expect(updated?.subagentAllowAgentIds).toEqual(['translator']);
+});
+
+test('persists per-session permissionPreset independently, copies on fork, and survives reload', () => {
+  const sessionA = store.createSession('Session A', '/tmp/a', '', 'local', [], 'main', '', {
+    permissionPreset: DshPermissionPreset.FullAccess,
+  });
+  const sessionB = store.createSession('Session B', '/tmp/b', '', 'local', [], 'main');
+
+  expect(sessionA.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+  expect(sessionB.permissionPreset).toBeNull();
+
+  store.updateSession(sessionB.id, { permissionPreset: DshPermissionPreset.ReadOnly });
+
+  // Reload store on same DB and confirm both sessions keep isolated persisted presets.
+  const reloaded = new CoworkStore(db);
+  expect(reloaded.getSession(sessionA.id)?.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+  expect(reloaded.getSession(sessionB.id)?.permissionPreset).toBe(DshPermissionPreset.ReadOnly);
+
+  // Forking a session preserves its explicit permission preset.
+  const forked = reloaded.forkSession({ sourceSessionId: sessionA.id, title: 'Forked A' });
+  expect(forked.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+
+  // Clearing back to null falls back to default preset inheritance.
+  reloaded.updateSession(sessionA.id, { permissionPreset: null });
+  expect(reloaded.getSession(sessionA.id)?.permissionPreset).toBeNull();
+  expect(reloaded.getSession(sessionB.id)?.permissionPreset).toBe(DshPermissionPreset.ReadOnly);
 });

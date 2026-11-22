@@ -8,6 +8,49 @@ import {
 
 export const DSH_PERMISSION_PRESET_CHANGED_EVENT = 'dsh:permissionPresetChanged';
 
+export interface DshPermissionPresetChangedDetail {
+  preset: DshPermissionPreset;
+  defaultPreset?: DshPermissionPreset;
+  sessionId?: string;
+}
+
+export interface PermissionPresetEventReaction {
+  apply: boolean;
+  nextPreset?: DshPermissionPreset;
+  refetch?: boolean;
+}
+
+/**
+ * Determine how a `PermissionModeSelector` bound to `currentSessionId` should
+ * react to a `DSH_PERMISSION_PRESET_CHANGED_EVENT`:
+ * - Session-scoped events (`event.sessionId`) only apply to the matching session.
+ * - Global default events (`!event.sessionId`) apply directly to the home/new-session
+ *   selector (`!currentSessionId`) and trigger a re-fetch for active session selectors
+ *   so unpinned sessions adopt the new default while pinned sessions stay isolated.
+ */
+export function shouldApplyPermissionPresetEvent(
+  currentSessionId: string | null | undefined,
+  detail: DshPermissionPresetChangedDetail | null | undefined,
+): PermissionPresetEventReaction {
+  if (!detail) return { apply: false };
+  const currentSid = typeof currentSessionId === 'string' && currentSessionId.trim()
+    ? currentSessionId.trim()
+    : undefined;
+  const eventSid = typeof detail.sessionId === 'string' && detail.sessionId.trim()
+    ? detail.sessionId.trim()
+    : undefined;
+  if (eventSid) {
+    if (eventSid === currentSid) {
+      return { apply: true, nextPreset: detail.preset };
+    }
+    return { apply: false };
+  }
+  if (!currentSid) {
+    return { apply: true, nextPreset: detail.defaultPreset ?? detail.preset };
+  }
+  return { apply: false, refetch: true };
+}
+
 export interface DshHostStatusSnapshot {
   phase: string;
   origin: string | null;
@@ -103,15 +146,19 @@ export const dshHostService = {
     preset: DshPermissionPreset,
     sessionId?: string,
   ): Promise<{ ok: boolean; preset?: DshPermissionPreset; defaultPreset?: DshPermissionPreset; error?: string }> {
-    const res = await window.electron.dshHost.setPermissionPreset(preset, sessionId);
+    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
+      ? sessionId.trim()
+      : undefined;
+    const res = await window.electron.dshHost.setPermissionPreset(preset, normalizedSessionId);
     if (res?.ok && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent(DSH_PERMISSION_PRESET_CHANGED_EVENT, {
-        detail: {
-          preset: res.preset ?? preset,
-          defaultPreset: res.defaultPreset ?? preset,
-          sessionId,
-        },
-      }));
+      const detail: DshPermissionPresetChangedDetail = {
+        preset: res.preset ?? preset,
+        ...(res.defaultPreset
+          ? { defaultPreset: res.defaultPreset }
+          : (!normalizedSessionId ? { defaultPreset: preset } : {})),
+        ...(normalizedSessionId ? { sessionId: normalizedSessionId } : {}),
+      };
+      window.dispatchEvent(new CustomEvent(DSH_PERMISSION_PRESET_CHANGED_EVENT, { detail }));
     }
     return res;
   },

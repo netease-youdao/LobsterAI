@@ -6,6 +6,7 @@ import {
 type OptimisticGoalAction =
   | 'start'
   | 'set'
+  | 'edit'
   | 'create'
   | 'pause'
   | 'resume'
@@ -16,27 +17,42 @@ type OptimisticGoalAction =
   | 'clear'
   | 'status';
 
-const GOAL_COMMAND_RE = /^\/goal(?:\s+([a-z]+))?(?:\s+([\s\S]*))?$/i;
+const KNOWN_GOAL_ACTIONS = new Set<string>([
+  'start',
+  'set',
+  'edit',
+  'create',
+  'pause',
+  'resume',
+  'complete',
+  'done',
+  'block',
+  'blocked',
+  'clear',
+  'status',
+]);
 
-const normalizeGoalAction = (action: string | undefined, text: string): OptimisticGoalAction | null => {
-  const normalized = action?.toLowerCase();
-  if (!normalized) return text.trim() ? 'start' : null;
-  if (
-    normalized === 'start'
-    || normalized === 'set'
-    || normalized === 'create'
-    || normalized === 'pause'
-    || normalized === 'resume'
-    || normalized === 'complete'
-    || normalized === 'done'
-    || normalized === 'block'
-    || normalized === 'blocked'
-    || normalized === 'clear'
-    || normalized === 'status'
-  ) {
-    return normalized;
+const GOAL_PREFIX_RE = /^\/goal(?=$|\s)([\s\S]*)$/i;
+
+const parseOptimisticGoalCommand = (
+  command: string,
+): { action: OptimisticGoalAction; text: string } | null => {
+  const match = GOAL_PREFIX_RE.exec(command.trim());
+  if (!match) return null;
+  const rest = (match[1] ?? '').trim();
+  if (!rest) return null;
+  const tokenMatch = /^([a-z]+)(?:\s+([\s\S]*))?$/i.exec(rest);
+  const firstToken = tokenMatch?.[1]?.toLowerCase();
+  if (firstToken && KNOWN_GOAL_ACTIONS.has(firstToken)) {
+    return {
+      action: firstToken as OptimisticGoalAction,
+      text: tokenMatch?.[2] ?? '',
+    };
   }
-  return text.trim() ? 'start' : null;
+  return {
+    action: 'start',
+    text: rest,
+  };
 };
 
 const readGoalObjective = (text: string): string => {
@@ -49,12 +65,10 @@ export function applyOptimisticGoalCommand(
   sessionId: string,
   now = Date.now(),
 ): CoworkGoal | null | undefined {
-  const match = GOAL_COMMAND_RE.exec(command.trim());
-  if (!match) return undefined;
+  const parsed = parseOptimisticGoalCommand(command);
+  if (!parsed) return undefined;
 
-  const text = match[2] ?? '';
-  const action = normalizeGoalAction(match[1], text);
-  if (!action) return undefined;
+  const { action, text } = parsed;
 
   if (action === 'status') {
     return undefined;
@@ -85,6 +99,13 @@ export function applyOptimisticGoalCommand(
 
   const objective = readGoalObjective(text);
   if (!objective) return undefined;
+  if (action === 'edit' && currentGoal && currentGoal.status !== CoworkGoalStatus.Complete) {
+    return {
+      ...currentGoal,
+      objective,
+      updatedAt: now,
+    };
+  }
   return {
     id: currentGoal?.id ?? `optimistic-goal-${sessionId}-${now}`,
     objective,

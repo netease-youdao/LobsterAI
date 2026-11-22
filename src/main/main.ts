@@ -9731,10 +9731,8 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        if (!options.editRequest && (getCoworkStore().messageEdits.pending(options.sessionId)
-          || getCoworkEngineRouter().hasPendingMessageEdit(options.sessionId))) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
+        // In-place message editing and recovery are retired in DSH v2 (replaced by Fork),
+        // so leftover `cowork_message_edits` rows must never block follow-up messages.
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -9888,10 +9886,6 @@ if (!gotTheLock) {
           return { success: true };
         }
         const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
-        // Model/runtime preparation awaits above can overlap a second window starting an edit.
-        if (runtime.hasPendingMessageEdit(options.sessionId)) {
-          return { success: false, error: t('coworkEditRecoveryNeeded') };
-        }
         runtime
           .continueSession(options.sessionId, options.prompt, {
             analytics: options.analytics,
@@ -10259,7 +10253,8 @@ if (!gotTheLock) {
         `Action ${action}.`,
       );
       const goal = await runtime.runGoalCommand(sessionId, command);
-      return { success: true, goal };
+      const isRunning = runtime.isSessionActive(sessionId);
+      return { success: true, goal, isRunning };
     } catch (error) {
       console.error('[CoworkGoal] goal command IPC failed:', error);
       return {
@@ -10607,6 +10602,7 @@ if (!gotTheLock) {
           }) : null;
         if (forkedDsh?.storedSessionId) {
           coworkStoreInstance.updateSession(session.id, { claudeSessionId: forkedDsh.storedSessionId }, { touchUpdatedAt: false });
+          session.claudeSessionId = forkedDsh.storedSessionId;
         }
         console.log(`[CoworkFork] created local conversation fork ${session.id} successfully`);
         return { success: true, session };
@@ -11138,7 +11134,7 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
-        runtime.respondToPermission(options.requestId, options.result);
+        await runtime.respondToPermission(options.requestId, options.result);
         // Close the desktop notification for this request regardless of which
         // subsystem handled it (runtime approvals emit permissionResolved on
         // their own; AskUserQuestion bridge requests do not).

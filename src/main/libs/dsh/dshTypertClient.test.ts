@@ -233,4 +233,165 @@ describe('DshTypertClient', () => {
 
     await client.close();
   });
+
+  test('executeCommand posts exact commands/execute contract and handles goal, compact, and unresolved results', async () => {
+    const fakeWs = new FakeWebSocket();
+    const commandRequests: Array<{ url: string; payload: Record<string, unknown> }> = [];
+
+    const requester: DshHttpRequester = async (url, options) => {
+      if (url.includes('/connect?')) {
+        return {
+          status: 302,
+          headers: { 'set-cookie': ['dsh-auth-cmd=ok; Path=/'] },
+          body: '',
+        };
+      }
+      if (url.endsWith('/api/commands/execute')) {
+        const parsed = JSON.parse(options.body ?? '{}') as {
+          rpcId: string;
+          method: string;
+          payload: { args: Record<string, unknown> };
+        };
+        commandRequests.push({ url, payload: parsed });
+        const line = String(parsed.payload.args.line ?? '');
+        if (line === '/unknown') {
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              type: 'server-response',
+              rpcId: parsed.rpcId,
+              result: { ok: true },
+            }),
+          };
+        }
+        if (line === '/compact') {
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              type: 'server-response',
+              rpcId: parsed.rpcId,
+              result: {
+                ok: true,
+                value: {
+                  commandId: 'cmd-compact',
+                  result: {
+                    kind: 'success',
+                    text: 'Compacted 4 history items (~1200 tokens).',
+                    sourceEventSeq: 12,
+                  },
+                },
+              },
+            }),
+          };
+        }
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            type: 'server-response',
+            rpcId: parsed.rpcId,
+            result: {
+              ok: true,
+              value: {
+                commandId: 'cmd-1',
+                result: { kind: 'success', text: 'Goal created' },
+              },
+            },
+          }),
+        };
+      }
+      return { status: 404, headers: {}, body: 'not found' };
+    };
+
+    const client = new DshTypertClient({
+      requester,
+      webSocketFactory: () => {
+        queueMicrotask(() => {
+          fakeWs.triggerOpen();
+          queueMicrotask(() => {
+            const openEvents = fakeWs.sent.find((m) => m.endpoint === '$events');
+            fakeWs.triggerMessage({
+              type: 'item',
+              streamId: openEvents!.streamId,
+              value: { type: 'ready', clientId: 'c-cmd', host: { home: '/tmp' } },
+            });
+          });
+        });
+        return fakeWs;
+      },
+    });
+
+    await client.connect('http://127.0.0.1:41234/?token=tok');
+
+    const res1 = await client.executeCommand({
+      agentId: 'session-42',
+      line: '/goal Build release checklist',
+    });
+    expect(res1).toEqual({
+      commandId: 'cmd-1',
+      result: { kind: 'success', text: 'Goal created' },
+    });
+    expect(commandRequests[0].payload).toMatchObject({
+      type: 'client-request',
+      method: 'commands/execute',
+      payload: {
+        args: {
+          agentId: 'session-42',
+          line: '/goal Build release checklist',
+          submittedAttachments: [],
+        },
+      },
+    });
+    expect(Object.keys((commandRequests[0].payload.payload as { args: Record<string, unknown> }).args).sort()).toEqual([
+      'agentId',
+      'line',
+      'submittedAttachments',
+    ]);
+
+    const res2 = await client.executeCommand({
+      agentId: 'session-42',
+      line: '/goal edit With image',
+      submittedAttachments: [
+        { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'spec.png' },
+      ],
+    });
+    expect(res2?.result.kind).toBe('success');
+    expect((commandRequests[1].payload.payload as { args: { submittedAttachments: unknown[] } }).args.submittedAttachments).toEqual([
+      { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'spec.png' },
+    ]);
+
+    const compactRes = await client.executeCommand({
+      agentId: 'session-99',
+      line: '/compact',
+    });
+    expect(compactRes).toEqual({
+      commandId: 'cmd-compact',
+      result: {
+        kind: 'success',
+        text: 'Compacted 4 history items (~1200 tokens).',
+        sourceEventSeq: 12,
+      },
+    });
+    expect(commandRequests[2].payload).toMatchObject({
+      type: 'client-request',
+      method: 'commands/execute',
+      payload: {
+        args: {
+          agentId: 'session-99',
+          line: '/compact',
+          submittedAttachments: [],
+        },
+      },
+    });
+
+    const resUnknown = await client.executeCommand({
+      agentId: 'session-42',
+      line: '/unknown',
+    });
+    expect(resUnknown).toBeUndefined();
+
+    await client.close();
+  });
 });

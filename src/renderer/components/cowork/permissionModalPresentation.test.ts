@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
-import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
-import { buildPermissionModalPresentation } from './permissionModalPresentation';
+import {
+  DshApprovalPermissionAction,
+  DshPermissionPreset,
+} from '../../../shared/dshEngine/hostConstants';
+import {
+  buildPermissionModalPresentation,
+  buildSwitchFullAccessAction,
+} from './permissionModalPresentation';
 
 const identityT = (key: string): string => key;
 
@@ -87,5 +93,44 @@ describe('buildPermissionModalPresentation', () => {
     expect(presentation.targetLabel).toBe('coworkApprovalTargetFile');
     expect(presentation.targetValue).toBe('/Users/alice/project/README.md');
     expect(presentation.canAllowForSession).toBe(true);
+  });
+
+  test('buildSwitchFullAccessAction scopes to active sessionId instead of setting global=true', () => {
+    const action = buildSwitchFullAccessAction('session-a', { command: 'rm -rf /tmp/x' });
+    expect(action.eventDetail).toEqual({
+      preset: DshPermissionPreset.FullAccess,
+      sessionId: 'session-a',
+    });
+    expect(action.eventDetail.defaultPreset).toBeUndefined();
+    expect(action.response).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'rm -rf /tmp/x' },
+      updatedPermissions: [
+        {
+          type: DshApprovalPermissionAction.SetPermissionPreset,
+          preset: DshPermissionPreset.FullAccess,
+          sessionId: 'session-a',
+        },
+      ],
+    });
+  });
+
+  test('buildSwitchFullAccessAction falls back to global only when sessionId is missing', () => {
+    const action = buildSwitchFullAccessAction('', { command: 'rm foo.txt' });
+    expect(action.eventDetail).toEqual({
+      preset: DshPermissionPreset.FullAccess,
+      defaultPreset: DshPermissionPreset.FullAccess,
+    });
+    expect(action.response).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'rm foo.txt' },
+      updatedPermissions: [
+        {
+          type: DshApprovalPermissionAction.SetPermissionPreset,
+          preset: DshPermissionPreset.FullAccess,
+          global: true,
+        },
+      ],
+    });
   });
 });
