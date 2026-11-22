@@ -16,7 +16,7 @@ import {
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { MigrationV2Status } from '../../../shared/migration/constants';
-import { APP_NAME, DB_FILENAME } from '../../appConstants';
+import { APP_NAME, APP_UPDATE_DOWNLOAD_DIR_NAME, DB_FILENAME } from '../../appConstants';
 import { MEMORY_FTS_DB_NAME } from '../../memory/lobsterMemoryService';
 import { runLegacyOpenClawMigration } from '../../migration/legacyOpenClawMigrator';
 import { SQLITE_BACKUP_DIR_NAME } from '../sqliteBackup/constants';
@@ -131,6 +131,7 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
   'logs',
   'lockfile',
   'runtimes',
+  APP_UPDATE_DOWNLOAD_DIR_NAME,
   'skill-migrate.log',
   'sqlite-backups',
   PENDING_RESTORE_FILE_NAME,
@@ -165,6 +166,7 @@ const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   'logs',
   'lockfile',
   'runtimes',
+  APP_UPDATE_DOWNLOAD_DIR_NAME,
   'skill-migrate.log',
   'sqlite-backups',
   PENDING_RESTORE_FILE_NAME,

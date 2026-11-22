@@ -278,6 +278,7 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   writeFile(path.join(userData, 'SharedStorage'), 'shared-storage');
   writeFile(path.join(userData, 'SharedStorage-wal'), 'shared-storage-wal');
   writeFile(path.join(userData, 'logs', 'main.log'), 'log');
+  writeFile(path.join(userData, 'updates', 'installer.dmg'), 'downloaded update');
   writeFile(path.join(userData, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite'), 'old-snapshot');
   writeFile(path.join(userData, 'sqlite-backups', 'lobsterai-latest.sqlite'), 'legacy-snapshot');
   writeFile(path.join(userData, 'Cookies'), 'cookies');
@@ -315,6 +316,7 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   expect(entries.some(entry => entry.includes('/openclaw/state/logs/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/backups/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/logs/'))).toBe(false);
+  expect(entries.some(entry => entry.startsWith('LobsterAI/updates/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/runtimes/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/sqlite-backups/'))).toBe(false);
   expect(entries.some(entry => entry.endsWith('/install-timing.log'))).toBe(false);
@@ -703,6 +705,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(targetUserData, 'openclaw', 'state', 'logs', 'commands.log'), 'target-commands-log');
   writeFile(path.join(targetUserData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'target-native.node'), 'target-native');
   writeFile(path.join(targetUserData, 'runtimes', 'python', 'python.exe'), 'target-runtime');
+  writeFile(path.join(targetUserData, 'updates', 'local-installer.dmg'), 'target-update');
   writeFile(path.join(targetUserData, 'SingletonLock'), 'runtime-lock');
 
   createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
@@ -720,6 +723,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(extractRoot, 'LobsterAI', 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'legacy-source-native');
   writeFile(path.join(extractRoot, 'LobsterAI', 'openclaw', 'state', 'logs', 'commands.log'), 'legacy-source-commands-log');
   writeFile(path.join(extractRoot, 'LobsterAI', 'runtimes', 'python', 'python.exe'), 'legacy-source-runtime');
+  writeFile(path.join(extractRoot, 'LobsterAI', 'updates', 'old-installer.dmg'), 'source-update');
   tar.create({
     sync: true,
     gzip: true,
@@ -745,6 +749,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/logs/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/state/logs/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/runtimes/'))).toBe(false);
+  expect(rollbackEntries.some(entry => entry.startsWith('LobsterAI/updates/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/sqlite-backups/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.endsWith('/install-timing.log'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.endsWith('/skill-migrate.log'))).toBe(false);
@@ -781,6 +786,8 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   expect(fs.readFileSync(path.join(targetUserData, 'openclaw', 'state', 'logs', 'commands.log'), 'utf8'))
     .toBe('target-commands-log');
   expect(fs.readFileSync(path.join(targetUserData, 'runtimes', 'python', 'python.exe'), 'utf8')).toBe('target-runtime');
+  expect(fs.readFileSync(path.join(targetUserData, 'updates', 'local-installer.dmg'), 'utf8')).toBe('target-update');
+  expect(fs.existsSync(path.join(targetUserData, 'updates', 'old-installer.dmg'))).toBe(false);
   expect(fs.readFileSync(path.join(targetUserData, 'SingletonLock'), 'utf8')).toBe('runtime-lock');
 });
 
