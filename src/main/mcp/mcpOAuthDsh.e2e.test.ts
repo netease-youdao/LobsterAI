@@ -309,8 +309,10 @@ async function startLocalOAuthMcpServer() {
     // 6. Protected Streamable HTTP MCP Endpoint (`/api/mcp`)
     if (pathname === '/api/mcp') {
       const authHeader = req.headers.authorization;
-      const match = typeof authHeader === 'string' ? authHeader.match(/^Bearer\s+(.+)$/i) : null;
-      const bearerToken = match?.[1]?.trim() ?? '';
+      const trimmedAuth = typeof authHeader === 'string' ? authHeader.trim() : '';
+      const bearerToken = trimmedAuth.toLowerCase().startsWith('bearer ')
+        ? trimmedAuth.slice('bearer '.length).trim()
+        : '';
       const tokenInfo = bearerToken ? activeTokens.get(bearerToken) : undefined;
 
       if (!tokenInfo) {

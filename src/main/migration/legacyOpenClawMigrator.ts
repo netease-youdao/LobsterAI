@@ -1455,25 +1455,25 @@ export function migrateLegacyMcpOAuthTokens(params: {
     config_json?: string;
   }>;
 
-  const oauthServers: Array<{ id: string; name: string; url?: string }> = [];
+  const remoteMcpServers: Array<{ id: string; name: string; url?: string }> = [];
   for (const row of mcpRows) {
     const config = safeParseJsonObject(row.config_json);
     if (!config || !isLegacyOAuthMcpRow(config, row.transport_type)) continue;
-    oauthServers.push({
+    remoteMcpServers.push({
       id: row.id,
       name: (typeof row.name === 'string' && row.name.trim()) ? row.name.trim() : row.id,
       url: typeof config.url === 'string' && config.url.trim() ? config.url.trim() : undefined,
     });
   }
 
-  if (oauthServers.length === 0) {
+  if (remoteMcpServers.length === 0) {
     return { tokensMigrated: 0, migratedServerIds, reauthRequired };
   }
 
   const legacyEntries = loadLegacyMcpOAuthStores(openclawStateDir);
   const usedStoreKeys = new Set<string>();
 
-  for (const server of oauthServers) {
+  for (const server of remoteMcpServers) {
     const existingKv = getKv(db, `${MCP_OAUTH_TOKEN_KV_PREFIX}${server.id}`);
     if (existingKv && existingKv.trim().length > 0) {
       // User already holds a v2 OAuth token for this server; preserve it.
