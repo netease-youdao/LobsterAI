@@ -1,8 +1,22 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import {
+  OpenClawApi,
+  OpenClawProviderId,
+} from '../../../shared/providers/constants';
+import {
+  LOBSTERAI_REQUEST_OPTIONS_VERSION,
+  LobsterAIRequestCapability,
+} from '../../../shared/providers/lobsterAIRequestOptions';
+import { ModelRuntimeProfile } from '../../../shared/providers/modelRuntimeProfiles';
+import {
+  ModelThinkingLevel,
+  OpenClawThinkingLevel,
+} from '../../../shared/providers/modelThinking';
+import {
   buildDshMcpServerSpecs,
   buildDshProvidersPayload,
+  buildDshThinkingLevelMap,
   normalizeDshMcpServerName,
 } from './dshProviderSync';
 
@@ -121,6 +135,199 @@ describe('buildDshProvidersPayload', () => {
     });
     expect(byId.anthropic.compat).toBeUndefined();
     expect(byId.customResponses.compat).toBeUndefined();
+  });
+
+  test('propagates per-model Anthropic api, thinkingConfig/lobsterai-options-v1, and Kimi K3 runtime profiles', () => {
+    const glmThinkingConfig = {
+      options: [
+        { level: ModelThinkingLevel.Off, openclawLevel: OpenClawThinkingLevel.Off },
+        { level: ModelThinkingLevel.High, openclawLevel: OpenClawThinkingLevel.High },
+        { level: ModelThinkingLevel.Max, openclawLevel: OpenClawThinkingLevel.XHigh },
+      ],
+      defaultLevel: ModelThinkingLevel.High,
+    };
+
+    const payload = buildDshProvidersPayload({
+      modelAuthProxyUrl: 'http://127.0.0.1:45555',
+      modelAuthProxySecret: 'proxy-secret',
+      providers: {
+        [OpenClawProviderId.LobsteraiServer]: {
+          enabled: true,
+          authType: 'lobster_plan',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'claude-sonnet-5-5-hc-YoudaoInner',
+              name: 'Claude Sonnet 5.5',
+              provider: 'anthropic',
+              apiFormat: 'anthropic',
+              supportsImage: true,
+              supportsThinking: true,
+              contextWindow: 1_000_000,
+            },
+            {
+              id: 'glm-5.3-flash-YoudaoInner',
+              name: 'GLM-5.3-Flash',
+              provider: 'zhipu',
+              apiFormat: 'openai',
+              supportsImage: true,
+              supportsThinking: true,
+              thinkingConfig: glmThinkingConfig,
+              requestCapabilities: [LobsterAIRequestCapability.OptionsV1],
+              contextWindow: 1_000_000,
+            },
+            {
+              id: 'glm-no-cap-YoudaoInner',
+              name: 'GLM Without Capability',
+              provider: 'zhipu',
+              apiFormat: 'openai',
+              supportsThinking: true,
+              thinkingConfig: glmThinkingConfig,
+              requestCapabilities: [],
+              contextWindow: 1_000_000,
+            },
+            {
+              id: 'kimi-k3-YoudaoInner',
+              name: 'Kimi K3',
+              provider: 'moonshot',
+              apiFormat: 'openai',
+              runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+              supportsImage: true,
+              supportsThinking: true,
+              contextWindow: 1_048_576,
+              maxTokens: 1_048_576,
+            },
+            {
+              id: 'kimi-k3.1-pro-YoudaoInner',
+              name: 'Kimi K3.1 Pro',
+              provider: 'moonshot',
+              apiFormat: 'openai',
+              supportsImage: true,
+              supportsThinking: true,
+              contextWindow: 1_048_576,
+            },
+          ],
+        },
+        custom_0: {
+          enabled: true,
+          apiKey: 'sk-custom',
+          baseUrl: 'https://proxy.example.com/v1',
+          apiFormat: 'openai',
+          models: [{ id: 'kimi-k3', name: 'Custom K3' }],
+        },
+        anthropic_direct: {
+          enabled: true,
+          apiKey: 'sk-ant',
+          baseUrl: 'https://api.anthropic.com/v1',
+          apiFormat: 'anthropic',
+          models: [{ id: 'claude-sonnet-4-6' }],
+        },
+      },
+    });
+
+    const server = payload.providers.find((p) => p.id === OpenClawProviderId.LobsteraiServer)!;
+    const serverModels = Object.fromEntries(server.models.map((m) => [m.id, m]));
+
+    // Claude Sonnet 5.5 keeps per-model anthropic-messages protocol and plan 32k default output cap.
+    expect(serverModels['claude-sonnet-5-5-hc-YoudaoInner']).toMatchObject({
+      id: 'claude-sonnet-5-5-hc-YoudaoInner',
+      api: OpenClawApi.AnthropicMessages,
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+      reasoning: true,
+    });
+    expect(serverModels['claude-sonnet-5-5-hc-YoudaoInner'].compat).toBeUndefined();
+
+    // GLM-5.3-Flash carries thinkingLevelMap + lobsterai-options-v1 protocol config.
+    expect(serverModels['glm-5.3-flash-YoudaoInner']).toMatchObject({
+      id: 'glm-5.3-flash-YoudaoInner',
+      maxTokens: 32_768,
+      thinkingConfig: glmThinkingConfig,
+      requestOptionsVersion: LOBSTERAI_REQUEST_OPTIONS_VERSION,
+      thinkingLevelMap: {
+        minimal: null,
+        low: null,
+        medium: null,
+        high: ModelThinkingLevel.High,
+        xhigh: null,
+        max: ModelThinkingLevel.Max,
+      },
+      compat: { supportsReasoningEffort: true },
+    });
+    expect(serverModels['glm-5.3-flash-YoudaoInner'].api).toBeUndefined();
+
+    // Without lobsterai-options-v1 capability, requestOptionsVersion is withheld (fail closed).
+    expect(serverModels['glm-no-cap-YoudaoInner'].requestOptionsVersion).toBeUndefined();
+    expect(serverModels['glm-no-cap-YoudaoInner'].thinkingConfig).toBeUndefined();
+
+    // Kimi K3 gets its full controlled runtime profile + safe 131,072 defaultMaxTokens cap.
+    expect(serverModels['kimi-k3-YoudaoInner']).toMatchObject({
+      id: 'kimi-k3-YoudaoInner',
+      runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+      contextWindow: 1_048_576,
+      maxTokens: 1_048_576,
+      defaultMaxTokens: 131_072,
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: 'max',
+        low: 'max',
+        medium: 'max',
+        high: 'max',
+        xhigh: 'max',
+        max: 'max',
+      },
+      compat: {
+        maxTokensField: 'max_tokens',
+        supportsUsageInStreaming: false,
+        supportsReasoningEffort: true,
+        requiresReasoningContentOnAssistantMessages: true,
+      },
+    });
+
+    // Other Moonshot models under lobsterai-server also get assistant reasoning replay compat.
+    expect(serverModels['kimi-k3.1-pro-YoudaoInner']).toMatchObject({
+      maxTokens: 32_768,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    });
+    expect(serverModels['kimi-k3.1-pro-YoudaoInner'].runtimeProfile).toBeUndefined();
+
+    // Custom OpenAI-compatible provider with exact kimi-k3 model ID also resolves K3 profile.
+    const custom = payload.providers.find((p) => p.id === 'custom_0')!;
+    expect(custom.models[0]).toMatchObject({
+      id: 'kimi-k3',
+      runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+      contextWindow: 1_048_576,
+      maxTokens: 1_048_576,
+      defaultMaxTokens: 131_072,
+      compat: {
+        maxTokensField: 'max_tokens',
+        supportsUsageInStreaming: false,
+        requiresReasoningContentOnAssistantMessages: true,
+      },
+    });
+
+    // Non-proxy Anthropic baseURL strips trailing /v1 so Anthropic SDK does not hit /v1/v1/messages.
+    const anthropicDirect = payload.providers.find((p) => p.id === 'anthropic_direct')!;
+    expect(anthropicDirect.baseURL).toBe('https://api.anthropic.com');
+  });
+
+  test('buildDshThinkingLevelMap disables off when omitted from thinkingConfig options', () => {
+    expect(buildDshThinkingLevelMap({
+      options: [
+        { level: ModelThinkingLevel.High, openclawLevel: OpenClawThinkingLevel.High },
+        { level: ModelThinkingLevel.Max, openclawLevel: OpenClawThinkingLevel.XHigh },
+      ],
+      defaultLevel: ModelThinkingLevel.High,
+    })).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: ModelThinkingLevel.High,
+      xhigh: null,
+      max: ModelThinkingLevel.Max,
+    });
   });
 });
 

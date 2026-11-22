@@ -74,6 +74,7 @@ export interface DshAdapterSessionRecord {
   executionMode?: string;
   modelOverride?: string | null;
   modelPresetId?: string | null;
+  thinkingLevel?: string | null;
   systemPrompt?: string;
   messages?: CoworkMessage[];
 }
@@ -125,6 +126,7 @@ export interface DshRuntimeAdapterDeps {
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
+    thinkingLevelOverride?: string | null,
   ) => Promise<DshModelSelection | null> | DshModelSelection | null;
   resolveAllowedSkillIds?: (
     sessionId: string,
@@ -549,7 +551,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     patch: OpenClawSessionPatch,
   ): Promise<CoworkSessionPatchResult | void> {
     const modelStr = typeof patch.model === 'string' ? patch.model.trim() : '';
-    const thinking = typeof patch.thinkingLevel === 'string' ? patch.thinkingLevel : undefined;
+    const hasThinkingPatch = patch.thinkingLevel !== undefined;
+    const thinkingPatchValue = typeof patch.thinkingLevel === 'string'
+      ? patch.thinkingLevel.trim()
+      : null;
 
     if (modelStr) {
       this.store.updateSession(sessionId, { modelOverride: modelStr });
@@ -559,25 +564,37 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     if (!dshSessionId || !this.hostManager.isReady()) {
       return {
         ...(modelStr ? { modelOverride: modelStr, resolvedModelRef: modelStr } : {}),
-        ...(thinking ? { thinkingLevel: thinking } : {}),
+        ...(thinkingPatchValue ? { thinkingLevel: thinkingPatchValue } : {}),
       };
     }
 
     const selection = this.resolveModelSelection
-      ? await this.resolveModelSelection(sessionId, modelStr || undefined)
+      ? await this.resolveModelSelection(
+          sessionId,
+          modelStr || undefined,
+          hasThinkingPatch ? thinkingPatchValue : undefined,
+        )
       : parseProviderModelRef(modelStr);
     if (selection) {
+      const resolverHandlesThinking = Boolean(
+        this.resolveModelSelection && this.resolveModelSelection.length >= 3,
+      );
+      const effectiveReasoningEffort = hasThinkingPatch
+        ? (resolverHandlesThinking
+            ? selection.reasoningEffort
+            : (selection.reasoningEffort ?? (thinkingPatchValue || undefined)))
+        : selection.reasoningEffort;
       await selectModelWithReasoningFallback(this.hostManager.getClient(), {
         sessionId: dshSessionId,
         provider: selection.provider,
         model: selection.model,
-        reasoningEffort: thinking ?? selection.reasoningEffort,
+        reasoningEffort: effectiveReasoningEffort,
       });
     }
 
     return {
       ...(modelStr ? { modelOverride: modelStr, resolvedModelRef: modelStr } : {}),
-      ...(thinking ? { thinkingLevel: thinking } : {}),
+      ...(thinkingPatchValue ? { thinkingLevel: thinkingPatchValue } : {}),
     };
   }
 

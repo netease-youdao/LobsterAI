@@ -121,6 +121,7 @@ export interface DshBootstrapOptions {
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
+    thinkingLevelOverride?: string | null,
   ) => Promise<DshModelSelection | null> | DshModelSelection | null;
   resolveAllowedSkillIds?: (
     sessionId: string,

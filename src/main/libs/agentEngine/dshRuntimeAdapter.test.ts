@@ -389,6 +389,53 @@ describe('DshRuntimeAdapter', () => {
     });
   });
 
+  test('patchSession forwards thinkingLevel overrides and resets to 3-arg resolveModelSelection', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-think',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-think-1`,
+      modelOverride: 'lobsterai-server/glm-5.3-flash-YoudaoInner',
+      thinkingLevel: 'max',
+    });
+
+    const selectModel = vi.fn(async () => ({ selected: {} }));
+    const resolveModelSelection = vi.fn((_sid: string, _override?: string | null, thinkingOverride?: string | null) => ({
+      provider: 'lobsterai-server',
+      model: 'glm-5.3-flash-YoudaoInner',
+      reasoningEffort: thinkingOverride === null ? 'high' : (thinkingOverride || 'max'),
+    }));
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => ({ selectModel }) as unknown as DshTypertClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+      resolveModelSelection,
+    });
+
+    await adapter.patchSession('cw-think', { thinkingLevel: 'off' });
+    expect(resolveModelSelection).toHaveBeenNthCalledWith(1, 'cw-think', undefined, 'off');
+    expect(selectModel).toHaveBeenNthCalledWith(1, {
+      sessionId: 'dsh-think-1',
+      provider: 'lobsterai-server',
+      model: 'glm-5.3-flash-YoudaoInner',
+      reasoningEffort: 'off',
+    });
+
+    await adapter.patchSession('cw-think', { thinkingLevel: null });
+    expect(resolveModelSelection).toHaveBeenNthCalledWith(2, 'cw-think', undefined, null);
+    expect(selectModel).toHaveBeenNthCalledWith(2, {
+      sessionId: 'dsh-think-1',
+      provider: 'lobsterai-server',
+      model: 'glm-5.3-flash-YoudaoInner',
+      reasoningEffort: 'high',
+    });
+  });
+
   test('stamps per-turn llmTrace on pre-created user message, binds traceId to DSH, and skips lazy bridge on new sessions', async () => {
     const { store, messages } = createInMemoryStore({
       id: 'cw-fresh',

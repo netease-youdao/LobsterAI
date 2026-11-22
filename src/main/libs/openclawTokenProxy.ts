@@ -547,6 +547,19 @@ function rejectInboundRequest(req: http.IncomingMessage, res: http.ServerRespons
   }));
 }
 
+/**
+ * Normalize the path suffix after `/v1/<lobsterai-plan-alias>` before forwarding
+ * to `/api/proxy/*`. OpenAI clients request `/v1/<alias>/chat/completions`
+ * (`restPath = '/chat/completions'`), whereas Anthropic SDK clients append
+ * `/v1/messages` themselves (`restPath = '/v1/messages'`). Avoid doubling `/v1`.
+ */
+function normalizeScopedLobsterPlanPath(restPath: string): string {
+  if (restPath === '/v1' || restPath.startsWith('/v1/') || restPath.startsWith('/v1?')) {
+    return restPath;
+  }
+  return `/v1${restPath}`;
+}
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!isLoopbackHostHeader(req.headers.host)) {
     rejectInboundRequest(req, res, 403, 'proxy_host_not_loopback');
@@ -577,7 +590,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       || providerId === 'lobsterai-server'
       || providerId === 'youdao'
     ) {
-      effectiveReqUrl = `/v1${restPath}`;
+      effectiveReqUrl = normalizeScopedLobsterPlanPath(restPath);
     } else if (oauthProviderUpstreamResolver) {
       const upstream = await oauthProviderUpstreamResolver(providerId);
       if (upstream) {
@@ -1730,4 +1743,5 @@ export const __openClawTokenProxyTestUtils = {
   isTemporaryAuthRefreshFailure,
   isProxySessionKeyCurrent,
   shouldRefreshLobsterAIToken,
+  normalizeScopedLobsterPlanPath,
 };

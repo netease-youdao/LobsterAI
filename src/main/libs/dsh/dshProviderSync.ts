@@ -4,7 +4,27 @@
 //
 // Zero Electron imports — directly testable under Vitest.
 
-import { OpenClawApi } from '../../../shared/providers/constants';
+import {
+  OpenClawApi,
+  OpenClawProviderId,
+} from '../../../shared/providers/constants';
+import {
+  LOBSTERAI_REQUEST_OPTIONS_VERSION,
+  type LobsterAIRequestCapability,
+  supportsLobsterAIRequestOptionsV1,
+} from '../../../shared/providers/lobsterAIRequestOptions';
+import {
+  getModelRuntimeProfileDefinition,
+  ModelRuntimeProfile,
+  type ModelRuntimeProfile as ModelRuntimeProfileType,
+  ModelRuntimeProfileSource,
+  resolveModelRuntimeProfile,
+} from '../../../shared/providers/modelRuntimeProfiles';
+import {
+  type ModelThinkingConfig,
+  ModelThinkingLevel,
+  parseModelThinkingConfig,
+} from '../../../shared/providers/modelThinking';
 import type { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import type {
   DshHostMcpServerSpec,
@@ -12,14 +32,36 @@ import type {
   DshHostProviderSpec,
 } from './dshHostManager';
 
+// Output cap for LobsterAI plan models whose server metadata carries no maxTokens.
+// Plan models are reasoning-capable, so thinking counts against this budget.
+const LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS = 32_768;
+// Safe single-turn default output cap for Kimi K3 (matches K3 official API default
+// while keeping `maxTokens: 1_048_576` as the model's catalog capacity).
+const KIMI_K3_DEFAULT_REQUEST_MAX_TOKENS = 131_072;
+const NON_OFF_THINKING_LEVELS = [
+  ModelThinkingLevel.Minimal,
+  ModelThinkingLevel.Low,
+  ModelThinkingLevel.Medium,
+  ModelThinkingLevel.High,
+  ModelThinkingLevel.XHigh,
+  ModelThinkingLevel.Max,
+] as const;
+
 export interface LobsterProviderModelConfig {
   id: string;
   name?: string;
+  provider?: string;
+  apiFormat?: 'anthropic' | 'openai' | 'openai-responses' | 'gemini' | 'google' | string;
+  baseUrl?: string;
   supportsImage?: boolean;
   supportsThinking?: boolean;
   contextWindow?: number;
   maxTokens?: number;
   reasoning?: boolean;
+  runtimeProfile?: ModelRuntimeProfileType;
+  thinkingConfig?: ModelThinkingConfig;
+  requestCapabilities?: readonly LobsterAIRequestCapability[];
+  compat?: Record<string, unknown>;
 }
 
 export interface LobsterProviderConfig {
@@ -72,6 +114,38 @@ function isNativeOpenAIEndpoint(baseURL: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isMoonshotFamilyProvider(providerName: string | undefined): boolean {
+  const normalized = providerName?.trim().toLowerCase() ?? '';
+  return normalized === 'moonshot' || normalized === 'kimi' || normalized === 'kimi-coding';
+}
+
+function stripTrailingV1Segment(rawBaseUrl: string): string {
+  const normalized = rawBaseUrl.trim().replace(/\/+$/, '');
+  return normalized.endsWith('/v1')
+    ? normalized.slice(0, -'/v1'.length).replace(/\/+$/, '') || normalized
+    : normalized;
+}
+
+/**
+ * Translate a server `thinkingConfig` into DSH / pi-ai's `thinkingLevelMap`
+ * so `getSupportedThinkingLevels()` exposes the exact allowed product levels.
+ */
+export function buildDshThinkingLevelMap(
+  thinkingConfig: ModelThinkingConfig,
+): Partial<Record<ModelThinkingLevel, string | null>> {
+  const allowed = new Set<ModelThinkingLevel>(
+    thinkingConfig.options.map((option) => option.level),
+  );
+  const map: Partial<Record<ModelThinkingLevel, string | null>> = {};
+  if (!allowed.has(ModelThinkingLevel.Off)) {
+    map[ModelThinkingLevel.Off] = null;
+  }
+  for (const level of NON_OFF_THINKING_LEVELS) {
+    map[level] = allowed.has(level) ? level : null;
+  }
+  return map;
 }
 
 function defaultBaseUrlForProvider(providerId: string): string | undefined {
@@ -132,11 +206,16 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
         || cfg.authType === 'lobster_plan'),
     );
 
-    const baseURL = usesProxy
+    const rawBaseURL = usesProxy
       ? `${proxyUrl}/v1/${encodeURIComponent(providerId)}`
       : (cfg.baseUrl?.trim().replace(/\/+$/, '') || defaultBaseUrlForProvider(providerId));
 
-    if (!baseURL) continue;
+    if (!rawBaseURL) continue;
+
+    const api = mapApiFormat(providerId, cfg.apiFormat);
+    const baseURL = !usesProxy && api === OpenClawApi.AnthropicMessages
+      ? stripTrailingV1Segment(rawBaseURL)
+      : rawBaseURL;
 
     const apiKey = usesProxy
       ? (options.modelAuthProxySecret || 'lobsterai-local-proxy')
@@ -146,17 +225,117 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
     const isLoopback = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(baseURL);
     if (!apiKey && !isLoopback) continue;
 
-    const api = mapApiFormat(providerId, cfg.apiFormat);
+    const isLobsterPlanProvider =
+      cfg.authType === 'lobster_plan'
+      || providerId === OpenClawProviderId.LobsteraiServer;
+    const profileSource = isLobsterPlanProvider
+      ? ModelRuntimeProfileSource.Server
+      : /^custom(?:_|$)/i.test(providerId)
+        ? ModelRuntimeProfileSource.Custom
+        : ModelRuntimeProfileSource.BuiltIn;
+
     const models: DshHostProviderModelSpec[] = (cfg.models ?? [])
       .filter((m) => m && typeof m.id === 'string' && m.id.trim().length > 0)
-      .map((m) => ({
-        id: m.id.trim(),
-        name: m.name?.trim() || m.id.trim(),
-        contextWindow: m.contextWindow,
-        maxTokens: m.maxTokens,
-        input: m.supportsImage ? ['text', 'image'] : ['text'],
-        reasoning: Boolean(m.reasoning ?? m.supportsThinking),
-      }));
+      .map((m) => {
+        const modelId = m.id.trim();
+        const modelApi = m.apiFormat ? mapApiFormat(providerId, m.apiFormat) : api;
+        const rawModelBaseUrl = m.baseUrl?.trim().replace(/\/+$/, '') || undefined;
+        const modelBaseUrl = !usesProxy && modelApi === OpenClawApi.AnthropicMessages && rawModelBaseUrl
+          ? stripTrailingV1Segment(rawModelBaseUrl)
+          : rawModelBaseUrl;
+
+        const runtimeProfile = resolveModelRuntimeProfile({
+          source: profileSource,
+          providerId,
+          modelId,
+          api: modelApi,
+          serverRuntimeProfile: m.runtimeProfile,
+        });
+        const profileDef = runtimeProfile
+          ? getModelRuntimeProfileDefinition(runtimeProfile)
+          : undefined;
+
+        const reasoning = profileDef
+          ? profileDef.reasoning
+          : Boolean(m.reasoning ?? m.supportsThinking);
+        const thinkingConfig = reasoning
+          ? parseModelThinkingConfig(m.thinkingConfig)
+          : undefined;
+        const hasRequestOptionsV1 = Boolean(
+          thinkingConfig && supportsLobsterAIRequestOptionsV1(m.requestCapabilities),
+        );
+
+        const contextWindow = m.contextWindow ?? profileDef?.contextWindow;
+        const rawMaxTokens = profileDef?.maxTokens ?? m.maxTokens;
+        const fallbackPlanMaxTokens = isLobsterPlanProvider && rawMaxTokens === undefined
+          ? (contextWindow && contextWindow > 0
+            ? Math.min(LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS, contextWindow)
+            : LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS)
+          : undefined;
+        const maxTokens = rawMaxTokens ?? fallbackPlanMaxTokens;
+        const defaultMaxTokens = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
+          ? Math.min(
+            KIMI_K3_DEFAULT_REQUEST_MAX_TOKENS,
+            contextWindow && contextWindow > 0
+              ? Math.max(1, Math.floor(contextWindow / 2))
+              : KIMI_K3_DEFAULT_REQUEST_MAX_TOKENS,
+          )
+          : undefined;
+
+        const thinkingLevelMap = profileDef
+          ? { ...profileDef.thinkingLevelMap }
+          : thinkingConfig
+            ? buildDshThinkingLevelMap(thinkingConfig)
+            : undefined;
+
+        const modelCompat: Record<string, unknown> = {
+          ...(m.compat ?? {}),
+        };
+        if (profileDef) {
+          Object.assign(modelCompat, profileDef.compat);
+          if (modelApi === OpenClawApi.OpenAICompletions) {
+            modelCompat.requiresReasoningContentOnAssistantMessages = true;
+          }
+        } else if (
+          modelApi === OpenClawApi.OpenAICompletions
+          && isMoonshotFamilyProvider(m.provider)
+          && modelCompat.requiresReasoningContentOnAssistantMessages === undefined
+        ) {
+          modelCompat.requiresReasoningContentOnAssistantMessages = true;
+        }
+        if (
+          hasRequestOptionsV1
+          && modelApi === OpenClawApi.OpenAICompletions
+          && modelCompat.supportsReasoningEffort === undefined
+        ) {
+          modelCompat.supportsReasoningEffort = true;
+        }
+
+        const supportsImage = profileDef
+          ? profileDef.input.includes('image')
+          : Boolean(m.supportsImage);
+
+        return {
+          id: modelId,
+          name: m.name?.trim() || modelId,
+          ...(modelApi !== api ? { api: modelApi } : {}),
+          ...(modelBaseUrl ? { baseURL: modelBaseUrl } : {}),
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+          ...(defaultMaxTokens !== undefined ? { defaultMaxTokens } : {}),
+          input: supportsImage ? ['text', 'image'] : ['text'],
+          reasoning,
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+          ...(runtimeProfile ? { runtimeProfile } : {}),
+          ...(hasRequestOptionsV1 && thinkingConfig
+            ? {
+                thinkingConfig,
+                requestOptionsVersion: LOBSTERAI_REQUEST_OPTIONS_VERSION,
+              }
+            : {}),
+          ...(Object.keys(modelCompat).length > 0 ? { compat: modelCompat } : {}),
+        };
+      });
 
     if (models.length === 0) continue;
 
@@ -172,7 +351,7 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
         compat.supportsStore = false;
       }
       // Kimi / Moonshot thinking compatibility in OpenAI-compat mode.
-      if (providerId === 'moonshot' || providerId === 'kimi' || providerId === 'kimi-coding') {
+      if (isMoonshotFamilyProvider(providerId)) {
         compat.requiresReasoningContentOnAssistantMessages = true;
       }
     }
