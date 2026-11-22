@@ -18,9 +18,11 @@ import {
   CoworkContextUsageRefreshMode,
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
+  type CoworkMemoryStatusFilter,
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
+import type { DreamDiaryData } from '../../shared/cowork/dreamDiary';
 import { CoworkGoalStatus, normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
@@ -2468,66 +2470,98 @@ class CoworkService {
   }
 
   async listMemoryEntries(input: {
+    agentId?: string;
     query?: string;
+    status?: CoworkMemoryStatusFilter;
+    includeDeleted?: boolean;
     limit?: number;
     offset?: number;
-  }): Promise<CoworkUserMemoryEntry[]> {
+  } = {}): Promise<CoworkUserMemoryEntry[]> {
     const api = window.electron?.cowork?.listMemoryEntries;
     if (!api) return [];
     const result = await api(input);
-    if (!result?.success || !result.entries) return [];
+    if (!result?.success || !result.entries) {
+      throw new Error(result?.error || 'Failed to list memory entries');
+    }
     return result.entries;
   }
 
   async createMemoryEntry(input: {
+    agentId?: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+    section?: string;
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.createMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to create memory entry');
+    }
     return result.entry;
   }
 
   async updateMemoryEntry(input: {
+    agentId?: string;
     id: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.updateMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to update memory entry');
+    }
     return result.entry;
   }
 
-  async deleteMemoryEntry(input: { id: string }): Promise<boolean> {
+  async deleteMemoryEntry(input: { agentId?: string; id: string }): Promise<boolean> {
     const api = window.electron?.cowork?.deleteMemoryEntry;
-    if (!api) return false;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    return Boolean(result?.success);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to delete memory entry');
+    }
+    return true;
   }
 
-  async getMemoryStats(): Promise<CoworkMemoryStats | null> {
+  async getMemoryStats(options?: { agentId?: string }): Promise<CoworkMemoryStats | null> {
     const api = window.electron?.cowork?.getMemoryStats;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success || !result.stats) return null;
     return result.stats;
   }
 
-  async readMemoryFileRaw(): Promise<string | null> {
+  async readMemoryFileRaw(options?: { agentId?: string }): Promise<string | null> {
     const api = window.electron?.cowork?.readMemoryFileRaw;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success) return null;
     return result.content ?? '';
   }
 
-  async writeMemoryFileRaw(content: string): Promise<{ success: boolean; error?: string }> {
+  async writeMemoryFileRaw(
+    content: string,
+    options?: { agentId?: string },
+  ): Promise<{ success: boolean; error?: string }> {
     const api = window.electron?.cowork?.writeMemoryFileRaw;
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
-    const result = await api({ content });
+    const result = await api({ content, agentId: options?.agentId });
     return result ?? { success: false };
+  }
+
+  async getDreamingDiary(options?: { agentId?: string }): Promise<DreamDiaryData | null> {
+    const api = window.electron?.cowork?.getDreamDiary;
+    if (!api) return null;
+    const result = await api(options);
+    if (!result?.success || !result.data) return null;
+    return result.data;
   }
 
   async readBootstrapFile(filename: string, options?: { agentId?: string }): Promise<string> {

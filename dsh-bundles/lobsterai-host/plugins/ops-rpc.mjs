@@ -10,6 +10,7 @@
  * - `syncProviders`: hot-sync LobsterAI providers & API keys into memory
  * - `syncMcpServers`: reconcile LobsterAI MCP servers via `ctx.mcpManager.register`
  * - `syncSkillsPolicy`: update global enabled/disabled skill lists & refresh catalog
+ * - `syncMemoryPolicy`: update global memoryEnabled toggle
  * - `syncAgents`: hot-sync LobsterAI agent roster & collaboration policies into memory
  * - `syncSubagentBindings`: restore durable childSessionId -> targetAgentId delegation bindings
  * - `bindSessionContext`: bind `{ agentId, coworkSessionId, allowedSkillIds, customSystemPrompt, executionMode }`
@@ -216,6 +217,7 @@ export function apply(ctx) {
               workspacesDirConfigured: state.workspacesDir.length > 0,
               skillsDirConfigured: state.skillsDir.length > 0,
               bridgeConfigured: state.bridgeUrl.length > 0,
+              memoryEnabled: state.memoryEnabled !== false,
             });
           }
 
@@ -253,6 +255,19 @@ export function apply(ctx) {
                 skillsDir: state.skillsDir,
                 enabledCount: state.skillsPolicy.enabledIds ? state.skillsPolicy.enabledIds.size : null,
                 disabledCount: state.skillsPolicy.disabledIds.size,
+              },
+            });
+          }
+
+          case 'syncMemoryPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            if (typeof p.enabled === 'boolean') {
+              state.memoryEnabled = p.enabled;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                memoryEnabled: state.memoryEnabled !== false,
               },
             });
           }

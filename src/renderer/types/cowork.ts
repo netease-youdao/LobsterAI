@@ -4,8 +4,17 @@ import type {
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
+  CoworkMemoryStats as SharedCoworkMemoryStats,
+  CoworkMemoryStatus as SharedCoworkMemoryStatus,
+  CoworkMemoryStatusFilter as SharedCoworkMemoryStatusFilter,
   CoworkSessionStatus,
+  CoworkUserMemoryEntry as SharedCoworkUserMemoryEntry,
+  CoworkUserMemorySourceSummary as SharedCoworkUserMemorySourceSummary,
 } from '../../shared/cowork/constants';
+import type {
+  DreamDiaryData as SharedDreamDiaryData,
+  LegacyAgentDreamDiary as SharedLegacyAgentDreamDiary,
+} from '../../shared/cowork/dreamDiary';
 import type { CoworkErrorDetail } from '../../shared/cowork/errorDetail';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type {
@@ -331,20 +340,11 @@ export interface OpenClawGatewayRepairResult {
   failurePath?: string;
 }
 
-export interface CoworkUserMemoryEntry {
-  id: string;
-  text: string;
-  section?: string;
-}
-
-export interface CoworkMemoryStats {
-  total: number;
-  created: number;
-  stale: number;
-  deleted: number;
-  explicit: number;
-  implicit: number;
-}
+export type CoworkMemoryStatus = SharedCoworkMemoryStatus;
+export type CoworkMemoryStatusFilter = SharedCoworkMemoryStatusFilter;
+export type CoworkUserMemorySourceSummary = SharedCoworkUserMemorySourceSummary;
+export type CoworkUserMemoryEntry = SharedCoworkUserMemoryEntry;
+export type CoworkMemoryStats = SharedCoworkMemoryStats;
 
 // Cowork pending permission request
 export interface CoworkPermissionRequest {
@@ -550,12 +550,8 @@ export interface DreamingStatusData {
   };
 }
 
-export interface DreamDiaryData {
-  found: boolean;
-  path: string;
-  content?: string;
-  updatedAtMs?: number;
-}
+export type LegacyAgentDreamDiary = SharedLegacyAgentDreamDiary;
+export type DreamDiaryData = SharedDreamDiaryData;
 
 // Stream event types for IPC communication
 export type CoworkStreamEventType =

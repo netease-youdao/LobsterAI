@@ -137,6 +137,11 @@ export const CoworkIpcChannel = {
   StreamGoal: 'cowork:stream:goal',
   StreamTurnUsage: 'cowork:stream:turnUsage',
   RefreshTurnUsage: 'cowork:turnUsage:refresh',
+  MemoryListEntries: 'cowork:memory:listEntries',
+  MemoryCreateEntry: 'cowork:memory:createEntry',
+  MemoryUpdateEntry: 'cowork:memory:updateEntry',
+  MemoryDeleteEntry: 'cowork:memory:deleteEntry',
+  MemoryGetStats: 'cowork:memory:getStats',
   MemoryReadRaw: 'cowork:memory:readRaw',
   MemoryWriteRaw: 'cowork:memory:writeRaw',
   BootstrapRead: 'cowork:bootstrap:read',
@@ -187,3 +192,59 @@ export const CoworkContextUsageRefreshMode = {
 } as const;
 export type CoworkContextUsageRefreshMode =
   typeof CoworkContextUsageRefreshMode[keyof typeof CoworkContextUsageRefreshMode];
+
+export const CoworkMemoryStatus = {
+  Created: 'created',
+  Stale: 'stale',
+  Deleted: 'deleted',
+} as const;
+export type CoworkMemoryStatus = typeof CoworkMemoryStatus[keyof typeof CoworkMemoryStatus];
+
+export const CoworkMemoryStatusFilter = {
+  All: 'all',
+  Created: CoworkMemoryStatus.Created,
+  Stale: CoworkMemoryStatus.Stale,
+  Deleted: CoworkMemoryStatus.Deleted,
+} as const;
+export type CoworkMemoryStatusFilter =
+  typeof CoworkMemoryStatusFilter[keyof typeof CoworkMemoryStatusFilter];
+
+export interface CoworkUserMemorySourceSummary {
+  count: number;
+  activeCount: number;
+  roles: string[];
+  sessionIds: string[];
+  sessionTitles?: string[];
+  latestSessionId?: string | null;
+  latestSessionTitle?: string | null;
+  latestMessageId?: string | null;
+  latestRole?: string | null;
+  latestCreatedAt?: number | null;
+}
+
+export interface CoworkUserMemoryEntry {
+  id: string;
+  text: string;
+  section?: string;
+  agentId?: string;
+  status?: CoworkMemoryStatus;
+  confidence?: number;
+  isExplicit?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  lastUsedAt?: number | null;
+  sourceCount?: number;
+  sourceLabel?: string;
+  sources?: CoworkUserMemorySourceSummary;
+  /** True for SQLite-only historical deleted/stale audit entries not stored in MEMORY.md. */
+  isLegacyReadOnly?: boolean;
+}
+
+export interface CoworkMemoryStats {
+  total: number;
+  created: number;
+  stale: number;
+  deleted: number;
+  explicit: number;
+  implicit: number;
+}

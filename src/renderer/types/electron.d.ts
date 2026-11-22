@@ -67,7 +67,11 @@ import type {
 import type {
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
+  CoworkMemoryStats as SharedCoworkMemoryStats,
+  CoworkMemoryStatus as SharedCoworkMemoryStatus,
+  CoworkMemoryStatusFilter as SharedCoworkMemoryStatusFilter,
   CoworkSessionsChangedPayload,
+  CoworkUserMemoryEntry as SharedCoworkUserMemoryEntry,
 } from '../../shared/cowork/constants';
 import type { CoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage, CoworkTurnUsageAnchor } from '../../shared/cowork/llmTurnUsage';
@@ -215,7 +219,7 @@ import type {
   SkinListResponse,
 } from '../../shared/skin/types';
 import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
-import type { CoworkTempDirPreview } from './cowork';
+import type { CoworkTempDirPreview, DreamDiaryData, DreamingStatusData } from './cowork';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -380,20 +384,9 @@ interface CoworkTempStorageCleanResult {
   error?: string;
 }
 
-interface CoworkUserMemoryEntry {
-  id: string;
-  text: string;
-  section?: string;
-}
+type CoworkUserMemoryEntry = SharedCoworkUserMemoryEntry;
 
-interface CoworkMemoryStats {
-  total: number;
-  created: number;
-  stale: number;
-  deleted: number;
-  explicit: number;
-  implicit: number;
-}
+type CoworkMemoryStats = SharedCoworkMemoryStats;
 
 interface CoworkPermissionRequest {
   sessionId: string;
@@ -1320,24 +1313,49 @@ interface IElectronAPI {
     onOpenSessionFromNotification: (
       callback: (data: { sessionId: string }) => void,
     ) => () => void;
-    listMemoryEntries: (input: {
+    listMemoryEntries: (input?: {
+      agentId?: string;
       query?: string;
+      status?: SharedCoworkMemoryStatusFilter;
+      includeDeleted?: boolean;
       limit?: number;
       offset?: number;
     }) => Promise<{ success: boolean; entries?: CoworkUserMemoryEntry[]; error?: string }>;
     createMemoryEntry: (input: {
+      agentId?: string;
       text: string;
+      section?: string;
+      confidence?: number;
+      isExplicit?: boolean;
     }) => Promise<{ success: boolean; entry?: CoworkUserMemoryEntry; error?: string }>;
     updateMemoryEntry: (input: {
+      agentId?: string;
       id: string;
       text: string;
+      confidence?: number;
+      status?: SharedCoworkMemoryStatus;
+      isExplicit?: boolean;
     }) => Promise<{ success: boolean; entry?: CoworkUserMemoryEntry; error?: string }>;
-    deleteMemoryEntry: (input: { id: string }) => Promise<{ success: boolean; error?: string }>;
-    getMemoryStats: () => Promise<{ success: boolean; stats?: CoworkMemoryStats; error?: string }>;
-    readMemoryFileRaw: () => Promise<{ success: boolean; content?: string; error?: string }>;
+    deleteMemoryEntry: (input: {
+      agentId?: string;
+      id: string;
+    }) => Promise<{ success: boolean; error?: string }>;
+    getMemoryStats: (options?: {
+      agentId?: string;
+    }) => Promise<{ success: boolean; stats?: CoworkMemoryStats; error?: string }>;
+    readMemoryFileRaw: (options?: {
+      agentId?: string;
+    }) => Promise<{ success: boolean; content?: string; error?: string }>;
     writeMemoryFileRaw: (input: {
+      agentId?: string;
       content: string;
     }) => Promise<{ success: boolean; error?: string }>;
+    getDreamingStatus: (
+      options?: { agentId?: string },
+    ) => Promise<{ success: boolean; data?: DreamingStatusData | null; error?: string }>;
+    getDreamDiary: (
+      options?: { agentId?: string },
+    ) => Promise<{ success: boolean; data?: DreamDiaryData | null; error?: string }>;
     readBootstrapFile: (
       filename: string,
       options?: { agentId?: string },

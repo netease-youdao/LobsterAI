@@ -52,6 +52,7 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
         : {}),
       ...customSystemPromptPatch,
       ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
+      ...(typeof p.memoryEnabled === 'boolean' ? { memoryEnabled: p.memoryEnabled } : {}),
       ...(nextPreset ? { permissionPreset: nextPreset } : {}),
       permissionPresetExplicit,
       ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),

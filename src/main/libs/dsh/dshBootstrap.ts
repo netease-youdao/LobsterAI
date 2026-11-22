@@ -38,7 +38,10 @@ import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshCh
 import { McpOAuthManager } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  backfillLegacyDreamDiariesFromBackup,
   backfillLegacyScheduledTasksFromBackup,
+  backfillLegacyUserMemories,
+  type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -95,6 +98,7 @@ export interface DshBootstrapSyncInput {
     extraDirs?: string[];
     skillsDir?: string;
   };
+  memoryEnabled?: boolean;
   agents?: DshHostAgentSpec[];
   imInstances?: Array<{
     platform: string;
@@ -131,6 +135,7 @@ export interface DshBootstrapOptions {
     ) => { id: string };
   };
   getDefaultCwd: (agentId?: string) => string;
+  getMemoryEnabled?: () => boolean;
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
@@ -342,6 +347,7 @@ export class DshBootstrap {
   };
   private ecosystemWindow: BrowserWindow | null = null;
   private lastImInstances: DshChannelInstanceConfig[] | null = null;
+  private dreamDiaryBackfillPromise: Promise<LegacyDreamDiaryBackfillResult> | null = null;
   private startPromise: Promise<DshCompatEngineStatus> | null = null;
   private started = false;
   private startingInProgress = false;
@@ -444,6 +450,7 @@ export class DshBootstrap {
     this.bridgeWiring = wireDshHostBridge({
       hostManager: this.hostManager,
       memoryService: this.memoryService,
+      isMemoryEnabled: options.getMemoryEnabled,
       scheduler: this.scheduler,
       onScheduleMutated: () => {
         this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
@@ -452,8 +459,13 @@ export class DshBootstrap {
       toolProviders: options.toolProviders,
     });
 
-    // Seed initial persisted permission preset into DshHostManager so it replays on boot.
+    // Seed initial persisted permission preset & memory policy into DshHostManager so they replay on boot.
     void this.hostManager.setPermissionPreset(this.defaultPermissionPreset).catch((): void => undefined);
+    if (options.getMemoryEnabled) {
+      void this.hostManager
+        .syncMemoryPolicy({ enabled: options.getMemoryEnabled() !== false })
+        .catch((): void => undefined);
+    }
 
     this.hostManager.on('phaseChange', (_phase, hostStatus: DshHostStatus) => {
       options.onStatusChange?.(this.mapEffectiveEngineStatus(hostStatus), hostStatus);
@@ -580,6 +592,35 @@ export class DshBootstrap {
   }
 
   /**
+   * Ensure one-shot idempotent backfill of legacy `DREAMS.md` files from
+   * `legacy-openclaw-state.tar.gz` has completed before reading diaries.
+   */
+  ensureDreamDiaryBackfilled(): Promise<LegacyDreamDiaryBackfillResult> {
+    if (!this.dreamDiaryBackfillPromise) {
+      this.dreamDiaryBackfillPromise = backfillLegacyDreamDiariesFromBackup({
+        userDataDir: this.options.userDataDir,
+        db: this.options.db,
+      })
+        .then((result) => {
+          if (result.status === 'failed') {
+            this.dreamDiaryBackfillPromise = null;
+          }
+          return result;
+        })
+        .catch((error) => {
+          console.warn('[MigrationV2] dream diary backup backfill failed:', error);
+          this.dreamDiaryBackfillPromise = null;
+          return {
+            status: 'failed' as const,
+            diariesRestored: 0,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        });
+    }
+    return this.dreamDiaryBackfillPromise;
+  }
+
+  /**
    * Deduplicated startup: concurrent callers share a single in-flight boot
    * promise so orphan reaping, host startup, dynamic host tool registration,
    * optional initial config sync, and scheduler activation never run twice
@@ -613,9 +654,9 @@ export class DshBootstrap {
   private async doStart(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
     this.startingInProgress = true;
     try {
-      // One-shot idempotent backfill for users who completed v2 migration before
-      // `cron_jobs` / run-history extraction landed. Runs concurrently with DSH boot
-      // and returns instantaneously once `engine.migration.v2.cronBackfillCompleted` is set.
+      // One-shot idempotent backfills for users who completed v2 migration before
+      // `cron_jobs` / `DREAMS.md` extraction landed. Both run concurrently with DSH
+      // boot and return instantaneously once their completion keys are set.
       const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
         userDataDir: this.options.userDataDir,
         db: this.options.db,
@@ -623,6 +664,24 @@ export class DshBootstrap {
         console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
         return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
       });
+      const dreamDiaryBackfillPromise = this.ensureDreamDiaryBackfilled();
+
+      // One-shot idempotent backfill for already-migrated v2 DBs so SQLite-only
+      // active `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
+      try {
+        const memoryBackfill = backfillLegacyUserMemories({
+          userDataDir: this.options.userDataDir,
+          db: this.options.db,
+          memoryService: this.memoryService,
+        });
+        if (memoryBackfill.memoriesImported > 0) {
+          console.log(
+            `[MigrationV2] backfilled ${memoryBackfill.memoriesImported} legacy SQLite user_memories into MEMORY.md`,
+          );
+        }
+      } catch (error) {
+        console.warn('[MigrationV2] legacy user_memories backfill failed:', error);
+      }
 
       await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
       await this.hostManager.start();
@@ -630,12 +689,20 @@ export class DshBootstrap {
         console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
       });
 
-      const backfill = await cronBackfillPromise;
+      const [backfill, dreamDiaryBackfill] = await Promise.all([
+        cronBackfillPromise,
+        dreamDiaryBackfillPromise,
+      ]);
       if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
         console.log(
           `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
         );
         this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
+      }
+      if (dreamDiaryBackfill.diariesRestored > 0) {
+        console.log(
+          `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
+        );
       }
 
       if (options?.syncInitialConfig) {
@@ -753,6 +820,9 @@ export class DshBootstrap {
       );
       await this.hostManager.syncMcpServers(servers);
       await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
+      if (typeof input.memoryEnabled === 'boolean') {
+        await this.hostManager.syncMemoryPolicy({ enabled: input.memoryEnabled });
+      }
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);
       }

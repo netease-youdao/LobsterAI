@@ -10,10 +10,22 @@ const HELPERS_URL = pathToFileURL(
 
 type PersonaHelpers = {
   MAX_INLINE_MEMORY_CHARS: number;
+  MEMORY_WRITE_POLICY_PROMPT: string;
   stripLegacyOpenClawAgentsBoilerplate: (content: string) => string;
   sanitizeMemoryMarkdownForPrompt: (content: string, maxChars?: number) => string;
   parseSkillFrontmatter: (markdown: string) => { meta: Record<string, string>; body: string };
-  assembleWorkspacePersona: (workspacesDir: string, agentId: string, customSystemPrompt?: string) => string;
+  filterMarkdownForProject: (
+    markdown: string,
+    activeProjectKeys?: readonly string[],
+    options?: { stripTags?: boolean; globalOnly?: boolean },
+  ) => string;
+  resolveProjectMemoryKeys: (cwd?: string | null) => string[];
+  assembleWorkspacePersona: (
+    workspacesDir: string,
+    agentId: string,
+    customSystemPrompt?: string,
+    options?: { workspaceDir?: string; memoryEnabled?: boolean },
+  ) => string;
 };
 
 let cachedHelpers: PersonaHelpers | null = null;
@@ -151,5 +163,106 @@ describe('persona-helpers', () => {
     const [bodyPart] = truncated.split('\n\n（长期记忆较长');
     expect(bodyPart.length).toBeLessThanOrEqual(MAX_INLINE_MEMORY_CHARS);
     expect(bodyPart.endsWith('历史长期记忆内容。')).toBe(true);
+  });
+
+  test('shares main global preferences with non-main experts while isolating expert private and foreign project memories', async () => {
+    const {
+      assembleWorkspacePersona,
+      MEMORY_WRITE_POLICY_PROMPT,
+      resolveProjectMemoryKeys,
+    } = await loadHelpers();
+
+    const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-persona-iso-'));
+    const projA = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-persona-proj-a-'));
+    const projB = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-persona-proj-b-'));
+    tempDirs.push(wsRoot, projA, projB);
+
+    fs.mkdirSync(path.join(projA, '.git'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projA, '.git', 'config'),
+      '[remote "origin"]\n\turl = https://github.com/acme/alpha.git\n',
+      'utf8',
+    );
+    expect(resolveProjectMemoryKeys(projA)).toContain('github.com/acme/alpha');
+
+    // Seed main + expert-a + expert-b workspaces.
+    for (const id of ['main', 'expert-a', 'expert-b']) {
+      fs.mkdirSync(path.join(wsRoot, id), { recursive: true });
+    }
+    fs.writeFileSync(
+      path.join(wsRoot, 'main', 'USER.md'),
+      '# Profile\n- Global user prefers concise bullet points\n- Project A main-only user note <!-- project: github.com/acme/alpha -->\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(wsRoot, 'main', 'MEMORY.md'),
+      '# User Memories\n- Always respond in Chinese\n- Main Project A build rule <!-- project: github.com/acme/alpha -->\n',
+      'utf8',
+    );
+    fs.writeFileSync(path.join(wsRoot, 'expert-a', 'SOUL.md'), 'You are Expert A.', 'utf8');
+    fs.writeFileSync(
+      path.join(wsRoot, 'expert-a', 'MEMORY.md'),
+      [
+        '# User Memories',
+        '- Expert A private codename: FALCON',
+        `- Project A convention: run pnpm check:alpha <!-- project: path:${projA} -->`,
+        '- Git-tagged Alpha rule: use strict ESM <!-- project: github.com/acme/alpha -->',
+        `- Project B convention: run make beta <!-- project: path:${projB} -->`,
+      ].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(path.join(wsRoot, 'expert-b', 'SOUL.md'), 'You are Expert B.', 'utf8');
+    fs.writeFileSync(
+      path.join(wsRoot, 'expert-b', 'MEMORY.md'),
+      '# User Memories\n- Expert B private codename: DOLPHIN\n',
+      'utf8',
+    );
+
+    // Expert A in Project A: global prefs + FALCON + Project A rules, never DOLPHIN or Project B or main project tags.
+    const promptExpAInA = assembleWorkspacePersona(wsRoot, 'expert-a', '', { workspaceDir: projA });
+    expect(promptExpAInA).toContain('## Global User Preferences');
+    expect(promptExpAInA).toContain('Global user prefers concise bullet points');
+    expect(promptExpAInA).toContain('## Global Memory');
+    expect(promptExpAInA).toContain('Always respond in Chinese');
+    expect(promptExpAInA).toContain('FALCON');
+    expect(promptExpAInA).toContain('run pnpm check:alpha');
+    expect(promptExpAInA).toContain('use strict ESM');
+    expect(promptExpAInA).not.toContain('DOLPHIN');
+    expect(promptExpAInA).not.toContain('make beta');
+    expect(promptExpAInA).not.toContain('Main Project A build rule');
+    expect(promptExpAInA).not.toContain('Project A main-only user note');
+    expect(promptExpAInA).not.toContain('<!-- project:');
+
+    // Expert A in Project B: global prefs + FALCON + Project B rule, NEVER Project A rules.
+    const promptExpAInB = assembleWorkspacePersona(wsRoot, 'expert-a', '', { workspaceDir: projB });
+    expect(promptExpAInB).toContain('Global user prefers concise bullet points');
+    expect(promptExpAInB).toContain('FALCON');
+    expect(promptExpAInB).toContain('run make beta');
+    expect(promptExpAInB).not.toContain('pnpm check:alpha');
+    expect(promptExpAInB).not.toContain('use strict ESM');
+
+    // Expert B in Project B: global prefs + DOLPHIN, NEVER FALCON.
+    const promptExpBInB = assembleWorkspacePersona(wsRoot, 'expert-b', '', { workspaceDir: projB });
+    expect(promptExpBInB).toContain('Global user prefers concise bullet points');
+    expect(promptExpBInB).toContain('Always respond in Chinese');
+    expect(promptExpBInB).toContain('DOLPHIN');
+    expect(promptExpBInB).not.toContain('FALCON');
+
+    // memoryEnabled: false omits all memory & user preference sections while keeping SOUL.md.
+    const promptDisabled = assembleWorkspacePersona(wsRoot, 'expert-a', 'Custom rule', {
+      workspaceDir: projA,
+      memoryEnabled: false,
+    });
+    expect(promptDisabled).toContain('You are Expert A.');
+    expect(promptDisabled).toContain('Custom rule');
+    expect(promptDisabled).not.toContain('Global User Preferences');
+    expect(promptDisabled).not.toContain('Global Memory');
+    expect(promptDisabled).not.toContain('FALCON');
+    expect(promptDisabled).not.toContain('concise bullet points');
+
+    // Write policy prompt covers write-before-confirm and both scopes.
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('lobster_memory_save');
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "project"');
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "global"');
   });
 });

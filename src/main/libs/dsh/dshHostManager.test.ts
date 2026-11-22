@@ -74,19 +74,26 @@ describe('DshHostManager', () => {
     unregisterOld();
     manager.setFallbackBridgeToolHandler(fallback);
     await manager['ensureBridgeServer']();
-    const execute = (toolName: unknown) => fetch(`${manager['bridgeUrl']}/dsh-bridge/tool-execute`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${manager['bridgeSecret']}` },
-      body: JSON.stringify({ toolName }),
-    });
+    const execute = (toolName: unknown, extra: Record<string, unknown> = {}) => fetch(
+      `${manager['bridgeUrl']}/dsh-bridge/tool-execute`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${manager['bridgeSecret']}` },
+        body: JSON.stringify({ toolName, ...extra }),
+      },
+    );
     try {
       expect(await (await execute('sample')).json()).toEqual({ via: 'registered' });
       expect((await execute(123)).status).toBe(400);
       expect((await execute('   ')).status).toBe(400);
       expect(fallback).not.toHaveBeenCalled();
-      expect(await (await execute('provider_tool')).json()).toEqual({ via: 'provider' });
+      expect(await (await execute('provider_tool', { workspaceDir: '/tmp/proj-alpha' })).json()).toEqual({
+        via: 'provider',
+      });
       expect(fallback).toHaveBeenCalledWith(expect.objectContaining({
-        toolName: 'provider_tool', signal: expect.any(AbortSignal),
+        toolName: 'provider_tool',
+        workspaceDir: '/tmp/proj-alpha',
+        signal: expect.any(AbortSignal),
       }));
       unregister();
       manager.setFallbackBridgeToolHandler(null);
@@ -136,6 +143,7 @@ describe('DshHostManager', () => {
     const provRes = await manager.syncProviders({ providers: [] });
     const mcpRes = await manager.syncMcpServers([]);
     const skillRes = await manager.syncSkillsPolicy({ disabledIds: ['foo'] });
+    const memoryRes = await manager.syncMemoryPolicy({ enabled: false });
     const toolsRes = await manager.syncHostTools([]);
     const agentsRes = await manager.syncAgents([]);
     const bindingsRes = await manager.syncSubagentBindings([], { replace: true });
@@ -143,6 +151,7 @@ describe('DshHostManager', () => {
     expect(provRes).toEqual({ deferred: true });
     expect(mcpRes).toEqual({ deferred: true });
     expect(skillRes).toEqual({ deferred: true });
+    expect(memoryRes).toEqual({ deferred: true });
     expect(toolsRes).toEqual({ deferred: true });
     expect(agentsRes).toEqual({ deferred: true });
     expect(bindingsRes).toEqual({ deferred: true });
