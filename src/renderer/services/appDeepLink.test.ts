@@ -6,12 +6,25 @@ import { describeAppDeepLinkTarget, isAppDeepLink, parseAppDeepLink } from './ap
 describe('app deep links', () => {
   test('parses settings tabs and main views', () => {
     expect(parseAppDeepLink('lobsterai://settings/im')).toEqual({ kind: 'settings', tab: 'im' });
+    expect(parseAppDeepLink('lobsterai://settings/email')).toEqual({ kind: 'settings', tab: 'email' });
     expect(parseAppDeepLink(' lobsterai://settings/desktopCompanion/ ')).toEqual({
       kind: 'settings',
       tab: 'desktopCompanion',
     });
     expect(parseAppDeepLink('lobsterai://view/scheduledTasks')).toEqual({ kind: 'view', view: 'scheduledTasks' });
     expect(parseAppDeepLink('lobsterai://view/skills')).toEqual({ kind: 'view', view: 'skills' });
+  });
+
+  test('normalizes retired settings tabs to general while keeping email active', () => {
+    expect(parseAppDeepLink('lobsterai://settings/email')).toEqual({ kind: 'settings', tab: 'email' });
+    expect(parseAppDeepLink('lobsterai://settings/coworkAgentEngine')).toEqual({
+      kind: 'settings',
+      tab: 'general',
+    });
+    expect(parseAppDeepLink('lobsterai://settings/coworkDreaming')).toEqual({
+      kind: 'settings',
+      tab: 'general',
+    });
   });
 
   test('rejects web urls, auth callbacks and unknown targets', () => {
@@ -28,6 +41,8 @@ describe('app deep links', () => {
     expect(describeAppDeepLinkTarget({ kind: 'view', view: MainView.Connectors }, translate)).toBe('<connectors>');
     expect(describeAppDeepLinkTarget({ kind: 'settings', tab: 'desktopCompanion' }, translate))
       .toBe('<settings> · <desktopCompanionTitle>');
+    expect(describeAppDeepLinkTarget({ kind: 'settings', tab: 'email' }, translate))
+      .toBe('<settings> · <emailTab>');
   });
 
   test('every main view a link can open has a name', () => {

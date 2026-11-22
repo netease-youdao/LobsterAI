@@ -80,6 +80,17 @@
   config:
     default: lobsterai
 
+# ── Context compaction policy ────────────────────────────────────────────────
+# DSH's default headroomTokens (65536) causes TargetPressureConfigError on
+# <=64K context windows (64000 - 16384 - 65536 <= 0, silently disabling
+# pre-step auto-compaction) and triggers premature compaction at ~36% on 128K
+# models. Setting 8192 keeps 64K, 128K, and 200K+ models compacting smoothly
+# around ~75-80% while keeping the derived summary maxTokens within 8K caps.
+
+- id: compaction-basic
+  config:
+    headroomTokens: 8192
+
 # ── LobsterAI Default Agent Preset & Host Cordis Plugins ─────────────────────
 
 - insert:
@@ -119,8 +130,12 @@
             name: '@deepseek-ai/dsh-tool-jobs'
             config:
               completionDelivery: quiet
-          - id: skill-filesystem
-            name: '@deepseek-ai/dsh-skill-filesystem'
+          # Omit `@deepseek-ai/dsh-skill-filesystem` in `preset-lobsterai`:
+          # `@deepseek-ai/dsh-web-app` already disables the host-plane row, and
+          # `lobster-persona-scope` owns skill discovery (LobsterAI SKILLs +
+          # project `.dsh/skills` / `.agents/skills`) under LobsterAI's
+          # `skillsPolicy` and per-agent `allowedSkillIds` allowlists so
+          # disabled or restricted skills can never be shadowed back in.
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
             config:
@@ -138,6 +153,8 @@
             config:
               - id: compaction-basic
                 name: '@deepseek-ai/dsh-compaction-basic'
+                config:
+                  headroomTokens: 8192
               - id: command-compact
                 name: '@deepseek-ai/dsh-command-compact'
               - id: tool-result-pruner

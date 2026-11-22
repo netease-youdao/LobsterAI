@@ -8,6 +8,7 @@ import {
   ComputerUseSkillId,
 } from '../../shared/computerUse/constants';
 import { type InstalledKitRecord, KitStoreKey } from '../../shared/kit/constants';
+import { McpAuthMode } from '../../shared/mcp/auth';
 import { ComputerUseMcpEnv, ComputerUseMcpServerName } from '../computerUse/computerUseMcpServer';
 import {
   ComputerUseRuntimeMode,
@@ -16,7 +17,9 @@ import {
   getComputerUseRuntimeRoot,
 } from '../computerUse/computerUseRuntime';
 import { buildDshMcpServerSpecs } from '../libs/dsh/dshProviderSync';
+import { McpLaunchResolutionStatus, McpLaunchResolverKind } from './mcpLaunchResolution';
 import { McpRuntime } from './mcpRuntime';
+import type { McpServerRecord } from './mcpStore';
 
 const TEST_USER_DATA = path.join(process.cwd(), '.test-mcp-runtime-computer-use');
 const originalPlatform = process.platform;
@@ -50,10 +53,12 @@ vi.mock('electron', () => ({
   },
 }));
 
+const mockEnabledServers: unknown[] = [];
+
 vi.mock('./mcpStore', () => ({
   McpStore: class {
     getEnabledServers(): unknown[] {
-      return [];
+      return mockEnabledServers;
     }
   },
 }));
@@ -135,6 +140,202 @@ describe.each(MAC_RUNTIMES)('McpRuntime Computer Use integration ($target)', (ma
       'macos',
       'lobster-computer-use',
     ));
+  });
+});
+
+describe('McpRuntime resolved server metadata', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('carries real SQLite server.id and timeouts across raw stdio, optimized stdio, and remote servers', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const enabledServers: McpServerRecord[] = [
+      {
+        id: 'uuid-raw-stdio',
+        name: '高德地图',
+        description: '',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'node',
+        args: ['server.js'],
+        requestTimeoutMs: 75_000,
+        connectionTimeoutMs: 12_000,
+        isBuiltIn: false,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: 'uuid-npx-opt',
+        name: 'Context7',
+        description: '',
+        enabled: true,
+        transportType: 'stdio',
+        command: 'npx',
+        args: ['-y', '@upstash/context7-mcp'],
+        requestTimeoutMs: 90_000,
+        connectionTimeoutMs: 25_000,
+        isBuiltIn: false,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+      {
+        id: 'uuid-remote-http',
+        name: 'Linear Remote',
+        description: '',
+        enabled: true,
+        transportType: 'http',
+        url: 'https://mcp.linear.app/mcp',
+        headers: { 'X-Client': 'lobsterai' },
+        auth: McpAuthMode.OAuth,
+        requestTimeoutMs: 120_000,
+        connectionTimeoutMs: 30_000,
+        isBuiltIn: false,
+        createdAt: 3,
+        updatedAt: 3,
+      },
+    ];
+
+    const runtime = new McpRuntime({
+      getStore: () => ({ get: () => undefined, set: () => {}, getDatabase: () => ({}) }) as never,
+      syncOpenClawConfig: vi.fn(async () => ({ success: true, changed: false })),
+    });
+    vi.spyOn(runtime, 'getStore').mockReturnValue({
+      getEnabledServers: () => enabledServers,
+    } as never);
+    vi.spyOn(runtime, 'getLaunchResolverManager').mockReturnValue({
+      canOptimize: (srv: McpServerRecord) => srv.id === 'uuid-npx-opt',
+      getReadyResolution: (srv: McpServerRecord) => (
+        srv.id === 'uuid-npx-opt'
+          ? {
+            serverId: srv.id,
+            resolverKind: McpLaunchResolverKind.Npx,
+            sourceFingerprint: 'fp',
+            status: McpLaunchResolutionStatus.Ready,
+            command: '/electron/node',
+            args: ['/userData/mcp-packages/uuid-npx-opt/bin.js'],
+            updatedAt: 1,
+          }
+          : undefined
+      ),
+    } as never);
+
+    const resolved = await runtime.refreshResolvedServersCache();
+    expect(resolved).toHaveLength(3);
+    expect(resolved[0]).toMatchObject({
+      id: 'uuid-raw-stdio',
+      name: '高德地图',
+      transportType: 'stdio',
+      requestTimeoutMs: 75_000,
+      connectionTimeoutMs: 12_000,
+    });
+    expect(resolved[1]).toMatchObject({
+      id: 'uuid-npx-opt',
+      name: 'Context7',
+      transportType: 'stdio',
+      command: '/electron/node',
+      args: ['/userData/mcp-packages/uuid-npx-opt/bin.js'],
+      requestTimeoutMs: 90_000,
+      connectionTimeoutMs: 25_000,
+    });
+    expect(resolved[2]).toMatchObject({
+      id: 'uuid-remote-http',
+      name: 'Linear Remote',
+      transportType: 'http',
+      url: 'https://mcp.linear.app/mcp',
+      auth: McpAuthMode.OAuth,
+      requestTimeoutMs: 120_000,
+      connectionTimeoutMs: 30_000,
+    });
+  });
+});
+
+describe('McpRuntime resolved server IDs', () => {
+  afterEach(() => {
+    mockEnabledServers.length = 0;
+  });
+
+  test('preserves SQLite server.id on resolved remote OAuth servers', async () => {
+    mockEnabledServers.push({
+      id: 'srv-uuid-1234',
+      name: 'Linear OAuth',
+      description: 'Remote OAuth server',
+      enabled: true,
+      transportType: 'http',
+      url: 'https://mcp.linear.app/mcp',
+      auth: McpAuthMode.OAuth,
+      isBuiltIn: false,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const sqliteStore = {
+      get: vi.fn(() => undefined),
+      set: vi.fn(),
+      getDatabase: vi.fn(() => ({})),
+    };
+    const runtime = new McpRuntime({
+      getStore: () => sqliteStore as never,
+      syncOpenClawConfig: vi.fn(async () => ({ success: true, changed: false })),
+    });
+
+    const resolved = await runtime.refreshResolvedServersCache();
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      id: 'srv-uuid-1234',
+      name: 'Linear OAuth',
+      transportType: 'http',
+      url: 'https://mcp.linear.app/mcp',
+      auth: McpAuthMode.OAuth,
+    });
+  });
+});
+
+describe('McpRuntime remote SSE resolution', () => {
+  test('preserves server id, transportType sse, headers, timeouts, and oauth mode', async () => {
+    const sqliteStore = {
+      get: vi.fn(() => undefined),
+      set: vi.fn(),
+      getDatabase: vi.fn(() => ({})),
+    };
+    const runtime = new McpRuntime({
+      getStore: () => sqliteStore as never,
+      syncOpenClawConfig: vi.fn(async () => ({ success: true, changed: false })),
+    });
+    vi.spyOn(runtime, 'getStore').mockReturnValue({
+      getEnabledServers: () => [
+        {
+          id: 'srv-uuid-sse-1',
+          name: 'Legacy SSE',
+          description: '',
+          enabled: true,
+          transportType: 'sse',
+          url: 'https://legacy.example.com/sse',
+          headers: { Authorization: 'Bearer tok-123' },
+          auth: McpAuthMode.OAuth,
+          requestTimeoutMs: 30_000,
+          connectionTimeoutMs: 10_000,
+          isBuiltIn: false,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    } as never);
+
+    const servers = await runtime.refreshResolvedServersCache();
+    expect(servers).toEqual([
+      {
+        id: 'srv-uuid-sse-1',
+        name: 'Legacy SSE',
+        transportType: 'sse',
+        url: 'https://legacy.example.com/sse',
+        headers: { Authorization: 'Bearer tok-123' },
+        auth: McpAuthMode.OAuth,
+        requestTimeoutMs: 30_000,
+        connectionTimeoutMs: 10_000,
+      },
+    ]);
   });
 });
 

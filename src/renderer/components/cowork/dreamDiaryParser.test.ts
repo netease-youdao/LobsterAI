@@ -3,6 +3,8 @@ import { describe, expect, test } from 'vitest';
 import {
   flattenDiaryBody,
   formatDiaryChipLabel,
+  getVisibleLegacyDreamDiaries,
+  hasMeaningfulDiaryContent,
   parseDiaryDateMs,
   parseDiaryEntries,
 } from './dreamDiaryParser';
@@ -40,6 +42,95 @@ describe('parseDiaryEntries', () => {
 
   test('returns no entries for a freshly seeded diary', () => {
     expect(parseDiaryEntries(buildDreamsFile([]))).toEqual([]);
+  });
+
+  test('parses real OpenClaw DREAMS.md sections and does not mistake bold headings for dates', () => {
+    const raw = [
+      '# Dream Diary',
+      '',
+      '<!-- openclaw:dreaming:diary:start -->',
+      '---',
+      '*November 14, 2026 at 3:00 AM GMT+8*',
+      'What Happened',
+      '1. Reviewed release notes [memory/2026-11-13.md:12]',
+      'Reflections',
+      '- Team prefers concise PR summaries',
+      '---',
+      '**Unstamped Reflection**',
+      'Remember to verify migration backups.',
+      '<!-- openclaw:dreaming:diary:end -->',
+      '',
+    ].join('\n');
+
+    const entries = parseDiaryEntries(raw);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].date).toBe('November 14, 2026 at 3:00 AM GMT+8');
+    expect(flattenDiaryBody(entries[0].body)).toEqual([
+      'Reviewed release notes',
+      'Team prefers concise PR summaries',
+    ]);
+    expect(entries[1]).toEqual({
+      date: '',
+      body: '**Unstamped Reflection**\nRemember to verify migration backups.',
+    });
+  });
+});
+
+describe('hasMeaningfulDiaryContent and getVisibleLegacyDreamDiaries', () => {
+  test('distinguishes empty seeded templates from meaningful historical diaries', () => {
+    expect(hasMeaningfulDiaryContent('')).toBe(false);
+    expect(hasMeaningfulDiaryContent(null)).toBe(false);
+    expect(hasMeaningfulDiaryContent(buildDreamsFile([]))).toBe(false);
+    expect(
+      hasMeaningfulDiaryContent(
+        buildDreamsFile([{ date: 'November 14, 2026 at 3:00 AM GMT+8', narrative: 'Kept note.' }]),
+      ),
+    ).toBe(true);
+    expect(hasMeaningfulDiaryContent('Plain user notes without markers')).toBe(true);
+  });
+
+  test('filters out empty seeded agents while preserving legacy single-agent payloads', () => {
+    expect(
+      getVisibleLegacyDreamDiaries({ found: false, path: '', content: '', agents: [] }),
+    ).toEqual([]);
+
+    const realContent = buildDreamsFile([
+      { date: 'November 14, 2026 at 3:00 AM GMT+8', narrative: 'Expert dream note.' },
+    ]);
+    expect(
+      getVisibleLegacyDreamDiaries({
+        found: true,
+        agentId: 'main',
+        path: '/workspaces/main/DREAMS.md',
+        content: buildDreamsFile([]),
+        agents: [
+          { agentId: 'main', path: '/workspaces/main/DREAMS.md', content: buildDreamsFile([]) },
+          { agentId: 'researcher', agentName: 'Researcher', path: '/workspaces/researcher/DREAMS.md', content: realContent },
+        ],
+      }),
+    ).toEqual([
+      {
+        agentId: 'researcher',
+        agentName: 'Researcher',
+        path: '/workspaces/researcher/DREAMS.md',
+        content: realContent,
+      },
+    ]);
+
+    expect(
+      getVisibleLegacyDreamDiaries({
+        found: true,
+        path: '/workspaces/main/DREAMS.md',
+        content: realContent,
+      }),
+    ).toEqual([
+      {
+        agentId: 'main',
+        path: '/workspaces/main/DREAMS.md',
+        content: realContent,
+        updatedAtMs: undefined,
+      },
+    ]);
   });
 });
 

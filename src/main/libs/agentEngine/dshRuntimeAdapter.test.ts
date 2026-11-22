@@ -1,16 +1,24 @@
+import { EventEmitter } from 'events';
 import { describe, expect, test, vi } from 'vitest';
 
+import {
+  ContextCompactionMode,
+  ContextCompactionStatus,
+  CoworkSystemMessageKind,
+} from '../../../common/coworkSystemMessages';
 import {
   BrowserAnnotationAnchorKind,
   BrowserAnnotationScreenshotStatus,
   type CoworkBrowserAnnotationMessageBatch,
 } from '../../../shared/cowork/browserAnnotations';
+import { type CoworkGoal, CoworkGoalStatus } from '../../../shared/cowork/goal';
 import { CoworkImageAttachmentRole } from '../../../shared/cowork/imageAttachments';
 import { getCoworkLlmTrace, isValidLlmTraceId } from '../../../shared/cowork/llmTurnUsage';
 import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
 } from '../../../shared/cowork/selectedText';
+import { CoworkSteerStatus } from '../../../shared/cowork/steer';
 import {
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
@@ -25,11 +33,16 @@ import {
   buildLazyContextBridgePrefix,
   type DshAdapterSessionRecord,
   type DshCoworkStorePort,
+  DshGoalCommandKind,
   DshRuntimeAdapter,
+  extractGoalFromDshPayload,
+  extractGoalFromProjections,
   isDshBackedSessionId,
   resolveOfficeAgentPromptForTurn,
   resolveUnlockedCapabilitiesForTurn,
+  translateLobsterGoalCommandToDsh,
 } from './dshRuntimeAdapter';
+import type { CoworkContextUsage } from './types';
 
 function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
   store: DshCoworkStorePort;
@@ -75,6 +88,8 @@ function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
       if (updates.claudeSessionId !== undefined) session.claudeSessionId = updates.claudeSessionId;
       if (updates.modelOverride !== undefined) session.modelOverride = updates.modelOverride;
       if (updates.thinkingLevel !== undefined) session.thinkingLevel = updates.thinkingLevel;
+      if (updates.goal !== undefined) session.goal = updates.goal;
+      if (updates.permissionPreset !== undefined) session.permissionPreset = updates.permissionPreset;
     },
     getContinuityCapsule: () => ({
       version: 1,
@@ -139,6 +154,86 @@ describe('dshRuntimeAdapter helpers', () => {
     expect(prefix).toContain('Ship v2 engine');
     expect(prefix).toContain('用户: Hello OpenClaw');
     expect(prefix).toContain('助手: Hi from legacy engine');
+  });
+
+  test('preserves both capsule summary and newest turns when Lazy Context Bridge exceeds max chars', () => {
+    const longCapsule = {
+      version: 1 as const,
+      sessionId: 'cw-long',
+      revision: 3,
+      updatedAt: 1,
+      lastSource: ContinuityCapsuleSource.PostRun,
+      currentObjective: 'CORE-OBJECTIVE-MARKER: Ship reliable context compaction',
+      recentUserRequests: Array.from({ length: 12 }, (_, i) => `User request #${i + 1}: ${'x'.repeat(200)}`),
+      userConstraints: Array.from({ length: 8 }, (_, i) => `Constraint #${i + 1}: ${'c'.repeat(180)}`),
+      decisions: Array.from({ length: 10 }, (_, i) => `Decision #${i + 1}: ${'d'.repeat(180)}`),
+      completedFacts: Array.from({ length: 10 }, (_, i) => `Completed #${i + 1}: ${'f'.repeat(180)}`),
+      recentActions: [],
+      touchedFiles: [],
+      keySymbols: [],
+      verification: [],
+      nextSteps: ['Verify E2E compaction'],
+      recentFailures: [],
+      activeCapabilities: [],
+      openQuestions: [],
+    };
+    const longMessages: CoworkMessage[] = Array.from({ length: 8 }, (_, i) => ({
+      id: `m-${i + 1}`,
+      type: i % 2 === 0 ? 'user' : 'assistant',
+      content: `TURN-MARKER-${i + 1} ${'m'.repeat(750)}`,
+      timestamp: i + 1,
+    }));
+
+    const prefix = buildLazyContextBridgePrefix(longCapsule, longMessages);
+    expect(prefix.length).toBeLessThanOrEqual(6_000);
+    expect(prefix.startsWith('<previous_conversation_context>\n')).toBe(true);
+    expect(prefix.endsWith('\n</previous_conversation_context>')).toBe(true);
+    // Capsule objective MUST survive.
+    expect(prefix).toContain('CORE-OBJECTIVE-MARKER: Ship reliable context compaction');
+    // Newest user/assistant turns MUST survive instead of being sliced off the end.
+    expect(prefix).toContain('[历史会话近期对话]');
+    expect(prefix).toContain('TURN-MARKER-8');
+    expect(prefix).toContain('TURN-MARKER-7');
+    // Oldest turns are dropped first to stay within budget.
+    expect(prefix).not.toContain('TURN-MARKER-1');
+
+    // When legacy goal and todo/plan are also present, all sections survive within budget.
+    const prefixWithGoalAndPlan = buildLazyContextBridgePrefix(
+      longCapsule,
+      [
+        {
+          id: 'todo-1',
+          type: 'tool_use',
+          content: 'TodoWrite',
+          timestamp: 0,
+          metadata: {
+            toolName: 'TodoWrite',
+            toolInput: {
+              todos: [
+                { content: 'LEGACY-PLAN-STEP-1', status: 'completed' },
+                { content: 'LEGACY-PLAN-STEP-2', status: 'in_progress' },
+              ],
+            },
+          },
+        },
+        ...longMessages,
+      ],
+      {
+        id: 'goal-legacy-1',
+        objective: 'LEGACY-GOAL-OBJECTIVE',
+        status: CoworkGoalStatus.Active,
+        createdAt: 1,
+        updatedAt: 2,
+        tokensUsed: 0,
+      },
+    );
+    expect(prefixWithGoalAndPlan.length).toBeLessThanOrEqual(6_000);
+    expect(prefixWithGoalAndPlan.endsWith('\n</previous_conversation_context>')).toBe(true);
+    expect(prefixWithGoalAndPlan).toContain('LEGACY-GOAL-OBJECTIVE');
+    expect(prefixWithGoalAndPlan).toContain('LEGACY-PLAN-STEP-2');
+    expect(prefixWithGoalAndPlan).toContain('CORE-OBJECTIVE-MARKER: Ship reliable context compaction');
+    expect(prefixWithGoalAndPlan).toContain('TURN-MARKER-8');
+    expect(prefixWithGoalAndPlan).not.toContain('TURN-MARKER-1');
   });
 });
 
@@ -1128,6 +1223,1167 @@ describe('DshRuntimeAdapter', () => {
     expect(messages.some(m => m.type === 'assistant' && m.content === '博客自动发布已完成发布。')).toBe(true);
     const toolResult = messages.find(m => m.type === 'tool_result');
     expect(toolResult?.metadata?.subagentRunId).toBe('dsh:child-blog-1');
+  });
+
+  test('translates LobsterAI /goal syntax to DSH parseGoalCommand grammar for fresh, active, and complete goals', () => {
+    const activeGoal: CoworkGoal = {
+      id: 'goal-1',
+      objective: 'Old goal',
+      status: CoworkGoalStatus.Active,
+      createdAt: 1000,
+      updatedAt: 1000,
+      tokensUsed: 0,
+    };
+    const completeGoal: CoworkGoal = {
+      ...activeGoal,
+      status: CoworkGoalStatus.Complete,
+      completedAt: 2000,
+    };
+
+    expect(translateLobsterGoalCommandToDsh('/goal start Build a release checklist', null)).toEqual({
+      kind: DshGoalCommandKind.Create,
+      line: '/goal Build a release checklist',
+      objective: 'Build a release checklist',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal set Ship v2', null)).toEqual({
+      kind: DshGoalCommandKind.Create,
+      line: '/goal Ship v2',
+      objective: 'Ship v2',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal set Updated objective', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Edit,
+      line: '/goal edit Updated objective',
+      objective: 'Updated objective',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal edit New goal after done', completeGoal)).toEqual({
+      kind: DshGoalCommandKind.Create,
+      line: '/goal New goal after done',
+      objective: 'New goal after done',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal pause', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Pause,
+      line: '/goal pause',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal resume', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Resume,
+      line: '/goal resume',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal clear', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Clear,
+      line: '/goal clear',
+    });
+    expect(translateLobsterGoalCommandToDsh('/goal status', activeGoal)).toEqual({
+      kind: DshGoalCommandKind.Show,
+      line: '/goal',
+    });
+  });
+
+  test('parses REAL DSH 0.2.2 nested goal projections and goal/change payloads (plus legacy flat fallback)', () => {
+    const realDshProjection = {
+      seq: 12,
+      values: {
+        goal: {
+          goal: {
+            id: 'goal-uuid-1',
+            revision: 3,
+            objective: 'Build a release checklist',
+            phase: 'blocked',
+            maxGoalRounds: 256,
+            blockedReason: {
+              code: 'missing-credentials',
+              message: 'Need npm publish token',
+            },
+          },
+          roundsStarted: 4,
+          createdAt: 1700000000000,
+          updatedAt: 1700000005000,
+        },
+      },
+    };
+    expect(extractGoalFromProjections(realDshProjection)).toEqual({
+      id: 'goal-uuid-1',
+      objective: 'Build a release checklist',
+      status: CoworkGoalStatus.Blocked,
+      createdAt: 1700000000000,
+      updatedAt: 1700000005000,
+      blockedAt: 1700000005000,
+      tokensUsed: 0,
+      continuationTurns: 4,
+      lastStatusNote: 'Need npm publish token',
+    });
+
+    expect(extractGoalFromDshPayload({
+      kind: 'goal/change',
+      version: 1,
+      operation: 'clear',
+      cleared: { id: 'goal-uuid-1', revision: 4 },
+      clearedAt: 1700000009000,
+    })).toBeNull();
+
+    expect(extractGoalFromProjections({
+      values: {
+        goal: {
+          id: 'legacy-flat-1',
+          text: 'Legacy objective',
+          status: 'paused',
+          createdAt: 100,
+          updatedAt: 200,
+          tokensUsed: 55,
+        },
+      },
+    })).toEqual({
+      id: 'legacy-flat-1',
+      objective: 'Legacy objective',
+      status: CoworkGoalStatus.Paused,
+      createdAt: 100,
+      updatedAt: 200,
+      pausedAt: 200,
+      tokensUsed: 55,
+    });
+  });
+
+  test('includes legacy session goal and latest todo/plan items in Lazy Context Bridge', () => {
+    const legacyGoal: CoworkGoal = {
+      id: 'g-old',
+      objective: 'Complete release migration',
+      status: CoworkGoalStatus.Paused,
+      createdAt: 1000,
+      updatedAt: 2000,
+      tokensUsed: 0,
+      lastStatusNote: 'Waiting for QA sign-off',
+    };
+    const prefix = buildLazyContextBridgePrefix(
+      null,
+      [
+        { id: 'm1', type: 'user', content: 'Plan the release', timestamp: 1 },
+        {
+          id: 'm2',
+          type: 'tool_use',
+          content: 'TodoWrite',
+          timestamp: 2,
+          metadata: {
+            toolName: 'TodoWrite',
+            toolInput: {
+              todos: [
+                { content: 'Fix /goal routing', status: 'completed' },
+                { content: 'Verify E2E with real DSH', status: 'in_progress' },
+              ],
+            },
+          },
+        },
+      ],
+      legacyGoal,
+    );
+    expect(prefix).toContain('[历史会话目标]');
+    expect(prefix).toContain('Complete release migration');
+    expect(prefix).toContain('Waiting for QA sign-off');
+    expect(prefix).toContain('[历史任务清单/计划]');
+    expect(prefix).toContain('[completed] Fix /goal routing');
+    expect(prefix).toContain('[in_progress] Verify E2E with real DSH');
+  });
+
+  test('routes runGoalCommand and startSession(/goal ...) via executeCommand, handles multi-round goal/change, and supports legacy sessions', async () => {
+    const { store, session, messages } = createInMemoryStore({
+      id: 'cw-goal-legacy',
+      cwd: '/tmp/work',
+      claudeSessionId: 'agent:main:legacy-openclaw',
+      goal: {
+        id: 'old-goal',
+        objective: 'Legacy objective',
+        status: CoworkGoalStatus.Paused,
+        createdAt: 1000,
+        updatedAt: 1000,
+        tokensUsed: 0,
+      },
+      messages: [
+        { id: 'u-old', type: 'user', content: 'Previous legacy turn', timestamp: 1 },
+        {
+          id: 't-old',
+          type: 'tool_use',
+          content: 'update_plan',
+          timestamp: 2,
+          metadata: {
+            toolName: 'update_plan',
+            toolInput: {
+              explanation: 'Migration checklist',
+              plan: [{ step: 'Run E2E tests', status: 'pending' }],
+            },
+          },
+        },
+      ],
+    });
+
+    const executeCommand = vi.fn(async () => ({
+      commandId: 'cmd-1',
+      result: { kind: 'success' as const, text: 'Goal created' },
+    }));
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const clientEmitter = new EventEmitter();
+
+    const fakeClient = Object.assign(clientEmitter, {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-goal-1' })),
+      executeCommand,
+      promptSession,
+      getSessionProjections: vi.fn(async () => ({
+        values: {
+          goal: {
+            goal: {
+              id: 'goal-dsh-1',
+              revision: 1,
+              objective: 'Legacy objective',
+              phase: 'active',
+              maxGoalRounds: 256,
+            },
+            roundsStarted: 0,
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        },
+      })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield {
+          type: 'event',
+          event: {
+            type: 'goal/change',
+            seq: 1,
+            data: {
+              kind: 'goal/change',
+              version: 1,
+              operation: 'create',
+              goal: {
+                id: 'goal-dsh-1',
+                revision: 1,
+                objective: 'Legacy objective',
+                phase: 'active',
+                maxGoalRounds: 256,
+              },
+              roundsStarted: 0,
+              createdAt: 1000,
+              updatedAt: 1000,
+            },
+          },
+        };
+        // Round 1 completes while goal stays armed -> stream stays open for Round 2!
+        yield { type: 'event', event: { type: 'turn/start', seq: 2, data: { turn: 1 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'user/message',
+            seq: 3,
+            data: { source: { kind: 'goal', goalId: 'goal-dsh-1', revision: 1, round: 1 } },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 4,
+            data: { turn: 1, message: { content: [{ type: 'text', text: 'Round 1 done' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 5, data: { turn: 1, reason: { kind: 'stop' } } } };
+
+        // Round 2 marks goal complete -> turn/end closes the follow stream cleanly!
+        yield { type: 'event', event: { type: 'turn/start', seq: 6, data: { turn: 2 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'user/message',
+            seq: 7,
+            data: { source: { kind: 'goal', goalId: 'goal-dsh-1', revision: 1, round: 2 } },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'goal/change',
+            seq: 8,
+            data: {
+              kind: 'goal/change',
+              version: 1,
+              operation: 'complete',
+              goal: {
+                id: 'goal-dsh-1',
+                revision: 2,
+                objective: 'Legacy objective',
+                phase: 'complete',
+                maxGoalRounds: 256,
+              },
+              roundsStarted: 2,
+              createdAt: 1000,
+              updatedAt: 2000,
+            },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 9,
+            data: { turn: 2, message: { content: [{ type: 'text', text: 'Round 2 complete!' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 10, data: { turn: 2, reason: { kind: 'stop' } } } };
+      }),
+    }) as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const goalEvents: Array<CoworkGoal | null> = [];
+    const statuses: string[] = [];
+    adapter.on('goalUpdate', (_sid, g) => goalEvents.push(g));
+    adapter.on('sessionStatus', (_sid, st) => statuses.push(st));
+
+    const resumed = await adapter.runGoalCommand('cw-goal-legacy', '/goal resume');
+    expect(resumed?.objective).toBe('Legacy objective');
+    expect(executeCommand).toHaveBeenCalledWith({
+      agentId: 'dsh-goal-1',
+      line: '/goal Legacy objective',
+      submittedAttachments: [],
+    });
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(bindSessionContext).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'dsh-goal-1',
+      customSystemPrompt: expect.stringContaining('Run E2E tests'),
+    }));
+
+    await vi.waitFor(() => {
+      expect(adapter.isSessionActive('cw-goal-legacy')).toBe(false);
+    });
+    expect(session.goal?.status).toBe(CoworkGoalStatus.Complete);
+    expect(session.goal?.continuationTurns).toBe(2);
+    expect(messages.some((m) => m.content === 'Round 1 done')).toBe(true);
+    expect(messages.some((m) => m.content === 'Round 2 complete!')).toBe(true);
+    expect(statuses.at(-1)).toBe('completed');
+    expect(goalEvents.some((g) => g?.status === CoworkGoalStatus.Complete)).toBe(true);
+  });
+
+  test('always binds explicit customSystemPrompt so turning off Plan Mode clears previous turn prompt', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-plan-sticky',
+      cwd: '/tmp/work',
+      systemPrompt: '',
+    });
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-plan-1' })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await adapter.startSession('cw-plan-sticky', 'Plan first', {
+      systemPrompt: '# Plan Mode\nDo not write files.',
+    });
+    expect(bindSessionContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      customSystemPrompt: '# Plan Mode\nDo not write files.',
+    }));
+
+    // Turn 2: Confirm & Execute turns off Plan Mode (`systemPrompt: ''`).
+    await adapter.continueSession('cw-plan-sticky', 'Confirm & Execute', {
+      systemPrompt: '',
+    });
+    expect(bindSessionContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      customSystemPrompt: '',
+    }));
+  });
+
+  test('submitSteer finalizes pre-steer assistant text above steer bubble and falls back cleanly when turn already ended', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-steer',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-steer-1`,
+    });
+
+    let releaseAfterSteer!: () => void;
+    const steerGate = new Promise<void>((resolve) => {
+      releaseAfterSteer = resolve;
+    });
+    let followCount = 0;
+
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const fakeClient = {
+      promptSession,
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        followCount += 1;
+        if (followCount === 1) {
+          yield { type: 'assistant-stream', frame: { type: 'start' } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'Before steer' } } };
+          await steerGate;
+          // Step 1's committed assistant/message matching flushed pre-steer text must NOT duplicate.
+          yield {
+            type: 'event',
+            event: {
+              type: 'assistant/message',
+              seq: 2,
+              data: { message: { content: [{ type: 'text', text: 'Before steer' }] } },
+            },
+          };
+          // Step 2 streams post-steer answer in a NEW assistant bubble below the steer message.
+          yield { type: 'assistant-stream', frame: { type: 'start' } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'After steer' } } };
+          yield { type: 'assistant-stream', frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/message', seq: 3 } } };
+          yield { type: 'event', event: { type: 'turn/end', seq: 4, data: {} } };
+          return;
+        }
+        // Second turn started by idle-turn steer fallback.
+        yield { type: 'assistant-stream', frame: { type: 'start' } };
+        yield { type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'Fallback reply' } } };
+        yield { type: 'assistant-stream', frame: { type: 'end', outcome: { kind: 'committed', eventType: 'assistant/message', seq: 5 } } };
+        yield { type: 'event', event: { type: 'turn/end', seq: 6, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const turn1 = adapter.continueSession('cw-steer', 'Initial question');
+    await vi.waitFor(() => {
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Before steer')).toBe(true);
+    });
+
+    const midSteer = await adapter.submitSteer('cw-steer', 'Change direction', 'steer-1');
+    expect(midSteer).toEqual({
+      success: true,
+      status: CoworkSteerStatus.Accepted,
+      clientSteerId: 'steer-1',
+    });
+    releaseAfterSteer();
+    await turn1;
+
+    expect(messages.map((m) => ({
+      type: m.type,
+      content: m.content,
+      isStreaming: m.metadata?.isStreaming,
+    }))).toEqual([
+      { type: 'user', content: 'Initial question', isStreaming: undefined },
+      { type: 'assistant', content: 'Before steer', isStreaming: false },
+      { type: 'user', content: 'Change direction', isStreaming: undefined },
+      { type: 'assistant', content: 'After steer', isStreaming: false },
+    ]);
+
+    // Idle-turn race: turn already finished before steer arrives -> falls back cleanly to continueSession.
+    expect(adapter.isSessionActive('cw-steer')).toBe(false);
+    const lateSteer = await adapter.submitSteer('cw-steer', 'Late steer', 'steer-2');
+    expect(lateSteer).toEqual({
+      success: true,
+      status: CoworkSteerStatus.Accepted,
+      clientSteerId: 'steer-2',
+    });
+    await vi.waitFor(() => {
+      expect(adapter.isSessionActive('cw-steer')).toBe(false);
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Fallback reply')).toBe(true);
+    });
+    expect(promptSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 'queue',
+      requestId: 'steer-2',
+    }));
+  });
+
+  test('ignores delayed interrupted assistant/message and aborted turn/end even after cancelSession RPC already resolved', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-queue-delayed-abort',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    let followInvocation = 0;
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-q-race-1' })),
+      // cancelSession acks immediately (clearing pendingCancels long before continueSession runs).
+      cancelSession: vi.fn(async () => ({ accepted: true })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* (_req: unknown, signal?: AbortSignal) {
+        followInvocation += 1;
+        if (followInvocation === 1) {
+          yield { type: 'event', event: { type: 'turn/start', seq: 1, data: { turn: 1 } } };
+          yield { type: 'assistant-stream', frame: { type: 'start', turn: 1 } };
+          yield { type: 'assistant-stream', frame: { type: 'chunk', turn: 1, chunk: { type: 'text-delta', index: 0, text: 'Turn 1 partial' } } };
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted) {
+              resolve();
+              return;
+            }
+            signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          return;
+        }
+        // Delayed Turn 1 interrupted assistant/message AND Turn 1 aborted turn/end arrive on Turn 2's stream!
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 2,
+            data: { turn: 1, interrupted: true, message: { content: [{ type: 'text', text: 'Turn 1 partial' }] } },
+          },
+        };
+        yield {
+          type: 'event',
+          event: {
+            type: 'turn/end',
+            seq: 3,
+            data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+          },
+        };
+        // Then Turn 2 runs and completes cleanly!
+        yield { type: 'event', event: { type: 'turn/start', seq: 4, data: { turn: 2 } } };
+        yield { type: 'assistant-stream', frame: { type: 'start', turn: 2 } };
+        yield { type: 'assistant-stream', frame: { type: 'chunk', turn: 2, chunk: { type: 'text-delta', index: 0, text: 'Turn 2 queued answer' } } };
+        yield { type: 'assistant-stream', frame: { type: 'end', turn: 2, outcome: { kind: 'committed', eventType: 'assistant/message', seq: 5 } } };
+        yield { type: 'event', event: { type: 'turn/end', seq: 6, data: { turn: 2, reason: { kind: 'stop' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const completed: string[] = [];
+    adapter.on('complete', (sid) => completed.push(sid));
+
+    const turn1Promise = adapter.startSession('cw-queue-delayed-abort', 'slow turn 1');
+    await vi.waitFor(() => {
+      expect(messages.some((m) => m.type === 'assistant' && m.content === 'Turn 1 partial')).toBe(true);
+    });
+
+    adapter.stopSession('cw-queue-delayed-abort');
+    await turn1Promise;
+    // Allow cancelSession promise microtask & finally() cleanup to delete pendingCancels!
+    await new Promise((r) => setTimeout(r, 15));
+
+    await adapter.continueSession('cw-queue-delayed-abort', 'urgent queued turn 2');
+
+    expect(completed).toEqual(['cw-queue-delayed-abort']);
+    expect(messages.filter((m) => m.type === 'assistant' && m.content === 'Turn 1 partial')).toHaveLength(1);
+    expect(messages.some((m) => m.type === 'assistant' && m.content === 'Turn 2 queued answer')).toBe(true);
+  });
+
+  test('routes startSession(/goal ...) via executeCommand with attachments and exits cleanly when goal disarms between rounds', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-start-goal',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    const clientEmitter = new EventEmitter();
+    const executeCommand = vi.fn(async () => ({
+      commandId: 'cmd-start-1',
+      result: { kind: 'success' as const, text: 'Goal created' },
+    }));
+    const promptSession = vi.fn(async () => ({ accepted: true }));
+    const fakeClient = Object.assign(clientEmitter, {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-start-goal-1' })),
+      executeCommand,
+      promptSession,
+      getSessionProjections: vi.fn(async () => ({
+        values: {
+          goal: {
+            goal: {
+              id: 'goal-start-1',
+              revision: 1,
+              objective: 'Ship onboarding',
+              phase: 'active',
+              maxGoalRounds: 256,
+            },
+            roundsStarted: 0,
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        },
+      })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* (_req: unknown, signal?: AbortSignal) {
+        yield { type: 'event', event: { type: 'turn/start', seq: 1, data: { turn: 1 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 2,
+            data: { turn: 1, message: { content: [{ type: 'text', text: 'Round 1 note' }] } },
+          },
+        };
+        // Turn 1 ends while goal is still armed -> waits for next round or disarm.
+        yield { type: 'event', event: { type: 'turn/end', seq: 3, data: { turn: 1, reason: { kind: 'stop' } } } };
+        // Simulate DSH disarming between rounds via forwarded remote event.
+        queueMicrotask(() => {
+          clientEmitter.emit('remote:goal/activation-changed', {
+            sessionId: 'dsh-start-goal-1',
+            goal: { id: 'goal-start-1', revision: 1, activation: 'disarmed' },
+          });
+        });
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }),
+    }) as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const completed: string[] = [];
+    adapter.on('complete', (sid) => completed.push(sid));
+
+    await adapter.startSession('cw-start-goal', '/goal start Ship onboarding', {
+      imageAttachments: [
+        { name: 'mock.png', mimeType: 'image/png', base64Data: 'iVBORw0KGgo=', sizeBytes: 8 },
+      ],
+    });
+
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(executeCommand).toHaveBeenCalledWith({
+      agentId: 'dsh-start-goal-1',
+      line: '/goal Ship onboarding',
+      submittedAttachments: [
+        { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'mock.png' },
+      ],
+    });
+    expect(session.goal?.objective).toBe('Ship onboarding');
+    expect(adapter.isSessionActive('cw-start-goal')).toBe(false);
+    expect(completed).toEqual(['cw-start-goal']);
+  });
+
+  test('getContextUsage reads DSH contextPressure, tokenUsage, contextBreakdown, legacy tokenMeter, and respects contextWindowOverride', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-usage',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-usage-1`,
+    });
+
+    const getSessionProjections = vi.fn();
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => ({ getSessionProjections }) as unknown as DshTypertClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    // 1. Real DSH 0.2.2 projection: prefers projectedTokens over pressureTokens (crucial post-compaction).
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 14,
+      values: {
+        contextPressure: {
+          pressureTokens: 96_000,
+          projectedTokens: 32_000,
+          contextWindow: 128_000,
+        },
+        tokenUsage: {
+          uncachedInputTokens: 90_000,
+          outputTokens: 4_000,
+          cacheReadTokens: 6_000,
+          cacheWriteTokens: 0,
+        },
+        contextBreakdown: {
+          systemTokens: 1_200,
+          toolsTokens: 3_400,
+          messageTokens: 27_400,
+        },
+        modelSelection: {
+          lastUsed: { provider: 'lobster-openai', model: 'gpt-5' },
+          next: { provider: 'lobster-openai', model: 'gpt-5' },
+        },
+      },
+    });
+    const projected = await adapter.getContextUsage('cw-usage');
+    expect(projected).toMatchObject({
+      sessionId: 'cw-usage',
+      sessionKey: 'dsh-usage-1',
+      usedTokens: 32_000,
+      contextTokens: 128_000,
+      percent: 25,
+      status: 'normal',
+      model: 'lobster-openai/gpt-5',
+    });
+
+    // 2. Respects positive session.contextWindowOverride over DSH model contextWindow.
+    session.contextWindowOverride = 40_000;
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 15,
+      values: {
+        contextPressure: {
+          pressureTokens: 32_000,
+          contextWindow: 128_000,
+        },
+      },
+    });
+    const overridden = await adapter.getContextUsage('cw-usage');
+    expect(overridden).toMatchObject({
+      usedTokens: 32_000,
+      contextTokens: 40_000,
+      percent: 80,
+      status: 'warning',
+    });
+
+    // 3. Falls back to contextBreakdown when provider usage hasn't been sampled yet.
+    session.contextWindowOverride = null;
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 4,
+      values: {
+        contextPressure: { contextWindow: 100_000 },
+        tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        contextBreakdown: { systemTokens: 2_000, toolsTokens: 3_000, messageTokens: 5_000 },
+      },
+    });
+    const fromBreakdown = await adapter.getContextUsage('cw-usage');
+    expect(fromBreakdown).toMatchObject({
+      usedTokens: 10_000,
+      contextTokens: 100_000,
+      percent: 10,
+      status: 'normal',
+    });
+
+    // 4. Falls back to tokenUsage when neither contextPressure counts nor breakdown are present.
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 6,
+      values: {
+        contextPressure: { contextWindow: 100_000 },
+        tokenUsage: { uncachedInputTokens: 60_000, outputTokens: 500, cacheReadTokens: 32_000, cacheWriteTokens: 0 },
+      },
+    });
+    const fromTokenUsage = await adapter.getContextUsage('cw-usage');
+    expect(fromTokenUsage).toMatchObject({
+      usedTokens: 92_000,
+      contextTokens: 100_000,
+      percent: 92,
+      status: 'danger',
+    });
+
+    // 5. Returns null for empty/fresh projections with zero usage and no contextWindow.
+    getSessionProjections.mockResolvedValueOnce({
+      asOfSeq: 0,
+      values: {
+        contextPressure: {},
+        tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 },
+      },
+    });
+    expect(await adapter.getContextUsage('cw-usage')).toBeNull();
+  });
+
+  test('compactContext invokes commands/execute /compact, distinguishes noop vs committed compaction, and persists notice', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-compact',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-compact-1`,
+    });
+
+    const executeCommand = vi.fn();
+    const promptSession = vi.fn();
+    const getSessionProjections = vi.fn(async () => ({
+      asOfSeq: 20,
+      values: {
+        contextPressure: {
+          pressureTokens: 80_000,
+          projectedTokens: 16_000,
+          contextWindow: 128_000,
+        },
+      },
+    }));
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => ({
+          executeCommand,
+          promptSession,
+          getSessionProjections,
+          onWaterfall: vi.fn(() => () => undefined),
+        }) as unknown as DshTypertClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const maintenanceEvents: boolean[] = [];
+    const usageUpdates: CoworkContextUsage[] = [];
+    const streamedMessages: CoworkMessage[] = [];
+    adapter.on('contextMaintenance', (_sid, active) => maintenanceEvents.push(active));
+    adapter.on('contextUsageUpdate', (_sid, usage) => usageUpdates.push(usage));
+    adapter.on('message', (_sid, msg) => streamedMessages.push(msg));
+
+    // Case 1: No compactable history yet (no sourceEventSeq).
+    executeCommand.mockResolvedValueOnce({
+      commandId: 'cmd-noop',
+      result: { kind: 'success', text: 'No compactable history yet.' },
+    });
+    const noopRes = await adapter.compactContext('cw-compact');
+    expect(executeCommand).toHaveBeenCalledWith({
+      agentId: 'dsh-compact-1',
+      line: '/compact',
+    });
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(noopRes.compacted).toBe(false);
+    expect(noopRes.reason).toBe('No compactable history yet.');
+    expect(noopRes.usage?.usedTokens).toBe(16_000);
+    expect(messages).toHaveLength(0);
+    expect(maintenanceEvents).toEqual([true, false]);
+
+    // Case 2: Actual compaction committed (sourceEventSeq returned).
+    executeCommand.mockResolvedValueOnce({
+      commandId: 'cmd-ok',
+      result: {
+        kind: 'success',
+        text: 'Compacted 6 history items (~64000 tokens).',
+        sourceEventSeq: 18,
+      },
+    });
+    const okRes = await adapter.compactContext('cw-compact');
+    expect(okRes.compacted).toBe(true);
+    expect(okRes.usage).toMatchObject({
+      usedTokens: 16_000,
+      contextTokens: 128_000,
+      percent: 13,
+      status: 'normal',
+    });
+    expect(usageUpdates).toHaveLength(2);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'system',
+      content: '',
+      metadata: {
+        kind: CoworkSystemMessageKind.ContextCompaction,
+        mode: ContextCompactionMode.Manual,
+        status: ContextCompactionStatus.Completed,
+        compacted: true,
+        seq: 18,
+        summary: 'Compacted 6 history items (~64000 tokens).',
+      },
+    });
+    expect(streamedMessages).toHaveLength(1);
+
+    // Case 3: Command returns error result -> throws and still clears contextMaintenance.
+    executeCommand.mockResolvedValueOnce({
+      commandId: 'cmd-err',
+      result: {
+        kind: 'error',
+        text: 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.',
+      },
+    });
+    await expect(adapter.compactContext('cw-compact')).rejects.toThrow(/active compaction/i);
+    expect(maintenanceEvents).toEqual([true, false, true, false, true, false]);
+  });
+
+  test('proactively emits contextUsageUpdate after assistant/message and persists ContextCompaction on auto compaction/end', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-auto-compact',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-auto-1`,
+    });
+
+    const getSessionProjections = vi.fn()
+      .mockResolvedValueOnce({
+        asOfSeq: 10,
+        values: {
+          contextPressure: { projectedTokens: 20_000, pressureTokens: 100_000, contextWindow: 128_000 },
+        },
+      })
+      .mockResolvedValueOnce({
+        asOfSeq: 12,
+        values: {
+          contextPressure: { projectedTokens: 24_000, pressureTokens: 23_500, contextWindow: 128_000 },
+        },
+      });
+
+    const fakeClient = {
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      getSessionProjections,
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'compaction/start', seq: 8, data: { compactionId: 'cmp-1', turn: 2 } } };
+        yield { type: 'event', event: { type: 'compaction/end', seq: 10, data: { compactionId: 'cmp-1', turn: 2 } } };
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 12,
+            data: { message: { role: 'assistant', content: [{ type: 'text', text: 'Done after compaction.' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 13, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const maintenance: boolean[] = [];
+    const usages: CoworkContextUsage[] = [];
+    adapter.on('contextMaintenance', (_sid, active) => maintenance.push(active));
+    adapter.on('contextUsageUpdate', (_sid, usage) => usages.push(usage));
+
+    await adapter.continueSession('cw-auto-compact', 'Keep going');
+
+    expect(maintenance).toEqual([true, false]);
+    expect(usages.map((u) => u.usedTokens)).toEqual([20_000, 24_000]);
+    const compactionMsg = messages.find(
+      (m) => m.type === 'system' && m.metadata?.kind === CoworkSystemMessageKind.ContextCompaction,
+    );
+    expect(compactionMsg).toBeDefined();
+    expect(compactionMsg?.metadata).toMatchObject({
+      kind: CoworkSystemMessageKind.ContextCompaction,
+      mode: ContextCompactionMode.Auto,
+      status: ContextCompactionStatus.Completed,
+      compacted: true,
+      compactionId: 'cmp-1',
+      seq: 10,
+    });
+  });
+
+  test('isolates per-session permission presets, persists to store, and survives reload without bleeding across sessions', async () => {
+    const sessions = new Map<string, DshAdapterSessionRecord>([
+      [
+        'sess-a',
+        {
+          id: 'sess-a',
+          cwd: '/tmp/a',
+          claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-a`,
+          permissionPreset: null,
+        },
+      ],
+      [
+        'sess-b',
+        {
+          id: 'sess-b',
+          cwd: '/tmp/b',
+          claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-b`,
+          permissionPreset: null,
+        },
+      ],
+    ]);
+    const multiStore: DshCoworkStorePort = {
+      getSession: (id) => sessions.get(id) ?? null,
+      addMessage: (_sid, msg) => ({
+        id: 'm1',
+        type: msg.type,
+        content: msg.content,
+        timestamp: Date.now(),
+        metadata: msg.metadata,
+      }),
+      updateMessageContent: () => undefined,
+      updateSession: (id, updates) => {
+        const s = sessions.get(id);
+        if (!s) return;
+        if (updates.claudeSessionId !== undefined) s.claudeSessionId = updates.claudeSessionId;
+        if (updates.modelOverride !== undefined) s.modelOverride = updates.modelOverride;
+        if (updates.permissionPreset !== undefined) s.permissionPreset = updates.permissionPreset;
+      },
+    };
+
+    const setPermissionPreset = vi.fn(async () => ({ ok: true }));
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    let defaultPreset: DshPermissionPreset = DshPermissionPreset.WorkspaceWrite;
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+      },
+      store: multiStore,
+      resolveDefaultPermissionPreset: () => defaultPreset,
+    });
+
+    // Switch Session A to FullAccess — must ONLY update Session A and NOT bleed to Session B or global default.
+    await adapter.setSessionPermissionPreset(DshPermissionPreset.FullAccess, 'sess-a');
+    expect(setPermissionPreset).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'dsh-a');
+    expect(sessions.get('sess-a')?.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+    expect(sessions.get('sess-b')?.permissionPreset).toBeNull();
+    expect(adapter.getEffectivePermissionPreset('sess-a')).toBe(DshPermissionPreset.FullAccess);
+    expect(adapter.getEffectivePermissionPreset('sess-b')).toBe(DshPermissionPreset.WorkspaceWrite);
+
+    // Changing global default must NOT wipe Session A's explicit override.
+    defaultPreset = DshPermissionPreset.ReadOnly;
+    await adapter.setSessionPermissionPreset(DshPermissionPreset.ReadOnly);
+    expect(adapter.getEffectivePermissionPreset('sess-a')).toBe(DshPermissionPreset.FullAccess);
+    expect(adapter.getEffectivePermissionPreset('sess-b')).toBe(DshPermissionPreset.ReadOnly);
+
+    // Simulate app reload with a fresh DshRuntimeAdapter reading from the same persisted store.
+    const reloadedAdapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+      },
+      store: multiStore,
+      resolveDefaultPermissionPreset: () => defaultPreset,
+    });
+    expect(reloadedAdapter.getEffectivePermissionPreset('sess-a')).toBe(DshPermissionPreset.FullAccess);
+    expect(reloadedAdapter.getEffectivePermissionPreset('sess-b')).toBe(DshPermissionPreset.ReadOnly);
+
+    await reloadedAdapter.continueSession('sess-a', 'Run turn after reload');
+    expect(bindSessionContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-a',
+        permissionPreset: DshPermissionPreset.FullAccess,
+        permissionPresetExplicit: true,
+      }),
+    );
+  });
+
+  test('awaits session-scoped setSessionPermissionPreset before resolving pending approval to avoid parallel tool race', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-race',
+      cwd: '/tmp/race',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-race-1`,
+    });
+
+    const waterfallMap = new Map<string, (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>>();
+    const fakeClient = {
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn((event: string, handler: (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>) => {
+        waterfallMap.set(event, handler);
+        return () => waterfallMap.delete(event);
+      }),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } } } };
+      }),
+    } as unknown as DshTypertClient;
+
+    let releaseHostPreset!: () => void;
+    const hostPresetDeferred = new Promise<Record<string, unknown>>((resolve) => {
+      releaseHostPreset = () => resolve({ ok: true });
+    });
+    const setPermissionPreset = vi.fn(() => hostPresetDeferred);
+    const onPermissionPresetChanged = vi.fn();
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        setPermissionPreset,
+      },
+      store,
+      onPermissionPresetChanged,
+    });
+
+    await adapter.continueSession('cw-race', 'Trigger approval');
+
+    let capturedRequestId = '';
+    adapter.on('permissionRequest', (_sid, req) => {
+      capturedRequestId = req.requestId;
+    });
+
+    const approvalHandler = waterfallMap.get('approval/request')!;
+    let settledOutcome: DshWaterfallOutcome | null = null;
+    const approvalPromise = approvalHandler({
+      event: 'approval/request',
+      eventId: 'ev-race-1',
+      agentId: 'dsh-race-1',
+      request: { toolName: 'bash', callId: 'call-race-1', reason: 'Confirm rm' },
+      signal: new AbortController().signal,
+    }).then((out) => {
+      settledOutcome = out;
+      return out;
+    });
+
+    const respondPromise = adapter.respondToPermission(capturedRequestId, {
+      behavior: 'allow',
+      updatedPermissions: [
+        {
+          type: DshApprovalPermissionAction.SetPermissionPreset,
+          preset: DshPermissionPreset.FullAccess,
+          sessionId: 'cw-race',
+        },
+      ],
+    });
+
+    // Yield microtasks: pending approval MUST NOT resolve while host setPermissionPreset is still in flight.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(setPermissionPreset).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'dsh-race-1');
+    expect(settledOutcome).toBeNull();
+
+    // Once host preset RPC finishes, respondToPermission resolves the pending approval and persists session preset.
+    releaseHostPreset();
+    await respondPromise;
+    expect(await approvalPromise).toEqual({ kind: 'result', value: 'allowed-once' });
+    expect(session.permissionPreset).toBe(DshPermissionPreset.FullAccess);
+    expect(onPermissionPresetChanged).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'cw-race');
   });
 
   test('auto-unlocks word/excel/ppt from selectedTextSnippets, prompt file paths, and legacy bridge', () => {

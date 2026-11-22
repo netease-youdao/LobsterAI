@@ -31,6 +31,7 @@ export function getHostState(ctx) {
       instanceId: process.env[ENV_KEYS.instanceId] || '',
       searchPolicy: process.env[ENV_KEYS.searchPolicy] || 'deepseek_native_only',
       defaultPermissionPreset: 'workspace-write',
+      memoryEnabled: true,
       /** @type {Map<string, Record<string, unknown>>} */
       sessionContexts: new Map(),
       /** @type {Map<string, Record<string, unknown>>} */
@@ -51,6 +52,23 @@ export function getHostState(ctx) {
         disabledIds: new Set(),
         extraDirs: [],
       },
+      /** @type {{ webFetchEnabled: boolean, blockedHostnames: string[], allowedHostnames: string[] }} */
+      webAccessPolicy: {
+        webFetchEnabled: true,
+        blockedHostnames: [],
+        allowedHostnames: [],
+      },
+      /**
+       * Active per-server user MCP tool filters keyed by normalized DSH server
+       * name (`serverName -> { include?, exclude? }`).
+       * @type {Map<string, Readonly<{ include?: readonly string[], exclude?: readonly string[] }>>}
+       */
+      mcpToolFilters: new Map(),
+      /**
+       * Normalized DSH server names currently registered via LobsterAI `syncMcpServers`.
+       * @type {Set<string>}
+       */
+      mcpRegisteredServers: new Set(),
       /** @type {Record<string, boolean>} */
       pluginsReady: {
         modelBridge: false,
@@ -156,12 +174,34 @@ export function resolveSessionContext(ctx, state, sessionId) {
           : {}),
         ...(ancestor?.executionMode ? { executionMode: ancestor.executionMode } : {}),
         ...(ancestor?.permissionPreset ? { permissionPreset: ancestor.permissionPreset } : {}),
+        ...(typeof ancestor?.memoryEnabled === 'boolean' ? { memoryEnabled: ancestor.memoryEnabled } : {}),
       };
     }
 
     const header = ctx?.get?.('agents')?.get?.(currentId)?.session?.header;
     if (header?.origin !== 'subagent') return undefined;
     currentId = header.parentSession;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the active project working directory (`workspaceDir`) for a session,
+ * preferring the bound LobsterAI session context and falling back to DSH's own
+ * session header `cwd`.
+ */
+export function resolveSessionWorkspaceDir(ctx, state, sessionId, bound, agent) {
+  const resolvedBound = bound ?? resolveSessionContext(ctx, state, sessionId);
+  if (typeof resolvedBound?.workspaceDir === 'string' && resolvedBound.workspaceDir.trim().length > 0) {
+    return resolvedBound.workspaceDir.trim();
+  }
+  const agentCwd = agent?.session?.header?.cwd;
+  if (typeof agentCwd === 'string' && agentCwd.trim().length > 0) {
+    return agentCwd.trim();
+  }
+  const liveCwd = sessionId ? ctx?.get?.('agents')?.get?.(sessionId)?.session?.header?.cwd : undefined;
+  if (typeof liveCwd === 'string' && liveCwd.trim().length > 0) {
+    return liveCwd.trim();
   }
   return undefined;
 }

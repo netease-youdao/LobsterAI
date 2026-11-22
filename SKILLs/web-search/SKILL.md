@@ -2,7 +2,7 @@
 name: web-search
 description: Real-time web search using Playwright-controlled browser. Use this skill when you need current information, latest documentation, recent news, or any data beyond your knowledge cutoff (January 2025).
 official: true
-version: 1.0.4
+version: 1.0.5
 ---
 
 # Web Search Skill
@@ -49,10 +49,16 @@ Use the web-search skill when you need:
 
 ### Simple Search (Recommended)
 
-**IMPORTANT:** Always use the `$SKILLS_ROOT` environment variable to locate the skill scripts. This ensures the skill works in both development and production environments.
+**IMPORTANT:** Always use the `$SKILLS_ROOT` environment variable (`$env:SKILLS_ROOT` in Windows PowerShell) to locate the skill scripts. This ensures the skill works in both development and production environments.
 
 ```bash
 bash "$SKILLS_ROOT/web-search/scripts/search.sh" "search query" [max_results]
+```
+
+On Windows PowerShell:
+
+```powershell
+bash "$env:SKILLS_ROOT/web-search/scripts/search.sh" "search query" 10
 ```
 
 For non-ASCII queries (Chinese/Japanese/etc.), prefer UTF-8 file input to avoid shell encoding issues on Windows:
@@ -63,6 +69,13 @@ cat > /tmp/web-query.txt <<'TXT'
 TXT
 
 bash "$SKILLS_ROOT/web-search/scripts/search.sh" @/tmp/web-query.txt 10
+```
+
+On Windows PowerShell:
+
+```powershell
+[System.IO.File]::WriteAllText("$env:TEMP\web-query.txt", "苹果 Siri AI 2026 发布计划", [System.Text.UTF8Encoding]::new($false))
+bash "$env:SKILLS_ROOT/web-search/scripts/search.sh" "@$env:TEMP/web-query.txt" 10
 ```
 
 **Examples:**
@@ -204,7 +217,7 @@ Parse the Markdown output to extract key information for the user. Don't just du
 
 ```bash
 # User asks about latest framework features
-bash SKILLs/web-search/scripts/search.sh "Next.js 15 documentation" 5
+bash "$SKILLS_ROOT/web-search/scripts/search.sh" "Next.js 15 documentation" 5
 
 # Parse results, find official docs, summarize features
 ```
@@ -213,7 +226,7 @@ bash SKILLs/web-search/scripts/search.sh "Next.js 15 documentation" 5
 
 ```bash
 # User reports an error
-bash SKILLs/web-search/scripts/search.sh "TypeError: Cannot read property of undefined React" 5
+bash "$SKILLS_ROOT/web-search/scripts/search.sh" "TypeError: Cannot read property of undefined React" 5
 
 # Find Stack Overflow answers and GitHub issues, provide solution
 ```
@@ -222,7 +235,7 @@ bash SKILLs/web-search/scripts/search.sh "TypeError: Cannot read property of und
 
 ```bash
 # User asks about recent news
-bash SKILLs/web-search/scripts/search.sh "AI developments January 2026" 10
+bash "$SKILLS_ROOT/web-search/scripts/search.sh" "AI developments January 2026" 10
 
 # Summarize key news items from results
 ```
@@ -231,7 +244,7 @@ bash SKILLs/web-search/scripts/search.sh "AI developments January 2026" 10
 
 ```bash
 # User wants to compare technologies
-bash SKILLs/web-search/scripts/search.sh "Vue 3 vs React 18 performance 2026" 5
+bash "$SKILLS_ROOT/web-search/scripts/search.sh" "Vue 3 vs React 18 performance 2026" 5
 
 # Synthesize comparison from multiple sources
 ```
@@ -240,7 +253,7 @@ bash SKILLs/web-search/scripts/search.sh "Vue 3 vs React 18 performance 2026" 5
 
 ```bash
 # User needs specific API documentation
-bash SKILLs/web-search/scripts/search.sh "Playwright page.evaluate examples" 5
+bash "$SKILLS_ROOT/web-search/scripts/search.sh" "Playwright page.evaluate examples" 5
 
 # Extract code examples and usage patterns
 ```
@@ -253,8 +266,8 @@ bash SKILLs/web-search/scripts/search.sh "Playwright page.evaluate examples" 5
 
 **Solution:**
 - The server should auto-start with Electron
-- If manual start needed: `bash SKILLs/web-search/scripts/start-server.sh`
-- Check logs: `cat SKILLs/web-search/.server.log`
+- If manual start needed: `bash "$SKILLS_ROOT/web-search/scripts/start-server.sh"`
+- Check logs: `cat "$SKILLS_ROOT/web-search/.server.log"`
 
 ### Browser Launch Failed
 
@@ -274,13 +287,13 @@ bash SKILLs/web-search/scripts/search.sh "Playwright page.evaluate examples" 5
 **Solution:**
 ```bash
 # Stop server
-bash SKILLs/web-search/scripts/stop-server.sh
+bash "$SKILLS_ROOT/web-search/scripts/stop-server.sh"
 
-# Clear cache
-rm SKILLs/web-search/.connection
+# Clear cache in temporary directory
+rm -f "${TMPDIR:-/tmp}"/lobsterai-web-search-*.connection
 
 # Restart
-bash SKILLs/web-search/scripts/start-server.sh
+bash "$SKILLS_ROOT/web-search/scripts/start-server.sh"
 ```
 
 ### No Search Results
@@ -400,10 +413,10 @@ The search output is Markdown. Extract:
 curl http://127.0.0.1:8923/api/health
 
 # 2. Check server logs
-cat SKILLs/web-search/.server.log | tail -50
+cat "$SKILLS_ROOT/web-search/.server.log" | tail -50
 
 # 3. Test basic search
-bash SKILLs/web-search/scripts/search.sh "test" 1
+bash "$SKILLS_ROOT/web-search/scripts/search.sh" "test" 1
 
 # 4. Check Chrome installation
 which google-chrome || which chromium || which chromium-browser
@@ -538,7 +551,7 @@ bash "$SKILLS_ROOT/web-search/scripts/search.sh" "Vite vs webpack 2026 compariso
 - Server: `SKILLs/web-search/dist/server/index.js`
 - Logs: `SKILLs/web-search/.server.log`
 - PID: `SKILLs/web-search/.server.pid`
-- Connection cache: `SKILLs/web-search/.connection`
+- Connection cache: `${TMPDIR:-/tmp}/lobsterai-web-search-<user>.connection` (sandbox-writable temp directory)
 
 ## Additional Resources
 

@@ -22,6 +22,12 @@ import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import type { DshChannelsBridge } from './dshChannelsBridge';
+import {
+  FeishuAuth,
+  FeishuPollError,
+  FeishuTenantBrand,
+  validateAppCredentials,
+} from './feishuInstallAuth';
 import { fetchJsonWithTimeout } from './http';
 import { IMCoworkHandler } from './imCoworkHandler';
 import {
@@ -2728,15 +2734,6 @@ export class IMGatewayManager extends EventEmitter {
 
   // ==================== Feishu Bot Install Helpers ====================
 
-  /** Lazy-load and cache the feishu-auth module (avoid repeated dynamic import overhead). */
-  private _feishuAuthModule: any = null;
-  private async getFeishuAuthModule() {
-    if (!this._feishuAuthModule) {
-      this._feishuAuthModule = await import('@larksuite/openclaw-lark-tools/dist/utils/feishu-auth.js');
-    }
-    return this._feishuAuthModule;
-  }
-
   /**
    * Start the Feishu Device Flow onboarding: init + begin.
    * Returns data needed to render a QR code in the UI.
@@ -2749,7 +2746,6 @@ export class IMGatewayManager extends EventEmitter {
     interval: number;
     expireIn: number;
   }> {
-    const { FeishuAuth } = await this.getFeishuAuthModule();
     this._feishuInstallIsLark = isLark;
     const auth = new FeishuAuth();
     auth.setDomain(isLark);
@@ -2774,18 +2770,22 @@ export class IMGatewayManager extends EventEmitter {
     domain?: string;
     error?: string;
   }> {
-    const { FeishuAuth } = await this.getFeishuAuthModule();
     const auth = new FeishuAuth();
     auth.setDomain(this._feishuInstallIsLark);
     const resp = await auth.poll(deviceCode);
     if (resp.error) {
-      if (resp.error === 'authorization_pending' || resp.error === 'slow_down') {
+      if (
+        resp.error === FeishuPollError.AuthorizationPending
+        || resp.error === FeishuPollError.SlowDown
+      ) {
         return { done: false };
       }
       return { done: false, error: resp.error_description || resp.error };
     }
     if (resp.client_id && resp.client_secret) {
-      const domain = resp.user_info?.tenant_brand === 'lark' ? 'lark' : 'feishu';
+      const domain = resp.user_info?.tenant_brand === FeishuTenantBrand.Lark
+        ? FeishuTenantBrand.Lark
+        : FeishuTenantBrand.Feishu;
       return { done: true, appId: resp.client_id, appSecret: resp.client_secret, domain };
     }
     return { done: false };
@@ -2798,15 +2798,17 @@ export class IMGatewayManager extends EventEmitter {
     success: boolean;
     error?: string;
   }> {
-    const { validateAppCredentials } = await this.getFeishuAuthModule();
     try {
       const valid = await validateAppCredentials(appId, appSecret);
       if (valid) {
         return { success: true };
       }
       return { success: false, error: t('feishuVerifyCredentialsFailed') };
-    } catch (err: any) {
-      return { success: false, error: err?.message || t('feishuVerifyFailed') };
+    } catch (err: unknown) {
+      return {
+        success: false,
+        error: (err instanceof Error ? err.message : undefined) || t('feishuVerifyFailed'),
+      };
     }
   }
 

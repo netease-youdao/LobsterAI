@@ -5,6 +5,9 @@
 //   narrative...
 //   <!-- openclaw:dreaming:diary:end -->
 
+import { AgentId } from '../../../shared/agent/constants';
+import type { DreamDiaryData, LegacyAgentDreamDiary } from '../../../shared/cowork/dreamDiary';
+
 export type DiaryEntry = {
   date: string;
   body: string;
@@ -12,6 +15,8 @@ export type DiaryEntry = {
 
 const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
 const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
+const DIARY_SEPARATOR_RE = /(?:^|\n)---[ \t]*(?:\n|$)/;
+const EMPTY_DIARY_BOILERPLATE_LINE_RE = /^(?:#+\s*dream\s+diary\s*|---+)$/i;
 // Leading calendar date of OpenClaw's en-US diary stamps, e.g. "November 14, 2026".
 const DIARY_CALENDAR_DATE_RE = /^([A-Za-z]+\s+\d{1,2},\s*\d{4})/;
 
@@ -31,14 +36,20 @@ export function parseDiaryEntries(raw: string): DiaryEntry[] {
     content = normalized.slice(startMatch.index + startMatch[0].length, endMatch.index);
   }
   const entries: DiaryEntry[] = [];
-  const blocks = content.split(/\n---\n/).filter((b) => b.trim().length > 0);
+  const blocks = content.split(DIARY_SEPARATOR_RE).filter((b) => b.trim().length > 0);
   for (const block of blocks) {
     const lines = block.trim().split('\n');
     let date = '';
     const bodyLines: string[] = [];
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!date && trimmed.startsWith('*') && trimmed.endsWith('*') && trimmed.length > 2) {
+      if (
+        !date
+        && trimmed.startsWith('*')
+        && !trimmed.startsWith('**')
+        && trimmed.endsWith('*')
+        && trimmed.length > 2
+      ) {
         date = trimmed.slice(1, -1);
         continue;
       }
@@ -50,6 +61,65 @@ export function parseDiaryEntries(raw: string): DiaryEntry[] {
     }
   }
   return entries;
+}
+
+function stripHtmlCommentBlocks(input: string): string {
+  const chunks: string[] = [];
+  let cursor = 0;
+  while (cursor < input.length) {
+    const start = input.indexOf('<!--', cursor);
+    if (start === -1) {
+      chunks.push(input.slice(cursor));
+      break;
+    }
+    if (start > cursor) {
+      chunks.push(input.slice(cursor, start));
+    }
+    const end = input.indexOf('-->', start + 4);
+    if (end === -1) {
+      break;
+    }
+    cursor = end + 3;
+  }
+  return chunks.join('\n');
+}
+
+/**
+ * Returns true when `raw` contains either parsed diary entries or non-empty
+ * text beyond OpenClaw's freshly-seeded empty `# Dream Diary` markers.
+ */
+export function hasMeaningfulDiaryContent(raw?: string | null): boolean {
+  if (!raw || !raw.trim()) return false;
+  if (parseDiaryEntries(raw).length > 0) return true;
+  const remaining = stripHtmlCommentBlocks(raw.replace(/\r\n?/g, '\n'))
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !EMPTY_DIARY_BOILERPLATE_LINE_RE.test(line));
+  return remaining.length > 0;
+}
+
+/**
+ * Resolve the ordered list of historical agent diaries that actually have
+ * readable content to display in Settings -> Memory.
+ */
+export function getVisibleLegacyDreamDiaries(
+  diary?: DreamDiaryData | null,
+): LegacyAgentDreamDiary[] {
+  if (!diary || !diary.found) return [];
+  if (Array.isArray(diary.agents) && diary.agents.length > 0) {
+    return diary.agents.filter((agent) => hasMeaningfulDiaryContent(agent.content));
+  }
+  if (hasMeaningfulDiaryContent(diary.content)) {
+    return [
+      {
+        agentId: diary.agentId || AgentId.Main,
+        path: diary.path,
+        content: diary.content ?? '',
+        updatedAtMs: diary.updatedAtMs,
+      },
+    ];
+  }
+  return [];
 }
 
 export function flattenDiaryBody(body: string): string[] {

@@ -183,12 +183,26 @@ const McpManager: React.FC = () => {
     return () => { isActive = false; };
   }, [dispatch]);
 
+  // Reads overlap (focus, sign-in, sign-out, background expiry); a read that
+  // started earlier never overwrites one that started later.
+  const oauthStatusReadRef = useRef(0);
+  const refreshOAuthStates = useCallback(async () => {
+    const read = ++oauthStatusReadRef.current;
+    const states = await mcpService.oauthStatus();
+    if (read !== oauthStatusReadRef.current) return;
+    setOAuthStates(states);
+    setOAuthStatusReady(true);
+  }, []);
+
   useEffect(() => {
     return mcpService.onChanged(async () => {
       const loaded = await mcpService.loadServers();
       dispatch(setMcpServers(loaded));
+      if (loaded.some(isOAuthRemoteServer)) {
+        void refreshOAuthStates();
+      }
     });
-  }, [dispatch]);
+  }, [dispatch, refreshOAuthStates]);
 
   useEffect(() => {
     let isActive = true;
@@ -205,7 +219,6 @@ const McpManager: React.FC = () => {
   }, []);
 
   // Re-read OAuth state whenever the set of OAuth servers (or their identity) changes.
-  // `mcp status` spawns the OpenClaw CLI, so skip it when no server uses OAuth.
   const oauthServerSignature = useMemo(
     () => servers
       .filter(isOAuthRemoteServer)
@@ -213,17 +226,6 @@ const McpManager: React.FC = () => {
       .join('|'),
     [servers],
   );
-
-  // Reads overlap (focus, sign-in, sign-out); a read that started earlier never
-  // overwrites one that started later.
-  const oauthStatusReadRef = useRef(0);
-  const refreshOAuthStates = useCallback(async () => {
-    const read = ++oauthStatusReadRef.current;
-    const states = await mcpService.oauthStatus();
-    if (read !== oauthStatusReadRef.current) return;
-    setOAuthStates(states);
-    setOAuthStatusReady(true);
-  }, []);
 
   useEffect(() => {
     if (!oauthServerSignature) {

@@ -14,6 +14,7 @@ export const DshPluginEcosystemView: React.FC = () => {
   const [cliShimPath, setCliShimPath] = useState<string | null>(null);
   const [packageSpec, setPackageSpec] = useState('');
   const [installing, setInstalling] = useState(false);
+  const [busyPlugin, setBusyPlugin] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -37,13 +38,13 @@ export const DshPluginEcosystemView: React.FC = () => {
   const handleInstall = async (event: React.FormEvent) => {
     event.preventDefault();
     const spec = packageSpec.trim();
-    if (!spec || installing) return;
+    if (!spec || installing || busyPlugin) return;
     setInstalling(true);
     setErrorMessage(null);
     try {
       const res = await dshHostService.installPlugin(spec);
       if (!res.ok) {
-        setErrorMessage(res.error || res.stderr || 'Install failed');
+        setErrorMessage(res.error || res.stderr || t('dshEcosystemInstallFailed'));
       } else {
         setPackageSpec('');
         setPlugins(res.plugins ?? []);
@@ -54,15 +55,38 @@ export const DshPluginEcosystemView: React.FC = () => {
     }
   };
 
-  const handleRemove = async (name: string) => {
+  const handleToggleEnabled = async (name: string, nextEnabled: boolean) => {
+    if (installing || busyPlugin) return;
+    setBusyPlugin(name);
     setErrorMessage(null);
-    const res = await dshHostService.removePlugin(name);
-    if (!res.ok) {
-      setErrorMessage(res.error || res.stderr || 'Remove failed');
-    } else {
-      setPlugins(res.plugins ?? []);
+    try {
+      const res = await dshHostService.setPluginEnabled(name, nextEnabled);
+      if (!res.ok) {
+        setErrorMessage(res.error || t('dshEcosystemToggleFailed'));
+      } else if (res.plugins) {
+        setPlugins(res.plugins);
+      }
+      await refresh();
+    } finally {
+      setBusyPlugin(null);
     }
-    await refresh();
+  };
+
+  const handleRemove = async (name: string) => {
+    if (installing || busyPlugin) return;
+    setBusyPlugin(name);
+    setErrorMessage(null);
+    try {
+      const res = await dshHostService.removePlugin(name);
+      if (!res.ok) {
+        setErrorMessage(res.error || res.stderr || t('dshEcosystemRemoveFailed'));
+      } else {
+        setPlugins(res.plugins ?? []);
+      }
+      await refresh();
+    } finally {
+      setBusyPlugin(null);
+    }
   };
 
   const handleOpenEcosystem = async () => {
@@ -143,7 +167,7 @@ export const DshPluginEcosystemView: React.FC = () => {
         />
         <button
           type="submit"
-          disabled={installing || !packageSpec.trim()}
+          disabled={installing || busyPlugin !== null || !packageSpec.trim()}
           className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
         >
           {installing ? t('dshEcosystemInstalling') : t('dshEcosystemInstallBtn')}
@@ -156,30 +180,65 @@ export const DshPluginEcosystemView: React.FC = () => {
           <p className="text-xs opacity-60">{t('dshEcosystemEmpty')}</p>
         ) : (
           <div className="divide-y rounded-lg border">
-            {plugins.map((plugin) => (
-              <div key={plugin.name} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-mono font-medium">{plugin.name}</span>
-                    {plugin.managed && (
-                      <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
-                        {t('dshEcosystemManagedBadge')}
+            {plugins.map((plugin) => {
+              const isBusy = busyPlugin === plugin.name;
+              return (
+                <div key={plugin.name} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`truncate font-mono font-medium${plugin.enabled ? '' : ' opacity-60'}`}
+                      >
+                        {plugin.name}
                       </span>
-                    )}
+                      {plugin.managed && (
+                        <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                          {t('dshEcosystemManagedBadge')}
+                        </span>
+                      )}
+                      {!plugin.managed && !plugin.enabled && (
+                        <span className="rounded bg-neutral-500/15 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 dark:text-neutral-400">
+                          {t('dshEcosystemDisabledBadge')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate text-[11px] opacity-60">{plugin.specifier}</div>
                   </div>
-                  <div className="truncate text-[11px] opacity-60">{plugin.specifier}</div>
+                  {!plugin.managed && (
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={plugin.enabled}
+                        aria-label={plugin.enabled ? t('dshEcosystemDisableLabel') : t('dshEcosystemEnableLabel')}
+                        title={plugin.enabled ? t('dshEcosystemDisableLabel') : t('dshEcosystemEnableLabel')}
+                        disabled={installing || busyPlugin !== null}
+                        onClick={() => void handleToggleEnabled(plugin.name, !plugin.enabled)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                          plugin.enabled
+                            ? 'bg-blue-600'
+                            : 'bg-neutral-300 dark:bg-neutral-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            plugin.enabled ? 'translate-x-4' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={installing || busyPlugin !== null}
+                        onClick={() => void handleRemove(plugin.name)}
+                        className="shrink-0 rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
+                      >
+                        {isBusy ? '…' : t('dshEcosystemRemoveBtn')}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                {!plugin.managed && (
-                  <button
-                    type="button"
-                    onClick={() => void handleRemove(plugin.name)}
-                    className="shrink-0 rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
-                  >
-                    {t('dshEcosystemRemoveBtn')}
-                  </button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

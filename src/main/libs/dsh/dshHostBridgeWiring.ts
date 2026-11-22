@@ -17,7 +17,12 @@ import {
 import type { Schedule, ScheduledTask, ScheduledTaskInput } from '../../../scheduledTask/types';
 import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
 import { t } from '../../i18n';
-import type { LobsterMemoryService } from '../../memory/lobsterMemoryService';
+import { type LobsterMemoryService, WorkspaceFileName } from '../../memory/lobsterMemoryService';
+import {
+  appendProjectTag,
+  MemoryScope,
+  resolvePrimaryProjectKey,
+} from '../../memory/projectMemoryScope';
 import type { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
 import {
   detectDisallowedOfficeGuiLaunch,
@@ -112,10 +117,8 @@ export function evaluateDshToolApproval(
   const toolName = request.toolName.trim();
   const isShellTool = SHELL_TOOL_NAMES.has(toolName.toLowerCase());
   const command = isShellTool ? extractShellCommandFromArgs(request.args) : '';
-  if (toolName === DSH_SKILL_INSTALL_TOOL && (request.args as { action?: unknown } | null)?.action === DshSkillInstallAction.Install) {
-    if (request.permissionPreset === DshPermissionPreset.ReadOnly) return { kind: 'deny', reason: t('skillChatReadOnly') };
-    if (request.permissionPreset !== DshPermissionPreset.FullAccess) return { kind: 'ask', reason: t('skillChatInstallPermission') };
-  }
+  const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
+  const scopeKey = buildApprovalScopeKey(toolName, request.args, danger.reason);
 
   // Never allow shell commands to pop up desktop Office GUI applications
   // (WPS / Keynote / Pages / Microsoft Office / non-headless soffice) even under
@@ -130,14 +133,36 @@ export function evaluateDshToolApproval(
     }
   }
 
+  if (
+    toolName === DSH_SKILL_INSTALL_TOOL
+    && (request.args as { action?: unknown } | null)?.action === DshSkillInstallAction.Install
+  ) {
+    if (request.permissionPreset === DshPermissionPreset.ReadOnly) {
+      return { kind: 'deny', reason: t('skillChatReadOnly') };
+    }
+    if (request.permissionPreset === DshPermissionPreset.FullAccess) {
+      return { kind: 'allow' };
+    }
+    if (
+      allowRules?.isToolAllowedAlways({
+        toolName,
+        args: request.args,
+        sessionId: request.sessionId,
+        coworkSessionId: request.coworkSessionId,
+        agentId: request.agentId,
+        scopeKey,
+      })
+    ) {
+      return { kind: 'allow' };
+    }
+    return { kind: 'ask', reason: t('skillChatInstallPermission') };
+  }
+
   // Explicit DSH `danger-full-access` preset sets DSH approvalPolicy='never' and
   // bypasses all interactive popups so the user is never interrupted repeatedly.
   if (request.permissionPreset === DshPermissionPreset.FullAccess) {
     return { kind: 'allow' };
   }
-
-  const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
-  const scopeKey = buildApprovalScopeKey(toolName, request.args, danger.reason);
 
   // High-severity destructive shell commands require explicit confirmation unless
   // the user explicitly switched the session/default mode to `danger-full-access`.
@@ -163,10 +188,8 @@ export function evaluateDshToolApproval(
     return { kind: 'allow' };
   }
 
-  if (request.executionMode === 'auto') {
-    return { kind: 'allow' };
-  }
-
+  // `permissionPreset` is the single source of truth on DSH: never bypass
+  // caution-level approvals based on stale legacy `executionMode === 'auto'`.
   if (command && isDangerousCommand(command)) {
     return {
       kind: 'ask',
@@ -411,6 +434,7 @@ export function wireDshHostBridge(options: {
     'registerBridgeToolHandler' | 'setFallbackBridgeToolHandler' | 'setApprovalEvaluator' | 'syncHostTools'
   >;
   memoryService: LobsterMemoryService;
+  isMemoryEnabled?: () => boolean;
   scheduler?: LobsterSchedulerBridgePort;
   onScheduleMutated?: () => void;
   allowRules?: ApprovalAllowRulePort;
@@ -419,9 +443,10 @@ export function wireDshHostBridge(options: {
   syncDynamicHostTools: () => Promise<Record<string, unknown>>;
   dispose: () => void;
 } {
-  const { hostManager, memoryService, scheduler, onScheduleMutated, allowRules } = options;
+  const { hostManager, memoryService, isMemoryEnabled, scheduler, onScheduleMutated, allowRules } = options;
   const providers = options.toolProviders ?? [];
   const disposers: Array<() => void> = [];
+  const memoryEnabled = (): boolean => (isMemoryEnabled ? isMemoryEnabled() !== false : true);
 
   // 1. Built-in Memory & Schedule tools backed by LobsterMemoryService and LobsterScheduler.
   const registerBuiltin = (name: string, handler: DshBridgeToolHandler) => {
@@ -430,31 +455,76 @@ export function wireDshHostBridge(options: {
 
   registerBuiltin(BUILTIN_MEMORY_TOOL_NAMES.Search, (req) => {
     const query = typeof req.args.query === 'string' ? req.args.query : '';
+    if (!memoryEnabled()) {
+      return {
+        query,
+        hits: [],
+        disabled: true,
+        text: 'Memory is currently disabled in settings.',
+      };
+    }
     const limit = typeof req.args.limit === 'number' && req.args.limit > 0 ? req.args.limit : 8;
-    const hits = memoryService.search(req.agentId, query, limit);
+    const hits = memoryService.search(req.agentId, query, limit, {
+      workspaceDir: req.workspaceDir,
+      includeMainGlobal: true,
+    });
     return {
       query,
       hits,
       text: hits.length === 0
         ? `No memory matches found for "${query}".`
-        : hits.map((h) => `[${h.relPath}:${h.lineStart}-${h.lineEnd}] ${h.snippet}`).join('\n\n'),
+        : hits.map((h) => {
+          const displayPath = h.agentId === 'main' && req.agentId !== 'main'
+            ? `global/${h.relPath}`
+            : h.relPath;
+          return `[${displayPath}:${h.lineStart}-${h.lineEnd}] ${h.snippet}`;
+        }).join('\n\n'),
     };
   });
 
   registerBuiltin(BUILTIN_MEMORY_TOOL_NAMES.Get, (req) => {
-    const relPath = typeof req.args.path === 'string' ? req.args.path : 'MEMORY.md';
+    const relPath = typeof req.args.path === 'string' ? req.args.path : WorkspaceFileName.Memory;
+    if (!memoryEnabled()) {
+      return { path: relPath, text: '', disabled: true };
+    }
     const startLine = typeof req.args.startLine === 'number' ? req.args.startLine : 1;
     const endLine = typeof req.args.endLine === 'number' ? req.args.endLine : undefined;
     const lineCount = endLine !== undefined && endLine >= startLine ? endLine - startLine + 1 : 80;
-    const text = memoryService.readMemorySnippet(req.agentId, relPath, startLine, lineCount) ?? '';
+    const normalizedRel = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (normalizedRel.startsWith('global/')) {
+      const globalFile = normalizedRel.slice('global/'.length);
+      if (globalFile !== WorkspaceFileName.Memory && globalFile !== WorkspaceFileName.User) {
+        throw new Error(`Refusing global memory read outside MEMORY.md/USER.md: ${relPath}`);
+      }
+      const text = memoryService.readMemorySnippet('main', globalFile, startLine, lineCount, {
+        globalOnly: true,
+      }) ?? '';
+      return { path: relPath, text };
+    }
+    const text = memoryService.readMemorySnippet(req.agentId, relPath, startLine, lineCount, {
+      workspaceDir: req.workspaceDir,
+    }) ?? '';
     return { path: relPath, text };
   });
 
   registerBuiltin(BUILTIN_MEMORY_TOOL_NAMES.Save, (req) => {
-    const content = typeof req.args.content === 'string' ? req.args.content.trim() : '';
-    if (!content) {
+    if (!memoryEnabled()) {
+      return {
+        ok: false,
+        disabled: true,
+        text: 'Memory is currently disabled in settings; nothing was saved.',
+      };
+    }
+    const rawContent = typeof req.args.content === 'string' ? req.args.content.trim() : '';
+    if (!rawContent) {
       throw new Error('Memory content cannot be empty');
     }
+    const scope = req.args.scope === MemoryScope.Project ? MemoryScope.Project : MemoryScope.Global;
+    const projectKey = scope === MemoryScope.Project
+      ? resolvePrimaryProjectKey(req.workspaceDir)
+      : null;
+    const content = projectKey ? appendProjectTag(rawContent, projectKey) : rawContent;
+
     const target = req.args.target === 'daily' ? 'daily' : 'memory';
     if (target === 'daily') {
       const dateStr = typeof req.args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.args.date)
@@ -462,10 +532,24 @@ export function wireDshHostBridge(options: {
         : undefined;
       const dateObj = dateStr ? new Date(`${dateStr}T00:00:00`) : new Date();
       const savedPath = memoryService.appendDailyNote(req.agentId, content, dateObj);
-      return { ok: true, target: 'daily', path: savedPath, text: `Saved daily note to ${savedPath}` };
+      return {
+        ok: true,
+        target: 'daily',
+        scope,
+        ...(projectKey ? { projectKey } : {}),
+        path: savedPath,
+        text: `Saved daily note to ${savedPath}`,
+      };
     }
     const entry = memoryService.addMemory(req.agentId, content);
-    return { ok: true, target: 'memory', entry, text: `Saved memory entry (${entry.id})` };
+    return {
+      ok: true,
+      target: 'memory',
+      scope,
+      ...(projectKey ? { projectKey } : {}),
+      entry,
+      text: `Saved memory entry (${entry.id})`,
+    };
   });
 
   registerBuiltin(BUILTIN_SCHEDULE_TOOL_NAME, (req) => {

@@ -10,6 +10,7 @@
  * - `syncProviders`: hot-sync LobsterAI providers & API keys into memory
  * - `syncMcpServers`: reconcile LobsterAI MCP servers via `ctx.mcpManager.register`
  * - `syncSkillsPolicy`: update global enabled/disabled skill lists & refresh catalog
+ * - `syncMemoryPolicy`: update global memoryEnabled toggle
  * - `syncAgents`: hot-sync LobsterAI agent roster & collaboration policies into memory
  * - `syncSubagentBindings`: restore durable childSessionId -> targetAgentId delegation bindings
  * - `bindSessionContext`: bind `{ agentId, coworkSessionId, allowedSkillIds, customSystemPrompt, executionMode }`
@@ -21,8 +22,13 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
+import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
+import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
 import { canonicalizeProviderId } from './model-bridge-helpers.mjs';
+import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
+import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
 
 export const name = 'lobster-ops-rpc';
 export const inject = ['connection'];
@@ -34,6 +40,16 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+function sameSkillAllowlist(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 /**
@@ -67,101 +83,177 @@ async function removeSessionDirectories(sessionId) {
 
 export function apply(ctx) {
   const state = getHostState(ctx);
-  /** @type {Map<string, () => void>} */
-  const managedMcpDisposers = new Map();
-  /** @type {Promise<void>} */
-  let mcpSyncQueue = Promise.resolve();
+  /** @type {Map<string, { fingerprint: string, dispose: () => unknown }>} */
+  const managedMcpEntries = new Map();
+  const sseBridge = createMcpSseBridge(ctx);
+  /** Serialize concurrent `syncMcpServers` RPC calls so map/disposal ops never race. */
+  let mcpSyncTail = Promise.resolve();
 
-  function parsePositiveTimeoutMs(value) {
-    return typeof value === 'number' && Number.isFinite(value) && value > 0
-      ? value
-      : undefined;
+  const REMOVED_UNMOUNT_WAIT_MS = 5_000;
+
+  async function waitForRemovedMcpUnmounted(mcpManager, removedNames) {
+    if (!Array.isArray(removedNames) || removedNames.length === 0) return;
+    const isSettled = (views) => {
+      const byName = new Map(views.map((view) => [view.name, view]));
+      return removedNames.every((serverName) => {
+        const view = byName.get(serverName);
+        // Settled once removed from list(), re-configured, or retained only due to failed cleanup.
+        return !view || view.configured === true || view.status?.state === 'failed';
+      });
+    };
+
+    if (isSettled(mcpManager.list())) return;
+    if (typeof mcpManager.watch !== 'function') return;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOVED_UNMOUNT_WAIT_MS);
+    timer.unref?.();
+    try {
+      for await (const views of mcpManager.watch(controller.signal)) {
+        if (isSettled(views)) {
+          controller.abort();
+          break;
+        }
+      }
+    } catch {
+      // Ignore abort / stream shutdown errors; bounded best-effort unmount wait.
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  async function syncMcpServersInner(payload) {
+  async function runSyncMcpServers(payload) {
     const mcpManager = ctx.get('mcpManager');
-    if (!mcpManager) {
-      return { available: false, registered: [], errors: ['mcpManager service is not mounted'] };
+    const tools = ctx.get('tools');
+    if (!mcpManager && !tools) {
+      const errors = ['mcpManager and tools services are not mounted'];
+      ctx.logger.warn('[LobsterAI:OpsRpc] syncMcpServers skipped: mcpManager and tools services are not mounted');
+      return {
+        available: false,
+        registered: [],
+        added: [],
+        updated: [],
+        removed: [],
+        unchanged: [],
+        errors,
+        statuses: [],
+      };
     }
+
     const body = payload && typeof payload === 'object' ? payload : {};
     const servers = Array.isArray(body.servers) ? body.servers : [];
 
-    // Snapshot and clear before awaiting disposal so no overlapping caller can
-    // double-dispose or drop newly registered disposers.
-    const previousDisposers = [...managedMcpDisposers.values()];
-    managedMcpDisposers.clear();
-    for (const dispose of previousDisposers) {
-      try {
-        await dispose();
-      } catch {
-        // best-effort unmount
-      }
-    }
+    const standardEntries = [];
+    const sseEntries = [];
+    /** @type {Map<string, ReturnType<typeof normalizeMcpToolFilter>>} */
+    const desiredToolFilters = new Map();
+    const preErrors = [];
+    const seenNames = new Set();
 
-    const registered = [];
-    const errors = [];
     for (const entry of servers) {
       if (!entry || typeof entry !== 'object') continue;
       const serverName = String(entry.name || '').trim();
       if (!serverName || entry.enabled === false) continue;
 
-      const startupTimeoutMs = parsePositiveTimeoutMs(entry.startupTimeoutMs);
-      const toolCallTimeoutMs = parsePositiveTimeoutMs(entry.toolCallTimeoutMs);
-      const transport = entry.transport === 'streamable-http' ? 'streamable-http' : 'stdio';
-      const config = transport === 'stdio'
-        ? {
-            transport: 'stdio',
-            command: String(entry.command || ''),
-            args: Array.isArray(entry.args) ? entry.args.map(String) : [],
-            env: entry.env && typeof entry.env === 'object'
-              ? Object.fromEntries(Object.entries(entry.env).map(([k, v]) => [k, String(v)]))
-              : {},
-            cwd: typeof entry.cwd === 'string' ? entry.cwd : '',
-            ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
-            ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
-          }
-        : {
-            transport: 'streamable-http',
-            url: String(entry.url || ''),
-            headers: entry.headers && typeof entry.headers === 'object'
-              ? Object.fromEntries(Object.entries(entry.headers).map(([k, v]) => [k, String(v)]))
-              : {},
-            ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
-            ...(toolCallTimeoutMs !== undefined ? { toolCallTimeoutMs } : {}),
-          };
+      if (seenNames.has(serverName)) {
+        preErrors.push(`${serverName}: duplicate MCP server name`);
+        continue;
+      }
+      seenNames.add(serverName);
+      desiredToolFilters.set(serverName, normalizeMcpToolFilter(entry.toolFilter));
 
-      try {
-        const disposer = mcpManager.register(serverName, config);
-        managedMcpDisposers.set(serverName, disposer);
-        registered.push(serverName);
-      } catch (error) {
-        errors.push(`${serverName}: ${error instanceof Error ? error.message : String(error)}`);
+      const rawTransport = String(entry.transport || '').trim().toLowerCase();
+      if (rawTransport === 'sse') {
+        sseEntries.push({ ...entry, name: serverName });
+      } else {
+        standardEntries.push({ ...entry, name: serverName, transport: rawTransport });
       }
     }
 
+    // Publish incoming user MCP tool filters before registering new servers so
+    // any immediate `tools/change` event observes the updated filter policy,
+    // while retaining existing filters for removed servers until after disposal.
+    for (const [serverName, filter] of desiredToolFilters.entries()) {
+      state.mcpRegisteredServers.add(serverName);
+      if (filter) {
+        state.mcpToolFilters.set(serverName, filter);
+      } else {
+        state.mcpToolFilters.delete(serverName);
+      }
+    }
+
+    // Release removed or transport-switched SSE servers before reconciling
+    // standard servers so namespaces never collide during transport changes.
+    await sseBridge.disposeRemovedOrChanged(sseEntries);
+
+    let standardOutcome = {
+      registered: [],
+      added: [],
+      updated: [],
+      removed: [],
+      unchanged: [],
+      errors: [],
+    };
+    if (mcpManager) {
+      standardOutcome = await reconcileMcpServers({
+        managedEntries: managedMcpEntries,
+        servers: standardEntries,
+        register: (serverName, config) => mcpManager.register(serverName, config),
+        logger: ctx.logger,
+        afterDispose: (removedNames) => waitForRemovedMcpUnmounted(mcpManager, removedNames),
+      });
+    } else {
+      for (const existing of managedMcpEntries.values()) {
+        try {
+          await existing.dispose();
+        } catch {}
+      }
+      managedMcpEntries.clear();
+      for (const entry of standardEntries) {
+        standardOutcome.errors.push(`${entry.name}: mcpManager service is not mounted`);
+      }
+    }
+
+    const sseResult = await sseBridge.sync(sseEntries);
+
+    // Prune removed or failed-to-register servers from active toolFilter state,
+    // then immediately reconcile restrictions across all live agents.
+    const activeRegistered = new Set([...standardOutcome.registered, ...sseResult.registered]);
+    state.mcpRegisteredServers.clear();
+    state.mcpToolFilters.clear();
+    for (const serverName of activeRegistered) {
+      state.mcpRegisteredServers.add(serverName);
+      const filter = desiredToolFilters.get(serverName);
+      if (filter) {
+        state.mcpToolFilters.set(serverName, filter);
+      }
+    }
+    state.reconcileToolDisclosure?.();
+
     return {
       available: true,
-      registered,
-      errors,
-      statuses: mcpManager.list(),
+      registered: [...standardOutcome.registered, ...sseResult.registered],
+      added: standardOutcome.added,
+      updated: standardOutcome.updated,
+      removed: standardOutcome.removed,
+      unchanged: standardOutcome.unchanged,
+      errors: [...preErrors, ...standardOutcome.errors, ...sseResult.errors],
+      statuses: [
+        ...(mcpManager ? mcpManager.list() : []),
+        ...sseBridge.list(),
+      ],
     };
   }
 
   function syncMcpServers(payload) {
-    const run = mcpSyncQueue.then(() => syncMcpServersInner(payload));
-    mcpSyncQueue = run.then(() => undefined, () => undefined);
+    const run = mcpSyncTail.then(() => runSyncMcpServers(payload));
+    mcpSyncTail = run.then(() => undefined, () => undefined);
     return run;
   }
 
   state.syncMcpServers = syncMcpServers;
 
-  const VALID_PERMISSION_PRESETS = new Set([
-    'read-only',
-    'workspace-write',
-    'danger-full-access',
-  ]);
-
-  function applyPermissionPresetToAgent(agent, preset) {
+  function applyPermissionPresetToAgent(agent, preset, options = {}) {
     if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
     // dsh applies the delegation's sandbox on top of its parent's permissions.
     if (agent.session.header?.origin === 'subagent') return false;
@@ -172,14 +264,21 @@ export function apply(ctx) {
         ? permissionPresets.current(agent.session)
         : undefined;
       if (current === preset) return true;
-      permissionPresets.set(agent.session, preset);
-      const approval = ctx.get('approval');
-      if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
-        const spec = permissionPresets.resolve(preset);
-        if (spec?.approval) {
-          approval.setPolicy(agent, spec.approval);
+      // Call `approval.setPolicy` BEFORE `permissionPresets.set` so `setPolicy`
+      // observes the previous effective policy and emits its model switch notice
+      // instead of silently returning early after `permissionPresets.set` already
+      // appends `approval/policy`. `permissionPresets.set` then writes
+      // `permission/preset` and `sandbox/mode` without duplicating `approval/policy`.
+      if (options.notifyPolicyChange !== false) {
+        const approval = ctx.get('approval');
+        if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
+          const spec = permissionPresets.resolve(preset);
+          if (spec?.approval) {
+            approval.setPolicy(agent, spec.approval);
+          }
         }
       }
+      permissionPresets.set(agent.session, preset);
       return true;
     } catch (error) {
       ctx.logger.warn(
@@ -198,7 +297,7 @@ export function apply(ctx) {
       ? bound.permissionPreset
       : state.defaultPermissionPreset;
     if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
-      applyPermissionPresetToAgent(agent, targetPreset);
+      applyPermissionPresetToAgent(agent, targetPreset, { notifyPolicyChange: false });
     }
   });
 
@@ -226,13 +325,17 @@ export function apply(ctx) {
               bootedAt: state.bootedAt,
               pluginsReady: { ...state.pluginsReady },
               providers: llm ? llm.listProviders() : [],
-              mcpServers: mcpManager ? mcpManager.list() : [],
+              mcpServers: [
+                ...(mcpManager ? mcpManager.list() : []),
+                ...sseBridge.list(),
+              ],
               boundSessionsCount: state.sessionContexts.size,
               agentsCount: state.agents.size,
               delegatedBindingsCount: state.delegatedChildAgents.size,
               workspacesDirConfigured: state.workspacesDir.length > 0,
               skillsDirConfigured: state.skillsDir.length > 0,
               bridgeConfigured: state.bridgeUrl.length > 0,
+              memoryEnabled: state.memoryEnabled !== false,
             });
           }
 
@@ -270,6 +373,19 @@ export function apply(ctx) {
                 skillsDir: state.skillsDir,
                 enabledCount: state.skillsPolicy.enabledIds ? state.skillsPolicy.enabledIds.size : null,
                 disabledCount: state.skillsPolicy.disabledIds.size,
+              },
+            });
+          }
+
+          case 'syncMemoryPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            if (typeof p.enabled === 'boolean') {
+              state.memoryEnabled = p.enabled;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                memoryEnabled: state.memoryEnabled !== false,
               },
             });
           }
@@ -380,6 +496,9 @@ export function apply(ctx) {
               });
               syncedCount += 1;
             }
+            if (replace || syncedCount > 0) {
+              state.invalidateSkills?.();
+            }
             return jsonResponse({
               ok: true,
               result: {
@@ -396,54 +515,27 @@ export function apply(ctx) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
             if (p.unbind === true) {
-              state.sessionContexts.delete(sessionId);
-              state.delegatedChildAgents.delete(sessionId);
+              const removedSession = state.sessionContexts.delete(sessionId);
+              const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+              if (removedSession || removedDelegated) {
+                state.invalidateSkills?.();
+              }
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
+            const hadPrev = state.sessionContexts.has(sessionId);
             const prev = state.sessionContexts.get(sessionId) ?? {};
-            const nextPreset = typeof p.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(p.permissionPreset)
-              ? p.permissionPreset
-              : undefined;
-            const mergedUnlocked = new Set([
-              ...(Array.isArray(prev.unlockedCapabilities) ? prev.unlockedCapabilities : []),
-              ...(Array.isArray(p.unlockedCapabilities)
-                ? p.unlockedCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0)
-                : []),
-            ]);
-            const nextContext = {
-              ...prev,
-              ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
-              ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
-              ...(typeof p.traceId === 'string' && p.traceId.length > 0 ? { traceId: p.traceId } : {}),
-              ...(typeof p.workspaceDir === 'string' ? { workspaceDir: p.workspaceDir } : {}),
-              ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
-                ? { allowedSkillIds: p.allowedSkillIds }
-                : {}),
-              ...(typeof p.customSystemPrompt === 'string'
-                ? { customSystemPrompt: p.customSystemPrompt }
-                : {}),
-              ...(typeof p.officeAgentPrompt === 'string' && p.officeAgentPrompt.trim().length > 0
-                ? { officeAgentPrompt: p.officeAgentPrompt }
-                : {}),
-              ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
-              ...(nextPreset ? { permissionPreset: nextPreset } : {}),
-              ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
-            };
-            if (p.contextWindowSelection === null) {
-              delete nextContext.contextWindowSelection;
-            } else if (typeof p.contextWindowSelection === 'string' && p.contextWindowSelection.trim().length > 0) {
-              nextContext.contextWindowSelection = p.contextWindowSelection.trim();
-            }
-            if (p.contextWindowOverride === null) {
-              delete nextContext.contextWindowOverride;
-            } else if (
-              typeof p.contextWindowOverride === 'number'
-              && Number.isInteger(p.contextWindowOverride)
-              && p.contextWindowOverride > 0
-            ) {
-              nextContext.contextWindowOverride = p.contextWindowOverride;
-            }
+            const { nextPreset, context: nextContext } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
             state.sessionContexts.set(sessionId, nextContext);
+            // Invalidate DSH's SkillRegistry collectCache whenever a session's
+            // agent binding or allowedSkillIds changes so Turn 2+ never serves
+            // a stale skill catalog from Turn 1.
+            if (
+              !hadPrev
+              || prev.agentId !== nextContext.agentId
+              || !sameSkillAllowlist(prev.allowedSkillIds, nextContext.allowedSkillIds)
+            ) {
+              state.invalidateSkills?.();
+            }
             state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);
@@ -463,7 +555,11 @@ export function apply(ctx) {
             const appliedSessions = [];
             if (sessionId) {
               const prev = state.sessionContexts.get(sessionId) ?? {};
-              state.sessionContexts.set(sessionId, { ...prev, permissionPreset: preset });
+              state.sessionContexts.set(sessionId, {
+                ...prev,
+                permissionPreset: preset,
+                permissionPresetExplicit: true,
+              });
               const liveAgent = ctx.get('agents')?.get(sessionId);
               if (liveAgent && applyPermissionPresetToAgent(liveAgent, preset)) {
                 appliedSessions.push(sessionId);
@@ -471,11 +567,14 @@ export function apply(ctx) {
             } else {
               state.defaultPermissionPreset = preset;
               for (const [sid, ctxEntry] of state.sessionContexts.entries()) {
+                if (ctxEntry?.permissionPresetExplicit) continue;
                 state.sessionContexts.set(sid, { ...ctxEntry, permissionPreset: preset });
               }
               const agents = ctx.get('agents');
               if (agents && typeof agents.list === 'function') {
                 for (const agent of agents.list()) {
+                  const ctxEntry = state.sessionContexts.get(agent.id);
+                  if (ctxEntry?.permissionPresetExplicit) continue;
                   if (applyPermissionPresetToAgent(agent, preset)) {
                     appliedSessions.push(agent.id);
                   }
@@ -500,14 +599,39 @@ export function apply(ctx) {
             return jsonResponse({ ok: true, result });
           }
 
+          case 'syncWebAccessPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const validSearchPolicies = new Set(Object.values(DSH_SEARCH_POLICY));
+            state.webAccessPolicy = {
+              webFetchEnabled: p.webFetchEnabled !== false,
+              blockedHostnames: normalizeHostnamePolicyList(p.blockedHostnames),
+              allowedHostnames: normalizeHostnamePolicyList(p.allowedHostnames),
+            };
+            if (typeof p.searchPolicy === 'string' && validSearchPolicies.has(p.searchPolicy)) {
+              state.searchPolicy = p.searchPolicy;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+                blockedHostnamesCount: state.webAccessPolicy.blockedHostnames.length,
+                allowedHostnamesCount: state.webAccessPolicy.allowedHostnames.length,
+                searchPolicy: state.searchPolicy,
+              },
+            });
+          }
+
           case 'deleteSessionFiles': {
             const p = payload && typeof payload === 'object' ? payload : {};
             const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
             if (!sessionId) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
-            state.sessionContexts.delete(sessionId);
-            state.delegatedChildAgents.delete(sessionId);
+            const removedSession = state.sessionContexts.delete(sessionId);
+            const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+            if (removedSession || removedDelegated) {
+              state.invalidateSkills?.();
+            }
             // Stop live agent if running before deleting files.
             const liveAgent = ctx.get('agents')?.get(sessionId);
             if (liveAgent && typeof liveAgent.cancel === 'function') {
@@ -537,14 +661,17 @@ export function apply(ctx) {
   });
 
   ctx.effect(() => async () => {
-    await mcpSyncQueue;
-    const disposers = [...managedMcpDisposers.values()];
-    managedMcpDisposers.clear();
-    for (const dispose of disposers) {
+    await mcpSyncTail;
+    await sseBridge.disposeAll();
+    const entries = [...managedMcpEntries.values()];
+    managedMcpEntries.clear();
+    for (const entry of entries) {
       try {
-        await dispose();
+        await entry.dispose();
       } catch {}
     }
+    state.mcpToolFilters.clear();
+    state.mcpRegisteredServers.clear();
     state.syncMcpServers = null;
     state.pluginsReady.opsRpc = false;
   }, 'lobster-ops-rpc cleanup');
