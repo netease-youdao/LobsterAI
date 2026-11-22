@@ -39,23 +39,43 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
       ? { customSystemPrompt: '' }
       : {};
 
+  const context = {
+    ...base,
+    ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
+    ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
+    ...(typeof p.traceId === 'string' && p.traceId.length > 0 ? { traceId: p.traceId } : {}),
+    ...(typeof p.workspaceDir === 'string' ? { workspaceDir: p.workspaceDir } : {}),
+    ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
+      ? { allowedSkillIds: p.allowedSkillIds }
+      : {}),
+    ...customSystemPromptPatch,
+    ...(typeof p.officeAgentPrompt === 'string' && p.officeAgentPrompt.trim().length > 0
+      ? { officeAgentPrompt: p.officeAgentPrompt }
+      : {}),
+    ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
+    ...(typeof p.memoryEnabled === 'boolean' ? { memoryEnabled: p.memoryEnabled } : {}),
+    ...(nextPreset ? { permissionPreset: nextPreset } : {}),
+    permissionPresetExplicit,
+    ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
+  };
+
+  if (p.contextWindowSelection === null) {
+    delete context.contextWindowSelection;
+  } else if (typeof p.contextWindowSelection === 'string' && p.contextWindowSelection.trim().length > 0) {
+    context.contextWindowSelection = p.contextWindowSelection.trim();
+  }
+  if (p.contextWindowOverride === null) {
+    delete context.contextWindowOverride;
+  } else if (
+    typeof p.contextWindowOverride === 'number'
+    && Number.isInteger(p.contextWindowOverride)
+    && p.contextWindowOverride > 0
+  ) {
+    context.contextWindowOverride = p.contextWindowOverride;
+  }
+
   return {
     nextPreset,
-    context: {
-      ...base,
-      ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
-      ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
-      ...(typeof p.traceId === 'string' && p.traceId.length > 0 ? { traceId: p.traceId } : {}),
-      ...(typeof p.workspaceDir === 'string' ? { workspaceDir: p.workspaceDir } : {}),
-      ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
-        ? { allowedSkillIds: p.allowedSkillIds }
-        : {}),
-      ...customSystemPromptPatch,
-      ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
-      ...(typeof p.memoryEnabled === 'boolean' ? { memoryEnabled: p.memoryEnabled } : {}),
-      ...(nextPreset ? { permissionPreset: nextPreset } : {}),
-      permissionPresetExplicit,
-      ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
-    },
+    context,
   };
 }

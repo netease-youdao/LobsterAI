@@ -12,6 +12,7 @@ import { EventEmitter } from 'events';
 import {
   DeliveryMode,
   RunDeliveryStatus,
+  ScheduleKind,
   SessionTarget,
   TaskStatus,
   WakeMode,
@@ -31,6 +32,7 @@ import type {
 
 export interface LobsterSchedulerRunResult {
   stopped?: boolean;
+  error?: string | null;
   sessionId?: string | null;
   sessionKey?: string | null;
   summary?: string | null;
@@ -80,6 +82,7 @@ export interface LegacyRunImportRecord {
 
 interface ParsedCronFields {
   minutes: Set<number>;
+  sortedMinutes: number[];
   hours: Set<number>;
   daysOfMonth: Set<number>;
   months: Set<number>;
@@ -123,7 +126,11 @@ interface RunRow {
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 15_000;
-const MAX_CRON_SEARCH_MINUTES = 366 * 24 * 60; // 1 leap year scan bound
+const MAX_CRON_SEARCH_YEARS = 8;
+const MAX_CRON_SEARCH_MS = MAX_CRON_SEARCH_YEARS * 366 * 24 * 60 * 60_000;
+const MAX_CRON_ITERATIONS = 32_000;
+const DST_GUARD_MINUTES = 180;
+const MAX_ZONED_FORMATTER_CACHE_SIZE = 128;
 
 const WEEKDAY_MAP: Record<string, number> = {
   Sun: 0,
@@ -135,43 +142,159 @@ const WEEKDAY_MAP: Record<string, number> = {
   Sat: 6,
 };
 
+const MONTH_ALIASES: Readonly<Record<string, number>> = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
+};
+
+const DOW_ALIASES: Readonly<Record<string, number>> = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
+};
+
+const CRON_MACROS: Readonly<Record<string, string>> = {
+  '@yearly': '0 0 1 1 *',
+  '@annually': '0 0 1 1 *',
+  '@monthly': '0 0 1 * *',
+  '@weekly': '0 0 * * 0',
+  '@daily': '0 0 * * *',
+  '@midnight': '0 0 * * *',
+  '@hourly': '0 * * * *',
+};
+
+interface ZonedDateParts {
+  year: number;
+  month: number;
+  day: number;
+  weekday: number;
+  hour: number;
+  minute: number;
+}
+
+const zonedFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getZonedFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = zonedFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      weekday: 'short',
+      hour: 'numeric',
+      minute: 'numeric',
+      hourCycle: 'h23',
+    });
+    if (zonedFormatterCache.size >= MAX_ZONED_FORMATTER_CACHE_SIZE) {
+      const oldestKey = zonedFormatterCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        zonedFormatterCache.delete(oldestKey);
+      }
+    }
+    zonedFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
+function parseCronValue(
+  raw: string,
+  min: number,
+  max: number,
+  aliases?: Readonly<Record<string, number>>,
+): number {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error('Empty cron value');
+  }
+  const lower = trimmed.toLowerCase();
+  if (aliases && Object.prototype.hasOwnProperty.call(aliases, lower)) {
+    return aliases[lower];
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`Invalid cron value "${raw}"`);
+  }
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`Invalid cron value "${raw}"`);
+  }
+  return value;
+}
+
 function parseCronField(
   token: string,
   min: number,
   max: number,
-  normalizeSevenToZero = false,
+  options?: {
+    normalizeSevenToZero?: boolean;
+    aliases?: Readonly<Record<string, number>>;
+    allowQuestionMark?: boolean;
+  },
 ): { values: Set<number>; isWildcard: boolean } {
   const trimmed = token.trim();
   if (!trimmed) throw new Error('Empty cron field');
-  const isWildcard = trimmed === '*';
+  const normalizeSevenToZero = options?.normalizeSevenToZero ?? false;
+  const aliases = options?.aliases;
+  const allowQuestionMark = options?.allowQuestionMark ?? false;
+  const isWildcard = trimmed === '*' || (allowQuestionMark && trimmed === '?');
   const values = new Set<number>();
 
-  for (const part of trimmed.split(',')) {
-    const [rangePart, stepPart] = part.split('/');
-    const step = stepPart !== undefined ? Number(stepPart) : 1;
+  for (const rawPart of trimmed.split(',')) {
+    const part = rawPart.trim();
+    if (!part) throw new Error(`Empty cron segment in "${token}"`);
+    const slashParts = part.split('/');
+    if (slashParts.length > 2) {
+      throw new Error(`Invalid cron step "${part}"`);
+    }
+    const [rangePart, stepPart] = slashParts;
+    if (stepPart !== undefined && !/^\d+$/.test(stepPart.trim())) {
+      throw new Error(`Invalid cron step "${part}"`);
+    }
+    const step = stepPart !== undefined ? Number(stepPart.trim()) : 1;
     if (!Number.isInteger(step) || step <= 0) {
       throw new Error(`Invalid cron step "${part}"`);
     }
 
     let start: number;
     let end: number;
-    if (rangePart === '*') {
+    if (rangePart === '*' || (allowQuestionMark && rangePart === '?')) {
       start = min;
       end = max;
     } else if (rangePart.includes('-')) {
-      const [s, e] = rangePart.split('-').map(Number);
-      if (!Number.isInteger(s) || !Number.isInteger(e) || s < min || e > max || s > e) {
+      const rangeTokens = rangePart.split('-');
+      if (rangeTokens.length !== 2) {
+        throw new Error(`Invalid cron range "${part}"`);
+      }
+      const [rawStart, rawEnd] = rangeTokens;
+      const s = parseCronValue(rawStart, min, max, aliases);
+      let e = parseCronValue(rawEnd, min, max, aliases);
+      if (normalizeSevenToZero && rawEnd.trim().toLowerCase() === 'sun' && s > 0) {
+        e = 7;
+      }
+      if (s > e) {
         throw new Error(`Invalid cron range "${part}"`);
       }
       start = s;
       end = e;
     } else {
-      const single = Number(rangePart);
-      if (!Number.isInteger(single) || single < min || single > max) {
-        throw new Error(`Invalid cron value "${part}"`);
-      }
+      const single = parseCronValue(rangePart, min, max, aliases);
       start = single;
-      end = single;
+      end = stepPart !== undefined ? max : single;
     }
 
     for (let v = start; v <= end; v += step) {
@@ -183,18 +306,44 @@ function parseCronField(
 }
 
 export function parseCronExpression(expr: string): ParsedCronFields {
-  const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    throw new Error(`Cron expression must have 5 fields (min hour dom month dow): "${expr}"`);
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    throw new Error('Cron expression cannot be empty');
   }
+  let expanded = trimmed;
+  if (trimmed.startsWith('@')) {
+    const macro = CRON_MACROS[trimmed.toLowerCase()];
+    if (!macro) {
+      throw new Error(`Unsupported cron macro "${expr}"`);
+    }
+    expanded = macro;
+  }
+
+  const rawParts = expanded.split(/\s+/);
+  let parts: string[];
+  if (rawParts.length === 5) {
+    parts = rawParts;
+  } else if (rawParts.length === 6) {
+    // 6-field cron (leading seconds field): validate seconds and schedule at minute precision.
+    parseCronField(rawParts[0], 0, 59);
+    parts = rawParts.slice(1);
+  } else {
+    throw new Error(`Cron expression must have 5 or 6 fields (min hour dom month dow): "${expr}"`);
+  }
+
   const minute = parseCronField(parts[0], 0, 59);
   const hour = parseCronField(parts[1], 0, 23);
-  const dom = parseCronField(parts[2], 1, 31);
-  const month = parseCronField(parts[3], 1, 12);
-  const dow = parseCronField(parts[4], 0, 7, true);
+  const dom = parseCronField(parts[2], 1, 31, { allowQuestionMark: true });
+  const month = parseCronField(parts[3], 1, 12, { aliases: MONTH_ALIASES });
+  const dow = parseCronField(parts[4], 0, 7, {
+    normalizeSevenToZero: true,
+    aliases: DOW_ALIASES,
+    allowQuestionMark: true,
+  });
 
   return {
     minutes: minute.values,
+    sortedMinutes: [...minute.values].sort((a, b) => a - b),
     hours: hour.values,
     daysOfMonth: dom.values,
     months: month.values,
@@ -204,69 +353,162 @@ export function parseCronExpression(expr: string): ParsedCronFields {
   };
 }
 
-function getZonedDateParts(
-  timestampMs: number,
-  timeZone?: string,
-): { minute: number; hour: number; day: number; month: number; weekday: number } {
+function getZonedDateParts(timestampMs: number, timeZone?: string): ZonedDateParts {
   if (!timeZone) {
     const d = new Date(timestampMs);
     return {
-      minute: d.getMinutes(),
-      hour: d.getHours(),
-      day: d.getDate(),
+      year: d.getFullYear(),
       month: d.getMonth() + 1,
+      day: d.getDate(),
       weekday: d.getDay(),
+      hour: d.getHours(),
+      minute: d.getMinutes(),
     };
   }
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    month: 'numeric',
-    day: 'numeric',
-    weekday: 'short',
-    hour: 'numeric',
-    minute: 'numeric',
-    hourCycle: 'h23',
-  });
+  const formatter = getZonedFormatter(timeZone);
   const parts = formatter.formatToParts(new Date(timestampMs));
-  let minute = 0;
-  let hour = 0;
-  let day = 1;
+  let year = 1970;
   let month = 1;
+  let day = 1;
   let weekday = 0;
+  let hour = 0;
+  let minute = 0;
   for (const part of parts) {
-    if (part.type === 'minute') minute = Number(part.value);
-    else if (part.type === 'hour') hour = Number(part.value) % 24;
-    else if (part.type === 'day') day = Number(part.value);
+    if (part.type === 'year') year = Number(part.value);
     else if (part.type === 'month') month = Number(part.value);
+    else if (part.type === 'day') day = Number(part.value);
     else if (part.type === 'weekday') weekday = WEEKDAY_MAP[part.value] ?? 0;
+    else if (part.type === 'hour') hour = Number(part.value) % 24;
+    else if (part.type === 'minute') minute = Number(part.value);
   }
-  return { minute, hour, day, month, weekday };
+  return { year, month, day, weekday, hour, minute };
 }
 
-function cronMatches(parsed: ParsedCronFields, tsMs: number, tz?: string): boolean {
-  const parts = getZonedDateParts(tsMs, tz);
-  if (!parsed.months.has(parts.month)) return false;
-  if (!parsed.hours.has(parts.hour)) return false;
-  if (!parsed.minutes.has(parts.minute)) return false;
-
-  const domMatch = parsed.daysOfMonth.has(parts.day);
-  const dowMatch = parsed.daysOfWeek.has(parts.weekday);
+function cronDayMatches(parsed: ParsedCronFields, day: number, weekday: number): boolean {
+  const domMatch = parsed.daysOfMonth.has(day);
+  const dowMatch = parsed.daysOfWeek.has(weekday);
   if (parsed.domWildcard && parsed.dowWildcard) return true;
   if (parsed.domWildcard) return dowMatch;
   if (parsed.dowWildcard) return domMatch;
   return domMatch || dowMatch;
 }
 
+function advancePastBucket(
+  candidateMs: number,
+  estimatedDeltaMin: number,
+  tz: string | undefined,
+  inSameBucket: (parts: ZonedDateParts) => boolean,
+): number {
+  const safeDelta = Math.max(1, estimatedDeltaMin);
+  if (safeDelta > DST_GUARD_MINUTES) {
+    return candidateMs + (safeDelta - DST_GUARD_MINUTES) * 60_000;
+  }
+  const probeMs = candidateMs + safeDelta * 60_000;
+  if (inSameBucket(getZonedDateParts(probeMs, tz))) {
+    return probeMs;
+  }
+  const prevMs = probeMs - 60_000;
+  if (prevMs <= candidateMs || inSameBucket(getZonedDateParts(prevMs, tz))) {
+    return probeMs;
+  }
+  // DST spring-forward shifted the boundary earlier than `probeMs`; binary-search
+  // the exact first minute outside the bucket within `(candidateMs, probeMs]`.
+  let low = Math.floor(candidateMs / 60_000);
+  let high = Math.floor(probeMs / 60_000);
+  while (high - low > 1) {
+    const mid = Math.floor((low + high) / 2);
+    if (inSameBucket(getZonedDateParts(mid * 60_000, tz))) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+  return high * 60_000;
+}
+
 function computeNextCronRunMs(schedule: ScheduleCron, afterMs: number): number | null {
   const parsed = parseCronExpression(schedule.expr);
   // Start on the next whole minute strictly after `afterMs`.
-  const startMinute = Math.floor(afterMs / 60_000) * 60_000 + 60_000;
-  for (let i = 0; i < MAX_CRON_SEARCH_MINUTES; i += 1) {
-    const candidate = startMinute + i * 60_000;
-    if (cronMatches(parsed, candidate, schedule.tz)) {
-      return candidate;
+  let candidate = Math.floor(afterMs / 60_000) * 60_000 + 60_000;
+  const maxSearchMs = afterMs + MAX_CRON_SEARCH_MS;
+
+  for (let iter = 0; iter < MAX_CRON_ITERATIONS && candidate <= maxSearchMs; iter += 1) {
+    const parts = getZonedDateParts(candidate, schedule.tz);
+
+    if (!parsed.months.has(parts.month)) {
+      const daysInMonth = new Date(Date.UTC(parts.year, parts.month, 0)).getUTCDate();
+      const remainingMin =
+        (daysInMonth - parts.day) * 1440
+        + (23 - parts.hour) * 60
+        + (60 - parts.minute);
+      candidate = advancePastBucket(
+        candidate,
+        remainingMin,
+        schedule.tz,
+        (p) => p.year === parts.year && p.month === parts.month,
+      );
+      continue;
     }
+
+    if (!cronDayMatches(parsed, parts.day, parts.weekday)) {
+      const remainingMin = (23 - parts.hour) * 60 + (60 - parts.minute);
+      candidate = advancePastBucket(
+        candidate,
+        remainingMin,
+        schedule.tz,
+        (p) => p.year === parts.year && p.month === parts.month && p.day === parts.day,
+      );
+      continue;
+    }
+
+    if (!parsed.hours.has(parts.hour)) {
+      candidate = advancePastBucket(
+        candidate,
+        60 - parts.minute,
+        schedule.tz,
+        (p) =>
+          p.year === parts.year
+          && p.month === parts.month
+          && p.day === parts.day
+          && p.hour === parts.hour,
+      );
+      continue;
+    }
+
+    if (!parsed.minutes.has(parts.minute)) {
+      const nextMinute = parsed.sortedMinutes.find((m) => m > parts.minute);
+      if (nextMinute !== undefined) {
+        const probeMs = candidate + (nextMinute - parts.minute) * 60_000;
+        const probeParts = getZonedDateParts(probeMs, schedule.tz);
+        if (
+          probeParts.year === parts.year
+          && probeParts.month === parts.month
+          && probeParts.day === parts.day
+          && probeParts.hour === parts.hour
+          && probeParts.minute === nextMinute
+        ) {
+          candidate = probeMs;
+        } else {
+          candidate += 60_000;
+        }
+      } else {
+        candidate = advancePastBucket(
+          candidate,
+          60 - parts.minute,
+          schedule.tz,
+          (p) =>
+            p.year === parts.year
+            && p.month === parts.month
+            && p.day === parts.day
+            && p.hour === parts.hour,
+        );
+      }
+      continue;
+    }
+
+    return candidate;
   }
+
   return null;
 }
 
@@ -275,12 +517,12 @@ function computeNextCronRunMs(schedule: ScheduleCron, afterMs: number): number |
  * or `null` when a one-shot schedule has already passed.
  */
 export function computeNextRunAtMs(schedule: Schedule, nowMs: number): number | null {
-  if (schedule.kind === 'at') {
+  if (schedule.kind === ScheduleKind.At) {
     const targetMs = Date.parse(schedule.at);
     if (!Number.isFinite(targetMs)) return null;
     return targetMs > nowMs ? targetMs : null;
   }
-  if (schedule.kind === 'every') {
+  if (schedule.kind === ScheduleKind.Every) {
     if (!Number.isFinite(schedule.everyMs) || schedule.everyMs <= 0) return null;
     const anchor = typeof schedule.anchorMs === 'number' && Number.isFinite(schedule.anchorMs)
       ? schedule.anchorMs
@@ -403,10 +645,13 @@ export class LobsterScheduler extends EventEmitter {
         if (this.runningControllers.has(task.id)) continue;
         closeRuns.run(TaskStatus.Stopped, finishedAt, RunDeliveryStatus.NotRequested, task.id, TaskStatus.Running);
         if (task.state.runningAtMs !== null || task.state.lastStatus === TaskStatus.Running) {
-          const enabled = task.enabled && task.schedule.kind !== 'at';
+          const nextRunAtMs = task.enabled ? computeNextRunAtMs(task.schedule, now) : null;
+          const enabled =
+            task.enabled
+            && (task.schedule.kind !== ScheduleKind.At || nextRunAtMs !== null);
           const state: TaskState = {
             ...task.state,
-            nextRunAtMs: enabled ? computeNextRunAtMs(task.schedule, now) : null,
+            nextRunAtMs: enabled ? nextRunAtMs : null,
             lastRunAtMs: task.state.runningAtMs ?? task.state.lastRunAtMs,
             lastStatus: TaskStatus.Stopped,
             lastDurationMs: null,
@@ -426,12 +671,23 @@ export class LobsterScheduler extends EventEmitter {
    */
   reconcileMissedJobs(): number {
     const nowMs = this.now();
+    const nowIso = new Date(nowMs).toISOString();
     let skipped = 0;
     for (const task of this.listTasks()) {
       if (!task.enabled || this.runningControllers.has(task.id)) continue;
       if (task.state.nextRunAtMs !== null && task.state.nextRunAtMs < nowMs - this.tickIntervalMs) {
-        task.state.nextRunAtMs = computeNextRunAtMs(task.schedule, nowMs);
-        this.saveTaskState(task.id, task.state);
+        const nextRunAtMs = computeNextRunAtMs(task.schedule, nowMs);
+        task.state.nextRunAtMs = nextRunAtMs;
+        const keepEnabled =
+          task.schedule.kind === ScheduleKind.At ? nextRunAtMs !== null : task.enabled;
+        if (keepEnabled !== task.enabled) {
+          this.db
+            .prepare('UPDATE lobster_scheduled_tasks SET enabled = ?, state_json = ?, updated_at = ? WHERE id = ?')
+            .run(keepEnabled ? 1 : 0, JSON.stringify(task.state), nowIso, task.id);
+        } else {
+          this.saveTaskState(task.id, task.state);
+        }
+        this.emit('statusUpdate', { taskId: task.id, state: task.state, enabled: keepEnabled });
         skipped += 1;
       }
     }
@@ -524,7 +780,7 @@ export class LobsterScheduler extends EventEmitter {
       );
 
     const updated = this.getTask(taskId)!;
-    this.emit('statusUpdate', { taskId, state: updated.state });
+    this.emit('statusUpdate', { taskId, state: updated.state, enabled: updated.enabled });
     return updated;
   }
 
@@ -814,20 +1070,31 @@ export class LobsterScheduler extends EventEmitter {
       const task = this.getTask(candidate.id);
       if (!task?.enabled || task.state.nextRunAtMs !== candidate.state.nextRunAtMs) continue;
       firedIds.push(task.id);
-      await this.executeTaskNow(task);
+      await this.startTaskExecution(task, { manual: false }).completion;
     }
     return firedIds;
   }
 
-  async runNow(taskId: string): Promise<ScheduledTaskRun> {
+  /**
+   * Validate and launch a manual task run immediately without blocking the caller
+   * on the full LLM turn. Returns the run ID and a completion promise.
+   */
+  startRunNow(taskId: string): { runId: string; completion: Promise<ScheduledTaskRun> } {
     const task = this.getTask(taskId);
     if (!task) {
       throw new Error(`Scheduled task "${taskId}" not found`);
     }
-    return this.executeTaskNow(task);
+    return this.startTaskExecution(task, { manual: true });
   }
 
-  private async executeTaskNow(task: ScheduledTask): Promise<ScheduledTaskRun> {
+  async runNow(taskId: string): Promise<ScheduledTaskRun> {
+    return this.startRunNow(taskId).completion;
+  }
+
+  private startTaskExecution(
+    task: ScheduledTask,
+    options: { manual: boolean },
+  ): { runId: string; completion: Promise<ScheduledTaskRun> } {
     if (this.runningControllers.has(task.id)) {
       throw new Error(`Scheduled task "${task.id}" is already running`);
     }
@@ -860,8 +1127,43 @@ export class LobsterScheduler extends EventEmitter {
         );
     })();
     this.runningControllers.set(task.id, controller);
-    this.emit('statusUpdate', { taskId: task.id, state: nextState });
+    this.emit('statusUpdate', { taskId: task.id, state: nextState, enabled: task.enabled });
+    const initialRunRecord: ScheduledTaskRun = {
+      id: runId,
+      taskId: task.id,
+      sessionId: null,
+      sessionKey: task.sessionKey ?? null,
+      status: TaskStatus.Running,
+      startedAt: startedIso,
+      finishedAt: null,
+      durationMs: null,
+      error: null,
+      summary: null,
+      deliveryError: null,
+      deliveryStatus: null,
+      deliveryChannel: task.delivery.channel ?? null,
+    };
+    this.emit('runUpdate', { run: { ...initialRunRecord, taskName: task.name } });
 
+    const completion = this.finishTaskExecution(
+      task,
+      runId,
+      startedMs,
+      startedIso,
+      controller,
+      options.manual,
+    );
+    return { runId, completion };
+  }
+
+  private async finishTaskExecution(
+    task: ScheduledTask,
+    runId: string,
+    startedMs: number,
+    startedIso: string,
+    controller: AbortController,
+    isManual: boolean,
+  ): Promise<ScheduledTaskRun> {
     let status: TaskStatus = TaskStatus.Success;
     let errorMsg: string | null = null;
     let runResult: LobsterSchedulerRunResult = {};
@@ -871,6 +1173,10 @@ export class LobsterScheduler extends EventEmitter {
         throw new Error('No scheduler executor configured');
       }
       runResult = await this.executor(task, controller.signal);
+      if (runResult.error) {
+        status = TaskStatus.Error;
+        errorMsg = runResult.error;
+      }
     } catch (error) {
       status = TaskStatus.Error;
       errorMsg = error instanceof Error ? error.message : String(error);
@@ -899,13 +1205,30 @@ export class LobsterScheduler extends EventEmitter {
       deliveryChannel: task.delivery.channel ?? null,
     };
 
-    // One-shot `at` tasks disable automatically after firing; recurring tasks
-    // compute the next slot after completion.
+    // Scheduled one-shot `at` tasks disable automatically after firing; a manual
+    // `runNow` before a future `at` timestamp preserves `enabled` and its future
+    // `nextRunAtMs`. Recurring tasks compute the next slot after completion.
     const latestTask = this.getTask(task.id);
     if (!latestTask) return runRecord;
-    const keepEnabled = latestTask.enabled && latestTask.schedule.kind !== 'at';
+    let keepEnabled = latestTask.enabled;
+    let nextRunAtMs: number | null = null;
+    if (keepEnabled) {
+      if (latestTask.schedule.kind === ScheduleKind.At) {
+        if (isManual) {
+          const futureRunMs = computeNextRunAtMs(latestTask.schedule, finishedMs);
+          keepEnabled = futureRunMs !== null;
+          nextRunAtMs = futureRunMs;
+        } else {
+          keepEnabled = false;
+          nextRunAtMs = null;
+        }
+      } else {
+        nextRunAtMs = computeNextRunAtMs(latestTask.schedule, finishedMs);
+      }
+    }
+
     const updatedState: TaskState = {
-      nextRunAtMs: keepEnabled ? computeNextRunAtMs(latestTask.schedule, finishedMs) : null,
+      nextRunAtMs,
       lastRunAtMs: startedMs,
       lastStatus: status,
       lastError: errorMsg,
@@ -924,8 +1247,8 @@ export class LobsterScheduler extends EventEmitter {
       this.db.prepare('UPDATE lobster_scheduled_tasks SET enabled = ?, state_json = ?, updated_at = ? WHERE id = ?')
         .run(keepEnabled ? 1 : 0, JSON.stringify(updatedState), finishedIso, task.id);
     })();
-    this.emit('statusUpdate', { taskId: task.id, state: updatedState });
-    this.emit('runUpdate', { run: { ...runRecord, taskName: task.name } });
+    this.emit('statusUpdate', { taskId: task.id, state: updatedState, enabled: keepEnabled });
+    this.emit('runUpdate', { run: { ...runRecord, taskName: latestTask.name } });
     return runRecord;
   }
 

@@ -99,6 +99,7 @@ export class ScheduledTaskService {
         updateTaskState({
           taskId: event.taskId,
           taskState: event.state,
+          ...(event.enabled !== undefined ? { enabled: event.enabled } : {}),
         }),
       );
     });

@@ -25,6 +25,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
+import { canonicalizeProviderId } from './model-bridge-helpers.mjs';
 import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
 import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
@@ -417,7 +418,7 @@ export function apply(ctx) {
                 && typeof rawModel.provider === 'string' && rawModel.provider.trim().length > 0
                 && typeof rawModel.model === 'string' && rawModel.model.trim().length > 0
                 ? {
-                    provider: rawModel.provider.trim(),
+                    provider: canonicalizeProviderId(rawModel.provider),
                     model: rawModel.model.trim(),
                     ...(typeof rawModel.reasoningEffort === 'string' && rawModel.reasoningEffort.trim().length > 0
                       ? { reasoningEffort: rawModel.reasoningEffort.trim() }
@@ -660,13 +661,15 @@ export function apply(ctx) {
   });
 
   ctx.effect(() => async () => {
+    await mcpSyncTail;
     await sseBridge.disposeAll();
-    for (const entry of managedMcpEntries.values()) {
+    const entries = [...managedMcpEntries.values()];
+    managedMcpEntries.clear();
+    for (const entry of entries) {
       try {
         await entry.dispose();
       } catch {}
     }
-    managedMcpEntries.clear();
     state.mcpToolFilters.clear();
     state.mcpRegisteredServers.clear();
     state.syncMcpServers = null;

@@ -1259,3 +1259,56 @@ describe('scoped lobsterai-server proxy path rewriting', () => {
     }
   });
 });
+
+test('normalizes /v1/lobsterai-server/v1/messages without duplicating /v1 and returns 503 for unavailable OAuth upstreams', async () => {
+  vi.mocked(net.fetch).mockReset();
+  vi.mocked(net.fetch).mockImplementation(async () => new Response('{"ok":true}', {
+    headers: { 'content-type': 'application/json' },
+  }));
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'account-jwt', refreshToken: 'account-refresh' }),
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getAccountContextHeaders: () => ({
+      'X-LobsterAI-Account-Mode': 'enterprise',
+      'X-LobsterAI-Enterprise-Id': 'ent-42',
+    }),
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => 'loopback-secret',
+    resolveOAuthProviderUpstream: () => null,
+  });
+  try {
+    const anthropicRes = await fetch(`http://127.0.0.1:${port}/v1/lobsterai-server/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': 'loopback-secret',
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [] }),
+    });
+    expect(anthropicRes.status).toBe(200);
+    expect(vi.mocked(net.fetch)).toHaveBeenCalledTimes(1);
+    const [upstreamUrl, upstreamInit] = vi.mocked(net.fetch).mock.calls[0];
+    expect(upstreamUrl).toBe('https://server.example/api/proxy/v1/messages');
+    const upstreamHeaders = new Headers(upstreamInit?.headers);
+    expect(upstreamHeaders.get('authorization')).toBe('Bearer account-jwt');
+    expect(upstreamHeaders.get('x-lobsterai-account-mode')).toBe('enterprise');
+    expect(upstreamHeaders.get('x-lobsterai-enterprise-id')).toBe('ent-42');
+
+    const copilotRes = await fetch(`http://127.0.0.1:${port}/v1/github-copilot/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer loopback-secret',
+      },
+      body: JSON.stringify({ model: 'gpt-4o', messages: [] }),
+    });
+    expect(copilotRes.status).toBe(503);
+    expect(await copilotRes.json()).toMatchObject({
+      error: { code: 'oauth_upstream_unavailable' },
+    });
+    expect(vi.mocked(net.fetch)).toHaveBeenCalledTimes(1);
+  } finally {
+    stopOpenClawTokenProxy();
+  }
+});

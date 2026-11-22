@@ -86,7 +86,13 @@ export function registerModelPresetIpc(dependencies: {
     try { return { success: true, data: await operation() }; }
     catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
   };
-  const resolveSelection = async (sessionId: string, presetId: ModelPresetId, requiresImage: boolean, initial: boolean) => {
+  const resolveSelection = async (
+    sessionId: string,
+    presetId: ModelPresetId,
+    requiresImage: boolean,
+    initial: boolean,
+    requestedThinkingLevel?: ModelThinkingLevel,
+  ) => {
     const isCurrent = dependencies.isAccountCurrent();
     const owner = dependencies.ownerAccountKey();
     if (!owner) throw new Error(t('modelPresetLoginRequired'));
@@ -102,10 +108,14 @@ export function registerModelPresetIpc(dependencies: {
     if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
     if (selectionRevision.get(sessionId) !== revision) throw new Error(t('modelPresetModelMismatch'));
     const modelRef = `${OpenClawProviderId.LobsteraiServer}/${model.modelId}`;
-    const config = parseModelThinkingConfig(model.thinkingConfig);
-    const thinkingLevel = config?.defaultLevel ?? '';
-    const contextOwner = dependencies.contextWindowOwnerKey?.() ?? null;
     const contextModel = getServerModelMetadata(model.modelId);
+    const config = parseModelThinkingConfig(model.thinkingConfig) ?? contextModel?.thinkingConfig;
+    const thinkingLevel: ModelThinkingLevel | '' = config
+      ? (requestedThinkingLevel && config.options.some(option => option.level === requestedThinkingLevel)
+          ? requestedThinkingLevel
+          : config.defaultLevel)
+      : (requestedThinkingLevel ?? '');
+    const contextOwner = dependencies.contextWindowOwnerKey?.() ?? null;
     const contextWindowOverride = rememberedContextWindow(dependencies.getStore(), contextOwner, model.modelId, presetId,
       selectableContextWindows(contextModel, presetId));
     if (!initial) {
@@ -128,7 +138,7 @@ export function registerModelPresetIpc(dependencies: {
     const key = `${dependencies.ownerAccountKey()}:${sessionId}:${presetId}:${requiresImage}:${initial}:${thinkingLevel ?? ''}`;
     const existing = selections.get(key);
     if (existing) return existing;
-    const selection = resolveSelection(sessionId, presetId, requiresImage, initial);
+    const selection = resolveSelection(sessionId, presetId, requiresImage, initial, thinkingLevel);
     selections.set(key, selection);
     void selection.finally(() => { if (selections.get(key) === selection) selections.delete(key); }).catch((): void => {});
     return selection;

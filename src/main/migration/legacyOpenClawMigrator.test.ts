@@ -6,6 +6,15 @@ import * as path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { DeliveryMode, TaskStatus } from '../../scheduledTask/constants';
+import {
+  BrowserCredentialSaveMode,
+  BrowserCredentialUseMode,
+} from '../../shared/browserCredentials/constants';
+import {
+  BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+  BrowserDisplayMode,
+  BrowserNetworkMode,
+} from '../../shared/browserWebAccess/constants';
 import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
   DSH_PERMISSION_PRESET_KV_KEY,
@@ -21,6 +30,7 @@ import {
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { APP_CONFIG_KEY } from '../libs/browserDisplayModeMigration';
 import { CoworkMessageEditStore } from '../libs/coworkMessageEditStore';
 import { CoworkMessageVersionStore } from '../libs/coworkMessageVersionStore';
 import { McpOAuthManager } from '../mcp/mcpOAuthManager';
@@ -2657,5 +2667,310 @@ describe('runLegacyOpenClawMigration', () => {
       migratedServerIds: [],
     });
     db.close();
+  });
+
+  test('migrates external browser config (version 1) to in-app during offline v2 migration, archiving legacy fields and preserving reusable settings', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE browser_credentials (id TEXT PRIMARY KEY, origin TEXT NOT NULL, username TEXT NOT NULL);
+    `);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      APP_CONFIG_KEY,
+      JSON.stringify({
+        theme: 'dark',
+        browserDisplayModeMigrationVersion: 1,
+        browserWebAccess: {
+          displayMode: BrowserDisplayMode.External,
+          networkMode: BrowserNetworkMode.Strict,
+          credentialUseMode: BrowserCredentialUseMode.OncePerTask,
+          credentialSaveMode: BrowserCredentialSaveMode.Never,
+          blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
+          executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          cdpUrl: 'http://127.0.0.1:9222',
+          headless: false,
+          attachOnly: true,
+          remoteCdpTimeoutMs: 15000,
+          remoteCdpHandshakeTimeoutMs: 5000,
+          extraArgs: ['--remote-debugging-port=9222'],
+        },
+      }),
+      1,
+    );
+    db.prepare('INSERT INTO browser_credentials VALUES (?, ?, ?)').run(
+      'cred-1',
+      'https://example.com',
+      'alice',
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T12:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    const report = result.report!;
+    expect(report.summary.externalBrowserConfigsMigrated).toBe(1);
+    expect(report.archivedModules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'external_chrome',
+          count: 1,
+        }),
+      ]),
+    );
+
+    const verifyDb = new Database(sqlitePath);
+    const rawAppConfig = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(APP_CONFIG_KEY) as { value: string };
+    const migratedAppConfig = JSON.parse(rawAppConfig.value) as Record<string, unknown>;
+    expect(migratedAppConfig).toEqual({
+      theme: 'dark',
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserWebAccess: {
+        displayMode: BrowserDisplayMode.InApp,
+        networkMode: BrowserNetworkMode.Strict,
+        credentialUseMode: BrowserCredentialUseMode.OncePerTask,
+        credentialSaveMode: BrowserCredentialSaveMode.Never,
+        blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
+      },
+    });
+
+    // Saved browser credentials table must remain untouched.
+    const savedCred = verifyDb
+      .prepare('SELECT id, origin, username FROM browser_credentials WHERE id = ?')
+      .get('cred-1');
+    expect(savedCred).toEqual({ id: 'cred-1', origin: 'https://example.com', username: 'alice' });
+    verifyDb.close();
+
+    // Verify legacy external browser fields were safely archived in incompatible-modules-backup.tar.gz.
+    const extractDir = createTempDir();
+    await extractMatchingEntriesFromTarGz(
+      report.incompatibleArchivePath,
+      extractDir,
+      (entryPath) => entryPath === 'sqlite/external_browser_config.json',
+    );
+    const archivedExternal = JSON.parse(
+      fs.readFileSync(path.join(extractDir, 'sqlite', 'external_browser_config.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(archivedExternal).toEqual({
+      displayMode: BrowserDisplayMode.External,
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      cdpUrl: 'http://127.0.0.1:9222',
+      headless: false,
+      attachOnly: true,
+      remoteCdpTimeoutMs: 15000,
+      remoteCdpHandshakeTimeoutMs: 5000,
+      extraArgs: ['--remote-debugging-port=9222'],
+    });
+  });
+
+  test('does not archive external_chrome when legacy DB was already using in-app browser', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      APP_CONFIG_KEY,
+      JSON.stringify({
+        browserDisplayModeMigrationVersion: 1,
+        browserWebAccess: {
+          displayMode: BrowserDisplayMode.InApp,
+          networkMode: BrowserNetworkMode.Strict,
+          blockedHostnames: ['https://blocked.example.com'],
+        },
+      }),
+      1,
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-21T12:05:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.summary.externalBrowserConfigsMigrated).toBe(0);
+    expect(result.report?.archivedModules.map((m) => m.category)).not.toContain('external_chrome');
+
+    const verifyDb = new Database(sqlitePath);
+    const rawAppConfig = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(APP_CONFIG_KEY) as { value: string };
+    expect(JSON.parse(rawAppConfig.value)).toEqual({
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserWebAccess: {
+        displayMode: BrowserDisplayMode.InApp,
+        networkMode: BrowserNetworkMode.Strict,
+        blockedHostnames: ['https://blocked.example.com'],
+      },
+    });
+    verifyDb.close();
+  });
+
+  test('repairs stuck external displayMode even when v2 migration was previously marked completed', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      MIGRATION_V2_COMPLETED_KV_KEY,
+      JSON.stringify({ migratedAt: '2026-11-20T00:00:00.000Z' }),
+      1,
+    );
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
+      APP_CONFIG_KEY,
+      JSON.stringify({
+        browserDisplayModeMigrationVersion: 1,
+        browserWebAccess: {
+          displayMode: BrowserDisplayMode.External,
+          credentialUseMode: BrowserCredentialUseMode.Disabled,
+          credentialSaveMode: BrowserCredentialSaveMode.Never,
+          blockedHostnames: ['https://blocked.example.com'],
+          cdpUrl: 'http://127.0.0.1:9222',
+        },
+      }),
+      1,
+    );
+    db.close();
+
+    const result = runLegacyOpenClawMigration({ userDataDir, sqlitePath });
+    expect(result.status).toBe(MigrationV2Status.Skipped);
+
+    const verifyDb = new Database(sqlitePath);
+    const rawAppConfig = verifyDb
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(APP_CONFIG_KEY) as { value: string };
+    expect(JSON.parse(rawAppConfig.value)).toEqual({
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserWebAccess: {
+        displayMode: BrowserDisplayMode.InApp,
+        credentialUseMode: BrowserCredentialUseMode.Disabled,
+        credentialSaveMode: BrowserCredentialSaveMode.Never,
+        blockedHostnames: ['https://blocked.example.com'],
+      },
+    });
+    verifyDb.close();
+  });
+
+  test('migrates legacy xAI OAuth credential from auth-profiles.json into auth/xai-oauth.json before deleting openclaw/', () => {
+    const tmp = createTempDir();
+    const sqlitePath = path.join(tmp, 'lobsterai.sqlite');
+    const openclawState = path.join(tmp, 'openclaw', 'state');
+    const mainAgentDir = path.join(openclawState, 'agents', 'main', 'agent');
+    fs.mkdirSync(mainAgentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mainAgentDir, 'auth-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          'xai:alice@example.com': {
+            type: 'oauth',
+            provider: 'xai',
+            access: 'xai-legacy-access-token',
+            refresh: 'xai-legacy-refresh-token',
+            email: 'alice@example.com',
+            expires: 1_900_000_000_000,
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir: tmp,
+      sqlitePath,
+      now: () => new Date('2026-11-21T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(fs.existsSync(path.join(tmp, 'openclaw'))).toBe(false);
+
+    const migratedPath = path.join(tmp, 'auth', 'xai-oauth.json');
+    expect(fs.existsSync(migratedPath)).toBe(true);
+    const migrated = JSON.parse(fs.readFileSync(migratedPath, 'utf8')) as {
+      profileId: string;
+      credential: { provider: string; type: string; access: string; email?: string };
+    };
+    expect(migrated.profileId).toBe('xai:alice@example.com');
+    expect(migrated.credential).toMatchObject({
+      provider: 'xai',
+      type: 'oauth',
+      access: 'xai-legacy-access-token',
+      email: 'alice@example.com',
+    });
+    expect(result.report?.reauthRequired.some((r) => r.kind === 'xai_oauth')).toBe(false);
+  });
+
+  test('migrates legacy xAI OAuth credential from openclaw.sqlite auth_profile_store and flags reauth if unreadable', () => {
+    // Part A: valid SQLite auth_profile_store
+    const tmpOk = createTempDir();
+    const sqliteOk = path.join(tmpOk, 'lobsterai.sqlite');
+    const stateOk = path.join(tmpOk, 'openclaw', 'state', 'state');
+    fs.mkdirSync(stateOk, { recursive: true });
+    const legacyDb = new Database(path.join(stateOk, 'openclaw.sqlite'));
+    legacyDb.exec('CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL)');
+    legacyDb.prepare('INSERT INTO auth_profile_store VALUES (?, ?)').run(
+      'primary',
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          'xai:bob@example.com': {
+            type: 'oauth',
+            provider: 'xai',
+            access: 'xai-sqlite-access-token',
+            email: 'bob@example.com',
+          },
+        },
+      }),
+    );
+    legacyDb.close();
+    const dbOk = new Database(sqliteOk);
+    dbOk.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    dbOk.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    dbOk.close();
+
+    const resOk = runLegacyOpenClawMigration({ userDataDir: tmpOk, sqlitePath: sqliteOk });
+    expect(resOk.status).toBe(MigrationV2Status.Completed);
+    const migratedOk = JSON.parse(
+      fs.readFileSync(path.join(tmpOk, 'auth', 'xai-oauth.json'), 'utf8'),
+    ) as { profileId: string; credential: { access: string } };
+    expect(migratedOk.profileId).toBe('xai:bob@example.com');
+    expect(migratedOk.credential.access).toBe('xai-sqlite-access-token');
+
+    // Part B: corrupted auth-profiles.json flags xai in reauthRequired
+    const tmpBad = createTempDir();
+    const sqliteBad = path.join(tmpBad, 'lobsterai.sqlite');
+    const badAgentDir = path.join(tmpBad, 'openclaw', 'state', 'agents', 'main', 'agent');
+    fs.mkdirSync(badAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(badAgentDir, 'auth-profiles.json'), '{not-valid-json', 'utf8');
+    const dbBad = new Database(sqliteBad);
+    dbBad.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    dbBad.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    dbBad.close();
+
+    const resBad = runLegacyOpenClawMigration({ userDataDir: tmpBad, sqlitePath: sqliteBad });
+    expect(resBad.status).toBe(MigrationV2Status.Completed);
+    expect(resBad.report?.reauthRequired).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'xai_oauth', id: 'xai' }),
+      ]),
+    );
   });
 });

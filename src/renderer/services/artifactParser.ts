@@ -419,7 +419,7 @@ const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
 const FILE_MARKDOWN_LINK_RE = /\[([^\]]+)\]\((file:\/\/[^)\s]+)\)/gi;
 const LOCAL_SERVICE_TRAILING_PUNCTUATION_RE = /[.,;:!?，。；：！？、]+$/;
 const PROJECT_DIRECTORY_LABEL_RE = /(?:项目目录|项目路径|工程目录|工作目录|project\s+directory|project\s+path|working\s+directory)\s*[:：]\s*([^\n]+)|(?:项目位置|项目位于)\s*(?:[:：]|为|是|在)?\s*([^\n]+)/gi;
-const CD_COMMAND_RE = /(?:^|\n|;|&&|\|\|)\s*(?:[$>]\s*)?cd(?:\s+\/d)?\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s\n;&|]+))/gi;
+const CD_COMMAND_RE = /(?:^|\n|;|&&|\|\|)\s*(?:[$>]\s*)?(?:cd(?:\s+\/d)?|chdir(?:\s+\/d)?|set-location|push-location|pushd)(?:\s+-(?:literal)?path(?:\s+|:)|\s+--\s+|\s+)(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s\n;&|-][^\s\n;&|]*))/gi;
 const FILE_LIKE_PATH_EXTENSION_RE = /\.[A-Za-z0-9]{1,12}$/;
 
 
@@ -1152,6 +1152,12 @@ const WRITE_TOOL_NAMES = new Set([
   'editfile',
   'multiedit',
   'createfile',
+  'wordedit',
+  'exceledit',
+  'pptedit',
+  'mcplobster-wordwordedit',
+  'mcplobster-excelexceledit',
+  'mcplobster-pptpptedit',
 ]);
 
 /**

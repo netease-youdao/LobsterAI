@@ -6,8 +6,18 @@ import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
+import {
+  BrowserAnnotationAnchorKind,
+  BrowserAnnotationScreenshotStatus,
+  type CoworkBrowserAnnotationMessageBatch,
+} from '../../../shared/cowork/browserAnnotations';
 import { type CoworkGoal, CoworkGoalStatus } from '../../../shared/cowork/goal';
+import { CoworkImageAttachmentRole } from '../../../shared/cowork/imageAttachments';
 import { getCoworkLlmTrace, isValidLlmTraceId } from '../../../shared/cowork/llmTurnUsage';
+import {
+  type CoworkSelectedTextSnippet,
+  CoworkSelectedTextSource,
+} from '../../../shared/cowork/selectedText';
 import { CoworkSteerStatus } from '../../../shared/cowork/steer';
 import {
   DSH_SESSION_ID_PREFIX,
@@ -17,7 +27,7 @@ import {
 } from '../../../shared/dshEngine/hostConstants';
 import type { CoworkMessage } from '../../coworkStore';
 import type { DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from '../dsh/dshTypertClient';
-import { hasLlmUsageContext } from '../llmUsageContext';
+import { getLlmUsageHeaders, hasLlmUsageContext } from '../llmUsageContext';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildLazyContextBridgePrefix,
@@ -28,6 +38,7 @@ import {
   extractGoalFromDshPayload,
   extractGoalFromProjections,
   isDshBackedSessionId,
+  resolveOfficeAgentPromptForTurn,
   resolveUnlockedCapabilitiesForTurn,
   translateLobsterGoalCommandToDsh,
 } from './dshRuntimeAdapter';
@@ -76,6 +87,7 @@ function createInMemoryStore(initialSession: DshAdapterSessionRecord): {
     updateSession: (_sid, updates) => {
       if (updates.claudeSessionId !== undefined) session.claudeSessionId = updates.claudeSessionId;
       if (updates.modelOverride !== undefined) session.modelOverride = updates.modelOverride;
+      if (updates.thinkingLevel !== undefined) session.thinkingLevel = updates.thinkingLevel;
       if (updates.goal !== undefined) session.goal = updates.goal;
       if (updates.permissionPreset !== undefined) session.permissionPreset = updates.permissionPreset;
     },
@@ -2372,5 +2384,553 @@ describe('DshRuntimeAdapter', () => {
     expect(await approvalPromise).toEqual({ kind: 'result', value: 'allowed-once' });
     expect(session.permissionPreset).toBe(DshPermissionPreset.FullAccess);
     expect(onPermissionPresetChanged).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, 'cw-race');
+  });
+
+  test('auto-unlocks word/excel/ppt from selectedTextSnippets, prompt file paths, and legacy bridge', () => {
+    expect(resolveUnlockedCapabilitiesForTurn({
+      selectedTextSnippets: [
+        {
+          id: 's1',
+          text: 'Q3 revenue was $10M',
+          sourceType: CoworkSelectedTextSource.ArtifactWord,
+          sourceId: 'doc-1',
+          sourceTitle: 'report.docx',
+          sourcePath: '/tmp/report.docx',
+          createdAt: 1,
+        },
+        {
+          id: 's2',
+          text: 'Total\t100',
+          sourceType: CoworkSelectedTextSource.ArtifactSheet,
+          sourceId: 'sheet-1',
+          sourceTitle: 'budget.xlsx · Sheet1!A1:B1',
+          createdAt: 2,
+        },
+        {
+          id: 's3',
+          text: 'Slide 2 title',
+          sourceType: CoworkSelectedTextSource.ArtifactSlides,
+          sourceId: 'ppt-1',
+          sourceTitle: 'deck.pptx',
+          createdAt: 3,
+        },
+      ],
+    })).toEqual([
+      DshProgressiveCapability.Word,
+      DshProgressiveCapability.Excel,
+      DshProgressiveCapability.Ppt,
+    ]);
+
+    expect(resolveUnlockedCapabilitiesForTurn({
+      prompt: '请修改季度报告.docx的第二段，顺便更新 File: /tmp/预算表.xlsx 和 D:\\slides\\汇报.PPTX',
+    })).toEqual([
+      DshProgressiveCapability.Word,
+      DshProgressiveCapability.Excel,
+      DshProgressiveCapability.Ppt,
+    ]);
+
+    expect(resolveUnlockedCapabilitiesForTurn({
+      prompt: '把刚才第二页的标题改短一点',
+      lazyBridgePrefix: '<previous_conversation_context>\n助手: 已生成 [deck.pptx](file:///tmp/deck.pptx)\n</previous_conversation_context>',
+    })).toEqual([DshProgressiveCapability.Ppt]);
+
+    const wordPrompt = resolveOfficeAgentPromptForTurn([DshProgressiveCapability.Word]);
+    expect(wordPrompt).toContain('## Editing Existing Office Files');
+    expect(wordPrompt).toContain('`word_read` / `word_edit`');
+    expect(wordPrompt).not.toContain('`excel_edit`');
+    expect(resolveOfficeAgentPromptForTurn([DshProgressiveCapability.Browser])).toBe('');
+  });
+
+  test('injects selectedTextSnippets into outbound DSH prompt while keeping stored user message clean and unlocking Office tools', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-selected-text',
+      cwd: '/tmp/office',
+      agentId: 'main',
+    });
+
+    const promptedContents: Array<Array<{ type: string; text?: string; data?: string; mediaType?: string }>> = [];
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-office-1' })),
+      promptSession: vi.fn(async (params: { content: Array<{ type: string; text?: string; data?: string; mediaType?: string }> }) => {
+        promptedContents.push(params.content);
+        return { accepted: true };
+      }),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const wordSnippet: CoworkSelectedTextSnippet = {
+      id: 'snip-word-1',
+      text: 'Q3 revenue was $10M',
+      sourceType: CoworkSelectedTextSource.ArtifactWord,
+      sourceId: 'artifact-word-1',
+      sourceTitle: 'report.docx',
+      sourcePath: '/tmp/report.docx',
+      createdAt: 100,
+    };
+
+    // Turn 1: startSession with selectedTextSnippets (raw prompt stays clean in SQLite)
+    await adapter.startSession('cw-selected-text', '请把这里改成 $12M', {
+      selectedTextSnippets: [wordSnippet],
+    });
+
+    expect(messages[0]?.type).toBe('user');
+    expect(messages[0]?.content).toBe('请把这里改成 $12M');
+    expect(messages[0]?.content).not.toContain('[Selected text excerpts]');
+    expect(messages[0]?.metadata?.selectedTextSnippets).toEqual([wordSnippet]);
+
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        unlockedCapabilities: [DshProgressiveCapability.Word],
+        officeAgentPrompt: expect.stringContaining('`word_read` / `word_edit`'),
+      }),
+    );
+
+    const turn1Text = promptedContents[0]?.[0]?.text ?? '';
+    expect(turn1Text).toContain('[Selected text excerpts]');
+    expect(turn1Text).toContain('Source path: /tmp/report.docx');
+    expect(turn1Text).toContain('> Q3 revenue was $10M');
+    expect(turn1Text).toContain('请把这里改成 $12M');
+
+    // Turn 2: continueSession with Excel snippet accumulates unlocked capabilities & guidance
+    const sheetSnippet: CoworkSelectedTextSnippet = {
+      id: 'snip-sheet-1',
+      text: 'Item\tCost\nGPU\t2000',
+      sourceType: CoworkSelectedTextSource.ArtifactSheet,
+      sourceId: 'artifact-sheet-1',
+      sourceTitle: 'budget.xlsx · Sheet1!A1:B2',
+      sourcePath: '/tmp/budget.xlsx',
+      createdAt: 200,
+    };
+    await adapter.continueSession('cw-selected-text', '把单价改成 2500', {
+      selectedTextSnippets: [sheetSnippet],
+    });
+
+    const userMessages = messages.filter((m) => m.type === 'user');
+    expect(userMessages[1]?.content).toBe('把单价改成 2500');
+    expect(userMessages[1]?.metadata?.selectedTextSnippets).toEqual([sheetSnippet]);
+
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        unlockedCapabilities: [DshProgressiveCapability.Word, DshProgressiveCapability.Excel],
+        officeAgentPrompt: expect.stringContaining('`excel_read` / `excel_edit`'),
+      }),
+    );
+
+    const turn2Text = promptedContents[1]?.[0]?.text ?? '';
+    expect(turn2Text).toContain('[Selected text excerpts]');
+    expect(turn2Text).toContain('Source path: /tmp/budget.xlsx');
+    expect(turn2Text).toContain('> GPU\t2000');
+    expect(turn2Text).toContain('把单价改成 2500');
+  });
+
+  test('injects browserAnnotations prompt section and attaches annotation screenshots without duplication', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-browser-ann',
+      cwd: '/tmp/web',
+      agentId: 'main',
+    });
+
+    const promptedContents: Array<Array<{ type: string; text?: string; data?: string; mediaType?: string }>> = [];
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-web-1' })),
+      promptSession: vi.fn(async (params: { content: Array<{ type: string; text?: string; data?: string; mediaType?: string }> }) => {
+        promptedContents.push(params.content);
+        return { accepted: true };
+      }),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const readBrowserAnnotationAsset = vi.fn(({ assetId }: { assetId: string }) => (
+      assetId === 'asset-from-store'
+        ? { dataUrl: 'data:image/png;base64,U1RPUkVfUE5H', byteSize: 9 }
+        : null
+    ));
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+      readBrowserAnnotationAsset,
+    });
+
+    const createBatch = (
+      assetId: string,
+      comment: string,
+      transportImageIndex?: number,
+    ): CoworkBrowserAnnotationMessageBatch => ({
+      version: 1,
+      id: `batch-${assetId}`,
+      browserTabId: 'tab-1',
+      documentId: 'doc-1',
+      navigationVersion: 1,
+      pageUrl: 'https://example.com/pricing',
+      pageTitle: 'Pricing',
+      createdAt: 100,
+      updatedAt: 100,
+      annotations: [{
+        id: `ann-${assetId}`,
+        order: 0,
+        comment,
+        anchor: {
+          kind: BrowserAnnotationAnchorKind.Element,
+          pageUrl: 'https://example.com/pricing',
+          pageTitle: 'Pricing',
+          framePath: [],
+          rect: { x: 10, y: 20, width: 120, height: 40 },
+          tagName: 'button',
+          selector: '.cta-btn',
+          immediateText: 'Start Free',
+        },
+        capture: {
+          viewportWidth: 1280,
+          viewportHeight: 800,
+          viewportScale: 1,
+          zoomPercent: 100,
+          scrollX: 0,
+          scrollY: 0,
+          targetRect: { x: 10, y: 20, width: 120, height: 40 },
+        },
+        screenshot: {
+          status: BrowserAnnotationScreenshotStatus.Ready,
+          asset: {
+            assetId,
+            mimeType: 'image/png',
+            width: 300,
+            height: 120,
+            byteSize: 9,
+            capturedAt: 100,
+            ...(transportImageIndex ? { transportImageIndex } : {}),
+          },
+        },
+        createdAt: 100,
+        updatedAt: 100,
+      }],
+    });
+
+    // Turn 1: Renderer already packed annotation screenshot into imageAttachments with transportImageIndex: 1
+    await adapter.startSession('cw-browser-ann', '请把主按钮改成蓝色', {
+      browserAnnotations: [createBatch('asset-prepacked', '把按钮背景改成 #2563EB', 1)],
+      imageAttachments: [{
+        name: '浏览器注释截图-1.png',
+        mimeType: 'image/png',
+        base64Data: 'data:image/png;base64,UFJFUExPQURFRA==',
+        sizeBytes: 9,
+        role: CoworkImageAttachmentRole.BrowserAnnotation,
+      }],
+    });
+
+    expect(readBrowserAnnotationAsset).not.toHaveBeenCalled();
+    expect(messages[0]?.content).toBe('请把主按钮改成蓝色');
+    expect(messages[0]?.content).not.toContain('[Browser annotations]');
+    expect(messages[0]?.metadata?.browserAnnotations).toHaveLength(1);
+    expect(promptedContents[0]).toEqual([
+      {
+        type: 'text',
+        text: expect.stringContaining('[Browser annotations]'),
+      },
+      {
+        type: 'image',
+        mediaType: 'image/png',
+        data: 'UFJFUExPQURFRA==',
+      },
+    ]);
+    expect(promptedContents[0]?.[0]?.text).toContain('把按钮背景改成 #2563EB');
+    expect(promptedContents[0]?.[0]?.text).toContain('Screenshot: transport image 1;');
+    expect(promptedContents[0]?.[0]?.text).toContain('请把主按钮改成蓝色');
+
+    // Turn 2: continueSession with empty text + un-indexed ready annotation resolved from asset store
+    await adapter.continueSession('cw-browser-ann', '', {
+      browserAnnotations: [createBatch('asset-from-store', '缩小字号到 14px')],
+    });
+
+    expect(readBrowserAnnotationAsset).toHaveBeenCalledWith({
+      draftKey: 'cw-browser-ann',
+      batchId: 'batch-asset-from-store',
+      annotationId: 'ann-asset-from-store',
+      assetId: 'asset-from-store',
+    });
+    const userMessages = messages.filter((m) => m.type === 'user');
+    expect(userMessages).toHaveLength(2);
+    expect(userMessages[1]?.content).toBe('');
+    expect(userMessages[1]?.metadata?.browserAnnotations).toHaveLength(1);
+    expect(promptedContents[1]).toEqual([
+      {
+        type: 'text',
+        text: expect.stringContaining('缩小字号到 14px'),
+      },
+      {
+        type: 'image',
+        mediaType: 'image/png',
+        data: 'U1RPUkVfUE5H',
+      },
+    ]);
+    expect(promptedContents[1]?.[0]?.text).toContain('Screenshot: transport image 1;');
+  });
+
+  test('preserves thinkingLevel -> reasoningEffort across Turn 1 & Turn 2, including pre-DSH patchSession, and canonicalizes provider aliases', async () => {
+    const { store, session } = createInMemoryStore({
+      id: 'cw-thinking',
+      cwd: '/tmp/work',
+      modelOverride: 'zai/glm-5.3',
+    });
+
+    const selectModel = vi.fn(async () => ({ selected: {} }));
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-think-1' })),
+      selectModel,
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+      // Simulate resolveModelSelection returning only provider/model (without reasoningEffort)
+      resolveModelSelection: (_sid, override) => {
+        const [provider, model] = String(override || '').split('/');
+        return provider && model ? { provider, model } : null;
+      },
+    });
+
+    // Patch BEFORE dshSessionId exists!
+    await adapter.patchSession('cw-thinking', {
+      thinkingLevel: 'high',
+      contextWindow: 'user-context:1000000',
+    });
+    expect(session.thinkingLevel).toBe('high');
+
+    // Turn 1
+    await adapter.startSession('cw-thinking', 'First turn');
+    // Turn 2
+    await adapter.continueSession('cw-thinking', 'Second turn');
+
+    expect(selectModel).toHaveBeenNthCalledWith(1, {
+      sessionId: 'dsh-think-1',
+      provider: 'zhipu',
+      model: 'glm-5.3',
+      reasoningEffort: 'high',
+    });
+    expect(selectModel).toHaveBeenNthCalledWith(2, {
+      sessionId: 'dsh-think-1',
+      provider: 'zhipu',
+      model: 'glm-5.3',
+      reasoningEffort: 'high',
+    });
+    expect(bindSessionContext).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'dsh-think-1',
+      contextWindowSelection: 'user-context:1000000',
+      contextWindowOverride: 1_000_000,
+    }));
+  });
+
+  test('honors patch.contextWindow in bindSessionContext and getContextUsage (including DSH contextPressure projection)', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-ctx',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-ctx-1`,
+      modelOverride: 'lobsterai-server/deepseek-v4',
+    });
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      getSessionProjections: vi.fn(async () => ({
+        values: {
+          contextPressure: {
+            pressureTokens: 250_000,
+            contextWindow: 400_000,
+          },
+        },
+      })),
+      selectModel: vi.fn(async () => ({ selected: {} })),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await adapter.patchSession('cw-ctx', { contextWindow: 'user-context:yd-fast:1000000' });
+    expect(bindSessionContext).toHaveBeenCalledWith({
+      sessionId: 'dsh-ctx-1',
+      coworkSessionId: 'cw-ctx',
+      contextWindowSelection: 'user-context:yd-fast:1000000',
+      contextWindowOverride: 1_000_000,
+    });
+
+    const usage = await adapter.getContextUsage('cw-ctx');
+    expect(usage).toMatchObject({
+      usedTokens: 250_000,
+      contextTokens: 1_000_000,
+      percent: 25,
+      status: 'normal',
+    });
+  });
+
+  test('writes modelPresetId and resolvedModelId onto turnUserMessage metadata for x-lobster-model-preset attribution', async () => {
+    const { store, messages } = createInMemoryStore({
+      id: 'cw-preset-attr',
+      cwd: '/tmp/work',
+      modelOverride: 'lobsterai-server/yd-fast',
+    });
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-preset-1' })),
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+      resolveModelSelection: async () => ({
+        provider: 'lobsterai-server',
+        model: 'deepseek-v4-flash',
+        modelPresetId: 'balanced',
+      }),
+    });
+
+    await adapter.startSession('cw-preset-attr', 'Attribute preset');
+
+    const userMsg = messages.find((m) => m.type === 'user')!;
+    expect(userMsg.metadata?.modelPresetId).toBe('balanced');
+    expect(userMsg.metadata?.resolvedModelId).toBe('deepseek-v4-flash');
+    const trace = getCoworkLlmTrace(userMsg.metadata)!;
+    const headers = getLlmUsageHeaders(`00-${trace.traceId}-1111111111111111-01`, 'deepseek-v4-flash');
+    expect(headers['x-lobster-model-preset']).toBe('balanced');
+  });
+
+  test('honors autoApprove=true by binding danger-full-access and auto-resolving approval/request without modal', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-scheduled-auto',
+      cwd: '/tmp/work',
+      agentId: 'main',
+    });
+
+    const waterfallMap = new Map<string, (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>>();
+    let approvalOutcome: DshWaterfallOutcome | null = null;
+    const permissionRequests: unknown[] = [];
+
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-auto-1' })),
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn((event: string, handler: (evt: DshWaterfallEvent) => Promise<DshWaterfallOutcome>) => {
+        waterfallMap.set(event, handler);
+        return () => waterfallMap.delete(event);
+      }),
+      followSession: vi.fn(async function* () {
+        const approvalHandler = waterfallMap.get('approval/request');
+        expect(approvalHandler).toBeDefined();
+        approvalOutcome = await approvalHandler!({
+          eventId: 'evt-auto-1',
+          agentId: 'dsh-auto-1',
+          request: { toolName: 'bash', callId: 'call-rm-1', reason: 'Caution shell command' },
+          signal: new AbortController().signal,
+        });
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 1,
+            data: { message: { content: [{ type: 'text', text: 'Scheduled cleanup done.' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 2, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const consumeApprovalCallContext = vi.fn(() => null);
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+        consumeApprovalCallContext,
+      },
+      store,
+      resolveDefaultPermissionPreset: () => DshPermissionPreset.WorkspaceWrite,
+    });
+    adapter.on('permissionRequest', (_sid, req) => {
+      permissionRequests.push(req);
+    });
+
+    await adapter.startSession('cw-scheduled-auto', 'Run background cleanup', {
+      agentId: 'main',
+      autoApprove: true,
+    });
+
+    expect(bindSessionContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-auto-1',
+        permissionPreset: DshPermissionPreset.FullAccess,
+      }),
+    );
+    expect(approvalOutcome).toEqual({ kind: 'result', value: 'allowed-once' });
+    expect(consumeApprovalCallContext).toHaveBeenCalledWith('call-rm-1');
+    expect(permissionRequests).toEqual([]);
+
+    // Subsequent manual continuation in chat restores the default permission preset.
+    (fakeClient.followSession as ReturnType<typeof vi.fn>).mockImplementationOnce(async function* () {
+      yield { type: 'event', event: { type: 'turn/end', seq: 3, data: {} } };
+    });
+    await adapter.continueSession('cw-scheduled-auto', 'Follow up interactively');
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-auto-1',
+        permissionPreset: DshPermissionPreset.WorkspaceWrite,
+      }),
+    );
   });
 });

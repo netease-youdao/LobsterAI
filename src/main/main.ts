@@ -32,6 +32,7 @@ import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { buildSessionTitleFromInput } from '../common/sessionTitle';
 import {
   AgentId,
+  AgentModelSelectionMode,
 } from '../shared/agent/constants';
 import {
   LogReporterAction,
@@ -202,6 +203,7 @@ import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayNam
 import {
   isChatPresetSession,
   type ModelPresetId,
+  modelPresetModelId,
   parseModelPresetId,
   parseModelPresetModelId,
 } from '../shared/modelPresets/constants';
@@ -217,6 +219,7 @@ import {
 } from '../shared/openclawEngine/constants';
 import type { PptCoverRequest } from '../shared/pptCreation/cover';
 import {
+  canonicalizeDshProviderId,
   ModelRuntimeProfile,
   OpenClawProviderId,
   parseModelThinkingLevel,
@@ -312,7 +315,7 @@ import {
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
-import { registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
+import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerImageCreationHandlers } from './ipcHandlers/imageCreation';
@@ -444,6 +447,7 @@ import {
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
+import { createDshDecisionToolProvider } from './libs/dsh/dshDecisionTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
@@ -538,10 +542,12 @@ import { MediaUsageStore } from './libs/mediaUsageStore';
 import {
   getModelAuthProxyPort,
   getModelAuthProxyTraceStats,
+  getModelAuthProxyUrl,
   startModelAuthProxy,
   stopModelAuthProxy,
 } from './libs/modelAuthProxy';
 import { modelContextWindowOwnerKey, registerModelContextWindowIpc, rememberedContextWindow } from './libs/modelContextWindows';
+import { buildPresetContextWindows } from './libs/modelPresetContext';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
 import { bindNativeRunUsageOwner, claimNativeRunTurnUsage, configureNativeUsageSessionTitleResolver, getNativeRunMediaUsageContext, recordNativeRunMediaTask } from './libs/nativeRunTurnUsage';
 import {
@@ -2192,6 +2198,9 @@ let coworkStore: CoworkStore | null = null;
 let resolveVirtualModelPresetForSession:
   | ((sessionId: string, presetId: ModelPresetId) => Promise<string | null>)
   | null = null;
+let resolveVirtualModelPresetForSync:
+  | ((presetId: ModelPresetId) => Promise<string | null>)
+  | null = null;
 let createRealtimeAsrSessionForIm:
   | ((options?: AsrRealtimeSessionRequest) => Promise<AsrRealtimeSessionResult>)
   | null = null;
@@ -2287,6 +2296,10 @@ const getDshBootstrap = (): DshBootstrap => {
           },
           ask: (...args) => getMcpRuntime().askUserInternal(...args),
         }),
+        createDshDecisionToolProvider({
+          getConfig: () => readDecisionModelConfig(getStore()),
+          fetch: (url, init) => session.defaultSession.fetch(url, init),
+        }),
       ],
       userDataDir,
       db: getStore().getDatabase(),
@@ -2303,8 +2316,26 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.updateSession(sessionId, updates);
         },
         getContinuityCapsule: sessionId => storeInstance.getContinuityCapsule(sessionId),
-        createSession: (title, cwd, systemPrompt, executionMode, activeSkillIds, agentId) =>
-          storeInstance.createSession(title, cwd, systemPrompt, executionMode, activeSkillIds, agentId),
+        createSession: (
+          title,
+          cwd,
+          systemPrompt,
+          executionMode,
+          activeSkillIds,
+          agentId,
+          modelOverride,
+          options,
+        ) =>
+          storeInstance.createSession(
+            title,
+            cwd,
+            systemPrompt,
+            executionMode,
+            activeSkillIds,
+            agentId,
+            modelOverride,
+            options,
+          ),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
@@ -2312,20 +2343,30 @@ const getDshBootstrap = (): DshBootstrap => {
         const session = storeInstance.getSession(sessionId, 0);
         const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
         const sessionModel = session?.modelOverride;
-        const agentModel = agent?.model;
+        const agentModel = agent && agent.modelSelectionMode !== AgentModelSelectionMode.Inherit
+          ? agent.model
+          : undefined;
         const ref = override?.trim() || sessionModel?.trim() || agentModel?.trim() || resolveDefaultAgentModelRef();
         const normalized = normalizeOpenClawModelRef(ref);
         const parsed = parsePrimaryModelRef(normalized);
         let selection: { provider: string; model: string } | null = null;
         if (parsed) {
-          selection = { provider: parsed.providerId, model: parsed.modelId };
+          selection = {
+            provider: canonicalizeDshProviderId(parsed.providerId),
+            model: parsed.modelId,
+          };
         } else {
           const raw = resolveRawApiConfig();
           if (raw.config?.model && raw.providerMetadata?.providerName) {
-            selection = { provider: raw.providerMetadata.providerName, model: raw.config.model };
+            selection = {
+              provider: canonicalizeDshProviderId(raw.providerMetadata.providerName),
+              model: raw.config.model,
+            };
           }
         }
         if (!selection) return null;
+
+        let effectivePresetId: ModelPresetId | undefined = session?.modelPresetId ?? undefined;
 
         // Resolve virtual LobsterAI Plan presets (yd-fast / yd-ultra) to their
         // concrete backing model via `/api/models/<id>/resolve`, matching
@@ -2333,34 +2374,52 @@ const getDshBootstrap = (): DshBootstrap => {
         // send raw virtual model IDs to `/api/proxy/v1/chat/completions`.
         if (selection.provider === OpenClawProviderId.LobsteraiServer) {
           const presetId = parseModelPresetModelId(selection.model);
-          if (presetId && resolveVirtualModelPresetForSession) {
-            try {
-              const resolvedModelId = await resolveVirtualModelPresetForSession(sessionId, presetId);
-              if (resolvedModelId) {
-                selection = { provider: OpenClawProviderId.LobsteraiServer, model: resolvedModelId };
+          if (presetId) {
+            effectivePresetId = presetId;
+            if (resolveVirtualModelPresetForSession) {
+              try {
+                const resolvedModelId = await resolveVirtualModelPresetForSession(sessionId, presetId);
+                if (resolvedModelId) {
+                  selection = { provider: OpenClawProviderId.LobsteraiServer, model: resolvedModelId };
+                }
+              } catch (error) {
+                console.warn(`[DSH] Failed to resolve virtual model preset "${selection.model}" for session ${sessionId}:`, error);
               }
-            } catch (error) {
-              console.warn(`[DSH] Failed to resolve virtual model preset "${selection.model}" for session ${sessionId}:`, error);
             }
           }
         }
 
+        const serverMeta = selection.provider === OpenClawProviderId.LobsteraiServer
+          ? getServerModelMetadata(selection.model)
+          : undefined;
         const normalizedAgentRef = agentModel?.trim() ? normalizeOpenClawModelRef(agentModel.trim()) : '';
         const inheritAgentThinkingLevel = !override?.trim()
           && (!sessionModel?.trim() || !normalizedAgentRef || normalized === normalizedAgentRef);
+        const effectiveAgentThinkingLevel = agent && agent.modelSelectionMode !== AgentModelSelectionMode.Inherit
+          ? agent.thinkingLevel
+          : storeInstance.getAgent(AgentId.Main)?.thinkingLevel;
         const reasoningEffort = resolveEffectiveDshReasoningEffort({
           providerId: selection.provider,
-          modelMetadata: selection.provider === OpenClawProviderId.LobsteraiServer
-            ? getServerModelMetadata(selection.model)
-            : undefined,
+          modelMetadata: serverMeta,
           overrideThinkingLevel: thinkingLevelOverride,
           sessionThinkingLevel: session?.thinkingLevel,
-          agentThinkingLevel: agent?.thinkingLevel,
+          agentThinkingLevel: effectiveAgentThinkingLevel,
           inheritAgentThinkingLevel,
         });
+        const effectiveContextWindow =
+          (typeof session?.contextWindowOverride === 'number' && session.contextWindowOverride > 0
+            ? session.contextWindowOverride
+            : undefined)
+          ?? (effectivePresetId && typeof serverMeta?.presetContextWindows?.[effectivePresetId] === 'number'
+            ? serverMeta.presetContextWindows[effectivePresetId]!
+            : undefined);
+
         return {
-          ...selection,
+          provider: selection.provider,
+          model: selection.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(effectivePresetId ? { modelPresetId: effectivePresetId } : {}),
+          ...(effectiveContextWindow ? { contextWindow: effectiveContextWindow } : {}),
         };
       },
       resolveAllowedSkillIds: (_sessionId, agentId, optionSkillIds) => {
@@ -2747,6 +2806,9 @@ const syncOpenClawConfig = async (options: {
             reasoning: Boolean(model.supportsThinking),
             contextWindow: model.contextWindow,
             maxTokens: model.maxTokens,
+            ...(model.customParams && Object.keys(model.customParams).length > 0
+              ? { customParams: model.customParams }
+              : {}),
           });
         }
       }
@@ -2776,6 +2838,12 @@ const syncOpenClawConfig = async (options: {
           runtimeProfile: m.runtimeProfile,
           thinkingConfig: m.thinkingConfig,
           requestCapabilities: m.requestCapabilities,
+          ...buildPresetContextWindows({
+            contextWindow: m.contextWindow,
+            presetContextWindows: m.presetContextWindows,
+            contextWindowOptions: m.contextWindowOptions,
+            presetContextWindowOptions: m.presetContextWindowOptions,
+          }),
         })),
       };
     }
@@ -2859,29 +2927,82 @@ const syncOpenClawConfig = async (options: {
     const enabledIds = skills.filter(s => s.enabled).map(s => s.id);
     const disabledIds = skills.filter(s => !s.enabled).map(s => s.id);
 
+    const rawAgents = getAgentManager().listAgents();
+    const virtualAliases: Record<string, { provider: string; model: string }> = {};
+    const resolvedPresetModels = new Map<ModelPresetId, string>();
+    const agentPresetIds = new Set<ModelPresetId>();
+    for (const agent of rawAgents) {
+      if (agent.modelSelectionMode === AgentModelSelectionMode.Inherit) continue;
+      const trimmed = agent.model.trim();
+      if (!trimmed) continue;
+      const normalized = normalizeOpenClawModelRef(trimmed);
+      const parsed = parsePrimaryModelRef(normalized);
+      const candidateModelId = parsed ? parsed.modelId : normalized;
+      const providerId = parsed ? canonicalizeDshProviderId(parsed.providerId) : ProviderName.LobsteraiServer;
+      if (providerId === ProviderName.LobsteraiServer) {
+        const presetId = parseModelPresetModelId(candidateModelId);
+        if (presetId) agentPresetIds.add(presetId);
+      }
+    }
+    if (agentPresetIds.size > 0 && resolveVirtualModelPresetForSync) {
+      for (const presetId of agentPresetIds) {
+        try {
+          const resolvedModelId = await resolveVirtualModelPresetForSync(presetId);
+          if (resolvedModelId) {
+            resolvedPresetModels.set(presetId, resolvedModelId);
+            const virtualModelId = modelPresetModelId(presetId);
+            virtualAliases[virtualModelId] = {
+              provider: ProviderName.LobsteraiServer,
+              model: resolvedModelId,
+            };
+            virtualAliases[`${ProviderName.LobsteraiServer}/${virtualModelId}`] = {
+              provider: ProviderName.LobsteraiServer,
+              model: resolvedModelId,
+            };
+          }
+        } catch (error) {
+          console.warn(`[DSH] Failed to resolve virtual model preset "${presetId}" during agent sync:`, error);
+        }
+      }
+    }
+
     const agents = buildDshHostAgentSpecs({
-      agents: getAgentManager().listAgents(),
+      agents: rawAgents,
       skills,
       resolveExplicitModel: (agent) => {
         const normalized = normalizeOpenClawModelRef(agent.model.trim());
         const parsed = parsePrimaryModelRef(normalized);
-        if (!parsed) return null;
-        if (
-          parsed.providerId === OpenClawProviderId.LobsteraiServer
-          && parseModelPresetModelId(parsed.modelId)
-        ) {
-          return null;
+        let providerId: string;
+        let modelId: string;
+        if (parsed) {
+          providerId = canonicalizeDshProviderId(parsed.providerId);
+          modelId = parsed.modelId;
+        } else {
+          const barePresetId = parseModelPresetModelId(normalized);
+          if (!barePresetId) return null;
+          providerId = ProviderName.LobsteraiServer;
+          modelId = normalized;
         }
+        if (providerId === ProviderName.LobsteraiServer) {
+          const presetId = parseModelPresetModelId(modelId);
+          if (presetId) {
+            const concreteModelId = resolvedPresetModels.get(presetId);
+            if (!concreteModelId) return null;
+            modelId = concreteModelId;
+          }
+        }
+
         const reasoningEffort = resolveEffectiveDshReasoningEffort({
-          providerId: parsed.providerId,
-          modelMetadata: parsed.providerId === OpenClawProviderId.LobsteraiServer
-            ? getServerModelMetadata(parsed.modelId)
+          providerId,
+          modelMetadata: providerId === OpenClawProviderId.LobsteraiServer
+            ? getServerModelMetadata(modelId)
             : undefined,
           agentThinkingLevel: agent.thinkingLevel,
         });
+
         return {
-          provider: parsed.providerId,
-          model: parsed.modelId,
+          provider: providerId,
+          model: modelId,
           ...(reasoningEffort ? { reasoningEffort } : {}),
         };
       },
@@ -2913,18 +3034,19 @@ const syncOpenClawConfig = async (options: {
       providers,
       modelAuthProxyUrl: proxyUrl,
       modelAuthProxySecret: proxySecret,
+      ...(Object.keys(virtualAliases).length > 0 ? { virtualAliases } : {}),
       mcpServers,
       skillsPolicy: {
         enabledIds,
         disabledIds,
         skillsDir: getSkillManager().getSkillsRoot(),
       },
+      memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       webAccessPolicy: {
         webFetchEnabled: normalizedBrowserWebAccess.webFetch.enabled,
         blockedHostnames,
         allowedHostnames,
       },
-      memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       agents,
       imInstances,
     });
@@ -5173,8 +5295,8 @@ if (!gotTheLock) {
       ...context,
       sessionId: target.sessionId,
       userMessage: target.message.content,
-      modelPresetId: target.message.metadata?.modelPresetId,
-      resolvedModelId: target.message.metadata?.resolvedModelId,
+      modelPresetId: target.message.metadata?.modelPresetId ?? context?.modelPresetId,
+      resolvedModelId: target.message.metadata?.resolvedModelId ?? context?.resolvedModelId,
       owner: sameOwner ? currentOwner : null,
     };
   });
@@ -5225,6 +5347,15 @@ if (!gotTheLock) {
       );
     } catch {
       // Non-fatal when session is not persisted in cowork_sessions.
+    }
+    return modelId;
+  };
+
+  resolveVirtualModelPresetForSync = async (presetId) => {
+    const resolved = await modelPresetClient.resolve(`dsh-sync:${presetId}`, presetId, false);
+    const modelId = resolved.modelId?.trim();
+    if (!modelId || parseModelPresetModelId(modelId)) {
+      return null;
     }
     return modelId;
   };
@@ -7927,8 +8058,13 @@ if (!gotTheLock) {
   const modelContextWindows = registerModelContextWindowIpc({
     ipcMain, getStore, getSessions: getCoworkStore, getRuntime: getCoworkEngineRouter,
     ownerKey: getContextWindowOwnerKey,
-    resolveSessionModel: session => normalizeOpenClawModelRef(session.modelOverride
-      || getCoworkStore().getAgent(session.agentId)?.model || resolveDefaultAgentModelRef()),
+    resolveSessionModel: session => {
+      const agent = getCoworkStore().getAgent(session.agentId);
+      const agentModel = agent && agent.modelSelectionMode !== AgentModelSelectionMode.Inherit
+        ? agent.model
+        : '';
+      return normalizeOpenClawModelRef(session.modelOverride || agentModel || resolveDefaultAgentModelRef());
+    },
     ensureModelsReady: () => loadAvailableServerModels({ reason: 'context-window-selection', awaitConfigSync: true }),
     t,
   });
@@ -9618,7 +9754,13 @@ if (!gotTheLock) {
           const presetId = parseModelPresetId(options.modelPresetId);
           if (!presetId) throw new Error(t('modelPresetInvalidSession'));
           try {
-            session = await modelPresetSelection.choose(session.id, presetId, Boolean(options.imageAttachments?.length), true);
+            session = await modelPresetSelection.choose(
+              session.id,
+              presetId,
+              Boolean(options.imageAttachments?.length),
+              true,
+              thinkingLevel || undefined,
+            );
             const modelRunGate = await ensureServerModelReadyForRun(session.modelOverride);
             if (modelRunGate.allowed === false) throw new Error(modelRunGate.error);
             // Admission must inspect the resolved model, not the agent's default.
@@ -15435,6 +15577,7 @@ if (!gotTheLock) {
         beforeSpeech: () => messageSpeechController?.stop(),
         quickAnswer: new CompanionQuickAnswerService({ getSessionKey: getAuthSessionKey,
           getProxyToken: () => getOpenClawLoopbackState().proxyToken,
+          getProxyBaseUrl: getModelAuthProxyUrl,
           resolvePreset: (presetId, signal) => modelPresetClient.resolve(crypto.randomUUID(), presetId, false, signal),
           reportAnalytics: event => getMainLogReporter().report(event) }),
       },

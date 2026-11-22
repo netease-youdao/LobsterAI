@@ -39,7 +39,7 @@ export interface MigrationV2ArchivedItem {
 }
 
 export interface MigrationV2ReauthItem {
-  kind: 'mcp_oauth' | 'im_weixin' | 'im_feishu_uat';
+  kind: 'mcp_oauth' | 'im_weixin' | 'im_feishu_uat' | 'xai_oauth';
   id: string;
   label: string;
 }
@@ -65,6 +65,7 @@ export interface MigrationV2Report {
     tavilyMcpMigrated?: number;
     mcpOAuthTokensMigrated?: number;
     disposableBytesFreed: number;
+    externalBrowserConfigsMigrated?: number;
   };
   archivedModules: MigrationV2ArchivedItem[];
   reauthRequired: MigrationV2ReauthItem[];

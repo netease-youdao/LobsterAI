@@ -20,8 +20,12 @@ import {
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai';
 import { DEFAULT_LOBSTER_RETRY_POLICY, guardEmptyStopStream } from './empty-stop-guard.mjs';
 import {
+  canonicalizeProviderId,
   dispatchProviderStream,
+  normalizeProtocol,
+  normalizeProviderBaseUrl,
   resolveDefaultRequestMaxTokens,
+  resolveEffectiveContextWindow,
   resolveModelCompat,
   resolveModelThinkingLevelMap,
 } from './model-bridge-helpers.mjs';
@@ -71,16 +75,6 @@ async function loadPiAiProtocols() {
   return piAiProtocolsPromise;
 }
 
-function normalizeProtocol(rawApi) {
-  const api = typeof rawApi === 'string' ? rawApi.trim().toLowerCase() : '';
-  if (api === 'anthropic' || api === 'anthropic-messages') return 'anthropic-messages';
-  if (api === 'openai-responses' || api === 'responses') return 'openai-responses';
-  if (api === 'google' || api === 'gemini' || api === 'google-generative-ai') {
-    return 'google-generative-ai';
-  }
-  return 'openai-completions';
-}
-
 const W3C_TRACE_ID_RE = /^[0-9a-f]{32}$/i;
 
 function buildTraceParent(preferredTraceId) {
@@ -91,9 +85,60 @@ function buildTraceParent(preferredTraceId) {
   return `00-${traceId}-${spanId}-01`;
 }
 
-function createProviderObject(spec, protocols, modelRuntimeMeta, getRequestContext) {
+function createProviderObject(spec, protocols, modelRuntimeMeta, getRequestContext, ctx, state) {
   /** @type {Map<string, { stream: Function; streamSimple: Function }>} */
   const apiImplCache = new Map();
+  const contextWindowsByModel = spec.modelContextWindows ?? new Map();
+
+  const applySessionContextWindow = (model, options, requestContext) => {
+    const contextWindows = model?.id ? contextWindowsByModel.get(model.id) : undefined;
+    const sid = options?.sessionId ?? requestContext?.sessionId;
+    const bound = sid ? resolveSessionContext(ctx, state, sid) : undefined;
+    if (!bound || (bound.contextWindowOverride === undefined && bound.contextWindowSelection === undefined)) {
+      return { effectiveModel: model, effectiveOptions: options };
+    }
+
+    const effectiveContextWindow = resolveEffectiveContextWindow(
+      { contextWindow: model.contextWindow, contextWindows },
+      bound.contextWindowSelection,
+      bound.contextWindowOverride,
+    );
+    if (effectiveContextWindow === model.contextWindow) {
+      return { effectiveModel: model, effectiveOptions: options };
+    }
+
+    const clampedMaxTokens = Math.min(model.maxTokens, effectiveContextWindow);
+    const effectiveModel = {
+      ...model,
+      contextWindow: effectiveContextWindow,
+      maxTokens: clampedMaxTokens,
+    };
+    const effectiveOptions = typeof options?.maxTokens === 'number' && options.maxTokens > effectiveContextWindow
+      ? { ...options, maxTokens: effectiveContextWindow }
+      : options;
+    return { effectiveModel, effectiveOptions };
+  };
+
+  const invokeStream = (method, model, context, options) => {
+    const requestContext = getRequestContext();
+    const { effectiveModel, effectiveOptions } = applySessionContextWindow(
+      model,
+      options,
+      requestContext,
+    );
+    return dispatchProviderStream({
+      method,
+      spec,
+      protocols,
+      apiImplCache,
+      model: effectiveModel,
+      context,
+      options: effectiveOptions,
+      modelRuntimeMeta,
+      requestContext,
+    });
+  };
+
   return {
     id: spec.provider,
     name: spec.displayName,
@@ -108,28 +153,8 @@ function createProviderObject(spec, protocols, modelRuntimeMeta, getRequestConte
       },
     },
     getModels: () => spec.models,
-    stream: (model, context, options) => dispatchProviderStream({
-      method: 'stream',
-      spec,
-      protocols,
-      apiImplCache,
-      model,
-      context,
-      options,
-      modelRuntimeMeta,
-      requestContext: getRequestContext(),
-    }),
-    streamSimple: (model, context, options) => dispatchProviderStream({
-      method: 'streamSimple',
-      spec,
-      protocols,
-      apiImplCache,
-      model,
-      context,
-      options,
-      modelRuntimeMeta,
-      requestContext: getRequestContext(),
-    }),
+    stream: (model, context, options) => invokeStream('stream', model, context, options),
+    streamSimple: (model, context, options) => invokeStream('streamSimple', model, context, options),
   };
 }
 
@@ -137,16 +162,17 @@ function createProviderObject(spec, protocols, modelRuntimeMeta, getRequestConte
  * Normalize one incoming LobsterAI provider definition into the exact
  * resolved profile shape consumed by `PiAiAdapter`.
  */
-function buildResolvedProfile(entry, protocols, getRequestContext) {
-  const provider = String(entry.id || '').trim();
+function buildResolvedProfile(entry, protocols, getRequestContext, ctx, state) {
+  const provider = canonicalizeProviderId(String(entry.id || ''));
   if (!provider) {
     throw new Error('lobster-model-bridge: provider id must be non-empty');
   }
   const displayName = String(entry.displayName || provider).trim() || provider;
   const api = normalizeProtocol(entry.api);
-  const baseURL = typeof entry.baseURL === 'string' && entry.baseURL.trim().length > 0
-    ? entry.baseURL.trim().replace(/\/+$/, '')
-    : undefined;
+  const rawBaseURL = typeof entry.baseURL === 'string' && entry.baseURL.trim().length > 0
+    ? entry.baseURL.trim()
+    : '';
+  const baseURL = rawBaseURL ? normalizeProviderBaseUrl(rawBaseURL, api) : undefined;
   if (!protocols[api]) {
     throw new Error(`lobster-model-bridge: unsupported protocol "${api}" for provider "${provider}"`);
   }
@@ -160,6 +186,8 @@ function buildResolvedProfile(entry, protocols, getRequestContext) {
 
   const configuredMaxTokens = new Map();
   const modelRuntimeMeta = new Map();
+  /** @type {Map<string, Array<{ id: string, label?: string, contextWindow: number }>>} */
+  const modelContextWindows = new Map();
   const rawModels = Array.isArray(entry.models) ? entry.models : [];
   const models = [];
   for (const rawModel of rawModels) {
@@ -170,24 +198,52 @@ function buildResolvedProfile(entry, protocols, getRequestContext) {
     if (!protocols[modelApi]) {
       throw new Error(`lobster-model-bridge: unsupported protocol "${modelApi}" for model "${provider}/${modelId}"`);
     }
-    const modelBaseUrl = typeof rawModel.baseURL === 'string' && rawModel.baseURL.trim().length > 0
-      ? rawModel.baseURL.trim().replace(/\/+$/, '')
-      : baseURL;
+    const hasExplicitModelBaseUrl = typeof rawModel.baseURL === 'string' && rawModel.baseURL.trim().length > 0;
+    const modelBaseUrl = hasExplicitModelBaseUrl
+      ? normalizeProviderBaseUrl(rawModel.baseURL, modelApi, api, true)
+      : (rawBaseURL ? normalizeProviderBaseUrl(rawBaseURL, modelApi, api, false) : '');
     if (!modelBaseUrl) continue;
 
     const contextWindow = Number.isInteger(rawModel.contextWindow) && rawModel.contextWindow > 0
       ? rawModel.contextWindow
       : defaultContextWindow;
-    const maxTokens = Number.isInteger(rawModel.maxTokens) && rawModel.maxTokens > 0
+    const rawMaxTokens = Number.isInteger(rawModel.maxTokens) && rawModel.maxTokens > 0
       ? rawModel.maxTokens
       : defaultMaxTokens;
+    const maxTokens = Math.min(rawMaxTokens, contextWindow);
+    const explicitMaxTokens = Number.isInteger(rawModel.maxTokens) && rawModel.maxTokens > 0
+      ? Math.min(rawModel.maxTokens, contextWindow)
+      : undefined;
     const defaultRequestMaxTokens = resolveDefaultRequestMaxTokens(
       rawModel.defaultMaxTokens,
-      rawModel.maxTokens,
+      explicitMaxTokens,
       contextWindow,
     );
     if (defaultRequestMaxTokens !== undefined) {
       configuredMaxTokens.set(modelId, defaultRequestMaxTokens);
+    }
+
+    let customParams;
+    if (rawModel.customParams && typeof rawModel.customParams === 'object' && !Array.isArray(rawModel.customParams)) {
+      const cleanedParams = Object.fromEntries(
+        Object.entries(rawModel.customParams).filter(([, v]) => v !== undefined),
+      );
+      if (Object.keys(cleanedParams).length > 0) {
+        customParams = cleanedParams;
+      }
+    }
+
+    if (Array.isArray(rawModel.contextWindows) && rawModel.contextWindows.length > 0) {
+      const validWindows = rawModel.contextWindows
+        .filter((w) => w && typeof w === 'object' && typeof w.id === 'string' && Number.isInteger(w.contextWindow) && w.contextWindow > 0)
+        .map((w) => ({
+          id: w.id,
+          ...(typeof w.label === 'string' ? { label: w.label } : {}),
+          contextWindow: w.contextWindow,
+        }));
+      if (validWindows.length > 0) {
+        modelContextWindows.set(modelId, validWindows);
+      }
     }
 
     const input = Array.isArray(rawModel.input) && rawModel.input.length > 0
@@ -205,11 +261,12 @@ function buildResolvedProfile(entry, protocols, getRequestContext) {
       ? rawModel.thinkingConfig
       : undefined;
     const requestOptionsVersion = rawModel.requestOptionsVersion === 1 ? 1 : undefined;
-    if (runtimeProfile || thinkingConfig || requestOptionsVersion !== undefined) {
+    if (runtimeProfile || thinkingConfig || requestOptionsVersion !== undefined || customParams) {
       modelRuntimeMeta.set(modelId, {
         ...(runtimeProfile ? { runtimeProfile } : {}),
         ...(thinkingConfig ? { thinkingConfig } : {}),
         ...(requestOptionsVersion !== undefined ? { requestOptionsVersion } : {}),
+        ...(customParams ? { customParams } : {}),
       });
     }
 
@@ -238,10 +295,12 @@ function buildResolvedProfile(entry, protocols, getRequestContext) {
     : undefined;
 
   const piProvider = createProviderObject(
-    { provider, displayName, api, baseURL, models },
+    { provider, displayName, api, baseURL, models, modelContextWindows },
     protocols,
     modelRuntimeMeta,
     getRequestContext,
+    ctx,
+    state,
   );
 
   const maxRequestImages = Number.isInteger(entry.maxRequestImages) && entry.maxRequestImages > 0
@@ -436,14 +495,20 @@ export function apply(ctx) {
     const skippedConflicts = [];
     for (const entry of providersList) {
       if (!entry || typeof entry !== 'object') continue;
-      const id = String(entry.id || '').trim();
+      const id = canonicalizeProviderId(String(entry.id || ''));
       if (!id) continue;
       // Never collide with an adapter owned by another plugin (e.g. deepseek-official).
       if (existingProviders.has(id) && !ownedRoutes.has(id)) {
         skippedConflicts.push(id);
         continue;
       }
-      const resolved = buildResolvedProfile(entry, protocols, getRequestContext);
+      const resolved = buildResolvedProfile(
+        { ...entry, id },
+        protocols,
+        getRequestContext,
+        ctx,
+        state,
+      );
       nextProfiles.set(id, resolved);
       if (typeof entry.apiKey === 'string' && entry.apiKey.length > 0) {
         nextKeys.set(id, entry.apiKey);
@@ -460,7 +525,10 @@ export function apply(ctx) {
           && typeof target.provider === 'string'
           && typeof target.model === 'string'
         ) {
-          virtualAliases.set(alias, { provider: target.provider, model: target.model });
+          const canonicalTargetProvider = canonicalizeProviderId(target.provider);
+          if (canonicalTargetProvider) {
+            virtualAliases.set(alias, { provider: canonicalTargetProvider, model: target.model });
+          }
         }
       }
     }

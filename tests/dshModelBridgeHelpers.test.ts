@@ -7,6 +7,14 @@ const HELPERS_URL = pathToFileURL(
 ).href;
 
 type ModelBridgeHelpers = {
+  canonicalizeProviderId: (rawId: unknown) => string;
+  normalizeProtocol: (rawApi: unknown) => string;
+  normalizeProviderBaseUrl: (
+    rawBaseUrl: unknown,
+    modelApi?: string,
+    providerApi?: string,
+    hasExplicitModelBaseUrl?: boolean,
+  ) => string;
   isNativeOpenAIEndpoint: (baseUrl: unknown) => boolean;
   resolveModelCompat: (
     modelApi: string,
@@ -24,6 +32,22 @@ type ModelBridgeHelpers = {
     rawMaxTokens: unknown,
     contextWindow: number,
   ) => number | undefined;
+  resolveEffectiveContextWindow: (
+    model: { contextWindow: number; contextWindows?: Array<{ id: string; contextWindow: number }> },
+    selectionId?: unknown,
+    overrideTokens?: unknown,
+  ) => number;
+  selectProtocolImpl: (
+    protocols: Record<string, () => unknown>,
+    implCache: Map<string, unknown>,
+    modelApi: unknown,
+    defaultApi: string,
+  ) => unknown;
+  applyModelPayloadTransforms: (
+    params: unknown,
+    model?: { compat?: Record<string, unknown> },
+    customParams?: Record<string, unknown>,
+  ) => Record<string, unknown>;
   applyKimiK3PayloadContract: (payload: Record<string, unknown>) => void;
   resolveRequestOptionsThinkingLevel: (
     thinkingConfig: unknown,
@@ -84,7 +108,7 @@ describe('model-bridge-helpers', () => {
     });
   });
 
-  test('leaves native OpenAI, explicit overrides, and non-completions protocols untouched', async () => {
+  test('leaves native OpenAI, explicit overrides, and non-completions protocols untouched and avoids leaking OpenAI providerCompat into Anthropic models', async () => {
     const { resolveModelCompat } = await loadHelpers();
 
     expect(
@@ -107,8 +131,9 @@ describe('model-bridge-helpers', () => {
       resolveModelCompat(
         'anthropic-messages',
         'https://dashscope.aliyuncs.com/apps/anthropic',
+        { supportsDeveloperRole: false, supportsStore: false },
         undefined,
-        undefined,
+        'openai-completions',
       ),
     ).toEqual({});
 
@@ -151,8 +176,69 @@ describe('model-bridge-helpers', () => {
     });
   });
 
-  test('preserves explicit thinkingLevelMap nulls and derives maps from thinkingConfig', async () => {
+  test('strips /chat/completions and /responses suffixes and normalizes inherited Anthropic /v1 URLs', async () => {
+    const { normalizeProviderBaseUrl } = await loadHelpers();
+
+    expect(
+      normalizeProviderBaseUrl('https://openapi.youdao.com/llmgateway/api/v1/chat/completions/', 'openai-completions'),
+    ).toBe('https://openapi.youdao.com/llmgateway/api/v1');
+    expect(
+      normalizeProviderBaseUrl('https://api.xiaomimimo.com/v1/chat/completions', 'openai-completions'),
+    ).toBe('https://api.xiaomimimo.com/v1');
+    expect(
+      normalizeProviderBaseUrl('https://gateway.example.com/v1/responses/', 'openai-responses'),
+    ).toBe('https://gateway.example.com/v1');
+    expect(
+      normalizeProviderBaseUrl('http://127.0.0.1:8080/v1', 'anthropic-messages', 'openai-completions', false),
+    ).toBe('http://127.0.0.1:8080');
+    expect(
+      normalizeProviderBaseUrl('https://custom.example.com/v1', 'anthropic-messages', 'openai-completions', true),
+    ).toBe('https://custom.example.com/v1');
+  });
+
+  test('canonicalizes all 5 legacy OpenClaw provider IDs', async () => {
+    const { canonicalizeProviderId } = await loadHelpers();
+
+    expect(canonicalizeProviderId('zai')).toBe('zhipu');
+    expect(canonicalizeProviderId('google')).toBe('gemini');
+    expect(canonicalizeProviderId('lobsterai-copilot')).toBe('github-copilot');
+    expect(canonicalizeProviderId('minimax-portal')).toBe('minimax');
+    expect(canonicalizeProviderId('openai-codex')).toBe('openai');
+    expect(canonicalizeProviderId('lobsterai-server')).toBe('lobsterai-server');
+  });
+
+  test('selects and caches protocol implementations per model api', async () => {
+    const { selectProtocolImpl } = await loadHelpers();
+
+    const openaiImpl = { kind: 'openai' };
+    const anthropicImpl = { kind: 'anthropic' };
+    const openaiFactory = vi.fn(() => openaiImpl);
+    const anthropicFactory = vi.fn(() => anthropicImpl);
+    const cache = new Map<string, unknown>();
+    const protocols = {
+      'openai-completions': openaiFactory,
+      'anthropic-messages': anthropicFactory,
+    };
+
+    expect(selectProtocolImpl(protocols, cache, undefined, 'openai-completions')).toBe(openaiImpl);
+    expect(selectProtocolImpl(protocols, cache, 'anthropic', 'openai-completions')).toBe(anthropicImpl);
+    expect(selectProtocolImpl(protocols, cache, 'anthropic-messages', 'openai-completions')).toBe(anthropicImpl);
+    expect(openaiFactory).toHaveBeenCalledTimes(1);
+    expect(anthropicFactory).toHaveBeenCalledTimes(1);
+  });
+
+  test('preserves explicit thinkingLevelMap nulls, ignores unknown keys, and derives maps from thinkingConfig', async () => {
     const { resolveModelThinkingLevelMap } = await loadHelpers();
+
+    expect(resolveModelThinkingLevelMap({ thinkingLevelMap: { high: 'max' } }, false)).toBeUndefined();
+    expect(resolveModelThinkingLevelMap({}, true)).toEqual({
+      minimal: 'minimal',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: 'max',
+    });
 
     expect(
       resolveModelThinkingLevelMap(
@@ -165,6 +251,7 @@ describe('model-bridge-helpers', () => {
             high: 'max',
             xhigh: 'max',
             max: 'max',
+            ignoredKey: 'nope',
           },
         },
         true,
@@ -416,5 +503,86 @@ describe('model-bridge-helpers', () => {
     };
     await onPayload(enabledPayload, {});
     expect(enabledPayload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+  });
+
+  test('injects customParams and flattens text-only content arrays when requiresStringContent is enabled', async () => {
+    const { applyModelPayloadTransforms, invokeModelApiStream } = await loadHelpers();
+
+    const payload = {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Hello' }, { type: 'text', text: 'World' }] },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Inspect image' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+          ],
+        },
+      ],
+    };
+
+    const result = applyModelPayloadTransforms(
+      payload,
+      { compat: { requiresStringContent: true } },
+      { top_k: 40, repetition_penalty: 1.05 },
+    );
+
+    expect(result.top_k).toBe(40);
+    expect(result.repetition_penalty).toBe(1.05);
+    expect((result.messages as Array<{ content: unknown }>)[0].content).toBe('Hello\nWorld');
+    // Multimodal messages remain array-formatted.
+    expect(Array.isArray((result.messages as Array<{ content: unknown }>)[1].content)).toBe(true);
+
+    // Also verify invokeModelApiStream applies customParams and requiresStringContent on stream payload.
+    let capturedOptions: Record<string, unknown> | undefined;
+    const apiImpl = {
+      stream: vi.fn(),
+      streamSimple: vi.fn((_m: unknown, _c: unknown, opts: Record<string, unknown>) => {
+        capturedOptions = opts;
+        return 'ok';
+      }),
+    };
+    const streamModel = {
+      id: 'deepseek-reasoner',
+      provider: 'youdaozhiyun',
+      api: 'openai-completions',
+      compat: { requiresStringContent: true },
+    };
+    invokeModelApiStream({
+      method: 'streamSimple',
+      apiImpl,
+      model: streamModel,
+      context: {},
+      options: {},
+      modelMeta: { customParams: { top_k: 40 } },
+    });
+    const streamPayload: Record<string, unknown> = {
+      model: 'deepseek-reasoner',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Hi' }] }],
+    };
+    const onPayload = capturedOptions?.onPayload as (p: Record<string, unknown>, m: unknown) => unknown;
+    await onPayload(streamPayload, streamModel);
+    expect(streamPayload.top_k).toBe(40);
+    expect((streamPayload.messages as Array<{ content: unknown }>)[0].content).toBe('Hi');
+  });
+
+  test('resolves effective per-session context windows from explicit override, named preset, or user-context string', async () => {
+    const { resolveEffectiveContextWindow } = await loadHelpers();
+
+    const model = {
+      contextWindow: 200_000,
+      contextWindows: [
+        { id: 'model-default', contextWindow: 200_000 },
+        { id: 'yd-fast', contextWindow: 400_000 },
+        { id: 'user-context:1000000', contextWindow: 1_000_000 },
+      ],
+    };
+
+    expect(resolveEffectiveContextWindow(model, 'yd-fast', undefined)).toBe(400_000);
+    expect(resolveEffectiveContextWindow(model, 'user-context:1000000', undefined)).toBe(1_000_000);
+    expect(resolveEffectiveContextWindow(model, 'user-context:yd-fast:800000', undefined)).toBe(800_000);
+    expect(resolveEffectiveContextWindow(model, 'yd-fast', 600_000)).toBe(600_000);
+    expect(resolveEffectiveContextWindow(model, null, null)).toBe(200_000);
   });
 });

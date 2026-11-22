@@ -34,6 +34,7 @@ import {
   buildComputerUseMarketplaceKit,
   getCurrentComputerUseKitBundleDescriptor,
   isComputerUseKitSupportedPlatform,
+  isComputerUseSkillEnabled,
   promptComputerUseAccessibilityPermission,
   resolveBundledComputerUseKitArchivePath,
   syncComputerUseSkillFromRuntime,
@@ -228,5 +229,50 @@ describe('Computer Use kit upgrades', () => {
     isTrustedAccessibilityClient.mockReturnValueOnce(true);
     expect(promptComputerUseAccessibilityPermission()).toBe(true);
     expect(isTrustedAccessibilityClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('isComputerUseSkillEnabled', () => {
+  test('defaults to enabled when skills_state is missing or has no computer-use entry', () => {
+    expect(isComputerUseSkillEnabled(makeStore({}))).toBe(true);
+    expect(isComputerUseSkillEnabled(makeStore({ skills_state: {} }))).toBe(true);
+    expect(
+      isComputerUseSkillEnabled(makeStore({ skills_state: { docx: { enabled: false } } })),
+    ).toBe(true);
+  });
+
+  test('respects explicit enabled and disabled states in skills_state', () => {
+    const store = makeStore({
+      skills_state: { [ComputerUseSkillId.BuiltIn]: { enabled: false } },
+    });
+    expect(isComputerUseSkillEnabled(store)).toBe(false);
+
+    store.set('skills_state', { [ComputerUseSkillId.BuiltIn]: { enabled: true } });
+    expect(isComputerUseSkillEnabled(store)).toBe(true);
+  });
+
+  test('supports legacy array-shaped skills_state and recorded kit skill ids', () => {
+    const legacyDisabledStore = makeStore({
+      skills_state: [
+        { id: 'docx', enabled: true },
+        { id: ComputerUseSkillId.BuiltIn, enabled: false },
+      ],
+    });
+    expect(isComputerUseSkillEnabled(legacyDisabledStore)).toBe(false);
+
+    const customSkillIdStore = makeStore({
+      [KitStoreKey.Installed]: {
+        [ComputerUseKitId.BuiltIn]: {
+          id: ComputerUseKitId.BuiltIn,
+          version: MAC_RUNTIME.version,
+          installedAt: 1,
+          skills: { skillIds: ['computer-use-1'] },
+          mcpServers: [],
+          connectors: [],
+        },
+      },
+      skills_state: { 'computer-use-1': { enabled: false } },
+    });
+    expect(isComputerUseSkillEnabled(customSkillIdStore)).toBe(false);
   });
 });

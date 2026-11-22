@@ -27,6 +27,7 @@ vi.mock('electron', () => ({
 }));
 
 import {
+  COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
   ComputerUseMcpEnv,
   ComputerUseMcpServerName,
   ensureComputerUseMcpServerScript,
@@ -427,6 +428,8 @@ describe('resolveComputerUseRuntimePaths', () => {
     });
     expect(server?.name).toBe('computer-use');
     expect(server?.transportType).toBe('stdio');
+    expect(server?.requestTimeoutMs).toBe(COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS);
+    expect(server?.requestTimeoutMs).toBeGreaterThanOrEqual(180_000);
     expect(server?.args?.[0]).toContain('computer-use-mcp-server.mjs');
     expect(server?.env?.[ComputerUseMcpEnv.ClientModulePath]).toBe(clientModulePath);
     expect(server?.env?.[ComputerUseMcpEnv.ExePath]).toBe(helperExePath);

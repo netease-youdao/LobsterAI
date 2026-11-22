@@ -169,6 +169,9 @@ export function resolveSessionContext(ctx, state, sessionId) {
         ...(typeof spec?.systemPrompt === 'string' && spec.systemPrompt.length > 0
           ? { customSystemPrompt: spec.systemPrompt }
           : {}),
+        ...(typeof ancestor?.officeAgentPrompt === 'string' && ancestor.officeAgentPrompt.length > 0
+          ? { officeAgentPrompt: ancestor.officeAgentPrompt }
+          : {}),
         ...(ancestor?.executionMode ? { executionMode: ancestor.executionMode } : {}),
         ...(ancestor?.permissionPreset ? { permissionPreset: ancestor.permissionPreset } : {}),
         ...(typeof ancestor?.memoryEnabled === 'boolean' ? { memoryEnabled: ancestor.memoryEnabled } : {}),

@@ -60,14 +60,14 @@ export function registerDecisionModelHandlers(deps: DecisionModelHandlerDeps): v
     store.set(DECISION_MODEL_CONFIG_STORE_KEY, next);
 
     // The key and provider are read on every call, so only switching the
-    // tool on or off touches openclaw.json (and restarts the gateway once).
+    // tool on or off needs a live dynamic host-tool sync (no DSH restart).
     const active = isDecisionModelActive(next);
     if (isDecisionModelActive(previous) !== active) {
-      console.log(`[DecisionModel] decision_evaluate ${active ? 'enabled' : 'disabled'}, syncing OpenClaw config`);
+      console.log(`[DecisionModel] decision_evaluate ${active ? 'enabled' : 'disabled'}, syncing dynamic host tools`);
       try {
-        await deps.syncOpenClawConfig({ reason: 'decision-model-toggle', restartGatewayIfRunning: true });
+        await deps.syncOpenClawConfig({ reason: 'decision-model-toggle', restartGatewayIfRunning: false });
       } catch (error) {
-        console.error('[DecisionModel] failed to sync OpenClaw config after toggle:', error);
+        console.error('[DecisionModel] failed to sync dynamic host tools after toggle:', error);
       }
     }
     return toDecisionModelConfigView(next);

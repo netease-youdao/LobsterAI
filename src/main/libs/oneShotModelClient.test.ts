@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   buildProviderSelection: vi.fn(),
 }));
 vi.mock('./claudeSettings', () => ({ resolveRawApiConfig: mocks.resolveRawApiConfig }));
-vi.mock('./providerSelection', () => ({ buildProviderSelection: mocks.buildProviderSelection }));
+vi.mock('./providerSelection', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./providerSelection')>(),
+  buildProviderSelection: mocks.buildProviderSelection,
+}));
 
 import {
   buildOneShotHttpRequest,
@@ -76,6 +79,47 @@ describe('toOneShotTarget', () => {
     expect(resolution).toMatchObject({ target: { apiKey: 'proxy-token', baseUrl: 'http://127.0.0.1:4100/v1/copilot' } });
   });
 
+  test('rewrites remote baseUrl to loopback proxy for proxy-backed providers and never sends loopback secrets remotely', () => {
+    const lobster = toOneShotTarget({
+      selection: selection(OpenClawApi.OpenAICompletions, '${LOBSTER_PROXY_TOKEN}', 'https://lobsterai-server.youdao.com/api/proxy/v1'),
+      providerName: ProviderName.LobsteraiServer,
+      apiKey: 'real-jwt',
+      proxyToken: 'loopback-secret',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(lobster).toMatchObject({
+      target: {
+        apiKey: 'loopback-secret',
+        baseUrl: 'http://127.0.0.1:45555/v1/lobsterai-server',
+      },
+    });
+
+    const copilot = toOneShotTarget({
+      selection: selection(OpenClawApi.OpenAICompletions, '${LOBSTER_PROXY_TOKEN}', 'https://api.individual.githubcopilot.com'),
+      providerName: ProviderName.Copilot,
+      apiKey: 'sk-lobsterai-local',
+      proxyToken: 'loopback-secret',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(copilot).toMatchObject({
+      target: {
+        apiKey: 'loopback-secret',
+        baseUrl: 'http://127.0.0.1:45555/v1/github-copilot',
+      },
+    });
+
+    expect(toOneShotTarget({
+      selection: selection(OpenClawApi.OpenAICompletions, '${LOBSTER_PROXY_TOKEN}', 'https://lobsterai-server.youdao.com/api/proxy/v1'),
+      providerName: ProviderName.LobsteraiServer,
+      apiKey: 'real-jwt',
+      proxyToken: 'loopback-secret',
+      proxyBaseUrl: null,
+    })).toEqual({
+      error: OneShotTargetError.UnsupportedModel,
+      detail: 'proxy-unavailable',
+    });
+  });
+
   test('rejects transports and OAuth routes it cannot call', () => {
     expect(toOneShotTarget({
       selection: selection(OpenClawApi.OpenAIChatGPTResponses, undefined),
@@ -105,13 +149,17 @@ describe('resolveOneShotTarget', () => {
     });
     mocks.buildProviderSelection.mockReturnValue(selection(OpenClawApi.OpenAIResponses, '${LOBSTER_APIKEY_CUSTOM_0}'));
 
-    const resolution = resolveOneShotTarget({ getProxyToken: () => 'proxy-token' });
+    const resolution = resolveOneShotTarget({
+      getProxyToken: () => 'proxy-token',
+      getProxyBaseUrl: () => 'http://127.0.0.1:45555',
+    });
 
     expect(mocks.buildProviderSelection).toHaveBeenCalledWith(expect.objectContaining({
       modelId: 'gpt-5.5',
       apiType: 'openai',
       openaiApiMode: 'responses',
       providerName: 'custom_0',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
     }));
     expect(resolution).toMatchObject({ target: { api: OpenClawApi.OpenAIResponses, apiKey: 'sk-real' } });
   });
@@ -198,6 +246,14 @@ describe('buildOneShotHttpRequest', () => {
     expect(bodyOf(other.init)).toMatchObject({ max_tokens: 2048 });
   });
 
+  test('openai chat completions avoids duplicating /chat/completions suffix', () => {
+    const { url } = buildOneShotHttpRequest(target(OpenClawApi.OpenAICompletions, {
+      baseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions/',
+      providerName: ProviderName.Youdaozhiyun,
+    }), request);
+    expect(url).toBe('https://openapi.youdao.com/llmgateway/api/v1/chat/completions');
+  });
+
   test('openai responses', () => {
     const { url, init } = buildOneShotHttpRequest(target(OpenClawApi.OpenAIResponses), request);
     expect(url).toBe('https://api.example.com/v1/responses');
@@ -208,6 +264,13 @@ describe('buildOneShotHttpRequest', () => {
       max_output_tokens: 2048,
       stream: true,
     });
+  });
+
+  test('openai responses avoids duplicating /responses suffix', () => {
+    const { url } = buildOneShotHttpRequest(target(OpenClawApi.OpenAIResponses, {
+      baseUrl: 'https://gw.example.com/v1/responses/',
+    }), request);
+    expect(url).toBe('https://gw.example.com/v1/responses');
   });
 
   test('gemini generateContent', () => {

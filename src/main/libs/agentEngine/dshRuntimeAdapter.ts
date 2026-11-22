@@ -13,6 +13,12 @@ import {
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import {
+  BrowserAnnotationScreenshotStatus,
+  buildBrowserAnnotationPromptSection,
+  type CoworkBrowserAnnotationMessageBatch,
+  normalizeBrowserAnnotationBatches,
+} from '../../../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortResponse,
   CoworkBtwSubmitResponse,
@@ -21,7 +27,15 @@ import { CoworkBtwStatus } from '../../../shared/cowork/btw';
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
 import type { CoworkGoal } from '../../../shared/cowork/goal';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
-import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
+import {
+  buildCoworkImageAttachmentPreviews,
+  CoworkImageAttachmentRole,
+  stripDataUrlPrefix,
+} from '../../../shared/cowork/imageAttachments';
+import {
+  buildSelectedTextPromptSection,
+  CoworkSelectedTextSource,
+} from '../../../shared/cowork/selectedText';
 import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
 import {
@@ -33,6 +47,22 @@ import {
   DshProgressiveCapability,
   parseDshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
+import {
+  modelPresetModelId,
+  parseModelPresetId,
+} from '../../../shared/modelPresets/constants';
+import { buildOfficeAgentPrompt } from '../../../shared/office/core/officeAgentPrompt';
+import {
+  SHEET_EDITOR,
+  SLIDES_EDITOR,
+  WORD_EDITOR,
+} from '../../../shared/office/editors';
+import {
+  canonicalizeDshProviderId,
+  type ModelThinkingLevel,
+  parseModelThinkingLevel,
+} from '../../../shared/providers';
+import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/modelContextWindow';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
 import {
@@ -84,6 +114,7 @@ export interface DshAdapterSessionRecord {
   modelPresetId?: string | null;
   thinkingLevel?: string | null;
   contextWindowOverride?: number | null;
+  contextWindowOwnerKey?: string | null;
   systemPrompt?: string;
   goal?: CoworkGoal | null;
   messages?: CoworkMessage[];
@@ -114,6 +145,7 @@ export interface DshCoworkStorePort {
       status?: CoworkSessionStatus;
       modelOverride?: string | null;
       permissionPreset?: DshPermissionPreset | null;
+      thinkingLevel?: ModelThinkingLevel | '';
       goal?: CoworkGoal | null;
     },
   ): void;
@@ -124,7 +156,16 @@ export interface DshModelSelection {
   provider: string;
   model: string;
   reasoningEffort?: string;
+  modelPresetId?: string | null;
+  contextWindow?: number;
 }
+
+export type DshReadBrowserAnnotationAsset = (identity: {
+  draftKey: string;
+  batchId: string;
+  annotationId: string;
+  assetId: string;
+}) => { dataUrl: string; byteSize?: number } | null | undefined;
 
 export interface DshRuntimeAdapterDeps {
   subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>
@@ -149,6 +190,7 @@ export interface DshRuntimeAdapterDeps {
     preset: DshPermissionPreset,
     coworkSessionId?: string,
   ) => Promise<void> | void;
+  readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
 }
 
 export const DshGoalCommandKind = {
@@ -189,6 +231,7 @@ interface ActiveTurnState {
   traceId: string;
   abortController: AbortController;
   confirmationMode: 'modal' | 'text';
+  autoApprove: boolean;
   startedAt: number;
   currentThinkingMessageId: string | null;
   currentThinkingText: string;
@@ -254,6 +297,22 @@ const DSH_SUPPORTED_REASONING_EFFORTS = new Set([
   'max',
 ]);
 
+function parseContextWindowSelectionTokens(selection: string | null | undefined): number | null {
+  if (typeof selection !== 'string') return null;
+  const trimmed = selection.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith(USER_CONTEXT_WINDOW_SELECTION_PREFIX)) {
+    const rawTokens = trimmed.slice(trimmed.lastIndexOf(':') + 1);
+    const parsed = Number(rawTokens);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    const parsed = Number(trimmed);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
 function normalizeDshReasoningEffort(raw?: string | null): string | undefined {
   if (typeof raw !== 'string') return undefined;
   const normalized = raw.trim().toLowerCase();
@@ -265,11 +324,12 @@ async function selectModelWithReasoningFallback(
   client: Pick<DshTypertClient, 'selectModel'>,
   params: { sessionId: string; provider: string; model: string; reasoningEffort?: string },
 ): Promise<void> {
+  const provider = canonicalizeDshProviderId(params.provider);
   const effort = normalizeDshReasoningEffort(params.reasoningEffort);
   try {
     await client.selectModel({
       sessionId: params.sessionId,
-      provider: params.provider,
+      provider,
       model: params.model,
       ...(effort ? { reasoningEffort: effort } : {}),
     });
@@ -278,12 +338,12 @@ async function selectModelWithReasoningFallback(
     // Retry without reasoningEffort when the target model does not declare
     // reasoning support or does not accept the requested effort level.
     console.warn(
-      `[DshRuntimeAdapter] selectModel rejected reasoningEffort="${effort}" for ${params.provider}/${params.model}; retrying without reasoningEffort:`,
+      `[DshRuntimeAdapter] selectModel rejected reasoningEffort="${effort}" for ${provider}/${params.model}; retrying without reasoningEffort:`,
       error instanceof Error ? error.message : String(error),
     );
     await client.selectModel({
       sessionId: params.sessionId,
-      provider: params.provider,
+      provider,
       model: params.model,
     });
   }
@@ -324,14 +384,52 @@ const SKILL_TO_PROGRESSIVE_CAPABILITY: Readonly<Record<string, DshProgressiveCap
   pptx: DshProgressiveCapability.Ppt,
 };
 
+const SELECTED_TEXT_SOURCE_TO_CAPABILITY: Readonly<Record<string, DshProgressiveCapability>> = {
+  [CoworkSelectedTextSource.ArtifactWord]: DshProgressiveCapability.Word,
+  [CoworkSelectedTextSource.ArtifactSheet]: DshProgressiveCapability.Excel,
+  [CoworkSelectedTextSource.ArtifactSlides]: DshProgressiveCapability.Ppt,
+};
+
+const OFFICE_EXTENSION_CAPABILITY_PATTERNS: ReadonlyArray<{
+  pattern: RegExp;
+  capability: DshProgressiveCapability;
+}> = [
+  { pattern: /\.docx\b/i, capability: DshProgressiveCapability.Word },
+  { pattern: /\.xlsx\b/i, capability: DshProgressiveCapability.Excel },
+  { pattern: /\.pptx\b/i, capability: DshProgressiveCapability.Ppt },
+];
+
+const OFFICE_CAPABILITY_TO_EDITOR = [
+  { capability: DshProgressiveCapability.Word, editor: WORD_EDITOR },
+  { capability: DshProgressiveCapability.Excel, editor: SHEET_EDITOR },
+  { capability: DshProgressiveCapability.Ppt, editor: SLIDES_EDITOR },
+] as const;
+
+function collectOfficeCapabilitiesFromText(
+  text: string | undefined,
+  target: Set<DshProgressiveCapability>,
+): void {
+  if (typeof text !== 'string' || text.length === 0) return;
+  for (const { pattern, capability } of OFFICE_EXTENSION_CAPABILITY_PATTERNS) {
+    if (pattern.test(text)) {
+      target.add(capability);
+    }
+  }
+}
+
 /**
  * Determine which built-in progressive MCP capability groups should be
- * pre-unlocked for this turn based on explicit user-selected skills or
- * attached browser annotations.
+ * pre-unlocked for this turn based on explicit user-selected skills,
+ * attached browser annotations, selected text excerpts, or Office file
+ * references in the prompt/attachments/legacy bridge.
  */
 export function resolveUnlockedCapabilitiesForTurn(params: {
   messageSkillIds?: string[];
   browserAnnotations?: CoworkStartOptions['browserAnnotations'];
+  selectedTextSnippets?: CoworkStartOptions['selectedTextSnippets'];
+  prompt?: string;
+  localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
+  lazyBridgePrefix?: string;
 }): DshProgressiveCapability[] {
   const unlocked = new Set<DshProgressiveCapability>();
   if (Array.isArray(params.messageSkillIds)) {
@@ -344,7 +442,43 @@ export function resolveUnlockedCapabilitiesForTurn(params: {
   if (Array.isArray(params.browserAnnotations) && params.browserAnnotations.length > 0) {
     unlocked.add(DshProgressiveCapability.Browser);
   }
+  if (Array.isArray(params.selectedTextSnippets)) {
+    for (const snippet of params.selectedTextSnippets) {
+      if (!snippet || typeof snippet !== 'object') continue;
+      const sourceType = snippet.sourceType ?? snippet.sourceMessageType;
+      if (typeof sourceType === 'string') {
+        const cap = SELECTED_TEXT_SOURCE_TO_CAPABILITY[sourceType];
+        if (cap) unlocked.add(cap);
+      }
+      collectOfficeCapabilitiesFromText(snippet.sourcePath, unlocked);
+      collectOfficeCapabilitiesFromText(snippet.sourceTitle, unlocked);
+    }
+  }
+  collectOfficeCapabilitiesFromText(params.prompt, unlocked);
+  collectOfficeCapabilitiesFromText(params.lazyBridgePrefix, unlocked);
+  if (Array.isArray(params.localMediaAttachments)) {
+    for (const att of params.localMediaAttachments) {
+      if (!att || typeof att !== 'object') continue;
+      collectOfficeCapabilitiesFromText(att.localPath, unlocked);
+      collectOfficeCapabilitiesFromText(att.name, unlocked);
+    }
+  }
   return [...unlocked];
+}
+
+/**
+ * Build concise in-place Office editing guidance from `buildOfficeAgentPrompt`
+ * scoped to the Office capability groups unlocked for this session.
+ */
+export function resolveOfficeAgentPromptForTurn(
+  unlockedCapabilities: Iterable<DshProgressiveCapability>,
+): string {
+  const unlockedSet = new Set(unlockedCapabilities);
+  const editors = OFFICE_CAPABILITY_TO_EDITOR
+    .filter(({ capability }) => unlockedSet.has(capability))
+    .map(({ editor }) => editor);
+  if (editors.length === 0) return '';
+  return buildOfficeAgentPrompt(editors);
 }
 
 function resolveLocalTimeZone(): string | undefined {
@@ -669,6 +803,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly resolveAllowedSkillIds?: DshRuntimeAdapterDeps['resolveAllowedSkillIds'];
   private readonly resolveDefaultPermissionPreset?: DshRuntimeAdapterDeps['resolveDefaultPermissionPreset'];
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
+  private readonly readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
   private readonly startingAbortControllers = new Map<string, AbortController>();
@@ -679,6 +814,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly btwAbortControllers = new Map<string, AbortController>();
   private readonly sessionAllowedScopes = new Map<string, Set<string>>();
   private readonly sessionPermissionPresets = new Map<string, DshPermissionPreset>();
+  private readonly sessionUnlockedCapabilities = new Map<string, Set<DshProgressiveCapability>>();
+  private readonly sessionThinkingLevels = new Map<string, string>();
+  private readonly sessionContextWindows = new Map<string, string | null>();
+  private readonly sessionResolvedContextTokens = new Map<string, number>();
   private wiredClient: DshTypertClient | null = null;
   private unwireClientHandlers: Array<() => void> = [];
 
@@ -691,6 +830,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.resolveAllowedSkillIds = deps.resolveAllowedSkillIds;
     this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
+    this.readBrowserAnnotationAsset = deps.readBrowserAnnotationAsset;
   }
 
   private getExplicitPermissionPreset(coworkSessionId?: string): DshPermissionPreset | null {
@@ -771,9 +911,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
       messageSkillIds: options.messageSkillIds,
+      selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: options.confirmationMode ?? 'modal',
+      autoApprove: options.autoApprove,
       imageAttachments: options.imageAttachments,
       mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
       localMediaAttachments: options.localMediaAttachments,
@@ -795,6 +937,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
       messageSkillIds: options.messageSkillIds,
+      selectedTextSnippets: options.selectedTextSnippets,
       browserAnnotations: options.browserAnnotations,
       systemPrompt: options.systemPrompt,
       confirmationMode: 'modal',
@@ -944,9 +1087,38 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const thinkingPatchValue = typeof patch.thinkingLevel === 'string'
       ? patch.thinkingLevel.trim()
       : null;
+    const thinking = thinkingPatchValue ?? '';
+    const hasContextWindowPatch = patch.contextWindow !== undefined;
+    const normalizedContextWindow = typeof patch.contextWindow === 'string' && patch.contextWindow.trim().length > 0
+      ? patch.contextWindow.trim()
+      : null;
 
+    const sessionUpdates: Parameters<DshCoworkStorePort['updateSession']>[1] = {};
     if (modelStr) {
-      this.store.updateSession(sessionId, { modelOverride: modelStr });
+      sessionUpdates.modelOverride = modelStr;
+    }
+    if (hasThinkingPatch) {
+      if (thinking) {
+        this.sessionThinkingLevels.set(sessionId, thinking);
+        const parsedThinking = parseModelThinkingLevel(thinking.toLowerCase());
+        sessionUpdates.thinkingLevel = parsedThinking ?? '';
+      } else {
+        this.sessionThinkingLevels.delete(sessionId);
+        sessionUpdates.thinkingLevel = '';
+      }
+    }
+    if (Object.keys(sessionUpdates).length > 0) {
+      this.store.updateSession(sessionId, sessionUpdates);
+    }
+
+    if (hasContextWindowPatch) {
+      this.sessionContextWindows.set(sessionId, normalizedContextWindow);
+      const parsedTokens = parseContextWindowSelectionTokens(normalizedContextWindow);
+      if (parsedTokens !== null) {
+        this.sessionResolvedContextTokens.set(sessionId, parsedTokens);
+      } else {
+        this.sessionResolvedContextTokens.delete(sessionId);
+      }
     }
 
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
@@ -957,28 +1129,49 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       };
     }
 
-    const selection = this.resolveModelSelection
-      ? await this.resolveModelSelection(
-          sessionId,
-          modelStr || undefined,
-          hasThinkingPatch ? thinkingPatchValue : undefined,
-        )
-      : parseProviderModelRef(modelStr);
-    if (selection) {
-      const resolverHandlesThinking = Boolean(
-        this.resolveModelSelection && this.resolveModelSelection.length >= 3,
-      );
-      const effectiveReasoningEffort = hasThinkingPatch
-        ? (resolverHandlesThinking
-            ? selection.reasoningEffort
-            : (selection.reasoningEffort ?? (thinkingPatchValue || undefined)))
-        : selection.reasoningEffort;
-      await selectModelWithReasoningFallback(this.hostManager.getClient(), {
+    if (hasContextWindowPatch) {
+      await this.hostManager.bindSessionContext({
         sessionId: dshSessionId,
-        provider: selection.provider,
-        model: selection.model,
-        reasoningEffort: effectiveReasoningEffort,
+        coworkSessionId: sessionId,
+        contextWindowSelection: normalizedContextWindow,
+        contextWindowOverride: parseContextWindowSelectionTokens(normalizedContextWindow),
       });
+    }
+
+    if (patch.model !== undefined || hasThinkingPatch) {
+      const session = this.store.getSession(sessionId, 0);
+      const selection = this.resolveModelSelection
+        ? await this.resolveModelSelection(
+            sessionId,
+            modelStr || undefined,
+            hasThinkingPatch ? thinkingPatchValue : undefined,
+          )
+        : parseProviderModelRef(modelStr || session?.modelOverride || '');
+      if (selection) {
+        const resolverHandlesThinking = Boolean(
+          this.resolveModelSelection && this.resolveModelSelection.length >= 3,
+        );
+        const resolvedEffort = hasThinkingPatch
+          ? (resolverHandlesThinking
+              ? selection.reasoningEffort
+              : (selection.reasoningEffort ?? (thinking || undefined)))
+          : (resolverHandlesThinking
+              ? selection.reasoningEffort
+              : (selection.reasoningEffort
+                ?? this.sessionThinkingLevels.get(sessionId)
+                ?? (typeof session?.thinkingLevel === 'string' && session.thinkingLevel.trim()
+                  ? session.thinkingLevel.trim()
+                  : undefined)));
+        if (typeof selection.contextWindow === 'number' && selection.contextWindow > 0 && !hasContextWindowPatch) {
+          this.sessionResolvedContextTokens.set(sessionId, selection.contextWindow);
+        }
+        await selectModelWithReasoningFallback(this.hostManager.getClient(), {
+          sessionId: dshSessionId,
+          provider: canonicalizeDshProviderId(selection.provider),
+          model: selection.model,
+          reasoningEffort: resolvedEffort,
+        });
+      }
     }
 
     return {
@@ -995,7 +1188,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     if (typeof client.getSessionProjections !== 'function') return null;
 
     const projections = await client.getSessionProjections(dshSessionId);
-    const contextWindowOverride = this.store.getSession(sessionId)?.contextWindowOverride;
+    const session = this.store.getSession(sessionId, 0);
+    const patchedSelection = this.sessionContextWindows.get(sessionId);
+    const patchedTokens = patchedSelection !== undefined
+      ? parseContextWindowSelectionTokens(patchedSelection)
+      : null;
+    const persistedTokens = typeof session?.contextWindowOverride === 'number' && session.contextWindowOverride > 0
+      ? session.contextWindowOverride
+      : null;
+    const resolvedTokens = this.sessionResolvedContextTokens.get(sessionId);
+    const contextWindowOverride = patchedTokens ?? persistedTokens ?? resolvedTokens ?? null;
     return extractContextUsageFromProjections(
       sessionId,
       dshSessionId,
@@ -1548,6 +1750,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.lastCancelledTurnBySession.delete(sessionId);
     this.sessionAllowedScopes.delete(sessionId);
     this.sessionPermissionPresets.delete(sessionId);
+    this.sessionUnlockedCapabilities.delete(sessionId);
+    this.sessionThinkingLevels.delete(sessionId);
+    this.sessionContextWindows.delete(sessionId);
+    this.sessionResolvedContextTokens.delete(sessionId);
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
     if (dshSessionId) {
       this.dshToCoworkSession.delete(dshSessionId);
@@ -1615,6 +1821,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       ?? this.subagentSessions?.getOwningSessionId(evt.agentId);
     if (!coworkSessionId) {
       return Promise.resolve({ kind: 'next' });
+    }
+
+    if (kind === 'approval' && this.activeTurns.get(coworkSessionId)?.autoApprove) {
+      const callId = typeof evt.request.callId === 'string' ? evt.request.callId : null;
+      if (callId) {
+        this.hostManager.consumeApprovalCallContext?.(callId);
+      }
+      return Promise.resolve({ kind: 'result', value: 'allowed-once' });
     }
 
     const requestId = `${kind === 'approval' ? 'dsh-approval:' : DSH_QUESTION_REQUEST_ID_PREFIX}${evt.eventId}`;
@@ -1774,9 +1988,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       userMessageContent?: string;
       skillIds?: string[];
       messageSkillIds?: string[];
+      selectedTextSnippets?: CoworkStartOptions['selectedTextSnippets'];
       browserAnnotations?: CoworkStartOptions['browserAnnotations'];
       systemPrompt?: string;
       confirmationMode: 'modal' | 'text';
+      autoApprove?: boolean;
       imageAttachments?: CoworkStartOptions['imageAttachments'];
       mediaInstruction?: string;
       localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
@@ -1832,18 +2048,28 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const localMediaAttachments = params.localMediaAttachments?.length
         ? params.localMediaAttachments
         : undefined;
+      const selectedTextSnippets = params.selectedTextSnippets?.length
+        ? params.selectedTextSnippets
+        : undefined;
+      const browserAnnotations = params.browserAnnotations?.length
+        ? params.browserAnnotations
+        : undefined;
       const imageAttachmentPreviews = !localMediaAttachments && params.imageAttachments?.length
         ? buildCoworkImageAttachmentPreviews(params.imageAttachments)
         : undefined;
       const hasPersistableUserMessage = persistedContent.trim().length > 0
         || Boolean(localMediaAttachments?.length)
-        || Boolean(imageAttachmentPreviews?.length);
+        || Boolean(imageAttachmentPreviews?.length)
+        || Boolean(selectedTextSnippets?.length)
+        || Boolean(browserAnnotations?.length);
 
       if (!params.skipInitialUserMessage && hasPersistableUserMessage) {
         const userMetadata: Record<string, unknown> = {
           llmTrace,
           ...(localMediaAttachments ? { localMediaAttachments } : {}),
           ...(imageAttachmentPreviews ? { imageAttachmentPreviews } : {}),
+          ...(selectedTextSnippets ? { selectedTextSnippets } : {}),
+          ...(browserAnnotations ? { browserAnnotations } : {}),
         };
         turnUserMessage = this.store.addMessage(sessionId, {
           type: 'user',
@@ -1869,15 +2095,45 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       // resolvedModelId headers and DSH selectModel stay completely aligned.
       const modelSelection = this.resolveModelSelection
         ? await this.resolveModelSelection(sessionId, session.modelOverride)
-        : null;
+        : (session.modelOverride ? parseProviderModelRef(session.modelOverride) : null);
       if (abortController.signal.aborted) return;
+
+      const latestSessionMeta = this.store.getSession(sessionId, 0);
+      const effectiveModelPresetId =
+        turnUserMessage?.metadata?.modelPresetId
+        ?? modelSelection?.modelPresetId
+        ?? latestSessionMeta?.modelPresetId
+        ?? session.modelPresetId
+        ?? undefined;
+      const effectiveResolvedModelId =
+        (typeof turnUserMessage?.metadata?.resolvedModelId === 'string'
+          && turnUserMessage.metadata.resolvedModelId.trim()
+          ? turnUserMessage.metadata.resolvedModelId
+          : undefined)
+        ?? modelSelection?.model;
+
+      // Persist resolved preset attribution onto the turn's user message so
+      // `llmUsageContext` recovery and `x-lobster-model-preset` stay aligned.
+      if (
+        turnUserMessage
+        && (
+          (effectiveModelPresetId && !turnUserMessage.metadata?.modelPresetId)
+          || (effectiveResolvedModelId && !turnUserMessage.metadata?.resolvedModelId)
+        )
+      ) {
+        const attributedMetadata: Record<string, unknown> = {
+          ...(turnUserMessage.metadata ?? {}),
+          ...(effectiveModelPresetId ? { modelPresetId: effectiveModelPresetId } : {}),
+          ...(effectiveResolvedModelId ? { resolvedModelId: effectiveResolvedModelId } : {}),
+        };
+        this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, attributedMetadata);
+        turnUserMessage = { ...turnUserMessage, metadata: attributedMetadata };
+      }
 
       registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
         title: session.title,
-        modelPresetId: turnUserMessage?.metadata?.modelPresetId ?? session.modelPresetId ?? undefined,
-        resolvedModelId: (typeof turnUserMessage?.metadata?.resolvedModelId === 'string'
-          ? turnUserMessage.metadata.resolvedModelId
-          : undefined) ?? modelSelection?.model,
+        modelPresetId: effectiveModelPresetId,
+        resolvedModelId: effectiveResolvedModelId,
       });
 
       // Create or reuse DSH session, applying Lazy Context Bridge when upgrading
@@ -1914,19 +2170,64 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         ? [baseSystemPrompt, lazyBridgePrefix].filter((part) => part.trim().length > 0).join('\n\n')
         : baseSystemPrompt;
 
-      // Bind LobsterAI session context (agent persona, skills filter, executionMode, turn traceId).
-      // Always pass explicit `customSystemPrompt` (including `''`) so turning off Plan Mode
-      // clears the previous turn's `# Plan Mode` system prompt in `ops-rpc.mjs`.
+      // Bind LobsterAI session context (agent persona, skills filter, executionMode,
+      // per-session contextWindow override, turn traceId). Always pass explicit
+      // `customSystemPrompt` (including `''`) so turning off Plan Mode clears the
+      // previous turn's `# Plan Mode` system prompt in `ops-rpc.mjs`.
       const agentId = params.agentId || session.agentId || 'main';
       const allowedSkillIds = this.resolveAllowedSkillIds
         ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
         : params.skillIds ?? null;
-      const unlockedCapabilities = resolveUnlockedCapabilitiesForTurn({
+      const turnUnlockedCapabilities = resolveUnlockedCapabilitiesForTurn({
         messageSkillIds: params.messageSkillIds,
         browserAnnotations: params.browserAnnotations,
+        selectedTextSnippets: params.selectedTextSnippets,
+        prompt,
+        localMediaAttachments: params.localMediaAttachments,
+        lazyBridgePrefix,
       });
+      if (turnUnlockedCapabilities.length > 0) {
+        let sessionSet = this.sessionUnlockedCapabilities.get(sessionId);
+        if (!sessionSet) {
+          sessionSet = new Set<DshProgressiveCapability>();
+          this.sessionUnlockedCapabilities.set(sessionId, sessionSet);
+        }
+        for (const cap of turnUnlockedCapabilities) {
+          sessionSet.add(cap);
+        }
+      }
+      const unlockedCapabilities = [...(this.sessionUnlockedCapabilities.get(sessionId) ?? [])];
+      const officeAgentPrompt = resolveOfficeAgentPromptForTurn(unlockedCapabilities);
+
+      const patchedContextWindow = this.sessionContextWindows.get(sessionId);
+      const effectivePresetId = parseModelPresetId(effectiveModelPresetId);
+      const persistedContextWindowOverride =
+        typeof (latestSessionMeta?.contextWindowOverride ?? session.contextWindowOverride) === 'number'
+        && (latestSessionMeta?.contextWindowOverride ?? session.contextWindowOverride)! > 0
+          ? (latestSessionMeta?.contextWindowOverride ?? session.contextWindowOverride)!
+          : null;
+      const contextWindowSelection = patchedContextWindow !== undefined
+        ? patchedContextWindow
+        : (!persistedContextWindowOverride && effectivePresetId
+          ? modelPresetModelId(effectivePresetId)
+          : undefined);
+      const contextWindowOverride = patchedContextWindow !== undefined
+        ? parseContextWindowSelectionTokens(patchedContextWindow)
+        : (persistedContextWindowOverride
+          ?? (typeof modelSelection?.contextWindow === 'number' && modelSelection.contextWindow > 0
+            ? modelSelection.contextWindow
+            : undefined));
+      if (typeof contextWindowOverride === 'number' && contextWindowOverride > 0) {
+        this.sessionResolvedContextTokens.set(sessionId, contextWindowOverride);
+      } else if (contextWindowOverride === null) {
+        this.sessionResolvedContextTokens.delete(sessionId);
+      }
+
       const explicitPermissionPreset = this.getExplicitPermissionPreset(sessionId);
-      const effectivePermissionPreset = explicitPermissionPreset ?? this.getEffectivePermissionPreset(sessionId);
+      const effectivePermissionPreset = params.autoApprove
+        ? DshPermissionPreset.FullAccess
+        : (explicitPermissionPreset ?? this.getEffectivePermissionPreset(sessionId));
+
       const contextPayload: DshHostSessionContext = {
         sessionId: dshSessionId,
         agentId,
@@ -1935,21 +2236,36 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         workspaceDir: params.workspaceRoot || session.cwd,
         allowedSkillIds,
         customSystemPrompt: boundCustomSystemPrompt,
+        ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: effectivePermissionPreset,
-        ...(explicitPermissionPreset ? { permissionPresetExplicit: true } : {}),
+        ...(!params.autoApprove && explicitPermissionPreset ? { permissionPresetExplicit: true } : {}),
         ...(unlockedCapabilities.length > 0 ? { unlockedCapabilities } : {}),
+        ...(contextWindowSelection !== undefined ? { contextWindowSelection } : {}),
+        ...(contextWindowOverride !== undefined ? { contextWindowOverride } : {}),
       };
       await this.hostManager.bindSessionContext(contextPayload);
       if (abortController.signal.aborted) return;
 
-      // Ensure session uses the resolved LobsterAI model before sending prompt.
+      // Ensure session uses the resolved LobsterAI model AND preserves the
+      // user's thinkingLevel -> reasoningEffort across Turn 1, Turn 2, ...
       if (modelSelection) {
+        const persistedThinking = typeof (latestSessionMeta?.thinkingLevel ?? session.thinkingLevel) === 'string'
+          ? (latestSessionMeta?.thinkingLevel ?? session.thinkingLevel)!.trim()
+          : '';
+        const resolverHandlesThinking = Boolean(
+          this.resolveModelSelection && this.resolveModelSelection.length >= 3,
+        );
+        const resolvedEffort = resolverHandlesThinking
+          ? modelSelection.reasoningEffort
+          : (modelSelection.reasoningEffort
+            ?? this.sessionThinkingLevels.get(sessionId)
+            ?? (persistedThinking || undefined));
         await selectModelWithReasoningFallback(client, {
           sessionId: dshSessionId,
-          provider: modelSelection.provider,
+          provider: canonicalizeDshProviderId(modelSelection.provider),
           model: modelSelection.model,
-          reasoningEffort: modelSelection.reasoningEffort,
+          reasoningEffort: resolvedEffort,
         });
         if (abortController.signal.aborted) return;
       }
@@ -2009,6 +2325,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           traceId: llmTrace.traceId,
           abortController,
           confirmationMode: params.confirmationMode,
+          autoApprove: Boolean(params.autoApprove),
           ignoreStaleAbortedTurnEnd: hadRecentCancel,
           cancelledDshTurnNumber: cancelledTurnNumber,
           goalArmed: true,
@@ -2072,6 +2389,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         traceId: llmTrace.traceId,
         abortController,
         confirmationMode: params.confirmationMode,
+        autoApprove: Boolean(params.autoApprove),
         ignoreStaleAbortedTurnEnd: hadRecentCancel,
         cancelledDshTurnNumber: cancelledTurnNumber,
         goalArmed: false,
@@ -2094,8 +2412,20 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         abortController.signal,
       );
 
-      const turnPrefix = [lazyBridgePrefix, params.mediaInstruction].filter(Boolean).join('\n\n');
-      const contentParts = buildPromptContentParts(prompt, turnPrefix, params.imageAttachments);
+      const selectedTextSection = buildSelectedTextPromptSection(params.selectedTextSnippets);
+      const preparedBrowser = prepareBrowserAnnotationsForPrompt(
+        sessionId,
+        params.browserAnnotations,
+        params.imageAttachments,
+        this.readBrowserAnnotationAsset,
+      );
+      const turnPrefix = [
+        lazyBridgePrefix,
+        params.mediaInstruction,
+        selectedTextSection,
+        preparedBrowser.browserAnnotationSection,
+      ].filter(Boolean).join('\n\n');
+      const contentParts = buildPromptContentParts(prompt, turnPrefix, preparedBrowser.imageAttachments);
       const streamTask = this.consumeFollowStream(turn, followStream);
 
       const clientTimeZone = resolveLocalTimeZone();
@@ -2132,6 +2462,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     traceId: string;
     abortController: AbortController;
     confirmationMode: 'modal' | 'text';
+    autoApprove?: boolean;
     ignoreStaleAbortedTurnEnd: boolean;
     cancelledDshTurnNumber: number | null;
     goalArmed: boolean;
@@ -2145,6 +2476,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       traceId: params.traceId,
       abortController: params.abortController,
       confirmationMode: params.confirmationMode,
+      autoApprove: Boolean(params.autoApprove),
       startedAt: Date.now(),
       currentThinkingMessageId: null,
       currentThinkingText: '',
@@ -2920,6 +3252,131 @@ function buildCommandSubmitAttachments(
   return attachments;
 }
 
+function extractInlineScreenshotImage(
+  asset: unknown,
+): { mimeType: string; base64Data: string; byteSize?: number } | null {
+  if (!asset || typeof asset !== 'object') return null;
+  const record = asset as Record<string, unknown>;
+  const fallbackMime = typeof record.mimeType === 'string' && record.mimeType.trim()
+    ? record.mimeType.trim()
+    : 'image/png';
+  if (typeof record.dataUrl === 'string' && record.dataUrl.trim()) {
+    const match = /^data:([^;]+);base64,(.*)$/s.exec(record.dataUrl.trim());
+    const base64Data = stripDataUrlPrefix(record.dataUrl);
+    if (base64Data) {
+      return { mimeType: match?.[1] || fallbackMime, base64Data };
+    }
+  }
+  if (typeof record.base64Data === 'string' && record.base64Data.trim()) {
+    const base64Data = stripDataUrlPrefix(record.base64Data);
+    if (base64Data) {
+      return { mimeType: fallbackMime, base64Data };
+    }
+  }
+  return null;
+}
+
+function readAnnotationAssetData(
+  readAsset: DshReadBrowserAnnotationAsset | undefined,
+  sessionId: string,
+  batchId: string,
+  annotationId: string,
+  assetId: string,
+  fallbackMime: string,
+): { mimeType: string; base64Data: string; byteSize?: number } | null {
+  if (!readAsset || !batchId || !annotationId || !assetId) return null;
+  const candidateDraftKeys = sessionId && sessionId !== 'home' ? [sessionId, 'home'] : ['home'];
+  for (const draftKey of candidateDraftKeys) {
+    try {
+      const loaded = readAsset({ draftKey, batchId, annotationId, assetId });
+      if (!loaded || typeof loaded.dataUrl !== 'string' || !loaded.dataUrl.trim()) continue;
+      const match = /^data:([^;]+);base64,(.*)$/s.exec(loaded.dataUrl.trim());
+      const base64Data = stripDataUrlPrefix(loaded.dataUrl);
+      if (!base64Data) continue;
+      return {
+        mimeType: match?.[1] || fallbackMime,
+        base64Data,
+        ...(typeof loaded.byteSize === 'number' ? { byteSize: loaded.byteSize } : {}),
+      };
+    } catch {
+      // Try next fallback draftKey or continue without screenshot attachment.
+    }
+  }
+  return null;
+}
+
+function prepareBrowserAnnotationsForPrompt(
+  sessionId: string,
+  browserAnnotations: CoworkStartOptions['browserAnnotations'],
+  imageAttachments: CoworkStartOptions['imageAttachments'],
+  readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset,
+): {
+  browserAnnotationSection: string;
+  imageAttachments: NonNullable<CoworkStartOptions['imageAttachments']>;
+} {
+  const effectiveImages = [...(imageAttachments ?? [])];
+  const normalized = normalizeBrowserAnnotationBatches(browserAnnotations);
+  if (normalized.length === 0) {
+    return { browserAnnotationSection: '', imageAttachments: effectiveImages };
+  }
+
+  const preparedBatches: CoworkBrowserAnnotationMessageBatch[] = normalized.map((batch) => ({
+    ...batch,
+    annotations: batch.annotations.map((annotation) => {
+      if (annotation.screenshot.status !== BrowserAnnotationScreenshotStatus.Ready) {
+        return annotation;
+      }
+      const existingIndex = annotation.screenshot.asset.transportImageIndex;
+      const alreadyAttached = typeof existingIndex === 'number'
+        && Number.isInteger(existingIndex)
+        && existingIndex >= 1
+        && existingIndex <= effectiveImages.length;
+      if (alreadyAttached) {
+        return annotation;
+      }
+
+      const fallbackMime = annotation.screenshot.asset.mimeType || 'image/png';
+      const resolved = extractInlineScreenshotImage(annotation.screenshot.asset)
+        ?? readAnnotationAssetData(
+          readBrowserAnnotationAsset,
+          sessionId,
+          batch.id,
+          annotation.id,
+          annotation.screenshot.asset.assetId,
+          fallbackMime,
+        );
+      if (!resolved) {
+        return annotation;
+      }
+
+      const nextIndex = effectiveImages.length + 1;
+      effectiveImages.push({
+        name: `browser-annotation-${nextIndex}.png`,
+        mimeType: resolved.mimeType,
+        base64Data: resolved.base64Data,
+        ...(typeof resolved.byteSize === 'number' && resolved.byteSize > 0 ? { sizeBytes: resolved.byteSize } : {}),
+        role: CoworkImageAttachmentRole.BrowserAnnotation,
+      });
+
+      return {
+        ...annotation,
+        screenshot: {
+          ...annotation.screenshot,
+          asset: {
+            ...annotation.screenshot.asset,
+            transportImageIndex: nextIndex,
+          },
+        },
+      };
+    }),
+  }));
+
+  return {
+    browserAnnotationSection: buildBrowserAnnotationPromptSection(preparedBatches),
+    imageAttachments: effectiveImages,
+  };
+}
+
 function buildPromptContentParts(
   prompt: string,
   turnPrefix: string,
@@ -2933,11 +3390,13 @@ function buildPromptContentParts(
     parts.push({ type: 'text', text: fullText });
   }
   for (const img of imageAttachments ?? []) {
-    if (!img || typeof img.base64Data !== 'string' || !img.base64Data) continue;
+    if (!img || typeof img.base64Data !== 'string') continue;
+    const data = stripDataUrlPrefix(img.base64Data);
+    if (!data) continue;
     parts.push({
       type: 'image',
       mediaType: img.mimeType || 'image/png',
-      data: img.base64Data,
+      data,
     });
   }
   return parts;
@@ -2947,7 +3406,7 @@ function parseProviderModelRef(ref: string): DshModelSelection | null {
   const idx = ref.indexOf('/');
   if (idx <= 0 || idx >= ref.length - 1) return null;
   return {
-    provider: ref.slice(0, idx),
+    provider: canonicalizeDshProviderId(ref.slice(0, idx)),
     model: ref.slice(idx + 1),
   };
 }

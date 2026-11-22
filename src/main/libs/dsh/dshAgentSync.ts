@@ -8,6 +8,7 @@ import {
   normalizeSubagentCollaborationMode,
   type SubagentCollaborationMode,
 } from '../../../shared/agent/constants';
+import { canonicalizeDshProviderId } from '../../../shared/providers/constants';
 import type { Agent } from '../../coworkStore';
 import type { DshHostAgentSpec } from './dshHostManager';
 
@@ -87,8 +88,14 @@ export function buildDshHostAgentSpecs(input: BuildDshHostAgentSpecsInput): DshH
     const allowedSkillIds = !isMain && explicitSkillIds.length > 0 ? explicitSkillIds : null;
 
     const usesInheritModel = agent.modelSelectionMode === AgentModelSelectionMode.Inherit;
-    const resolvedModel = !usesInheritModel && agent.model.trim().length > 0
+    const rawResolvedModel = !usesInheritModel && agent.model.trim().length > 0
       ? input.resolveExplicitModel?.(agent) ?? null
+      : null;
+    const resolvedModel = rawResolvedModel
+      ? {
+          ...rawResolvedModel,
+          provider: canonicalizeDshProviderId(rawResolvedModel.provider),
+        }
       : null;
 
     const collaborationMode: SubagentCollaborationMode = normalizeSubagentCollaborationMode(

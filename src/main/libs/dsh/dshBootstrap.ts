@@ -17,9 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
-  DeliveryMode,
   IpcChannel as ScheduledTaskIpc,
-  RunDeliveryStatus,
 } from '../../../scheduledTask/constants';
 import type {
   ScheduledTask,
@@ -62,6 +60,7 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
+import { BrowserAnnotationAssetStore } from '../browserAnnotationAssetStore';
 import {
   ensureElectronNodeShim,
   getElectronNodeRuntimePath,
@@ -92,7 +91,7 @@ import {
   type LobsterMcpServerRecord,
   type LobsterProviderConfig,
 } from './dshProviderSync';
-import { runScheduledTurn } from './dshScheduledTurn';
+import { executeDshScheduledTask } from './dshScheduledTurn';
 import { DshSubagentSessions } from './dshSubagentSessions';
 
 export interface DshCompatEngineStatus {
@@ -149,6 +148,8 @@ export interface DshBootstrapOptions {
       executionMode?: 'auto' | 'local' | 'sandbox',
       activeSkillIds?: string[],
       agentId?: string,
+      modelOverride?: string,
+      options?: { scheduledTaskId?: string | null },
     ) => { id: string };
   };
   getDefaultCwd: (agentId?: string) => string;
@@ -532,6 +533,9 @@ export class DshBootstrap {
     if (persistedBindings.length > 0) {
       void this.hostManager.syncSubagentBindings(persistedBindings, { replace: true }).catch((): void => undefined);
     }
+    const browserAnnotationAssetStore = new BrowserAnnotationAssetStore(
+      path.join(options.userDataDir, 'browser-annotation-assets'),
+    );
     this.runtimeAdapter = new DshRuntimeAdapter({
       subagentSessions: this.subagentSessions,
       hostManager: this.hostManager,
@@ -543,6 +547,13 @@ export class DshBootstrap {
         if (!coworkSessionId) {
           this.defaultPermissionPreset = preset;
           this.kvStorage.set(DSH_PERMISSION_PRESET_KV_KEY, preset);
+        }
+      },
+      readBrowserAnnotationAsset: (identity) => {
+        try {
+          return browserAnnotationAssetStore.read(identity);
+        } catch {
+          return null;
         }
       },
     });
@@ -1053,6 +1064,7 @@ export class DshBootstrap {
       if (input.webAccessPolicy) {
         await this.hostManager.syncWebAccessPolicy(input.webAccessPolicy);
       }
+      await this.bridgeWiring.syncDynamicHostTools();
       if (input.agents) {
         await this.hostManager.syncAgents(input.agents);
       }
@@ -1143,57 +1155,17 @@ export class DshBootstrap {
     }
     signal.throwIfAborted();
 
-    const promptText =
-      task.payload.kind === 'agentTurn'
-        ? task.payload.message
-        : task.payload.text;
-
-    const agentId = task.agentId || 'main';
-    const cwd = this.options.getDefaultCwd(agentId);
-
-    const sessionId = this.options.coworkStore.createSession?.(
-      `[定时] ${task.name}`, cwd, undefined, 'auto', undefined, agentId,
-    ).id;
-    if (!sessionId) throw new Error('Unable to create a Cowork session for the scheduled task.');
-
-    const stopped = await runScheduledTurn(this.runtimeAdapter, sessionId, agentId, promptText, signal);
-    if (stopped || signal.aborted) {
-      return { sessionId, stopped: true, deliveryStatus: RunDeliveryStatus.NotRequested };
-    }
-
-    const session = this.options.coworkStore.getSession(sessionId);
-    const lastAssistant = [...(session?.messages ?? [])]
-      .reverse()
-      .find((m) => m.type === 'assistant' && m.content.trim().length > 0);
-    const summary = lastAssistant?.content.trim() ?? '';
-
-    let deliveryStatus: RunDeliveryStatus = RunDeliveryStatus.NotRequested;
-    let deliveryError: string | null = null;
-    if (
-      task.delivery.mode === DeliveryMode.Announce
-      && task.delivery.channel
-      && task.delivery.to
-      && this.channelsBundleDir
-    ) {
-      try {
-        await this.channelsBridge.sendProactiveMessage({
-          platform: task.delivery.channel,
-          instanceId: task.delivery.accountId,
-          chatId: task.delivery.to,
-          text: summary || `[${task.name}] Completed.`,
-        });
-        deliveryStatus = RunDeliveryStatus.Delivered;
-      } catch (error) {
-        deliveryStatus = RunDeliveryStatus.NotDelivered;
-        deliveryError = error instanceof Error ? error.message : String(error);
-      }
-    }
-
-    return {
-      sessionId,
-      summary,
-      deliveryStatus,
-      deliveryError,
-    };
+    return executeDshScheduledTask(
+      {
+        hostManager: this.hostManager,
+        runtimeAdapter: this.runtimeAdapter,
+        coworkStore: this.options.coworkStore,
+        getDefaultCwd: this.options.getDefaultCwd,
+        channelsBridge: this.channelsBridge,
+        channelsBundleDir: this.channelsBundleDir,
+      },
+      task,
+      signal,
+    );
   }
 }

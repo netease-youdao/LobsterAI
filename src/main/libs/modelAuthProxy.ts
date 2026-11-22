@@ -28,7 +28,8 @@ export function resolveDefaultOAuthProviderUpstream(
   providerId: string,
 ): OAuthProviderUpstream | null {
   switch (providerId) {
-    case 'github-copilot': {
+    case 'github-copilot':
+    case 'lobsterai-copilot': {
       const baseUrl = getCopilotLoopbackBaseUrl();
       if (!baseUrl) return null;
       const token = getCopilotLoopbackAuthToken();
@@ -78,5 +79,9 @@ export function startModelAuthProxy(
 
 export const stopModelAuthProxy = stopOpenClawTokenProxy;
 export const getModelAuthProxyPort = getOpenClawTokenProxyPort;
+export function getModelAuthProxyUrl(): string | null {
+  const port = getOpenClawTokenProxyPort();
+  return port ? `http://127.0.0.1:${port}` : null;
+}
 export const getModelAuthProxyTraceStats = getOpenClawTokenProxyTraceStats;
 export const consumeRecentModelAuthProxyQuotaError = consumeRecentOpenClawTokenProxyQuotaError;

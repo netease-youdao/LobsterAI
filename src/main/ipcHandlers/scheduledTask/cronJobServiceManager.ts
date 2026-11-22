@@ -69,7 +69,10 @@ export function getCronJobService(): CronJobServiceFacade {
       },
       toggleJob: async (id, enabled) => requireScheduler().toggleTask(id, enabled),
       runJob: async (id) => {
-        await requireScheduler().runNow(id);
+        const { completion } = requireScheduler().startRunNow(id);
+        completion.catch((error) => {
+          console.error(`[ScheduledTask] Background manual run failed for ${id}:`, error);
+        });
       },
       stopJob: async (id) => requireScheduler().stopTask(id),
       listRuns: async (taskId, limit, offset, filter) =>

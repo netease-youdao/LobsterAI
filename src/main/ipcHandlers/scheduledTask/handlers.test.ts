@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 const { registeredHandlers } = vi.hoisted(() => ({
@@ -21,7 +22,12 @@ import {
   TaskStatus,
   WakeMode,
 } from '../../../scheduledTask/constants';
-import type { CronJobServiceFacade } from './cronJobServiceManager';
+import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
+import {
+  type CronJobServiceFacade,
+  getCronJobService,
+  initCronJobServiceManager,
+} from './cronJobServiceManager';
 import {
   migrateScheduledTaskAnnounceJobs,
   registerScheduledTaskHandlers,
@@ -602,5 +608,81 @@ describe('registerScheduledTaskHandlers', () => {
       chatId: 'WxId_ZhangSan@im.wechat',
       text: 'saved report',
     });
+  });
+
+  test('RunManually returns immediately without blocking on a pending DSH turn while propagating start errors', async () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    let resolveTurn!: (result: { sessionId: string; summary: string }) => void;
+    const scheduler = new LobsterScheduler({
+      db,
+      executor: () => new Promise(resolve => {
+        resolveTurn = resolve;
+      }),
+    });
+
+    try {
+      const task = scheduler.createTask({
+        name: 'Long report',
+        description: '',
+        enabled: true,
+        schedule: { kind: 'cron', expr: '0 9 * * *' },
+        sessionTarget: SessionTarget.Isolated,
+        wakeMode: WakeMode.Now,
+        payload: { kind: PayloadKind.AgentTurn, message: 'Generate report' },
+        delivery: { mode: DeliveryMode.None },
+      });
+
+      initCronJobServiceManager({ getScheduler: () => scheduler });
+      registerScheduledTaskHandlers({
+        getCronJobService,
+        getIMGatewayManager: () => null,
+        getCoworkSessionTitle: () => null,
+      });
+
+      const handler = registeredHandlers.get(ScheduledTaskIpc.RunManually)!;
+      const runUpdates: Array<{ status: TaskStatus; summary?: string | null }> = [];
+      scheduler.on('runUpdate', (evt: { run: { status: TaskStatus; summary?: string | null } }) => {
+        runUpdates.push({ status: evt.run.status, summary: evt.run.summary });
+      });
+
+      // Returns immediately while executor is still pending!
+      const startResult = await handler(undefined, task.id);
+      expect(startResult).toEqual({ success: true });
+      expect(scheduler.getTask(task.id)?.state.lastStatus).toBe(TaskStatus.Running);
+
+      // Duplicate click while running fails immediately.
+      const duplicateResult = await handler(undefined, task.id);
+      expect(duplicateResult).toEqual({
+        success: false,
+        error: `Scheduled task "${task.id}" is already running`,
+      });
+
+      // Unknown task fails immediately.
+      const missingResult = await handler(undefined, 'does-not-exist');
+      expect(missingResult).toEqual({
+        success: false,
+        error: 'Scheduled task "does-not-exist" not found',
+      });
+
+      // Finish the background turn and confirm run history completes cleanly.
+      const completed = new Promise<void>(resolve => {
+        scheduler.on('runUpdate', (evt: { run: { status: TaskStatus } }) => {
+          if (evt.run.status === TaskStatus.Success) resolve();
+        });
+      });
+      resolveTurn({ sessionId: 'cw-long-1', summary: 'Report ready' });
+      await completed;
+
+      expect(scheduler.listRuns(task.id)[0]).toMatchObject({
+        sessionId: 'cw-long-1',
+        status: TaskStatus.Success,
+        summary: 'Report ready',
+      });
+      expect(runUpdates.map(u => u.status)).toEqual([TaskStatus.Running, TaskStatus.Success]);
+    } finally {
+      scheduler.stop();
+      db.close();
+    }
   });
 });

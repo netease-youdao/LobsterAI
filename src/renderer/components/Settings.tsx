@@ -7,6 +7,7 @@ import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
+  BrowserDisplayMode,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
   normalizeBrowserWebAccessConfig,
@@ -3499,11 +3500,13 @@ const Settings: React.FC<SettingsProps> = ({
       const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig({
         ...browserWebAccess,
         browserEnabled: true,
+        displayMode: BrowserDisplayMode.InApp,
         profileMode: defaultBrowserWebAccessConfig.profileMode,
         followGlobalProxy: defaultBrowserWebAccessConfig.followGlobalProxy,
         snapshotMode: defaultBrowserWebAccessConfig.snapshotMode,
         executablePath: undefined,
         cdpUrl: undefined,
+        headless: undefined,
         attachOnly: undefined,
         remoteCdpTimeoutMs: undefined,
         remoteCdpHandshakeTimeoutMs: undefined,

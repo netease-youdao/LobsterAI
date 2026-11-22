@@ -73,7 +73,10 @@ export function apply(ctx) {
       ];
       const webSearchGuidance = buildWebSearchRoutingGuidance(roots, state.skillsPolicy, allowedSkillIds);
       const install = 'For requests to install a local or attached skill into My Skills, use lobster_skill_install. Its inspect action reports this instance’s actual skill root and install performs desktop security review and registration.';
-      return [persona, memoryPolicy, webSearchGuidance, install].filter(Boolean).join('\n\n');
+      const officeGuidance = bound && typeof bound.officeAgentPrompt === 'string' && bound.officeAgentPrompt.trim().length > 0
+        ? bound.officeAgentPrompt.trim()
+        : 'When editing an existing `.docx`, `.xlsx`, or `.pptx` file, prefer LobsterAI\'s live in-place editor tools (`word_read`/`word_edit`, `excel_read`/`excel_edit`, `ppt_read`/`ppt_edit`; enable `word`/`excel`/`ppt` via `lobster_enable_tools` first if not yet visible) instead of rewriting the file with scripts.';
+      return [persona, memoryPolicy, webSearchGuidance, install, officeGuidance].filter(Boolean).join('\n\n');
     },
   });
 

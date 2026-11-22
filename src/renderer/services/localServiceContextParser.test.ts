@@ -333,4 +333,174 @@ describe('parseLocalServiceArtifactsFromMessages', () => {
 
     expect(artifacts[0].localService?.projectDirectory).toBe('D:\\work\\my app');
   });
+
+  test('extracts projectDir, port, and isServiceStart from pwsh tool calls with workdir', () => {
+    const artifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-1', 'user', '启动前端服务'),
+      makeMessage('pwsh-start', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolUseId: 'pwsh-1',
+        toolInput: {
+          description: 'Start Vite dev server',
+          workdir: 'C:\\Users\\dev\\projects\\demo-app',
+          command: 'npm run dev -- --port 5173',
+          run_in_background: true,
+        },
+      }),
+      makeMessage('pwsh-diag', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolUseId: 'pwsh-2',
+        toolInput: {
+          description: 'Check server health',
+          workdir: 'C:\\Users\\dev\\projects',
+          command: 'Invoke-WebRequest http://localhost:5173',
+        },
+      }),
+      makeMessage('assistant-1', 'assistant', '本地预览：http://localhost:5173'),
+    ], 'session-1', {
+      workingDirectory: 'C:\\Users\\dev\\projects',
+    });
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].localService?.projectDirectory).toBe('C:\\Users\\dev\\projects\\demo-app');
+    expect(artifacts[0].localService?.projectCandidates?.[0]).toEqual(expect.objectContaining({
+      source: ShareDeploymentCandidateSource.ToolWorkingDirectory,
+      messageId: 'pwsh-start',
+    }));
+  });
+
+  test('supports pwsh Set-Location, sl, Push-Location, and cd patterns', () => {
+    const setLocationArtifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-1', 'user', '启动 Set-Location 服务'),
+      makeMessage('pwsh-set-loc', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start app via Set-Location',
+          command: 'Set-Location -Path "D:\\work\\my app"; npm run dev -- --port 3001',
+        },
+      }),
+      makeMessage('assistant-1', 'assistant', '运行于 http://localhost:3001'),
+    ], 'session-1');
+
+    const slArtifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-2', 'user', '启动 sl 服务'),
+      makeMessage('pwsh-sl', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start static server via sl',
+          workdir: 'D:\\work',
+          command: 'sl .\\static-site; python -m http.server 8000',
+        },
+      }),
+      makeMessage('assistant-2', 'assistant', '运行于 http://localhost:8000'),
+    ], 'session-1');
+
+    const pushLocationArtifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-3', 'user', '启动 Push-Location 服务'),
+      makeMessage('pwsh-push', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start app via Push-Location',
+          command: "Push-Location -LiteralPath 'D:\\work\\pushed app'; npm run start",
+        },
+      }),
+      makeMessage('assistant-3', 'assistant', '运行于 http://localhost:4100'),
+    ], 'session-1');
+
+    const cdArtifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-4', 'user', '启动 cd 服务'),
+      makeMessage('pwsh-cd', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start app via cd',
+          command: 'cd "D:\\work\\cd app" && npm run dev',
+        },
+      }),
+      makeMessage('assistant-4', 'assistant', '运行于 http://localhost:4200'),
+    ], 'session-1');
+
+    expect(setLocationArtifacts[0].localService?.projectDirectory).toBe('D:\\work\\my app');
+    expect(setLocationArtifacts[0].localService?.projectCandidates?.[0].source).toBe(
+      ShareDeploymentCandidateSource.ToolCdCommand,
+    );
+    expect(slArtifacts[0].localService?.projectDirectory).toBe('D:/work/static-site');
+    expect(pushLocationArtifacts[0].localService?.projectDirectory).toBe('D:\\work\\pushed app');
+    expect(cdArtifacts[0].localService?.projectDirectory).toBe('D:\\work\\cd app');
+  });
+
+  test('disambiguates multiple pwsh services by --port, $env:PORT, and python -m http.server port', () => {
+    const artifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-1', 'user', '启动多个服务'),
+      makeMessage('pwsh-vite', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start Vite frontend',
+          workdir: 'C:\\work\\frontend',
+          command: 'npm run dev -- --port 3000',
+        },
+      }),
+      makeMessage('pwsh-python', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start Python static server',
+          command: 'Set-Location "C:\\work\\docs site"; python -m http.server 8000',
+        },
+      }),
+      makeMessage('pwsh-env-port', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Start Node API',
+          workdir: 'C:\\work\\api-server',
+          command: '$env:PORT=4000; npm run start',
+        },
+      }),
+      makeMessage('pwsh-check', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolInput: {
+          description: 'Check ports',
+          workdir: 'C:\\work',
+          command: 'Get-NetTCPConnection -LocalPort 3000',
+        },
+      }),
+      makeMessage(
+        'assistant-1',
+        'assistant',
+        '前端：http://localhost:3000\n文档：http://localhost:8000\nAPI：http://localhost:4000',
+      ),
+    ], 'session-1');
+
+    const byPort = new Map(artifacts.map(artifact => [new URL(artifact.url || '').port, artifact]));
+    expect(byPort.get('3000')?.localService?.projectDirectory).toBe('C:\\work\\frontend');
+    expect(byPort.get('8000')?.localService?.projectDirectory).toBe('C:\\work\\docs site');
+    expect(byPort.get('4000')?.localService?.projectDirectory).toBe('C:\\work\\api-server');
+  });
+
+  test('pairs pwsh Get-Location table output as explicit working directory evidence', () => {
+    const artifacts = parseLocalServiceArtifactsFromMessages([
+      makeMessage('user-1', 'user', '查看目录并预览'),
+      makeMessage('pwsh-gl', 'tool_use', '', {
+        toolName: 'pwsh',
+        toolUseId: 'gl-1',
+        toolInput: {
+          description: 'Print current directory',
+          command: 'Set-Location "C:\\work\\my-site"; Get-Location',
+        },
+      }),
+      makeMessage(
+        'pwsh-gl-result',
+        'tool_result',
+        '\nPath\n----\nC:\\work\\my-site\n\n',
+        { toolUseId: 'gl-1' },
+      ),
+      makeMessage('browser-1', 'tool_use', '', {
+        toolName: 'browser',
+        toolInput: { action: 'navigate', url: 'http://localhost:8080' },
+      }),
+    ], 'session-1');
+
+    expect(artifacts[0].localService?.projectDirectory).toBe('C:\\work\\my-site');
+    expect(artifacts[0].localService?.projectCandidates?.[0].source).toBe(
+      ShareDeploymentCandidateSource.ToolPwdResult,
+    );
+  });
 });
