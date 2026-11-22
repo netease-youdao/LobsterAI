@@ -442,6 +442,7 @@ import {
 } from './libs/dsh/dshBootstrap';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
+import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
 import { createDshSkillInstallProvider } from './libs/dsh/dshSkillInstallTool';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
@@ -2289,10 +2290,11 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.createSession(title, cwd, systemPrompt, executionMode, activeSkillIds, agentId),
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
-      resolveModelSelection: async (sessionId, override) => {
+      resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {
         const session = storeInstance.getSession(sessionId, 0);
+        const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
         const sessionModel = session?.modelOverride;
-        const agentModel = session?.agentId ? storeInstance.getAgent(session.agentId)?.model : undefined;
+        const agentModel = agent?.model;
         const ref = override?.trim() || sessionModel?.trim() || agentModel?.trim() || resolveDefaultAgentModelRef();
         const normalized = normalizeOpenClawModelRef(ref);
         const parsed = parsePrimaryModelRef(normalized);
@@ -2317,14 +2319,31 @@ const getDshBootstrap = (): DshBootstrap => {
             try {
               const resolvedModelId = await resolveVirtualModelPresetForSession(sessionId, presetId);
               if (resolvedModelId) {
-                return { provider: OpenClawProviderId.LobsteraiServer, model: resolvedModelId };
+                selection = { provider: OpenClawProviderId.LobsteraiServer, model: resolvedModelId };
               }
             } catch (error) {
               console.warn(`[DSH] Failed to resolve virtual model preset "${selection.model}" for session ${sessionId}:`, error);
             }
           }
         }
-        return selection;
+
+        const normalizedAgentRef = agentModel?.trim() ? normalizeOpenClawModelRef(agentModel.trim()) : '';
+        const inheritAgentThinkingLevel = !override?.trim()
+          && (!sessionModel?.trim() || !normalizedAgentRef || normalized === normalizedAgentRef);
+        const reasoningEffort = resolveEffectiveDshReasoningEffort({
+          providerId: selection.provider,
+          modelMetadata: selection.provider === OpenClawProviderId.LobsteraiServer
+            ? getServerModelMetadata(selection.model)
+            : undefined,
+          overrideThinkingLevel: thinkingLevelOverride,
+          sessionThinkingLevel: session?.thinkingLevel,
+          agentThinkingLevel: agent?.thinkingLevel,
+          inheritAgentThinkingLevel,
+        });
+        return {
+          ...selection,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        };
       },
       resolveAllowedSkillIds: (_sessionId, agentId, optionSkillIds) => {
         if (optionSkillIds && optionSkillIds.length > 0) return optionSkillIds;
@@ -2701,11 +2720,16 @@ const syncOpenClawConfig = async (options: {
         models: serverModels.map(m => ({
           id: m.modelId,
           name: m.modelName,
+          provider: m.provider,
+          apiFormat: m.apiFormat,
           supportsImage: m.supportsImage,
           supportsThinking: m.supportsThinking,
           reasoning: Boolean(m.supportsThinking),
           contextWindow: m.contextWindow,
           maxTokens: m.maxTokens,
+          runtimeProfile: m.runtimeProfile,
+          thinkingConfig: m.thinkingConfig,
+          requestCapabilities: m.requestCapabilities,
         })),
       };
     }
@@ -2799,10 +2823,17 @@ const syncOpenClawConfig = async (options: {
         ) {
           return null;
         }
+        const reasoningEffort = resolveEffectiveDshReasoningEffort({
+          providerId: parsed.providerId,
+          modelMetadata: parsed.providerId === OpenClawProviderId.LobsteraiServer
+            ? getServerModelMetadata(parsed.modelId)
+            : undefined,
+          agentThinkingLevel: agent.thinkingLevel,
+        });
         return {
           provider: parsed.providerId,
           model: parsed.modelId,
-          ...(agent.thinkingLevel ? { reasoningEffort: agent.thinkingLevel } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
         };
       },
     });

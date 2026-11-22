@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 
 import http from 'http';
-import { beforeEach, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { AuthRefreshOutcome } from '../../shared/auth/constants';
 import { DSH_INSTANCE_HEADER } from '../../shared/dshEngine/analytics';
@@ -1211,4 +1211,51 @@ test('the running proxy logs where a new turn breaks the cached prompt prefix', 
     logSpy.mockRestore();
     debugSpy.mockRestore();
   }
+});
+
+describe('scoped lobsterai-server proxy path rewriting', () => {
+  test('avoids doubling /v1 when Anthropic SDK requests /v1/messages under a scoped provider route', () => {
+    expect(testUtils.normalizeScopedLobsterPlanPath('/chat/completions')).toBe('/v1/chat/completions');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/v1/messages')).toBe('/v1/messages');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/v1/messages?beta=true')).toBe('/v1/messages?beta=true');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/messages')).toBe('/v1/messages');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/v1')).toBe('/v1');
+    expect(testUtils.normalizeScopedLobsterPlanPath('/')).toBe('/v1/');
+  });
+
+  test('forwards /v1/lobsterai-server/v1/messages to /api/proxy/v1/messages and chat/completions to /api/proxy/v1/chat/completions', async () => {
+    vi.mocked(net.fetch).mockReset();
+    vi.mocked(net.fetch)
+      .mockResolvedValueOnce(new Response('{"id":"msg_1"}', { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response('{"id":"chat_1"}', { headers: { 'content-type': 'application/json' } }));
+
+    const { port } = await startOpenClawTokenProxy({
+      getAuthTokens: () => ({ accessToken: 'plan-token', refreshToken: 'refresh' }),
+      refreshToken: vi.fn(),
+      getServerBaseUrl: () => 'https://server.example',
+      getClientVersion: () => 'test',
+      getInboundAuthToken: () => 'proxy-secret',
+    });
+
+    try {
+      const anthropicRes = await fetch(`http://127.0.0.1:${port}/v1/lobsterai-server/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'x-api-key': 'proxy-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-5-5-hc-YoudaoInner', messages: [] }),
+      });
+      expect(anthropicRes.status).toBe(200);
+
+      const openaiRes = await fetch(`http://127.0.0.1:${port}/v1/lobsterai-server/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer proxy-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'glm-5.3-flash-YoudaoInner', messages: [] }),
+      });
+      expect(openaiRes.status).toBe(200);
+
+      expect(vi.mocked(net.fetch).mock.calls[0]?.[0]).toBe('https://server.example/api/proxy/v1/messages?beta=true');
+      expect(vi.mocked(net.fetch).mock.calls[1]?.[0]).toBe('https://server.example/api/proxy/v1/chat/completions');
+    } finally {
+      stopOpenClawTokenProxy();
+    }
+  });
 });

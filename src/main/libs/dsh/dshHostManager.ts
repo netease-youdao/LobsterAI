@@ -33,6 +33,12 @@ import {
   DshSearchPolicy,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import type { LOBSTERAI_REQUEST_OPTIONS_VERSION } from '../../../shared/providers/lobsterAIRequestOptions';
+import type { ModelRuntimeProfile } from '../../../shared/providers/modelRuntimeProfiles';
+import type {
+  ModelThinkingConfig,
+  ModelThinkingLevel,
+} from '../../../shared/providers/modelThinking';
 import { DSH_NODE_EXEC_ARGV } from '../dshRuntime';
 import {
   ensureAppOwnedProfile,
@@ -44,13 +50,18 @@ import { DshTypertClient } from './dshTypertClient';
 export interface DshHostProviderModelSpec {
   id: string;
   name?: string;
-  api?: string;
+  api?: DshHostProviderSpec['api'];
   baseURL?: string;
   contextWindow?: number;
   maxTokens?: number;
+  defaultMaxTokens?: number;
   input?: Array<'text' | 'image'>;
   supportsImage?: boolean;
   reasoning?: boolean;
+  thinkingLevelMap?: Partial<Record<ModelThinkingLevel, string | null>>;
+  runtimeProfile?: ModelRuntimeProfile;
+  thinkingConfig?: ModelThinkingConfig;
+  requestOptionsVersion?: typeof LOBSTERAI_REQUEST_OPTIONS_VERSION;
   compat?: Record<string, unknown>;
 }
 

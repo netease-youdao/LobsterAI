@@ -10,6 +10,7 @@
  * - `llm/stream`: resolves virtual model aliases & compatibility adjustments
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import {
   LlmError,
@@ -18,7 +19,12 @@ import {
 } from '@deepseek-ai/dsh-llm';
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai';
 import { DEFAULT_LOBSTER_RETRY_POLICY, guardEmptyStopStream } from './empty-stop-guard.mjs';
-import { resolveModelCompat } from './model-bridge-helpers.mjs';
+import {
+  dispatchProviderStream,
+  resolveDefaultRequestMaxTokens,
+  resolveModelCompat,
+  resolveModelThinkingLevelMap,
+} from './model-bridge-helpers.mjs';
 import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
 export const name = 'lobster-model-bridge';
@@ -85,8 +91,9 @@ function buildTraceParent(preferredTraceId) {
   return `00-${traceId}-${spanId}-01`;
 }
 
-function createProviderObject(spec, protocolFactory) {
-  const apiImpl = protocolFactory();
+function createProviderObject(spec, protocols, modelRuntimeMeta, getRequestContext) {
+  /** @type {Map<string, { stream: Function; streamSimple: Function }>} */
+  const apiImplCache = new Map();
   return {
     id: spec.provider,
     name: spec.displayName,
@@ -101,8 +108,28 @@ function createProviderObject(spec, protocolFactory) {
       },
     },
     getModels: () => spec.models,
-    stream: (model, context, options) => apiImpl.stream(model, context, options),
-    streamSimple: (model, context, options) => apiImpl.streamSimple(model, context, options),
+    stream: (model, context, options) => dispatchProviderStream({
+      method: 'stream',
+      spec,
+      protocols,
+      apiImplCache,
+      model,
+      context,
+      options,
+      modelRuntimeMeta,
+      requestContext: getRequestContext(),
+    }),
+    streamSimple: (model, context, options) => dispatchProviderStream({
+      method: 'streamSimple',
+      spec,
+      protocols,
+      apiImplCache,
+      model,
+      context,
+      options,
+      modelRuntimeMeta,
+      requestContext: getRequestContext(),
+    }),
   };
 }
 
@@ -110,7 +137,7 @@ function createProviderObject(spec, protocolFactory) {
  * Normalize one incoming LobsterAI provider definition into the exact
  * resolved profile shape consumed by `PiAiAdapter`.
  */
-function buildResolvedProfile(entry, protocols) {
+function buildResolvedProfile(entry, protocols, getRequestContext) {
   const provider = String(entry.id || '').trim();
   if (!provider) {
     throw new Error('lobster-model-bridge: provider id must be non-empty');
@@ -120,8 +147,7 @@ function buildResolvedProfile(entry, protocols) {
   const baseURL = typeof entry.baseURL === 'string' && entry.baseURL.trim().length > 0
     ? entry.baseURL.trim().replace(/\/+$/, '')
     : undefined;
-  const protocolFactory = protocols[api];
-  if (!protocolFactory) {
+  if (!protocols[api]) {
     throw new Error(`lobster-model-bridge: unsupported protocol "${api}" for provider "${provider}"`);
   }
 
@@ -133,6 +159,7 @@ function buildResolvedProfile(entry, protocols) {
     : DEFAULT_MAX_TOKENS;
 
   const configuredMaxTokens = new Map();
+  const modelRuntimeMeta = new Map();
   const rawModels = Array.isArray(entry.models) ? entry.models : [];
   const models = [];
   for (const rawModel of rawModels) {
@@ -140,6 +167,9 @@ function buildResolvedProfile(entry, protocols) {
     const modelId = String(rawModel.id || '').trim();
     if (!modelId) continue;
     const modelApi = rawModel.api ? normalizeProtocol(rawModel.api) : api;
+    if (!protocols[modelApi]) {
+      throw new Error(`lobster-model-bridge: unsupported protocol "${modelApi}" for model "${provider}/${modelId}"`);
+    }
     const modelBaseUrl = typeof rawModel.baseURL === 'string' && rawModel.baseURL.trim().length > 0
       ? rawModel.baseURL.trim().replace(/\/+$/, '')
       : baseURL;
@@ -151,8 +181,13 @@ function buildResolvedProfile(entry, protocols) {
     const maxTokens = Number.isInteger(rawModel.maxTokens) && rawModel.maxTokens > 0
       ? rawModel.maxTokens
       : defaultMaxTokens;
-    if (Number.isInteger(rawModel.maxTokens) && rawModel.maxTokens > 0) {
-      configuredMaxTokens.set(modelId, rawModel.maxTokens);
+    const defaultRequestMaxTokens = resolveDefaultRequestMaxTokens(
+      rawModel.defaultMaxTokens,
+      rawModel.maxTokens,
+      contextWindow,
+    );
+    if (defaultRequestMaxTokens !== undefined) {
+      configuredMaxTokens.set(modelId, defaultRequestMaxTokens);
     }
 
     const input = Array.isArray(rawModel.input) && rawModel.input.length > 0
@@ -160,18 +195,23 @@ function buildResolvedProfile(entry, protocols) {
       : (rawModel.supportsImage ? ['text', 'image'] : ['text']);
     const reasoning = Boolean(rawModel.reasoning || rawModel.supportsThinking);
 
-    const compat = resolveModelCompat(modelApi, modelBaseUrl, entry.compat, rawModel.compat);
+    const compat = resolveModelCompat(modelApi, modelBaseUrl, entry.compat, rawModel.compat, api);
+    const thinkingLevelMap = resolveModelThinkingLevelMap(rawModel, reasoning);
 
-    const thinkingLevelMap = reasoning
-      ? {
-          minimal: 'minimal',
-          low: 'low',
-          medium: 'medium',
-          high: 'high',
-          xhigh: 'xhigh',
-          max: 'max',
-        }
+    const runtimeProfile = typeof rawModel.runtimeProfile === 'string' && rawModel.runtimeProfile.trim().length > 0
+      ? rawModel.runtimeProfile.trim()
       : undefined;
+    const thinkingConfig = rawModel.thinkingConfig && typeof rawModel.thinkingConfig === 'object'
+      ? rawModel.thinkingConfig
+      : undefined;
+    const requestOptionsVersion = rawModel.requestOptionsVersion === 1 ? 1 : undefined;
+    if (runtimeProfile || thinkingConfig || requestOptionsVersion !== undefined) {
+      modelRuntimeMeta.set(modelId, {
+        ...(runtimeProfile ? { runtimeProfile } : {}),
+        ...(thinkingConfig ? { thinkingConfig } : {}),
+        ...(requestOptionsVersion !== undefined ? { requestOptionsVersion } : {}),
+      });
+    }
 
     models.push({
       id: modelId,
@@ -198,8 +238,10 @@ function buildResolvedProfile(entry, protocols) {
     : undefined;
 
   const piProvider = createProviderObject(
-    { provider, displayName, baseURL, models },
-    protocolFactory,
+    { provider, displayName, api, baseURL, models },
+    protocols,
+    modelRuntimeMeta,
+    getRequestContext,
   );
 
   const maxRequestImages = Number.isInteger(entry.maxRequestImages) && entry.maxRequestImages > 0
@@ -234,8 +276,27 @@ function buildResolvedProfile(entry, protocols) {
   };
 }
 
+async function* runIterableInRequestContext(requestContextStorage, reqCtx, createIterable) {
+  const iterable = requestContextStorage.run(reqCtx, createIterable);
+  const iterator = iterable[Symbol.asyncIterator]();
+  try {
+    while (true) {
+      const step = await requestContextStorage.run(reqCtx, () => iterator.next());
+      if (step.done) return step.value;
+      yield step.value;
+    }
+  } finally {
+    if (typeof iterator.return === 'function') {
+      await requestContextStorage.run(reqCtx, () => iterator.return()).catch(() => undefined);
+    }
+  }
+}
+
 export function apply(ctx) {
   const state = getHostState(ctx);
+  /** @type {AsyncLocalStorage<{ provider?: string; model?: string; reasoningEffort?: string; purpose?: string; sessionId?: string }>} */
+  const requestContextStorage = new AsyncLocalStorage();
+  const getRequestContext = () => requestContextStorage.getStore();
   /** @type {Map<string, ReturnType<typeof buildResolvedProfile>>} */
   let currentProfiles = new Map();
   /** @type {Map<string, string>} */
@@ -297,6 +358,39 @@ export function apply(ctx) {
     },
   });
 
+  // Preserve the raw DSH `GenerateOptions.reasoningEffort` (including `'off'` vs
+  // `undefined`) across `PiAiAdapter` into the provider stream wrapper so
+  // `lobsterai_options.thinking.level` reflects explicit `'off'` choices accurately.
+  const rawAdapterStream = adapter.stream.bind(adapter);
+  adapter.stream = (options) => {
+    const reqCtx = {
+      provider: options?.provider,
+      model: options?.model,
+      reasoningEffort: options?.reasoningEffort,
+      purpose: options?.purpose,
+      sessionId: options?.sessionId,
+    };
+    return runIterableInRequestContext(requestContextStorage, reqCtx, () => rawAdapterStream(options));
+  };
+
+  const rawAdapterPrepareCall = adapter.prepareCall.bind(adapter);
+  adapter.prepareCall = async (provider, model, signal) => {
+    const prepared = await rawAdapterPrepareCall(provider, model, signal);
+    return {
+      ...prepared,
+      stream: (options) => {
+        const reqCtx = {
+          provider: options?.provider ?? provider,
+          model: options?.model ?? model,
+          reasoningEffort: options?.reasoningEffort,
+          purpose: options?.purpose,
+          sessionId: options?.sessionId,
+        };
+        return runIterableInRequestContext(requestContextStorage, reqCtx, () => prepared.stream(options));
+      },
+    };
+  };
+
   // Inject LobsterAI observability, turn credit traceparent & instance correlation headers on every LLM call.
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
     if (state.instanceId) {
@@ -349,7 +443,7 @@ export function apply(ctx) {
         skippedConflicts.push(id);
         continue;
       }
-      const resolved = buildResolvedProfile(entry, protocols);
+      const resolved = buildResolvedProfile(entry, protocols, getRequestContext);
       nextProfiles.set(id, resolved);
       if (typeof entry.apiKey === 'string' && entry.apiKey.length > 0) {
         nextKeys.set(id, entry.apiKey);
