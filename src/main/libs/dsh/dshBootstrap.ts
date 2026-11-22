@@ -159,6 +159,45 @@ export interface DshBootstrapOptions {
   bootTimeoutMs?: number;
 }
 
+export interface SingleFlightAsyncTracker<T> {
+  getInFlight(): Promise<T> | null;
+  run(factory: () => Promise<T>, options?: { force?: boolean }): Promise<T>;
+}
+
+/**
+ * Tracks a single in-flight async operation (such as main-process DSH engine
+ * bootstrap/retry), clearing the tracked reference as soon as the exact
+ * derived `.finally()` promise settles (fulfilled or rejected).
+ *
+ * Passing `force: true` bypasses any prior in-flight promise and replaces it
+ * with the newer attempt so concurrent waiters join the retry and an earlier
+ * attempt settling later never clears the newer reference.
+ */
+export function createSingleFlightAsyncTracker<T>(): SingleFlightAsyncTracker<T> {
+  let activePromise: Promise<T> | null = null;
+  return {
+    getInFlight: () => activePromise,
+    run(factory: () => Promise<T>, options?: { force?: boolean }): Promise<T> {
+      if (!options?.force && activePromise) {
+        return activePromise;
+      }
+      let inner: Promise<T>;
+      try {
+        inner = factory();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const pending = inner.finally(() => {
+        if (activePromise === pending) {
+          activePromise = null;
+        }
+      });
+      activePromise = pending;
+      return pending;
+    },
+  };
+}
+
 /**
  * Run the pure-offline 6-step OpenClaw -> DSH v2 migrator before SQLite is
  * opened by the app store, ensuring clean snapshot, archival, and rollback.

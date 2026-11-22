@@ -44,7 +44,11 @@ vi.mock('../../migration/legacyOpenClawMigrator', async () => {
 
 import { DshHostPhase } from '../../../shared/dshEngine/hostConstants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
-import { DshBootstrap, type DshCompatEngineStatus } from './dshBootstrap';
+import {
+  createSingleFlightAsyncTracker,
+  DshBootstrap,
+  type DshCompatEngineStatus,
+} from './dshBootstrap';
 
 const tempDirs: string[] = [];
 
@@ -277,5 +281,59 @@ describe('DshBootstrap startup deduplication and initial config sync gate', () =
       await bootstrap.stop();
       db.close();
     }
+  });
+});
+
+describe('createSingleFlightAsyncTracker', () => {
+  test('clears tracked promise after rejection so retry and subsequent admission succeed', async () => {
+    const tracker = createSingleFlightAsyncTracker<string>();
+    const firstGate = deferred<string>();
+    const firstFactory = vi.fn(() => firstGate.promise);
+
+    const p1 = tracker.run(firstFactory);
+    const p2 = tracker.run(vi.fn(async () => 'should-not-run'));
+    expect(p2).toBe(p1);
+    expect(tracker.getInFlight()).toBe(p1);
+    expect(firstFactory).toHaveBeenCalledTimes(1);
+
+    firstGate.reject(new Error('DSH runtime binary not found'));
+    await expect(p1).rejects.toThrow('DSH runtime binary not found');
+    // Allow .finally() cleanup microtask to settle.
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBeNull();
+
+    // Subsequent retry succeeds and also clears once settled so future callers re-check live readiness.
+    const retryResult = await tracker.run(async () => 'running', { force: true });
+    expect(retryResult).toBe('running');
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBeNull();
+
+    const nextResult = await tracker.run(async () => 'rechecked');
+    expect(nextResult).toBe('rechecked');
+  });
+
+  test('force: true replaces in-flight attempt so waiters join retry and older settlement cannot clobber it', async () => {
+    const tracker = createSingleFlightAsyncTracker<string>();
+    const staleGate = deferred<string>();
+    const retryGate = deferred<string>();
+
+    const stale = tracker.run(() => staleGate.promise);
+    const retry = tracker.run(() => retryGate.promise, { force: true });
+
+    expect(retry).not.toBe(stale);
+    expect(tracker.getInFlight()).toBe(retry);
+    // Concurrent waiter joins the active forced retry instead of launching a third attempt.
+    expect(tracker.run(vi.fn(async () => 'unexpected'))).toBe(retry);
+
+    // When the superseded attempt fails later, it must NOT clear the active retry reference.
+    staleGate.reject(new Error('stale failure'));
+    await expect(stale).rejects.toThrow('stale failure');
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBe(retry);
+
+    retryGate.resolve('recovered');
+    await expect(retry).resolves.toBe('recovered');
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBeNull();
   });
 });

@@ -437,6 +437,7 @@ import {
 } from './libs/developmentProtocolContext';
 import { buildDshHostAgentSpecs } from './libs/dsh/dshAgentSync';
 import {
+  createSingleFlightAsyncTracker,
   DshBootstrap,
   type DshCompatEngineStatus,
   runPreBootLegacyOpenClawMigration,
@@ -2523,16 +2524,12 @@ const getEngineNotReadyResponse = (status: DshCompatEngineStatus) => {
   };
 };
 
-let activeBootstrapEnginePromise: Promise<DshCompatEngineStatus> | null = null;
+const bootstrapEngineFlight = createSingleFlightAsyncTracker<DshCompatEngineStatus>();
 
 const bootstrapOpenClawEngine = async (
   options: { forceReinstall?: boolean; reason?: string } = {},
-): Promise<DshCompatEngineStatus> => {
-  if (!options.forceReinstall && activeBootstrapEnginePromise) {
-    return activeBootstrapEnginePromise;
-  }
-
-  const run = (async (): Promise<DshCompatEngineStatus> => {
+): Promise<DshCompatEngineStatus> => bootstrapEngineFlight.run(
+  async (): Promise<DshCompatEngineStatus> => {
     const bootstrap = getDshBootstrap();
     try {
       ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
@@ -2548,19 +2545,9 @@ const bootstrapOpenClawEngine = async (
     return options.forceReinstall
       ? await bootstrap.restart({ syncInitialConfig })
       : await bootstrap.start({ syncInitialConfig });
-  })();
-
-  if (!options.forceReinstall) {
-    activeBootstrapEnginePromise = run.finally(() => {
-      if (activeBootstrapEnginePromise === run) {
-        activeBootstrapEnginePromise = null;
-      }
-    });
-    return activeBootstrapEnginePromise;
-  }
-
-  return run;
-};
+  },
+  { force: Boolean(options.forceReinstall) },
+);
 
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 let coworkTurnUsageService: CoworkTurnUsageService | null = null;
@@ -2580,8 +2567,9 @@ const ensureOpenClawRunningForCowork = async (
   _admission: CoworkEngineAdmission = {},
 ): Promise<DshCompatEngineStatus> => {
   await waitForPendingTokenRefresh();
-  if (activeBootstrapEnginePromise) {
-    return activeBootstrapEnginePromise;
+  const inFlightBootstrap = bootstrapEngineFlight.getInFlight();
+  if (inFlightBootstrap) {
+    return inFlightBootstrap;
   }
   const bootstrap = getDshBootstrap();
   if (bootstrap.isReadyForTurns()) {
