@@ -31,17 +31,31 @@ describe('parseProcessTable', () => {
 });
 
 describe('isDshWebCommand', () => {
+  const LAUNCHER_ENTRY = '/Users/me/Library/Application Support/LobsterAI/dsh-profile/dsh-launcher/launch.mjs';
+
   test('matches the spawned runtime, through bin.js, profile boot, or a generated launcher', () => {
     expect(isDshWebCommand(dshCommand(EXEC, INSTALLED_ENTRY, 57437), EXEC)).toBe(true);
     expect(isDshWebCommand(`${EXEC} --expose-internals ${INSTALLED_ENTRY} --profile lobsterai --no-open`, EXEC)).toBe(true);
     expect(isDshWebCommand(dshCommand(EXEC, '/Users/me/Library/Application Support/LobsterAI/dsh-launcher/launch.mjs', 1), EXEC)).toBe(true);
+    expect(
+      isDshWebCommand(
+        `${EXEC} --expose-internals ${LAUNCHER_ENTRY} --profile lobsterai --no-open --host 127.0.0.1 --port 0`,
+        EXEC,
+      ),
+    ).toBe(true);
   });
 
-  test('ignores another install, the main process, and other Node-mode children', () => {
+  test('ignores another install, the main process, plugin CLI runs, and other Node-mode children', () => {
     expect(isDshWebCommand(dshCommand(DEV_EXEC, INSTALLED_ENTRY, 57437), EXEC)).toBe(false);
     expect(isDshWebCommand(EXEC, EXEC)).toBe(false);
     expect(isDshWebCommand(`${EXEC} /runtime/openclaw.mjs gateway --port 18789`, EXEC)).toBe(false);
     expect(isDshWebCommand(`${EXEC} --expose-internals ${INSTALLED_ENTRY} plugin install foo`, EXEC)).toBe(false);
+    expect(
+      isDshWebCommand(`${EXEC} --expose-internals ${LAUNCHER_ENTRY} plugin --profile lobsterai add foo`, EXEC),
+    ).toBe(false);
+    expect(
+      isDshWebCommand(`${EXEC} --expose-internals ${LAUNCHER_ENTRY} plugin --profile lobsterai add --no-open`, EXEC),
+    ).toBe(false);
   });
 });
 

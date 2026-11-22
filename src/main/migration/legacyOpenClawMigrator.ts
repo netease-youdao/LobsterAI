@@ -58,6 +58,7 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
+import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
   collectDirectoryTarEntries,
@@ -1279,6 +1280,7 @@ export function runLegacyOpenClawMigration(
     fs.copyFileSync(sqlitePath, sqliteSnapshotPath);
     db = new Database(sqlitePath);
 
+    const createdSeededSessionDirs: string[] = [];
     try {
       const incompatibleEntries: TarEntryInput[] = [];
       const archivedModules: MigrationV2ArchivedItem[] = [];
@@ -1376,17 +1378,16 @@ export function runLegacyOpenClawMigration(
         }
       }
 
-      // Count historical sessions preserved for Lazy Context Bridge.
-      let sessionsPreservedForLazyBridge = 0;
-      if (tableExists(db, 'cowork_sessions')) {
-        const cols = getTableColumns(db, 'cowork_sessions');
-        const row = cols.has('claude_session_id')
-          ? (db
-              .prepare("SELECT COUNT(*) AS cnt FROM cowork_sessions WHERE claude_session_id IS NULL OR claude_session_id NOT LIKE 'dsh:%'")
-              .get() as { cnt: number })
-          : (db.prepare('SELECT COUNT(*) AS cnt FROM cowork_sessions').get() as { cnt: number });
-        sessionsPreservedForLazyBridge = row.cnt;
-      }
+      // Pre-seed historical OpenClaw sessions natively into DSH v4 JSONL-Zstd
+      // storage BEFORE initStore() and createWindow(); empty or unconvertible
+      // sessions remain safely preserved for Lazy Context Bridge fallback.
+      const sessionSeedResult = seedLegacySessionsToDsh({
+        db,
+        userDataDir,
+        nowMs: now().getTime(),
+      });
+      createdSeededSessionDirs.push(...sessionSeedResult.createdSessionDirs);
+      const { sessionsPreSeeded, sessionsPreservedForLazyBridge } = sessionSeedResult;
 
       // ── Step 3: Archive Incompatible & Retired Modules ───────────────────
       // 3a. Legacy OpenClaw `user_plugins` table
@@ -1531,6 +1532,7 @@ export function runLegacyOpenClawMigration(
           scheduledTasksMigrated,
           scheduledTaskRunsMigrated,
           imAllowListsMigrated,
+          sessionsPreSeeded,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
           disposableBytesFreed,
@@ -1584,6 +1586,13 @@ export function runLegacyOpenClawMigration(
         }
       } catch {
         // best-effort rollback
+      }
+      for (const seededDir of createdSeededSessionDirs) {
+        try {
+          fs.rmSync(seededDir, { recursive: true, force: true });
+        } catch {
+          // best-effort rollback of pre-seeded DSH session artifacts
+        }
       }
       return {
         status: MigrationV2Status.Failed,

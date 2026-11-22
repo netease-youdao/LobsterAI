@@ -6,26 +6,23 @@ import * as tar from 'tar';
  * Recovery for Windows installs where the NSIS installer stopped (killed by
  * the user, or its extractor child was frozen by security software) after the
  * main app files were extracted but before win-resources.tar was unpacked.
- * In that state the app launches, but resources/cfmind, python-win and SKILLs
- * are empty directories; the tar preserved next to them is the only local
- * source of the OpenClaw runtime. The installer only deletes the tar after a
- * successful extraction, so we can finish its job here.
+ * In that state the app launches, but resources/dsh-runtime, dsh-bundles,
+ * python-win and SKILLs are empty directories; the tar preserved next to them
+ * is the only local source of the DSH runtime. The installer only deletes the
+ * tar after a successful extraction, so we can finish its job here.
  */
 
 export const INSTALLER_RESOURCES_TAR = 'win-resources.tar';
 /** Written after a successful extraction, by the installer or by this module. */
 export const INSTALLER_RESOURCES_MARKER = '.win-resources-extracted';
 
-const GATEWAY_BUNDLE_ENTRY = path.join('cfmind', 'gateway-bundle.mjs');
-const GATEWAY_BUNDLE_REQUIRED_ASSETS = [path.join('cfmind', 'web-tree-sitter.wasm')];
-
-// Mirrors the fallback candidates of OpenClawEngineManager.resolveOpenClawEntry.
-// The optimized root bundle is only usable when its root-relative assets are
-// present; otherwise recovery must not treat a partial extraction as complete.
-const RUNTIME_FALLBACK_ENTRY_CANDIDATES = [
-  path.join('cfmind', 'openclaw.mjs'),
-  path.join('cfmind', 'dist', 'entry.js'),
-  path.join('cfmind', 'gateway.asar'),
+// Mirrors the required DSH runtime and host bundle entries validated during
+// packaging (scripts/electron-builder-hooks.cjs) and post-install extraction
+// (scripts/unpack-dsh-resources.cjs). Both markers must exist so recovery does
+// not treat a partial extraction as complete.
+const DSH_RUNTIME_REQUIRED_FILES = [
+  path.join('dsh-runtime', 'lib', 'bin.js'),
+  path.join('dsh-bundles', 'lobsterai-host', 'package.json'),
 ];
 
 const PROGRESS_LOG_STEP_BYTES = 50 * 1024 * 1024;
@@ -47,17 +44,11 @@ export interface InstallerResourceRecoveryResult {
   error?: string;
 }
 
-export const hasBundledRuntimeEntry = (resourcesDir: string): boolean => {
-  if (fs.existsSync(path.join(resourcesDir, GATEWAY_BUNDLE_ENTRY))) {
-    return GATEWAY_BUNDLE_REQUIRED_ASSETS.every((asset) =>
-      fs.existsSync(path.join(resourcesDir, asset)),
-    );
-  }
-
-  return RUNTIME_FALLBACK_ENTRY_CANDIDATES.some((candidate) =>
-    fs.existsSync(path.join(resourcesDir, candidate)),
-  );
-};
+export const hasBundledRuntimeEntry = (resourcesDir: string): boolean => (
+  DSH_RUNTIME_REQUIRED_FILES.every((relativePath) =>
+    fs.existsSync(path.join(resourcesDir, relativePath)),
+  )
+);
 
 const stringifyError = (error: unknown): string => {
   if (error instanceof Error) return error.message;
@@ -174,10 +165,10 @@ let inflightRecovery: Promise<InstallerResourceRecoveryResult> | null = null;
 
 /**
  * Extract win-resources.tar back into the resources directory if (and only
- * if) the OpenClaw runtime entry is missing. The tar is deleted only after
- * the runtime entry is confirmed present, so a failed attempt (e.g. security
- * software still holding files) can be retried later. Concurrent calls share
- * one extraction. Cheap no-op when the runtime is intact.
+ * if) the DSH runtime entry or host bundle manifest is missing. The tar is
+ * deleted only after the runtime entries are confirmed present, so a failed
+ * attempt (e.g. security software still holding files) can be retried later.
+ * Concurrent calls share one extraction. Cheap no-op when the runtime is intact.
  */
 export const recoverInstallerResourcesFromTar = (
   resourcesDir: string,

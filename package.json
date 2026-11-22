@@ -94,7 +94,6 @@
     "verify:sheet-licenses": "node scripts/sheet-third-party-notices.cjs"
   },
   "dependencies": {
-    "@larksuite/openclaw-lark-tools": "~1.0.26",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "better-sqlite3": "^13.0.3",
     "bufferutil": "^4.1.0",
