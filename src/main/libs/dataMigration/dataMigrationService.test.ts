@@ -284,6 +284,7 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   writeFile(path.join(userData, 'openclaw', 'logs', 'gateway-2026-06-10.log'), 'gateway log');
   writeFile(path.join(userData, 'openclaw', 'state', 'logs', 'commands.log'), 'commands log');
   writeFile(path.join(userData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'native');
+  writeFile(path.join(userData, 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'top-level-native');
   writeOpenClawStateFixture(userData, 'source');
   writeFile(path.join(userData, 'runtimes', 'node', 'node.exe'), 'runtime');
   writeFile(path.join(userData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
@@ -305,6 +306,7 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   expect(entries.some(entry => entry.includes('/Session Storage/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Shared Dictionary/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/openclaw/mcp-packages/'))).toBe(false);
+  expect(entries.some(entry => entry.startsWith('LobsterAI/mcp-packages/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/openclaw/logs/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/openclaw/state/logs/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/backups/'))).toBe(false);
@@ -696,6 +698,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(targetUserData, 'openclaw', 'logs', 'gateway-2026-06-10.log'), 'target-gateway-log');
   writeFile(path.join(targetUserData, 'openclaw', 'state', 'logs', 'commands.log'), 'target-commands-log');
   writeFile(path.join(targetUserData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'target-native.node'), 'target-native');
+  writeFile(path.join(targetUserData, 'mcp-packages', 'demo', 'node_modules', 'target-native.node'), 'target-top-level-native');
   writeFile(path.join(targetUserData, 'runtimes', 'python', 'python.exe'), 'target-runtime');
   writeFile(path.join(targetUserData, 'SingletonLock'), 'runtime-lock');
 
@@ -712,6 +715,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   writeFile(path.join(extractRoot, 'LobsterAI', 'Session Storage', 'leveldb', 'source.log'), 'legacy-source-session-storage');
   writeFile(path.join(extractRoot, 'LobsterAI', 'openclaw', 'logs', 'gateway-2026-06-10.log'), 'legacy-source-gateway-log');
   writeFile(path.join(extractRoot, 'LobsterAI', 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'legacy-source-native');
+  writeFile(path.join(extractRoot, 'LobsterAI', 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'source-top-level-native');
   writeFile(path.join(extractRoot, 'LobsterAI', 'openclaw', 'state', 'logs', 'commands.log'), 'legacy-source-commands-log');
   writeFile(path.join(extractRoot, 'LobsterAI', 'runtimes', 'python', 'python.exe'), 'legacy-source-runtime');
   tar.create({
@@ -736,6 +740,7 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   expect(rollbackEntries.some(entry => entry.includes('/Local Storage/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/Network/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/mcp-packages/'))).toBe(false);
+  expect(rollbackEntries.some(entry => entry.startsWith('LobsterAI/mcp-packages/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/logs/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/openclaw/state/logs/'))).toBe(false);
   expect(rollbackEntries.some(entry => entry.includes('/runtimes/'))).toBe(false);
@@ -772,6 +777,9 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
     .toBe('target-gateway-log');
   expect(fs.readFileSync(path.join(targetUserData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'target-native.node'), 'utf8'))
     .toBe('target-native');
+  expect(fs.readFileSync(path.join(targetUserData, 'mcp-packages', 'demo', 'node_modules', 'target-native.node'), 'utf8'))
+    .toBe('target-top-level-native');
+  expect(fs.existsSync(path.join(targetUserData, 'mcp-packages', 'demo', 'node_modules', 'native.node'))).toBe(false);
   expect(fs.readFileSync(path.join(targetUserData, 'openclaw', 'state', 'logs', 'commands.log'), 'utf8'))
     .toBe('target-commands-log');
   expect(fs.readFileSync(path.join(targetUserData, 'runtimes', 'python', 'python.exe'), 'utf8')).toBe('target-runtime');

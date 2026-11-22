@@ -9,6 +9,7 @@ import {
   type DataMigrationLastRestoreResult,
   DataMigrationRestoreStatus,
 } from '../../../shared/dataMigration/constants';
+import { MCP_PACKAGES_DIR_NAME } from '../../../shared/mcp/constants';
 import { APP_NAME, DB_FILENAME } from '../../appConstants';
 import { runLegacyOpenClawMigration } from '../../migration/legacyOpenClawMigrator';
 import { SQLITE_BACKUP_DIR_NAME } from '../sqliteBackup/constants';
@@ -110,6 +111,7 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
   SQLITE_BACKUP_TOP_LEVEL_DIR_NAME,
   'logs',
   'lockfile',
+  MCP_PACKAGES_DIR_NAME,
   'runtimes',
   'skill-migrate.log',
   'sqlite-backups',
@@ -144,6 +146,7 @@ const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   SQLITE_BACKUP_TOP_LEVEL_DIR_NAME,
   'logs',
   'lockfile',
+  MCP_PACKAGES_DIR_NAME,
   'runtimes',
   'skill-migrate.log',
   'sqlite-backups',

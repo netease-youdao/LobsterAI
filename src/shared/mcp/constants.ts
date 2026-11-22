@@ -18,6 +18,8 @@ export const McpIpcChannel = {
 } as const;
 export type McpIpcChannel = typeof McpIpcChannel[keyof typeof McpIpcChannel];
 
+export const MCP_PACKAGES_DIR_NAME = 'mcp-packages';
+
 /** Node.js env names that matter when launching stdio MCP servers. */
 export const McpNodeEnv = {
   // Dropped by OpenClaw's stdio env policy; the server form warns about it.

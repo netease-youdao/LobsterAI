@@ -3,6 +3,7 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import { MCP_PACKAGES_DIR_NAME } from '../../shared/mcp/constants';
 import {
   resolveNodePackageCliCommand,
   resolveNodeRuntimeForSpawn,
@@ -54,7 +55,7 @@ function log(level: 'INFO' | 'WARN' | 'ERROR', message: string, error?: unknown)
   }
 }
 
-export const MCP_PACKAGES_DIR_NAME = 'mcp-packages';
+export { MCP_PACKAGES_DIR_NAME };
 
 function sanitizeForPath(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'mcp';
