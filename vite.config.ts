@@ -121,9 +121,7 @@ export default defineConfig({
             rollupOptions: {
               external: (id) => {
                 const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate'];
-                if (staticExternals.includes(id)) return true;
-                if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
-                return false;
+                return staticExternals.includes(id);
               },
               output: {
                 // Keep CJS format (default), but load via ESM loader.mjs
@@ -257,7 +255,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
+    exclude: ['electron'],
     esbuildOptions: {
       target: rendererTarget,
       define: {

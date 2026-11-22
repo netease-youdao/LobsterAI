@@ -53,6 +53,7 @@ export interface MigrationV2Report {
     scheduledTasksMigrated: number;
     scheduledTaskRunsMigrated?: number;
     imAllowListsMigrated: number;
+    sessionsPreSeeded?: number;
     sessionsPreservedForLazyBridge: number;
     mcpLaunchCachesCleared: number;
     disposableBytesFreed: number;

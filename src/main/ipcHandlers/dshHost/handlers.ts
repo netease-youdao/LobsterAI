@@ -13,12 +13,18 @@ import {
   DshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
+import {
+  buildIsolatedDshBaseEnv,
+  type DshNodeToolchain,
+  prepareDshLaunchEntry,
+} from '../../libs/dsh/dshProfileManager';
 import { DSH_NODE_EXEC_ARGV } from '../../libs/dshRuntime';
 
 export interface DshHostIpcDeps {
   getHostManager: () => DshHostManager | null;
   getRuntimeDir: () => string;
   getExecutablePath: () => string;
+  getNodeToolchain?: () => DshNodeToolchain | null;
   openEcosystemWindow?: (authenticatedUrl: string, routeHash?: string) => Promise<void> | void;
   closeEcosystemWindow?: () => void;
   getPermissionPreset?: (sessionId?: string) => {
@@ -64,36 +70,51 @@ export function readInstalledProfilePlugins(profileDir: string): DshProfilePlugi
   }
 }
 
-function runDshPluginCommand(options: {
+export function runDshPluginCommand(options: {
   executablePath: string;
   runtimeDir: string;
   dshHomeDir: string;
   args: string[];
+  toolchain?: DshNodeToolchain | null;
+  baseEnv?: NodeJS.ProcessEnv;
+  skipElectronRunAsNode?: boolean;
 }): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
-    const binPath = path.join(options.runtimeDir, 'lib', 'bin.js');
-    const pmDir = path.join(options.runtimeDir, 'package-manager');
-    const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (/^dsh_/i.test(key)) continue;
-      if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
-      env[key] = value;
-    }
-    env.ELECTRON_RUN_AS_NODE = '1';
-    env.DSH_HOME = options.dshHomeDir;
-    env.DSH_AGENTS_HOME = path.join(options.dshHomeDir, 'agents-home');
-    env.DSH_TELEMETRY_DISABLED = '1';
-    env.npm_config_store_dir = path.join(options.dshHomeDir, 'cache', 'pnpm-store');
-    env.npm_config_cache = path.join(options.dshHomeDir, 'cache', 'npm-cache');
-    if (fs.existsSync(pmDir)) {
-      const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
-      env[pathKey] = env[pathKey] ? `${pmDir}${path.delimiter}${env[pathKey]}` : pmDir;
+    let env: NodeJS.ProcessEnv;
+    let entryPath: string;
+    try {
+      fs.mkdirSync(options.dshHomeDir, { recursive: true, mode: 0o700 });
+      env = buildIsolatedDshBaseEnv({
+        baseEnv: options.baseEnv,
+        dshHomeDir: options.dshHomeDir,
+        skipElectronRunAsNode: options.skipElectronRunAsNode,
+      });
+      ({ entryPath } = prepareDshLaunchEntry({
+        runtimeDir: options.runtimeDir,
+        dshHomeDir: options.dshHomeDir,
+        electronPath: options.executablePath,
+        toolchain: options.toolchain,
+        baseEnv: env,
+      }));
+    } catch (error) {
+      resolve({
+        ok: false,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+      });
+      return;
     }
 
     const child = spawn(
       options.executablePath,
-      [...DSH_NODE_EXEC_ARGV, binPath, 'plugin', '--profile', DSH_PROFILE_NAME, ...options.args],
-      { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
+      [...DSH_NODE_EXEC_ARGV, entryPath, 'plugin', '--profile', DSH_PROFILE_NAME, ...options.args],
+      {
+        cwd: options.dshHomeDir,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      },
     );
 
     let stdout = '';
@@ -185,6 +206,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       runtimeDir: deps.getRuntimeDir(),
       dshHomeDir: status.dshHomeDir,
       args: ['add', spec],
+      toolchain: deps.getNodeToolchain?.() ?? null,
     });
     if (res.ok) {
       await manager.restart().catch((): void => undefined);
@@ -208,6 +230,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       runtimeDir: deps.getRuntimeDir(),
       dshHomeDir: status.dshHomeDir,
       args: ['remove', name],
+      toolchain: deps.getNodeToolchain?.() ?? null,
     });
     if (res.ok) {
       await manager.restart().catch((): void => undefined);

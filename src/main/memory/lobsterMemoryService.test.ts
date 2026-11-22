@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   LobsterMemoryService,
+  MEMORY_FTS_DB_NAME,
   stripManagedAgentsSection,
   WorkspaceFileName,
 } from './lobsterMemoryService';
@@ -82,6 +83,36 @@ describe('LobsterMemoryService', () => {
     const service = createService();
     service.ensureAgentWorkspace('main');
     expect(() => service.readMemorySnippet('main', '../secret.txt')).toThrow(/outside agent workspace/i);
+  });
+
+  test('close() is idempotent, releases WAL handles cleanly, and lazily re-opens on later queries', () => {
+    const service = createService();
+    service.addMemory('main', 'Initial persisted memory before backup restore');
+    expect(service.search('main', 'Initial persisted')).toHaveLength(1);
+
+    const ftsPath = path.join(service.getWorkspacesDir(), MEMORY_FTS_DB_NAME);
+    expect(fs.existsSync(ftsPath)).toBe(true);
+
+    // Idempotent close releases SQLite + WAL handles cleanly.
+    service.close();
+    service.close();
+    expect(fs.existsSync(`${ftsPath}-wal`)).toBe(false);
+    expect(fs.existsSync(`${ftsPath}-shm`)).toBe(false);
+
+    // Simulate restore clearing workspacesDir and restoring new MEMORY.md without FTS DB.
+    fs.rmSync(service.getWorkspacesDir(), { recursive: true, force: true });
+    fs.mkdirSync(path.join(service.getWorkspacesDir(), 'main'), { recursive: true });
+    fs.writeFileSync(
+      path.join(service.getWorkspacesDir(), 'main', WorkspaceFileName.Memory),
+      '# User Memories\n\n- Restored memory after backup import\n',
+      'utf8',
+    );
+
+    // Subsequent search lazily re-opens the FTS DB and indexes the restored file.
+    expect(service.search('main', 'Initial persisted')).toHaveLength(0);
+    const restoredHits = service.search('main', 'Restored memory');
+    expect(restoredHits).toHaveLength(1);
+    expect(restoredHits[0].snippet).toContain('Restored memory after backup import');
   });
 });
 
