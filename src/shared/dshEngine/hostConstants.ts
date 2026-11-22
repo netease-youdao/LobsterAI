@@ -90,11 +90,13 @@ export const DshOpsAction = {
   SyncProviders: 'syncProviders',
   SyncMcpServers: 'syncMcpServers',
   SyncSkillsPolicy: 'syncSkillsPolicy',
+  SyncMemoryPolicy: 'syncMemoryPolicy',
   SyncAgents: 'syncAgents',
   SyncSubagentBindings: 'syncSubagentBindings',
   BindSessionContext: 'bindSessionContext',
   DeleteSessionFiles: 'deleteSessionFiles',
   SyncHostTools: 'syncHostTools',
+  SyncWebAccessPolicy: 'syncWebAccessPolicy',
   SetPermissionPreset: 'setPermissionPreset',
 } as const;
 export type DshOpsAction = typeof DshOpsAction[keyof typeof DshOpsAction];
@@ -126,6 +128,31 @@ export type DshPermissionPreset = typeof DshPermissionPreset[keyof typeof DshPer
 
 export const DEFAULT_DSH_PERMISSION_PRESET: DshPermissionPreset = DshPermissionPreset.WorkspaceWrite;
 export const DSH_PERMISSION_PRESET_KV_KEY = 'dsh.permissionPreset.default';
+
+export function parseDshPermissionPreset(value: unknown): DshPermissionPreset | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (
+    trimmed === DshPermissionPreset.ReadOnly
+    || trimmed === DshPermissionPreset.WorkspaceWrite
+    || trimmed === DshPermissionPreset.FullAccess
+  ) {
+    return trimmed;
+  }
+  return null;
+}
+
+export function mapLegacyExecutionModeToPermissionPreset(
+  executionMode: unknown,
+): DshPermissionPreset | null {
+  if (typeof executionMode !== 'string') return null;
+  const normalized = executionMode.trim().toLowerCase();
+  if (normalized === 'auto') return DshPermissionPreset.FullAccess;
+  if (normalized === 'local' || normalized === 'sandbox') {
+    return DshPermissionPreset.WorkspaceWrite;
+  }
+  return null;
+}
 
 export const DshApprovalPermissionAction = {
   AllowSession: 'allow-session',
@@ -160,6 +187,7 @@ export const DshHostIpc = {
   ListPlugins: 'dshHost:listPlugins',
   InstallPlugin: 'dshHost:installPlugin',
   RemovePlugin: 'dshHost:removePlugin',
+  SetPluginEnabled: 'dshHost:setPluginEnabled',
   OpenProfileDir: 'dshHost:openProfileDir',
   CopyCliShimCommand: 'dshHost:copyCliShimCommand',
   GetPermissionPreset: 'dshHost:getPermissionPreset',

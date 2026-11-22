@@ -9,100 +9,25 @@
  *    filtered by global `skills_state` policy and per-agent `allowedSkillIds`.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { isSkillName } from '@deepseek-ai/dsh-skill';
 import {
   assembleWorkspacePersona,
+  buildWebSearchRoutingGuidance,
   DEFAULT_AGENT_ID,
+  discoverLobsterSkills,
+  MEMORY_WRITE_POLICY_PROMPT,
   parseSkillFrontmatter,
   readTextCached,
 } from './persona-helpers.mjs';
-import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
+import {
+  getHostState,
+  resolveSessionContext,
+  resolveSessionId,
+  resolveSessionWorkspaceDir,
+} from './shared-state.mjs';
 
 export const name = 'lobster-persona-scope';
 export const inject = ['systemPrompt', 'skills'];
-
-const LOBSTERAI_SKILL_RANK = 260;
-
-function toKebabSkillName(raw) {
-  return String(raw || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function discoverLobsterSkills(rootDirs, policy, allowedSkillIds) {
-  const candidates = [];
-  const seen = new Set();
-
-  for (const rootDir of rootDirs) {
-    if (!rootDir || !existsSync(rootDir)) continue;
-    let entries;
-    try {
-      entries = readdirSync(rootDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      const skillDir = join(rootDir, entry.name);
-      const skillFile = join(skillDir, 'SKILL.md');
-      if (!existsSync(skillFile)) continue;
-
-      const rawId = entry.name;
-      const content = readTextCached(skillFile);
-      if (!content) continue;
-      const { meta } = parseSkillFrontmatter(content);
-      const skillName = toKebabSkillName(meta.name || rawId);
-      if (!isSkillName(skillName) || seen.has(skillName)) continue;
-
-      // Apply global LobsterAI skill toggle policy.
-      if (policy.disabledIds.has(rawId) || policy.disabledIds.has(skillName)) continue;
-      if (
-        policy.enabledIds !== null
-        && !policy.enabledIds.has(rawId)
-        && !policy.enabledIds.has(skillName)
-      ) {
-        continue;
-      }
-
-      // Apply per-agent skill allowlist when the session restricts skills.
-      if (
-        allowedSkillIds !== null
-        && !allowedSkillIds.has(rawId)
-        && !allowedSkillIds.has(skillName)
-      ) {
-        continue;
-      }
-
-      seen.add(skillName);
-      candidates.push({
-        name: skillName,
-        description: meta.description || `LobsterAI skill: ${skillName}`,
-        provider: 'lobsterai-skills',
-        source: skillFile,
-        rank: LOBSTERAI_SKILL_RANK,
-        invocation: {
-          modelInvocable: true,
-          userInvocable: true,
-        },
-        resourceBase: {
-          kind: 'directory',
-          path: skillDir,
-        },
-        locator: {
-          filePath: skillFile,
-          dirPath: skillDir,
-          skillName,
-          description: meta.description || `LobsterAI skill: ${skillName}`,
-        },
-      });
-    }
-  }
-  return candidates;
-}
 
 export function apply(ctx) {
   const state = getHostState(ctx);
@@ -122,9 +47,33 @@ export function apply(ctx) {
       const customSystemPrompt = bound && typeof bound.customSystemPrompt === 'string'
         ? bound.customSystemPrompt
         : '';
-      const persona = assembleWorkspacePersona(state.workspacesDir, agentId, customSystemPrompt);
+      const workspaceDir = resolveSessionWorkspaceDir(
+        ctx,
+        state,
+        sessionId,
+        bound,
+        assemblyCtx?.agent,
+      );
+      const memoryEnabled = typeof bound?.memoryEnabled === 'boolean'
+        ? bound.memoryEnabled
+        : state.memoryEnabled !== false;
+      const persona = assembleWorkspacePersona(
+        state.workspacesDir,
+        agentId,
+        customSystemPrompt,
+        { workspaceDir, memoryEnabled },
+      );
+      const memoryPolicy = memoryEnabled ? MEMORY_WRITE_POLICY_PROMPT : '';
+      const allowedSkillIds = bound && Array.isArray(bound.allowedSkillIds)
+        ? new Set(bound.allowedSkillIds.filter((s) => typeof s === 'string'))
+        : null;
+      const roots = [
+        ...(state.skillsDir ? [state.skillsDir] : []),
+        ...state.skillsPolicy.extraDirs,
+      ];
+      const webSearchGuidance = buildWebSearchRoutingGuidance(roots, state.skillsPolicy, allowedSkillIds);
       const install = 'For requests to install a local or attached skill into My Skills, use lobster_skill_install. Its inspect action reports this instance’s actual skill root and install performs desktop security review and registration.';
-      return [persona, install].filter(Boolean).join('\n\n');
+      return [persona, memoryPolicy, webSearchGuidance, install].filter(Boolean).join('\n\n');
     },
   });
 
@@ -143,7 +92,10 @@ export function apply(ctx) {
           ...(state.skillsDir ? [state.skillsDir] : []),
           ...state.skillsPolicy.extraDirs,
         ];
-        return discoverLobsterSkills(roots, state.skillsPolicy, allowedSkillIds);
+        return discoverLobsterSkills(roots, state.skillsPolicy, allowedSkillIds, {
+          cwd: options?.cwd,
+          isSkillName,
+        });
       },
       async get(candidate) {
         const locator = candidate?.locator;

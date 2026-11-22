@@ -3,8 +3,20 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PID_FILE="$PROJECT_DIR/.server.pid"
-LOG_FILE="$PROJECT_DIR/.server.log"
+STATE_TMP_DIR="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}"
+STATE_TMP_DIR="${STATE_TMP_DIR%/}"
+if [ -z "$STATE_TMP_DIR" ]; then
+  STATE_TMP_DIR="/tmp"
+fi
+STATE_USER="$(printf '%s' "${USER:-${USERNAME:-user}}" | tr -cd 'A-Za-z0-9._-')"
+STATE_USER="${STATE_USER:-user}"
+if [ -w "$PROJECT_DIR" ]; then
+  PID_FILE="$PROJECT_DIR/.server.pid"
+  LOG_FILE="$PROJECT_DIR/.server.log"
+else
+  PID_FILE="${STATE_TMP_DIR}/lobsterai-web-search-${STATE_USER}.server.pid"
+  LOG_FILE="${STATE_TMP_DIR}/lobsterai-web-search-${STATE_USER}.server.log"
+fi
 SERVER_ENTRY="dist/server/index.js"
 # Some historical installs had partial node_modules trees (missing iconv-lite encodings).
 ICONV_SENTINEL="node_modules/iconv-lite/encodings/index.js"

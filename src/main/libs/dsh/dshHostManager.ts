@@ -41,10 +41,16 @@ import type {
   ModelThinkingConfig,
   ModelThinkingLevel,
 } from '../../../shared/providers/modelThinking';
-import { DSH_NODE_EXEC_ARGV } from '../dshRuntime';
+import { DSH_NODE_EXEC_ARGV, DSH_RUNTIME_ENTRY_RELPATH } from '../dshRuntime';
+import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from '../webSearchBridgeFile';
 import {
+  buildIsolatedDshBaseEnv,
+  type DshNodeToolchain,
   ensureAppOwnedProfile,
+  type EnsureAppOwnedProfileResult,
+  prepareDshLaunchEntry,
   resolveLobsterDshProfileDir,
+  shouldStripDshInheritedEnvKey,
   writeDshCliShim,
 } from './dshProfileManager';
 import { DshTypertClient } from './dshTypertClient';
@@ -109,6 +115,17 @@ export interface DshHostSkillsPolicy {
   skillsDir?: string;
 }
 
+export interface DshHostMemoryPolicy {
+  enabled: boolean;
+}
+
+export interface DshHostWebAccessPolicy {
+  webFetchEnabled: boolean;
+  blockedHostnames: string[];
+  allowedHostnames?: string[];
+  searchPolicy?: DshSearchPolicy;
+}
+
 export interface DshHostAgentSkillSummary {
   id: string;
   name: string;
@@ -169,7 +186,9 @@ export interface DshHostSessionContext {
   allowedSkillIds?: string[] | null;
   customSystemPrompt?: string;
   executionMode?: string;
+  memoryEnabled?: boolean;
   permissionPreset?: DshPermissionPreset;
+  permissionPresetExplicit?: boolean;
   unlockedCapabilities?: DshProgressiveCapability[];
   unbind?: boolean;
 }
@@ -182,6 +201,7 @@ export interface DshBridgeToolExecuteRequest {
   sessionId?: string;
   agentId: string;
   coworkSessionId?: string;
+  workspaceDir?: string;
 }
 
 export type DshBridgeToolHandler = (
@@ -237,6 +257,16 @@ export interface DshHostStatus {
   restartCount: number;
 }
 
+export interface DshChildEnvAdditions {
+  webSearchBridgeFile?: string | null;
+  timeZone?: string;
+  nodeShimDir?: string | null;
+  npmBinDir?: string | null;
+  prependPathDirs?: readonly string[];
+  appendPathDirs?: readonly string[];
+  extraEnv?: Record<string, string | undefined>;
+}
+
 export interface DshHostManagerOptions {
   /** Electron userData directory (e.g. `app.getPath('userData')`). */
   userDataDir: string;
@@ -250,6 +280,16 @@ export interface DshHostManagerOptions {
   skillsDir: string;
   /** Path to Electron (or Node in tests) executable used with `ELECTRON_RUN_AS_NODE=1`. */
   executablePath: string;
+  /** Optional path to LobsterAI's web-search in-app bridge JSON file. */
+  webSearchBridgeFile?: string | null;
+  /** Optional fallback IANA timezone when `TZ` is unset in the inherited environment. */
+  timeZone?: string;
+  /** Optional directory containing Electron-backed `node`/`npm`/`npx` shims, prepended to PATH. */
+  nodeShimDir?: string | null;
+  /** Optional bundled npm bin directory used by Windows `npm.cmd`/`npx.cmd` shims. */
+  npmBinDir?: string | null;
+  /** Optional callback resolving Electron/bundled runtime PATH and env additions at spawn time. */
+  resolveChildEnvAdditions?: () => DshChildEnvAdditions;
   /** Optional stable instance ID sent via `X-LobsterAI-Instance`. */
   instanceId?: string;
   /** Search routing policy passed to `@lobsterai/dsh-bundle`. */
@@ -260,6 +300,12 @@ export interface DshHostManagerOptions {
   maxAutoRestarts?: number;
   /** Optional pre-built client (useful in unit tests). */
   clientFactory?: () => DshTypertClient;
+  /** Optional Node/npm/Git toolchain for bundled pnpm lifecycle scripts and Git plugins. */
+  nodeToolchainSource?: () => DshNodeToolchain | null;
+  /** Optional static Node/npm/Git toolchain shims passed to the bundled pnpm launcher. */
+  nodeToolchain?: DshNodeToolchain | null;
+  /** Optional base environment override (defaults to `process.env`; useful in tests). */
+  baseEnv?: NodeJS.ProcessEnv;
   /** Set true in pure Node tests when running plain node instead of Electron binary. */
   skipElectronRunAsNode?: boolean;
   /** Optional resolver returning runtime PATH dirs and env vars at spawn time (e.g. Node/npx shims, Python runtime). */
@@ -281,6 +327,43 @@ const DEFAULT_MAX_AUTO_RESTARTS = 3;
 const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
 const BRIDGE_KEEPALIVE_MS = 30_000;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
+
+function resolveSystemTimeZone(): string | undefined {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof tz === 'string' && tz.trim().length > 0 ? tz.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeEnvPathEntries(
+  existingPath: string | undefined,
+  prependDirs: readonly string[],
+  appendDirs: readonly string[],
+): string | undefined {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const normalize = (entry: string): string => (
+    process.platform === 'win32'
+      ? entry.toLowerCase().replace(/[\\/]+$/, '')
+      : entry.replace(/\/+$/, '') || '/'
+  );
+  const add = (raw: string | undefined): void => {
+    const trimmed = raw?.trim();
+    if (!trimmed) return;
+    const key = normalize(trimmed);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(trimmed);
+  };
+
+  for (const dir of prependDirs) add(dir);
+  for (const entry of (existingPath ?? '').split(path.delimiter)) add(entry);
+  for (const dir of appendDirs) add(dir);
+
+  return merged.length > 0 ? merged.join(path.delimiter) : existingPath;
+}
 
 /**
  * Resolve runtime and bundle directories for packaged vs dev layouts.
@@ -308,34 +391,12 @@ export function resolveBundledDshPaths(options: {
   return { runtimeDir, hostBundleDir, channelsBundleDir };
 }
 
-function mergeDedupPathEntries(
-  delimiter: string,
-  groups: Array<readonly string[] | undefined>,
-): string {
-  const isWin = delimiter === ';';
-  const seen = new Set<string>();
-  const merged: string[] = [];
-
-  for (const group of groups) {
-    if (!group) continue;
-    for (const rawEntry of group) {
-      const trimmed = rawEntry.trim();
-      if (!trimmed) continue;
-      const key = isWin ? trimmed.toLowerCase().replace(/[\\/]+$/, '') : trimmed;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(trimmed);
-    }
-  }
-
-  return merged.join(delimiter);
-}
-
 /**
  * Build a strictly isolated environment for LobsterAI's embedded DSH child
  * process so a co-installed standalone native DSH (using `~/.dsh`, `~/.agents`,
- * or exported `DSH_*` / pnpm store env vars) never interferes with LobsterAI,
- * and LobsterAI never mutates the user's standalone DSH data or plugins.
+ * or exported `DSH_*` / `DEEPSEEK_API_KEY` / pnpm/npm config env vars) never
+ * interferes with LobsterAI, and LobsterAI never mutates the user's standalone
+ * DSH data or plugins.
  */
 export function buildIsolatedDshChildEnv(params: {
   baseEnv?: NodeJS.ProcessEnv;
@@ -345,66 +406,95 @@ export function buildIsolatedDshChildEnv(params: {
   workspacesDir: string;
   skillsDir: string;
   searchPolicy: DshSearchPolicy;
-  runtimeDir: string;
+  runtimeDir?: string;
+  executablePath?: string;
+  webSearchBridgeFile?: string | null;
+  timeZone?: string;
+  nodeShimDir?: string | null;
+  npmBinDir?: string | null;
+  prependPathDirs?: readonly string[];
+  appendPathDirs?: readonly string[];
+  extraPathDirs?: readonly string[];
+  extraEnv?: Record<string, string | undefined>;
   instanceId?: string;
   skipElectronRunAsNode?: boolean;
-  prependPathDirs?: string[];
-  extraPathDirs?: string[];
-  extraEnv?: Record<string, string>;
 }): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(params.baseEnv ?? process.env)) {
-    // Strip any inherited native DSH or global pnpm/npm store overrides.
-    if (/^dsh_/i.test(key)) continue;
-    if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
-    env[key] = value;
-  }
+  const env = buildIsolatedDshBaseEnv({
+    baseEnv: params.baseEnv,
+    dshHomeDir: params.dshHomeDir,
+    skipElectronRunAsNode: params.skipElectronRunAsNode,
+  });
 
   const extraEnvPathDirs: string[] = [];
-  for (const [key, value] of Object.entries(params.extraEnv ?? {})) {
-    if (value === undefined) continue;
-    if (/^dsh_/i.test(key)) continue;
-    if (/^npm_config_(?:store_dir|cache)$/i.test(key)) continue;
-    if (key.toLowerCase() === 'path') {
-      extraEnvPathDirs.push(...value.split(path.delimiter));
-      continue;
+  if (params.extraEnv) {
+    for (const [key, value] of Object.entries(params.extraEnv)) {
+      if (value === undefined) continue;
+      if (shouldStripDshInheritedEnvKey(key)) continue;
+      if (key.toLowerCase() === 'path') {
+        extraEnvPathDirs.push(...value.split(path.delimiter));
+        continue;
+      }
+      env[key] = value;
     }
-    env[key] = value;
   }
 
-  env.DSH_HOME = params.dshHomeDir;
-  env.DSH_AGENTS_HOME = path.join(params.dshHomeDir, 'agents-home');
-  env.DSH_TELEMETRY_DISABLED = '1';
-  env.npm_config_store_dir = path.join(params.dshHomeDir, 'cache', 'pnpm-store');
-  env.npm_config_cache = path.join(params.dshHomeDir, 'cache', 'npm-cache');
+  const normalizedSkillsRoot = params.skillsDir.replace(/\\/g, '/');
+
   env[DshHostBundleEnvVar.BridgeUrl] = params.bridgeUrl;
   env[DshHostBundleEnvVar.BridgeSecret] = params.bridgeSecret;
   env[DshHostBundleEnvVar.WorkspacesDir] = params.workspacesDir;
   env[DshHostBundleEnvVar.SkillsDir] = params.skillsDir;
+  env.SKILLS_ROOT = normalizedSkillsRoot;
+  env.LOBSTERAI_SKILLS_ROOT = normalizedSkillsRoot;
   env[DshHostBundleEnvVar.SearchPolicy] = params.searchPolicy;
 
-  if (!params.skipElectronRunAsNode) {
-    env.ELECTRON_RUN_AS_NODE = '1';
+  if (params.executablePath?.trim()) {
+    env.LOBSTERAI_ELECTRON_PATH = params.executablePath.trim();
+  }
+  if (params.webSearchBridgeFile?.trim()) {
+    env[WEB_SEARCH_BRIDGE_FILE_ENV] = params.webSearchBridgeFile.trim();
+  }
+  if (params.npmBinDir?.trim()) {
+    env.LOBSTERAI_NPM_BIN_DIR = params.npmBinDir.trim();
+  }
+  if (!env.TZ?.trim()) {
+    const resolvedTz = params.timeZone?.trim() || resolveSystemTimeZone();
+    if (resolvedTz) {
+      env.TZ = resolvedTz;
+    }
   }
   if (params.instanceId) {
     env[DshHostBundleEnvVar.InstanceId] = params.instanceId;
   }
 
-  // Compose PATH: bundled pnpm first, then runtime prepends (e.g. Windows
-  // Python / packaged Node shim), existing PATH, and runtime fallbacks.
-  const pmDir = path.join(params.runtimeDir, 'package-manager');
-  const pmDirs = fs.existsSync(pmDir) ? [pmDir] : [];
-  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
-  const existingPathDirs = typeof env[pathKey] === 'string' ? env[pathKey].split(path.delimiter) : [];
-  const mergedPath = mergeDedupPathEntries(path.delimiter, [
-    pmDirs,
-    params.prependPathDirs,
-    existingPathDirs,
-    params.extraPathDirs,
-    extraEnvPathDirs,
-  ]);
-  if (mergedPath) {
-    env[pathKey] = mergedPath;
+  const prependPathDirs: string[] = [];
+  if (params.runtimeDir) {
+    const pmDir = path.join(params.runtimeDir, 'package-manager');
+    if (fs.existsSync(pmDir)) {
+      prependPathDirs.push(pmDir);
+    }
+  }
+  if (params.nodeShimDir?.trim()) {
+    prependPathDirs.push(params.nodeShimDir.trim());
+  }
+  if (params.prependPathDirs) {
+    prependPathDirs.push(...params.prependPathDirs);
+  }
+
+  const appendPathDirs: string[] = [];
+  if (params.appendPathDirs) {
+    appendPathDirs.push(...params.appendPathDirs);
+  }
+  if (params.extraPathDirs) {
+    appendPathDirs.push(...params.extraPathDirs);
+  }
+  if (extraEnvPathDirs.length > 0) {
+    appendPathDirs.push(...extraEnvPathDirs);
+  }
+
+  if (prependPathDirs.length > 0 || appendPathDirs.length > 0) {
+    const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+    env[pathKey] = mergeEnvPathEntries(env[pathKey], prependPathDirs, appendPathDirs);
   }
   return env;
 }
@@ -445,10 +535,13 @@ export class DshHostManager extends EventEmitter {
   } | null = null;
   private lastMcpServers: DshHostMcpServerSpec[] | null = null;
   private lastSkillsPolicy: DshHostSkillsPolicy | null = null;
+  private lastMemoryPolicy: DshHostMemoryPolicy | null = null;
+  private lastWebAccessPolicy: DshHostWebAccessPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
   private lastAgents: DshHostAgentSpec[] | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
   private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
+  private readonly lastSessionPermissionPresets = new Map<string, DshPermissionPreset>();
   private readonly approvalCallContexts = new Map<string, DshApprovalCallContext>();
 
   constructor(options: DshHostManagerOptions) {
@@ -489,6 +582,23 @@ export class DshHostManager extends EventEmitter {
 
   isReady(): boolean {
     return this.phase === DshHostPhase.Ready && this.client !== null && this.client.isConnected();
+  }
+
+  /**
+   * Ensures LobsterAI's App-Owned Profile manifest and managed bundle symlinks
+   * (`@lobsterai/dsh-bundle`, `@lobsterai/dsh-channels`) remain intact after
+   * external package-manager operations such as `dsh plugin add/remove`.
+   */
+  ensureProfileIntegrity(): EnsureAppOwnedProfileResult {
+    return ensureAppOwnedProfile({
+      profileDir: this.profileDir,
+      hostBundleDir: this.options.hostBundleDir,
+      channelsBundleDir: this.options.channelsBundleDir,
+    });
+  }
+
+  getNodeToolchain(): DshNodeToolchain | null {
+    return this.options.nodeToolchain ?? null;
   }
 
   registerBridgeToolHandler(toolName: string, handler: DshBridgeToolHandler): () => void {
@@ -572,6 +682,18 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, policy);
   }
 
+  async syncMemoryPolicy(policy: DshHostMemoryPolicy): Promise<Record<string, unknown>> {
+    this.lastMemoryPolicy = policy;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncMemoryPolicy, policy);
+  }
+
+  async syncWebAccessPolicy(policy: DshHostWebAccessPolicy): Promise<Record<string, unknown>> {
+    this.lastWebAccessPolicy = policy;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncWebAccessPolicy, policy);
+  }
+
   async syncHostTools(tools: DshHostToolDescriptor[]): Promise<Record<string, unknown>> {
     this.lastHostTools = tools;
     if (!this.isReady()) return { deferred: true };
@@ -604,10 +726,16 @@ export class DshHostManager extends EventEmitter {
   }
 
   async bindSessionContext(context: DshHostSessionContext): Promise<Record<string, unknown>> {
+    if (context.unbind) {
+      this.lastSessionPermissionPresets.delete(context.sessionId);
+    } else if (context.permissionPresetExplicit && context.permissionPreset) {
+      this.lastSessionPermissionPresets.set(context.sessionId, context.permissionPreset);
+    }
     return this.getClient().callOps(DshOpsAction.BindSessionContext, context);
   }
 
   async deleteSessionFiles(sessionId: string): Promise<Record<string, unknown>> {
+    this.lastSessionPermissionPresets.delete(sessionId);
     if (!this.isReady()) return { skipped: true };
     return this.getClient().callOps(DshOpsAction.DeleteSessionFiles, { sessionId });
   }
@@ -616,7 +744,9 @@ export class DshHostManager extends EventEmitter {
     preset: DshPermissionPreset,
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
-    if (!sessionId) {
+    if (sessionId) {
+      this.lastSessionPermissionPresets.set(sessionId, preset);
+    } else {
       this.lastPermissionPreset = preset;
     }
     if (!this.isReady()) return { deferred: true, preset };
@@ -651,29 +781,30 @@ export class DshHostManager extends EventEmitter {
     this.setPhase(DshHostPhase.Starting);
 
     try {
-      const runtimeBinPath = path.join(this.options.runtimeDir, 'lib', 'bin.js');
+      const runtimeBinPath = path.join(this.options.runtimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/'));
       if (!fs.existsSync(runtimeBinPath)) {
         throw new Error(`DSH runtime binary not found at ${runtimeBinPath}`);
       }
       this.runtimeVersion = this.readRuntimeVersion();
 
+      fs.mkdirSync(this.dshHomeDir, { recursive: true, mode: 0o700 });
       fs.mkdirSync(this.workspacesDir, { recursive: true });
-      ensureAppOwnedProfile({
-        profileDir: this.profileDir,
-        hostBundleDir: this.options.hostBundleDir,
-        channelsBundleDir: this.options.channelsBundleDir,
-      });
+      this.ensureProfileIntegrity();
+
+      await this.ensureBridgeServer();
+      const childEnv = this.buildChildEnv();
+      const launchInfo = this.prepareLaunchEntry(childEnv);
 
       this.cliShimPath = writeDshCliShim({
         binDir: path.join(this.dshHomeDir, 'bin'),
         electronPath: this.options.executablePath,
-        runtimeEntryPath: runtimeBinPath,
+        runtimeEntryPath: launchInfo.entryPath,
+        launcherPath: launchInfo.usesBundledPnpm ? launchInfo.entryPath : null,
         profileDir: this.profileDir,
         dshHomeDir: this.dshHomeDir,
       });
 
-      await this.ensureBridgeServer();
-      const launchUrl = await this.spawnAndWaitForLaunchUrl(runtimeBinPath);
+      const launchUrl = await this.spawnAndWaitForLaunchUrl(launchInfo.entryPath, childEnv);
 
       const client = this.options.clientFactory
         ? this.options.clientFactory()
@@ -688,9 +819,12 @@ export class DshHostManager extends EventEmitter {
       this.authenticatedWebUrl = launchUrl;
       this.origin = new URL(launchUrl).origin;
       this.startedAt = Date.now();
-      this.setPhase(DshHostPhase.Ready);
 
-      await this.replayCachedSyncs();
+      // Replay cached sync state (providers, skills, host tools, MCP, agents,
+      // subagent bindings, permission preset) BEFORE transitioning to Ready so
+      // callers waiting on host readiness never race against replay.
+      await this.replayCachedSyncs(client);
+      this.setPhase(DshHostPhase.Ready);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
@@ -701,19 +835,26 @@ export class DshHostManager extends EventEmitter {
     }
   }
 
-  private async replayCachedSyncs(): Promise<void> {
-    if (!this.isReady()) return;
+  private async replayCachedSyncs(clientArg?: DshTypertClient): Promise<void> {
+    const client = clientArg ?? this.client;
+    if (!client || !client.isConnected()) return;
     if (this.lastProvidersPayload) {
-      await this.getClient().callOps(DshOpsAction.SyncProviders, this.lastProvidersPayload);
+      await client.callOps(DshOpsAction.SyncProviders, this.lastProvidersPayload);
     }
     if (this.lastSkillsPolicy) {
-      await this.getClient().callOps(DshOpsAction.SyncSkillsPolicy, this.lastSkillsPolicy);
+      await client.callOps(DshOpsAction.SyncSkillsPolicy, this.lastSkillsPolicy);
+    }
+    if (this.lastMemoryPolicy) {
+      await client.callOps(DshOpsAction.SyncMemoryPolicy, this.lastMemoryPolicy);
+    }
+    if (this.lastWebAccessPolicy) {
+      await client.callOps(DshOpsAction.SyncWebAccessPolicy, this.lastWebAccessPolicy);
     }
     if (this.lastHostTools) {
-      await this.getClient().callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
+      await client.callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
     }
     if (this.lastMcpServers) {
-      const mcpResult = await this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      const mcpResult = await client.callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
       if (mcpResult && typeof mcpResult === 'object') {
         if (mcpResult.available === false) {
           console.warn('[DshHostManager] replay syncMcpServers reported mcpManager unavailable');
@@ -725,17 +866,23 @@ export class DshHostManager extends EventEmitter {
       }
     }
     if (this.lastAgents) {
-      await this.getClient().callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
+      await client.callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
     }
     if (this.lastSubagentBindings.size > 0) {
-      await this.getClient().callOps(DshOpsAction.SyncSubagentBindings, {
+      await client.callOps(DshOpsAction.SyncSubagentBindings, {
         bindings: [...this.lastSubagentBindings.values()],
         replace: true,
       });
     }
-    await this.getClient().callOps(DshOpsAction.SetPermissionPreset, {
+    await client.callOps(DshOpsAction.SetPermissionPreset, {
       preset: this.lastPermissionPreset,
     });
+    for (const [sessionId, sessionPreset] of this.lastSessionPermissionPresets.entries()) {
+      await client.callOps(DshOpsAction.SetPermissionPreset, {
+        preset: sessionPreset,
+        sessionId,
+      });
+    }
   }
 
   private readRuntimeVersion(): string | null {
@@ -749,9 +896,10 @@ export class DshHostManager extends EventEmitter {
   }
 
   private buildChildEnv(): NodeJS.ProcessEnv {
+    const additions = this.options.resolveChildEnvAdditions?.();
     const resolvedRuntimeEnv = this.options.resolveRuntimeEnv?.();
     return buildIsolatedDshChildEnv({
-      baseEnv: process.env,
+      baseEnv: this.options.baseEnv ?? process.env,
       dshHomeDir: this.dshHomeDir,
       bridgeUrl: this.bridgeUrl,
       bridgeSecret: this.bridgeSecret,
@@ -759,12 +907,17 @@ export class DshHostManager extends EventEmitter {
       skillsDir: this.options.skillsDir,
       searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.DeepSeekNativeOnly,
       runtimeDir: this.options.runtimeDir,
-      instanceId: this.options.instanceId,
-      skipElectronRunAsNode: this.options.skipElectronRunAsNode,
+      executablePath: this.options.executablePath,
+      webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile ?? getWebSearchBridgeFilePath(this.options.userDataDir),
+      timeZone: additions?.timeZone ?? this.options.timeZone,
+      nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir ?? this.options.nodeToolchain?.nodeShimDir,
+      npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir ?? this.options.nodeToolchain?.npmBinDir,
       prependPathDirs: [
+        ...(additions?.prependPathDirs ?? []),
         ...(this.options.prependPathDirs ?? []),
         ...(resolvedRuntimeEnv?.prependPathDirs ?? []),
       ],
+      appendPathDirs: additions?.appendPathDirs,
       extraPathDirs: [
         ...(this.options.extraPathDirs ?? []),
         ...(resolvedRuntimeEnv?.extraPathDirs ?? []),
@@ -772,14 +925,37 @@ export class DshHostManager extends EventEmitter {
       extraEnv: {
         ...(this.options.extraEnv ?? {}),
         ...(resolvedRuntimeEnv?.extraEnv ?? {}),
+        ...(additions?.extraEnv ?? {}),
       },
+      instanceId: this.options.instanceId,
+      skipElectronRunAsNode: this.options.skipElectronRunAsNode,
     });
   }
 
-  private spawnAndWaitForLaunchUrl(runtimeBinPath: string): Promise<string> {
+  private prepareLaunchEntry(childEnv: NodeJS.ProcessEnv): { entryPath: string; usesBundledPnpm: boolean } {
+    let toolchain: DshNodeToolchain | null = null;
+    try {
+      toolchain = this.options.nodeToolchainSource?.() ?? this.options.nodeToolchain ?? null;
+    } catch (error) {
+      console.warn('[DSH Host] Could not resolve Node toolchain for bundled pnpm; continuing without shims', error);
+    }
+    const prepared = prepareDshLaunchEntry({
+      runtimeDir: this.options.runtimeDir,
+      dshHomeDir: this.dshHomeDir,
+      electronPath: this.options.executablePath,
+      toolchain,
+      baseEnv: childEnv,
+    });
+    if (!prepared.usesBundledPnpm) {
+      console.warn(`[DSH Host] Runtime at ${this.options.runtimeDir} bundles no pnpm; falling back to direct runtime entry`);
+    }
+    return prepared;
+  }
+
+  private spawnAndWaitForLaunchUrl(launchEntryPath: string, childEnv: NodeJS.ProcessEnv): Promise<string> {
     const args = [
       ...DSH_NODE_EXEC_ARGV,
-      runtimeBinPath,
+      launchEntryPath,
       '--profile',
       DSH_PROFILE_NAME,
       '--no-open',
@@ -788,8 +964,10 @@ export class DshHostManager extends EventEmitter {
       '--port',
       '0',
     ];
+    fs.mkdirSync(this.dshHomeDir, { recursive: true, mode: 0o700 });
     const child = spawn(this.options.executablePath, args, {
-      env: this.buildChildEnv(),
+      cwd: this.dshHomeDir,
+      env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -1001,6 +1179,9 @@ export class DshHostManager extends EventEmitter {
           sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
           agentId: typeof body.agentId === 'string' && body.agentId ? body.agentId : 'main',
           coworkSessionId: typeof body.coworkSessionId === 'string' ? body.coworkSessionId : undefined,
+          workspaceDir: typeof body.workspaceDir === 'string' && body.workspaceDir.trim().length > 0
+            ? body.workspaceDir.trim()
+            : undefined,
         };
         const tool = this.bridgeTools.get(request.toolName) ?? this.fallbackBridgeTool;
         if (!tool) {

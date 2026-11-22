@@ -9,6 +9,7 @@ import {
   APP_UPDATE_ELEVATION_DECLINED_ERROR,
   type AppUpdateSource,
 } from '../../shared/appUpdate/constants';
+import { APP_UPDATE_DOWNLOAD_DIR_NAME } from '../appConstants';
 import { quitAppWithoutConfirmation } from './appQuitConfirmation';
 import {
   AppUpdateUrlUntrustedError,
@@ -114,7 +115,7 @@ export async function downloadUpdate(
   }
 
   const ext = path.extname(parsedUrl.pathname) || (process.platform === 'darwin' ? '.dmg' : '.exe');
-  const updateDir = path.join(app.getPath('userData'), 'updates');
+  const updateDir = path.join(app.getPath('userData'), APP_UPDATE_DOWNLOAD_DIR_NAME);
   const ts = Date.now();
   const downloadPath = path.join(updateDir, `lobsterai-update-${source}-${ts}${ext}.download`);
   const finalPath = path.join(updateDir, `lobsterai-update-${source}-${ts}${ext}`);
@@ -809,7 +810,7 @@ async function installMacDmg(dmgPath: string): Promise<void> {
 
       explicitMountDir = path.join(
         app.getPath('userData'),
-        'updates',
+        APP_UPDATE_DOWNLOAD_DIR_NAME,
         `${MAC_UPDATE_MOUNT_DIR_PREFIX}${Date.now()}`,
       );
       await fs.promises.mkdir(explicitMountDir, { recursive: true });

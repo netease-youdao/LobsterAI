@@ -1,0 +1,339 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+
+const orphanReapMock = vi.hoisted(() => vi.fn(async () => 0));
+const cronBackfillMock = vi.hoisted(() => vi.fn(async () => ({
+  status: 'skipped' as const,
+  tasksImported: 0,
+  runsImported: 0,
+})));
+
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+    getAppPath: () => process.cwd(),
+    getPath: () => os.tmpdir(),
+  },
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (s: string) => Buffer.from(s, 'utf8'),
+    decryptString: (b: Buffer) => b.toString('utf8'),
+  },
+}));
+
+vi.mock('../dshOrphanReaper', () => ({
+  reapOrphanedDshRuntimes: orphanReapMock,
+}));
+
+vi.mock('../../migration/legacyOpenClawMigrator', async () => {
+  const actual = await vi.importActual<typeof import('../../migration/legacyOpenClawMigrator')>(
+    '../../migration/legacyOpenClawMigrator',
+  );
+  return {
+    ...actual,
+    backfillLegacyScheduledTasksFromBackup: cronBackfillMock,
+  };
+});
+
+import { DshHostPhase } from '../../../shared/dshEngine/hostConstants';
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
+import {
+  createSingleFlightAsyncTracker,
+  DshBootstrap,
+  type DshCompatEngineStatus,
+} from './dshBootstrap';
+
+const tempDirs: string[] = [];
+
+function createTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-dsh-bootstrap-test-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function createTestBootstrap(options: {
+  onStatusChange?: (status: DshCompatEngineStatus) => void;
+} = {}) {
+  const userDataDir = createTempDir();
+  const db = new Database(path.join(userDataDir, 'lobsterai.sqlite'));
+  db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+
+  const bootstrap = new DshBootstrap({
+    userDataDir,
+    db,
+    skillsDir: path.join(userDataDir, 'SKILLs'),
+    coworkStore: {
+      getSession: () => null,
+      addMessage: () => ({ id: 'm1', type: 'user', content: '', timestamp: Date.now() }),
+      updateMessageContent: () => undefined,
+      updateSession: () => undefined,
+    },
+    getDefaultCwd: () => userDataDir,
+    runtimePaths: {
+      runtimeDir: path.join(userDataDir, 'runtime'),
+      hostBundleDir: path.join(userDataDir, 'host-bundle'),
+      channelsBundleDir: null,
+    },
+    executablePath: process.execPath,
+    skipElectronRunAsNode: true,
+    onStatusChange: (compat) => options.onStatusChange?.(compat),
+  });
+
+  return { bootstrap, db, userDataDir };
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+  while (tempDirs.length > 0) {
+    fs.rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  }
+});
+
+describe('DshBootstrap startup deduplication and initial config sync gate', () => {
+  test('deduplicates concurrent start() calls and keeps engine in Starting until syncInitialConfig completes', async () => {
+    const phases: OpenClawEnginePhase[] = [];
+    const { bootstrap, db } = createTestBootstrap({
+      onStatusChange: (status) => phases.push(status.phase),
+    });
+
+    try {
+      let hostReady = false;
+      const hostStartGate = deferred<void>();
+      const syncGate = deferred<{ success: boolean }>();
+
+      const hostStartSpy = vi.spyOn(bootstrap.hostManager, 'start').mockImplementation(async () => {
+        await hostStartGate.promise;
+        hostReady = true;
+        bootstrap.hostManager.emit('phaseChange', DshHostPhase.Ready, {
+          ...bootstrap.hostManager.getStatus(),
+          phase: DshHostPhase.Ready,
+        });
+      });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap.hostManager, 'getStatus').mockImplementation(() => ({
+        phase: hostReady ? DshHostPhase.Ready : DshHostPhase.Starting,
+        origin: hostReady ? 'http://127.0.0.1:9999' : null,
+        authenticatedWebUrl: null,
+        pid: hostReady ? 12345 : null,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir: '/tmp/profile',
+        dshHomeDir: '/tmp/dsh-profile',
+        cliShimPath: null,
+        lastError: null,
+        startedAt: hostReady ? Date.now() : null,
+        restartCount: 0,
+      }));
+
+      const syncToolsSpy = vi
+        .spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools')
+        .mockResolvedValue({ ok: true });
+      const schedulerStartSpy = vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+
+      const syncInitialConfig = vi.fn(async () => syncGate.promise);
+
+      // Fire 3 concurrent start() calls (simulating startup + early user prompt + cron).
+      const p1 = bootstrap.start({ syncInitialConfig });
+      const p2 = bootstrap.start({ syncInitialConfig });
+      const p3 = bootstrap.start();
+
+      // Let hostManager become ready while syncInitialConfig is still pending!
+      hostStartGate.resolve();
+      await new Promise((r) => setTimeout(r, 25));
+
+      // CRITICAL: hostManager is Ready, yet initial config sync has NOT completed:
+      // - isReadyForTurns() MUST remain false
+      // - getEngineStatus().phase MUST remain Starting (not Running!)
+      // - scheduler MUST NOT have started yet
+      expect(bootstrap.hostManager.isReady()).toBe(true);
+      expect(bootstrap.isInitialConfigSynced()).toBe(false);
+      expect(bootstrap.isReadyForTurns()).toBe(false);
+      expect(bootstrap.getEngineStatus().phase).toBe(OpenClawEnginePhase.Starting);
+      expect(schedulerStartSpy).not.toHaveBeenCalled();
+
+      // Release initial config sync.
+      syncGate.resolve({ success: true });
+      const [s1, s2, s3] = await Promise.all([p1, p2, p3]);
+
+      expect(s1.phase).toBe(OpenClawEnginePhase.Running);
+      expect(s2.phase).toBe(OpenClawEnginePhase.Running);
+      expect(s3.phase).toBe(OpenClawEnginePhase.Running);
+      expect(bootstrap.isInitialConfigSynced()).toBe(true);
+      expect(bootstrap.isReadyForTurns()).toBe(true);
+      expect(phases.at(-1)).toBe(OpenClawEnginePhase.Running);
+
+      // Every startup side effect executed ONCE despite 3 concurrent callers.
+      expect(orphanReapMock).toHaveBeenCalledTimes(1);
+      expect(hostStartSpy).toHaveBeenCalledTimes(1);
+      expect(syncToolsSpy).toHaveBeenCalledTimes(1);
+      expect(syncInitialConfig).toHaveBeenCalledTimes(1);
+      expect(schedulerStartSpy).toHaveBeenCalledTimes(1);
+
+      // Subsequent start() call is an O(1) idempotent no-op.
+      const s4 = await bootstrap.start({ syncInitialConfig });
+      expect(s4.phase).toBe(OpenClawEnginePhase.Running);
+      expect(hostStartSpy).toHaveBeenCalledTimes(1);
+      expect(syncInitialConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+
+  test('clears in-flight startPromise on boot failure so subsequent retries succeed cleanly', async () => {
+    const { bootstrap, db } = createTestBootstrap();
+
+    try {
+      let attempt = 0;
+      let hostReady = false;
+      vi.spyOn(bootstrap.hostManager, 'start').mockImplementation(async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          throw new Error('transient spawn failure');
+        }
+        hostReady = true;
+      });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap.hostManager, 'getStatus').mockImplementation(() => ({
+        phase: hostReady ? DshHostPhase.Ready : DshHostPhase.Failed,
+        origin: null,
+        authenticatedWebUrl: null,
+        pid: null,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir: '/tmp/profile',
+        dshHomeDir: '/tmp/dsh-profile',
+        cliShimPath: null,
+        lastError: hostReady ? null : 'transient spawn failure',
+        startedAt: null,
+        restartCount: 0,
+      }));
+      vi.spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools').mockResolvedValue({ ok: true });
+      vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+
+      await expect(bootstrap.start()).rejects.toThrow('transient spawn failure');
+      expect(bootstrap.isReadyForTurns()).toBe(false);
+
+      const syncInitialConfig = vi.fn(async () => ({ success: true }));
+      const status = await bootstrap.start({ syncInitialConfig });
+      expect(status.phase).toBe(OpenClawEnginePhase.Running);
+      expect(bootstrap.isReadyForTurns()).toBe(true);
+      expect(syncInitialConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+
+  test('retries initial config sync when a previous sync returned { success: false } without re-booting host', async () => {
+    const { bootstrap, db } = createTestBootstrap();
+
+    try {
+      let hostReady = false;
+      const hostStartSpy = vi.spyOn(bootstrap.hostManager, 'start').mockImplementation(async () => {
+        hostReady = true;
+      });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap.hostManager, 'getStatus').mockImplementation(() => ({
+        phase: hostReady ? DshHostPhase.Ready : DshHostPhase.Stopped,
+        origin: null,
+        authenticatedWebUrl: null,
+        pid: null,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir: '/tmp/profile',
+        dshHomeDir: '/tmp/dsh-profile',
+        cliShimPath: null,
+        lastError: null,
+        startedAt: null,
+        restartCount: 0,
+      }));
+      vi.spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools').mockResolvedValue({ ok: true });
+      vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+
+      const failingSync = vi.fn(async () => ({ success: false }));
+      await bootstrap.start({ syncInitialConfig: failingSync });
+      expect(bootstrap.isInitialConfigSynced()).toBe(false);
+      expect(bootstrap.isReadyForTurns()).toBe(false);
+
+      const succeedingSync = vi.fn(async () => ({ success: true }));
+      await bootstrap.start({ syncInitialConfig: succeedingSync });
+      expect(bootstrap.isInitialConfigSynced()).toBe(true);
+      expect(bootstrap.isReadyForTurns()).toBe(true);
+      // Host was NOT restarted for the config sync retry.
+      expect(hostStartSpy).toHaveBeenCalledTimes(1);
+      expect(succeedingSync).toHaveBeenCalledTimes(1);
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+});
+
+describe('createSingleFlightAsyncTracker', () => {
+  test('clears tracked promise after rejection so retry and subsequent admission succeed', async () => {
+    const tracker = createSingleFlightAsyncTracker<string>();
+    const firstGate = deferred<string>();
+    const firstFactory = vi.fn(() => firstGate.promise);
+
+    const p1 = tracker.run(firstFactory);
+    const p2 = tracker.run(vi.fn(async () => 'should-not-run'));
+    expect(p2).toBe(p1);
+    expect(tracker.getInFlight()).toBe(p1);
+    expect(firstFactory).toHaveBeenCalledTimes(1);
+
+    firstGate.reject(new Error('DSH runtime binary not found'));
+    await expect(p1).rejects.toThrow('DSH runtime binary not found');
+    // Allow .finally() cleanup microtask to settle.
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBeNull();
+
+    // Subsequent retry succeeds and also clears once settled so future callers re-check live readiness.
+    const retryResult = await tracker.run(async () => 'running', { force: true });
+    expect(retryResult).toBe('running');
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBeNull();
+
+    const nextResult = await tracker.run(async () => 'rechecked');
+    expect(nextResult).toBe('rechecked');
+  });
+
+  test('force: true replaces in-flight attempt so waiters join retry and older settlement cannot clobber it', async () => {
+    const tracker = createSingleFlightAsyncTracker<string>();
+    const staleGate = deferred<string>();
+    const retryGate = deferred<string>();
+
+    const stale = tracker.run(() => staleGate.promise);
+    const retry = tracker.run(() => retryGate.promise, { force: true });
+
+    expect(retry).not.toBe(stale);
+    expect(tracker.getInFlight()).toBe(retry);
+    // Concurrent waiter joins the active forced retry instead of launching a third attempt.
+    expect(tracker.run(vi.fn(async () => 'unexpected'))).toBe(retry);
+
+    // When the superseded attempt fails later, it must NOT clear the active retry reference.
+    staleGate.reject(new Error('stale failure'));
+    await expect(stale).rejects.toThrow('stale failure');
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBe(retry);
+
+    retryGate.resolve('recovered');
+    await expect(retry).resolves.toBe('recovered');
+    await Promise.resolve();
+    expect(tracker.getInFlight()).toBeNull();
+  });
+});

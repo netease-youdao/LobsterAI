@@ -3,7 +3,12 @@
 // copy suitable for everyday users.
 
 import { isDeleteCommand } from '../../../common/deleteCommand';
-import { DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
+import {
+  DshApprovalPermissionAction,
+  DshPermissionPreset,
+} from '../../../shared/dshEngine/hostConstants';
+import type { DshPermissionPresetChangedDetail } from '../../services/dshHost';
+import type { CoworkPermissionResult } from '../../types/cowork';
 
 export type ApprovalDangerLevel = 'safe' | 'caution' | 'destructive';
 
@@ -232,5 +237,44 @@ export function buildPermissionModalPresentation(
     canAllowForSession,
     canSwitchFullAccess,
     technicalDetails: command ? '' : buildSanitizedTechnicalDetails(input),
+  };
+}
+
+/**
+ * Build the approval response and renderer preset-change event for clicking
+ * "Switch to Full Access" inside `CoworkPermissionModal`.
+ * Always scopes to the requesting session when `sessionId` is present so
+ * `danger-full-access` never bleeds into other sessions or the global default.
+ */
+export function buildSwitchFullAccessAction(
+  sessionId: string | null | undefined,
+  toolInput: unknown,
+): {
+  eventDetail: DshPermissionPresetChangedDetail;
+  response: CoworkPermissionResult;
+} {
+  const targetSessionId = typeof sessionId === 'string' && sessionId.trim()
+    ? sessionId.trim()
+    : undefined;
+  return {
+    eventDetail: {
+      preset: DshPermissionPreset.FullAccess,
+      ...(targetSessionId
+        ? { sessionId: targetSessionId }
+        : { defaultPreset: DshPermissionPreset.FullAccess }),
+    },
+    response: {
+      behavior: 'allow',
+      updatedInput: toolInput && typeof toolInput === 'object'
+        ? (toolInput as Record<string, unknown>)
+        : {},
+      updatedPermissions: [
+        {
+          type: DshApprovalPermissionAction.SetPermissionPreset,
+          preset: DshPermissionPreset.FullAccess,
+          ...(targetSessionId ? { sessionId: targetSessionId } : { global: true }),
+        },
+      ],
+    },
   };
 }

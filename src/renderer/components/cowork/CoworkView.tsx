@@ -538,7 +538,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           + `current=${currentSessionIdRef.current ?? 'none'} temp=${tempSessionId}`,
         );
       }
-      if (optimisticGoal !== undefined) {
+      if (!startedSession.goal && optimisticGoal !== undefined) {
         const startedGoal = applyOptimisticGoalCommand(prompt, null, startedSession.id, Date.now());
         if (startedGoal !== undefined) {
           console.debug(`[CoworkGoal] applying optimistic goal after session start for session ${startedSession.id}.`);

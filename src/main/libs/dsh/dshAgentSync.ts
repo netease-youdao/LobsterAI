@@ -115,3 +115,53 @@ export function buildDshHostAgentSpecs(input: BuildDshHostAgentSpecsInput): DshH
 
   return specs;
 }
+
+function normalizeSkillIdList(rawIds: readonly string[] | null | undefined): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of rawIds ?? []) {
+    const trimmed = typeof raw === 'string' ? raw.trim() : '';
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+/**
+ * Resolve the DSH `allowedSkillIds` allowlist for a Cowork turn.
+ *
+ * - Explicit empty `optionSkillIds` (`[]`, e.g. Plan Mode / PPT Outline)
+ *   suppresses all skills (`[]`).
+ * - Restricted experts (`agentId !== 'main'` with non-empty `agentSkillIds`)
+ *   are bounded by `agentSkillIds`; any non-empty `optionSkillIds` is
+ *   intersected with `agentSkillIds` so composer selections cannot bypass
+ *   the expert's binding.
+ * - Unrestricted agents (`main`, or experts with empty `agentSkillIds`) return
+ *   `null` so composer selections act as preferred-candidate routing hints
+ *   without banning other globally enabled skills.
+ */
+export function resolveAllowedSkillIdsForTurn(input: {
+  agentId?: string;
+  agentSkillIds?: readonly string[] | null;
+  optionSkillIds?: readonly string[];
+}): string[] | null {
+  if (Array.isArray(input.optionSkillIds) && input.optionSkillIds.length === 0) {
+    return [];
+  }
+
+  const normalizedAgentId = input.agentId?.trim() || AgentId.Main;
+  const normalizedAgentSkillIds = normalizedAgentId !== AgentId.Main
+    ? normalizeSkillIdList(input.agentSkillIds)
+    : [];
+
+  if (normalizedAgentSkillIds.length > 0) {
+    if (Array.isArray(input.optionSkillIds) && input.optionSkillIds.length > 0) {
+      const allowedSet = new Set(normalizedAgentSkillIds);
+      return normalizeSkillIdList(input.optionSkillIds).filter((id) => allowedSet.has(id));
+    }
+    return normalizedAgentSkillIds;
+  }
+
+  return null;
+}

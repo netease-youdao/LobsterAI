@@ -717,3 +717,38 @@ test('migrates legacy agents to all collaboration mode unless an explicit allowl
   expect(bindingsTable?.name).toBe('dsh_subagent_agent_bindings');
   migrated.close();
 });
+
+test('adds required cowork_sessions.permission_preset column to legacy databases on open', async () => {
+  const userDataPath = createTempUserDataPath();
+  const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
+  const now = Date.now();
+  legacyDb.exec(`
+    CREATE TABLE cowork_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      claude_session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      cwd TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      execution_mode TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  legacyDb
+    .prepare(
+      "INSERT INTO cowork_sessions (id, title, cwd, execution_mode, created_at, updated_at) VALUES ('legacy-1', 'Legacy', '/tmp', 'auto', ?, ?)",
+    )
+    .run(now, now);
+  legacyDb.close();
+
+  const migrated = await SqliteStore.create(userDataPath);
+  const cols = migrated.getDatabase().pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+  expect(cols.map((c) => c.name)).toContain('permission_preset');
+
+  const coworkStore = new CoworkStore(migrated.getDatabase());
+  expect(coworkStore.getSession('legacy-1')?.permissionPreset).toBeNull();
+  coworkStore.updateSession('legacy-1', { permissionPreset: 'read-only' });
+  expect(coworkStore.getSession('legacy-1')?.permissionPreset).toBe('read-only');
+  migrated.close();
+});

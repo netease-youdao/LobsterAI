@@ -9,10 +9,19 @@ import {
   type DataMigrationLastRestoreResult,
   DataMigrationRestoreStatus,
 } from '../../../shared/dataMigration/constants';
+import {
+  DSH_PROFILE_DIR_NAME,
+  DSH_PROFILE_NAME,
+  LEGACY_OPENCLAW_BACKUP_DIR_NAME,
+  WORKSPACES_DIR_NAME,
+} from '../../../shared/dshEngine/hostConstants';
 import { MCP_PACKAGES_DIR_NAME } from '../../../shared/mcp/constants';
-import { APP_NAME, DB_FILENAME } from '../../appConstants';
+import { MigrationV2Status } from '../../../shared/migration/constants';
+import { APP_NAME, APP_UPDATE_DOWNLOAD_DIR_NAME, DB_FILENAME } from '../../appConstants';
+import { MEMORY_FTS_DB_NAME } from '../../memory/lobsterMemoryService';
 import { runLegacyOpenClawMigration } from '../../migration/legacyOpenClawMigrator';
 import { SQLITE_BACKUP_DIR_NAME } from '../sqliteBackup/constants';
+import { rewriteRestoredUserDataPathsInSqliteSync } from './rewriteRestoredUserDataPaths';
 
 const CURRENT_ARCHIVE_ROOT = APP_NAME;
 const MANIFEST_FILE_NAME = '.lobsterai-migration.json';
@@ -48,12 +57,23 @@ const SQLITE_MIGRATION_TABLES = [
   'user_memory_sources',
   'subagent_runs',
   'subagent_messages',
+  'dsh_subagent_agent_bindings',
   'im_config',
   'im_session_mappings',
   'scheduled_task_meta',
   'scheduled_tasks',
   'scheduled_task_runs',
 ] as const;
+
+const OPTIONAL_MANIFEST_TABLE_CHECKSUMS_V1 = new Set<string>([
+  'dsh_subagent_agent_bindings',
+  'scheduled_tasks',
+  'scheduled_task_runs',
+]);
+
+const OPTIONAL_MANIFEST_TABLE_CHECKSUMS_V2 = new Set<string>([
+  'dsh_subagent_agent_bindings',
+]);
 
 const SQLITE_MIGRATION_KV_KEYS = [
   'auth_tokens',
@@ -113,6 +133,7 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
   'lockfile',
   MCP_PACKAGES_DIR_NAME,
   'runtimes',
+  APP_UPDATE_DOWNLOAD_DIR_NAME,
   'skill-migrate.log',
   'sqlite-backups',
   PENDING_RESTORE_FILE_NAME,
@@ -148,6 +169,7 @@ const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   'lockfile',
   MCP_PACKAGES_DIR_NAME,
   'runtimes',
+  APP_UPDATE_DOWNLOAD_DIR_NAME,
   'skill-migrate.log',
   'sqlite-backups',
   PENDING_RESTORE_FILE_NAME,
@@ -162,22 +184,31 @@ const SOURCE_EXCLUDED_TOP_LEVEL_PREFIXES = [
 
 const RESTORE_PRESERVED_TOP_LEVEL_PREFIXES = SOURCE_EXCLUDED_TOP_LEVEL_PREFIXES;
 
+const MEMORY_FTS_EXCLUDED_RELATIVE_PATHS = [
+  `${WORKSPACES_DIR_NAME}/${MEMORY_FTS_DB_NAME}`,
+  `${WORKSPACES_DIR_NAME}/${MEMORY_FTS_DB_NAME}-wal`,
+  `${WORKSPACES_DIR_NAME}/${MEMORY_FTS_DB_NAME}-shm`,
+] as const;
+
 const EXCLUDED_RELATIVE_PATHS = [
   'openclaw/logs',
   'openclaw/mcp-packages',
   'openclaw/state/logs',
-  'dsh-profile/profiles/lobsterai/node_modules',
-  'dsh-profile/bin',
-  'legacy-openclaw-backup',
+  `${DSH_PROFILE_DIR_NAME}/profiles/${DSH_PROFILE_NAME}/node_modules`,
+  `${DSH_PROFILE_DIR_NAME}/bin`,
+  `${DSH_PROFILE_DIR_NAME}/cache`,
+  ...MEMORY_FTS_EXCLUDED_RELATIVE_PATHS,
+  LEGACY_OPENCLAW_BACKUP_DIR_NAME,
 ];
 
 const RESTORE_PRESERVED_RELATIVE_PATHS = [
   'openclaw/logs',
   'openclaw/mcp-packages',
   'openclaw/state/logs',
-  'dsh-profile/profiles/lobsterai/node_modules',
-  'dsh-profile/bin',
-  'legacy-openclaw-backup',
+  `${DSH_PROFILE_DIR_NAME}/profiles/${DSH_PROFILE_NAME}/node_modules`,
+  `${DSH_PROFILE_DIR_NAME}/bin`,
+  `${DSH_PROFILE_DIR_NAME}/cache`,
+  LEGACY_OPENCLAW_BACKUP_DIR_NAME,
 ];
 
 const ALLOWED_ENTRY_TYPES = new Set([
@@ -221,8 +252,10 @@ interface MigrationManifest {
   version?: number;
   archiveRoot?: string;
   archiveKind?: DataMigrationArchiveKind;
+  sourceUserDataPath?: string;
   sqlite?: SqliteMigrationSummary;
   openclawState?: OpenClawStateMigrationSummary;
+  dshState?: DshStateMigrationSummary;
 }
 
 export interface PendingDataMigrationRestoreRequest {
@@ -273,6 +306,23 @@ interface OpenClawStateMigrationSummary {
   cronRunFileCount?: number;
   agentSessionFileCount?: number;
   openclawConfigExists?: boolean;
+  sampledRelativePaths?: string[];
+  error?: string;
+}
+
+export interface DshStateMigrationSummary {
+  exists: boolean;
+  fileCount?: number;
+  totalSizeBytes?: number;
+  checksumSha256?: string;
+  sessionCount?: number;
+  sessionFileCount?: number;
+  profileConfigExists?: boolean;
+  workspacesExist: boolean;
+  workspaceFileCount?: number;
+  workspaceTotalSizeBytes?: number;
+  workspaceChecksumSha256?: string;
+  workspaceAgentIds?: string[];
   sampledRelativePaths?: string[];
   error?: string;
 }
@@ -376,6 +426,13 @@ const getExclusionManifestFields = (archiveKind: DataMigrationArchiveKind): Reco
   };
 };
 
+const isMemoryFtsExcludedRelativeEntry = (relativePosixPath: string): boolean => (
+  MEMORY_FTS_EXCLUDED_RELATIVE_PATHS.some(excludedPath => (
+    relativePosixPath === excludedPath
+    || relativePosixPath.startsWith(`${excludedPath}/`)
+  ))
+);
+
 const shouldExcludeSourcePath = (
   relativePosixPath: string,
   absolutePath: string,
@@ -386,6 +443,7 @@ const shouldExcludeSourcePath = (
   if (archiveKind === 'rollback') {
     if (isPreservedRestoreTopLevelEntry(relativePosixPath)) return true;
     if (isPreservedRestoreRelativeEntry(relativePosixPath)) return true;
+    if (isMemoryFtsExcludedRelativeEntry(relativePosixPath)) return true;
   } else if (isExcludedMigrationEntry(relativePosixPath)) {
     return true;
   }
@@ -1050,6 +1108,189 @@ const assertOpenClawStateSummaryValuesMatch = (
   }
 };
 
+interface CollectedSummaryFile {
+  relativePath: string;
+  absolutePath: string;
+  sizeBytes: number;
+}
+
+const collectRestorableFilesUnderSubdirSync = (
+  userDataPath: string,
+  subdirName: string,
+): { files: CollectedSummaryFile[]; error?: string } => {
+  const subdirRoot = path.join(userDataPath, subdirName);
+  if (!fs.existsSync(subdirRoot)) return { files: [] };
+  if (!fs.statSync(subdirRoot).isDirectory()) {
+    return { files: [], error: `${subdirName} is not a directory` };
+  }
+
+  const files: CollectedSummaryFile[] = [];
+  const visit = (dirPath: string): void => {
+    for (const entryName of fs.readdirSync(dirPath)) {
+      const absolutePath = path.join(dirPath, entryName);
+      const relativePath = toPosixPath(path.relative(subdirRoot, absolutePath));
+      if (!relativePath || isExcludedMigrationEntry(`${subdirName}/${relativePath}`)) continue;
+
+      const stat = fs.lstatSync(absolutePath);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        visit(absolutePath);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      files.push({ relativePath, absolutePath, sizeBytes: stat.size });
+    }
+  };
+  visit(subdirRoot);
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return { files };
+};
+
+const computeCollectedFilesChecksumSync = (files: readonly CollectedSummaryFile[]): string | undefined => {
+  if (files.length === 0) return undefined;
+  const hash = crypto.createHash('sha256');
+  for (const file of files) {
+    hash.update(file.relativePath);
+    hash.update('\0');
+    hash.update(String(file.sizeBytes));
+    hash.update('\0');
+    hash.update(fs.readFileSync(file.absolutePath));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+};
+
+const countDshSessions = (dshFiles: readonly CollectedSummaryFile[]): number => {
+  const sessionKeys = new Set<string>();
+  for (const file of dshFiles) {
+    if (!file.relativePath.startsWith('sessions/')) continue;
+    const segments = file.relativePath.split('/').filter(Boolean);
+    if (segments.length >= 4) {
+      sessionKeys.add(`${segments[1]}/${segments[2]}`);
+    } else if (segments.length >= 2) {
+      sessionKeys.add(segments[1]);
+    }
+  }
+  return sessionKeys.size;
+};
+
+export const readDshStateMigrationSummarySync = (userDataPath: string): DshStateMigrationSummary => {
+  try {
+    const dshCollected = collectRestorableFilesUnderSubdirSync(userDataPath, DSH_PROFILE_DIR_NAME);
+    if (dshCollected.error) {
+      return { exists: false, workspacesExist: false, error: dshCollected.error };
+    }
+    const workspaceCollected = collectRestorableFilesUnderSubdirSync(userDataPath, WORKSPACES_DIR_NAME);
+    if (workspaceCollected.error) {
+      return {
+        exists: dshCollected.files.length > 0,
+        workspacesExist: false,
+        error: workspaceCollected.error,
+      };
+    }
+
+    const dshFiles = dshCollected.files;
+    const workspaceFiles = workspaceCollected.files;
+    const dshTotalSizeBytes = dshFiles.reduce((sum, file) => sum + file.sizeBytes, 0);
+    const workspaceTotalSizeBytes = workspaceFiles.reduce((sum, file) => sum + file.sizeBytes, 0);
+    const sessionFiles = dshFiles.filter(file => file.relativePath.startsWith('sessions/'));
+    const profileConfigPrefix = `profiles/${DSH_PROFILE_NAME}/`;
+    const profileConfigExists = dshFiles.some(file => (
+      file.relativePath === `${profileConfigPrefix}package.json`
+      || file.relativePath === `${profileConfigPrefix}cordis.patch.yml`
+    ));
+    const workspaceAgentIds = [...new Set(
+      workspaceFiles
+        .filter(file => file.relativePath.includes('/'))
+        .map(file => file.relativePath.split('/')[0])
+        .filter(Boolean),
+    )].sort();
+    const sampledRelativePaths = [
+      ...dshFiles.map(file => `${DSH_PROFILE_DIR_NAME}/${file.relativePath}`),
+      ...workspaceFiles.map(file => `${WORKSPACES_DIR_NAME}/${file.relativePath}`),
+    ].slice(0, 50);
+
+    return {
+      exists: dshFiles.length > 0,
+      fileCount: dshFiles.length,
+      totalSizeBytes: dshTotalSizeBytes,
+      checksumSha256: computeCollectedFilesChecksumSync(dshFiles),
+      sessionCount: countDshSessions(dshFiles),
+      sessionFileCount: sessionFiles.length,
+      profileConfigExists,
+      workspacesExist: workspaceFiles.length > 0,
+      workspaceFileCount: workspaceFiles.length,
+      workspaceTotalSizeBytes,
+      workspaceChecksumSha256: computeCollectedFilesChecksumSync(workspaceFiles),
+      workspaceAgentIds,
+      sampledRelativePaths,
+    };
+  } catch (error) {
+    return {
+      exists: false,
+      workspacesExist: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+};
+
+const assertDshStateSummaryValuesMatch = (
+  sourceSummary: DshStateMigrationSummary,
+  targetSummary: DshStateMigrationSummary,
+  label: string,
+): void => {
+  if (sourceSummary.error || targetSummary.error) {
+    throw new Error(
+      `${label} DSH state summary failed: ${sourceSummary.error || targetSummary.error}`,
+    );
+  }
+  if (sourceSummary.exists !== targetSummary.exists) {
+    throw new Error(
+      `${label} DSH state exists mismatch: expected ${String(sourceSummary.exists)}, got ${String(targetSummary.exists)}.`,
+    );
+  }
+  if (sourceSummary.workspacesExist !== targetSummary.workspacesExist) {
+    throw new Error(
+      `${label} DSH state workspacesExist mismatch: expected ${String(sourceSummary.workspacesExist)}, got ${String(targetSummary.workspacesExist)}.`,
+    );
+  }
+  for (const fieldName of [
+    'fileCount',
+    'totalSizeBytes',
+    'checksumSha256',
+    'sessionCount',
+    'sessionFileCount',
+    'profileConfigExists',
+    'workspaceFileCount',
+    'workspaceTotalSizeBytes',
+    'workspaceChecksumSha256',
+  ] as const) {
+    if (sourceSummary[fieldName] !== undefined && sourceSummary[fieldName] !== targetSummary[fieldName]) {
+      throw new Error(
+        `${label} DSH state ${fieldName} mismatch: expected ${String(sourceSummary[fieldName])}, got ${String(targetSummary[fieldName])}.`,
+      );
+    }
+  }
+  if (
+    sourceSummary.workspaceAgentIds !== undefined
+    && !arraysEqual(sourceSummary.workspaceAgentIds, targetSummary.workspaceAgentIds ?? [])
+  ) {
+    throw new Error(
+      `${label} DSH state workspaceAgentIds mismatch: expected [${sourceSummary.workspaceAgentIds.join(', ')}], got [${(targetSummary.workspaceAgentIds ?? []).join(', ')}].`,
+    );
+  }
+};
+
+const assertDshStateSummaryMatches = (
+  sourceUserDataPath: string,
+  targetUserDataPath: string,
+  label: string,
+): void => {
+  const sourceSummary = readDshStateMigrationSummarySync(sourceUserDataPath);
+  const targetSummary = readDshStateMigrationSummarySync(targetUserDataPath);
+  assertDshStateSummaryValuesMatch(sourceSummary, targetSummary, label);
+};
+
 const readMigrationManifestSync = (sourceRoot: string): MigrationManifest => {
   const manifestPath = path.join(sourceRoot, MANIFEST_FILE_NAME);
   if (!fs.existsSync(manifestPath)) {
@@ -1079,6 +1320,7 @@ const assertManifestSqliteSummaryMatches = (
   manifestSummary: SqliteMigrationSummary | undefined,
   actualSummary: SqliteMigrationSummary,
   label: string,
+  manifestVersion?: number,
 ): void => {
   if (!manifestSummary) {
     throw new Error(`${label} is missing sqlite summary.`);
@@ -1101,13 +1343,33 @@ const assertManifestSqliteSummaryMatches = (
   if (manifestSummary.checksumSha256 !== actualSummary.checksumSha256) {
     throw new Error(`${label} sqlite checksum mismatch.`);
   }
-  assertSqliteCriticalSummaryMatches(manifestSummary, actualSummary, label);
+
+  // Older v1 (and pre-bindings v2) manifests did not record content checksums for
+  // newly added tables; still enforce full-file SHA-256 + rowCounts and every
+  // table checksum the manifest did record.
+  const optionalTables = manifestVersion === 1
+    ? OPTIONAL_MANIFEST_TABLE_CHECKSUMS_V1
+    : OPTIONAL_MANIFEST_TABLE_CHECKSUMS_V2;
+  const manifestChecksums = manifestSummary.tableContentChecksums ?? {};
+  const actualChecksums = actualSummary.tableContentChecksums;
+  const normalizedActualSummary = actualChecksums
+    ? {
+      ...actualSummary,
+      tableContentChecksums: Object.fromEntries(
+        Object.entries(actualChecksums).filter(([tableName]) => (
+          tableName in manifestChecksums || !optionalTables.has(tableName)
+        )),
+      ),
+    }
+    : actualSummary;
+
+  assertSqliteCriticalSummaryMatches(manifestSummary, normalizedActualSummary, label);
 };
 
 const validateExtractedArchiveContentSync = (sourceRoot: string): MigrationManifest => {
   const manifest = readMigrationManifestSync(sourceRoot);
   const sqliteSummary = assertMigrationSqliteReadySync(path.join(sourceRoot, DB_FILENAME), 'Backup archive');
-  assertManifestSqliteSummaryMatches(manifest.sqlite, sqliteSummary, 'Backup archive manifest');
+  assertManifestSqliteSummaryMatches(manifest.sqlite, sqliteSummary, 'Backup archive manifest', manifest.version);
 
   if (manifest.version === 1) {
     if (!manifest.openclawState) {
@@ -1116,6 +1378,15 @@ const validateExtractedArchiveContentSync = (sourceRoot: string): MigrationManif
     assertOpenClawStateSummaryValuesMatch(
       manifest.openclawState,
       readOpenClawStateMigrationSummarySync(sourceRoot),
+      'Backup archive manifest',
+    );
+  } else if (manifest.version === 2) {
+    if (!manifest.dshState) {
+      throw new Error('Backup archive manifest is missing DSH state summary.');
+    }
+    assertDshStateSummaryValuesMatch(
+      manifest.dshState,
+      readDshStateMigrationSummarySync(sourceRoot),
       'Backup archive manifest',
     );
   }
@@ -1137,6 +1408,7 @@ const buildManifest = (
     appName: APP_NAME,
     archiveKind,
     archiveRoot: CURRENT_ARCHIVE_ROOT,
+    sourceUserDataPath: resolvePath(input.userDataPath),
     createdAt: now.toISOString(),
     platform: process.platform,
     arch: process.arch,
@@ -1144,6 +1416,7 @@ const buildManifest = (
     ...getExclusionManifestFields(archiveKind),
     sqlite: readSqliteMigrationSummarySync(sqliteSourcePath),
     openclawState: readOpenClawStateMigrationSummarySync(manifestUserDataPath),
+    dshState: readDshStateMigrationSummarySync(manifestUserDataPath),
   };
 };
 
@@ -1176,6 +1449,7 @@ export const createMigrationArchiveSync = (
     if (archiveKind !== 'rollback') {
       assertMigrationSqliteReadySync(path.join(stageUserDataRoot, DB_FILENAME), 'Backup staging');
       assertOpenClawStateSummaryMatches(userDataPath, stageUserDataRoot, 'Backup staging');
+      assertDshStateSummaryMatches(userDataPath, stageUserDataRoot, 'Backup staging');
     }
 
     writeJsonSync(path.join(stageUserDataRoot, MANIFEST_FILE_NAME), buildManifest(input, stageUserDataRoot));
@@ -1482,7 +1756,7 @@ const clearRestorableUserDataSync = (userDataPath: string): void => {
     if (hasPreservedRestoreRelativeDescendant(relativePosixPath)) {
       const stat = fs.lstatSync(absolutePath);
       if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        removeDirIfExistsSync(absolutePath);
+        removePathWithRetrySync(absolutePath);
         return;
       }
 
@@ -1493,12 +1767,12 @@ const clearRestorableUserDataSync = (userDataPath: string): void => {
         );
       }
       if (fs.readdirSync(absolutePath).length === 0) {
-        removeDirIfExistsSync(absolutePath);
+        removePathWithRetrySync(absolutePath);
       }
       return;
     }
 
-    removeDirIfExistsSync(absolutePath);
+    removePathWithRetrySync(absolutePath);
   };
 
   for (const entry of fs.readdirSync(userDataPath)) {
@@ -1670,25 +1944,35 @@ export const performDataMigrationRestoreSync = (
 
     const extracted = extractMigrationArchiveToTempSync(archivePath);
     extractedTempRoot = extracted.tempRoot;
-    assertMigrationSqliteReadySync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
-    checkpointSqliteDatabaseSync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
-    invalidateMcpLaunchResolutionsSync(path.join(extracted.sourceRoot, DB_FILENAME));
-    checkpointSqliteDatabaseSync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
-    const sourceSummary = assertMigrationSqliteReadySync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
+    const extractedManifest = readMigrationManifestSync(extracted.sourceRoot);
+    const extractedManifestVersion = extractedManifest.version ?? 2;
+    const extractedDbPath = path.join(extracted.sourceRoot, DB_FILENAME);
 
-    const extractedManifestVersion = (() => {
-      try {
-        return readMigrationManifestSync(extracted.sourceRoot).version ?? 2;
-      } catch {
-        return 2;
-      }
-    })();
+    assertMigrationSqliteReadySync(extractedDbPath, 'Backup archive');
+    checkpointSqliteDatabaseSync(extractedDbPath, 'Backup archive');
+    invalidateMcpLaunchResolutionsSync(extractedDbPath);
+    rewriteRestoredUserDataPathsInSqliteSync(extractedDbPath, {
+      sourceUserDataPath: extractedManifest.sourceUserDataPath,
+      targetUserDataPath: resolvePath(input.userDataPath),
+      existsInTarget: (relPosix) => fs.existsSync(path.join(extracted.sourceRoot, ...relPosix.split('/'))),
+    });
+    checkpointSqliteDatabaseSync(extractedDbPath, 'Backup archive');
+    const sourceSummary = assertMigrationSqliteReadySync(extractedDbPath, 'Backup archive');
 
     targetWasTouched = true;
     replaceRestorableUserDataSync(extracted.sourceRoot, input.userDataPath);
     assertSqliteRestoredSync(extracted.sourceRoot, input.userDataPath, sourceSummary);
     if (extractedManifestVersion === 1) {
       assertOpenClawStateSummaryMatches(extracted.sourceRoot, input.userDataPath, 'Restored data');
+    } else if (extractedManifestVersion === 2) {
+      if (extractedManifest.dshState) {
+        assertDshStateSummaryValuesMatch(
+          extractedManifest.dshState,
+          readDshStateMigrationSummarySync(input.userDataPath),
+          'Restored data',
+        );
+      }
+      assertDshStateSummaryMatches(extracted.sourceRoot, input.userDataPath, 'Restored data');
     }
     removeSqliteSidecarsWithRetrySync(input.userDataPath);
 
@@ -1701,7 +1985,7 @@ export const performDataMigrationRestoreSync = (
         sqlitePath: path.join(input.userDataPath, DB_FILENAME),
         now: () => now,
       });
-      if (migrationResult.status === 'failed') {
+      if (migrationResult.status === MigrationV2Status.Failed) {
         throw new Error(`Legacy backup migration failed: ${migrationResult.error ?? 'unknown error'}`);
       }
     }

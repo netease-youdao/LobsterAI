@@ -63,6 +63,8 @@ import type {
 } from '../shared/cowork/btw';
 import {
   CoworkIpcChannel,
+  type CoworkMemoryStatus,
+  type CoworkMemoryStatusFilter,
   type CoworkSessionsChangedPayload,
 } from '../shared/cowork/constants';
 import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
@@ -861,27 +863,36 @@ contextBridge.exposeInMainWorld('electron', {
     getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
     cleanTempStorage: (options?: { cwds?: string[] }) =>
       ipcRenderer.invoke(CoworkIpcChannel.TempStorageClean, options),
-    listMemoryEntries: (input: {
+    listMemoryEntries: (input?: {
+      agentId?: string;
       query?: string;
-      status?: 'created' | 'stale' | 'deleted' | 'all';
+      status?: CoworkMemoryStatusFilter;
       includeDeleted?: boolean;
       limit?: number;
       offset?: number;
-    }) => ipcRenderer.invoke('cowork:memory:listEntries', input),
-    createMemoryEntry: (input: { text: string; confidence?: number; isExplicit?: boolean }) =>
-      ipcRenderer.invoke('cowork:memory:createEntry', input),
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryListEntries, input),
+    createMemoryEntry: (input: {
+      agentId?: string;
+      text: string;
+      section?: string;
+      confidence?: number;
+      isExplicit?: boolean;
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryCreateEntry, input),
     updateMemoryEntry: (input: {
+      agentId?: string;
       id: string;
       text?: string;
       confidence?: number;
-      status?: 'created' | 'stale' | 'deleted';
+      status?: CoworkMemoryStatus;
       isExplicit?: boolean;
-    }) => ipcRenderer.invoke('cowork:memory:updateEntry', input),
-    deleteMemoryEntry: (input: { id: string }) =>
-      ipcRenderer.invoke('cowork:memory:deleteEntry', input),
-    getMemoryStats: () => ipcRenderer.invoke('cowork:memory:getStats'),
-    readMemoryFileRaw: () => ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw),
-    writeMemoryFileRaw: (input: { content: string }) =>
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryUpdateEntry, input),
+    deleteMemoryEntry: (input: { agentId?: string; id: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryDeleteEntry, input),
+    getMemoryStats: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryGetStats, options),
+    readMemoryFileRaw: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw, options),
+    writeMemoryFileRaw: (input: { agentId?: string; content: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
     getDreamingStatus: (options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.DreamingStatus, options),
@@ -1330,35 +1341,6 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(AppUpdateIpc.StateChanged, handler);
     },
   },
-  plugins: {
-    list: () => ipcRenderer.invoke('plugins:list'),
-    detect: () => ipcRenderer.invoke('plugins:detect'),
-    sync: () => ipcRenderer.invoke('plugins:sync'),
-    install: (params: {
-      source: 'npm' | 'clawhub' | 'git' | 'local';
-      spec: string;
-      registry?: string;
-      version?: string;
-    }) => ipcRenderer.invoke('plugins:install', params),
-    uninstall: (pluginId: string) => ipcRenderer.invoke('plugins:uninstall', pluginId),
-    setEnabled: (pluginId: string, enabled: boolean) =>
-      ipcRenderer.invoke('plugins:set-enabled', pluginId, enabled),
-    getConfigSchema: (pluginId: string) =>
-      ipcRenderer.invoke('plugins:get-config-schema', pluginId),
-    saveConfig: (pluginId: string, config: Record<string, unknown>) =>
-      ipcRenderer.invoke('plugins:save-config', pluginId, config),
-    batchSave: (changes: {
-      toggles?: Array<{ pluginId: string; enabled: boolean }>;
-      configs?: Array<{ pluginId: string; config: Record<string, unknown> }>;
-    }) => ipcRenderer.invoke('plugins:batch-save', changes),
-    checkUpdates: (pluginIds?: string[]) => ipcRenderer.invoke('plugins:check-updates', pluginIds),
-    update: (pluginId: string) => ipcRenderer.invoke('plugins:update', pluginId),
-    onInstallLog: (callback: (line: string) => void) => {
-      const handler = (_event: any, line: string) => callback(line);
-      ipcRenderer.on('plugins:install-log', handler);
-      return () => ipcRenderer.removeListener('plugins:install-log', handler);
-    },
-  },
   log: {
     getPath: () => ipcRenderer.invoke('log:getPath'),
     openFolder: () => ipcRenderer.invoke('log:openFolder'),
@@ -1771,6 +1753,8 @@ contextBridge.exposeInMainWorld('electron', {
     listPlugins: () => ipcRenderer.invoke(DshHostIpc.ListPlugins),
     installPlugin: (packageSpec: string) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, packageSpec),
     removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
+    setPluginEnabled: (packageName: string, enabled: boolean) =>
+      ipcRenderer.invoke(DshHostIpc.SetPluginEnabled, packageName, enabled),
     openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),
     getPermissionPreset: (sessionId?: string) => ipcRenderer.invoke(DshHostIpc.GetPermissionPreset, sessionId),
     setPermissionPreset: (preset: string, sessionId?: string) =>

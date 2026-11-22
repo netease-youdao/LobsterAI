@@ -10,6 +10,7 @@
  * - `syncProviders`: hot-sync LobsterAI providers & API keys into memory
  * - `syncMcpServers`: reconcile LobsterAI MCP servers via `ctx.mcpManager.register`
  * - `syncSkillsPolicy`: update global enabled/disabled skill lists & refresh catalog
+ * - `syncMemoryPolicy`: update global memoryEnabled toggle
  * - `syncAgents`: hot-sync LobsterAI agent roster & collaboration policies into memory
  * - `syncSubagentBindings`: restore durable childSessionId -> targetAgentId delegation bindings
  * - `bindSessionContext`: bind `{ agentId, coworkSessionId, allowedSkillIds, customSystemPrompt, executionMode }`
@@ -24,7 +25,9 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
+import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
 import { getHostState } from './shared-state.mjs';
+import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
 
 export const name = 'lobster-ops-rpc';
 export const inject = ['connection'];
@@ -36,6 +39,16 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+function sameSkillAllowlist(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 /**
@@ -239,13 +252,7 @@ export function apply(ctx) {
 
   state.syncMcpServers = syncMcpServers;
 
-  const VALID_PERMISSION_PRESETS = new Set([
-    'read-only',
-    'workspace-write',
-    'danger-full-access',
-  ]);
-
-  function applyPermissionPresetToAgent(agent, preset) {
+  function applyPermissionPresetToAgent(agent, preset, options = {}) {
     if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
     // dsh applies the delegation's sandbox on top of its parent's permissions.
     if (agent.session.header?.origin === 'subagent') return false;
@@ -256,14 +263,21 @@ export function apply(ctx) {
         ? permissionPresets.current(agent.session)
         : undefined;
       if (current === preset) return true;
-      permissionPresets.set(agent.session, preset);
-      const approval = ctx.get('approval');
-      if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
-        const spec = permissionPresets.resolve(preset);
-        if (spec?.approval) {
-          approval.setPolicy(agent, spec.approval);
+      // Call `approval.setPolicy` BEFORE `permissionPresets.set` so `setPolicy`
+      // observes the previous effective policy and emits its model switch notice
+      // instead of silently returning early after `permissionPresets.set` already
+      // appends `approval/policy`. `permissionPresets.set` then writes
+      // `permission/preset` and `sandbox/mode` without duplicating `approval/policy`.
+      if (options.notifyPolicyChange !== false) {
+        const approval = ctx.get('approval');
+        if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
+          const spec = permissionPresets.resolve(preset);
+          if (spec?.approval) {
+            approval.setPolicy(agent, spec.approval);
+          }
         }
       }
+      permissionPresets.set(agent.session, preset);
       return true;
     } catch (error) {
       ctx.logger.warn(
@@ -282,7 +296,7 @@ export function apply(ctx) {
       ? bound.permissionPreset
       : state.defaultPermissionPreset;
     if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
-      applyPermissionPresetToAgent(agent, targetPreset);
+      applyPermissionPresetToAgent(agent, targetPreset, { notifyPolicyChange: false });
     }
   });
 
@@ -320,6 +334,7 @@ export function apply(ctx) {
               workspacesDirConfigured: state.workspacesDir.length > 0,
               skillsDirConfigured: state.skillsDir.length > 0,
               bridgeConfigured: state.bridgeUrl.length > 0,
+              memoryEnabled: state.memoryEnabled !== false,
             });
           }
 
@@ -357,6 +372,19 @@ export function apply(ctx) {
                 skillsDir: state.skillsDir,
                 enabledCount: state.skillsPolicy.enabledIds ? state.skillsPolicy.enabledIds.size : null,
                 disabledCount: state.skillsPolicy.disabledIds.size,
+              },
+            });
+          }
+
+          case 'syncMemoryPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            if (typeof p.enabled === 'boolean') {
+              state.memoryEnabled = p.enabled;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                memoryEnabled: state.memoryEnabled !== false,
               },
             });
           }
@@ -467,6 +495,9 @@ export function apply(ctx) {
               });
               syncedCount += 1;
             }
+            if (replace || syncedCount > 0) {
+              state.invalidateSkills?.();
+            }
             return jsonResponse({
               ok: true,
               result: {
@@ -483,36 +514,27 @@ export function apply(ctx) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
             if (p.unbind === true) {
-              state.sessionContexts.delete(sessionId);
-              state.delegatedChildAgents.delete(sessionId);
+              const removedSession = state.sessionContexts.delete(sessionId);
+              const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+              if (removedSession || removedDelegated) {
+                state.invalidateSkills?.();
+              }
               return jsonResponse({ ok: true, result: { unbound: sessionId } });
             }
+            const hadPrev = state.sessionContexts.has(sessionId);
             const prev = state.sessionContexts.get(sessionId) ?? {};
-            const nextPreset = typeof p.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(p.permissionPreset)
-              ? p.permissionPreset
-              : undefined;
-            const mergedUnlocked = new Set([
-              ...(Array.isArray(prev.unlockedCapabilities) ? prev.unlockedCapabilities : []),
-              ...(Array.isArray(p.unlockedCapabilities)
-                ? p.unlockedCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0)
-                : []),
-            ]);
-            state.sessionContexts.set(sessionId, {
-              ...prev,
-              ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
-              ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
-              ...(typeof p.traceId === 'string' && p.traceId.length > 0 ? { traceId: p.traceId } : {}),
-              ...(typeof p.workspaceDir === 'string' ? { workspaceDir: p.workspaceDir } : {}),
-              ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
-                ? { allowedSkillIds: p.allowedSkillIds }
-                : {}),
-              ...(typeof p.customSystemPrompt === 'string'
-                ? { customSystemPrompt: p.customSystemPrompt }
-                : {}),
-              ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
-              ...(nextPreset ? { permissionPreset: nextPreset } : {}),
-              ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
-            });
+            const { nextPreset, context: nextContext } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
+            state.sessionContexts.set(sessionId, nextContext);
+            // Invalidate DSH's SkillRegistry collectCache whenever a session's
+            // agent binding or allowedSkillIds changes so Turn 2+ never serves
+            // a stale skill catalog from Turn 1.
+            if (
+              !hadPrev
+              || prev.agentId !== nextContext.agentId
+              || !sameSkillAllowlist(prev.allowedSkillIds, nextContext.allowedSkillIds)
+            ) {
+              state.invalidateSkills?.();
+            }
             state.reconcileToolDisclosure?.(sessionId);
             const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
             const liveAgent = ctx.get('agents')?.get(sessionId);
@@ -532,7 +554,11 @@ export function apply(ctx) {
             const appliedSessions = [];
             if (sessionId) {
               const prev = state.sessionContexts.get(sessionId) ?? {};
-              state.sessionContexts.set(sessionId, { ...prev, permissionPreset: preset });
+              state.sessionContexts.set(sessionId, {
+                ...prev,
+                permissionPreset: preset,
+                permissionPresetExplicit: true,
+              });
               const liveAgent = ctx.get('agents')?.get(sessionId);
               if (liveAgent && applyPermissionPresetToAgent(liveAgent, preset)) {
                 appliedSessions.push(sessionId);
@@ -540,11 +566,14 @@ export function apply(ctx) {
             } else {
               state.defaultPermissionPreset = preset;
               for (const [sid, ctxEntry] of state.sessionContexts.entries()) {
+                if (ctxEntry?.permissionPresetExplicit) continue;
                 state.sessionContexts.set(sid, { ...ctxEntry, permissionPreset: preset });
               }
               const agents = ctx.get('agents');
               if (agents && typeof agents.list === 'function') {
                 for (const agent of agents.list()) {
+                  const ctxEntry = state.sessionContexts.get(agent.id);
+                  if (ctxEntry?.permissionPresetExplicit) continue;
                   if (applyPermissionPresetToAgent(agent, preset)) {
                     appliedSessions.push(agent.id);
                   }
@@ -569,14 +598,39 @@ export function apply(ctx) {
             return jsonResponse({ ok: true, result });
           }
 
+          case 'syncWebAccessPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const validSearchPolicies = new Set(Object.values(DSH_SEARCH_POLICY));
+            state.webAccessPolicy = {
+              webFetchEnabled: p.webFetchEnabled !== false,
+              blockedHostnames: normalizeHostnamePolicyList(p.blockedHostnames),
+              allowedHostnames: normalizeHostnamePolicyList(p.allowedHostnames),
+            };
+            if (typeof p.searchPolicy === 'string' && validSearchPolicies.has(p.searchPolicy)) {
+              state.searchPolicy = p.searchPolicy;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+                blockedHostnamesCount: state.webAccessPolicy.blockedHostnames.length,
+                allowedHostnamesCount: state.webAccessPolicy.allowedHostnames.length,
+                searchPolicy: state.searchPolicy,
+              },
+            });
+          }
+
           case 'deleteSessionFiles': {
             const p = payload && typeof payload === 'object' ? payload : {};
             const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
             if (!sessionId) {
               return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
             }
-            state.sessionContexts.delete(sessionId);
-            state.delegatedChildAgents.delete(sessionId);
+            const removedSession = state.sessionContexts.delete(sessionId);
+            const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+            if (removedSession || removedDelegated) {
+              state.invalidateSkills?.();
+            }
             // Stop live agent if running before deleting files.
             const liveAgent = ctx.get('agents')?.get(sessionId);
             if (liveAgent && typeof liveAgent.cancel === 'function') {

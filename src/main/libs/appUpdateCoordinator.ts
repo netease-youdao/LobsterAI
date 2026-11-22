@@ -16,6 +16,7 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../../shared/appUpdate/constants';
+import { APP_UPDATE_DOWNLOAD_DIR_NAME } from '../appConstants';
 import type { SqliteStore } from '../sqliteStore';
 import { AppUpdateGrayClient, canReuseUpdatePackage } from './appUpdateGrayClient';
 import {
@@ -916,7 +917,7 @@ export class AppUpdateCoordinator {
   }
 
   private getUpdateCacheDir(): string {
-    return path.join(app.getPath('userData'), 'updates');
+    return path.join(app.getPath('userData'), APP_UPDATE_DOWNLOAD_DIR_NAME);
   }
 
   private isCachedInstallerForSource(filename: string, source: AppUpdateSource | null): boolean {

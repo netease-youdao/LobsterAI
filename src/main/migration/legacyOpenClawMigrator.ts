@@ -31,7 +31,16 @@ import type {
 } from '../../scheduledTask/types';
 import { AgentId } from '../../shared/agent/constants';
 import {
+  LEGACY_DREAM_DIARY_FILENAME,
+  LEGACY_DREAM_DIARY_LOWERCASE_FILENAME,
+} from '../../shared/cowork/dreamDiary';
+import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
+import {
+  DEFAULT_DSH_PERMISSION_PRESET,
+  DSH_PERMISSION_PRESET_KV_KEY,
   LEGACY_OPENCLAW_BACKUP_DIR_NAME,
+  mapLegacyExecutionModeToPermissionPreset,
+  parseDshPermissionPreset,
   RETAINED_IM_PLATFORM_LIST,
   RetiredImPlatform,
   WORKSPACES_DIR_NAME,
@@ -41,20 +50,26 @@ import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
+  MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
   MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
+  MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
+  MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+  MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
   type MigrationV2Report,
   MigrationV2Status,
 } from '../../shared/migration/constants';
 import { type Platform, PlatformRegistry } from '../../shared/platform';
+import { cpRecursiveSync } from '../fsCompat';
 import { seedAgentPersonaFiles } from '../libs/agentPersonaFiles';
 import {
   encodeMigratedMcpOAuthToken,
   MCP_OAUTH_TOKEN_KV_PREFIX,
   type McpOAuthTokenRecord,
 } from '../mcp/mcpOAuthManager';
+import { findLegacyDreamDiaryFile } from '../memory/legacyDreamDiaryReader';
 import {
   LobsterMemoryService,
   sanitizeAgentId,
@@ -67,13 +82,28 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
+import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
+import {
+  type ExtractedLegacyTavilyConfig,
+  extractLegacyTavilyConfig,
+  LegacyTavilySource,
+  type LegacyUserPluginRow,
+  migrateLegacyTavilyPluginToMcp,
+} from './legacyTavilyMigration';
 import {
   collectDirectoryTarEntries,
   extractMatchingEntriesFromTarGz,
   type TarEntryInput,
   writeTarGzArchive,
 } from './tarGzUtil';
+
+export {
+  type ExtractedLegacyTavilyConfig,
+  extractLegacyTavilyConfig,
+  LegacyTavilySource,
+  migrateLegacyTavilyPluginToMcp,
+};
 
 export interface RunLegacyOpenClawMigrationOptions {
   /** Electron userData root directory. */
@@ -1092,6 +1122,170 @@ export async function backfillLegacyScheduledTasksFromBackup(options: {
   }
 }
 
+function copyLegacyMemoryMarkdownRecursive(
+  srcDir: string,
+  dstDir: string,
+  agentId: string,
+  incompatibleEntries: TarEntryInput[],
+  relPrefix = '',
+): { copiedAny: boolean; dreamsFilesArchived: number } {
+  let copiedAny = false;
+  let dreamsFilesArchived = 0;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(srcDir, { withFileTypes: true });
+  } catch {
+    return { copiedAny, dreamsFilesArchived };
+  }
+
+  for (const entry of entries) {
+    const srcPath = path.join(srcDir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '.dreams') {
+        const archivePrefix = relPrefix
+          ? `dreams/${agentId}/memory/${relPrefix}/.dreams`
+          : `dreams/${agentId}/memory/.dreams`;
+        const dreamEntries = collectDirectoryTarEntries(srcPath, archivePrefix);
+        incompatibleEntries.push(...dreamEntries);
+        dreamsFilesArchived += dreamEntries.length;
+        continue;
+      }
+      const nextRelPrefix = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+      const nested = copyLegacyMemoryMarkdownRecursive(
+        srcPath,
+        path.join(dstDir, entry.name),
+        agentId,
+        incompatibleEntries,
+        nextRelPrefix,
+      );
+      if (nested.copiedAny) copiedAny = true;
+      dreamsFilesArchived += nested.dreamsFilesArchived;
+      continue;
+    }
+
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const dstPath = path.join(dstDir, entry.name);
+    if (!fs.existsSync(dstPath)) {
+      fs.mkdirSync(dstDir, { recursive: true });
+      fs.copyFileSync(srcPath, dstPath);
+      copiedAny = true;
+    }
+  }
+
+  return { copiedAny, dreamsFilesArchived };
+}
+
+export interface LegacyDreamDiaryBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  diariesRestored: number;
+  error?: string;
+}
+
+function copyLegacyDreamDiaryFile(srcFile: string, dstDir: string): boolean {
+  if (!fs.existsSync(srcFile)) return false;
+  const content = fs.readFileSync(srcFile, 'utf8');
+  if (!content.trim()) return false;
+  if (findLegacyDreamDiaryFile(dstDir)) return false;
+
+  fs.mkdirSync(dstDir, { recursive: true });
+  const dstFile = path.join(dstDir, LEGACY_DREAM_DIARY_FILENAME);
+  fs.writeFileSync(dstFile, content, 'utf8');
+  try {
+    const stat = fs.statSync(srcFile);
+    fs.utimesSync(dstFile, stat.atime, stat.mtime);
+  } catch {
+    // Best-effort mtime preservation.
+  }
+  return true;
+}
+
+interface ParsedDreamDiaryArchiveEntry {
+  agentId: string;
+  isCanonicalWorkspace: boolean;
+  isUpperCase: boolean;
+}
+
+function parseDreamDiaryArchiveEntry(archivePath: string): ParsedDreamDiaryArchiveEntry | null {
+  const normalized = archivePath
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .replace(/^\/+/, '');
+  const stripped = normalized.startsWith('openclaw-state/')
+    ? normalized.slice('openclaw-state/'.length)
+    : normalized;
+  const segments = stripped.split('/').filter(Boolean);
+  if (segments.length !== 2) return null;
+
+  const [dirName, fileName] = segments;
+  if (fileName.toLowerCase() !== LEGACY_DREAM_DIARY_LOWERCASE_FILENAME) return null;
+  if (dirName !== 'workspace' && !dirName.startsWith('workspace-')) return null;
+
+  const rawAgentId = dirName === 'workspace'
+    ? AgentId.Main
+    : dirName.slice('workspace-'.length).trim() || AgentId.Main;
+  try {
+    return {
+      agentId: sanitizeAgentId(rawAgentId),
+      isCanonicalWorkspace: dirName !== 'workspace',
+      isUpperCase: fileName === LEGACY_DREAM_DIARY_FILENAME,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isDreamDiaryArchiveEntry(archivePath: string): boolean {
+  return parseDreamDiaryArchiveEntry(archivePath) !== null;
+}
+
+function findIncompatibleModulesArchivePath(userDataDir: string, db: Database.Database): string | null {
+  const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+  if (rawReport) {
+    try {
+      const report = JSON.parse(rawReport) as MigrationV2Report;
+      if (report?.incompatibleArchivePath && fs.existsSync(report.incompatibleArchivePath)) {
+        return report.incompatibleArchivePath;
+      }
+    } catch {
+      // fall through to directory scan
+    }
+  }
+
+  const backupsRoot = path.join(userDataDir, LEGACY_OPENCLAW_BACKUP_DIR_NAME);
+  if (!fs.existsSync(backupsRoot)) return null;
+  try {
+    const dirs = fs
+      .readdirSync(backupsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort()
+      .reverse();
+    for (const dirName of dirs) {
+      const candidate = path.join(backupsRoot, dirName, 'incompatible-modules-backup.tar.gz');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isTavilyMigrationArchiveEntry(entryPath: string): boolean {
+  const normalized = entryPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return (
+    normalized === 'sqlite/user_plugins.json'
+    || normalized === 'openclaw-config/openclaw.user.json'
+    || normalized === 'openclaw-config/openclaw.json'
+  );
+}
+
+export interface LegacyTavilyBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  migrated: boolean;
+  error?: string;
+}
+
 const LEGACY_MCP_TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
 const LEGACY_MCP_TOOL_NAME_MAX_PREFIX = 30;
 const LEGACY_MCP_OAUTH_REQUESTER_SUFFIX_RE = /-r-[0-9a-f]{16}$/i;
@@ -1646,32 +1840,250 @@ export async function backfillLegacyMcpOAuthTokensFromBackup(options: {
 }
 
 /**
- * Copy legacy `workspace-*` persona & memory files out of OpenClaw's state dir
- * into engine-independent `<userData>/workspaces/<agentId>/`, stripping the
- * old OpenClaw-managed `AGENTS.md` section and skipping `.dreams/`.
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before legacy plugin-based Tavily config extraction landed.
+ */
+export async function backfillLegacyTavilyFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyTavilyBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_TAVILY_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', migrated: false };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', migrated: false };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', migrated: false };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds.
+  }
+
+  const archivePath = findIncompatibleModulesArchivePath(userDataDir, db);
+  const tmpDir = archivePath ? fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-tavily-backfill-')) : null;
+
+  try {
+    let archivedUserPlugins: LegacyUserPluginRow[] | undefined;
+    let archivedOpenclawUserConfig: Record<string, unknown> | null = null;
+    let archivedOpenclawConfig: Record<string, unknown> | null = null;
+
+    if (archivePath && tmpDir) {
+      await extractMatchingEntriesFromTarGz(archivePath, tmpDir, isTavilyMigrationArchiveEntry);
+      const pluginsJson = safeReadJson(path.join(tmpDir, 'sqlite', 'user_plugins.json'));
+      if (Array.isArray(pluginsJson)) {
+        archivedUserPlugins = pluginsJson as LegacyUserPluginRow[];
+      }
+      const userCfg = safeReadJson(path.join(tmpDir, 'openclaw-config', 'openclaw.user.json'));
+      if (userCfg && typeof userCfg === 'object' && !Array.isArray(userCfg)) {
+        archivedOpenclawUserConfig = userCfg as Record<string, unknown>;
+      }
+      const mainCfg = safeReadJson(path.join(tmpDir, 'openclaw-config', 'openclaw.json'));
+      if (mainCfg && typeof mainCfg === 'object' && !Array.isArray(mainCfg)) {
+        archivedOpenclawConfig = mainCfg as Record<string, unknown>;
+      }
+    }
+
+    const res = migrateLegacyTavilyPluginToMcp({
+      db,
+      userPluginsOverride: archivedUserPlugins,
+      openclawUserConfigOverride: archivedOpenclawUserConfig,
+      openclawConfigOverride: archivedOpenclawConfig,
+      nowMs: now().getTime(),
+    });
+
+    setKv(
+      db,
+      MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+      JSON.stringify({
+        completedAt: now().toISOString(),
+        migrated: res.migrated,
+        ...(res.source ? { source: res.source } : {}),
+        ...(res.skippedReason ? { skippedReason: res.skippedReason } : {}),
+      }),
+    );
+
+    return { status: 'completed', migrated: res.migrated };
+  } catch (error) {
+    return {
+      status: 'failed',
+      migrated: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+}
+
+/**
+ * One-shot idempotent backfill for users who completed OpenClaw -> DSH v2
+ * migration before `DREAMS.md` preservation landed.
+ *
+ * Streams only `workspace-<agentId>/DREAMS.md`, `workspace-<agentId>/dreams.md`, and
+ * `workspace/DREAMS.md` from `legacy-openclaw-backup/<ts>/legacy-openclaw-state.tar.gz`
+ * into `<userData>/workspaces/<agentId>/DREAMS.md` without overwriting existing files.
+ */
+export async function backfillLegacyDreamDiariesFromBackup(options: {
+  userDataDir: string;
+  db: Database.Database;
+  now?: () => Date;
+}): Promise<LegacyDreamDiaryBackfillResult> {
+  const { userDataDir, db } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', diariesRestored: 0 };
+  }
+
+  const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+  if (!completedRaw) {
+    return { status: 'skipped', diariesRestored: 0 };
+  }
+
+  try {
+    const completedMeta = JSON.parse(completedRaw) as { freshInstall?: boolean };
+    if (completedMeta?.freshInstall) {
+      setKv(
+        db,
+        MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: now().toISOString(), skipped: 'freshInstall' }),
+      );
+      return { status: 'skipped', diariesRestored: 0 };
+    }
+  } catch {
+    // Non-JSON completion marker still proceeds to archive lookup.
+  }
+
+  const archivePath = findLegacyStateArchivePath(userDataDir, db);
+  if (!archivePath) {
+    setKv(
+      db,
+      MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), skipped: 'noBackupArchive' }),
+    );
+    return { status: 'skipped', diariesRestored: 0 };
+  }
+
+  const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-dream-diary-backfill-'));
+  try {
+    const extractedEntries = await extractMatchingEntriesFromTarGz(
+      archivePath,
+      tmpDir,
+      isDreamDiaryArchiveEntry,
+    );
+
+    const prioritized = extractedEntries
+      .map((entryPath) => ({
+        entryPath,
+        parsed: parseDreamDiaryArchiveEntry(entryPath),
+      }))
+      .filter(
+        (item): item is { entryPath: string; parsed: ParsedDreamDiaryArchiveEntry } =>
+          item.parsed !== null,
+      )
+      .sort((a, b) => {
+        if (a.parsed.isCanonicalWorkspace !== b.parsed.isCanonicalWorkspace) {
+          return a.parsed.isCanonicalWorkspace ? -1 : 1;
+        }
+        if (a.parsed.isUpperCase !== b.parsed.isUpperCase) {
+          return a.parsed.isUpperCase ? -1 : 1;
+        }
+        return a.entryPath.localeCompare(b.entryPath);
+      });
+
+    let diariesRestored = 0;
+    for (const { entryPath, parsed } of prioritized) {
+      const extractedFile = path.resolve(tmpDir, ...entryPath.split('/').filter(Boolean));
+      const dstDir = path.join(workspacesDir, parsed.agentId);
+      if (copyLegacyDreamDiaryFile(extractedFile, dstDir)) {
+        diariesRestored += 1;
+      }
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), diariesRestored }),
+    );
+    return { status: 'completed', diariesRestored };
+  } catch (error) {
+    return {
+      status: 'failed',
+      diariesRestored: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Copy legacy `workspace-*` (and bare `workspace`) persona, memory, and
+ * read-only historical `DREAMS.md` files out of OpenClaw's state dir into
+ * engine-independent `<userData>/workspaces/<agentId>/`, stripping the old
+ * OpenClaw-managed `AGENTS.md` section, recursively copying `memory/**\/*.md`,
+ * and archiving `memory/.dreams/` (plus legacy `.dreams/`) into
+ * `incompatible-modules-backup.tar.gz`.
  */
 function migrateLegacyWorkspaces(
   openclawStateDir: string,
   workspacesDir: string,
   incompatibleEntries: TarEntryInput[],
   archivedModules: MigrationV2ArchivedItem[],
-): number {
-  if (!fs.existsSync(openclawStateDir)) return 0;
-  let migratedCount = 0;
+): { workspacesMigrated: number; dreamDiariesMigrated: number } {
+  if (!fs.existsSync(openclawStateDir)) {
+    return { workspacesMigrated: 0, dreamDiariesMigrated: 0 };
+  }
+  const migratedAgentIds = new Set<string>();
+  let dreamDiariesMigrated = 0;
   let dreamsFilesArchived = 0;
 
   let dirents: fs.Dirent[];
   try {
     dirents = fs.readdirSync(openclawStateDir, { withFileTypes: true });
   } catch {
-    return 0;
+    return { workspacesMigrated: 0, dreamDiariesMigrated: 0 };
   }
+
+  const workspaceDirents = dirents
+    .filter((d) => d.isDirectory() && (d.name === 'workspace' || d.name.startsWith('workspace-')))
+    .sort((a, b) => {
+      // Process `workspace-*` before bare `workspace` so `workspace-main` wins when both exist.
+      if (a.name === 'workspace' && b.name !== 'workspace') return 1;
+      if (b.name === 'workspace' && a.name !== 'workspace') return -1;
+      return a.name.localeCompare(b.name);
+    });
 
   const memoryService = new LobsterMemoryService(workspacesDir);
   try {
-    for (const dirent of dirents) {
-      if (!dirent.isDirectory() || !dirent.name.startsWith('workspace-')) continue;
-      const agentId = dirent.name.slice('workspace-'.length).trim() || 'main';
+    for (const dirent of workspaceDirents) {
+      const rawAgentId = dirent.name === 'workspace'
+        ? AgentId.Main
+        : dirent.name.slice('workspace-'.length).trim() || AgentId.Main;
+      let agentId: string;
+      try {
+        agentId = sanitizeAgentId(rawAgentId);
+      } catch {
+        continue;
+      }
+
       const srcDir = path.join(openclawStateDir, dirent.name);
       const dstDir = memoryService.ensureAgentWorkspace(agentId);
 
@@ -1692,33 +2104,45 @@ function migrateLegacyWorkspaces(
         }
       }
 
-      // Copy daily memory notes (`memory/YYYY-MM-DD.md`).
+      // Preserve historical `DREAMS.md` / `dreams.md` (case-insensitive) as read-only
+      // `DREAMS.md` inside `<userData>/workspaces/<agentId>/`.
+      const srcDreamDiary = findLegacyDreamDiaryFile(srcDir);
+      if (srcDreamDiary && copyLegacyDreamDiaryFile(srcDreamDiary, dstDir)) {
+        dreamDiariesMigrated += 1;
+        copiedAny = true;
+      }
+
+      // Recursively copy daily and nested memory markdown notes (`memory/**/*.md`),
+      // archiving `memory/.dreams/` (and any nested `.dreams/`) into incompatible backup.
       const srcDailyDir = path.join(srcDir, 'memory');
       if (fs.existsSync(srcDailyDir)) {
         const dstDailyDir = path.join(dstDir, 'memory');
         fs.mkdirSync(dstDailyDir, { recursive: true });
-        for (const f of fs.readdirSync(srcDailyDir)) {
-          if (!f.endsWith('.md')) continue;
-          const srcMd = path.join(srcDailyDir, f);
-          const dstMd = path.join(dstDailyDir, f);
-          if (fs.statSync(srcMd).isFile() && !fs.existsSync(dstMd)) {
-            fs.copyFileSync(srcMd, dstMd);
-            copiedAny = true;
-          }
-        }
+        const copiedMemory = copyLegacyMemoryMarkdownRecursive(
+          srcDailyDir,
+          dstDailyDir,
+          agentId,
+          incompatibleEntries,
+        );
+        if (copiedMemory.copiedAny) copiedAny = true;
+        dreamsFilesArchived += copiedMemory.dreamsFilesArchived;
       }
 
-      // Archive `.dreams/` into incompatible modules backup instead of migrating.
-      const dreamsDir = path.join(srcDir, '.dreams');
-      if (fs.existsSync(dreamsDir)) {
-        const dreamEntries = collectDirectoryTarEntries(dreamsDir, `dreams/${agentId}`);
+      // Archive legacy top-level `.dreams/` into incompatible modules backup instead of migrating.
+      // (`memory/.dreams/` is already archived during the recursive walk above.)
+      const legacyTopDreamsDir = path.join(srcDir, '.dreams');
+      if (fs.existsSync(legacyTopDreamsDir)) {
+        const dreamEntries = collectDirectoryTarEntries(
+          legacyTopDreamsDir,
+          `dreams/${agentId}/.dreams`,
+        );
         incompatibleEntries.push(...dreamEntries);
         dreamsFilesArchived += dreamEntries.length;
       }
 
       if (copiedAny) {
         memoryService.reindexAgent(agentId);
-        migratedCount += 1;
+        migratedAgentIds.add(agentId);
       }
     }
   } finally {
@@ -1732,6 +2156,88 @@ function migrateLegacyWorkspaces(
       count: dreamsFilesArchived,
     });
   }
+  return {
+    workspacesMigrated: migratedAgentIds.size,
+    dreamDiariesMigrated,
+  };
+}
+
+/**
+ * Copy legacy custom skill directories out of `<openclawStateDir>/skills/`
+ * and `<openclawStateDir>/workspace-<agentId>/skills/` into `<userData>/SKILLs/`
+ * before deleting `openclaw/`. Never overwrites existing skills in `SKILLs/`.
+ */
+function migrateLegacyOpenClawSkills(
+  openclawStateDir: string,
+  userSkillsDir: string,
+): number {
+  if (!fs.existsSync(openclawStateDir)) return 0;
+
+  const candidateSkillRoots: string[] = [];
+  const sharedSkillsDir = path.join(openclawStateDir, 'skills');
+  if (fs.existsSync(sharedSkillsDir)) {
+    candidateSkillRoots.push(sharedSkillsDir);
+  }
+
+  let stateEntries: fs.Dirent[];
+  try {
+    stateEntries = fs.readdirSync(openclawStateDir, { withFileTypes: true });
+  } catch {
+    stateEntries = [];
+  }
+
+  const workspaceNames = stateEntries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('workspace-'))
+    .map((entry) => entry.name)
+    .sort((a, b) => {
+      if (a === 'workspace-main') return -1;
+      if (b === 'workspace-main') return 1;
+      return a.localeCompare(b);
+    });
+
+  for (const workspaceName of workspaceNames) {
+    const wsSkillsDir = path.join(openclawStateDir, workspaceName, 'skills');
+    if (fs.existsSync(wsSkillsDir)) {
+      candidateSkillRoots.push(wsSkillsDir);
+    }
+  }
+
+  let migratedCount = 0;
+  for (const sourceRoot of candidateSkillRoots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(sourceRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const skillId = entry.name.trim();
+      if (!skillId || skillId.startsWith('.') || skillId.includes('/') || skillId.includes('\\')) {
+        continue;
+      }
+      const srcSkillDir = path.join(sourceRoot, entry.name);
+      try {
+        if (!fs.statSync(srcSkillDir).isDirectory()) continue;
+        const skillManifestPath = path.join(srcSkillDir, 'SKILL.md');
+        if (!fs.existsSync(skillManifestPath) || !fs.statSync(skillManifestPath).isFile()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      const targetSkillDir = path.join(userSkillsDir, skillId);
+      if (fs.existsSync(targetSkillDir)) {
+        continue;
+      }
+
+      fs.mkdirSync(userSkillsDir, { recursive: true });
+      cpRecursiveSync(srcSkillDir, targetSkillDir, { dereference: true, force: false });
+      migratedCount += 1;
+    }
+  }
+
   return migratedCount;
 }
 
@@ -1750,6 +2256,227 @@ function backfillAgentPersonaFiles(db: Database.Database, workspacesDir: string)
     }
   }
   setKv(db, marker, '1');
+}
+
+const PENDING_MESSAGE_EDITS_CLEARED_KV_KEY = 'engine.migration.v2.pendingMessageEditsCleared';
+
+/**
+ * Archive (when `incompatibleEntries` is provided) and clear stale legacy
+ * in-place message edit / version switch rows. LobsterAI v2 retires in-place
+ * edit recovery in favor of session forking, so uncommitted rows left over
+ * from OpenClaw must be cleared to avoid leaving sessions permanently stuck.
+ */
+function archiveAndClearLegacyPendingMessageEdits(
+  db: Database.Database,
+  incompatibleEntries?: TarEntryInput[],
+): void {
+  if (tableExists(db, 'cowork_message_edits')) {
+    const editCols = getTableColumns(db, 'cowork_message_edits');
+    const pendingEdits = editCols.has('phase')
+      ? db
+          .prepare('SELECT * FROM cowork_message_edits WHERE phase IS NULL OR phase NOT IN (?, ?)')
+          .all(CoworkMessageEditPhase.Committed, CoworkMessageEditPhase.Restored)
+      : db.prepare('SELECT * FROM cowork_message_edits').all();
+    if (pendingEdits.length > 0) {
+      incompatibleEntries?.push({
+        archivePath: 'sqlite/cowork_message_edits.json',
+        content: Buffer.from(JSON.stringify(pendingEdits, null, 2), 'utf8'),
+      });
+      if (editCols.has('phase')) {
+        db.prepare('DELETE FROM cowork_message_edits WHERE phase IS NULL OR phase NOT IN (?, ?)')
+          .run(CoworkMessageEditPhase.Committed, CoworkMessageEditPhase.Restored);
+      } else {
+        db.prepare('DELETE FROM cowork_message_edits').run();
+      }
+    }
+  }
+
+  if (tableExists(db, 'cowork_message_version_switches')) {
+    const pendingSwitches = db.prepare('SELECT * FROM cowork_message_version_switches').all();
+    if (pendingSwitches.length > 0) {
+      incompatibleEntries?.push({
+        archivePath: 'sqlite/cowork_message_version_switches.json',
+        content: Buffer.from(JSON.stringify(pendingSwitches, null, 2), 'utf8'),
+      });
+      db.prepare('DELETE FROM cowork_message_version_switches').run();
+    }
+  }
+}
+
+/** One-shot cleanup for already-migrated v2 DBs that still have stale legacy edit rows. */
+function clearLegacyPendingMessageEditsOnce(db: Database.Database): void {
+  if (getKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY)) return;
+  archiveAndClearLegacyPendingMessageEdits(db);
+  setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+}
+
+/**
+ * Migrate legacy OpenClaw `cowork_config.executionMode` and per-session
+ * `cowork_sessions.execution_mode` to DSH permission presets once.
+ *
+ * - `cowork_config.executionMode` -> `kv['dsh.permissionPreset.default']` when not already set
+ *   (`'auto'` -> `'danger-full-access'`, `'local'`/`'sandbox'` -> `'workspace-write'`).
+ * - Legacy `cowork_sessions.execution_mode` rows whose mapped preset differs from the
+ *   legacy default receive an explicit `cowork_sessions.permission_preset` so per-session
+ *   restrictions or auto approvals survive upgrade without relying on stale `execution_mode`.
+ */
+export function migrateLegacyPermissionPresets(db: Database.Database): void {
+  if (getKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY)) return;
+
+  let legacyConfigExecutionMode: string | null = null;
+  if (tableExists(db, 'cowork_config')) {
+    try {
+      const row = db
+        .prepare("SELECT value FROM cowork_config WHERE key = 'executionMode'")
+        .get() as { value?: unknown } | undefined;
+      if (typeof row?.value === 'string') {
+        legacyConfigExecutionMode = row.value;
+      }
+    } catch {
+      // Ignore unreadable legacy cowork_config table.
+    }
+  }
+
+  const mappedConfigPreset = mapLegacyExecutionModeToPermissionPreset(legacyConfigExecutionMode);
+  const existingDefaultPreset = parseDshPermissionPreset(getKv(db, DSH_PERMISSION_PRESET_KV_KEY));
+  if (!existingDefaultPreset && mappedConfigPreset) {
+    setKv(db, DSH_PERMISSION_PRESET_KV_KEY, mappedConfigPreset);
+  }
+
+  if (tableExists(db, 'cowork_sessions')) {
+    const cols = getTableColumns(db, 'cowork_sessions');
+    if (cols.has('execution_mode')) {
+      if (!cols.has('permission_preset')) {
+        db.exec('ALTER TABLE cowork_sessions ADD COLUMN permission_preset TEXT;');
+      }
+      const baselinePreset = mappedConfigPreset ?? existingDefaultPreset ?? DEFAULT_DSH_PERMISSION_PRESET;
+      const rows = db
+        .prepare(
+          'SELECT id, execution_mode FROM cowork_sessions WHERE permission_preset IS NULL AND execution_mode IS NOT NULL',
+        )
+        .all() as Array<{ id: string; execution_mode: string | null }>;
+      const updateStmt = db.prepare('UPDATE cowork_sessions SET permission_preset = ? WHERE id = ?');
+      for (const row of rows) {
+        const sessionPreset = mapLegacyExecutionModeToPermissionPreset(row.execution_mode);
+        if (sessionPreset && sessionPreset !== baselinePreset) {
+          updateStmt.run(sessionPreset, row.id);
+        }
+      }
+    }
+  }
+
+  setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
+}
+
+export interface LegacyUserMemoriesBackfillResult {
+  status: 'skipped' | 'completed' | 'failed';
+  memoriesImported: number;
+  error?: string;
+}
+
+/**
+ * Migrate ALL active (`status = 'created'`) legacy SQLite `user_memories` rows
+ * into `<workspacesDir>/main/MEMORY.md`, deduplicating by normalized fingerprint.
+ *
+ * Never resurrects `deleted` or `stale` rows and keeps `user_memories` and
+ * `user_memory_sources` intact in SQLite for provenance & audit inspection.
+ */
+export function migrateLegacySqliteUserMemories(params: {
+  db: Database.Database;
+  workspacesDir: string;
+  memoryService?: LobsterMemoryService;
+}): number {
+  const { db, workspacesDir } = params;
+  if (!tableExists(db, 'user_memories')) return 0;
+
+  const columns = getTableColumns(db, 'user_memories');
+  if (!columns.has('text')) return 0;
+
+  const whereClause = columns.has('status') ? "WHERE status = 'created'" : '';
+  const orderClause = columns.has('created_at')
+    ? 'ORDER BY created_at ASC, ROWID ASC'
+    : 'ORDER BY ROWID ASC';
+
+  const rows = db
+    .prepare(`SELECT text FROM user_memories ${whereClause} ${orderClause}`)
+    .all() as Array<{ text?: unknown }>;
+
+  const texts = rows
+    .map((row) => (typeof row.text === 'string' ? row.text.trim() : ''))
+    .filter((text) => text.length > 0);
+  if (texts.length === 0) return 0;
+
+  const ownedService = !params.memoryService;
+  const memoryService = params.memoryService ?? new LobsterMemoryService(workspacesDir);
+  try {
+    return memoryService.importMemories(AgentId.Main, texts);
+  } finally {
+    if (ownedService) {
+      memoryService.close();
+    }
+  }
+}
+
+/**
+ * One-shot idempotent backfill for already-migrated v2 DBs (or upgraded DBs
+ * that previously only ran the capped 200-row lazy migration) so all active
+ * SQLite-only `user_memories` rows are recovered into `workspaces/main/MEMORY.md`.
+ */
+export function backfillLegacyUserMemories(options: {
+  userDataDir: string;
+  db: Database.Database;
+  memoryService?: LobsterMemoryService;
+  now?: () => Date;
+}): LegacyUserMemoriesBackfillResult {
+  const { userDataDir, db, memoryService } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY)) {
+    return { status: 'skipped', memoriesImported: 0 };
+  }
+
+  try {
+    const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+    const memoriesImported = migrateLegacySqliteUserMemories({
+      db,
+      workspacesDir,
+      memoryService,
+    });
+
+    const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+    if (rawReport && memoriesImported > 0) {
+      try {
+        const report = JSON.parse(rawReport) as MigrationV2Report;
+        if (report && report.version === 2 && report.summary) {
+          report.summary.userMemoriesMigrated =
+            (report.summary.userMemoriesMigrated ?? 0) + memoriesImported;
+          setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
+          if (report.backupDir && fs.existsSync(report.backupDir)) {
+            fs.writeFileSync(
+              path.join(report.backupDir, 'migration-report.json'),
+              `${JSON.stringify(report, null, 2)}\n`,
+              'utf8',
+            );
+          }
+        }
+      } catch {
+        // Best-effort report metadata update.
+      }
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), memoriesImported }),
+    );
+    return { status: 'completed', memoriesImported };
+  } catch (error) {
+    return {
+      status: 'failed',
+      memoriesImported: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /**
@@ -1960,11 +2687,23 @@ export function runLegacyOpenClawMigration(
 
   let db = new Database(sqlitePath);
   try {
-    // Idempotency guard: already migrated -> instant return.
-    if (getKv(db, MIGRATION_V2_COMPLETED_KV_KEY)) {
+    // Idempotency guard: already migrated -> instant return (after one-shot backfills).
+    const completedRaw = getKv(db, MIGRATION_V2_COMPLETED_KV_KEY);
+    if (completedRaw) {
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
       backfillAgentPersonaFiles(db, workspacesDir);
+      clearLegacyPendingMessageEditsOnce(db);
+      backfillLegacyUserMemories({ userDataDir, db, now });
+      let isFreshInstall = false;
+      try {
+        isFreshInstall = Boolean((JSON.parse(completedRaw) as { freshInstall?: boolean })?.freshInstall);
+      } catch {
+        // Non-JSON completion marker is treated as an upgraded database.
+      }
+      if (!isFreshInstall) {
+        migrateLegacyPermissionPresets(db);
+      }
       return { status: MigrationV2Status.Skipped };
     }
 
@@ -1974,9 +2713,18 @@ export function runLegacyOpenClawMigration(
     if (!hasOpenClawState && !hasLegacyEngineKv) {
       backfillAgentPersonaFiles(db, workspacesDir);
       migrateLegacyConversationImages(db, userDataDir);
+      backfillLegacyUserMemories({ userDataDir, db, now });
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+      setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
+      setKv(
+        db,
+        MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+        JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }),
+      );
+      setKv(db, MIGRATION_V2_TAVILY_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
       setKv(
         db,
         MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
@@ -2004,10 +2752,10 @@ export function runLegacyOpenClawMigration(
     fs.copyFileSync(sqlitePath, sqliteSnapshotPath);
     db = new Database(sqlitePath);
 
+    const createdSeededSessionDirs: string[] = [];
     const legacyMcpPackagesDir = path.join(openclawRootDir, 'mcp-packages');
     const targetMcpPackagesDir = path.join(userDataDir, 'mcp-packages');
     let mcpPackagesMovedWholeDir = false;
-
     try {
       const incompatibleEntries: TarEntryInput[] = [];
       const archivedModules: MigrationV2ArchivedItem[] = [];
@@ -2016,13 +2764,22 @@ export function runLegacyOpenClawMigration(
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
-      const workspacesMigrated = migrateLegacyWorkspaces(
+      const { workspacesMigrated, dreamDiariesMigrated } = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,
         incompatibleEntries,
         archivedModules,
       );
+      const userMemoriesMigrated = migrateLegacySqliteUserMemories({
+        db,
+        workspacesDir,
+      });
+      const skillsMigrated = migrateLegacyOpenClawSkills(
+        openclawStateDir,
+        path.join(userDataDir, 'SKILLs'),
+      );
       backfillAgentPersonaFiles(db, workspacesDir);
+      migrateLegacyPermissionPresets(db);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
       const {
@@ -2080,6 +2837,16 @@ export function runLegacyOpenClawMigration(
       mcpPackagesMovedWholeDir = relocateMcpResult.movedWholeDir;
       const { cleared: mcpLaunchCachesCleared } = migrateLegacyMcpLaunchResolutions(db);
 
+      // Migrate legacy plugin/search-based Tavily config into SQLite `mcp_servers`
+      // (`npx -y tavily-mcp@latest`, preserving API key & enabled state) if no
+      // Tavily MCP server already exists.
+      const tavilyMigration = migrateLegacyTavilyPluginToMcp({
+        db,
+        openclawStateDir,
+        nowMs: now().getTime(),
+      });
+      const tavilyMcpMigrated = tavilyMigration.migrated ? 1 : 0;
+
       // Migrate Remote MCP OAuth tokens from OpenClaw `mcp_oauth_stores` before
       // removing `openclaw/state/`. Only servers without a valid or refreshable
       // legacy token are marked for re-authorization.
@@ -2093,17 +2860,16 @@ export function runLegacyOpenClawMigration(
       });
       reauthRequired.push(...mcpOAuthReauthRequired);
 
-      // Count historical sessions preserved for Lazy Context Bridge.
-      let sessionsPreservedForLazyBridge = 0;
-      if (tableExists(db, 'cowork_sessions')) {
-        const cols = getTableColumns(db, 'cowork_sessions');
-        const row = cols.has('claude_session_id')
-          ? (db
-              .prepare("SELECT COUNT(*) AS cnt FROM cowork_sessions WHERE claude_session_id IS NULL OR claude_session_id NOT LIKE 'dsh:%'")
-              .get() as { cnt: number })
-          : (db.prepare('SELECT COUNT(*) AS cnt FROM cowork_sessions').get() as { cnt: number });
-        sessionsPreservedForLazyBridge = row.cnt;
-      }
+      // Pre-seed historical OpenClaw sessions natively into DSH v4 JSONL-Zstd
+      // storage BEFORE initStore() and createWindow(); empty or unconvertible
+      // sessions remain safely preserved for Lazy Context Bridge fallback.
+      const sessionSeedResult = seedLegacySessionsToDsh({
+        db,
+        userDataDir,
+        nowMs: now().getTime(),
+      });
+      createdSeededSessionDirs.push(...sessionSeedResult.createdSessionDirs);
+      const { sessionsPreSeeded, sessionsPreservedForLazyBridge } = sessionSeedResult;
 
       // ── Step 3: Archive Incompatible & Retired Modules ───────────────────
       // 3a. Legacy OpenClaw `user_plugins` table
@@ -2195,6 +2961,11 @@ export function runLegacyOpenClawMigration(
         }
       }
 
+      // 3f. Archive and clear stale pending `cowork_message_edits` and
+      // `cowork_message_version_switches` rows so upgraded sessions are never
+      // blocked waiting for retired in-place edit recovery.
+      archiveAndClearLegacyPendingMessageEdits(db, incompatibleEntries);
+
       // Write incompatible modules archive (even if empty, guarantees manifest exists).
       const incompatibleArchivePath = path.join(backupDir, 'incompatible-modules-backup.tar.gz');
       writeTarGzArchive(incompatibleArchivePath, incompatibleEntries);
@@ -2244,11 +3015,15 @@ export function runLegacyOpenClawMigration(
         dismissed: archivedModules.length === 0 && reauthRequired.length === 0,
         summary: {
           workspacesMigrated,
+          userMemoriesMigrated,
+          skillsMigrated,
           scheduledTasksMigrated,
           scheduledTaskRunsMigrated,
           imAllowListsMigrated,
+          sessionsPreSeeded,
           sessionsPreservedForLazyBridge,
           mcpLaunchCachesCleared,
+          tavilyMcpMigrated,
           mcpOAuthTokensMigrated,
           disposableBytesFreed,
         },
@@ -2267,6 +3042,33 @@ export function runLegacyOpenClawMigration(
             completedAt: report.migratedAt,
             tasksImported: scheduledTasksMigrated,
             runsImported: scheduledTaskRunsMigrated,
+          }),
+        );
+        setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
+        setKv(
+          db,
+          MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            memoriesImported: userMemoriesMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            diariesRestored: dreamDiariesMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            migrated: tavilyMigration.migrated,
+            ...(tavilyMigration.source ? { source: tavilyMigration.source } : {}),
+            ...(tavilyMigration.skippedReason ? { skippedReason: tavilyMigration.skippedReason } : {}),
           }),
         );
         setKv(
@@ -2309,6 +3111,13 @@ export function runLegacyOpenClawMigration(
         }
       } catch {
         // best-effort rollback
+      }
+      for (const seededDir of createdSeededSessionDirs) {
+        try {
+          fs.rmSync(seededDir, { recursive: true, force: true });
+        } catch {
+          // best-effort rollback of pre-seeded DSH session artifacts
+        }
       }
       if (
         mcpPackagesMovedWholeDir

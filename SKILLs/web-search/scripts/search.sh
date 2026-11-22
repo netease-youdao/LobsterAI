@@ -4,9 +4,21 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DEFAULT_SERVER_URL="http://127.0.0.1:8923"
-SERVER_URL="${WEB_SEARCH_SERVER:-$DEFAULT_SERVER_URL}"
+EXPLICIT_SERVER_URL="${WEB_SEARCH_SERVER:-}"
+SERVER_URL="${EXPLICIT_SERVER_URL:-$DEFAULT_SERVER_URL}"
 ACTIVE_SERVER_URL="$SERVER_URL"
-CONNECTION_CACHE="$PROJECT_DIR/.connection"
+
+# Store mutable runtime cache in a sandbox-writable temporary directory rather
+# than inside $PROJECT_DIR (which is read-only under DSH workspace-write).
+STATE_TMP_DIR="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}"
+STATE_TMP_DIR="${STATE_TMP_DIR%/}"
+if [ -z "$STATE_TMP_DIR" ]; then
+  STATE_TMP_DIR="/tmp"
+fi
+STATE_USER="$(printf '%s' "${USER:-${USERNAME:-user}}" | tr -cd 'A-Za-z0-9._-')"
+STATE_USER="${STATE_USER:-user}"
+CONNECTION_CACHE="${WEB_SEARCH_CONNECTION_CACHE:-${STATE_TMP_DIR}/lobsterai-web-search-${STATE_USER}.connection}"
+FALLBACK_SERVER_LOG="${STATE_TMP_DIR}/lobsterai-web-search-${STATE_USER}.server.log"
 
 # Colors for output
 RED='\033[0;31m'
@@ -24,6 +36,30 @@ is_windows_bash() {
     MINGW*|MSYS*|CYGWIN*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+write_connection_cache() {
+  local CONNECTION_ID="$1"
+  if [ -z "$CONNECTION_ID" ] || [ -z "$CONNECTION_CACHE" ]; then
+    return 0
+  fi
+  (printf '%s\n' "$CONNECTION_ID" > "$CONNECTION_CACHE") 2>/dev/null || true
+}
+
+clear_connection_cache() {
+  if [ -n "$CONNECTION_CACHE" ]; then
+    rm -f "$CONNECTION_CACHE" 2>/dev/null || true
+  fi
+}
+
+print_recent_server_logs() {
+  if [ -f "$FALLBACK_SERVER_LOG" ]; then
+    echo -e "${YELLOW}  Recent logs:${NC}" >&2
+    tail -20 "$FALLBACK_SERVER_LOG" >&2
+  elif [ -f "$PROJECT_DIR/.server.log" ]; then
+    echo -e "${YELLOW}  Recent logs:${NC}" >&2
+    tail -20 "$PROJECT_DIR/.server.log" >&2
+  fi
 }
 
 # Usage information
@@ -79,6 +115,162 @@ run_http_node() {
     fi
     exec "$HTTP_NODE_CMD" "${HTTP_NODE_ARGS[@]}" "$@"
   )
+}
+
+# Query LobsterAI's in-app WebSearchHost directly via LOBSTERAI_WEB_SEARCH_BRIDGE_FILE
+# when no explicit WEB_SEARCH_SERVER override is set.
+# Return codes:
+#   0  - search completed successfully
+#   10 - host bridge unavailable or in-app browser mode disabled (fall back to Express server)
+#   11 - web-search skill explicitly disabled by LobsterAI (do NOT fall back)
+#   1  - host bridge active but search failed
+try_host_bridge_search() {
+  local QUERY="$1"
+  local MAX_RESULTS="${2:-10}"
+  local ENGINE="${WEB_SEARCH_ENGINE:-auto}"
+
+  if [ -n "$EXPLICIT_SERVER_URL" ]; then
+    return 10
+  fi
+
+  if [ -z "${LOBSTERAI_WEB_SEARCH_BRIDGE_FILE:-}" ] || [ ! -r "${LOBSTERAI_WEB_SEARCH_BRIDGE_FILE}" ]; then
+    return 10
+  fi
+
+  if ! resolve_http_node_runtime; then
+    return 10
+  fi
+
+  run_http_node - "$LOBSTERAI_WEB_SEARCH_BRIDGE_FILE" "$QUERY" "$MAX_RESULTS" "$ENGINE" <<'NODE'
+const fs = require('fs');
+
+const [bridgeFile, query, maxResultsRaw, engineRaw] = process.argv.slice(2);
+const maxResults = (() => {
+  const parsed = Number.parseInt(maxResultsRaw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+})();
+
+function formatMarkdown(queryText, data) {
+  const results = Array.isArray(data.results) ? data.results : [];
+  const total = typeof data.totalResults === 'number' ? data.totalResults : results.length;
+  const duration = typeof data.duration === 'number' ? data.duration : 0;
+  const engineUsed = typeof data.engine === 'string' && data.engine ? data.engine : 'unknown';
+
+  process.stderr.write(`✓ Found ${total} results in ${duration}ms (engine: ${engineUsed})\n\n`);
+
+  const lines = [
+    `# Search Results: ${queryText}`,
+    '',
+    `**Query:** ${queryText}  `,
+    `**Engine:** ${engineUsed}  `,
+    `**Results:** ${total}  `,
+    `**Time:** ${duration}ms  `,
+    '',
+    '---',
+    '',
+  ];
+
+  for (const item of results) {
+    if (!item || typeof item !== 'object') continue;
+    const title = typeof item.title === 'string' ? item.title : '';
+    const url = typeof item.url === 'string' ? item.url : '';
+    const snippet = typeof item.snippet === 'string' ? item.snippet : '';
+    if (!title && !url) continue;
+    lines.push(`## ${title || url}`);
+    lines.push('');
+    lines.push(`**URL:** [${url}](${url})`);
+    lines.push('');
+    lines.push(snippet);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+  }
+
+  process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+async function postBridge(endpoint, op, payload, timeoutMs) {
+  const response = await fetch(endpoint.bridgeUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-mcp-bridge-secret': endpoint.bridgeSecret,
+    },
+    body: JSON.stringify({ ...payload, op }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const body = await response.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    throw new Error(`LobsterAI search bridge returned HTTP ${response.status}`);
+  }
+  return body;
+}
+
+(async () => {
+  let endpoint;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(bridgeFile, 'utf8'));
+    if (typeof parsed?.bridgeUrl !== 'string' || typeof parsed?.bridgeSecret !== 'string') {
+      process.exit(10);
+    }
+    const url = new URL(parsed.bridgeUrl);
+    if (url.hostname !== '127.0.0.1') {
+      process.exit(10);
+    }
+    endpoint = { bridgeUrl: parsed.bridgeUrl, bridgeSecret: parsed.bridgeSecret };
+  } catch {
+    process.exit(10);
+  }
+
+  let statusBody;
+  try {
+    statusBody = await postBridge(endpoint, 'status', {}, 2500);
+  } catch {
+    process.exit(10);
+  }
+
+  if (statusBody.code === 'skill-disabled') {
+    process.stderr.write(`✗ ${statusBody.error || 'The LobsterAI web-search skill is disabled.'}\n`);
+    process.exit(11);
+  }
+  if (statusBody.success !== true) {
+    process.exit(10);
+  }
+
+  process.stderr.write(`🔍 Searching for: "${query}"\n\n`);
+
+  const normalizedEngine = String(engineRaw || 'auto').trim().toLowerCase();
+  const engines = normalizedEngine === 'google'
+    ? ['google']
+    : normalizedEngine === 'bing'
+      ? ['bing']
+      : ['google', 'bing'];
+
+  const errors = [];
+  for (const engine of engines) {
+    try {
+      const body = await postBridge(endpoint, 'search', { engine, query, maxResults }, 45000);
+      if (body.code === 'skill-disabled') {
+        process.stderr.write(`✗ ${body.error || 'The LobsterAI web-search skill is disabled.'}\n`);
+        process.exit(11);
+      }
+      if (body.code === 'in-app-disabled') {
+        process.exit(10);
+      }
+      if (body.success === true && body.data && typeof body.data === 'object') {
+        formatMarkdown(query, body.data);
+        process.exit(0);
+      }
+      errors.push(`${engine}: ${body.error || 'Search failed'}`);
+    } catch (error) {
+      errors.push(`${engine}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  process.stderr.write(`✗ Search failed\n${errors.join(' | ')}\n`);
+  process.exit(1);
+})();
+NODE
 }
 
 http_request() {
@@ -187,6 +379,57 @@ NODE
     "$CONNECTION_ID" "$ESCAPED_QUERY" "${MAX_RESULTS:-10}" "${ENGINE:-auto}"
 }
 
+format_search_response_with_node() {
+  local QUERY="$1"
+  local SEARCH_RESPONSE="$2"
+
+  printf '%s' "$SEARCH_RESPONSE" | run_http_node -e '
+const fs = require("fs");
+const [queryText] = process.argv.slice(1);
+const raw = fs.readFileSync(0, "utf8");
+const parsed = JSON.parse(raw);
+const data = parsed && typeof parsed === "object" && parsed.data && typeof parsed.data === "object"
+  ? parsed.data
+  : parsed;
+const results = Array.isArray(data?.results) ? data.results : [];
+const total = typeof data?.totalResults === "number" ? data.totalResults : results.length;
+const duration = typeof data?.duration === "number" ? data.duration : 0;
+const engineUsed = typeof data?.engine === "string" && data.engine ? data.engine : "unknown";
+
+process.stderr.write(`✓ Found ${total} results in ${duration}ms (engine: ${engineUsed})\n\n`);
+
+const lines = [
+  `# Search Results: ${queryText}`,
+  "",
+  `**Query:** ${queryText}  `,
+  `**Engine:** ${engineUsed}  `,
+  `**Results:** ${total}  `,
+  `**Time:** ${duration}ms  `,
+  "",
+  "---",
+  "",
+];
+
+for (const item of results) {
+  if (!item || typeof item !== "object") continue;
+  const title = typeof item.title === "string" ? item.title : "";
+  const url = typeof item.url === "string" ? item.url : "";
+  const snippet = typeof item.snippet === "string" ? item.snippet : "";
+  if (!title && !url) continue;
+  lines.push(`## ${title || url}`);
+  lines.push("");
+  lines.push(`**URL:** [${url}](${url})`);
+  lines.push("");
+  lines.push(snippet);
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+}
+
+process.stdout.write(`${lines.join("\n")}\n`);
+' "$QUERY"
+}
+
 ensure_http_client_available() {
   if is_windows_bash; then
     if resolve_http_node_runtime; then
@@ -253,10 +496,7 @@ check_server() {
     fi
     echo -e "${RED}✗ Failed to auto-start Bridge Server${NC}" >&2
     echo -e "${YELLOW}  Try manually: bash $SCRIPT_DIR/start-server.sh${NC}" >&2
-    if [ -f "$PROJECT_DIR/.server.log" ]; then
-      echo -e "${YELLOW}  Recent logs:${NC}" >&2
-      tail -20 "$PROJECT_DIR/.server.log" >&2
-    fi
+    print_recent_server_logs
     exit 1
   fi
 
@@ -272,10 +512,7 @@ check_server() {
   if ! is_server_healthy "$ACTIVE_SERVER_URL"; then
     echo -e "${RED}✗ Bridge Server still unavailable after start${NC}" >&2
     echo -e "${YELLOW}  Endpoint checked: $ACTIVE_SERVER_URL/api/health${NC}" >&2
-    if [ -f "$PROJECT_DIR/.server.log" ]; then
-      echo -e "${YELLOW}  Recent logs:${NC}" >&2
-      tail -20 "$PROJECT_DIR/.server.log" >&2
-    fi
+    print_recent_server_logs
     exit 1
   fi
 }
@@ -313,15 +550,12 @@ is_connection_runtime_error() {
 
 repair_server_runtime() {
   echo -e "${YELLOW}Detected broken web-search runtime, trying automatic repair...${NC}" >&2
-  rm -f "$CONNECTION_CACHE"
+  clear_connection_cache
   bash "$SCRIPT_DIR/stop-server.sh" > /dev/null 2>&1 || true
 
   if ! WEB_SEARCH_FORCE_REPAIR=1 bash "$SCRIPT_DIR/start-server.sh" > /dev/null 2>&1; then
     echo -e "${RED}✗ Failed to repair web-search runtime${NC}" >&2
-    if [ -f "$PROJECT_DIR/.server.log" ]; then
-      echo -e "${YELLOW}  Recent logs:${NC}" >&2
-      tail -20 "$PROJECT_DIR/.server.log" >&2
-    fi
+    print_recent_server_logs
     return 1
   fi
 
@@ -353,7 +587,7 @@ get_connection() {
 
   # Try to use cached connection
   if [ -f "$CONNECTION_CACHE" ]; then
-    CONNECTION_ID=$(cat "$CONNECTION_CACHE")
+    CONNECTION_ID=$(cat "$CONNECTION_CACHE" 2>/dev/null || true)
 
     # Verify cached connection is actually usable.
     if [ -n "$CONNECTION_ID" ] && is_cached_connection_valid "$CONNECTION_ID"; then
@@ -362,7 +596,7 @@ get_connection() {
     fi
 
     # Stale connection, remove cache
-    rm -f "$CONNECTION_CACHE"
+    clear_connection_cache
   fi
 
   # Launch browser if not running
@@ -377,7 +611,7 @@ get_connection() {
       fi
     fi
     if [ "$ATTEMPT" -eq 1 ] && is_connection_runtime_error "$LAUNCH_RESPONSE"; then
-      rm -f "$CONNECTION_CACHE"
+      clear_connection_cache
       bash "$SCRIPT_DIR/stop-server.sh" > /dev/null 2>&1 || true
       if WEB_SEARCH_FORCE_REPAIR=1 bash "$SCRIPT_DIR/start-server.sh" > /dev/null 2>&1; then
         get_connection 2
@@ -401,7 +635,7 @@ get_connection() {
       fi
     fi
     if [ "$ATTEMPT" -eq 1 ] && is_connection_runtime_error "$CONNECT_RESPONSE"; then
-      rm -f "$CONNECTION_CACHE"
+      clear_connection_cache
       bash "$SCRIPT_DIR/stop-server.sh" > /dev/null 2>&1 || true
       if WEB_SEARCH_FORCE_REPAIR=1 bash "$SCRIPT_DIR/start-server.sh" > /dev/null 2>&1; then
         get_connection 2
@@ -421,8 +655,8 @@ get_connection() {
     return 1
   fi
 
-  # Cache connection ID
-  echo "$CONNECTION_ID" > "$CONNECTION_CACHE"
+  # Cache connection ID in sandbox-writable temp directory (best-effort)
+  write_connection_cache "$CONNECTION_ID"
   echo "$CONNECTION_ID"
 }
 
@@ -458,7 +692,7 @@ search() {
       fi
     fi
     if [ "$ATTEMPT" -eq 1 ] && is_connection_runtime_error "$SEARCH_RESPONSE"; then
-      rm -f "$CONNECTION_CACHE"
+      clear_connection_cache
       if CONNECTION_ID="$(get_connection 2)"; then
         search "$QUERY" "$MAX_RESULTS" "$CONNECTION_ID" 2
         return $?
@@ -469,7 +703,11 @@ search() {
     return 1
   fi
 
-  # Parse and display results
+  if resolve_http_node_runtime && format_search_response_with_node "$QUERY" "$SEARCH_RESPONSE"; then
+    return 0
+  fi
+
+  # Parse and display results (fallback when Node runtime is unavailable)
   local DURATION=$(echo "$SEARCH_RESPONSE" | grep -o '"duration":[0-9]*' | cut -d':' -f2)
   local TOTAL=$(echo "$SEARCH_RESPONSE" | grep -o '"totalResults":[0-9]*' | cut -d':' -f2)
   local ENGINE_USED=$(echo "$SEARCH_RESPONSE" | grep -o '"engine":"[^"]*"' | cut -d'"' -f4)
@@ -493,7 +731,6 @@ search() {
   echo ""
 
   # Extract and format each result
-  # Note: This is a simplified parser. For production, use jq or node.js
   echo "$SEARCH_RESPONSE" | grep -o '"title":"[^"]*","url":"[^"]*","snippet":"[^"]*"' | while IFS= read -r result; do
     local TITLE=$(echo "$result" | sed -n 's/.*"title":"\([^"]*\)".*/\1/p')
     local URL=$(echo "$result" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
@@ -523,7 +760,7 @@ cleanup_browser() {
   http_post_json "$ACTIVE_SERVER_URL/api/browser/close" "{}" > /dev/null 2>&1 || true
 
   # Clear connection cache
-  rm -f "$CONNECTION_CACHE"
+  clear_connection_cache
 }
 
 # Main execution
@@ -548,6 +785,15 @@ main() {
   fi
 
   if ! ensure_http_client_available; then
+    exit 1
+  fi
+
+  # Prefer LobsterAI's direct in-app WebSearchHost bridge when configured.
+  local HOST_BRIDGE_EXIT=0
+  try_host_bridge_search "$QUERY" "$MAX_RESULTS" || HOST_BRIDGE_EXIT=$?
+  if [ "$HOST_BRIDGE_EXIT" -eq 0 ]; then
+    exit 0
+  elif [ "$HOST_BRIDGE_EXIT" -eq 11 ] || [ "$HOST_BRIDGE_EXIT" -eq 1 ]; then
     exit 1
   fi
 

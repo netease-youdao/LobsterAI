@@ -10,10 +10,22 @@ const HELPERS_URL = pathToFileURL(
 
 type PersonaHelpers = {
   MAX_INLINE_MEMORY_CHARS: number;
+  MEMORY_WRITE_POLICY_PROMPT: string;
   stripLegacyOpenClawAgentsBoilerplate: (content: string) => string;
   sanitizeMemoryMarkdownForPrompt: (content: string, maxChars?: number) => string;
   parseSkillFrontmatter: (markdown: string) => { meta: Record<string, string>; body: string };
-  assembleWorkspacePersona: (workspacesDir: string, agentId: string, customSystemPrompt?: string) => string;
+  filterMarkdownForProject: (
+    markdown: string,
+    activeProjectKeys?: readonly string[],
+    options?: { stripTags?: boolean; globalOnly?: boolean },
+  ) => string;
+  resolveProjectMemoryKeys: (cwd?: string | null) => string[];
+  assembleWorkspacePersona: (
+    workspacesDir: string,
+    agentId: string,
+    customSystemPrompt?: string,
+    options?: { workspaceDir?: string; memoryEnabled?: boolean },
+  ) => string;
 };
 
 let cachedHelpers: PersonaHelpers | null = null;
@@ -151,5 +163,221 @@ describe('persona-helpers', () => {
     const [bodyPart] = truncated.split('\n\n（长期记忆较长');
     expect(bodyPart.length).toBeLessThanOrEqual(MAX_INLINE_MEMORY_CHARS);
     expect(bodyPart.endsWith('历史长期记忆内容。')).toBe(true);
+  });
+
+  test('shares main global preferences with non-main experts while isolating expert private and foreign project memories', async () => {
+    const {
+      assembleWorkspacePersona,
+      MEMORY_WRITE_POLICY_PROMPT,
+      resolveProjectMemoryKeys,
+    } = await loadHelpers();
+
+    const wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-persona-iso-'));
+    const projA = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-persona-proj-a-'));
+    const projB = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-persona-proj-b-'));
+    tempDirs.push(wsRoot, projA, projB);
+
+    fs.mkdirSync(path.join(projA, '.git'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projA, '.git', 'config'),
+      '[remote "origin"]\n\turl = https://github.com/acme/alpha.git\n',
+      'utf8',
+    );
+    expect(resolveProjectMemoryKeys(projA)).toContain('github.com/acme/alpha');
+
+    // Seed main + expert-a + expert-b workspaces.
+    for (const id of ['main', 'expert-a', 'expert-b']) {
+      fs.mkdirSync(path.join(wsRoot, id), { recursive: true });
+    }
+    fs.writeFileSync(
+      path.join(wsRoot, 'main', 'USER.md'),
+      '# Profile\n- Global user prefers concise bullet points\n- Project A main-only user note <!-- project: github.com/acme/alpha -->\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(wsRoot, 'main', 'MEMORY.md'),
+      '# User Memories\n- Always respond in Chinese\n- Main Project A build rule <!-- project: github.com/acme/alpha -->\n',
+      'utf8',
+    );
+    fs.writeFileSync(path.join(wsRoot, 'expert-a', 'SOUL.md'), 'You are Expert A.', 'utf8');
+    fs.writeFileSync(
+      path.join(wsRoot, 'expert-a', 'MEMORY.md'),
+      [
+        '# User Memories',
+        '- Expert A private codename: FALCON',
+        `- Project A convention: run pnpm check:alpha <!-- project: path:${projA} -->`,
+        '- Git-tagged Alpha rule: use strict ESM <!-- project: github.com/acme/alpha -->',
+        `- Project B convention: run make beta <!-- project: path:${projB} -->`,
+      ].join('\n'),
+      'utf8',
+    );
+    fs.writeFileSync(path.join(wsRoot, 'expert-b', 'SOUL.md'), 'You are Expert B.', 'utf8');
+    fs.writeFileSync(
+      path.join(wsRoot, 'expert-b', 'MEMORY.md'),
+      '# User Memories\n- Expert B private codename: DOLPHIN\n',
+      'utf8',
+    );
+
+    // Expert A in Project A: global prefs + FALCON + Project A rules, never DOLPHIN or Project B or main project tags.
+    const promptExpAInA = assembleWorkspacePersona(wsRoot, 'expert-a', '', { workspaceDir: projA });
+    expect(promptExpAInA).toContain('## Global User Preferences');
+    expect(promptExpAInA).toContain('Global user prefers concise bullet points');
+    expect(promptExpAInA).toContain('## Global Memory');
+    expect(promptExpAInA).toContain('Always respond in Chinese');
+    expect(promptExpAInA).toContain('FALCON');
+    expect(promptExpAInA).toContain('run pnpm check:alpha');
+    expect(promptExpAInA).toContain('use strict ESM');
+    expect(promptExpAInA).not.toContain('DOLPHIN');
+    expect(promptExpAInA).not.toContain('make beta');
+    expect(promptExpAInA).not.toContain('Main Project A build rule');
+    expect(promptExpAInA).not.toContain('Project A main-only user note');
+    expect(promptExpAInA).not.toContain('<!-- project:');
+
+    // Expert A in Project B: global prefs + FALCON + Project B rule, NEVER Project A rules.
+    const promptExpAInB = assembleWorkspacePersona(wsRoot, 'expert-a', '', { workspaceDir: projB });
+    expect(promptExpAInB).toContain('Global user prefers concise bullet points');
+    expect(promptExpAInB).toContain('FALCON');
+    expect(promptExpAInB).toContain('run make beta');
+    expect(promptExpAInB).not.toContain('pnpm check:alpha');
+    expect(promptExpAInB).not.toContain('use strict ESM');
+
+    // Expert B in Project B: global prefs + DOLPHIN, NEVER FALCON.
+    const promptExpBInB = assembleWorkspacePersona(wsRoot, 'expert-b', '', { workspaceDir: projB });
+    expect(promptExpBInB).toContain('Global user prefers concise bullet points');
+    expect(promptExpBInB).toContain('Always respond in Chinese');
+    expect(promptExpBInB).toContain('DOLPHIN');
+    expect(promptExpBInB).not.toContain('FALCON');
+
+    // memoryEnabled: false omits all memory & user preference sections while keeping SOUL.md.
+    const promptDisabled = assembleWorkspacePersona(wsRoot, 'expert-a', 'Custom rule', {
+      workspaceDir: projA,
+      memoryEnabled: false,
+    });
+    expect(promptDisabled).toContain('You are Expert A.');
+    expect(promptDisabled).toContain('Custom rule');
+    expect(promptDisabled).not.toContain('Global User Preferences');
+    expect(promptDisabled).not.toContain('Global Memory');
+    expect(promptDisabled).not.toContain('FALCON');
+    expect(promptDisabled).not.toContain('concise bullet points');
+
+    // Write policy prompt covers write-before-confirm and both scopes.
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('lobster_memory_save');
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "project"');
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "global"');
+  });
+
+  test('resolves non-ASCII frontmatter names and remotion ID mismatches without dropping custom skills', async () => {
+    const { resolveDshSkillName } = await loadHelpers();
+
+    // Pure Chinese frontmatter name falls back to kebab directory ID.
+    expect(resolveDshSkillName('custom-report', '周报助手')).toBe('custom-report');
+    expect(resolveDshSkillName('custom-report', '报告生成器', { preferRawId: false })).toBe('custom-report');
+
+    // Mixed Chinese + ASCII frontmatter does not mangle managed skill ID to 'v2'.
+    expect(resolveDshSkillName('custom-report', '周报助手 v2')).toBe('custom-report');
+
+    // Legacy remotion/SKILL.md with `name: remotion-best-practices` registers as `remotion`.
+    expect(resolveDshSkillName('remotion', 'remotion-best-practices')).toBe('remotion');
+
+    // Non-ASCII folder name falls back to ASCII frontmatter name, or deterministic hash if both non-ASCII.
+    expect(resolveDshSkillName('周报目录', 'weekly-report')).toBe('weekly-report');
+    expect(resolveDshSkillName('周报目录', '周报助手')).toMatch(/^skill-[0-9a-f]{8}$/);
+  });
+
+  test('discovers skills with policy filtering, expert allowlists, Plan Mode suppression, and no project-root shadowing of disabled skills', async () => {
+    const { discoverLobsterSkills } = await loadHelpers();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skill-discover-'));
+    tempDirs.push(root);
+
+    const skillsDir = path.join(root, 'SKILLs');
+    const projectDir = path.join(root, 'project');
+    const writeSkill = (baseDir: string, id: string, frontmatterName: string, desc: string) => {
+      const dir = path.join(baseDir, id);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${frontmatterName}\ndescription: ${desc}\n---\nInstructions for ${id}.\n`,
+        'utf8',
+      );
+    };
+
+    writeSkill(skillsDir, 'custom-report', '周报助手', '生成团队周报');
+    writeSkill(skillsDir, 'remotion', 'remotion-best-practices', 'Remotion video');
+    writeSkill(skillsDir, 'other-skill', 'other-skill', 'Other skill');
+    writeSkill(path.join(projectDir, '.dsh', 'skills'), 'other-skill', 'other-skill', 'Shadow attempt');
+    writeSkill(path.join(projectDir, '.dsh', 'skills'), 'project-only', '项目助手', 'Project-local skill');
+
+    // Unrestricted main session sees enabled managed + project-local skills,
+    // and disabled managed skill cannot be resurrected by `.dsh/skills`.
+    const unrestricted = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: new Set(['custom-report', 'remotion']), disabledIds: new Set(['other-skill']) },
+      null,
+      { cwd: projectDir },
+    );
+    expect(unrestricted.map(s => s.name).sort()).toEqual(['custom-report', 'project-only', 'remotion']);
+
+    // Even when disabledIds is empty, a managed skill omitted from enabledIds cannot be resurrected from `.dsh/skills`.
+    const enabledOnly = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: new Set(['custom-report']), disabledIds: new Set() },
+      null,
+      { cwd: projectDir },
+    );
+    expect(enabledOnly.map(s => s.name).sort()).toEqual(['custom-report', 'project-only']);
+
+    // Expert allowlist strictly restricts both managed and project-local skills.
+    const expertA = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: null, disabledIds: new Set() },
+      new Set(['custom-report']),
+      { cwd: projectDir },
+    );
+    expect(expertA.map(s => s.name)).toEqual(['custom-report']);
+
+    // Plan Mode explicit empty allowlist suppresses every skill including project-local skills.
+    const planMode = discoverLobsterSkills(
+      [skillsDir],
+      { enabledIds: null, disabledIds: new Set() },
+      new Set(),
+      { cwd: projectDir },
+    );
+    expect(planMode).toEqual([]);
+  });
+
+  test('injects concise web-search routing guidance only when web-search skill is installed and enabled', async () => {
+    const { buildWebSearchRoutingGuidance, WEB_SEARCH_ROUTING_GUIDANCE } = await loadHelpers();
+
+    const skillsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-'));
+    tempDirs.push(skillsRoot);
+    fs.mkdirSync(path.join(skillsRoot, 'web-search'), { recursive: true });
+    fs.writeFileSync(path.join(skillsRoot, 'web-search', 'SKILL.md'), '---\nname: web-search\n---\n', 'utf8');
+
+    // Enabled globally and unrestricted for agent -> guidance included.
+    expect(buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe(
+      WEB_SEARCH_ROUTING_GUIDANCE,
+    );
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: new Set(['web-search']), disabledIds: new Set() }, null),
+    ).toBe(WEB_SEARCH_ROUTING_GUIDANCE);
+
+    // Disabled globally -> omitted.
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set(['web-search']) }, null),
+    ).toBe('');
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: new Set(['docx']), disabledIds: new Set() }, null),
+    ).toBe('');
+
+    // Excluded by per-agent allowlist -> omitted.
+    expect(
+      buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, new Set(['docx'])),
+    ).toBe('');
+
+    // Missing from skills root -> omitted.
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-empty-'));
+    tempDirs.push(emptyRoot);
+    expect(buildWebSearchRoutingGuidance([emptyRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe('');
   });
 });

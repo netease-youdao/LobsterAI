@@ -7,7 +7,7 @@ import {
   SubagentCollaborationMode,
 } from '../../../shared/agent/constants';
 import type { Agent } from '../../coworkStore';
-import { buildDshHostAgentSpecs } from './dshAgentSync';
+import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './dshAgentSync';
 
 function makeAgent(overrides: Partial<Agent> & { id: string; name: string }): Agent {
   return {
@@ -125,5 +125,70 @@ describe('buildDshHostAgentSpecs', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('resolveAllowedSkillIdsForTurn', () => {
+  test('returns empty array when optionSkillIds is explicitly empty (Plan Mode suppression)', () => {
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: AgentId.Main,
+      agentSkillIds: [],
+      optionSkillIds: [],
+    })).toEqual([]);
+
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: 'expert-a',
+      agentSkillIds: ['custom-a'],
+      optionSkillIds: [],
+    })).toEqual([]);
+  });
+
+  test('enforces expert agent.skillIds allowlist and intersects composer optionSkillIds without bypass', () => {
+    // Undefined optionSkillIds -> expert's full bound allowlist.
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: 'expert-a',
+      agentSkillIds: ['custom-a', 'docx'],
+      optionSkillIds: undefined,
+    })).toEqual(['custom-a', 'docx']);
+
+    // Composer selecting a subset -> intersected subset.
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: 'expert-a',
+      agentSkillIds: ['custom-a', 'docx'],
+      optionSkillIds: ['custom-a'],
+    })).toEqual(['custom-a']);
+
+    // Composer attempting to pass an unbound skill -> stripped by intersection.
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: 'expert-a',
+      agentSkillIds: ['custom-a'],
+      optionSkillIds: ['custom-a', 'other-skill'],
+    })).toEqual(['custom-a']);
+
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: 'expert-b',
+      agentSkillIds: ['other-skill'],
+      optionSkillIds: ['custom-a'],
+    })).toEqual([]);
+  });
+
+  test('returns null for unrestricted agents even when composer passes preferred-candidate hints', () => {
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: AgentId.Main,
+      agentSkillIds: ['ignored-for-main'],
+      optionSkillIds: undefined,
+    })).toBeNull();
+
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: AgentId.Main,
+      agentSkillIds: [],
+      optionSkillIds: ['docx'],
+    })).toBeNull();
+
+    expect(resolveAllowedSkillIdsForTurn({
+      agentId: 'unrestricted-expert',
+      agentSkillIds: [],
+      optionSkillIds: ['docx'],
+    })).toBeNull();
   });
 });
