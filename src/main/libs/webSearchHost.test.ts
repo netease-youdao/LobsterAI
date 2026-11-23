@@ -110,7 +110,7 @@ describe('decodeBingClickUrl & normalizeSearchSources', () => {
         { title: 'Duplicate', url: 'https://allowed.example.org/guide', snippet: 'dup' },
         { title: 'Local', url: 'file:///etc/passwd', snippet: 'bad scheme' },
       ],
-      url => !url.includes('blocked.example.com'),
+      url => new URL(url).hostname !== 'blocked.example.com',
       10,
     );
 
@@ -153,14 +153,15 @@ describe('WebSearchHost', () => {
   test('falls back from Google to Bing, cools down Google, and retries Google after cooldown expires', async () => {
     let clock = 1_000;
     let failGoogle = true;
+    const isGoogleHost = (url: string) => new URL(url).hostname === 'www.google.com';
     const { page, navigations } = createFakePage({
       onNavigate: (url) => {
-        if (url.includes('google.com') && failGoogle) {
+        if (isGoogleHost(url) && failGoogle) {
           throw new Error('ERR_CONNECTION_TIMED_OUT');
         }
       },
       results: (url) => (
-        url.includes('google.com')
+        isGoogleHost(url)
           ? [{ title: 'Google Hit', url: 'https://google-hit.example/', snippet: 'from google' }]
           : [{ title: 'Bing Hit', url: 'https://bing-hit.example/', snippet: 'from bing' }]
       ),
@@ -205,7 +206,7 @@ describe('WebSearchHost', () => {
       ],
     });
     const { host, createPage } = createHost(page, {
-      isAllowedUrl: url => !url.includes('blocked.example'),
+      isAllowedUrl: url => new URL(url).hostname !== 'blocked.example',
     });
 
     const first = await host.search({ engine: WebSearchEngine.Bing, query: 'one' });
@@ -474,7 +475,7 @@ describe('navigateWebContents', () => {
 
     const navPromise = navigateWebContents(mock.webContents, 'https://allowed.example/start', {
       timeoutMs: 5_000,
-      isAllowedUrl: url => !url.includes('blocked.example'),
+      isAllowedUrl: url => new URL(url).hostname !== 'blocked.example',
     });
 
     expect(mock.webContents.stop).toHaveBeenCalledTimes(1);
