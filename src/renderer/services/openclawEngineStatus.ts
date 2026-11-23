@@ -4,8 +4,7 @@ import { i18nService } from './i18n';
 
 /**
  * A task-admission reply that only says a config change is still unapplied.
- * The gateway keeps running, so it must not drive the global startup overlay,
- * which only a later engine status event could clear.
+ * The AI engine keeps running, so it must not override live engine status.
  */
 export function isConfigApplyPendingStatus(status: OpenClawEngineStatus | null | undefined): boolean {
   return status?.configApplyPending === true;

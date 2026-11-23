@@ -8,6 +8,7 @@ import { buildSessionTitleFromInput, buildSessionTitleInput } from '../../../com
 import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { PptCreation } from '../../../shared/pptCreation/constants';
 import startupCreditEntryGiftUrl from '../../assets/startup-credit-entry-gift.svg';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
@@ -68,6 +69,7 @@ import {
   CoworkStartBlock,
   isOpenClawReadyForSession,
   resolveCoworkStartBlock,
+  shouldShowCoworkEngineNotice,
 } from './coworkStartRequest';
 import { reportPromptTemplateAction } from './promptAnalytics';
 import SessionSwipeNavigator from './SessionSwipeNavigator';
@@ -83,8 +85,6 @@ const resolveHomeGreetingKey = (date: Date = new Date()): string => {
   if (hour >= 18 && hour < 23) return 'coworkGreetingEvening';
   return 'coworkGreetingLateNight';
 };
-
-const ENGINE_STARTING_PILL_DELAY_MS = 3_000;
 
 const logCoworkViewModel = (message: string, level: 'debug' | 'warn' = 'debug'): void => {
   if (level === 'warn') console.warn(`[CoworkView] ${message}`);
@@ -128,7 +128,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(
     () => coworkService.getOpenClawEngineStatusSnapshot(),
   );
-  const [showDelayedStartingNotice, setShowDelayedStartingNotice] = useState(false);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   // Shown when a session start is blocked because no usable model config exists;
   // guides the user to plan models instead of pushing them into custom-model settings.
@@ -248,17 +247,17 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
   const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
     switch (status.phase) {
-      case 'not_installed':
+      case OpenClawEnginePhase.NotInstalled:
         return i18nService.t('coworkOpenClawNotInstalledNotice');
-      case 'installing':
+      case OpenClawEnginePhase.Installing:
         return i18nService.t('coworkOpenClawInstalling');
-      case 'ready':
+      case OpenClawEnginePhase.Ready:
         return i18nService.t('coworkOpenClawReadyNotice');
-      case 'starting':
+      case OpenClawEnginePhase.Starting:
         return i18nService.t('coworkOpenClawStarting');
-      case 'error':
+      case OpenClawEnginePhase.Error:
         return i18nService.t('coworkOpenClawError');
-      case 'running':
+      case OpenClawEnginePhase.Running:
       default:
         return i18nService.t('coworkOpenClawRunning');
     }
@@ -275,19 +274,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       setIsRestartingGateway(false);
     }
   };
-
-  useEffect(() => {
-    if (openClawStatus?.phase !== 'starting') {
-      setShowDelayedStartingNotice(false);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setShowDelayedStartingNotice(true);
-    }, ENGINE_STARTING_PILL_DELAY_MS);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [openClawStatus?.phase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -833,8 +819,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     return <div className="flex-1 h-full flex flex-col bg-background" />;
   }
 
-  const shouldShowEngineStatus = Boolean(openClawStatus && openClawStatus.phase !== 'running');
-  const isEngineError = openClawStatus?.phase === 'error';
+  const shouldShowEngineNotice = shouldShowCoworkEngineNotice(openClawStatus);
   const isEngineReady = openClawStatus === null || isOpenClawReadyForSession(openClawStatus);
 
   const homeHeader = (
@@ -887,17 +872,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     </div>
   );
 
-  // Non-blocking engine states float below the title bar: normal cold-start
-  // 'starting' stays completely invisible unless it persists past 3s, while
-  // blocking startup failures render as a global overlay in App.tsx.
-  const engineStatusBanner = openClawStatus?.phase === 'starting' && showDelayedStartingNotice ? (
-    <div className="pointer-events-none absolute inset-x-0 top-14 z-20 flex justify-center px-4">
-      <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface/95 px-3.5 py-1.5 text-xs text-secondary shadow-subtle backdrop-blur-sm animate-fade-in-down">
-        <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-primary" />
-        <span>{resolveEngineStatusText(openClawStatus)}</span>
-      </div>
-    </div>
-  ) : shouldShowEngineStatus && !isEngineError && openClawStatus && openClawStatus.phase !== 'starting' ? (
+  // Cold start ('starting'), idle auto-start ('ready'), and active ('running')
+  // stay completely silent here (in-flight prompt waits surface inside the turn's
+  // ActivityIndicator), while blocking startup failures render globally via
+  // EngineFailureOverlay in App.tsx.
+  const engineStatusBanner = shouldShowEngineNotice && openClawStatus ? (
     <div className="pointer-events-none absolute inset-x-0 top-14 z-30 flex justify-center px-4">
       <div className="pointer-events-auto w-full max-w-xl rounded-2xl border border-amber-200 bg-surface p-4 shadow-lg animate-fade-in-down dark:border-amber-900/60">
         <div className="flex items-start gap-3">
