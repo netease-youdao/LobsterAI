@@ -16,7 +16,7 @@ type WebAccessGuardHelpers = {
   evaluateWebAccessGuard: (
     toolName: unknown,
     args: unknown,
-    policy: { webFetchEnabled?: boolean; blockedHostnames?: readonly string[]; searchPolicy?: string },
+    policy: { webFetchEnabled?: boolean; webSearchEnabled?: boolean; blockedHostnames?: readonly string[]; searchPolicy?: string },
     context?: { llmProvider?: string },
   ) => string | undefined;
 };
@@ -104,6 +104,16 @@ describe('web-access-guard-helpers', () => {
         { llmProvider: 'openai' },
       ),
     ).toBeUndefined();
+
+    // Disabling web-search skill blocks web_search synchronously even under AllowAll.
+    expect(
+      evaluateWebAccessGuard(
+        'web_search',
+        { queries: ['news'] },
+        { webSearchEnabled: false, searchPolicy: DSH_SEARCH_POLICY.AllowAll },
+        { llmProvider: 'deepseek' },
+      ),
+    ).toContain('disabled');
 
     expect(
       evaluateWebAccessGuard(

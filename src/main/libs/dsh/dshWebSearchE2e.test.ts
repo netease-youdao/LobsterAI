@@ -4,14 +4,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { DshPermissionPreset, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
-import { getWebSearchBridgeFilePath, writeWebSearchBridgeFile } from '../webSearchBridgeFile';
+import { DshOpsAction, DshPermissionPreset } from '../../../shared/dshEngine/hostConstants';
 import { DshHostManager } from './dshHostManager';
 
 const ROOT_DIR = process.cwd();
 const RUNTIME_DIR = path.join(ROOT_DIR, 'vendor', 'dsh-runtime', 'current');
 const HOST_BUNDLE_DIR = path.join(ROOT_DIR, 'dsh-bundles', 'lobsterai-host');
-const REPO_WEB_SEARCH_DIR = path.join(ROOT_DIR, 'SKILLs', 'web-search');
+const REPO_WEB_SEARCH_SKILL_MD = path.join(ROOT_DIR, 'SKILLs', 'web-search', 'SKILL.md');
 const HAS_DSH_RUNTIME =
   process.platform !== 'win32'
   && fs.existsSync(path.join(RUNTIME_DIR, 'lib', 'bin.js'))
@@ -49,12 +48,16 @@ function sendSseChunks(res: http.ServerResponse, payloads: Array<Record<string, 
   res.end();
 }
 
-function makeToolCallSse(callId: string, toolName: string, argsObj: Record<string, unknown>): Array<Record<string, unknown> | '[DONE]'> {
+function makeToolCallSse(
+  callId: string,
+  toolName: string,
+  argsObj: Record<string, unknown>,
+): Array<Record<string, unknown> | '[DONE]'> {
   const base = {
     id: `chatcmpl-${callId}`,
     object: 'chat.completion.chunk',
     created: Math.floor(Date.now() / 1000),
-    model: 'mock-gpt',
+    model: 'mock-model',
   };
   return [
     {
@@ -87,7 +90,7 @@ function makeFinalTextSse(text: string): Array<Record<string, unknown> | '[DONE]
     id: `chatcmpl-final-${Date.now()}`,
     object: 'chat.completion.chunk',
     created: Math.floor(Date.now() / 1000),
-    model: 'mock-gpt',
+    model: 'mock-model',
   };
   return [
     {
@@ -122,6 +125,10 @@ function extractToolResultText(req: CapturedLlmRequest): string {
     .join('\n');
 }
 
+function extractAdmittedToolNames(req: CapturedLlmRequest): string[] {
+  return (req.tools ?? []).map((t) => t.function?.name).filter((n): n is string => typeof n === 'string');
+}
+
 afterEach(async () => {
   while (httpServers.length > 0) {
     const srv = httpServers.pop()!;
@@ -130,103 +137,101 @@ afterEach(async () => {
   }
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()!;
-    try {
-      const wsDir = path.join(dir, 'skills', 'web-search');
-      if (fs.existsSync(wsDir)) fs.chmodSync(wsDir, 0o755);
-    } catch {
-      // ignore chmod restore errors
-    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: web-search sandbox & web_fetch guard', () => {
+describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: unified native web_search routing & guards', () => {
   test(
-    'runs search.sh under workspace-write sandbox with read-only skillsDir, enforces blockedHostnames/webFetch guard, and strips ambient DEEPSEEK_API_KEY',
+    'routes plan models to in-app browser search, personal DeepSeek to native search with automatic fallback, honors global and per-agent web-search toggles, and enforces web_fetch guards',
     async () => {
       const tempRoot = createTempDir('lobsterai-dsh-web-e2e-');
       const userDataDir = path.join(tempRoot, 'userData');
       const skillsDir = path.join(tempRoot, 'skills');
       const webSearchSkillDir = path.join(skillsDir, 'web-search');
+      const docxSkillDir = path.join(skillsDir, 'docx');
       const workspaceDir = path.join(tempRoot, 'workspace');
       fs.mkdirSync(userDataDir, { recursive: true });
-      fs.mkdirSync(path.join(webSearchSkillDir, 'scripts'), { recursive: true });
+      fs.mkdirSync(webSearchSkillDir, { recursive: true });
+      fs.mkdirSync(docxSkillDir, { recursive: true });
       fs.mkdirSync(workspaceDir, { recursive: true });
 
-      fs.copyFileSync(path.join(REPO_WEB_SEARCH_DIR, 'SKILL.md'), path.join(webSearchSkillDir, 'SKILL.md'));
-      fs.copyFileSync(
-        path.join(REPO_WEB_SEARCH_DIR, 'scripts', 'search.sh'),
-        path.join(webSearchSkillDir, 'scripts', 'search.sh'),
+      fs.copyFileSync(REPO_WEB_SEARCH_SKILL_MD, path.join(webSearchSkillDir, 'SKILL.md'));
+      fs.writeFileSync(
+        path.join(docxSkillDir, 'SKILL.md'),
+        '---\nname: docx\ndescription: Word helper\n---\n# Docx\n',
+        'utf8',
       );
-      fs.chmodSync(path.join(webSearchSkillDir, 'scripts', 'search.sh'), 0o755);
-      // Lock skillsDir/web-search strictly read-only to guarantee zero writes to $PROJECT_DIR.
-      fs.chmodSync(webSearchSkillDir, 0o555);
 
-      // 1. Local mock WebSearchHost HTTP bridge on 127.0.0.1:<port>/web-search/page
-      const bridgeSecret = 'e2e-web-search-secret';
-      const bridgeCalls: Array<{ op?: string; query?: string; engine?: string; authOk: boolean }> = [];
-      const searchBridge = await startServer((req, res) => {
+      // 1. Mock DeepSeek native Anthropic Messages search endpoint
+      const deepSeekSearchCalls: Array<{
+        apiKey?: string;
+        tools?: unknown;
+        text?: string;
+      }> = [];
+      let failDeepSeekNative = false;
+      const mockDeepSeekSearch = await startServer((req, res) => {
         const chunks: Buffer[] = [];
         req.on('data', (c: Buffer) => chunks.push(c));
         req.on('end', () => {
-          const authOk = req.headers['x-mcp-bridge-secret'] === bridgeSecret;
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
-            op?: string;
-            query?: string;
-            engine?: string;
+          const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+            messages?: Array<{ content?: Array<{ text?: string }> }>;
+            tools?: unknown;
           };
-          bridgeCalls.push({ op: body.op, query: body.query, engine: body.engine, authOk });
+          deepSeekSearchCalls.push({
+            apiKey: typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'] : undefined,
+            tools: parsed.tools,
+            text: parsed.messages?.[0]?.content?.[0]?.text,
+          });
           res.setHeader('content-type', 'application/json');
-          if (!authOk) {
-            res.statusCode = 401;
-            res.end(JSON.stringify({ success: false, error: 'Unauthorized' }));
+          if (failDeepSeekNative) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: { message: 'Model Not Exist' } }));
             return;
           }
-          if (body.op === 'status') {
-            res.end(JSON.stringify({ success: true, data: { active: true } }));
-            return;
-          }
-          if (body.op === 'search') {
-            res.end(JSON.stringify({
-              success: true,
-              data: {
-                query: body.query,
-                engine: body.engine ?? 'google',
-                totalResults: 1,
-                duration: 9,
-                results: [
+          res.end(JSON.stringify({
+            id: 'msg_ds_search_1',
+            type: 'message',
+            role: 'assistant',
+            content: [
+              {
+                type: 'web_search_tool_result',
+                tool_use_id: 'srvtoolu_1',
+                content: [
                   {
-                    title: 'LobsterAI E2E Verified Search Hit',
-                    url: 'https://verified-e2e.example.test/article',
-                    snippet: 'Real DSH workspace-write sandbox search succeeded via host bridge.',
+                    type: 'web_search_result',
+                    url: 'https://blocked.example.test/must-be-filtered',
+                    title: 'Blocked Native Hit',
+                    snippet: 'Should not survive blockedHostnames filter.',
+                  },
+                  {
+                    type: 'web_search_result',
+                    url: 'https://deepseek-native.example.test/doc',
+                    title: 'DeepSeek Native Verified Hit',
+                    snippet: 'Served by DeepSeek native web_search_20250305.',
                   },
                 ],
               },
-            }));
-            return;
-          }
-          res.statusCode = 400;
-          res.end(JSON.stringify({ success: false, error: 'Unsupported op' }));
+            ],
+          }));
         });
       });
 
-      const bridgeFilePath = getWebSearchBridgeFilePath(userDataDir);
-      writeWebSearchBridgeFile(bridgeFilePath, {
-        bridgeUrl: `${searchBridge.origin}/web-search/page`,
-        bridgeSecret,
-      });
-
-      // 2. Local mock OpenAI Chat Completions HTTP server scripting deterministic tool calls
+      // 2. Mock OpenAI Chat Completions server for both `lobsterai-server` (plan) and `deepseek` (personal)
       const capturedRequests: CapturedLlmRequest[] = [];
-      let llmPhase: 'search' | 'blocked-fetch' | 'disabled-fetch' = 'search';
+      let llmPhase:
+        | 'plan-search'
+        | 'deepseek-native'
+        | 'deepseek-fallback'
+        | 'expert-restricted'
+        | 'global-disabled' = 'plan-search';
       let stepInPhase = 0;
 
-      const mockOpenAi = await startServer((req, res) => {
+      const mockLlm = await startServer((req, res) => {
         const chunks: Buffer[] = [];
         req.on('data', (c: Buffer) => chunks.push(c));
         req.on('end', () => {
           const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as CapturedLlmRequest;
-          // Ignore auxiliary tool-less calls (e.g. session title generation).
           if (!Array.isArray(body.tools) || body.tools.length === 0) {
             sendSseChunks(res, makeFinalTextSse('E2E Session Title'));
             return;
@@ -234,66 +239,97 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: web-search sandbox & we
           capturedRequests.push(body);
           const step = stepInPhase++;
 
-          if (llmPhase === 'search') {
+          if (llmPhase === 'plan-search') {
             if (step === 0) {
-              sendSseChunks(
-                res,
-                makeToolCallSse('call-search-1', 'bash', {
-                  description: 'Run LobsterAI web-search script inside DSH workspace-write sandbox',
-                  command: 'bash "$SKILLS_ROOT/web-search/scripts/search.sh" "LobsterAI DSH E2E test" 3',
-                }),
-              );
+              sendSseChunks(res, makeToolCallSse('call-plan-search', 'web_search', {
+                queries: ['LobsterAI plan model search'],
+              }));
               return;
             }
-            sendSseChunks(res, makeFinalTextSse('Search completed with verified E2E results.'));
+            sendSseChunks(res, makeFinalTextSse('Plan browser search succeeded.'));
             return;
           }
 
-          if (llmPhase === 'blocked-fetch') {
+          if (llmPhase === 'deepseek-native') {
             if (step === 0) {
-              sendSseChunks(
-                res,
-                makeToolCallSse('call-fetch-blocked', 'web_fetch', {
-                  url: 'https://blocked.example.test/private',
-                }),
-              );
+              sendSseChunks(res, makeToolCallSse('call-ds-native', 'web_search', {
+                queries: ['DeepSeek native search query'],
+              }));
               return;
             }
-            sendSseChunks(res, makeFinalTextSse('Fetch was blocked as expected.'));
+            sendSseChunks(res, makeFinalTextSse('DeepSeek native search succeeded.'));
             return;
           }
 
-          if (llmPhase === 'disabled-fetch') {
+          if (llmPhase === 'deepseek-fallback') {
             if (step === 0) {
-              sendSseChunks(
-                res,
-                makeToolCallSse('call-fetch-disabled', 'web_fetch', {
-                  url: 'https://allowed.example.test/public',
-                }),
-              );
+              sendSseChunks(res, makeToolCallSse('call-ds-fallback', 'web_search', {
+                queries: ['DeepSeek fallback query'],
+              }));
               return;
             }
-            sendSseChunks(res, makeFinalTextSse('Fetch disabled as expected.'));
+            sendSseChunks(res, makeFinalTextSse('Fallback browser search succeeded.'));
+            return;
+          }
+
+          if (llmPhase === 'expert-restricted') {
+            if (step === 0) {
+              sendSseChunks(res, makeToolCallSse('call-blocked-fetch', 'web_fetch', {
+                url: 'https://blocked.example.test/private',
+              }));
+              return;
+            }
+            sendSseChunks(res, makeFinalTextSse('Blocked fetch rejected as expected.'));
+            return;
+          }
+
+          if (llmPhase === 'global-disabled') {
+            if (step === 0) {
+              sendSseChunks(res, makeToolCallSse('call-disabled-fetch', 'web_fetch', {
+                url: 'https://allowed.example.test/public',
+              }));
+              return;
+            }
+            sendSseChunks(res, makeFinalTextSse('Disabled fetch rejected as expected.'));
           }
         });
       });
 
-      // Inject an ambient DEEPSEEK_API_KEY into parent env to prove buildIsolatedDshChildEnv strips it!
+      // Inject an ambient DEEPSEEK_API_KEY into parent env to confirm DSH child isolation strips it.
       const prevDeepSeekKey = process.env.DEEPSEEK_API_KEY;
       process.env.DEEPSEEK_API_KEY = 'sk-ambient-must-not-leak';
 
+      const browserBridgeCalls: Array<{ query: string; maxResults?: number }> = [];
       const manager = new DshHostManager({
         userDataDir,
         runtimeDir: RUNTIME_DIR,
         hostBundleDir: HOST_BUNDLE_DIR,
         skillsDir,
         executablePath: process.execPath,
-        searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
-        webSearchBridgeFile: bridgeFilePath,
         skipElectronRunAsNode: true,
         bootTimeoutMs: 30_000,
       });
       manager.setApprovalEvaluator(() => ({ kind: 'allow' }));
+      manager.setWebSearchHandler(async ({ query, maxResults }) => {
+        browserBridgeCalls.push({ query, maxResults });
+        return {
+          query,
+          engine: 'bing',
+          duration: 12,
+          sources: [
+            {
+              url: 'https://blocked.example.test/blocked-browser-hit',
+              title: 'Blocked Browser Hit',
+              snippet: 'Must be filtered out by blockedHostnames.',
+            },
+            {
+              url: 'https://browser-e2e.example.test/article',
+              title: 'In-App Browser Verified Hit',
+              snippet: `In-app WebSearchHost answered: ${query}`,
+            },
+          ],
+        };
+      });
 
       async function runTurn(sessionId: string, promptText: string): Promise<void> {
         const client = manager.getClient();
@@ -328,110 +364,201 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: web-search sandbox & we
         await manager.start();
         const client = manager.getClient();
 
+        const health = await client.callOps<{ ok?: boolean; pluginsReady?: Record<string, boolean> }>(
+          DshOpsAction.Health,
+        );
+        expect(health.ok).toBe(true);
+        expect(health.pluginsReady?.webSearchBridge).toBe(true);
+
         await manager.syncProviders({
           providers: [
             {
-              id: 'mock-openai',
-              displayName: 'Mock OpenAI',
+              id: 'lobsterai-server',
+              displayName: 'LobsterAI Plan',
               api: 'openai-completions',
-              baseURL: `${mockOpenAi.origin}/v1`,
-              apiKey: 'mock-key',
-              models: [{ id: 'mock-gpt', name: 'Mock GPT', contextWindow: 64000, maxTokens: 4096 }],
+              baseURL: `${mockLlm.origin}/v1`,
+              apiKey: 'plan-proxy-key',
+              models: [{ id: 'deepseek-chat', name: 'DeepSeek Plan', contextWindow: 64000, maxTokens: 4096 }],
+            },
+            {
+              id: 'deepseek',
+              displayName: 'Personal DeepSeek',
+              api: 'openai-completions',
+              baseURL: `${mockLlm.origin}/v1`,
+              apiKey: 'sk-personal-deepseek',
+              models: [{ id: 'deepseek-chat', name: 'DeepSeek Personal', contextWindow: 64000, maxTokens: 4096 }],
             },
           ],
         });
         await manager.syncSkillsPolicy({
-          enabledIds: ['web-search'],
+          enabledIds: ['web-search', 'docx'],
           disabledIds: [],
           skillsDir,
         });
         await manager.syncWebAccessPolicy({
           webFetchEnabled: true,
+          browserSearchEnabled: true,
           blockedHostnames: ['blocked.example.test'],
+          deepseekSearchBaseUrl: mockDeepSeekSearch.origin,
         });
 
-        // ── Turn 1: Run web-search skill inside real DSH workspace-write sandbox ──
-        const created1 = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
+        // ── Turn 1: LobsterAI plan DeepSeek -> native web_search routes to in-app browser bridge ──
+        const sessionPlan = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
         await manager.bindSessionContext({
-          sessionId: created1.sessionId,
+          sessionId: sessionPlan.sessionId,
           agentId: 'main',
-          coworkSessionId: 'cw-e2e-1',
+          coworkSessionId: 'cw-e2e-plan',
           executionMode: 'auto',
           permissionPreset: DshPermissionPreset.WorkspaceWrite,
         });
-        await client.selectModel({ sessionId: created1.sessionId, provider: 'mock-openai', model: 'mock-gpt' });
+        await client.selectModel({
+          sessionId: sessionPlan.sessionId,
+          provider: 'lobsterai-server',
+          model: 'deepseek-chat',
+        });
 
-        llmPhase = 'search';
+        llmPhase = 'plan-search';
         stepInPhase = 0;
-        await runTurn(created1.sessionId, 'Search for LobsterAI DSH E2E test');
+        await runTurn(sessionPlan.sessionId, 'Search using plan model');
 
         expect(capturedRequests.length).toBeGreaterThanOrEqual(2);
-        const turn1FirstReq = capturedRequests[0];
-        const turn1SecondReq = capturedRequests[1];
+        const turn1Req0 = capturedRequests[0];
+        const turn1Req1 = capturedRequests[1];
 
-        // Ambient DEEPSEEK_API_KEY was stripped -> DSH built-in `web_search` MUST NOT be admitted on non-DeepSeek route.
-        const admittedToolNames = (turn1FirstReq.tools ?? []).map((t) => t.function?.name).filter(Boolean);
-        expect(admittedToolNames).not.toContain('web_search');
-        expect(admittedToolNames).toContain('web_fetch');
-        expect(admittedToolNames).toContain('bash');
+        const turn1Tools = extractAdmittedToolNames(turn1Req0);
+        expect(turn1Tools).toContain('web_search');
+        expect(turn1Tools).toContain('web_fetch');
 
-        // Concise web-search routing guidance MUST be present when web-search skill is enabled.
-        expect(extractSystemText(turn1FirstReq)).toContain('$SKILLS_ROOT/web-search/scripts/search.sh');
+        const turn1System = extractSystemText(turn1Req0);
+        expect(turn1System).toContain('`web_search`');
+        expect(turn1System).not.toContain('search.sh');
+        // `web-search` is hidden from the model-facing skill catalog while `docx` remains listed.
+        expect(turn1System).toContain('docx');
+        expect(turn1System).not.toMatch(/<name>\s*web-search\s*<\/name>/);
 
-        // Real search.sh queried the local bridge with valid secret and ZERO sandbox write failures.
-        expect(bridgeCalls).toEqual([
-          { op: 'status', query: undefined, engine: undefined, authOk: true },
-          { op: 'search', query: 'LobsterAI DSH E2E test', engine: 'google', authOk: true },
-        ]);
-        const searchToolOutput = extractToolResultText(turn1SecondReq);
-        expect(searchToolOutput).toContain('LobsterAI E2E Verified Search Hit');
-        expect(searchToolOutput).toContain('https://verified-e2e.example.test/article');
-        expect(searchToolOutput).not.toMatch(/Operation not permitted|sandbox: file access denied/i);
-        expect(fs.existsSync(path.join(webSearchSkillDir, '.connection'))).toBe(false);
+        expect(deepSeekSearchCalls).toHaveLength(0);
+        expect(browserBridgeCalls).toEqual([{ query: 'LobsterAI plan model search', maxResults: 10 }]);
 
-        // ── Turn 2: web_fetch to blockedHostnames MUST be rejected by DSH ctx.tools.guard ──
+        const planToolOutput = extractToolResultText(turn1Req1);
+        expect(planToolOutput).toContain('In-App Browser Verified Hit');
+        expect(planToolOutput).toContain('https://browser-e2e.example.test/article');
+        expect(planToolOutput).not.toContain('blocked.example.test');
+
+        // ── Turn 2: Personal DeepSeek key -> native DeepSeek web_search_20250305 (zero bridge calls) ──
+        const sessionPersonal = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
+        await manager.bindSessionContext({
+          sessionId: sessionPersonal.sessionId,
+          agentId: 'main',
+          coworkSessionId: 'cw-e2e-personal',
+          executionMode: 'auto',
+          permissionPreset: DshPermissionPreset.WorkspaceWrite,
+        });
+        await client.selectModel({
+          sessionId: sessionPersonal.sessionId,
+          provider: 'deepseek',
+          model: 'deepseek-chat',
+        });
+
         const reqOffset2 = capturedRequests.length;
-        llmPhase = 'blocked-fetch';
+        llmPhase = 'deepseek-native';
         stepInPhase = 0;
-        await runTurn(created1.sessionId, 'Fetch https://blocked.example.test/private');
+        await runTurn(sessionPersonal.sessionId, 'Search using personal DeepSeek key');
 
         expect(capturedRequests.length).toBeGreaterThanOrEqual(reqOffset2 + 2);
-        const blockedToolOutput = extractToolResultText(capturedRequests[reqOffset2 + 1]);
-        expect(blockedToolOutput).toContain('blocked.example.test');
-        expect(blockedToolOutput).toContain('blockedHostnames');
+        expect(deepSeekSearchCalls).toHaveLength(1);
+        expect(deepSeekSearchCalls[0].apiKey).toBe('sk-personal-deepseek');
+        expect(deepSeekSearchCalls[0].text).toContain('DeepSeek native search query');
+        expect(deepSeekSearchCalls[0].tools).toEqual([
+          { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
+        ]);
+        // Browser bridge was NOT called during Turn 2.
+        expect(browserBridgeCalls).toHaveLength(1);
 
-        // ── Turn 3: Disable web-search skill & webFetch -> guidance omitted & web_fetch denied ──
+        const nativeToolOutput = extractToolResultText(capturedRequests[reqOffset2 + 1]);
+        expect(nativeToolOutput).toContain('DeepSeek Native Verified Hit');
+        expect(nativeToolOutput).toContain('https://deepseek-native.example.test/doc');
+        expect(nativeToolOutput).not.toContain('blocked.example.test');
+
+        // ── Turn 3: Personal DeepSeek native failure -> transparent fallback to in-app browser bridge ──
+        failDeepSeekNative = true;
+        const reqOffset3 = capturedRequests.length;
+        llmPhase = 'deepseek-fallback';
+        stepInPhase = 0;
+        await runTurn(sessionPersonal.sessionId, 'Search when DeepSeek native fails');
+
+        expect(capturedRequests.length).toBeGreaterThanOrEqual(reqOffset3 + 2);
+        expect(deepSeekSearchCalls).toHaveLength(2);
+        expect(browserBridgeCalls).toHaveLength(2);
+        expect(browserBridgeCalls[1].query).toBe('DeepSeek fallback query');
+
+        const fallbackToolOutput = extractToolResultText(capturedRequests[reqOffset3 + 1]);
+        expect(fallbackToolOutput).toContain('In-App Browser Verified Hit');
+        expect(fallbackToolOutput).toContain('DeepSeek fallback query');
+
+        // ── Turn 4: Expert with allowedSkillIds excluding `web-search` -> web_search hidden + web_fetch guard active ──
+        const sessionExpert = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
+        await manager.bindSessionContext({
+          sessionId: sessionExpert.sessionId,
+          agentId: 'doc-expert',
+          coworkSessionId: 'cw-e2e-expert',
+          allowedSkillIds: ['docx'],
+          executionMode: 'auto',
+          permissionPreset: DshPermissionPreset.WorkspaceWrite,
+        });
+        await client.selectModel({
+          sessionId: sessionExpert.sessionId,
+          provider: 'lobsterai-server',
+          model: 'deepseek-chat',
+        });
+
+        const reqOffset4 = capturedRequests.length;
+        llmPhase = 'expert-restricted';
+        stepInPhase = 0;
+        await runTurn(sessionExpert.sessionId, 'Fetch blocked URL in restricted expert');
+
+        expect(capturedRequests.length).toBeGreaterThanOrEqual(reqOffset4 + 2);
+        expect(extractAdmittedToolNames(capturedRequests[reqOffset4])).not.toContain('web_search');
+        expect(extractSystemText(capturedRequests[reqOffset4])).not.toContain('When you need live web search:');
+        const blockedFetchOutput = extractToolResultText(capturedRequests[reqOffset4 + 1]);
+        expect(blockedFetchOutput).toContain('blocked.example.test');
+        expect(blockedFetchOutput).toContain('blockedHostnames');
+
+        // ── Turn 5: Global web-search disabled + webFetch disabled -> web_search hidden & web_fetch denied ──
         await manager.syncSkillsPolicy({
-          enabledIds: [],
+          enabledIds: ['docx'],
           disabledIds: ['web-search'],
           skillsDir,
         });
         await manager.syncWebAccessPolicy({
           webFetchEnabled: false,
+          browserSearchEnabled: true,
           blockedHostnames: [],
         });
 
-        const created2 = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
+        const sessionDisabled = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
         await manager.bindSessionContext({
-          sessionId: created2.sessionId,
+          sessionId: sessionDisabled.sessionId,
           agentId: 'main',
-          coworkSessionId: 'cw-e2e-2',
+          coworkSessionId: 'cw-e2e-disabled',
           executionMode: 'auto',
           permissionPreset: DshPermissionPreset.WorkspaceWrite,
         });
-        await client.selectModel({ sessionId: created2.sessionId, provider: 'mock-openai', model: 'mock-gpt' });
+        await client.selectModel({
+          sessionId: sessionDisabled.sessionId,
+          provider: 'lobsterai-server',
+          model: 'deepseek-chat',
+        });
 
-        const reqOffset3 = capturedRequests.length;
-        llmPhase = 'disabled-fetch';
+        const reqOffset5 = capturedRequests.length;
+        llmPhase = 'global-disabled';
         stepInPhase = 0;
-        await runTurn(created2.sessionId, 'Fetch https://allowed.example.test/public');
+        await runTurn(sessionDisabled.sessionId, 'Fetch allowed URL when web_fetch is disabled');
 
-        expect(capturedRequests.length).toBeGreaterThanOrEqual(reqOffset3 + 2);
-        expect(extractSystemText(capturedRequests[reqOffset3])).not.toContain(
-          '$SKILLS_ROOT/web-search/scripts/search.sh',
-        );
-        const disabledFetchToolOutput = extractToolResultText(capturedRequests[reqOffset3 + 1]);
-        expect(disabledFetchToolOutput).toContain('web_fetch is disabled');
+        expect(capturedRequests.length).toBeGreaterThanOrEqual(reqOffset5 + 2);
+        expect(extractAdmittedToolNames(capturedRequests[reqOffset5])).not.toContain('web_search');
+        expect(extractSystemText(capturedRequests[reqOffset5])).not.toContain('When you need live web search:');
+        const disabledFetchOutput = extractToolResultText(capturedRequests[reqOffset5 + 1]);
+        expect(disabledFetchOutput).toContain('web_fetch is disabled');
       } finally {
         if (prevDeepSeekKey === undefined) {
           delete process.env.DEEPSEEK_API_KEY;

@@ -17,7 +17,7 @@ export const PROGRESSIVE_TOOL_GROUPS = Object.freeze([
   {
     id: 'browser',
     prefix: 'mcp__lobster-browser__',
-    skills: ['web-search'],
+    skills: [],
     label: '内置浏览器与网页交互',
   },
   {

@@ -85,4 +85,25 @@ describe('buildSelectedSkillRoutingPrompt', () => {
     expect(prompt).not.toContain('DOCX BODY');
     expect(prompt).not.toContain('XLSX BODY');
   });
+
+  test('routes explicit web-search selection directly to native web_search without skill XML', () => {
+    const onlyWebSearch = buildSelectedSkillRoutingPrompt([
+      makeSkill({
+        id: 'web-search',
+        name: 'Web Search',
+        skillPath: '/Users/example/SKILLs/web-search/SKILL.md',
+      }),
+    ]);
+    expect(onlyWebSearch).toContain('## 本轮联网搜索');
+    expect(onlyWebSearch).toContain('`web_search`');
+    expect(onlyWebSearch).not.toContain('<selected_skills>');
+
+    const combined = buildSelectedSkillRoutingPrompt([
+      makeSkill({ id: 'web-search', name: 'Web Search', skillPath: '/Users/example/SKILLs/web-search/SKILL.md' }),
+      makeSkill({ id: 'docx', name: 'Docx', skillPath: '/Users/example/SKILLs/docx/SKILL.md' }),
+    ]);
+    expect(combined).toContain('## 本轮联网搜索');
+    expect(combined).toContain('<id>docx</id>');
+    expect(combined).not.toContain('<id>web-search</id>');
+  });
 });

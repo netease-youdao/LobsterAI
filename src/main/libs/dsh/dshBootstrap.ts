@@ -69,13 +69,13 @@ import {
 import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
 import { resolveDshBundledGitBinDir } from '../dshRuntime';
 import { appendPythonRuntimeToEnv } from '../pythonRuntime';
-import { getWebSearchBridgeFilePath } from '../webSearchBridgeFile';
 import {
   type ApprovalAllowRulePort,
   type HostToolProvider,
   wireDshHostBridge,
 } from './dshHostBridgeWiring';
 import {
+  type DshBridgeWebSearchHandler,
   type DshChildEnvAdditions,
   type DshHostAgentSpec,
   DshHostManager,
@@ -166,6 +166,7 @@ export interface DshBootstrapOptions {
   ) => string[] | null;
   allowRules?: ApprovalAllowRulePort;
   toolProviders?: HostToolProvider[];
+  webSearchHandler?: DshBridgeWebSearchHandler;
   instanceId?: string;
   ecosystemWindowTitle?: string;
   mcpOAuthFetcher?: McpOAuthFetch;
@@ -337,7 +338,6 @@ function resolveBundledNpmBinDir(): string | undefined {
 
 function resolveDshChildEnvAdditions(
   executablePath: string,
-  userDataDir: string,
 ): DshChildEnvAdditions {
   const npmBinDir = resolveBundledNpmBinDir();
   const nodeShimDir = ensureElectronNodeShim(executablePath, npmBinDir);
@@ -369,7 +369,6 @@ function resolveDshChildEnvAdditions(
   }
 
   return {
-    webSearchBridgeFile: getWebSearchBridgeFilePath(userDataDir),
     nodeShimDir,
     npmBinDir,
     prependPathDirs,
@@ -502,14 +501,16 @@ export class DshBootstrap {
       channelsBundleDir: this.channelsBundleDir,
       skillsDir: options.skillsDir,
       executablePath: this.executablePath,
-      webSearchBridgeFile: getWebSearchBridgeFilePath(options.userDataDir),
-      resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath, options.userDataDir),
+      resolveChildEnvAdditions: () => resolveDshChildEnvAdditions(this.executablePath),
       nodeToolchain: this.nodeToolchain,
       instanceId: options.instanceId,
       skipElectronRunAsNode: options.skipElectronRunAsNode,
       bootTimeoutMs: options.bootTimeoutMs,
       nodeToolchainSource: () => this.resolveNodeToolchain(),
     });
+    if (options.webSearchHandler) {
+      this.hostManager.setWebSearchHandler(options.webSearchHandler);
+    }
 
     this.channelsBridge = new DshChannelsBridge({
       hostManager: this.hostManager,

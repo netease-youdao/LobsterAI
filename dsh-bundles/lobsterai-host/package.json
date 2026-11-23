@@ -30,6 +30,7 @@
     "@deepseek-ai/dsh-system-prompt": "*",
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-web": "*",
+    "@deepseek-ai/dsh-web-search-deepseek": "*",
     "@earendil-works/pi-ai": "*",
     "@modelcontextprotocol/client": "*"
   }

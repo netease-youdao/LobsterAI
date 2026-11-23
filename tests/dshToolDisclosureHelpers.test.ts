@@ -61,7 +61,7 @@ describe('tool-disclosure-helpers', () => {
     expect(h.resolveCapabilityForSkillName('XLSX')).toBe('excel');
     expect(h.resolveCapabilityForSkillName(' pptx ')).toBe('ppt');
     expect(h.resolveCapabilityForSkillName('computer-use')).toBe('computer-use');
-    expect(h.resolveCapabilityForSkillName('web-search')).toBe('browser');
+    expect(h.resolveCapabilityForSkillName('web-search')).toBeNull();
     expect(h.resolveCapabilityForSkillName('article-writer')).toBeNull();
   });
 

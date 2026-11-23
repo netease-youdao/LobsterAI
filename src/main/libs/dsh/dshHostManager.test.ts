@@ -438,7 +438,6 @@ describe('DshHostManager', () => {
     const pmDir = path.join(runtimeDir, 'package-manager');
     fs.mkdirSync(pmDir, { recursive: true });
     const skillsDir = path.join(temp, 'userData', 'SKILLs');
-    const bridgeFile = path.join(temp, 'userData', 'web-search-bridge.json');
     const nodeShimDir = path.join(temp, 'userData', 'cowork', 'bin');
     const pythonDir = path.join(temp, 'userData', 'runtimes', 'python-win');
 
@@ -455,7 +454,6 @@ describe('DshHostManager', () => {
       searchPolicy: DshSearchPolicy.DeepSeekNativeOnly,
       runtimeDir,
       executablePath: '/Apps/LobsterAI Helper',
-      webSearchBridgeFile: bridgeFile,
       timeZone: 'Asia/Shanghai',
       nodeShimDir,
       npmBinDir: '/Apps/resources/npm/bin',
@@ -472,7 +470,6 @@ describe('DshHostManager', () => {
     expect(withInheritedTz.SKILLS_ROOT).toBe(skillsDir);
     expect(withInheritedTz.LOBSTERAI_SKILLS_ROOT).toBe(skillsDir);
     expect(withInheritedTz.LOBSTERAI_ELECTRON_PATH).toBe('/Apps/LobsterAI Helper');
-    expect(withInheritedTz.LOBSTERAI_WEB_SEARCH_BRIDGE_FILE).toBe(bridgeFile);
     expect(withInheritedTz.LOBSTERAI_NPM_BIN_DIR).toBe('/Apps/resources/npm/bin');
     expect(withInheritedTz.LOBSTERAI_PYTHON_ROOT).toBe(pythonDir);
     expect(withInheritedTz.PYTHONUTF8).toBe('1');

@@ -1042,6 +1042,7 @@ describe('DshRuntimeAdapter', () => {
       DshProgressiveCapability.Word,
       DshProgressiveCapability.Ppt,
     ]);
+    expect(resolveUnlockedCapabilitiesForTurn({ messageSkillIds: ['web-search'] })).toEqual([]);
     expect(resolveUnlockedCapabilitiesForTurn({
       browserAnnotations: [{ id: 'ann-1', pageUrl: 'https://example.com', pageTitle: 'Example', items: [] }],
     })).toEqual([DshProgressiveCapability.Browser]);

@@ -537,6 +537,7 @@ export function apply(ctx) {
     currentProfiles = nextProfiles;
     apiKeys.clear();
     for (const [k, v] of nextKeys) apiKeys.set(k, v);
+    state.resetWebSearchCooldown?.();
 
     const routes = [...currentProfiles.keys()];
     if (routes.length === 0) {
@@ -560,12 +561,27 @@ export function apply(ctx) {
     };
   };
 
+  state.getProviderAuth = (providerId) => {
+    if (typeof providerId !== 'string' || providerId.trim().length === 0) return null;
+    const canonical = canonicalizeProviderId(providerId);
+    if (!canonical) return null;
+    const profile = currentProfiles.get(canonical);
+    const apiKey = apiKeys.get(canonical) ?? '';
+    if (!profile && !apiKey) return null;
+    return {
+      apiKey,
+      baseURL: typeof profile?.baseURL === 'string' ? profile.baseURL : '',
+      api: typeof profile?.api === 'string' ? profile.api : '',
+    };
+  };
+
   ctx.effect(() => () => {
     if (registration) {
       registration();
       registration = undefined;
     }
     state.syncProviders = null;
+    state.getProviderAuth = null;
     state.pluginsReady.modelBridge = false;
   }, 'lobster-model-bridge cleanup');
 

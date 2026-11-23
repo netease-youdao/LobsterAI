@@ -346,13 +346,23 @@ describe('persona-helpers', () => {
     expect(planMode).toEqual([]);
   });
 
-  test('injects concise web-search routing guidance only when web-search skill is installed and enabled', async () => {
-    const { buildWebSearchRoutingGuidance, WEB_SEARCH_ROUTING_GUIDANCE } = await loadHelpers();
+  test('injects concise web-search routing guidance and hides web-search from the model-facing skill catalog', async () => {
+    const { buildWebSearchRoutingGuidance, discoverLobsterSkills, WEB_SEARCH_ROUTING_GUIDANCE } = await loadHelpers();
 
     const skillsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-skills-'));
     tempDirs.push(skillsRoot);
     fs.mkdirSync(path.join(skillsRoot, 'web-search'), { recursive: true });
     fs.writeFileSync(path.join(skillsRoot, 'web-search', 'SKILL.md'), '---\nname: web-search\n---\n', 'utf8');
+    fs.mkdirSync(path.join(skillsRoot, 'docx'), { recursive: true });
+    fs.writeFileSync(path.join(skillsRoot, 'docx', 'SKILL.md'), '---\nname: docx\ndescription: Word helper\n---\n', 'utf8');
+
+    // Routing guidance directs the model to native web_search rather than legacy search.sh.
+    expect(WEB_SEARCH_ROUTING_GUIDANCE).toContain('`web_search`');
+    expect(WEB_SEARCH_ROUTING_GUIDANCE).not.toContain('search.sh');
+
+    // `web-search` is omitted from model-facing skill discovery to save context tokens.
+    const discovered = discoverLobsterSkills([skillsRoot], { enabledIds: null, disabledIds: new Set() }, null);
+    expect(discovered.map((item) => item.name)).toEqual(['docx']);
 
     // Enabled globally and unrestricted for agent -> guidance included.
     expect(buildWebSearchRoutingGuidance([skillsRoot], { enabledIds: null, disabledIds: new Set() }, null)).toBe(

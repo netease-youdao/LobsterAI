@@ -129,7 +129,7 @@ export function isUrlBlockedByHostnames(rawUrl, blockedHostnames) {
  *
  * @param {unknown} toolName
  * @param {unknown} args
- * @param {{ webFetchEnabled?: boolean, blockedHostnames?: readonly string[], searchPolicy?: string }} policy
+ * @param {{ webFetchEnabled?: boolean, webSearchEnabled?: boolean, blockedHostnames?: readonly string[], searchPolicy?: string }} policy
  * @param {{ llmProvider?: string }} [context]
  * @returns {string | undefined}
  */
@@ -156,12 +156,16 @@ export function evaluateWebAccessGuard(toolName, args, policy, context = {}) {
   }
 
   if (normalizedTool === WEB_SEARCH_TOOL_NAME) {
+    if (policy?.webSearchEnabled === false) {
+      return 'web_search is disabled by LobsterAI web-search skill policy.';
+    }
+
     const searchPolicy = typeof policy?.searchPolicy === 'string' && policy.searchPolicy.trim().length > 0
       ? policy.searchPolicy.trim()
-      : DSH_SEARCH_POLICY.DeepSeekNativeOnly;
+      : DSH_SEARCH_POLICY.AllowAll;
 
     if (searchPolicy === DSH_SEARCH_POLICY.LobsterWebSearchOnly) {
-      return 'Built-in DSH web_search is disabled by LobsterAI search policy. Use the LobsterAI web-search skill or a configured MCP search server instead.';
+      return 'Built-in DSH web_search is disabled by LobsterAI search policy. Use a configured MCP search server instead.';
     }
 
     if (searchPolicy === DSH_SEARCH_POLICY.DeepSeekNativeOnly) {
@@ -169,7 +173,7 @@ export function evaluateWebAccessGuard(toolName, args, policy, context = {}) {
         ? context.llmProvider.trim().toLowerCase()
         : '';
       if (!llmProvider || !DEEPSEEK_SEARCH_ROUTES.has(llmProvider)) {
-        return 'Built-in DSH web_search is restricted to DeepSeek routes by LobsterAI search policy. Use the LobsterAI web-search skill or a configured MCP search server instead.';
+        return 'Built-in DSH web_search is restricted to DeepSeek routes by LobsterAI search policy. Use a configured MCP search server instead.';
       }
     }
     return undefined;

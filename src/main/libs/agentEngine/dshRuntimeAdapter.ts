@@ -379,7 +379,6 @@ function assistantEventPosition(dshSessionId: string, seq?: number): { dshSessio
 
 const SKILL_TO_PROGRESSIVE_CAPABILITY: Readonly<Record<string, DshProgressiveCapability>> = {
   'computer-use': DshProgressiveCapability.ComputerUse,
-  'web-search': DshProgressiveCapability.Browser,
   docx: DshProgressiveCapability.Word,
   xlsx: DshProgressiveCapability.Excel,
   pptx: DshProgressiveCapability.Ppt,
