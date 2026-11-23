@@ -90,6 +90,7 @@ import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
+import DefaultPermissionModeSettingRow from './settings/DefaultPermissionModeSettingRow';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
 import {
   buildGeminiConnectionTestRequest,
@@ -4757,6 +4758,10 @@ const Settings: React.FC<SettingsProps> = ({
                     />
                   </div>
                 </div>
+              </SettingsRow>
+
+              <SettingsRow>
+                <DefaultPermissionModeSettingRow />
               </SettingsRow>
 
               <SettingsRow>

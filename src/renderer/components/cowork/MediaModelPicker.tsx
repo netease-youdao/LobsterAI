@@ -40,6 +40,7 @@ import {
   resolveMediaModelListMinHeight,
   resolveMediaPanelMaxHeight,
 } from './mediaModelListLayout';
+import { hasNonDefaultMediaPreference } from './mediaOverrideBadge';
 import { resolveMediaTypeChoice } from './mediaTypeChoice';
 import { resolvePopoverClipBounds, resolvePopoverPlacement } from './popoverPlacement';
 
@@ -1302,6 +1303,7 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
 
   if (menuItem) {
     const openSubmenu = () => { if (!disabled) setIsOpen(true); };
+    const isCustomized = hasNonDefaultMediaPreference(selection);
     // No positioned wrapper: the model list hangs off the add menu itself.
     return (
       <>
@@ -1319,6 +1321,12 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled,
         >
           <MagicIcon className="h-5 w-5 shrink-0 text-secondary" />
           <span className="min-w-0 flex-1 truncate">{i18nService.t('mediaGenerationMenuItem')}</span>
+          {isCustomized && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+              aria-hidden="true"
+            />
+          )}
           <ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />
         </button>
         {isOpen && (
