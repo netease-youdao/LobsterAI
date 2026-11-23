@@ -310,7 +310,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             className={`flex h-full min-w-0 items-center gap-2.5 rounded-[10px] pl-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors ${
               isHighlighted
                 ? 'font-medium text-foreground'
-                : 'font-normal text-foreground/80 group-hover:text-foreground'
+                : 'font-normal text-foreground/90 group-hover:text-foreground'
             } ${agent.updateRevision ? '' : 'flex-1'}`}
             role="treeitem"
             aria-level={1}
@@ -318,7 +318,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
           >
             <span
               className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none transition-all group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 ${
-                isHighlighted ? 'text-foreground' : 'text-foreground/55'
+                isHighlighted ? 'text-foreground' : 'text-foreground/65'
               }`}
             >
               <AgentAvatar agent={agent} />
@@ -477,25 +477,25 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             aria-hidden={!agent.isExpanded}
           >
             {/* Bottom padding closes the group so the next agent reads as a new section. */}
-            <div className="min-w-0 max-w-full space-y-0.5 pb-2 pt-0.5">
+            <div className="min-w-0 max-w-full space-y-0.5 pb-2.5 pt-0.5">
               {agent.hasLoadError && !hasVisibleTasks && (
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="flex h-[30px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="flex h-[32px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>
               )}
 
               {agent.isLoadingTasks && !hasVisibleTasks && (
-                <div className="flex h-[30px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary/80">
+                <div className="flex h-[32px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
                   {i18nService.t('loading')}
                 </div>
               )}
 
               {!agent.isLoadingTasks && !agent.hasLoadError && !hasVisibleTasks && (
-                <div className="flex h-[30px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary/75">
+                <div className="flex h-[32px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
                   {i18nService.t('myAgentSidebarNoTasks')}
                 </div>
               )}
@@ -524,7 +524,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="flex h-[30px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="flex h-[32px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>

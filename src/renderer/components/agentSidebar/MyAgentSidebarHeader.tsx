@@ -13,7 +13,7 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
 }) => {
   return (
     <div className="group sticky top-0 z-30 -mx-2.5 flex h-9 items-center justify-between bg-[var(--lobster-sidebar-bg)] px-2.5">
-      <h2 className="min-w-0 truncate pl-2.5 text-[11.5px] font-medium tracking-[0.01em] text-secondary/85">
+      <h2 className="min-w-0 truncate pl-2.5 text-[length:var(--lobster-text-sidebarMeta)] font-medium tracking-[0.01em] text-secondary">
         {i18nService.t('myAgents')}
       </h2>
       <Tooltip
@@ -21,7 +21,7 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
         position={TooltipPosition.Bottom}
         align={TooltipAlign.End}
         delay={300}
-        className="mr-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:opacity-100"
+        className="mr-0.5 opacity-75 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:opacity-100"
       >
         <button
           type="button"

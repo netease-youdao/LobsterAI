@@ -140,7 +140,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
     const pillLabel = isInstalling ? i18nService.t('updateInstallingShort') : title;
     const pillTone = isError
       ? 'border-red-500/25 bg-surface hover:border-red-500/40 dark:bg-surface/90 dark:hover:bg-surface'
-      : 'border-border/90 bg-surface hover:border-border dark:bg-surface/90 dark:hover:bg-surface';
+      : 'border-border bg-surface hover:border-border-input dark:bg-surface/90 dark:hover:bg-surface';
     const pillDot = isReady || isInstalling
       ? 'bg-emerald-500'
       : isError
@@ -151,14 +151,14 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
       <button
         type="button"
         onClick={handleExpand}
-        className={`non-draggable flex h-9 w-full items-center gap-2 rounded-xl border px-3 text-[12.5px] font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all duration-150 hover:shadow-[0_3px_10px_rgba(0,0,0,0.05)] ${pillTone}`}
+        className={`non-draggable flex h-9 w-full items-center gap-2 rounded-xl border px-3 text-[13px] font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all duration-150 hover:shadow-[0_3px_10px_rgba(0,0,0,0.06)] ${pillTone}`}
         aria-label={`${pillLabel} v${latestVersion}`}
         title={`${pillLabel} v${latestVersion}`}
       >
         <PingDot dotClassName={pillDot} />
         <span className="truncate">{pillLabel}</span>
         {!isInstalling && (
-          <span className="shrink-0 text-[11.5px] font-normal tabular-nums text-secondary">
+          <span className="shrink-0 text-[length:var(--lobster-text-sidebarMeta)] font-normal tabular-nums text-secondary">
             v{latestVersion}
           </span>
         )}
@@ -190,7 +190,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
           <span className="min-w-0 break-words text-[13px] font-semibold leading-5 text-foreground">
             {title}
           </span>
-          <span className="shrink-0 text-[11.5px] tabular-nums leading-4 text-secondary">v{latestVersion}</span>
+          <span className="shrink-0 text-[length:var(--lobster-text-sidebarMeta)] tabular-nums leading-4 text-secondary">v{latestVersion}</span>
         </div>
         <button
           type="button"
