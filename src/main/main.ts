@@ -449,11 +449,13 @@ import {
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
 import { createDshDecisionToolProvider } from './libs/dsh/dshDecisionTool';
+import { createDshHtmlRenderProvider } from './libs/dsh/dshHtmlRenderTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
 import { createDshSkillInstallProvider } from './libs/dsh/dshSkillInstallTool';
+import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
   getExpertStoreUrl,
@@ -2304,6 +2306,16 @@ const getDshBootstrap = (): DshBootstrap => {
         createDshDecisionToolProvider({
           getConfig: () => readDecisionModelConfig(getStore()),
           fetch: (url, init) => session.defaultSession.fetch(url, init),
+        }),
+        createDshHtmlRenderProvider({
+          resolveAllowedRoots: ({ coworkSessionId, agentId }) => {
+            const roots: string[] = [];
+            const coworkSession = coworkSessionId ? storeInstance.getSession(coworkSessionId, 0) : null;
+            if (coworkSession?.cwd) roots.push(coworkSession.cwd);
+            roots.push(path.join(userDataDir, 'workspaces', agentId || 'main'));
+            return roots;
+          },
+          render: (jobs, signal) => renderHtmlFilesOffscreen(jobs, signal),
         }),
       ],
       webSearchHandler: ({ query, maxResults, signal }) => (
