@@ -43,3 +43,44 @@ export function getPermissionPresetOption(
   return PERMISSION_PRESET_OPTIONS.find((option) => option.value === DEFAULT_DSH_PERMISSION_PRESET)
     ?? PERMISSION_PRESET_OPTIONS[1];
 }
+
+export function requiresPermissionPresetConfirmation(
+  currentPreset: DshPermissionPreset,
+  nextPreset: DshPermissionPreset,
+): boolean {
+  return (
+    nextPreset === DshPermissionPreset.FullAccess
+    && currentPreset !== DshPermissionPreset.FullAccess
+  );
+}
+
+export const FullAccessRiskItemId = {
+  Files: 'files',
+  Terminal: 'terminal',
+  Network: 'network',
+} as const;
+export type FullAccessRiskItemId = typeof FullAccessRiskItemId[keyof typeof FullAccessRiskItemId];
+
+export interface FullAccessRiskItemDescriptor {
+  id: FullAccessRiskItemId;
+  titleKey: string;
+  descKey: string;
+}
+
+export const FULL_ACCESS_RISK_ITEMS: readonly FullAccessRiskItemDescriptor[] = [
+  {
+    id: FullAccessRiskItemId.Files,
+    titleKey: 'coworkFullAccessRiskFilesTitle',
+    descKey: 'coworkFullAccessRiskFilesDesc',
+  },
+  {
+    id: FullAccessRiskItemId.Terminal,
+    titleKey: 'coworkFullAccessRiskTerminalTitle',
+    descKey: 'coworkFullAccessRiskTerminalDesc',
+  },
+  {
+    id: FullAccessRiskItemId.Network,
+    titleKey: 'coworkFullAccessRiskNetworkTitle',
+    descKey: 'coworkFullAccessRiskNetworkDesc',
+  },
+] as const;

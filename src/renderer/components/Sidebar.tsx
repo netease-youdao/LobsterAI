@@ -4,6 +4,7 @@ import { ENABLE_EXPERT_PLAZA_UI } from '@shared/featureFlags';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
+import { ShortcutAction } from '../config';
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
@@ -23,10 +24,14 @@ import {
   createSessionBatchKey,
 } from './agentSidebar/batchSelection';
 import MyAgentSidebarTree from './agentSidebar/MyAgentSidebarTree';
-import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from './agentSidebar/sidebarHeaderTooltip';
+import {
+  SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME,
+  SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
+} from './agentSidebar/sidebarHeaderTooltip';
 import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
 import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './agentSidebar/taskFilter';
+import { useShortcutHint } from './agentSidebar/useShortcutHint';
 import Modal from './common/Modal';
 import {
   type CoworkTaskSearchRequestEventDetail,
@@ -45,6 +50,7 @@ import LoginButton from './LoginButton';
 import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
 import SidebarCapabilitiesMenu from './SidebarCapabilitiesMenu';
 import SidebarExperienceSlot from './SidebarExperienceSlot';
+import Tooltip, { TooltipAlign, TooltipPosition } from './ui/Tooltip';
 import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
 import { useIsWindowFullscreen } from './window/useIsWindowFullscreen';
 
@@ -86,13 +92,17 @@ const SidebarNewFeatureBadge = {
   // Bump this value in a release when the experts entry should show the badge again.
   ExpertsVersion: '2026-10-12',
 } as const;
+const sidebarNavItemBaseClassName =
+  'group w-full inline-flex h-[34px] items-center gap-2.5 rounded-[10px] px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35';
 const sidebarNavItemClassName =
-  'w-full inline-flex h-9 items-center gap-2.5 rounded-full px-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+  `${sidebarNavItemBaseClassName} font-normal text-foreground/80 hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground`;
 const activeSidebarNavItemClassName =
-  `${sidebarNavItemClassName} bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_95%,black)] dark:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)] dark:hover:bg-[color-mix(in_srgb,var(--lobster-surface-raised)_93%,white)]`;
-const sidebarNavIconClassName = 'h-[18px] w-[18px] shrink-0 text-foreground/80';
+  `${sidebarNavItemBaseClassName} font-medium text-foreground bg-[var(--lobster-sidebar-item-active-bg)] ring-1 ring-inset ring-[var(--lobster-sidebar-item-active-border)] shadow-[var(--lobster-sidebar-item-active-shadow)]`;
+const sidebarNavIconClassName =
+  'h-[17px] w-[17px] shrink-0 text-secondary transition-colors group-hover:text-foreground';
+const activeSidebarNavIconClassName = 'h-[17px] w-[17px] shrink-0 text-foreground';
 const sidebarBottomIconButtonClassName =
-  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+  `inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`;
 
 type SidebarAnalyticsSource = 'home_sidebar' | 'home_agent_sidebar';
 
@@ -233,6 +243,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const showHeaderRow = !isWindows;
   const isWindowFullscreen = useIsWindowFullscreen();
+  const toggleSidebarShortcutHint = useShortcutHint(ShortcutAction.ToggleSidebar);
+  const newChatShortcutHint = useShortcutHint(ShortcutAction.NewChat);
+  const settingsShortcutHint = useShortcutHint(ShortcutAction.Settings);
   // macOS hides the traffic lights in full screen; take their slot instead of leaving a gap.
   const alignHeaderStart = isMac && isWindowFullscreen;
   const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn && !accountConnectionState;
@@ -609,12 +622,14 @@ const Sidebar: React.FC<SidebarProps> = ({
     };
   }, [updateAgentScrollEdges]);
 
+  const toggleSidebarLabel = isCollapsed ? i18nService.t('expand') : i18nService.t('collapse');
+
   return (
     <aside
       data-skin-sidebar="true"
-      className={`relative shrink-0 overflow-hidden bg-surface-raised ${
-        isResizing ? '' : 'sidebar-transition'
-      }`}
+      className={`relative shrink-0 overflow-hidden bg-[var(--lobster-sidebar-bg)] ${
+        isCollapsed ? '' : 'border-r border-border/80'
+      } ${isResizing ? '' : 'sidebar-transition'}`}
       style={{ width: isCollapsed ? 0 : sidebarWidth }}
     >
       <div
@@ -626,25 +641,39 @@ const Sidebar: React.FC<SidebarProps> = ({
           transitionDuration: `${SIDEBAR_COLLAPSE_TRANSITION_MS}ms`,
         }}
       >
-      <div className="pt-3 pb-3">
+      <div className="pt-2.5 pb-2.5">
         {showHeaderRow && (
           <div
             // When left-aligned, 13px (not 12px) puts the toggle icon's drawn edge in line
             // with the nav icons below, whose artwork sits about 1.6px further in.
             className={`draggable sidebar-header-drag h-8 flex items-center ${
-              alignHeaderStart ? 'justify-start gap-0.5 pl-[13px] pr-3' : 'justify-end px-3'
+              alignHeaderStart ? 'justify-start gap-0.5 pl-[13px] pr-2.5' : 'justify-end gap-0.5 px-2.5'
             }`}
           >
             {!isWindows && (
               <>
-                <button
-                  type="button"
-                  onClick={onToggleCollapse}
-                  className={`non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
-                  aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+                <Tooltip
+                  className="non-draggable shrink-0"
+                  align={alignHeaderStart ? TooltipAlign.Start : TooltipAlign.Center}
+                  bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
+                  content={(
+                    <span className="inline-flex items-center gap-1.5">
+                      <span>{toggleSidebarLabel}</span>
+                      {toggleSidebarShortcutHint && (
+                        <span className="text-white/55">{toggleSidebarShortcutHint}</span>
+                      )}
+                    </span>
+                  )}
                 >
-                  <SidebarToggleIcon className="h-[18px] w-[18px]" isCollapsed={isCollapsed} />
-                </button>
+                  <button
+                    type="button"
+                    onClick={onToggleCollapse}
+                    className={`non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
+                    aria-label={toggleSidebarLabel}
+                  >
+                    <SidebarToggleIcon className="h-[18px] w-[18px]" isCollapsed={isCollapsed} />
+                  </button>
+                </Tooltip>
                 {!isCollapsed && (
                   <>
                     <SidebarTaskSearchButton
@@ -672,7 +701,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
         {/* Keep the highlighted nav item clear of the icon row above it; Windows has no row here. */}
-        <div className={`${showHeaderRow ? 'mt-3' : 'mt-[5px]'} space-y-0.5 px-3`}>
+        <div className={`${showHeaderRow ? 'mt-2.5' : 'mt-[6px]'} space-y-0.5 px-2.5`}>
           <button
             type="button"
             data-onboarding-target="new-task"
@@ -680,11 +709,21 @@ const Sidebar: React.FC<SidebarProps> = ({
               reportSidebarAction('new_task', { activeView, isCollapsed });
               onNewChat();
             }}
-            className={isNewTaskViewActive ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            className={isNewTaskViewActive
+              ? activeSidebarNavItemClassName
+              : `${sidebarNavItemBaseClassName} font-medium text-foreground/90 hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground`}
             aria-current={isNewTaskViewActive ? 'page' : undefined}
           >
-            <ComposeIcon className={sidebarNavIconClassName} />
-            {i18nService.t('newChat')}
+            <ComposeIcon className={isNewTaskViewActive ? activeSidebarNavIconClassName : sidebarNavIconClassName} />
+            <span className="min-w-0 flex-1 truncate">{i18nService.t('newChat')}</span>
+            {newChatShortcutHint && (
+              <span
+                aria-hidden="true"
+                className="shrink-0 text-[11px] font-normal tracking-wide text-secondary/75 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+              >
+                {newChatShortcutHint}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -696,8 +735,10 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === MainView.ScheduledTasks ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === MainView.ScheduledTasks ? 'page' : undefined}
           >
-            <SidebarAutomationIcon className={sidebarNavIconClassName} />
-            {i18nService.t('scheduledTasks')}
+            <SidebarAutomationIcon
+              className={activeView === MainView.ScheduledTasks ? activeSidebarNavIconClassName : sidebarNavIconClassName}
+            />
+            <span className="min-w-0 truncate">{i18nService.t('scheduledTasks')}</span>
           </button>
           {ENABLE_EXPERT_PLAZA_UI && (
             <button
@@ -711,10 +752,12 @@ const Sidebar: React.FC<SidebarProps> = ({
               className={activeView === MainView.Experts ? activeSidebarNavItemClassName : sidebarNavItemClassName}
               aria-current={activeView === MainView.Experts ? 'page' : undefined}
             >
-              <SidebarExpertIcon className={sidebarNavIconClassName} />
+              <SidebarExpertIcon
+                className={activeView === MainView.Experts ? activeSidebarNavIconClassName : sidebarNavIconClassName}
+              />
               <span className="min-w-0 truncate">{i18nService.t('expertPlaza')}</span>
               {showExpertsNewBadge && (
-                <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-[#ff4f6d] px-1.5 text-[10px] font-semibold leading-none text-white">
+                <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-rose-500/12 px-1.5 text-[10px] font-semibold leading-none text-rose-600 dark:bg-rose-500/20 dark:text-rose-400">
                   {i18nService.t('newFeatureBadge')}
                 </span>
               )}
@@ -726,6 +769,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={sidebarNavItemClassName}
             activeClassName={activeSidebarNavItemClassName}
             iconClassName={sidebarNavIconClassName}
+            activeIconClassName={activeSidebarNavIconClassName}
             onSelect={(view) => {
               const destinations = {
                 [MainView.Kits]: { action: 'open_kits', navigate: onShowKits },
@@ -748,15 +792,18 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={activeView === MainView.Library ? activeSidebarNavItemClassName : sidebarNavItemClassName}
             aria-current={activeView === MainView.Library ? 'page' : undefined}
           >
-            <SidebarLibraryIcon className={sidebarNavIconClassName} />
+            <SidebarLibraryIcon
+              className={activeView === MainView.Library ? activeSidebarNavIconClassName : sidebarNavIconClassName}
+            />
             <span className="min-w-0 truncate">{i18nService.t('librarySidebarTitle')}</span>
           </button>
         </div>
       </div>
+      <div className="mx-3 shrink-0 border-t border-border/70" role="separator" />
       <div className="relative min-h-0 flex-1">
         <div
           ref={agentScrollContainerRef}
-          className={`scrollbar-hidden h-full overflow-y-auto px-[18px] ${
+          className={`scrollbar-hidden h-full overflow-y-auto px-2.5 ${
             isSidebarBannerVisible && !isBatchMode ? 'pb-[128px]' : 'pb-10'
           }`}
           onScroll={handleAgentScroll}
@@ -798,13 +845,13 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         )}
         <div
-          className={`pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-gradient-to-b from-surface-raised to-transparent transition-opacity duration-150 ${
+          className={`pointer-events-none absolute inset-x-0 top-9 z-10 h-5 bg-gradient-to-b from-[var(--lobster-sidebar-bg)] to-transparent transition-opacity duration-150 ${
             agentScrollEdges.top ? 'opacity-100' : 'opacity-0'
           }`}
         />
         <div
-          className={`pointer-events-none absolute inset-x-0 top-[68px] z-10 h-3 bg-gradient-to-b from-surface-raised to-transparent transition-opacity duration-150 ${
-            agentScrollEdges.top ? 'opacity-40' : 'opacity-0'
+          className={`pointer-events-none absolute inset-x-0 bottom-0 z-[25] h-10 bg-gradient-to-t from-[var(--lobster-sidebar-bg)] via-[var(--lobster-sidebar-bg)]/80 to-transparent transition-opacity duration-150 ${
+            agentScrollEdges.bottom ? 'opacity-100' : 'opacity-0'
           }`}
         />
       </div>
@@ -822,7 +869,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onSelectSession={handleSelectSession}
       />
       {!isBatchMode && (updateNotice || paymentGuideVisible) && (
-        <div className="non-draggable px-3 pt-1.5">
+        <div className="non-draggable px-2.5 pb-1.5 pt-1">
           <div hidden={paymentGuideOwnsSlot}>{updateNotice}</div>
           {paymentGuideVisible && purchaseGuide.candidate && (
             <LowCreditPurchaseOfferCard
@@ -834,7 +881,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
       {isBatchMode ? (
-        <div className="border-t border-border/60 px-3 pb-3 pt-2">
+        <div className="border-t border-border/70 px-2.5 pb-2.5 pt-2">
           <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
             <span className="min-w-0 truncate text-xs text-secondary">
               {i18nService
@@ -845,13 +892,13 @@ const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={handleExitBatchMode}
-              className="shrink-0 rounded-md px-1.5 py-1 text-xs font-medium text-secondary transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+              className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground"
             >
               {i18nService.t('batchCancel')}
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <label className="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
+            <label className="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground transition-colors hover:bg-[var(--lobster-sidebar-item-hover)]">
               <input
                 type="checkbox"
                 checked={isBatchSelectAllChecked}
@@ -865,7 +912,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               type="button"
               onClick={handleBatchDeleteClick}
               disabled={selectedKeys.size === 0}
-              className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium transition-colors ${
+              className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors ${
                 selectedKeys.size > 0
                   ? 'bg-red-500 text-white hover:bg-red-600'
                   : 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
@@ -877,10 +924,10 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       ) : (
-        <div className="pb-2.5 pt-2">
-          <div className="flex items-end pl-3 pr-2 pt-1">
+        <div className="border-t border-border/70 px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
             {!hideLogin && (
-              <div className="shrink-0">
+              <div className="min-w-0 shrink-0">
                 <LoginButton
                   contentLeftOffset={isCollapsed ? 0 : sidebarWidth}
                   loggedOutVariant="sidebarPromo"
@@ -889,14 +936,29 @@ const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
             <div className="ml-auto flex shrink-0 items-center justify-end">
-              <button
-                type="button"
-                onClick={() => onShowSettings()}
-                className={sidebarBottomIconButtonClassName}
-                aria-label={i18nService.t('settings')}
+              <Tooltip
+                className="shrink-0"
+                position={TooltipPosition.Top}
+                align={TooltipAlign.End}
+                bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
+                content={(
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>{i18nService.t('settings')}</span>
+                    {settingsShortcutHint && (
+                      <span className="text-white/55">{settingsShortcutHint}</span>
+                    )}
+                  </span>
+                )}
               >
-                <Cog6ToothIcon className="h-[18px] w-[18px] shrink-0" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onShowSettings()}
+                  className={sidebarBottomIconButtonClassName}
+                  aria-label={i18nService.t('settings')}
+                >
+                  <Cog6ToothIcon className="h-[17px] w-[17px] shrink-0" />
+                </button>
+              </Tooltip>
             </div>
           </div>
         </div>

@@ -35,7 +35,7 @@ const SidebarTaskSearchButton: React.FC<SidebarTaskSearchButtonProps> = ({
       <button
         type="button"
         onClick={onClick}
-        className={`group inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME} ${className}`}
+        className={`group inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME} ${className}`}
         aria-label={label}
       >
         <SidebarSearchIcon className="sidebar-search-icon-flip h-[18px] w-[18px]" />

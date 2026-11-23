@@ -112,6 +112,24 @@ blockquote {
 }
 
 :root {
+  /* Sidebar rail: lighter off-white surface in light themes and a calm recessed
+     rail in dark themes, matching the crisp layered cards on the home canvas. */
+  --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface-raised) 56%, var(--lobster-background));
+  --lobster-sidebar-item-hover: rgba(0, 0, 0, 0.04);
+  --lobster-sidebar-item-active-bg: var(--lobster-surface);
+  --lobster-sidebar-item-active-border: rgba(0, 0, 0, 0.07);
+  --lobster-sidebar-item-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0.5px 1px rgba(0, 0, 0, 0.02);
+}
+
+.dark {
+  --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface) 58%, var(--lobster-background));
+  --lobster-sidebar-item-hover: rgba(255, 255, 255, 0.055);
+  --lobster-sidebar-item-active-bg: color-mix(in srgb, var(--lobster-surface-raised) 76%, var(--lobster-surface));
+  --lobster-sidebar-item-active-border: rgba(255, 255, 255, 0.08);
+  --lobster-sidebar-item-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+}
+
+:root {
   /* Pre-JS fallbacks; must match what applyTypographyPreferences() emits for
      the default preferences (UiFontSizeDefault 15 over the 14px baseline),
      otherwise text visibly resizes right after startup. */

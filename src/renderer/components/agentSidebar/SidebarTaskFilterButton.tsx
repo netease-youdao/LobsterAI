@@ -27,7 +27,7 @@ const MENU_TRIGGER_GAP = 6;
 const MENU_EXIT_DURATION = 120;
 
 const menuItemClassName =
-  'flex h-8 w-full items-center gap-2 rounded-[10px] px-2.5 text-left text-[13px] text-foreground transition-colors duration-150 hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 dark:hover:bg-white/[0.06]';
+  'flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] text-foreground transition-colors duration-150 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40';
 
 interface SidebarTaskFilterButtonProps {
   filter: SidebarTaskFilter;
@@ -183,8 +183,8 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
             isActive
               ? 'bg-primary/10 text-primary'
               : isOpen
-                ? 'bg-black/[0.03] text-foreground/80 dark:bg-white/[0.04]'
-                : 'text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+                ? 'bg-[var(--lobster-sidebar-item-hover)] text-foreground'
+                : 'text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground'
           } ${isFocusRingSuppressed ? 'focus:outline-none' : SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME} ${className}`}
           aria-label={label}
           aria-haspopup="menu"
@@ -208,7 +208,7 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
           aria-label={label}
           aria-hidden={!isOpen}
           data-state={isOpen ? 'open' : 'closed'}
-          className="sidebar-task-filter-menu non-draggable fixed z-[9999] w-48 max-w-[calc(100vw-16px)] rounded-2xl border border-border bg-surface p-1.5 text-foreground shadow-[0_12px_32px_-12px_rgba(0,0,0,0.16),0_4px_12px_-4px_rgba(0,0,0,0.06)]"
+          className="sidebar-task-filter-menu non-draggable fixed z-[9999] w-48 max-w-[calc(100vw-16px)] rounded-xl border border-border bg-surface p-1 text-foreground shadow-popover"
           style={position}
           onKeyDown={(event) => {
             const index = itemRefs.current.findIndex(item => item === document.activeElement);

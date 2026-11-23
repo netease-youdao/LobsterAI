@@ -138,11 +138,9 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
   if (!isExpanded) {
     const pillLabel = isInstalling ? i18nService.t('updateInstallingShort') : title;
-    const pillTone = isReady || isInstalling
-      ? 'border-emerald-500/25 bg-emerald-500/[0.07] hover:bg-emerald-500/[0.12]'
-      : isError
-        ? 'border-red-500/25 bg-red-500/[0.06] hover:bg-red-500/[0.1]'
-        : 'border-primary/20 bg-primary/[0.06] hover:bg-primary/[0.1]';
+    const pillTone = isError
+      ? 'border-red-500/25 bg-surface hover:border-red-500/40 dark:bg-surface/90 dark:hover:bg-surface'
+      : 'border-border/90 bg-surface hover:border-border dark:bg-surface/90 dark:hover:bg-surface';
     const pillDot = isReady || isInstalling
       ? 'bg-emerald-500'
       : isError
@@ -153,25 +151,25 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
       <button
         type="button"
         onClick={handleExpand}
-        className={`non-draggable flex h-8 w-full items-center gap-2 rounded-lg border px-2.5 text-xs font-medium text-foreground transition-colors ${pillTone}`}
+        className={`non-draggable flex h-9 w-full items-center gap-2 rounded-xl border px-3 text-[12.5px] font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all duration-150 hover:shadow-[0_3px_10px_rgba(0,0,0,0.05)] ${pillTone}`}
         aria-label={`${pillLabel} v${latestVersion}`}
         title={`${pillLabel} v${latestVersion}`}
       >
         <PingDot dotClassName={pillDot} />
         <span className="truncate">{pillLabel}</span>
         {!isInstalling && (
-          <span className="shrink-0 text-secondary">v{latestVersion}</span>
+          <span className="shrink-0 text-[11.5px] font-normal tabular-nums text-secondary">
+            v{latestVersion}
+          </span>
         )}
         <ChevronUpIcon className="ml-auto h-3.5 w-3.5 shrink-0 text-secondary" aria-hidden="true" />
       </button>
     );
   }
 
-  const cardTone = isReady || isInstalling
-    ? 'border-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.10] via-emerald-500/[0.04] to-transparent'
-    : isError
-      ? 'border-red-500/20 bg-gradient-to-br from-red-500/[0.07] via-red-500/[0.03] to-transparent'
-      : 'border-primary/15 bg-gradient-to-br from-primary/[0.09] via-primary/[0.04] to-transparent';
+  const cardTone = isError
+    ? 'border-red-500/25 bg-surface'
+    : 'border-border/90 bg-surface';
   const iconTone = isReady || isInstalling
     ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400'
     : isError
@@ -181,23 +179,23 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
   return (
     <section
-      className={`non-draggable animate-fade-in-up rounded-xl border p-3 shadow-card ${cardTone}`}
+      className={`non-draggable animate-fade-in-up rounded-2xl border p-3 shadow-card ${cardTone}`}
       aria-label={`${title} v${latestVersion}`}
     >
-      <div className="flex items-start gap-1.5">
-        <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${iconTone}`} aria-hidden="true">
-          <Icon className="h-4 w-4" />
+      <div className="flex items-start gap-2">
+        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${iconTone}`} aria-hidden="true">
+          <Icon className="h-3.5 w-3.5" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
-          <span className="min-w-0 break-words text-sm font-semibold leading-5 text-foreground">
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 pt-0.5">
+          <span className="min-w-0 break-words text-[13px] font-semibold leading-5 text-foreground">
             {title}
           </span>
-          <span className="shrink-0 text-xs leading-4 text-secondary">v{latestVersion}</span>
+          <span className="shrink-0 text-[11.5px] tabular-nums leading-4 text-secondary">v{latestVersion}</span>
         </div>
         <button
           type="button"
           onClick={handleCollapse}
-          className="-mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"
+          className="-mr-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
           aria-label={i18nService.t('collapse')}
           title={i18nService.t('collapse')}
         >
@@ -222,7 +220,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
         type="button"
         onClick={() => void handlePrimary()}
         disabled={isActing || isInstalling || isChecking}
-        className={`mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-white transition-all active:scale-[0.98] disabled:opacity-70 ${
+        className={`mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium text-white transition-all active:scale-[0.98] disabled:opacity-70 ${
           isReady || isInstalling
             ? 'bg-emerald-600 hover:bg-emerald-500'
             : 'bg-primary hover:bg-primary-hover'

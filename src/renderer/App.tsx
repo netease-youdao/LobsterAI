@@ -1794,12 +1794,12 @@ const App: React.FC = () => {
     // Matches index.html's static two-plane boot shell so startup transitions
     // directly into the main workspace with no splash overlay flash.
     return (
-      <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
+      <div className="h-screen overflow-hidden flex flex-col bg-[var(--lobster-sidebar-bg)]">
         {windowsStandaloneTitleBar}
         <div className="flex flex-1 min-h-0 overflow-hidden">
           {!isSidebarCollapsed && (
             <div
-              className="shrink-0 bg-surface-raised"
+              className="shrink-0 border-r border-border/80 bg-[var(--lobster-sidebar-bg)]"
               style={{ width: sidebarWidth }}
             />
           )}
@@ -1863,7 +1863,7 @@ const App: React.FC = () => {
     <SkinProvider>
       <SkinPresentationScope
         enabled
-        className="h-screen overflow-hidden flex flex-col bg-surface-raised"
+        className="h-screen overflow-hidden flex flex-col bg-[var(--lobster-sidebar-bg)]"
       >
       {toastMessage && (
         <Toast

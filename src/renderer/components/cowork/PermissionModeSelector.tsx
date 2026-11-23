@@ -1,9 +1,9 @@
 import {
-  BoltIcon,
   CheckIcon,
   ChevronDownIcon,
   EyeIcon,
   ShieldCheckIcon,
+  ShieldExclamationIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -19,9 +19,11 @@ import {
   shouldApplyPermissionPresetEvent,
 } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
+import FullAccessConfirmDialog from './FullAccessConfirmDialog';
 import {
   getPermissionPresetOption,
   PERMISSION_PRESET_OPTIONS,
+  requiresPermissionPresetConfirmation,
 } from './permissionPresetOptions';
 
 interface PermissionModeSelectorProps {
@@ -33,7 +35,7 @@ interface PermissionModeSelectorProps {
 const PRESET_ICONS: Record<DshPermissionPreset, React.ComponentType<{ className?: string }>> = {
   [DshPermissionPreset.ReadOnly]: EyeIcon,
   [DshPermissionPreset.WorkspaceWrite]: ShieldCheckIcon,
-  [DshPermissionPreset.FullAccess]: BoltIcon,
+  [DshPermissionPreset.FullAccess]: ShieldExclamationIcon,
 };
 
 const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
@@ -44,6 +46,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const [preset, setPreset] = useState<DshPermissionPreset>(DEFAULT_DSH_PERMISSION_PRESET);
   const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [confirmFullAccessOpen, setConfirmFullAccessOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -53,6 +56,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     : undefined;
 
   useEffect(() => {
+    setConfirmFullAccessOpen(false);
     let active = true;
     void dshHostService.getPermissionPreset(normalizedSessionId).then((res) => {
       if (active) setPreset(res.preset);
@@ -125,8 +129,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const currentOption = getPermissionPresetOption(preset);
   const CurrentIcon = PRESET_ICONS[currentOption.value];
 
-  const handleSelect = async (nextPreset: DshPermissionPreset) => {
-    setOpen(false);
+  const applyPreset = async (nextPreset: DshPermissionPreset) => {
     if (nextPreset === preset || updating) return;
     setUpdating(true);
     try {
@@ -145,6 +148,21 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     } finally {
       setUpdating(false);
     }
+  };
+
+  const handleSelect = (nextPreset: DshPermissionPreset) => {
+    setOpen(false);
+    if (nextPreset === preset || updating) return;
+    if (requiresPermissionPresetConfirmation(preset, nextPreset)) {
+      setConfirmFullAccessOpen(true);
+      return;
+    }
+    void applyPreset(nextPreset);
+  };
+
+  const handleConfirmFullAccess = async () => {
+    await applyPreset(DshPermissionPreset.FullAccess);
+    setConfirmFullAccessOpen(false);
   };
 
   return (
@@ -195,7 +213,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
-                onClick={() => void handleSelect(option.value)}
+                onClick={() => handleSelect(option.value)}
                 className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
                   selected
                     ? 'bg-primary/10 text-foreground'
@@ -220,6 +238,12 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         </div>,
         document.body,
       )}
+      <FullAccessConfirmDialog
+        isOpen={confirmFullAccessOpen}
+        confirming={updating}
+        onCancel={() => setConfirmFullAccessOpen(false)}
+        onConfirm={() => { void handleConfirmFullAccess(); }}
+      />
     </div>
   );
 };

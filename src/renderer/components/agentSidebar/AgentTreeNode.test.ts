@@ -39,9 +39,13 @@ const makeAgent = (overrides: Partial<AgentSidebarAgentNode> = {}): AgentSidebar
   ...overrides,
 });
 
-const renderAgent = (agent: AgentSidebarAgentNode) => renderToStaticMarkup(
+const renderAgent = (
+  agent: AgentSidebarAgentNode,
+  options: { isCurrentAgent?: boolean } = {},
+) => renderToStaticMarkup(
   React.createElement(AgentTreeNode, {
     agent,
+    isCurrentAgent: options.isCurrentAgent,
     isBatchMode: false,
     batchAgentId: null,
     selectedKeys: new Set<string>(),
@@ -107,4 +111,19 @@ test('tasks nested under an agent step down one text size from the agent row', (
   // Activity rows stand alone with their agent as context, so they keep the agent-level size.
   const activityTaskHtml = renderTaskRow('Writer');
   expect(activityTaskHtml).toContain('text-[length:var(--lobster-text-sidebarCompact)]');
+});
+
+test('only the current agent row gets elevated ink weight, even when another agent stays expanded', () => {
+  const inactiveCollapsedHtml = renderAgent(makeAgent());
+  expect(inactiveCollapsedHtml).toContain('text-foreground/55');
+  expect(inactiveCollapsedHtml).toContain('font-normal text-foreground/80');
+
+  const inactiveExpandedHtml = renderAgent(makeAgent({ isExpanded: true, tasks: [makeTask()] }));
+  expect(inactiveExpandedHtml).toContain('text-foreground/55');
+  expect(inactiveExpandedHtml).toContain('font-normal text-foreground/80');
+  expect(inactiveExpandedHtml).not.toContain('font-medium text-foreground');
+
+  const currentHtml = renderAgent(makeAgent(), { isCurrentAgent: true });
+  expect(currentHtml).toContain('font-medium text-foreground');
+  expect(currentHtml).not.toContain('text-foreground/55');
 });

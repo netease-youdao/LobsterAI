@@ -518,6 +518,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     >
       <AgentTreeNode
         agent={agent}
+        isCurrentAgent={agent.id === currentAgentId}
         isBatchMode={isBatchMode}
         batchAgentId={batchAgentId}
         selectedKeys={selectedKeys}
@@ -654,9 +655,9 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       ) : (
         <div role="tree" aria-label={i18nService.t('myAgents')}>
           {hasPinnedAgents && (
-            <div className="space-y-0.5">
-              <div className="sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center bg-surface-raised pl-2 pr-1">
-                <h2 className="min-w-0 truncate text-xs font-normal text-secondary/80">
+            <div className="mb-1 space-y-0.5">
+              <div className="sticky top-0 z-30 -mx-2.5 flex h-9 items-center bg-[var(--lobster-sidebar-bg)] px-2.5">
+                <h2 className="min-w-0 truncate pl-2.5 text-[11.5px] font-medium tracking-[0.01em] text-secondary/85">
                   {i18nService.t('myAgentSidebarPinned')}
                 </h2>
               </div>

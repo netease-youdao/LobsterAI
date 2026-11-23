@@ -12,8 +12,8 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
   onCreateAgent,
 }) => {
   return (
-    <div className="group sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center justify-between bg-surface-raised pl-2 pr-1">
-      <h2 className="min-w-0 truncate text-xs font-normal text-secondary/80">
+    <div className="group sticky top-0 z-30 -mx-2.5 flex h-9 items-center justify-between bg-[var(--lobster-sidebar-bg)] px-2.5">
+      <h2 className="min-w-0 truncate pl-2.5 text-[11.5px] font-medium tracking-[0.01em] text-secondary/85">
         {i18nService.t('myAgents')}
       </h2>
       <Tooltip
@@ -21,15 +21,15 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
         position={TooltipPosition.Bottom}
         align={TooltipAlign.End}
         delay={300}
-        className="opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+        className="mr-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:opacity-100"
       >
         <button
           type="button"
           onClick={onCreateAgent}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-foreground/60 transition-colors hover:text-foreground"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground"
           aria-label={i18nService.t('createNewAgent')}
         >
-          <PlusIcon className="h-4 w-4" />
+          <PlusIcon className="h-3.5 w-3.5" strokeWidth={2} />
         </button>
       </Tooltip>
     </div>

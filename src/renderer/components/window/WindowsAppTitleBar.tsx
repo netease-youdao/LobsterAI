@@ -79,7 +79,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
       data-skin-app-titlebar="true"
       className="draggable flex h-9 shrink-0 items-center justify-between bg-background pl-3"
       style={sidebarColumnVisible
-        ? { backgroundImage: `linear-gradient(to right, var(--lobster-surface-raised) ${sidebarWidth}px, transparent ${sidebarWidth}px)` }
+        ? { backgroundImage: `linear-gradient(to right, var(--lobster-sidebar-bg) ${sidebarWidth}px, transparent ${sidebarWidth}px)` }
         : undefined}
     >
       <div
@@ -103,7 +103,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={sidebarToggleLabel}
                 title={sidebarToggleLabel}
               >
@@ -128,7 +128,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <button
                 type="button"
                 onClick={handleNewChatClick}
-                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={newChatLabel}
                 title={newChatLabel}
               >
