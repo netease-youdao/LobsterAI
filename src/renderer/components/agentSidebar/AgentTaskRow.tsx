@@ -286,8 +286,8 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   const pinLabel = task.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
   const isActivityRow = !!contextLabel;
   const scheduledTaskLabel = i18nService.t('myAgentSidebarScheduledTask');
-  // Rows nested under an agent are a level below it: denser, one font step smaller
-  // and muted until hovered or selected. Activity rows stand on their own.
+  // Nested tasks keep full 14px legibility; hierarchy comes from indentation,
+  // icon-less alignment on the agent text rail, and a slightly softer ink step.
   const textSizeClassName = isActivityRow
     ? 'text-[length:var(--lobster-text-sidebarCompact)]'
     : 'text-[length:var(--lobster-text-sidebarTask)]';
@@ -295,7 +295,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   return (
     <div
       className={`group relative flex w-full items-center gap-2 rounded-[9px] ${
-        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[30px]'
+        isActivityRow ? 'min-h-[48px] py-1.5' : 'h-[32px]'
       } ${
         isBatchMode ? 'pl-2' : isActivityRow ? 'pl-2.5' : 'pl-[38px]'
       } pr-2.5 ${textSizeClassName} transition-all duration-150 ${
@@ -304,7 +304,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           : task.isSelected && !hasActiveSubagent
           ? 'cursor-pointer bg-[var(--lobster-sidebar-item-active-bg)] font-medium text-foreground ring-1 ring-inset ring-[var(--lobster-sidebar-item-active-border)] shadow-[var(--lobster-sidebar-item-active-shadow)]'
           : `cursor-pointer font-normal hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${
-            isActivityRow ? 'text-foreground' : 'text-foreground/75'
+            isActivityRow ? 'text-foreground' : 'text-foreground/85'
           }`
       }`}
       onClick={handleRowMouseClick}
@@ -331,8 +331,8 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
             suppressPinHover
               ? 'pointer-events-none opacity-0'
               : task.pinned
-                ? 'opacity-70 hover:opacity-100'
-                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-70 focus-visible:pointer-events-auto focus-visible:opacity-100'
+                ? 'opacity-80 hover:opacity-100'
+                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-75 focus-visible:pointer-events-auto focus-visible:opacity-100'
           }`}
           aria-label={pinLabel}
           title={pinLabel}
@@ -406,7 +406,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           >
             <span className="truncate">{displayTitle}</span>
             {contextLabel && (
-              <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal leading-4 text-secondary">
+              <span className="flex min-w-0 items-center gap-1 text-[length:var(--lobster-text-sidebarMeta)] font-normal leading-4 text-secondary">
                 {contextIcon && (
                   <span className="flex h-3 w-3 shrink-0 items-center justify-center" aria-hidden="true">
                     {contextIcon}
@@ -444,7 +444,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           )}
           {showRelativeTime && (
             <span
-              className="shrink-0 whitespace-nowrap text-[11.5px] font-normal tabular-nums text-secondary/75 transition-opacity group-hover:opacity-0"
+              className="shrink-0 whitespace-nowrap text-[length:var(--lobster-text-sidebarMeta)] font-normal tabular-nums text-secondary/90 transition-opacity group-hover:opacity-0"
               title={relativeTime.full}
             >
               {relativeTime.compact}

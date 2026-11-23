@@ -95,11 +95,11 @@ const SidebarNewFeatureBadge = {
 const sidebarNavItemBaseClassName =
   'group w-full inline-flex h-[34px] items-center gap-2.5 rounded-[10px] px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35';
 const sidebarNavItemClassName =
-  `${sidebarNavItemBaseClassName} font-normal text-foreground/80 hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground`;
+  `${sidebarNavItemBaseClassName} font-normal text-foreground/90 hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground`;
 const activeSidebarNavItemClassName =
   `${sidebarNavItemBaseClassName} font-medium text-foreground bg-[var(--lobster-sidebar-item-active-bg)] ring-1 ring-inset ring-[var(--lobster-sidebar-item-active-border)] shadow-[var(--lobster-sidebar-item-active-shadow)]`;
 const sidebarNavIconClassName =
-  'h-[17px] w-[17px] shrink-0 text-secondary transition-colors group-hover:text-foreground';
+  'h-[17px] w-[17px] shrink-0 text-foreground/65 transition-colors group-hover:text-foreground';
 const activeSidebarNavIconClassName = 'h-[17px] w-[17px] shrink-0 text-foreground';
 const sidebarBottomIconButtonClassName =
   `inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`;
@@ -628,7 +628,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     <aside
       data-skin-sidebar="true"
       className={`relative shrink-0 overflow-hidden bg-[var(--lobster-sidebar-bg)] ${
-        isCollapsed ? '' : 'border-r border-border/80'
+        isCollapsed ? '' : 'border-r border-border'
       } ${isResizing ? '' : 'sidebar-transition'}`}
       style={{ width: isCollapsed ? 0 : sidebarWidth }}
     >
@@ -719,7 +719,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             {newChatShortcutHint && (
               <span
                 aria-hidden="true"
-                className="shrink-0 text-[11px] font-normal tracking-wide text-secondary/75 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                className="shrink-0 text-[11px] font-normal tracking-wide text-secondary/80 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
               >
                 {newChatShortcutHint}
               </span>
@@ -799,7 +799,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
       </div>
-      <div className="mx-3 shrink-0 border-t border-border/70" role="separator" />
+      <div className="mx-3 shrink-0 border-t border-border" role="separator" />
       <div className="relative min-h-0 flex-1">
         <div
           ref={agentScrollContainerRef}
@@ -881,7 +881,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
       {isBatchMode ? (
-        <div className="border-t border-border/70 px-2.5 pb-2.5 pt-2">
+        <div className="border-t border-border px-2.5 pb-2.5 pt-2">
           <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
             <span className="min-w-0 truncate text-xs text-secondary">
               {i18nService
@@ -924,7 +924,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       ) : (
-        <div className="border-t border-border/70 px-2.5 py-2">
+        <div className="border-t border-border px-2.5 py-2">
           <div className="flex items-center justify-between gap-2">
             {!hideLogin && (
               <div className="min-w-0 shrink-0">

@@ -1168,7 +1168,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
         className={
           useSidebarPromoLogin
             ? `peer sidebar-login-rainbow inline-flex h-7 shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium leading-none transition-[filter,transform] ${loginInProgress ? 'min-w-[5.75rem]' : 'w-[5.75rem]'}`
-            : 'inline-flex h-8 min-w-0 items-center justify-start gap-2 rounded-[10px] px-2 text-[13px] font-medium text-foreground/85 transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground cursor-pointer'
+            : 'inline-flex h-8 min-w-0 items-center justify-start gap-2 rounded-[10px] px-2 text-[length:var(--lobster-text-sidebarCompact)] font-medium text-foreground/90 transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground cursor-pointer'
         }
       >
         {isLoggedIn || connectionState ? (

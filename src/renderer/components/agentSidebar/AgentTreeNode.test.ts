@@ -100,12 +100,13 @@ test('agent rows expose a separate disclosure toggle that follows the expanded s
   }
 });
 
-test('tasks nested under an agent step down one text size from the agent row', () => {
+test('nested tasks use the sidebarTask token and readable ink while activity rows use sidebarCompact', () => {
   const agentHtml = renderAgent(makeAgent());
   expect(agentHtml).toContain('text-[length:var(--lobster-text-sidebarCompact)]');
 
   const nestedTaskHtml = renderTaskRow();
   expect(nestedTaskHtml).toContain('text-[length:var(--lobster-text-sidebarTask)]');
+  expect(nestedTaskHtml).toContain('text-foreground/85');
   expect(nestedTaskHtml).not.toContain('text-[length:var(--lobster-text-sidebarCompact)]');
 
   // Activity rows stand alone with their agent as context, so they keep the agent-level size.
@@ -115,15 +116,15 @@ test('tasks nested under an agent step down one text size from the agent row', (
 
 test('only the current agent row gets elevated ink weight, even when another agent stays expanded', () => {
   const inactiveCollapsedHtml = renderAgent(makeAgent());
-  expect(inactiveCollapsedHtml).toContain('text-foreground/55');
-  expect(inactiveCollapsedHtml).toContain('font-normal text-foreground/80');
+  expect(inactiveCollapsedHtml).toContain('text-foreground/65');
+  expect(inactiveCollapsedHtml).toContain('font-normal text-foreground/90');
 
   const inactiveExpandedHtml = renderAgent(makeAgent({ isExpanded: true, tasks: [makeTask()] }));
-  expect(inactiveExpandedHtml).toContain('text-foreground/55');
-  expect(inactiveExpandedHtml).toContain('font-normal text-foreground/80');
+  expect(inactiveExpandedHtml).toContain('text-foreground/65');
+  expect(inactiveExpandedHtml).toContain('font-normal text-foreground/90');
   expect(inactiveExpandedHtml).not.toContain('font-medium text-foreground');
 
   const currentHtml = renderAgent(makeAgent(), { isCurrentAgent: true });
   expect(currentHtml).toContain('font-medium text-foreground');
-  expect(currentHtml).not.toContain('text-foreground/55');
+  expect(currentHtml).not.toContain('text-foreground/65');
 });
