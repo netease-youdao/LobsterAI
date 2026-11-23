@@ -89,10 +89,18 @@ describe('cowork start plan', () => {
 
 describe('cowork start blocks', () => {
   test('quota, then engine readiness, then a model that bills the other side', () => {
-    expect(resolveCoworkStartBlock({ blockingQuotaReason: 'exhausted', engineStatus: engine('starting'), crossesBillingSide: true }))
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: 'exhausted', engineStatus: engine('error'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.EnterpriseQuota);
-    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('starting'), crossesBillingSide: true }))
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('error'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.EngineNotReady);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('not_installed'), crossesBillingSide: false }))
+      .toBe(CoworkStartBlock.EngineNotReady);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('installing'), crossesBillingSide: false }))
+      .toBe(CoworkStartBlock.EngineNotReady);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('starting'), crossesBillingSide: false }))
+      .toBeNull();
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('starting'), crossesBillingSide: true }))
+      .toBe(CoworkStartBlock.ModelBillingSide);
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('running'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.ModelBillingSide);
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('ready'), crossesBillingSide: false })).toBeNull();

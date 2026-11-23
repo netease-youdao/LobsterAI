@@ -6,6 +6,7 @@ export const AuthIpcChannel = {
   GetAccessToken: 'auth:getAccessToken',
   GetActiveClientBanner: 'auth:getActiveClientBanner',
   GetActiveClientBanners: 'auth:getActiveClientBanners',
+  GetCachedSnapshot: 'auth:getCachedSnapshot',
   GetClientBannerSnapshot: 'auth:getClientBannerSnapshot',
   GetModels: 'auth:getModels',
   GetPricingCatalog: 'auth:getPricingCatalog',

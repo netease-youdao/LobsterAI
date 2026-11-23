@@ -23,7 +23,6 @@ import {
   LibrarySourceFilter,
 } from '../shared/library/constants';
 import type { LibrarySessionRef } from '../shared/library/types';
-import { OpenClawEnginePhase } from '../shared/openclawEngine/constants';
 import { ProviderName, ProviderRegistry } from '../shared/providers';
 import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
 import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './components/agentSidebar/taskFilter';
@@ -42,7 +41,6 @@ import CoworkNativeQuestionModal from './components/cowork/CoworkNativeQuestionM
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
-import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import FeedbackDialog from './components/feedback/FeedbackDialog';
 import LaunchAdModal from './components/LaunchAdModal';
@@ -76,7 +74,7 @@ import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selector
 import { SkinProvider } from './providers/SkinProvider';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
-import { AppDeepLinkEvent, type AppDeepLinkTarget, describeAppDeepLinkTarget } from './services/appDeepLink';
+import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
@@ -163,6 +161,8 @@ const INIT_AUTO_RETRY_MAX = 2;
 const INIT_CONFIG_REPAIR_DELAY_MS = 15_000;
 const INIT_CONFIG_REPAIR_MAX = 4;
 const INIT_REQUIRED_GATE_MAX_ATTEMPTS = 2;
+/** Defer startup update check (which may hash cached installers) past first paint and engine boot. */
+const APP_UPDATE_STARTUP_DELAY_MS = 5_000;
 
 export const InitPassMode = {
   Startup: 'startup',
@@ -208,13 +208,6 @@ const App: React.FC = () => {
   const [taskFilter, setTaskFilter] = useState<SidebarTaskFilter>(DEFAULT_SIDEBAR_TASK_FILTER);
   const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
-  const initialOpenClawEngineStatusRef = useRef(coworkService.getOpenClawEngineStatusSnapshot());
-  const [isEngineStartupOverlayVisible, setIsEngineStartupOverlayVisible] = useState(
-    () => initialOpenClawEngineStatusRef.current?.phase === OpenClawEnginePhase.Starting,
-  );
-  const [hasResolvedEngineStartupOverlayState, setHasResolvedEngineStartupOverlayState] = useState(
-    () => initialOpenClawEngineStatusRef.current !== null,
-  );
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
     status: AppUpdateStatus.Idle,
     source: null,
@@ -229,12 +222,9 @@ const App: React.FC = () => {
   const [isUpdateCardExpanded, setIsUpdateCardExpanded] = useState(false);
   const [isUserInitiatedUpdateFlowActive, setIsUserInitiatedUpdateFlowActive] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
-  const [isLaunchAdOpen, setIsLaunchAdOpen] = useState(false);
-  // An in-app link followed while the engine startup screen still covers the app.
-  const [startupDestination, setStartupDestination] = useState<{
-    target: AppDeepLinkTarget;
-    previousView: MainView;
-  } | null>(null);
+  // Start blocked on mount so secondary startup pop-ups wait until LaunchAdModal
+  // finishes its initial eligibility check (or settles via its guard timer).
+  const [isLaunchAdBlocking, setIsLaunchAdBlocking] = useState(true);
   const [trialTaskCreatedSignal, setTrialTaskCreatedSignal] = useState(0);
   const [isNewUserOnboardingDismissed, setIsNewUserOnboardingDismissed] = useState(false);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
@@ -276,8 +266,6 @@ const App: React.FC = () => {
     privacyAgreed === false
     && !authUser
     && !isNewUserOnboardingDismissed
-    && hasResolvedEngineStartupOverlayState
-    && !isEngineStartupOverlayVisible
     && !isUpdateInteractionBlocked;
 
   // The agent's Office tools edit the file open in the artifact panel in place.
@@ -295,35 +283,6 @@ const App: React.FC = () => {
     setMainView(MainView.Cowork);
     setIsSidebarCollapsed(false);
   }, [shouldShowNewUserOnboarding]);
-
-  useEffect(() => {
-    let isCurrent = true;
-    const resolveOverlayVisible = (phase?: string | null) =>
-      phase === OpenClawEnginePhase.Starting;
-
-    coworkService.getOpenClawEngineStatus()
-      .then((status) => {
-        if (!isCurrent) return;
-        setIsEngineStartupOverlayVisible(resolveOverlayVisible(status?.phase));
-        setHasResolvedEngineStartupOverlayState(true);
-      })
-      .catch((error) => {
-        console.debug('[App] failed to refresh OpenClaw engine status for sidebar promo timing:', error);
-        if (isCurrent) {
-          setHasResolvedEngineStartupOverlayState(true);
-        }
-      });
-
-    const unsubscribe = coworkService.onOpenClawEngineStatus((status) => {
-      setIsEngineStartupOverlayVisible(resolveOverlayVisible(status.phase));
-      setHasResolvedEngineStartupOverlayState(true);
-    });
-
-    return () => {
-      isCurrent = false;
-      unsubscribe();
-    };
-  }, []);
 
   const waitWithTimeout = useCallback(
     async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
@@ -514,23 +473,27 @@ const App: React.FC = () => {
         themeService.initialize();
         mark('themeService done');
 
-        mark('i18nService.initialize begin');
-        const i18nReady = await runStep('i18nService.initialize', () => i18nService.initialize(), {
-          // Keep one invocation alive after a timeout. Starting a concurrent
-          // locale initialization would let late IPC results race each other.
-          attempts: 1,
-          firstTimeoutMs: initTimeoutMs,
-        });
-        mark(i18nReady ? 'i18nService.initialize done' : 'i18nService.initialize degraded — using persisted language hint');
+        // Pre-warm Cowork session/config/engine snapshots while i18n and auth
+        // hydrate so CoworkView mounts ready with zero intermediate loading frame.
+        void coworkService.init();
 
-        // Single attempt: authService.init() re-entry tears down listeners, so a
-        // concurrent retry could stack them; its in-flight run self-completes
-        // once IPC recovers.
-        mark('authService.init begin');
-        const authReady = await runStep('authService.init', () => authService.init(), {
-          attempts: 1,
-          firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS,
-        });
+        mark('i18nService + authService init begin');
+        const [i18nReady, authReady] = await Promise.all([
+          runStep('i18nService.initialize', () => i18nService.initialize(), {
+            // Keep one invocation alive after a timeout. Starting a concurrent
+            // locale initialization would let late IPC results race each other.
+            attempts: 1,
+            firstTimeoutMs: initTimeoutMs,
+          }),
+          // Single attempt: authService.init() re-entry tears down listeners, so a
+          // concurrent retry could stack them; its in-flight run self-completes
+          // once IPC recovers.
+          runStep('authService.init', () => authService.init(), {
+            attempts: 1,
+            firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS,
+          }),
+        ]);
+        mark(i18nReady ? 'i18nService.initialize done' : 'i18nService.initialize degraded — using persisted language hint');
         mark(authReady ? 'authService.init done' : 'authService.init pending (auth restore completes in background)');
         coreStartupServicesInitializedRef.current = true;
       }
@@ -757,10 +720,6 @@ const App: React.FC = () => {
       const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
       if (!target) return;
       if (target.kind === 'view' && target.view === MainView.Experts && !ENABLE_EXPERT_PLAZA_UI) return;
-      // The page opens underneath the startup screen, which says where the user is headed.
-      if (isEngineStartupOverlayVisible) {
-        setStartupDestination(pending => ({ target, previousView: pending?.previousView ?? mainView }));
-      }
       if (target.kind === 'settings') {
         handleShowSettings({ initialTab: target.tab });
         return;
@@ -772,19 +731,7 @@ const App: React.FC = () => {
     };
     window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
     return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
-  }, [handleShowExperts, handleShowLibrary, handleShowSettings, isEngineStartupOverlayVisible, mainView]);
-
-  // Once the startup screen is gone the destination is on screen; nothing is pending any more.
-  useEffect(() => {
-    if (!isEngineStartupOverlayVisible) setStartupDestination(null);
-  }, [isEngineStartupOverlayVisible]);
-
-  const handleCancelStartupDestination = useCallback(() => {
-    if (!startupDestination) return;
-    if (startupDestination.target.kind === 'settings') setShowSettings(false);
-    else setMainView(startupDestination.previousView);
-    setStartupDestination(null);
-  }, [startupDestination]);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
 
   const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
@@ -1709,8 +1656,12 @@ const App: React.FC = () => {
       }
     };
 
-    // 启动时立即检查
-    void maybeCheck('startup');
+    // 启动后错峰检查更新，避免缓存安装包的 SHA-256 校验与首屏和引擎冷启动争抢 CPU/磁盘
+    const startupTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        void maybeCheck('startup');
+      }
+    }, APP_UPDATE_STARTUP_DELAY_MS);
 
     // 心跳：每 30 分钟检测是否距上次检查已超过 2 小时
     const timer = window.setInterval(() => {
@@ -1734,6 +1685,7 @@ const App: React.FC = () => {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(startupTimer);
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
@@ -1839,14 +1791,20 @@ const App: React.FC = () => {
   ) : null;
 
   if (!isInitialized) {
-    // index.html's static splash shows the same startup page until React
-    // mounts; rendering EngineStartupOverlay from the first frame keeps the
-    // whole startup on one continuous screen with no visual handoff.
+    // Matches index.html's static two-plane boot shell so startup transitions
+    // directly into the main workspace with no splash overlay flash.
     return (
-      <div className="h-screen overflow-hidden flex flex-col">
+      <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
         {windowsStandaloneTitleBar}
-        <div className="flex-1 bg-surface" />
-        <EngineStartupOverlay bootstrapping />
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {!isSidebarCollapsed && (
+            <div
+              className="shrink-0 bg-surface-raised"
+              style={{ width: sidebarWidth }}
+            />
+          )}
+          <div className="flex-1 min-w-0 bg-background" />
+        </div>
       </div>
     );
   }
@@ -1919,15 +1877,15 @@ const App: React.FC = () => {
       <SubscriptionTrialCampaign
         privacyAgreed={privacyAgreed}
         taskCreatedSignal={trialTaskCreatedSignal}
-        enabled={privacyAgreed === true && !isOverlayActive && hasResolvedEngineStartupOverlayState && !isEngineStartupOverlayVisible}
+        enabled={privacyAgreed === true && !isOverlayActive && !isLaunchAdBlocking}
       />
       <LaunchAdModal
         enabled={privacyAgreed === true && !isOverlayActive}
-        onOpenChange={setIsLaunchAdOpen}
+        onBlockingChange={setIsLaunchAdBlocking}
       />
       <StartupCreditCampaign
         enabled={privacyAgreed === true && !isEnterpriseAccount}
-        deferred={isLaunchAdOpen}
+        deferred={isLaunchAdBlocking}
       />
       {windowsStandaloneTitleBar}
       <div
@@ -1956,7 +1914,6 @@ const App: React.FC = () => {
           updateNotice={!isSidebarCollapsed && !isUpdateInteractionBlocked ? updateCard : null}
           hideAdBanner={isUpdateCardExpanded}
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
-          isEngineStartupOverlayVisible={isEngineStartupOverlayVisible}
         />
         <div className="flex-1 min-w-0">
           {/* The main area meets the sidebar edge to edge (no inset card
@@ -1970,12 +1927,6 @@ const App: React.FC = () => {
             {mainView !== MainView.Cowork && (
               <SkinBackdrop variant={SkinBackdropVariant.Management} />
             )}
-            <EngineStartupOverlay
-              destinationLabel={startupDestination
-                ? describeAppDeepLinkTarget(startupDestination.target, key => i18nService.t(key))
-                : null}
-              onCancelDestination={handleCancelStartupDestination}
-            />
             {mainView === MainView.Skills || mainView === MainView.Connectors || mainView === MainView.Kits ? (
               <SkillsAndConnectorsView
                 activeSection={mainView === MainView.Connectors ? SkillsConnectorsSection.Connectors : mainView === MainView.Kits ? SkillsConnectorsSection.Kits : SkillsConnectorsSection.Skills}

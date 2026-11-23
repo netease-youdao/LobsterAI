@@ -246,7 +246,6 @@ import {
 } from '../shared/shareDeployment/constants';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
 import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from '../shared/shell/constants';
-import { SkinPackKitId, SkinPackSkillId } from '../shared/skin/kit';
 import { isUrlOnDomain } from '../shared/url/hostname';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
@@ -603,6 +602,12 @@ import {
 } from './libs/shareDeployment/shareDeploymentOperationCoordinator';
 import { SqliteBackupTrigger } from './libs/sqliteBackup/constants';
 import { SqliteBackupManager } from './libs/sqliteBackup/sqliteBackupManager';
+import {
+  clearStartupAuthCache,
+  extractAuthCacheUserId,
+  readStartupAuthCache,
+  saveStartupAuthCachePatch,
+} from './libs/startupAuthCache';
 import {
   buildServerModelCapabilityHeaders,
   runStartupCacheWarmup,
@@ -2627,8 +2632,12 @@ const bootstrapOpenClawEngine = async (
     await startAskUserServer().catch((err: unknown) => {
       console.error("[DSH] AskUser server startup failed (non-fatal):", err);
     });
+    const resolvedReason = options.reason || "startup";
+    const isInitialStartup = resolvedReason === "startup";
     const syncInitialConfig = () => syncOpenClawConfig({
-      reason: `bootstrap:${options.reason || "startup"}`,
+      reason: `bootstrap:${resolvedReason}`,
+      deferExternalSync: isInitialStartup,
+      skipHostToolsSync: true,
     });
     return options.forceReinstall
       ? await bootstrap.restart({ syncInitialConfig })
@@ -2756,6 +2765,8 @@ const syncOpenClawConfig = async (options: {
   expectedImpact?: string;
   imConfigRestartFingerprint?: string;
   skillChangeBatch?: unknown;
+  deferExternalSync?: boolean;
+  skipHostToolsSync?: boolean;
 }): Promise<{
   success: boolean;
   changed: boolean;
@@ -3053,6 +3064,9 @@ const syncOpenClawConfig = async (options: {
       },
       agents,
       imInstances,
+    }, {
+      deferExternalSync: options.deferExternalSync,
+      skipHostToolsSync: options.skipHostToolsSync,
     });
 
     if (result.needsReauthMcpIds.length > 0) {
@@ -3462,6 +3476,14 @@ const getIMGatewayManager = () => {
         reason?: string,
         options?: { restartGatewayIfRunning?: boolean; requireSuccess?: boolean },
       ) => {
+        if (
+          reason?.startsWith('im-gateway-start-batch:')
+          && dshBootstrap
+          && (dshBootstrap.isBootstrapInProgress() || !dshBootstrap.isInitialConfigSynced())
+        ) {
+          console.log('[IMGatewayManager] Skipping redundant pre-boot IM sync; initial DSH bootstrap will sync IM channels');
+          return;
+        }
         const result = await syncOpenClawConfig({
           reason: reason || 'im-gateway-sync',
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -5047,6 +5069,7 @@ if (!gotTheLock) {
     cachedMediaGenerationEntitled = false;
     clearAuthTokens();
     clearAuthUser();
+    clearStartupAuthCache(getStore());
     clearEnterpriseAccountContext(getStore());
     clearServerModelMetadata();
     mediaSelectionBySession.clear();
@@ -5417,6 +5440,9 @@ if (!gotTheLock) {
     }
 
     const serverModelsChanged = updateServerModelMetadataFromResponse(data.data);
+    saveStartupAuthCachePatch(getStore(), extractAuthCacheUserId(getAuthUser()), {
+      serverModels: data.data,
+    });
     const serverModelIds = data.data.map(model => model.modelId);
     const serverModelsMissingFromConfig = !openClawConfigHasServerModels(serverModelIds);
     const configSyncOptions = {
@@ -7320,6 +7346,7 @@ if (!gotTheLock) {
     }
     clearAuthTokens();
     clearAuthUser();
+    clearStartupAuthCache(getStore());
     clearEnterpriseAccountContext(getStore());
     clearServerModelMetadata();
     resetAuthQuotaGateState();
@@ -7623,6 +7650,36 @@ if (!gotTheLock) {
     }
   }));
 
+  ipcMain.handle(AuthIpcChannel.GetCachedSnapshot, () => {
+    try {
+      const tokens = getAuthTokens();
+      if (!tokens) {
+        return {
+          success: true,
+          hasCredentials: false,
+        };
+      }
+      const cachedUser = getAuthUser();
+      const userId = extractAuthCacheUserId(cachedUser);
+      const persisted = readStartupAuthCache(getStore(), userId);
+      const cachedEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
+      return {
+        success: true,
+        hasCredentials: true,
+        cachedUser,
+        cachedQuota: persisted?.quota ?? null,
+        cachedModels: persisted?.serverModels ?? null,
+        cachedEnterpriseContext,
+      };
+    } catch (error) {
+      console.warn('[Auth] failed to read cached startup snapshot:', error);
+      return {
+        success: false,
+        hasCredentials: Boolean(getAuthTokens()),
+      };
+    }
+  });
+
   ipcMain.handle(AuthIpcChannel.GetUser, async () => {
     const createUnavailableResponse = () => {
       const hasCredentials = Boolean(getAuthTokens());
@@ -7648,8 +7705,11 @@ if (!gotTheLock) {
       const requestAccountGeneration = authAccountGeneration;
       const requestAccountScope = getCurrentMediaAccountScope();
       const serverBaseUrl = getServerApiBaseUrl();
-      // Fetch user profile
-      const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
+      // Fetch profile and quota in parallel to halve auth refresh latency.
+      const [profileResp, quotaResp] = await Promise.all([
+        fetchWithAuth(`${serverBaseUrl}/api/user/profile`),
+        fetchWithAuth(`${serverBaseUrl}/api/user/quota`).catch((): Response | null => null),
+      ]);
       if (authAccountGeneration !== requestAccountGeneration) {
         return createUnavailableResponse();
       }
@@ -7681,13 +7741,8 @@ if (!gotTheLock) {
         };
       }
       saveAuthUser(profileBody.data);
-      // Fetch quota separately
-      const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
-      if (authAccountGeneration !== requestAccountGeneration) {
-        return createUnavailableResponse();
-      }
       let quota = null;
-      if (quotaResp.ok) {
+      if (quotaResp?.ok) {
         const quotaResponseAuthState = captureAuthStateSnapshot();
         const quotaBody = (await quotaResp.json()) as {
           code: number;
@@ -7702,6 +7757,12 @@ if (!gotTheLock) {
         if (quotaBody.code === 0 && quotaBody.data) {
           const previousQuotaGateState = getAuthQuotaGateState();
           quota = normalizeQuota(quotaBody.data);
+          const nextQuotaGateState = getAuthQuotaGateState();
+          saveStartupAuthCachePatch(getStore(), extractAuthCacheUserId(profileBody.data), {
+            quota: quota as unknown as Record<string, unknown>,
+            subscriptionStatus: nextQuotaGateState.subscriptionStatus,
+            mediaGenerationEntitled: nextQuotaGateState.mediaGenerationEntitled,
+          });
           syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
         }
       }
@@ -15121,10 +15182,6 @@ if (!gotTheLock) {
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();
     profiler.measure('initStore');
-    // An installed designer must use the bundled dsh instructions from the first visible turn.
-    if (store.get<Record<string, InstalledKitRecord>>(KitStoreKey.Installed)?.[SkinPackKitId.BuiltIn]) {
-      getSkillManager().syncBundledSkillsToUserData(SkinPackSkillId.BuiltIn);
-    }
     console.log('[Main] initApp: store initialized');
     const libraryLocalStore = new LibraryLocalStore(store.getDatabase());
     const emitLibraryChanged = (payload: LibraryChangedPayload): void => {
@@ -15152,19 +15209,9 @@ if (!gotTheLock) {
         return scopedFetch(url, options);
       },
     });
-    libraryIndexService.start();
 
     initializeKeyfromAttribution(store);
     refreshEndpointsTestMode(store);
-
-    startUninstallAnalytics({
-      isPackaged: app.isPackaged,
-      platform: process.platform,
-      executablePath: app.getPath('exe'),
-      userDataPath: app.getPath('userData'),
-      store,
-      captureContext: () => getMainLogReporter().captureContext(),
-    });
 
     // Background persistence services require the initialized store and restored endpoints.
     const usageTitleSync = new UsageTitleSync({
@@ -15181,7 +15228,6 @@ if (!gotTheLock) {
         signal: AbortSignal.timeout(10_000),
       }),
     });
-    usageTitleSync.start();
     app.once('before-quit', () => usageTitleSync.stop());
     configureNativeUsageSessionTitleResolver((sessionKey, jobId) => {
       const agentMatch = /^agent:([^:]+):/.exec(sessionKey);
@@ -15197,34 +15243,11 @@ if (!gotTheLock) {
       catch { console.warn('[UsageTitle] could not persist pending title.'); }
     });
 
-    // Older builds kept request bodies inline in the intent index; compact it before any window
-    // opens so the one-time cost is not paid during a recovery tick while the user is typing.
-    try { getMediaTaskStore().intents(); }
-    catch (error) { console.warn('[MediaGeneration] Media intent index compaction failed:', error); }
-    // Same for task records whose saved assets older builds kept as inline images.
-    try { getMediaTaskStore().tasks(); }
-    catch (error) { console.warn('[MediaGeneration] Media task index compaction failed:', error); }
-    // Restore legacy media preferences and files before the first window can read them.
+    // Restore legacy media preferences synchronously (fast SQLite read).
     const database = getStore().getDatabase();
     const legacyKeys = database.prepare('SELECT key FROM kv WHERE key GLOB ?')
       .all(MediaDefaultsProtocol.LegacyKey + ':*') as Array<{ key: string }>;
     mediaDefaults.migrateLegacyPreferences(legacyKeys.map(row => row.key));
-    await migrateInlineMediaMetadata({
-      db: database,
-      kv: getStore(),
-      recoveryDirectory: (sessionId, type) => path.join(
-        app.getPath('userData'), type === MediaType.Video ? 'generated-videos' : 'generated-images', sessionId,
-      ),
-      pause: () => new Promise(resolve => setImmediate(resolve)),
-    });
-    let mediaRecoveryInFlight = false;
-    const mediaRecoveryTimer = setInterval(() => {
-      if (mediaRecoveryInFlight) return;
-      mediaRecoveryInFlight = true;
-      void recoverMediaTasks().catch(error => console.warn('[MediaGeneration] Recovery failed:', error))
-        .finally(() => { mediaRecoveryInFlight = false; });
-    }, 15_000);
-    app.once('before-quit', () => clearInterval(mediaRecoveryTimer));
 
     sqliteBackupManager = new SqliteBackupManager(app.getPath('userData'));
 
@@ -15236,12 +15259,6 @@ if (!gotTheLock) {
     const stopSqliteBackupLoop = (): void => {
       sqliteBackupManager?.stopPeriodicBackupLoop();
     };
-
-    if (getSqliteAutoBackupEnabledFromConfig(getStore().get<AppConfigSettings>('app_config'))) {
-      await startSqliteBackupLoop().catch(error => {
-        console.error('[SqliteBackup] Failed to start periodic backup loop:', error);
-      });
-    }
 
     // Defensive recovery: app may be force-closed during execution and leave
     // stale running flags in DB. Normalize them on startup.
@@ -15275,6 +15292,30 @@ if (!gotTheLock) {
       return tokens;
     });
     setServerBaseUrlGetter(() => getServerApiBaseUrl());
+
+    // Hydrate cached server models & quota gate synchronously from SQLite (<2ms)
+    // so window creation and DSH boot never wait on remote HTTPS round trips.
+    if (getAuthTokens()) {
+      const cachedAuthUser = getAuthUser();
+      const persistedStartupAuth = readStartupAuthCache(
+        getStore(),
+        extractAuthCacheUserId(cachedAuthUser),
+      );
+      if (persistedStartupAuth) {
+        if (persistedStartupAuth.subscriptionStatus) {
+          cachedSubscriptionStatus = persistedStartupAuth.subscriptionStatus;
+        }
+        if (typeof persistedStartupAuth.mediaGenerationEntitled === 'boolean') {
+          cachedMediaGenerationEntitled = persistedStartupAuth.mediaGenerationEntitled;
+        }
+        if (Array.isArray(persistedStartupAuth.serverModels) && persistedStartupAuth.serverModels.length > 0) {
+          updateServerModelMetadataFromResponse(persistedStartupAuth.serverModels);
+          console.log(
+            `[Main] startup cache hydrated ${persistedStartupAuth.serverModels.length} server model(s) from SQLite`,
+          );
+        }
+      }
+    }
 
     // Initialize Copilot token manager and restore token state if available
     initCopilotTokenManager(getStore);
@@ -15444,16 +15485,15 @@ if (!gotTheLock) {
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
 
-    // Start proxy BEFORE config sync so proxy-dependent providers (e.g. copilot)
-    // get the correct baseURL on the first write, avoiding a mid-startup config
-    // overwrite that triggers unnecessary gateway hot-reload.
+    // Start proxy BEFORE DSH spawn so DSH inherits proxy env vars and
+    // proxy-dependent providers (e.g. copilot) get the right baseURL.
     profiler.mark('applyProxyPreference');
     const appConfig = getStore().get<AppConfigSettings>('app_config');
     await applyProxyPreference(getUseSystemProxyFromConfig(appConfig));
     profiler.measure('applyProxyPreference');
 
     profiler.mark('copilotLoopbackProxy');
-    // A stable port keeps the Copilot baseUrl rendered into openclaw.json the same.
+    // A stable port keeps the Copilot baseUrl rendered into provider sync consistent.
     await startCopilotLoopbackProxy({
       authToken: getOpenClawLoopbackState().proxyToken,
       preferredPort: getOpenClawLoopbackState().getPreferredPort(OpenClawLoopbackService.CopilotProxy),
@@ -15465,39 +15505,25 @@ if (!gotTheLock) {
     });
     profiler.measure('copilotLoopbackProxy');
 
-    // ── Pre-warm quota & model caches so provider resolution and config sync
-    // see real server data instead of empty defaults ──
-    if (getAuthTokens()) {
-      profiler.mark('startupCacheWarmup');
-      const warmupResult = await runStartupCacheWarmup({
-        serverBaseUrl: getServerApiBaseUrl(),
-        fetchWithAuth,
-        appendKeyfromQuery,
-        cachedSubscriptionStatus,
-        clientVersion: app.getVersion(),
-        t,
+    const runAgentModelMigration = () => {
+      const defaultAgentModelRef = resolveDefaultAgentModelRef();
+      const backfilledAgentModels = getCoworkStore().backfillEmptyAgentModels(defaultAgentModelRef);
+      const qualifiedAgentModels = migrateAgentModelRefs({
+        defaultModelRef: defaultAgentModelRef,
+        availableProviders: buildAvailableOpenClawProviders(),
+        agents: getAgentManager().listAgents(),
+        updateAgent: (id, patch) => getCoworkStore().updateAgent(id, patch),
       });
-      cachedSubscriptionStatus = warmupResult.subscriptionStatus;
-      cachedMediaGenerationEntitled = warmupResult.mediaGenerationEntitled;
-      profiler.measure('startupCacheWarmup');
-    }
+      if (backfilledAgentModels > 0 || qualifiedAgentModels > 0) {
+        console.log(
+          `[Main] migrated agent model bindings: backfilled=${backfilledAgentModels}, qualified=${qualifiedAgentModels}`,
+        );
+      }
+    };
 
-    // Agent model migration — runs after cache warmup so resolveMatchedProvider
-    // can match lobsterai-server models without falling back.
+    // Agent model migration — runs against hydrated SQLite server model cache (fast, ~3ms).
     profiler.mark('agentModelMigration');
-    const defaultAgentModelRef = resolveDefaultAgentModelRef();
-    const backfilledAgentModels = getCoworkStore().backfillEmptyAgentModels(defaultAgentModelRef);
-    const qualifiedAgentModels = migrateAgentModelRefs({
-      defaultModelRef: defaultAgentModelRef,
-      availableProviders: buildAvailableOpenClawProviders(),
-      agents: getAgentManager().listAgents(),
-      updateAgent: (id, patch) => getCoworkStore().updateAgent(id, patch),
-    });
-    if (backfilledAgentModels > 0 || qualifiedAgentModels > 0) {
-      console.log(
-        `[Main] migrated agent model bindings: backfilled=${backfilledAgentModels}, qualified=${qualifiedAgentModels}`,
-      );
-    }
+    runAgentModelMigration();
     profiler.measure('agentModelMigration');
 
     // One-time migration: existing installs switch to the in-app browser.
@@ -15532,10 +15558,7 @@ if (!gotTheLock) {
         console.error('[DSH] Failed to auto-start DSH host on app startup:', error);
       });
 
-    // ── Step 1: Show window ASAP ──────────────────────────────────────
-    // CSP + createWindow moved before skill initialisation so the user
-    // sees the loading UI within ~1-2 s instead of waiting for the full
-    // skill bootstrap (~6-8 s previously).
+    // ── Step 1: Show window ASAP (zero remote network gating) ─────────
     setContentSecurityPolicy();
     asrRealtimeWsOriginStripper.attachToSession(session.defaultSession);
     registerRendererPermissionHandler({
@@ -15597,23 +15620,61 @@ if (!gotTheLock) {
     });
     console.log('[Main] initApp: window created');
 
-    // ── Step 2-4: Skill bootstrap (non-blocking) ────────────────────
+    // Refresh quota & model caches in background (SWR) without delaying window or DSH spawn.
+    if (getAuthTokens()) {
+      const warmupGeneration = authAccountGeneration;
+      void runStartupCacheWarmup({
+        serverBaseUrl: getServerApiBaseUrl(),
+        fetchWithAuth,
+        appendKeyfromQuery,
+        cachedSubscriptionStatus,
+        clientVersion: app.getVersion(),
+        t,
+      }).then((warmupResult) => {
+        if (authAccountGeneration !== warmupGeneration || !getAuthTokens()) return;
+        const previousGateState = getAuthQuotaGateState();
+        cachedSubscriptionStatus = warmupResult.subscriptionStatus;
+        cachedMediaGenerationEntitled = warmupResult.mediaGenerationEntitled;
+        saveStartupAuthCachePatch(getStore(), extractAuthCacheUserId(getAuthUser()), {
+          subscriptionStatus: warmupResult.subscriptionStatus,
+          mediaGenerationEntitled: warmupResult.mediaGenerationEntitled,
+          ...(warmupResult.quota !== undefined ? { quota: warmupResult.quota } : {}),
+          ...(warmupResult.serverModels !== undefined ? { serverModels: warmupResult.serverModels } : {}),
+        });
+        if (warmupResult.modelsChanged) {
+          runAgentModelMigration();
+        }
+        const gateChanged = (
+          previousGateState.subscriptionStatus !== cachedSubscriptionStatus
+          || previousGateState.mediaGenerationEntitled !== cachedMediaGenerationEntitled
+        );
+        if ((warmupResult.modelsChanged || gateChanged) && dshBootstrap?.isReadyForTurns()) {
+          void syncOpenClawConfig({
+            reason: 'startup-cache-warmup-refresh',
+            restartGatewayIfRunning: false,
+          }).catch(error => {
+            console.warn('[Main] Failed to sync DSH config after background warmup refresh:', error);
+          });
+        }
+      }).catch(error => {
+        console.debug('[Main] background startup cache warmup failed (non-fatal):', error);
+      });
+    }
+
+    // ── Step 2: Skill bootstrap (deduplicated single sync) ───────────
     console.log('[Main] initApp: starting skill bootstrap');
     profiler.mark('skillManager');
     const manager = getSkillManager();
     console.log('[Main] initApp: getSkillManager done');
 
-    // When skills change (install/enable/disable/delete), re-sync AGENTS.md
-    // so OpenClaw's IM channel agents pick up the latest skill list.
+    // When skills change (install/enable/disable/delete), re-sync DSH skills policy.
     manager.onSkillsChanged(skillChangeBatch => {
       syncOpenClawConfig({ reason: 'skills-changed', skillChangeBatch }).catch(error => {
         console.warn('[Main] Failed to sync OpenClaw config after skills change:', error);
       });
     });
 
-    // Parallelise independent skill sub-tasks (Step 4).
     await Promise.all([
-      // Group A: file-system skill operations (sync, must run in order)
       (async () => {
         profiler.mark('syncBundledSkills');
         try {
@@ -15630,16 +15691,8 @@ if (!gotTheLock) {
         } catch (error) {
           console.error('[Main] initApp: recoverInterruptedUpgrades failed:', error);
         }
-
-        try {
-          manager.startWatching();
-          console.log('[Main] initApp: startWatching done');
-        } catch (error) {
-          console.error('[Main] initApp: startWatching failed:', error);
-        }
       })(),
 
-      // Group B: python runtime (independent, async)
       (async () => {
         profiler.mark('pythonRuntime');
         try {
@@ -15667,12 +15720,69 @@ if (!gotTheLock) {
       handleDeepLink(coldStartDeepLink);
     }
 
-    // Auto-reconnect IM bots that were enabled before restart
+    // Auto-reconnect IM bots (skipped if initial DSH bootstrap is already syncing IM in Phase 2).
     getIMGatewayManager()
       .startAllEnabled()
       .catch(error => {
         console.error('[IM] Failed to auto-start enabled gateways:', error);
       });
+
+    // ── Step 3: Stagger non-urgent background maintenance ────────────
+    // Avoid disk/CPU contention while Chromium first-paints and DSH cold-boots.
+    const deferredStartupTimer = setTimeout(() => {
+      if (isQuitting) return;
+      try {
+        manager.startWatching();
+        console.log('[Main] initApp: deferred skill watcher started');
+      } catch (error) {
+        console.error('[Main] initApp: startWatching failed:', error);
+      }
+
+      libraryIndexService?.start();
+      usageTitleSync.start();
+
+      startUninstallAnalytics({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        executablePath: app.getPath('exe'),
+        userDataPath: app.getPath('userData'),
+        store: getStore(),
+        captureContext: () => getMainLogReporter().captureContext(),
+      });
+
+      try { getMediaTaskStore().intents(); }
+      catch (error) { console.warn('[MediaGeneration] Media intent index compaction failed:', error); }
+      try { getMediaTaskStore().tasks(); }
+      catch (error) { console.warn('[MediaGeneration] Media task index compaction failed:', error); }
+
+      void migrateInlineMediaMetadata({
+        db: database,
+        kv: getStore(),
+        recoveryDirectory: (sessionId, type) => path.join(
+          app.getPath('userData'), type === MediaType.Video ? 'generated-videos' : 'generated-images', sessionId,
+        ),
+        pause: () => new Promise(resolve => setImmediate(resolve)),
+      }).catch(error => {
+        console.warn('[MediaGeneration] Deferred inline media migration failed:', error);
+      });
+
+      let mediaRecoveryInFlight = false;
+      const mediaRecoveryTimer = setInterval(() => {
+        if (mediaRecoveryInFlight) return;
+        mediaRecoveryInFlight = true;
+        void recoverMediaTasks().catch(error => console.warn('[MediaGeneration] Recovery failed:', error))
+          .finally(() => { mediaRecoveryInFlight = false; });
+      }, 15_000);
+      app.once('before-quit', () => clearInterval(mediaRecoveryTimer));
+
+      if (getSqliteAutoBackupEnabledFromConfig(getStore().get<AppConfigSettings>('app_config'))) {
+        void startSqliteBackupLoop().catch(error => {
+          console.error('[SqliteBackup] Failed to start periodic backup loop:', error);
+        });
+      }
+    }, 2_500);
+    deferredStartupTimer.unref();
+    app.once('before-quit', () => clearTimeout(deferredStartupTimer));
 
     // Reconcile missed scheduled tasks after system wake from sleep/suspend
     powerMonitor.on('resume', () => {

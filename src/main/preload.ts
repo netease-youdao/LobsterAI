@@ -1559,6 +1559,7 @@ contextBridge.exposeInMainWorld('electron', {
     cancelLogin: () => ipcRenderer.invoke(AuthIpcChannel.CancelLogin),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
+    getCachedSnapshot: () => ipcRenderer.invoke(AuthIpcChannel.GetCachedSnapshot),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),
     logout: () => ipcRenderer.invoke(AuthIpcChannel.Logout),
     refreshToken: () => ipcRenderer.invoke(AuthIpcChannel.RefreshToken),

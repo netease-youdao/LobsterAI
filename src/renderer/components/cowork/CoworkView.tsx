@@ -84,6 +84,8 @@ const resolveHomeGreetingKey = (date: Date = new Date()): string => {
   return 'coworkGreetingLateNight';
 };
 
+const ENGINE_STARTING_PILL_DELAY_MS = 3_000;
+
 const logCoworkViewModel = (message: string, level: 'debug' | 'warn' = 'debug'): void => {
   if (level === 'warn') console.warn(`[CoworkView] ${message}`);
   else console.debug(`[CoworkView] ${message}`);
@@ -122,8 +124,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
+  const [isInitialized, setIsInitialized] = useState(() => coworkService.isInitialized());
+  const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(
+    () => coworkService.getOpenClawEngineStatusSnapshot(),
+  );
+  const [showDelayedStartingNotice, setShowDelayedStartingNotice] = useState(false);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   // Shown when a session start is blocked because no usable model config exists;
   // guides the user to plan models instead of pushing them into custom-model settings.
@@ -272,19 +277,37 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   };
 
   useEffect(() => {
+    if (openClawStatus?.phase !== 'starting') {
+      setShowDelayedStartingNotice(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setShowDelayedStartingNotice(true);
+    }, ENGINE_STARTING_PILL_DELAY_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [openClawStatus?.phase]);
+
+  useEffect(() => {
     let cancelled = false;
+    quickActionService.initialize();
+    void quickActionService.getLocalizedActions()
+      .then((actions) => {
+        if (!cancelled) {
+          dispatch(setActions(actions));
+        }
+      })
+      .catch((error) => {
+        console.error('[CoworkView] failed to load quick actions:', error);
+      });
+
     const init = async () => {
       try {
         await coworkService.init();
         const initialEngineStatus = coworkService.getOpenClawEngineStatusSnapshot();
         if (!cancelled && initialEngineStatus) {
           setOpenClawStatus(initialEngineStatus);
-        }
-        // Load quick actions with localization
-        quickActionService.initialize();
-        const actions = await quickActionService.getLocalizedActions();
-        if (!cancelled) {
-          dispatch(setActions(actions));
         }
       } catch (error) {
         console.error('[CoworkView] initialization failed:', error);
@@ -807,20 +830,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   }, [currentSession]);
 
   if (!isInitialized) {
-    return (
-      <div className="flex-1 h-full flex flex-col bg-background">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-secondary">
-            {i18nService.t('loading')}
-          </div>
-        </div>
-      </div>
-    );
+    return <div className="flex-1 h-full flex flex-col bg-background" />;
   }
 
   const shouldShowEngineStatus = Boolean(openClawStatus && openClawStatus.phase !== 'running');
   const isEngineError = openClawStatus?.phase === 'error';
-  const isEngineReady = isOpenClawReadyForSession(openClawStatus);
+  const isEngineReady = openClawStatus === null || isOpenClawReadyForSession(openClawStatus);
 
   const homeHeader = (
     <div className="draggable relative z-10 flex h-12 items-center justify-between px-4 shrink-0">
@@ -872,10 +887,17 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     </div>
   );
 
-  // Non-blocking engine states (ready/not_installed/installing) float below
-  // the title bar as a lightweight notice; starting and blocking startup
-  // failures render as global overlays in App.tsx.
-  const engineStatusBanner = shouldShowEngineStatus && !isEngineError && openClawStatus && openClawStatus.phase !== 'starting' ? (
+  // Non-blocking engine states float below the title bar: normal cold-start
+  // 'starting' stays completely invisible unless it persists past 3s, while
+  // blocking startup failures render as a global overlay in App.tsx.
+  const engineStatusBanner = openClawStatus?.phase === 'starting' && showDelayedStartingNotice ? (
+    <div className="pointer-events-none absolute inset-x-0 top-14 z-20 flex justify-center px-4">
+      <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface/95 px-3.5 py-1.5 text-xs text-secondary shadow-subtle backdrop-blur-sm animate-fade-in-down">
+        <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-primary" />
+        <span>{resolveEngineStatusText(openClawStatus)}</span>
+      </div>
+    </div>
+  ) : shouldShowEngineStatus && !isEngineError && openClawStatus && openClawStatus.phase !== 'starting' ? (
     <div className="pointer-events-none absolute inset-x-0 top-14 z-30 flex justify-center px-4">
       <div className="pointer-events-auto w-full max-w-xl rounded-2xl border border-amber-200 bg-surface p-4 shadow-lg animate-fade-in-down dark:border-amber-900/60">
         <div className="flex items-start gap-3">

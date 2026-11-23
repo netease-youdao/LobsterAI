@@ -134,6 +134,8 @@ export class ChannelManager {
     const desiredKeys = new Set();
     const started = [];
     const errors = [];
+    /** @type {Array<{ key: string, driver: import('./drivers/base-driver.mjs').BaseChannelDriver }>} */
+    const toStart = [];
 
     for (const item of Array.isArray(desiredList) ? desiredList : []) {
       if (!item || typeof item !== 'object' || item.enabled === false) continue;
@@ -183,22 +185,45 @@ export class ChannelManager {
         agentId,
         cwd: item.cwd,
       });
-
-      try {
-        await driver.start();
-        started.push(key);
-      } catch (error) {
-        errors.push(`${key}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      toStart.push({ key, driver });
     }
 
-    // Stop instances removed or disabled.
+    // Stop instances removed or disabled before/while starting new ones.
     const stopped = [];
+    const stopTasks = [];
     for (const [key, entry] of [...this.instances.entries()]) {
       if (desiredKeys.has(key)) continue;
-      await entry.driver.stop().catch(() => {});
       this.instances.delete(key);
       stopped.push(key);
+      stopTasks.push(entry.driver.stop().catch(() => {}));
+    }
+
+    const startResults = await Promise.allSettled([
+      ...stopTasks.map(async (task) => {
+        await task;
+        return null;
+      }),
+      ...toStart.map(async ({ key, driver }) => {
+        try {
+          await driver.start();
+          return { key, ok: true };
+        } catch (error) {
+          return {
+            key,
+            ok: false,
+            error: `${key}: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      }),
+    ]);
+
+    for (const settled of startResults) {
+      if (settled.status !== 'fulfilled' || !settled.value) continue;
+      if (settled.value.ok) {
+        started.push(settled.value.key);
+      } else if (settled.value.error) {
+        errors.push(settled.value.error);
+      }
     }
 
     return {

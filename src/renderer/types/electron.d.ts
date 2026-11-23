@@ -2112,6 +2112,44 @@ interface IElectronAPI {
       purchaseOffer?: import('../store/slices/authSlice').LowCreditPurchaseOffer | null;
       enterpriseContext?: EnterpriseAccountContext | null;
     }>;
+    getCachedSnapshot: () => Promise<{
+      success: boolean;
+      hasCredentials: boolean;
+      cachedUser?: import('../store/slices/authSlice').UserProfile | null;
+      cachedQuota?: import('../store/slices/authSlice').UserQuota | null;
+      cachedModels?: Array<{
+        modelId: string;
+        presetId?: unknown;
+        modelName: string;
+        provider: string;
+        apiFormat: string;
+        runtimeProfile?: import('../../shared/providers/modelRuntimeProfiles').ModelRuntimeProfile;
+        supportsImage?: boolean;
+        supportsVideo?: boolean;
+        supportsThinking?: boolean;
+        thinkingConfig?: import('../../shared/providers/modelThinking').ModelThinkingConfig;
+        requestCapabilities?: import('../../shared/providers/lobsterAIRequestOptions').LobsterAIRequestCapability[];
+        supportsToolCalling?: boolean;
+        agenticReady?: boolean;
+        contextWindow?: number;
+        contextWindowOptions?: number[];
+        maxTokens?: number;
+        explicitContextCache?: boolean;
+        costMultiplier?: number;
+        description?: string;
+        limitedFree?: boolean;
+        limitedFreeActive?: boolean;
+        limitedFreeStartAt?: string | null;
+        limitedFreeEndAt?: string | null;
+        subscriptionPriority?: boolean;
+        customTag?: unknown;
+        busy?: boolean;
+        moreModel?: boolean;
+        accessible?: boolean;
+        restrictionHint?: string;
+      }> | null;
+      cachedEnterpriseContext?: EnterpriseAccountContext | null;
+    }>;
     getQuota: () => Promise<{
       success: boolean;
       quota?: import('../store/slices/authSlice').UserQuota;

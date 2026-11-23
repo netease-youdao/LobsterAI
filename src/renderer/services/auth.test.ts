@@ -1579,4 +1579,131 @@ describe('auth state restoration', () => {
     expect(store.getState().enterpriseAccount.context).toBeNull();
     expect(store.getState().auth.ownerAccountKey).toBe('personal:next@example.com');
   });
+
+  test('init hydrates personal account and cached models via SWR without blocking on live getUser', async () => {
+    const cachedUser = {
+      id: 1,
+      yid: 'cached@example.com',
+      nickname: 'Cached User',
+    };
+    const cachedQuota = {
+      subscriptionStatus: 'pro',
+      remainingCredits: 320,
+    };
+    const cachedModels = [
+      {
+        modelId: 'deepseek-v4',
+        modelName: 'DeepSeek V4',
+        provider: 'LobsterAI',
+        apiFormat: 'openai',
+        accessible: true,
+      },
+    ];
+    let resolveLiveGetUser!: (value: unknown) => void;
+    const getUser = vi.fn(() => new Promise((resolve) => {
+      resolveLiveGetUser = resolve;
+    }));
+    const getCachedSnapshot = vi.fn().mockResolvedValue({
+      success: true,
+      hasCredentials: true,
+      cachedUser,
+      cachedQuota,
+      cachedModels,
+      cachedEnterpriseContext: null,
+    });
+    const getModels = vi.fn().mockResolvedValue({ success: true, models: cachedModels });
+    const getPricingCatalog = vi.fn().mockResolvedValue({ success: true, textModels: [] });
+
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      electron: {
+        auth: {
+          getPendingCallback: vi.fn().mockResolvedValue(null),
+          getCachedSnapshot,
+          getUser,
+          getModels,
+          getPricingCatalog,
+          onCallback: vi.fn(() => () => undefined),
+          onLifecycleEvent: vi.fn(() => () => undefined),
+          onQuotaChanged: vi.fn(() => () => undefined),
+          onSessionChanged: vi.fn(() => () => undefined),
+        },
+        enterpriseAccount: {
+          onContextInvalidated: vi.fn(() => () => undefined),
+        },
+        modelPresets: {
+          getPreferences: vi.fn().mockResolvedValue({ success: true, data: {} }),
+        },
+        window: {
+          onStateChanged: vi.fn(() => () => undefined),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    // Must settle immediately even while getUser() is still pending.
+    await authService.init();
+
+    expect(getCachedSnapshot).toHaveBeenCalledOnce();
+    expect(store.getState().auth.isLoading).toBe(false);
+    expect(store.getState().auth.isLoggedIn).toBe(true);
+    expect(store.getState().auth.user?.yid).toBe('cached@example.com');
+    expect(store.getState().model.availableModels.filter(m => m.isServerModel).map(m => m.id))
+      .toEqual(['deepseek-v4']);
+    expect(getUser).toHaveBeenCalledOnce();
+
+    resolveLiveGetUser({
+      success: true,
+      user: { ...cachedUser, nickname: 'Fresh User' },
+      quota: cachedQuota,
+    });
+    await vi.waitFor(() => {
+      expect(store.getState().auth.user?.nickname).toBe('Fresh User');
+    });
+  });
+
+  test('init marks unauthenticated immediately when cached snapshot reports no credentials', async () => {
+    const getUser = vi.fn();
+    const getCachedSnapshot = vi.fn().mockResolvedValue({
+      success: true,
+      hasCredentials: false,
+      cachedUser: null,
+      cachedQuota: null,
+      cachedModels: null,
+      cachedEnterpriseContext: null,
+    });
+    const getPricingCatalog = vi.fn().mockResolvedValue({ success: true, textModels: [] });
+
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      electron: {
+        auth: {
+          getPendingCallback: vi.fn().mockResolvedValue(null),
+          getCachedSnapshot,
+          getUser,
+          getPricingCatalog,
+          onCallback: vi.fn(() => () => undefined),
+          onLifecycleEvent: vi.fn(() => () => undefined),
+          onQuotaChanged: vi.fn(() => () => undefined),
+          onSessionChanged: vi.fn(() => () => undefined),
+        },
+        enterpriseAccount: {
+          onContextInvalidated: vi.fn(() => () => undefined),
+        },
+        window: {
+          onStateChanged: vi.fn(() => () => undefined),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await authService.init();
+
+    expect(getCachedSnapshot).toHaveBeenCalledOnce();
+    expect(store.getState().auth.isLoading).toBe(false);
+    expect(store.getState().auth.isLoggedIn).toBe(false);
+    expect(getUser).not.toHaveBeenCalled();
+  });
 });

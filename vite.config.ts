@@ -89,7 +89,9 @@ function silkWasmAssetPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => {
+  const productionMinify = command === 'build' ? 'esbuild' : false;
+  return {
   define: {
     // KaTeX ESM bundle references this compile-time constant.
     __VERSION__: JSON.stringify(katexVersion),
@@ -117,7 +119,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
             rollupOptions: {
               external: (id) => {
                 const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate'];
@@ -140,7 +142,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -151,7 +153,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -163,7 +165,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -175,7 +177,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -187,7 +189,7 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
-            minify: false,
+            minify: productionMinify,
           },
         },
         onstart() {},
@@ -211,7 +213,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
-    minify: false,
+    minify: productionMinify,
     rollupOptions: {
       // library-thumbnail.html is built by vite.thumbnail.config.ts so the
       // sandboxed thumbnail page never shares chunks with the app entry.
@@ -264,4 +266,5 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  };
 });

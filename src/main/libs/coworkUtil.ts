@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'child_process';
+import { execFile, execSync, spawnSync } from 'child_process';
 import { app } from 'electron';
 import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
@@ -98,6 +98,101 @@ export function getElectronNodeRuntimePath(): string {
  * Cached user shell PATH. Resolved once and reused across calls.
  */
 let cachedUserShellPath: string | null | undefined;
+let userShellPathInFlight: Promise<string | null> | null = null;
+
+/**
+ * Seed the in-memory shell PATH cache (e.g. from persisted startup KV) so
+ * packaged macOS/Linux launches never block the main thread on `execSync`.
+ */
+export function seedUserShellPathCache(shellPath: string | null): void {
+  if (typeof shellPath === 'string' && shellPath.trim().length > 0) {
+    cachedUserShellPath = shellPath.trim();
+  }
+}
+
+/** Return the currently cached shell PATH without spawning a subprocess. */
+export function getCachedUserShellPath(): string | null {
+  return cachedUserShellPath ?? null;
+}
+
+/** Common POSIX tool directories used as a fast fallback before shell probe finishes. */
+export function getFallbackCommonShellPaths(): string[] {
+  if (process.platform === 'win32') return [];
+  const home = process.env.HOME || '';
+  const candidates = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ];
+  if (home) {
+    candidates.push(
+      `${home}/.local/bin`,
+      `${home}/.nvm/current/bin`,
+      `${home}/.volta/bin`,
+      `${home}/.fnm/current/bin`,
+    );
+  }
+  return candidates;
+}
+
+/**
+ * Non-blocking resolution of the user's login shell PATH on macOS/Linux.
+ * Avoids freezing Electron's main thread during packaged startup.
+ */
+export async function resolveUserShellPathAsync(options: {
+  timeoutMs?: number;
+  forceRefresh?: boolean;
+} = {}): Promise<string | null> {
+  if (process.platform === 'win32') {
+    cachedUserShellPath = null;
+    return null;
+  }
+  if (!options.forceRefresh && cachedUserShellPath !== undefined) {
+    return cachedUserShellPath;
+  }
+  if (!options.forceRefresh && userShellPathInFlight) {
+    return userShellPathInFlight;
+  }
+
+  const shell = process.env.SHELL || '/bin/bash';
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const run = new Promise<string | null>((resolve) => {
+    execFile(
+      shell,
+      ['-lc', 'echo __PATH__=$PATH'],
+      {
+        encoding: 'utf-8',
+        timeout: timeoutMs,
+        env: { ...process.env },
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+        const match = stdout.match(/__PATH__=(.+)/);
+        const resolved = match?.[1]?.trim() || null;
+        if (resolved) {
+          cachedUserShellPath = resolved;
+        } else if (cachedUserShellPath === undefined) {
+          cachedUserShellPath = null;
+        }
+        resolve(resolved);
+      },
+    );
+  }).finally(() => {
+    if (userShellPathInFlight === run) {
+      userShellPathInFlight = null;
+    }
+  });
+
+  if (!options.forceRefresh) {
+    userShellPathInFlight = run;
+  }
+  return run;
+}
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
