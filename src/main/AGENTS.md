@@ -5,21 +5,21 @@ Paths below are relative to `src/main/` unless they start with `src/`.
 
 ## Map
 
-`main.ts` wires Electron lifecycle, IPC, auth, logging, OpenClaw startup,
-Cowork routing, IM gateways, scheduled tasks, skills, MCP, updates, artifact
-preview/share handlers, and shell/dialog bridges. It is about 17k lines: search
-it instead of reading it whole, and keep new feature logic out of it.
+`main.ts` wires Electron lifecycle, IPC, auth, logging, DSH startup,
+Cowork routing, IM, scheduled tasks, skills, MCP, updates, artifact
+previews and sharing, and shell/dialog bridges. Search it for the relevant
+entry point and keep new feature logic in domain modules.
 
-- `libs/openclawEngineManager.ts`: the bundled OpenClaw gateway process, state
-  directory, config path, ports, tokens, gateway logs, restart/repair, and
-  runtime readiness.
-- `libs/openclawConfigSync.ts`: renders LobsterAI state into OpenClaw config:
-  providers/models, agents, IM bindings, plugins, MCP servers, skills extra
-  dirs, sandbox mode, and managed workspace `AGENTS.md` sections.
-- `libs/agentEngine/openclawRuntimeAdapter.ts`: translates between OpenClaw
-  gateway events and Cowork stream events. About 13k lines.
-- `libs/agentEngine/coworkEngineRouter.ts`: Cowork-facing runtime router. It
-  routes to OpenClaw only.
+- `libs/dsh/dshBootstrap.ts`: startup, app service wiring, and synchronization
+  of providers, agents, permissions, skills, MCP, and IM configuration.
+- `libs/dsh/dshHostManager.ts`: the bundled DSH process, isolated app
+  profile, host status, and lifecycle.
+- `libs/agentEngine/dshRuntimeAdapter.ts`: adapts DSH session control, turn
+  execution, and streaming events to Cowork.
+- `libs/agentEngine/coworkEngineRouter.ts`: routes Cowork calls to the DSH
+  runtime adapter.
+- `migration/legacyOpenClawMigrator.ts`: pre-startup migration of legacy
+  OpenClaw data and reporting of archived data.
 - `coworkStore.ts`: Cowork sessions, messages, config, agents, memory metadata,
   and related CRUD over SQLite.
 - `sqliteStore.ts`: database initialization and migrations.
@@ -35,12 +35,12 @@ it instead of reading it whole, and keep new feature logic out of it.
   `MAIN_OFFICE_FORMATS`. Read
   `specs/features/office-editing/2026-09-28-office-module-architecture.md`
   before adding a format.
-- `libs/dsh*.ts` and `ipcHandlers/dsh/`: the experimental DeepSeek Harness
-  runtime. It stays independent of the main agent: it is never registered as an
-  MCP server and no task is forwarded to it.
+- `ipcHandlers/dshHost/`: DSH host status and plugin operations exposed
+  through IPC.
 - `desktopCompanion/`: the floating orb windows.
-- `src/scheduledTask/`: scheduled task model, cron gateway service, policies,
-  migrations, and local metadata.
+- `scheduledTask/lobsterScheduler.ts`: SQLite task definitions and run
+  history, scheduling, and dispatch to DSH turns.
+- `src/scheduledTask/`: shared task model, policies, and migration helpers.
 
 Other features have their own directories (`computerUse/`,
 `browserCredentials/`, `library/`, `plugins/`, `skins/`, and more). List
@@ -77,18 +77,18 @@ Linux. Development runs use the same directory as the installed app unless a
 dev user-data dir is passed at launch (`DevelopmentProtocolSwitch.UserDataDir`
 in `libs/developmentProtocolContext.ts`).
 
-- `userData/lobsterai.sqlite`: the SQLite database.
-- `userData/openclaw/state/openclaw.json`: generated OpenClaw config.
-- `userData/openclaw/state/workspace-main`: main agent workspace, resolved by
-  `getMainAgentWorkspacePath()`.
-- `userData/openclaw/state/workspace-{agentId}`: other agents' workspaces. They
-  follow OpenClaw's state-dir fallback and are synced by
-  `openclawConfigSync.ts`.
+- `userData/lobsterai.sqlite`: the desktop app database.
+- `userData/dsh-profile/`: LobsterAI's isolated DSH home. The `lobsterai`
+  profile is under `profiles/lobsterai/` and DSH's agents home is under
+  `agents-home/` within that directory.
+- `userData/workspaces/<agentId>/`: app-owned agent workspaces and memory.
+  The session cwd is the user-selected working directory.
+- `userData/openclaw/state/` is the legacy migration source.
+  `userData/legacy-openclaw-backup/` contains migration archives.
 
-Workspace files: `AGENTS.md` (OpenClaw workspace instructions with a
-LobsterAI-managed section), `MEMORY.md` (durable memory facts),
-`memory/YYYY-MM-DD.md` (daily notes), `USER.md` (user profile/context),
-`SOUL.md` (agent/system prompt), `IDENTITY.md` (agent identity).
+Workspace files can include `AGENTS.md` (instructions), `MEMORY.md`
+(durable memory), `memory/YYYY-MM-DD.md` (daily notes), `USER.md` (user
+context), `SOUL.md` (persona), and `IDENTITY.md` (identity).
 
 ## SQLite Tables
 
@@ -99,27 +99,27 @@ LobsterAI-managed section), `MEMORY.md` (durable memory facts),
 - `cowork_message_edits`, `cowork_message_versions`,
   `cowork_message_version_switches`: message edit and version history.
 - `cowork_session_capsules`: continuity/context capsules for sessions.
-- `cowork_config`: Cowork settings such as working directory, execution mode,
-  agent engine, memory, dreaming, and embedding.
+- `cowork_config`: Cowork settings, including the working directory, and
+  preferences carried forward from older databases.
 - `agents`: custom/preset agents: model, identity, skill IDs, per-agent working
   directory, enable state, and pinning.
 - `user_memories`, `user_memory_sources`: legacy/local memory tracking used for
   migration and source metadata.
 - `im_config`: IM platform configuration.
-- `im_session_mappings`: IM conversation to Cowork/OpenClaw session mapping,
-  including agent ID and OpenClaw session key.
+- `im_session_mappings`: conversation and agent bindings to Cowork
+  sessions, with `openclaw_session_key` kept for legacy data.
 - `mcp_servers`, `mcp_launch_resolutions`: MCP server configuration and
   resolved launch metadata.
-- `user_plugins`: user-installed OpenClaw plugins and their enabled/config
-  state.
+- `user_plugins`: legacy OpenClaw plugin records read by the migrator.
+  DSH plugin state lives in the app's DSH profile.
 - `subagent_runs`, `subagent_messages`: subagent run tracking and fetched
   conversation history.
 - `browser_credentials`: created by
   `browserCredentials/browserCredentialService.ts`.
 - `library_*` (four tables): created by `library/libraryMigrations.ts`.
-- `scheduled_task_meta`: local origin/binding metadata for OpenClaw cron jobs,
-  created by `src/scheduledTask/metaStore.ts`. Task definitions and run history
-  live in OpenClaw cron state, not here.
+- `lobster_scheduled_tasks`, `lobster_scheduled_task_runs`: task definitions
+  and run history owned by `LobsterScheduler`.
+- `scheduled_task_meta`: task origin and session binding metadata.
 
 Migrations are mostly ad-hoc: `sqliteStore.ts` checks `table_info(...)` and
 runs `ALTER TABLE ... ADD COLUMN`, and feature stores create and migrate their
@@ -130,12 +130,9 @@ own tables.
 - Main logs: `main-YYYY-MM-DD.log` in `%APPDATA%/LobsterAI/logs/` (Windows),
   `~/Library/Logs/LobsterAI/` (macOS), or `~/.config/LobsterAI/logs/` (Linux).
   Kept 7 days; 80 MB per file, overflow rotates to `.old.log`.
-- Gateway capture logs: `userData/openclaw/logs/gateway-YYYY-MM-DD.log`, kept
-  3 days.
-- OpenClaw's own daily logs sit in a temp directory.
-  `openclawEngineManager.getOpenClawDailyLogDirs()` lists the candidates:
-  `/tmp/openclaw` and the OS temp dir, or on Windows the temp dir and
-  `<runtime drive>/tmp/openclaw`.
+- DSH runtime log: `userData/dsh-profile/dsh.log`. The app includes it
+  in log exports when present. Host lifecycle and migration messages
+  also appear in the main log.
 
 Logs can be large. Use `rg`, `tail`, `Select-String`, `Get-Content -Tail`, or
 other targeted filters instead of reading whole files.
@@ -151,7 +148,7 @@ Main-process `console.*` is captured by `electron-log` through `logger.ts`.
 - No info-level logs in polling loops, per-message hot paths, or routine
   function entries.
 - Messages are English, concise, and start with a module tag such as
-  `[OpenClaw]`.
+  `[DshBootstrap]`.
 
 ## Domain Notes
 
@@ -164,26 +161,27 @@ Agents:
 
 IM:
 
-- IM config is stored in SQLite and synced into OpenClaw config where the
-  channel is OpenClaw-backed.
-- Multi-instance platforms: DingTalk, Feishu/Lark, QQ, Telegram, Discord,
-  WeCom, NIM, POPO, and email. Weixin and NetEase Bee have single-instance
-  config.
-- IM session mappings preserve conversation/session/agent relationships.
+- IM config is stored in SQLite and synced via `im/dshChannelsBridge.ts`
+  to the LobsterAI DSH channel bundle. `im/dshImInboundHandler.ts` routes
+  incoming events to Cowork sessions and sends replies through the bridge.
+- `RetainedImPlatform` in `src/shared/dshEngine/hostConstants.ts` lists
+  the supported channel types. IM session mappings preserve conversation,
+  session, and agent relationships.
 
 MCP:
 
 - User-configured servers live in `mcp_servers`, resolved launch metadata in
   `mcp_launch_resolutions`.
-- OpenClaw config sync writes enabled servers into native `mcp.servers`.
+- DSH bootstrap syncs enabled servers and their tool filters to the host
+  bundle. OAuth credential handling lives in `mcp/`.
 
 Scheduled tasks:
 
 - Local policy code is in `src/scheduledTask/`, the UI in
   `src/renderer/components/scheduledTasks/`.
-- Execution uses OpenClaw cron APIs through `CronJobService`.
-- `scheduled_task_meta` stores only the origin/binding data that OpenClaw cron
-  jobs cannot carry as custom fields.
+- `LobsterScheduler` dispatches DSH turns through `libs/dsh/dshScheduledTurn.ts`.
+  The execution path uses the task's working directory and routes scheduled
+  results through the app's delivery handlers.
 
 ## Desktop Companion On macOS
 

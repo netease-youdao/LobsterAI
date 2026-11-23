@@ -6,7 +6,6 @@ Thanks for helping improve LobsterAI. This guide covers setting up a development
 
 - [Development setup](#development-setup)
 - [Tests and lint](#tests-and-lint)
-- [OpenClaw runtime](#openclaw-runtime)
 - [DeepSeek Harness runtime](#deepseek-harness-runtime)
 - [Packaging](#packaging)
 - [Project map](#project-map)
@@ -18,7 +17,7 @@ Requirements:
 
 - Node.js `>=24.15.0 <25`
 - npm `>=11.17.0 <12` (older versions: `npm install -g npm@11.17.0`)
-- git and pnpm, needed on the first run to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout
+- Git and `tar`
 
 `better-sqlite3@13.0.3` includes prebuilt N-API binaries for Windows, macOS,
 and Linux on x64/arm64. The `allowScripts` entry in `package.json` skips npm's
@@ -32,13 +31,13 @@ cd LobsterAI
 npm install
 ```
 
-First development run:
+Build the pinned DSH runtime for your host and start Electron.
 
 ```bash
-npm run electron:dev:openclaw
+npm run electron:dev:dsh
 ```
 
-Daily development after the pinned OpenClaw runtime exists:
+Use the prepared runtime for daily development.
 
 ```bash
 npm run electron:dev
@@ -79,101 +78,77 @@ CI lints only the TypeScript files a pull request changes. Leave every file you 
 - Vitest runs in a Node environment and collects only `*.test.ts` files. There is no DOM, so test renderer logic as plain functions rather than rendered components.
 - Do not run `npm run format` or Prettier on existing files. Most of the tree has never been formatted with it, so it rewrites whole files.
 
-## OpenClaw runtime
-
-The pinned OpenClaw version and third-party plugin list live in `package.json` under `openclaw`.
-
-```bash
-# Build the current-platform runtime manually
-npm run openclaw:runtime:host
-
-# Use a custom OpenClaw source checkout
-OPENCLAW_SRC=/path/to/openclaw npm run electron:dev:openclaw
-
-# Force runtime rebuild
-OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
-
-# Keep a local OpenClaw checkout on its current branch/tag
-OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
-```
-
-When behavior has to change inside OpenClaw, prefer a LobsterAI-side integration point first. If a patch is unavoidable, add a small version-scoped patch under `scripts/patches/<openclaw.version>/` and describe it in that directory's `README.md`, rather than leaving manual edits in the sibling checkout.
-
 ## DeepSeek Harness runtime
 
-The pinned dsh version and one archive descriptor per platform live in `package.json` under `dsh`. Development reads `vendor/dsh-runtime/current`; shipped apps download the archive on first use and verify it against the digest they carry.
+`package.json` pins the `@deepseek-ai/dsh` and pnpm versions in `dsh`.
+The build fetches the npm package, installs the target's dependencies, applies
+`scripts/dsh-patches/<dsh.version>/`, and prepares `vendor/dsh-runtime/current`
+for development. Set `DSH_NPM_REGISTRY` to use a different npm registry or
+`DSH_FORCE_BUILD=1` to force a rebuild.
 
-Each runtime also bundles the exact pnpm release pinned in `dsh.pnpm`, unpacked to `package-manager/pnpm`. dsh's plugin manager installs plugins with pnpm, and a Dock- or Start-menu-launched app has none on PATH, so the app starts dsh through a generated launcher that hands this pnpm to `runCli({ packageManager })`. Keep `dsh.pnpm` on the major that upstream pins in its root `packageManager` field. Changing it requires rebuilding and re-uploading every target.
+The runtime includes the pinned pnpm at `package-manager/pnpm`. The app
+launcher passes this copy to `runCli({ packageManager })` for DSH plugin
+installs. On Windows it also adds `resources/mingit/cmd` to the plugin
+installer's `PATH` when bundled Git is available. Run
+`npm run setup:mingit -- --required` before `dsh:e2e` on Windows to exercise
+Git-sourced plugin installation without system Git.
 
-On Windows, the launcher also adds the app's `resources/mingit/cmd` to the plugin installer's PATH so Git-sourced plugins work without system Git. This is app-side wiring; Git is not duplicated in the dsh archive. Run `npm run setup:mingit -- --required` before Windows `dsh:e2e`; that gate installs a local Git-sourced test plugin with system Git removed from PATH and checks that the same install fails without the bundled Git path.
+Run these checks after changing the runtime or its patches.
 
 ```bash
 # Build and activate the current-platform runtime
 npm run dsh:runtime:host
 
-# Boot it once and assert the web UI answers
+# Boot the runtime and verify its web and RPC interfaces
 npm run dsh:runtime:verify
 
-# Full gate: build, pack, install over HTTP, boot, assert provider/model over RPC
+# Check the runtime contents and the LobsterAI profile and bundle configuration
+npm run dsh:upgrade-check
+
+# Check embedded Electron hosts, authenticated RPC, and profile isolation
 npm run dsh:e2e
 ```
 
 <details>
-<summary>Publish a runtime archive (per platform)</summary>
+<summary>Update the bundled DSH version</summary>
 
-Each target must be built on a matching machine: native dependencies install for the host, so a cross-architecture build produces an archive that packs cleanly and only fails on users' machines. The build refuses to run on a mismatched host.
-
-| Target | Build on |
-| --- | --- |
-| `mac-arm64` | Apple Silicon mac |
-| `mac-x64` | Intel mac |
-| `win-x64` | Windows 10 1803+ (ships `tar.exe`) |
-
-Run these on that machine, substituting the target:
-
-```bash
-# 1. Build (applies the pinned patches, prunes to ~160 MB)
-npm run dsh:runtime:mac-arm64
-
-# 2. Pack; prints the sha256 and size
-npm run dsh:runtime:pack mac-arm64
-
-# 3. Upload vendor/dsh-dist/dsh-runtime-<version>-mac-arm64.tar.gz to the CDN,
-#    then record where it landed. Digest and size come from the local manifest,
-#    so they cannot drift from the bytes that were packed.
-npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<uploaded>"
-
-# 4. Confirm the URL serves exactly those bytes
-npm run dsh:runtime:verify-urls mac-arm64
-```
-
-Step 3 writes `dsh.runtimes[target]` into `package.json`; commit that hunk so every platform's descriptor ships in one build. Each target holds one absolute URL and nothing is appended to it, so a CDN that mints an unrelated URL per file needs no shared directory.
+1. Bump `dsh.version` in `package.json`. Keep `dsh.pnpm` on the major version
+   specified by upstream's `packageManager` field.
+2. Carry forward the patches still needed into `scripts/dsh-patches/<new-version>/`.
+   The build looks up patches by version and treats a missing directory as
+   an empty patch set. Update the patch targets and `PATCH_SENTINELS` in
+   `scripts/build-dsh-runtime.cjs` as needed.
+3. Build the runtime on a host matching each installer target and run the
+   runtime checks above. Build the installer to pick up the new runtime.
 
 </details>
 
 <details>
-<summary>Update to a newer dsh version</summary>
+<summary>Publish a standalone runtime archive</summary>
 
-1. Bump `dsh.version` in `package.json`, and check that `dsh.pnpm` is still on the major in upstream's `packageManager` field.
-2. Copy the patch directory to the new version before that directory exists: `cp -R scripts/dsh-patches/<old> scripts/dsh-patches/<new>` (if `<new>` already exists, `cp` nests the copy one level down and the build finds no patches). Patches are found by version, and a missing directory applies **no** patches without failing — the Windows console-hiding fix would vanish silently. After copying, the build's sentinels re-verify each patch still lands, and fail if upstream moved the code: retarget the patch and add its sentinel to `PATCH_SENTINELS` in `scripts/build-dsh-runtime.cjs`, or drop it once upstream carries the fix (the directory-picker fix is upstream from 0.1.5, the console-hiding fix from 0.1.6-alpha.2).
-3. Empty `dsh.runtimes`. A descriptor left pointing at the previous archive still passes its digest check, so the old runtime would install under the new version's name.
-4. Rebuild, upload, and record all three targets as above.
-5. Re-run `npm run dsh:runtime:verify-urls` and `npm run dsh:e2e`.
+The archive tooling maintains `dsh.runtimes` in `package.json`. Build the
+archive on a host that matches its target platform and architecture.
 
-Known gap: existing users keep the runtime they already installed. `ensureRuntimeInstalled` returns early whenever any runtime is present and never compares it with the pinned version, so only fresh installs pick up a new dsh. Selection among installed versions is also a lexical sort, which puts `rc.6` ahead of `rc.10`.
+```bash
+# Build and pack for the target, for example Apple Silicon
+npm run dsh:runtime:mac-arm64
+npm run dsh:runtime:pack mac-arm64
+
+# After uploading the tarball from vendor/dsh-dist, record and verify its URL
+npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<uploaded>"
+npm run dsh:runtime:verify-urls mac-arm64
+```
+
+`dsh:runtime:url` takes the digest and size from the generated manifest
+and writes them with the URL into the selected target's descriptor.
 
 </details>
 
 ## Packaging
 
-The CI workflow builds each installer on its own OS (macOS, Windows, Linux). Do the same locally: native modules are compiled for the host, and the `dist:*` scripts build the OpenClaw runtime for the requested target only.
-
-Build machine prerequisites:
-
-- Node.js `>=24.15.0 <25`. `.npmrc` sets `engine-strict`, so npm refuses other versions.
-- npm `>=11.17.0 <12`, required for the dependency install-script policy.
-- git and pnpm, used to build the pinned OpenClaw runtime from the sibling `../openclaw` checkout (override with `OPENCLAW_SRC`).
-- Windows: Git for Windows. The runtime build runs in its Git Bash. Without it, run `npm run setup:mingit` once to prepare a portable Git under `resources/mingit`.
+Build on the target operating system and architecture to match the runtime's
+native dependencies. The installer commands below cover macOS arm64/x64
+and Windows x64. Use the development prerequisites above.
 
 Clean build:
 
@@ -189,22 +164,27 @@ npm ci
 #    files whose sources were deleted.
 npx rimraf dist dist-electron
 
-# 3. Build the installer. Output goes to release/.
-npm run dist:mac            # macOS, host architecture
-npm run dist:mac:x64
-npm run dist:mac:arm64
-npm run dist:mac:universal
+# 3. Run the installer command for your target. Output goes to release/.
+npm run dist:mac:arm64      # Apple Silicon
+npm run dist:mac:x64        # Intel Mac
 npm run dist:win            # Windows x64
-npm run dist:linux
 ```
 
-`vendor/` does not need to be deleted between builds. The OpenClaw runtime under `vendor/openclaw-runtime/<target>` is cached by pinned version and patch hash and is rebuilt automatically when either changes. Set `OPENCLAW_FORCE_BUILD=1` to rebuild it after changing the build scripts themselves, and `OPENCLAW_FORCE_PLUGIN_INSTALL=1` to re-download the bundled plugins. Optional plugins (POPO, NIM) are skipped with a warning when their registry is unreachable, so check the build log before shipping.
+Each command builds the matching DSH runtime and ships it with the
+LobsterAI host and IM channel bundles. On macOS the runtime is under
+`Contents/Resources/dsh-runtime/`, alongside `dsh-bundles/`. The Windows
+installer extracts `dsh-runtime/`, `dsh-bundles/`, `SKILLs/`, and
+`python-win/` from `win-resources.tar` into the installed resources.
+`setup:python-runtime` prepares the portable Python runtime.
 
-The `dist:*` scripts also run these steps for you:
+The build reuses `vendor/dsh-runtime/<target>` when the target, pinned
+versions, and patch hashes match. Use `DSH_FORCE_BUILD=1` to rebuild it
+after changing the build script.
 
-- `openclaw:runtime:<target>`: build, patch, bundle, and prune the OpenClaw runtime, shipped under `Resources/cfmind`.
-- Windows only, `verify:installer-patches`: re-applies `patches/app-builder-lib+*.patch` to `node_modules` and runs the installer contract tests. It fails when `node_modules` still carries an older version of the patch, for example after `git pull` without reinstalling; run `npm ci` and retry. Never ship an installer from a tree where it fails.
-- Windows only, `setup:python-runtime`: prepares a portable Python under `resources/python-win`, so end users do not need to install Python. cfmind, `SKILLs`, and python-win are shipped as a single `win-resources.tar` and extracted after install.
+The Windows `verify:installer-patches` gate re-applies
+`patches/app-builder-lib+*.patch` and runs installer contract tests.
+`dist:win` and the `dist:win:web` stub pass both run it. If it fails, run
+`npm ci` and retry before packaging for release.
 
 Windows channel and web-installer builds wrap the same `dist:win` chain:
 
@@ -232,13 +212,14 @@ Offline or private-source packaging can use:
 | --- | --- |
 | `src/main/main.ts` | Electron lifecycle, IPC registration, auth, logging, runtime startup, and service wiring |
 | `src/main/ipcHandlers/` | IPC handlers grouped by domain; new handlers go here rather than in `main.ts` |
-| `src/main/libs/openclawEngineManager.ts` | OpenClaw gateway process, runtime state, ports, logs, restart, and repair |
-| `src/main/libs/openclawConfigSync.ts` | Renders LobsterAI providers, models, agents, IM bindings, skills, MCP, and workspace instructions into OpenClaw config |
-| `src/main/libs/agentEngine/openclawRuntimeAdapter.ts` | Translates OpenClaw gateway events into Cowork stream events |
+| `src/main/libs/dsh/dshBootstrap.ts` | DSH startup, settings sync, and app service wiring |
+| `src/main/libs/dsh/dshHostManager.ts` | Bundled DSH process, app-owned profile, and host status |
+| `src/main/libs/agentEngine/dshRuntimeAdapter.ts` | Adapts DSH sessions, turns, and events to Cowork |
+| `src/main/migration/legacyOpenClawMigrator.ts` | Imports legacy OpenClaw data into LobsterAI's DSH layout |
 | `src/main/coworkStore.ts` | Cowork sessions, messages, config, agents, memory metadata, and SQLite CRUD |
 | `src/main/skills/skillManager.ts` | Skill sync, install/upgrade, security scan, and enable state |
 | `src/main/office/` | In-place Word, Excel, and PowerPoint editors: file store, agent tool bridge, and MCP servers |
-| `src/main/libs/dsh*.ts` | DeepSeek Harness runtime: install, process launch, and config sync. Independent of the Cowork agent runtime |
+| `src/main/ipcHandlers/dshHost/` | DSH status and plugin operations exposed over IPC |
 | `src/renderer/components/cowork/` | Main Cowork UI, prompt input, session detail, permissions, thinking/tool display, media, and voice input |
 | `src/renderer/components/artifacts/` | Artifact panel, previews, and renderers |
 | `src/renderer/components/agent/` | Agent creation and settings UI |
@@ -248,9 +229,10 @@ Offline or private-source packaging can use:
 | `src/renderer/services/i18n.ts` | Renderer i18n dictionary and `t()` helper |
 | `src/shared/` | Constants and types shared by the main and renderer processes |
 | `src/common/` | Small pure helpers compiled into both processes |
-| `src/scheduledTask/` | Scheduled task model and policies; execution goes through OpenClaw cron |
+| `src/scheduledTask/` | Scheduled task model, policies, and migration helpers |
+| `src/main/scheduledTask/` | SQLite scheduler, DSH turn execution, and result delivery |
 | `SKILLs/` | Bundled LobsterAI skills |
-| `openclaw-extensions/` | Local OpenClaw plugins |
+| `dsh-bundles/` | Bundled LobsterAI host tools and IM channel drivers for DSH |
 | `scripts/` | Runtime build, patch, and packaging scripts |
 | `specs/` | Design docs per feature, refactor, and bugfix, written in Chinese |
 | `tests/` | Packaging, runtime, and integration tests |

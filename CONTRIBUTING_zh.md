@@ -6,7 +6,6 @@
 
 - [开发环境](#开发环境)
 - [测试与 Lint](#测试与-lint)
-- [OpenClaw Runtime](#openclaw-runtime)
 - [DeepSeek Harness Runtime](#deepseek-harness-runtime)
 - [打包](#打包)
 - [项目地图](#项目地图)
@@ -18,7 +17,7 @@
 
 - Node.js `>=24.15.0 <25`
 - npm `>=11.17.0 <12`（旧版本可运行 `npm install -g npm@11.17.0` 升级）
-- git 与 pnpm，首次启动时用于从同级目录 `../openclaw` 构建锁定版本的 OpenClaw runtime
+- Git 和 `tar`
 
 `better-sqlite3@13.0.3` 已包含 Windows、macOS 和 Linux 的 x64/arm64 N-API
 预编译文件。`package.json` 中的 `allowScripts` 配置跳过 npm 对此版本触发的多余编译，
@@ -31,13 +30,13 @@ cd LobsterAI
 npm install
 ```
 
-首次开发启动：
+为当前平台构建锁定版本的 DSH 运行时并启动 Electron。
 
 ```bash
-npm run electron:dev:openclaw
+npm run electron:dev:dsh
 ```
 
-OpenClaw runtime 已构建后，日常开发使用：
+运行时准备好后，日常开发可直接启动。
 
 ```bash
 npm run electron:dev
@@ -77,100 +76,70 @@ CI 只对 PR 中改动过的 TypeScript 文件执行 lint。请确保你改动�
 - Vitest 运行在 Node 环境中，只收集 `*.test.ts` 文件。没有 DOM，renderer 逻辑请作为纯函数来测，不要渲染组件。
 - 不要对已有文件运行 `npm run format` 或 Prettier。仓库里大部分文件从未用它格式化过，运行后会整文件改写。
 
-## OpenClaw Runtime
-
-锁定的 OpenClaw 版本和第三方插件列表位于 `package.json` 的 `openclaw` 字段。
-
-```bash
-# 手动构建当前平台 runtime
-npm run openclaw:runtime:host
-
-# 指定 OpenClaw 源码路径
-OPENCLAW_SRC=/path/to/openclaw npm run electron:dev:openclaw
-
-# 强制重建 runtime
-OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
-
-# 保持本地 OpenClaw checkout 在当前分支或 tag
-OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
-```
-
-需要改变 OpenClaw 内部行为时，优先在 LobsterAI 侧寻找集成点。确实需要打补丁时，请在 `scripts/patches/<openclaw.version>/` 下添加按版本划分的小补丁，并在该目录的 `README.md` 中说明，而不是在同级源码目录里留下手工修改。
-
 ## DeepSeek Harness Runtime
 
-锁定的 dsh 版本以及各平台的分发包描述位于 `package.json` 的 `dsh` 字段。开发环境读取 `vendor/dsh-runtime/current`；发布版在首次使用时下载分发包，并用应用自带的摘要校验。
+`package.json` 的 `dsh` 字段锁定了 `@deepseek-ai/dsh` 和 pnpm 的版本。
+构建脚本拉取 npm 包、安装对应平台的依赖、应用 `scripts/dsh-patches/<dsh.version>/`
+下的补丁，并准备开发使用的 `vendor/dsh-runtime/current`。
+可用 `DSH_NPM_REGISTRY` 指定 npm registry，用 `DSH_FORCE_BUILD=1` 强制重建。
 
-每个 runtime 还会内置 `dsh.pnpm` 锁定的那个 pnpm 版本，解压在 `package-manager/pnpm`。dsh 的插件管理器用 pnpm 安装插件，而从 Dock 或开始菜单启动的应用 PATH 里没有 pnpm，所以应用通过一个生成的启动入口启动 dsh，把这份 pnpm 交给 `runCli({ packageManager })`。`dsh.pnpm` 要和上游仓库根目录 `packageManager` 字段锁定的 pnpm 保持同一大版本。修改它之后，每个平台都要重新构建并上传。
+运行时在 `package-manager/pnpm` 中内置锁定版本的 pnpm。应用启动 DSH 时，
+通过 `runCli({ packageManager })` 指定这份 pnpm，用于安装 DSH 插件。
+Windows 上如果有内置 Git，应用会将 `resources/mingit/cmd` 加入插件安装进程的 `PATH`。
+在 Windows 上运行 `dsh:e2e` 前，执行 `npm run setup:mingit -- --required`，
+以验证不依赖系统 Git 的插件安装流程。
 
-Windows 启动器还会把应用自带的 `resources/mingit/cmd` 加入插件安装进程的 PATH，让 Git 来源的插件不依赖系统 Git。这是应用端的接入，dsh 分发包里不会重复放一份 Git。Windows 执行 `dsh:e2e` 前先运行 `npm run setup:mingit -- --required`；该门禁会在 PATH 没有系统 Git 的环境中安装本地 Git 测试插件，并对照验证移除内置 Git 路径后同一次安装会失败。
+运行时或补丁有改动时，运行以下检查。
 
 ```bash
-# 构建并激活当前平台的 runtime
+# 构建并激活当前平台的运行时
 npm run dsh:runtime:host
 
-# 启动一次并验证 Web UI 可访问
+# 启动运行时并验证 Web 与 RPC 接口
 npm run dsh:runtime:verify
 
-# 完整门禁：构建、打包、经 HTTP 安装、启动、经 RPC 断言 provider/model
+# 检查运行时内容、LobsterAI 的 DSH 配置和内置包配置
+npm run dsh:upgrade-check
+
+# 检查 Electron 内嵌宿主、鉴权 RPC 和数据隔离
 npm run dsh:e2e
 ```
 
 <details>
-<summary>发布 runtime 分发包（分平台）</summary>
+<summary>升级内置 DSH 版本</summary>
 
-每个目标平台必须在对应机器上构建：原生依赖按宿主平台安装，跨架构构建产出的包能正常打包上传，只会在用户机器上失败。构建脚本会在宿主与目标不匹配时直接报错退出。
-
-| 目标 | 构建机器 |
-| --- | --- |
-| `mac-arm64` | Apple Silicon mac |
-| `mac-x64` | Intel mac |
-| `win-x64` | Windows 10 1803+（自带 `tar.exe`） |
-
-在对应机器上执行，把目标名替换掉即可：
-
-```bash
-# 1. 构建（应用锁定的补丁，裁剪到约 160 MB）
-npm run dsh:runtime:mac-arm64
-
-# 2. 打包，输出 sha256 与体积
-npm run dsh:runtime:pack mac-arm64
-
-# 3. 把 vendor/dsh-dist/dsh-runtime-<版本>-mac-arm64.tar.gz 上传到 CDN，
-#    然后登记地址。摘要与体积取自本地 manifest，不会与实际打包的字节脱节。
-npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<上传后的地址>"
-
-# 4. 确认该地址返回的就是这些字节
-npm run dsh:runtime:verify-urls mac-arm64
-```
-
-第 3 步会把 `dsh.runtimes[目标]` 写入 `package.json`，记得提交这段改动，确保各平台的描述在同一个构建里齐全。每个目标只保存一个绝对 URL 且不做任何拼接，因此"每个文件一个独立地址"的 CDN 无需共享目录。
+1. 更新 `package.json` 的 `dsh.version`，并确认 `dsh.pnpm` 与上游
+   `packageManager` 字段指定的 pnpm 大版本一致。
+2. 将仍然需要的补丁移植到 `scripts/dsh-patches/<新版本>/`。构建按版本查找补丁，
+   目录缺失时会按空补丁集处理。按需更新补丁目标和
+   `scripts/build-dsh-runtime.cjs` 中的 `PATCH_SENTINELS`。
+3. 在各安装包目标对应的机器上构建运行时，执行上面的运行时检查，再构建包含新版运行时的安装包。
 
 </details>
 
 <details>
-<summary>升级 dsh 版本</summary>
+<summary>发布独立运行时分发包</summary>
 
-1. 修改 `package.json` 的 `dsh.version`，并对照上游 `packageManager` 字段确认 `dsh.pnpm` 仍在同一大版本。
-2. 在新版本目录尚不存在时复制补丁目录：`cp -R scripts/dsh-patches/<旧版本> scripts/dsh-patches/<新版本>`（`<新版本>` 目录已存在时，`cp` 会把副本嵌套到下一层，构建时一个补丁都找不到）。补丁按版本号查找，目录缺失时**一个补丁都不会应用且不会报错**——Windows 控制台隐藏修复会就此静默消失。复制后构建时的 sentinel 会重新校验每个补丁是否仍能落地，上游挪动代码时构建失败：此时改写补丁目标，并在 `scripts/build-dsh-runtime.cjs` 的 `PATCH_SENTINELS` 中登记新的 sentinel；上游已带上修复则删掉该补丁（目录选择器修复自 0.1.5 起已在上游，控制台隐藏修复自 0.1.6-alpha.2 起在上游）。
-3. 清空 `dsh.runtimes`。残留的旧描述仍能通过摘要校验，于是旧 runtime 会被安装到新版本号命名的目录下。
-4. 按上文重新构建、上传并登记三个平台。
-5. 重跑 `npm run dsh:runtime:verify-urls` 与 `npm run dsh:e2e`。
+分发工具维护 `package.json` 中的 `dsh.runtimes`。请在操作系统和架构匹配的机器上打包。
 
-已知缺口：老用户会继续使用已安装的那份 runtime。`ensureRuntimeInstalled` 只要检测到任何已安装 runtime 就直接返回，从不与锁定版本比对，因此只有全新安装才会用上新版 dsh。已安装版本之间的选择还是字典序，会把 `rc.6` 排在 `rc.10` 前面。
+```bash
+# 构建并打包，以下以 Apple 芯片为例
+npm run dsh:runtime:mac-arm64
+npm run dsh:runtime:pack mac-arm64
+
+# 上传 vendor/dsh-dist 中的压缩包后，登记并验证 URL
+npm run dsh:runtime:url mac-arm64 "https://cdn.example.com/<上传后的地址>"
+npm run dsh:runtime:verify-urls mac-arm64
+```
+
+`dsh:runtime:url` 从生成的 manifest 读取摘要和文件大小，与 URL 一并写入对应目标的分发包描述。
 
 </details>
 
 ## 打包
 
-CI 工作流在各自的操作系统上构建对应的安装包（macOS、Windows、Linux），本地打包也请这样做：原生模块按宿主平台编译，`dist:*` 脚本只会构建所请求目标平台的 OpenClaw runtime。
-
-构建机环境要求：
-
-- Node.js `>=24.15.0 <25`。`.npmrc` 开启了 `engine-strict`，其他版本会被 npm 直接拒绝。
-- npm `>=11.17.0 <12`，用于支持依赖安装脚本的按包配置。
-- git 与 pnpm，用于从同级目录 `../openclaw` 构建锁定版本的 OpenClaw runtime（可用 `OPENCLAW_SRC` 指定路径）。
-- Windows：需要 Git for Windows，runtime 构建脚本在它自带的 Git Bash 中运行。没有安装的话，先执行一次 `npm run setup:mingit`，在 `resources/mingit` 准备便携版 Git。
+请在操作系统和架构与目标匹配的机器上打包，以使用正确的原生依赖。
+下面的安装包命令覆盖 macOS arm64/x64 和 Windows x64，构建机环境要求同开发环境。
 
 干净构建：
 
@@ -185,22 +154,24 @@ npm ci
 # 2. 清理旧的构建产物。dist-electron 由 tsc 输出，源文件删掉后旧产物不会自动清理。
 npx rimraf dist dist-electron
 
-# 3. 构建安装包，产物输出到 release/。
-npm run dist:mac            # macOS，宿主架构
-npm run dist:mac:x64
-npm run dist:mac:arm64
-npm run dist:mac:universal
+# 3. 按目标选择一条安装包构建命令，产物输出到 release/
+npm run dist:mac:arm64      # Apple 芯片
+npm run dist:mac:x64        # Intel Mac
 npm run dist:win            # Windows x64
-npm run dist:linux
 ```
 
-两次构建之间不需要删除 `vendor/`。`vendor/openclaw-runtime/<目标>` 下的 OpenClaw runtime 按锁定版本和补丁哈希缓存，任一变化都会自动重建。只改了构建脚本本身时，用 `OPENCLAW_FORCE_BUILD=1` 强制重建；用 `OPENCLAW_FORCE_PLUGIN_INSTALL=1` 重新下载内置插件。可选插件（POPO、NIM）在其 registry 不可达时只会打印警告并跳过，发布前请检查构建日志。
+各命令会构建目标平台的 DSH 运行时，并随包放入 LobsterAI 宿主包和 IM 渠道包。
+macOS 的运行时位于 `Contents/Resources/dsh-runtime/`，同级有 `dsh-bundles/`。
+Windows 安装程序从 `win-resources.tar` 将 `dsh-runtime/`、`dsh-bundles/`、
+`SKILLs/` 和 `python-win/` 解压到安装后的资源目录。
+`setup:python-runtime` 用于准备便携 Python 运行时。
 
-`dist:*` 脚本还会自动执行以下步骤：
+目标、锁定版本和补丁哈希匹配时，构建会复用 `vendor/dsh-runtime/<目标>`。
+修改构建脚本后可用 `DSH_FORCE_BUILD=1` 强制重建。
 
-- `openclaw:runtime:<目标>`：构建、打补丁、打包并裁剪 OpenClaw runtime，随安装包内置到 `Resources/cfmind`。
-- 仅 Windows，`verify:installer-patches`：把 `patches/app-builder-lib+*.patch` 重新应用到 `node_modules`，并运行安装器契约测试。`node_modules` 里还留着旧版本补丁时它会失败，例如 `git pull` 之后没有重新安装依赖，此时执行 `npm ci` 后重试。该步骤失败的代码树打出的安装包一律不要发布。
-- 仅 Windows，`setup:python-runtime`：在 `resources/python-win` 准备便携 Python 运行时，终端用户无需手动安装 Python。cfmind、`SKILLs` 和 python-win 会合并成一个 `win-resources.tar` 随安装包分发，安装后再解压。
+Windows 的 `verify:installer-patches` 会重新应用 `patches/app-builder-lib+*.patch`，
+并运行安装器契约测试。`dist:win` 和 `dist:win:web` 的 stub 构建都执行这项检查。
+检查失败时，执行 `npm ci` 后重试，通过后再打发布包。
 
 Windows 渠道包与在线安装器都是对同一条 `dist:win` 链的封装：
 
@@ -228,13 +199,14 @@ npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目�
 | --- | --- |
 | `src/main/main.ts` | Electron 生命周期、IPC 注册、鉴权、日志、runtime 启动和服务装配 |
 | `src/main/ipcHandlers/` | 按领域划分的 IPC handler；新增 handler 放在这里，不要写进 `main.ts` |
-| `src/main/libs/openclawEngineManager.ts` | OpenClaw 网关进程、运行时状态、端口、日志、重启和修复 |
-| `src/main/libs/openclawConfigSync.ts` | 将 LobsterAI 的 provider、model、agent、IM 绑定、skills、MCP 和工作区指令渲染为 OpenClaw 配置 |
-| `src/main/libs/agentEngine/openclawRuntimeAdapter.ts` | 将 OpenClaw 网关事件翻译为 Cowork 流式事件 |
+| `src/main/libs/dsh/dshBootstrap.ts` | DSH 启动、配置同步和应用服务装配 |
+| `src/main/libs/dsh/dshHostManager.ts` | 内置 DSH 进程、应用专用配置目录和宿主状态 |
+| `src/main/libs/agentEngine/dshRuntimeAdapter.ts` | 将 DSH 的会话、轮次和事件适配到 Cowork |
+| `src/main/migration/legacyOpenClawMigrator.ts` | 将旧 OpenClaw 数据导入 LobsterAI 的 DSH 数据布局 |
 | `src/main/coworkStore.ts` | Cowork 会话、消息、配置、Agents、记忆元数据和 SQLite CRUD |
 | `src/main/skills/skillManager.ts` | 技能同步、安装/升级、安全扫描和启用状态 |
 | `src/main/office/` | Word、Excel、PowerPoint 原生编辑器：文件存储、Agent 工具桥和 MCP 服务 |
-| `src/main/libs/dsh*.ts` | DeepSeek Harness runtime：安装、进程启动和配置同步，独立于 Cowork 的 agent runtime |
+| `src/main/ipcHandlers/dshHost/` | 通过 IPC 提供 DSH 状态和插件操作 |
 | `src/renderer/components/cowork/` | 主 Cowork UI、输入框、会话详情、权限、思考/工具展示、媒体和语音输入 |
 | `src/renderer/components/artifacts/` | 产物面板、预览卡片和渲染器 |
 | `src/renderer/components/agent/` | Agent 创建和设置 UI |
@@ -244,9 +216,10 @@ npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目�
 | `src/renderer/services/i18n.ts` | Renderer i18n 字典和 `t()` helper |
 | `src/shared/` | 主进程和渲染进程共用的常量与类型 |
 | `src/common/` | 两个进程都会编译进去的小型纯函数工具 |
-| `src/scheduledTask/` | 定时任务模型与策略；实际执行走 OpenClaw cron |
+| `src/scheduledTask/` | 定时任务模型、策略和迁移工具 |
+| `src/main/scheduledTask/` | 基于 SQLite 的调度、DSH 会话执行及结果投递 |
 | `SKILLs/` | LobsterAI 内置技能 |
-| `openclaw-extensions/` | 本地 OpenClaw 插件 |
+| `dsh-bundles/` | 面向 DSH 的 LobsterAI 内置宿主工具和 IM 渠道驱动 |
 | `scripts/` | runtime 构建、补丁和打包脚本 |
 | `specs/` | 按功能、重构和缺陷修复划分的设计文档，用中文撰写 |
 | `tests/` | 打包、runtime 和集成测试 |

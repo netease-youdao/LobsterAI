@@ -40,7 +40,7 @@ edits Office documents, and hands back finished work — at your desk or from yo
 
 Most AI assistants stop at an answer. LobsterAI is built to finish the job.
 
-- **It works where your work lives.** Point it at a folder and it reads spreadsheets, writes documents, runs scripts, and browses the web, asking before anything sensitive.
+- **It works where your work lives.** Point it at a folder and it reads spreadsheets, writes documents, runs scripts, and browses the web within the permissions you set.
 - **You see the result, not just a reply.** Web pages, charts, images, videos, PDFs, and Word, Excel, and PowerPoint files open in a side panel, ready to edit or share.
 - **It keeps working when you step away.** Schedule recurring jobs, or message your desktop agent from WeChat, Feishu, DingTalk, Telegram, and more.
 - **It's yours.** MIT-licensed, with sessions stored locally. Sign in to use the built-in models, or bring your own API keys.
@@ -66,7 +66,6 @@ Built by [NetEase Youdao](https://www.youdao.com/), LobsterAI is the first open-
       <p><b>Scheduled tasks</b><br/>Turn any prompt into a recurring job: morning briefs, end-of-day wrap-ups, weekly reports, and health checks.</p>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/res/screenshots/im-bots-en.png" alt="IM bot settings" />
       <p><b>Message it from anywhere</b><br/>Connect a chat app once, then send tasks to your desktop agent from your phone.</p>
     </td>
   </tr>
@@ -76,16 +75,16 @@ Built by [NetEase Youdao](https://www.youdao.com/), LobsterAI is the first open-
 
 | Capability | What you get |
 | --- | --- |
-| **Cowork sessions** | Long-running tasks on local projects with streaming progress, a tool timeline, session forks, and approval prompts before file, shell, or network actions. |
+| **Cowork sessions** | Long-running tasks on local projects with streaming progress, a tool timeline, session forks, and tool approvals based on your session permissions. |
 | **Artifacts and sharing** | Live previews for HTML, SVG, Mermaid, images, video, Markdown, code, PDF, and Office files. Edit images in place and share results as a link. |
 | **Built-in browser** | An in-app browser the agent can drive, with tabs, saved logins, and passkey support, for research and web workflows. |
 | **Computer use** | Let the agent operate desktop apps on Windows x64 and macOS 13 or later. |
 | **Multiple agents** | Create agents with their own identity, model, skills, and working folder, add ready-made experts from the Expert Plaza, and bind agents to chat channels. |
 | **Skills** | Built-in skills for documents, spreadsheets, slides, PDFs, web search, browser automation, image and video generation, stock research, writing, email, and more. See [`SKILLs/`](SKILLs). |
 | **MCP connectors** | Add local or remote MCP servers from the marketplace, sign in with OAuth, and choose which tools each server exposes. |
-| **IM channels** | WeChat, WeCom, DingTalk, Feishu/Lark, QQ, NetEase IM, NetEase Bee, POPO, Telegram, Discord, and email. Multi-instance platforms can route each bot to a different agent. |
+| **IM channels** | WeChat, WeCom, DingTalk, Feishu/Lark, QQ, Telegram, and Discord. Multi-instance platforms can route each bot to a different agent. |
 | **Desktop companion** | A floating orb for quick tasks, screenshots, and actions on selected text, such as translating or reading aloud. |
-| **Memory and Dreaming** | Durable memory files, plus optional scheduled "Dreaming" runs that consolidate what the agent learned, so preferences carry across sessions. |
+| **Memory** | Agent memory files carry preferences across sessions. If you have older Dreaming diaries, you can read them in memory settings. |
 | **Models** | Built-in models (DeepSeek, GLM, Kimi, Qwen, MiniMax, and more) after sign-in, or your own keys for OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible endpoint. |
 | **Library** | Every file your agents create, collected in one place across sessions, both local and shared. |
 
@@ -116,30 +115,36 @@ Built by [NetEase Youdao](https://www.youdao.com/), LobsterAI is the first open-
 flowchart LR
   subgraph App["LobsterAI desktop app (Electron)"]
     UI["Renderer<br/>React · Redux · Tailwind<br/>sessions · artifacts · Office editors"]
-    Main["Main process<br/>Cowork sessions · permissions · SQLite<br/>skills · MCP · IM · scheduler"]
+    Main["Main process<br/>Cowork · SQLite · scheduler"]
+    subgraph DshHost["Bundled DeepSeek Harness"]
+      DSH["Agent runtime"]
+      Channels["IM channel bundle"]
+    end
     UI <-->|"preload IPC"| Main
+    Main <-->|"session control · config · events"| DSH
+    Main <-->|"incoming messages · replies"| Channels
+    Main --> Browser["Built-in browser"]
   end
-  Main <-->|"config sync · events"| Gateway["OpenClaw gateway<br/>bundled agent runtime"]
-  Gateway --> Models["LLM providers"]
-  Gateway --> Tools["Local tools<br/>files · shell · browser<br/>computer use · MCP servers"]
-  Chat["Chat apps<br/>WeChat · Feishu · DingTalk · Telegram …"] <--> Gateway
+  DSH --> Models["LLM providers"]
+  DSH --> Tools["Files · shell · MCP tools<br/>including computer use"]
+  Chat["Chat apps<br/>WeChat · Feishu · DingTalk …"] <--> Channels
 ```
 
-- **Cowork** is LobsterAI's product layer. It owns sessions, messages, permissions, artifacts, agents, and IM bindings, and stores them locally in SQLite.
-- **[OpenClaw](https://github.com/openclaw/openclaw)** is the agent runtime underneath. LobsterAI ships a pinned build, renders its config from app state, and translates its events into the Cowork stream.
+- **Cowork** is LobsterAI's product layer. It manages sessions, messages, permissions, artifacts, agents, and IM bindings.
+- **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** runs the agent. LobsterAI synchronizes settings with the DSH host and translates its events into the Cowork stream.
 - The renderer is sandboxed with context isolation and talks to the main process only through the preload IPC bridge.
 
 ## Build from source
 
-Requirements: Node.js `>=24.15.0 <25`, npm `>=11.17.0 <12`, git, and pnpm.
+Requirements include Node.js `>=24.15.0 <25`, npm `>=11.17.0 <12`, Git, and `tar`.
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
 cd LobsterAI
 npm install
 
-# First run: fetches the pinned OpenClaw version into ../openclaw, builds the runtime, and starts the app
-npm run electron:dev:openclaw
+# Build the pinned DSH runtime for the current platform and start the app
+npm run electron:dev:dsh
 
 # Later runs, once the runtime exists
 npm run electron:dev
@@ -149,8 +154,8 @@ npm run electron:dev
 
 ## Security and privacy
 
-- Sessions, messages, and settings are stored locally in `lobsterai.sqlite` under the app's user data directory. Agent memory and runtime state live alongside it under `openclaw/`.
-- File operations, shell commands, and network access are permission-gated, and the agent asks before it acts.
+- The app stores desktop sessions, messages, and settings locally in `lobsterai.sqlite`. Under the same user data directory, `dsh-profile/` holds LobsterAI's DSH state, and `workspaces/<agentId>/` holds agent instructions and memory. This app data is separate from a standalone DSH installation.
+- Tool actions follow the session's permission settings, including when to ask for approval.
 - Renderer windows run with context isolation, sandboxing, and no Node.js integration.
 
 ## Community
