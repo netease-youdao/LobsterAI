@@ -18,9 +18,19 @@ export function parseRunningApplication(userInfo: unknown): string | null {
   return match ? match[1] : null;
 }
 
+export function parseRunningApplicationPid(userInfo: unknown): number | null {
+  const value = (userInfo as Record<string, unknown> | null)?.NSWorkspaceApplicationKey;
+  if (typeof value !== 'string') return null;
+  const match = /\([^\s()]+ - (\d+)\)/.exec(value);
+  if (!match) return null;
+  const pid = Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
 export interface ForegroundAppMonitor extends EventEmitter {
   readonly capability: CompanionCapability;
   readonly currentAppId: string | null;
+  readonly currentPid?: number | null;
   start(): void;
   stop(): void;
   /** Whether the user is presenting or in a fullscreen/quiet mode the OS reports. */
@@ -33,6 +43,7 @@ export class CompanionForegroundMonitor extends EventEmitter implements Foregrou
   private subscription: number | null = null;
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private current: string | null = null;
+  private pid: number | null = null;
 
   constructor() {
     super();
@@ -45,11 +56,15 @@ export class CompanionForegroundMonitor extends EventEmitter implements Foregrou
     return this.current;
   }
 
+  get currentPid(): number | null {
+    return this.pid;
+  }
+
   start(): void {
     if (this.capability !== CompanionCapability.Ready || this.subscription !== null || this.pollTimer) return;
     if (process.platform === 'darwin') {
       this.subscription = systemPreferences.subscribeWorkspaceNotification(MAC_ACTIVATE_NOTIFICATION, (_event, userInfo) => {
-        this.update(parseRunningApplication(userInfo));
+        this.update(parseRunningApplication(userInfo), parseRunningApplicationPid(userInfo));
       });
       return;
     }
@@ -57,7 +72,7 @@ export class CompanionForegroundMonitor extends EventEmitter implements Foregrou
     if (!native) return;
     const poll = () => {
       try {
-        this.update(native.foregroundProcessName());
+        this.update(native.foregroundProcessName(), null);
       } catch (error) {
         console.warn('[DesktopCompanion] Foreground app poll failed:', error);
       }
@@ -84,8 +99,11 @@ export class CompanionForegroundMonitor extends EventEmitter implements Foregrou
     }
   }
 
-  private update(appId: string | null): void {
-    if (!appId || appId === this.current) return;
+  private update(appId: string | null, pid: number | null): void {
+    if (!appId) return;
+    const changed = appId !== this.current;
+    this.pid = pid;
+    if (!changed) return;
     this.current = appId;
     this.emit('change', appId);
   }

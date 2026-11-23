@@ -67,7 +67,6 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
     snoozed: !!state.snooze,
     dropHover,
     dropStage: state.stage.kind === DesktopCompanionStageKind.Drop,
-    hintShowing: state.stage.kind === DesktopCompanionStageKind.Hint,
   });
 
   const skin = getCompanionSkin(state.preferences.skin);

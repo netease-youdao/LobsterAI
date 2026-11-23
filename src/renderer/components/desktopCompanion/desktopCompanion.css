@@ -113,7 +113,7 @@ svg { flex-shrink: 0; }
 /* Use the system pointing hand on hover; reserve the grab cursor for an active drag. */
 .orb-button { position: relative; width: 76px; height: 76px; display: grid; place-items: center; border-radius: 50%; cursor: pointer; touch-action: none; }
 .orb-button[data-moving="true"] { cursor: grabbing; }
-.orb-button:focus-visible { outline-offset: -4px; }
+.orb-button:focus, .orb-button:focus-visible { outline: none; }
 /* Keep the default brand mark calm; living atlas motion runs on sea-friend skins only. */
 .orb-surface .companion-character {
   transition: transform 0.14s cubic-bezier(0.2, 0, 0, 1);
@@ -136,26 +136,16 @@ svg { flex-shrink: 0; }
 .screenshot-hint { position: absolute; top: 48px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 16px; padding: 10px 14px; border-radius: 10px; background: #26262a; color: #fff; box-shadow: var(--c-shadow); white-space: nowrap; cursor: default; }
 .screenshot-hint button { padding: 4px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.15); }
 
-/* ── Stage: hint bubble and drop zone ──────────────────── */
+/* ── Stage: drop zone, task strip and hover launcher ──── */
 
 .stage-surface { position: relative; width: 100%; height: 100%; }
 .stage-card { position: absolute; bottom: var(--surface-pad); }
 .stage-surface[data-side="left"] .stage-card { right: var(--surface-pad); }
 .stage-surface[data-side="right"] .stage-card { left: var(--surface-pad); }
-.stage-bubble {
-  width: 284px; padding: 12px 12px 10px 14px; background: var(--c-surface); border: 1px solid var(--c-line);
-  border-radius: 16px 16px 4px 16px; box-shadow: var(--c-shadow);
-  animation: pop-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1); transform-origin: 100% 100%;
-}
-.stage-surface[data-side="right"] .stage-bubble { border-radius: 16px 16px 16px 4px; transform-origin: 0 100%; }
-.bubble-message { margin: 0; font-size: 13.5px; line-height: 1.6; font-weight: 500; letter-spacing: -0.1px; text-wrap: balance; }
-.bubble-actions { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
 .bubble-primary { height: 28px; padding: 0 12px; border-radius: 8px; background: var(--c-accent); color: #fff; font-size: 12px; font-weight: 600; }
 .bubble-primary:hover { background: var(--c-accent-ink); }
 .bubble-text { height: 28px; padding: 0 9px; border-radius: 8px; color: var(--c-ink-2); font-size: 12px; }
 .bubble-text:hover { background: var(--c-surface-2); }
-.bubble-mute { margin-left: auto; padding: 0 2px; color: var(--c-ink-3); font-size: 11px; }
-.bubble-mute:hover { color: var(--c-ink-2); text-decoration: underline; }
 /* The status strip of a task handed to the orb. */
 .stage-task {
   display: flex; align-items: center; gap: 6px; width: max-content; max-width: 376px; padding: 8px 8px 8px 14px;
@@ -208,6 +198,8 @@ svg { flex-shrink: 0; }
 .launcher-row:hover, .launcher-row:focus-visible { background: var(--c-surface-2); }
 .launcher-icon { display: inline-flex; flex-shrink: 0; }
 .launcher-row svg, .launcher-ask svg { width: 17px; height: 17px; color: var(--c-ink-2); }
+.launcher-row-context { font-weight: 500; }
+.launcher-row-context svg { color: var(--c-ink); }
 .launcher-row > span:last-child, .launcher-ask > span:last-child { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .launcher-divider { height: 1px; margin: 4px 8px; background: var(--c-line); }
 .launcher-ask {

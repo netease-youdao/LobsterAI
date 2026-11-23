@@ -3,7 +3,6 @@ import { CoworkSessionStatusValue } from '../../../types/cowork';
 /** The companion's current state; drives animations, badges, and labels. */
 export const CompanionMood = {
   Idle: 'idle',
-  Idea: 'idea',
   Curious: 'curious',
   Catch: 'catch',
   Working: 'working',
@@ -21,7 +20,6 @@ export interface CompanionMoodInput {
   snoozed: boolean;
   dropHover: boolean;
   dropStage: boolean;
-  hintShowing: boolean;
 }
 
 /**
@@ -36,7 +34,6 @@ export function companionMood(input: CompanionMoodInput): CompanionMood {
   if (input.status === CoworkSessionStatusValue.Error) return CompanionMood.Error;
   if (input.unseenResult) return CompanionMood.Done;
   if (input.status === CoworkSessionStatusValue.Running) return CompanionMood.Working;
-  if (input.hintShowing) return CompanionMood.Idea;
   return CompanionMood.Idle;
 }
 
