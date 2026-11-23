@@ -72,6 +72,7 @@ export function parseExpertCatalog(value: unknown): ExpertCatalog {
     }
     return {
       id: id(expert.id), category, tags, starterPrompts, icon: normalizedIcon, skillIds,
+      ...(typeof expert.isNew === 'boolean' ? { isNew: expert.isNew } : {}),
       ...(typeof revision === 'number' ? { revision } : {}),
       name: text(expert.name, 100), nameEn: text(expert.nameEn, 100),
       description: text(expert.description), descriptionEn: text(expert.descriptionEn),
