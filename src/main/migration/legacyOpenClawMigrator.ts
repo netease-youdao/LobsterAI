@@ -131,7 +131,6 @@ export interface LegacyOpenClawMigrationResult {
 }
 
 const RETIRED_IM_PLATFORMS: readonly string[] = [
-  RetiredImPlatform.Popo,
   RetiredImPlatform.Nim,
   RetiredImPlatform.NeteaseBee,
   RetiredImPlatform.Email,
@@ -3021,7 +3020,7 @@ export function runLegacyOpenClawMigration(
         nowMs: now().getTime(),
       });
 
-      // IM allowFrom whitelists for the 7 retained platforms.
+      // IM allowFrom whitelists for the retained platforms.
       let imAllowListsMigrated = 0;
       const credsDir = path.join(openclawStateDir, 'credentials');
       const allowListsByPlatform: Record<string, string[]> = {};
@@ -3167,7 +3166,7 @@ export function runLegacyOpenClawMigration(
         }
       }
 
-      // 3d. Retired IM platform configs (POPO, NIM, NetEase Bee, Email)
+      // 3d. Retired IM platform configs (NIM, NetEase Bee, Email)
       if (tableExists(db, 'im_config')) {
         const imCols = getTableColumns(db, 'im_config');
         const keyCol = imCols.has('platform') ? 'platform' : imCols.has('key') ? 'key' : null;
@@ -3183,7 +3182,7 @@ export function runLegacyOpenClawMigration(
             });
             archivedModules.push({
               category: 'retired_im',
-              label: 'Retired IM configs (POPO / NIM / NetEase Bee / Email)',
+              label: 'Retired IM configs (NIM / NetEase Bee / Email)',
               count: retiredRows.length,
             });
           }

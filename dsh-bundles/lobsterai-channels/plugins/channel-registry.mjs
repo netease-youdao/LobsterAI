@@ -1,14 +1,13 @@
 /**
  * Layered IM Channel Registry (`Driver -> Adapter -> ChannelManager -> DSH Harness Bridge`).
  *
- * Strictly scoped to the 7 retained mainstream platforms:
- * Feishu, Weixin, DingTalk, WeCom, QQ, Telegram, Discord.
  */
 
 import { randomUUID } from 'node:crypto';
 import { DingTalkChannelDriver } from './drivers/dingtalk.mjs';
 import { DiscordChannelDriver } from './drivers/discord.mjs';
 import { FeishuChannelDriver } from './drivers/feishu.mjs';
+import { PopoChannelDriver } from './drivers/popo.mjs';
 import { QQChannelDriver } from './drivers/qq.mjs';
 import { TelegramChannelDriver } from './drivers/telegram.mjs';
 import { WeComChannelDriver } from './drivers/wecom.mjs';
@@ -22,6 +21,7 @@ export const RETAINED_IM_PLATFORMS = Object.freeze([
   'qq',
   'telegram',
   'discord',
+  'popo',
 ]);
 
 const DRIVER_FACTORIES = Object.freeze({
@@ -32,6 +32,7 @@ const DRIVER_FACTORIES = Object.freeze({
   qq: (opts) => new QQChannelDriver(opts),
   telegram: (opts) => new TelegramChannelDriver(opts),
   discord: (opts) => new DiscordChannelDriver(opts),
+  popo: (opts) => new PopoChannelDriver(opts),
 });
 
 export function instanceKey(platform, instanceId) {
@@ -168,6 +169,7 @@ export class ChannelManager {
       const driver = factory({
         instanceId,
         config: item.config || {},
+        requestPairing: (senderId) => this.bridgeNotify?.({ type: 'popoPairing', instanceId, senderId }),
         onInbound: (msg) => this.handleInbound(msg, agentId, item.cwd),
         onStatus: (status) => {
           void this.bridgeNotify?.({

@@ -1,6 +1,6 @@
 // Pure translator mapping LobsterAI's SQLite IMGatewayConfig into the
-// 7 retained channel instance configs consumed by `@lobsterai/dsh-channels`.
-// Retired platforms (`popo`, `nim`, `netease-bee`, `email`) are excluded.
+// retained channel instance configs consumed by `@lobsterai/dsh-channels`.
+// Retired platforms (`nim`, `netease-bee`, `email`) are excluded.
 
 import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
 import type { DshChannelInstanceConfig } from '../../im/dshChannelsBridge';
@@ -12,6 +12,7 @@ const MULTI_INSTANCE_PLATFORMS: readonly RetainedImPlatform[] = [
   RetainedImPlatform.QQ,
   RetainedImPlatform.Telegram,
   RetainedImPlatform.Discord,
+  RetainedImPlatform.Popo,
 ];
 
 function resolveBindingAgentId(

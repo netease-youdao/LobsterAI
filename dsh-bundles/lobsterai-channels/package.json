@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "LobsterAI IM Channels bundle for DeepSeek Harness (7 mainstream platforms: Feishu, Weixin, DingTalk, WeCom, QQ, Telegram, Discord)",
+  "description": "LobsterAI IM Channels bundle for DeepSeek Harness (Feishu, Weixin, DingTalk, WeCom, QQ, Telegram, Discord, POPO)",
   "exports": {
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./plugins/*": "./plugins/*",
