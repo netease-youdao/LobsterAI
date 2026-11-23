@@ -247,6 +247,8 @@ contextBridge.exposeInMainWorld('electron', {
     abortQuickAnswer: requestId => ipcRenderer.invoke(DesktopCompanionIpc.QuickAnswerAbort, requestId),
     requestPermission: permission => ipcRenderer.invoke(DesktopCompanionIpc.RequestPermission, permission),
     copyText: text => ipcRenderer.invoke(DesktopCompanionIpc.CopyText, text),
+    runContextAction: request => ipcRenderer.invoke(DesktopCompanionIpc.RunContextAction, request),
+    dismissContextClipboard: fingerprint => ipcRenderer.invoke(DesktopCompanionIpc.DismissContextClipboard, fingerprint),
     onChanged: callback => {
       const handler = (_event: Electron.IpcRendererEvent, state: DesktopCompanionState) => callback(state);
       ipcRenderer.on(DesktopCompanionIpc.Changed, handler);

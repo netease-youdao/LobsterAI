@@ -4,19 +4,23 @@ vi.mock('electron', () => ({ systemPreferences: {} }));
 vi.mock('./windowsNative', () => ({ loadWindowsNative: () => null }));
 
 const { parseFileDragLine } = await import('./fileDragMonitor');
-const { parseRunningApplication } = await import('./foregroundAppMonitor');
+const { parseRunningApplication, parseRunningApplicationPid } = await import('./foregroundAppMonitor');
 
 describe('foreground app notifications', () => {
-  test('reads the bundle id out of the NSRunningApplication description', () => {
-    expect(parseRunningApplication({
+  test('reads the bundle id and pid out of the NSRunningApplication description', () => {
+    const payload = {
       NSWorkspaceApplicationKey: '<NSRunningApplication: 0x11400f0c720 (com.apple.finder - 629) LSASN:{hi=0x0;lo=0xf00f}>',
-    })).toBe('com.apple.finder');
+    };
+    expect(parseRunningApplication(payload)).toBe('com.apple.finder');
+    expect(parseRunningApplicationPid(payload)).toBe(629);
   });
 
   test('ignores payloads it cannot read', () => {
     expect(parseRunningApplication({})).toBeNull();
     expect(parseRunningApplication(null)).toBeNull();
     expect(parseRunningApplication({ NSWorkspaceApplicationKey: '<NSRunningApplication: 0x1>' })).toBeNull();
+    expect(parseRunningApplicationPid({})).toBeNull();
+    expect(parseRunningApplicationPid({ NSWorkspaceApplicationKey: '<NSRunningApplication: 0x1>' })).toBeNull();
   });
 });
 

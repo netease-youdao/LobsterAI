@@ -16,7 +16,6 @@ import {
 } from '../../shared/desktopCompanion/constants';
 import type { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
 import { type CompanionSize, resolveCompanionStageBounds } from '../../shared/desktopCompanion/geometry';
-import { type CompanionHintOutcome, CompanionHintOutcome as Outcome, type CompanionHintTopic } from '../../shared/desktopCompanion/hintPolicy';
 import { type CompanionLauncherAction, isCompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import type { CompanionAnalytics } from './companionAnalytics';
 import { CompanionWindowLevel, setCompanionWindowLevel } from './companionWindow';
@@ -34,8 +33,6 @@ export interface StageHost {
 }
 
 export interface StageHandlers {
-  onHintOutcome(topic: CompanionHintTopic, outcome: CompanionHintOutcome): void;
-  onHintAccept(topic: CompanionHintTopic): void;
   onDropAsk(attachments: DesktopCompanionAttachment[]): void;
   onDropStarted(sessionId: string): void;
   onTaskOpen(sessionId: string): void;
@@ -52,15 +49,15 @@ export function normalizeStageAttachments(value: unknown): DesktopCompanionAttac
 }
 
 /**
- * The "stage" is a small window that comes out of the orb: a hint bubble, the
- * drop zone for files, the status strip of a task handed to the orb, or the
- * launcher that opens on hover. Only one of them is ever shown, and the
- * launcher gives way to all the others.
+ * The "stage" is a small window that comes out of the orb: the drop zone for
+ * files, the status strip of a task handed to the orb, or the launcher that
+ * opens on hover. Only one of them is ever shown, and the launcher gives way
+ * to all the others.
  */
 export class CompanionStageController {
   private window: BrowserWindow | null = null;
   private current: DesktopCompanionStage = NONE;
-  private size: CompanionSize = { ...DesktopCompanionSize.Hint };
+  private size: CompanionSize = { ...DesktopCompanionSize.Launcher };
   private hovering = false;
   private dragInFlight = false;
   private lingerTimer: ReturnType<typeof setTimeout> | undefined;
@@ -79,14 +76,6 @@ export class CompanionStageController {
 
   get browserWindow(): BrowserWindow | null {
     return this.window && !this.window.isDestroyed() ? this.window : null;
-  }
-
-  showHint(topic: CompanionHintTopic, variant: number): boolean {
-    if (this.current.kind !== DesktopCompanionStageKind.None) return false;
-    this.current = { kind: DesktopCompanionStageKind.Hint, id: randomUUID(), topic, variant };
-    this.size = { ...DesktopCompanionSize.Hint };
-    this.present();
-    return true;
   }
 
   /** The hover launcher only ever takes an empty stage. */
@@ -169,8 +158,7 @@ export class CompanionStageController {
   setContentSize(size: CompanionSize): void {
     if (this.current.kind === DesktopCompanionStageKind.None) return;
     const max = this.current.kind === DesktopCompanionStageKind.Drop ? DesktopCompanionSize.Drop
-      : this.current.kind === DesktopCompanionStageKind.Task ? DesktopCompanionSize.Task
-        : this.current.kind === DesktopCompanionStageKind.Launcher ? DesktopCompanionSize.Launcher : DesktopCompanionSize.Hint;
+      : this.current.kind === DesktopCompanionStageKind.Task ? DesktopCompanionSize.Task : DesktopCompanionSize.Launcher;
     this.size = {
       width: Math.max(160, Math.min(Math.ceil(size.width), max.width)),
       height: Math.max(60, Math.min(Math.ceil(size.height), max.height)),
@@ -183,25 +171,6 @@ export class CompanionStageController {
   handleCommand(command: DesktopCompanionStageCommand): void {
     const current = this.current;
     switch (command?.type) {
-      case DesktopCompanionStageCommandType.HintAccept:
-      case DesktopCompanionStageCommandType.HintDismiss:
-      case DesktopCompanionStageCommandType.HintMute:
-      case DesktopCompanionStageCommandType.HintTimeout: {
-        if (current.kind !== DesktopCompanionStageKind.Hint) return;
-        if (command.type === DesktopCompanionStageCommandType.HintTimeout && this.hovering) return;
-        const outcome = {
-          [DesktopCompanionStageCommandType.HintAccept]: Outcome.Accepted,
-          [DesktopCompanionStageCommandType.HintDismiss]: Outcome.Dismissed,
-          [DesktopCompanionStageCommandType.HintMute]: Outcome.Muted,
-          [DesktopCompanionStageCommandType.HintTimeout]: Outcome.Ignored,
-        }[command.type];
-        this.handlers.onHintOutcome(current.topic, outcome);
-        this.host.analytics?.report({ action: CompanionAnalyticsAction.Hint, source: CompanionAnalyticsSource.Hint,
-          stage: CompanionAnalyticsStage.Result, topic: current.topic, outcome });
-        this.clear();
-        if (command.type === DesktopCompanionStageCommandType.HintAccept) this.handlers.onHintAccept(current.topic);
-        return;
-      }
       case DesktopCompanionStageCommandType.StageHover:
         this.hovering = command.hovering === true;
         if (!this.hovering && !this.dragInFlight && current.kind === DesktopCompanionStageKind.Drop) this.releaseDrop();
@@ -285,10 +254,7 @@ export class CompanionStageController {
     if (!this.pendingShow || this.current.kind === DesktopCompanionStageKind.None || !win) return;
     this.pendingShow = false;
     win.showInactive();
-    if (this.current.kind === DesktopCompanionStageKind.Hint) {
-      this.host.analytics?.report({ action: CompanionAnalyticsAction.Hint, source: CompanionAnalyticsSource.Hint,
-        stage: CompanionAnalyticsStage.Shown, topic: this.current.topic });
-    } else if (this.current.kind === DesktopCompanionStageKind.Drop) {
+    if (this.current.kind === DesktopCompanionStageKind.Drop) {
       this.host.analytics?.report({ action: CompanionAnalyticsAction.FileDrop, source: CompanionAnalyticsSource.FileDrop,
         stage: CompanionAnalyticsStage.Shown, fileKinds: this.current.kinds.join(',') });
     } else if (this.current.kind === DesktopCompanionStageKind.Launcher) {
