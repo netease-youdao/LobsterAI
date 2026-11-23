@@ -20,8 +20,7 @@ const logBlockingPanelStatus = (status: string, version: string): void => {
 
 /**
  * Full-screen panel shown from the moment the user confirms an install until
- * the app quits for the installer. Styled after EngineStartupOverlay so the
- * update screen and the relaunch splash that follows it read as one flow.
+ * the app quits for the installer.
  */
 const AppUpdateBlockingPanel: React.FC<AppUpdateBlockingPanelProps> = ({ updateState }) => {
   const updateInfo = updateState.info;
@@ -52,7 +51,7 @@ const AppUpdateBlockingPanel: React.FC<AppUpdateBlockingPanelProps> = ({ updateS
       aria-modal="true"
       role="dialog"
     >
-      {/* logo with breathing glow, same as EngineStartupOverlay */}
+      {/* logo with breathing glow */}
       <div className="relative mb-5 shrink-0">
         <div className="absolute -inset-2 animate-pulse rounded-3xl bg-primary/20 blur-xl" aria-hidden="true" />
         <img

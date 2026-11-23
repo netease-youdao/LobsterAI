@@ -72,7 +72,6 @@ interface SidebarProps {
    * promo banner while preserving it for a smooth return after collapse. */
   hideAdBanner?: boolean;
   hideLogin?: boolean;
-  isEngineStartupOverlayVisible?: boolean;
 }
 
 const DEFAULT_SIDEBAR_WIDTH = 260;
@@ -199,7 +198,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   updateNotice,
   hideAdBanner,
   hideLogin,
-  isEngineStartupOverlayVisible = false,
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const agents = useSelector((state: RootState) => state.agent.agents);
@@ -228,7 +226,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const resizeStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
   const agentScrollContainerRef = useRef<HTMLDivElement>(null);
   const purchaseGuide = useSidebarPurchaseGuide();
-  const canShowPurchaseGuide = !isCollapsed && !isBatchMode && !hideLogin && !isEngineStartupOverlayVisible;
+  const canShowPurchaseGuide = !isCollapsed && !isBatchMode && !hideLogin;
   const paymentGuideVisible = canShowPurchaseGuide && purchaseGuide.candidate !== null;
   const paymentGuideOwnsSlot = canShowPurchaseGuide && (paymentGuideVisible || purchaseGuide.loading);
   const isWindows = window.electron.platform === 'win32';
@@ -298,15 +296,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       return undefined;
     }
 
-    if (isEngineStartupOverlayVisible) {
-      if (showLoginPromoTip) {
-        const message = 'pausing login promo tip auto-hide while engine startup overlay is visible';
-        console.debug(`[Sidebar] ${message}`);
-        writeSidebarRendererLog('debug', message);
-      }
-      return undefined;
-    }
-
     if (!showLoginPromoTip) {
       return undefined;
     }
@@ -325,7 +314,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     return () => {
       window.clearTimeout(hideTimer);
     };
-  }, [isEngineStartupOverlayVisible, showLoginPromo, showLoginPromoTip]);
+  }, [showLoginPromo, showLoginPromoTip]);
 
   const dismissExpertsNewBadge = useCallback(() => {
     if (!showExpertsNewBadge) return;

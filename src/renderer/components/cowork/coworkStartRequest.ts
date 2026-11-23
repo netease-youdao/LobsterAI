@@ -1,5 +1,6 @@
 import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import type { CoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
 import {
   CoworkCollaborationMode,
@@ -28,7 +29,22 @@ export function isOpenClawReadyForSession(status: OpenClawEngineStatus | null): 
   if (!status) return false;
   // Cold start runs the engine in the background; submitting a prompt during
   // 'starting' enters main-process ensureOpenClawRunningForCowork() cleanly.
-  return status.phase === 'running' || status.phase === 'ready' || status.phase === 'starting';
+  return (
+    status.phase === OpenClawEnginePhase.Running
+    || status.phase === OpenClawEnginePhase.Ready
+    || status.phase === OpenClawEnginePhase.Starting
+  );
+}
+
+/**
+ * Whether CoworkView should render a floating amber notice for the engine.
+ * Cold start (`starting`), idle auto-start (`ready`), and `running` stay silent
+ * so startup never flashes infrastructure chrome; blocking `error` states are
+ * owned globally by EngineFailureOverlay.
+ */
+export function shouldShowCoworkEngineNotice(status: OpenClawEngineStatus | null): boolean {
+  if (!status) return false;
+  return !isOpenClawReadyForSession(status) && status.phase !== OpenClawEnginePhase.Error;
 }
 
 /** An unknown engine status does not block: the start request reports its own failure. */

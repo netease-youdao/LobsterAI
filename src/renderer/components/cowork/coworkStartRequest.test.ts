@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { CoworkCollaborationMode, type OpenClawEngineStatus } from '../../types/cowork';
 import {
   buildCoworkStartPlan,
   CoworkStartBlock,
   type CoworkStartRequestInput,
   resolveCoworkStartBlock,
+  shouldShowCoworkEngineNotice,
 } from './coworkStartRequest';
 
 const capabilities = {
@@ -108,5 +110,20 @@ describe('cowork start blocks', () => {
 
   test('an unknown engine status lets the request report its own failure', () => {
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: null, crossesBillingSide: false })).toBeNull();
+  });
+});
+
+describe('cowork engine notice', () => {
+  test('stays silent during normal startup, idle ready, running, unknown, and error states', () => {
+    expect(shouldShowCoworkEngineNotice(null)).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Starting))).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Ready))).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Running))).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Error))).toBe(false);
+  });
+
+  test('only shows for non-error states that block starting a session', () => {
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.NotInstalled))).toBe(true);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Installing))).toBe(true);
   });
 });
