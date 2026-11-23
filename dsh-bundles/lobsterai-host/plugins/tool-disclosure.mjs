@@ -32,6 +32,7 @@ import {
   normalizeCapabilityIds,
   PROGRESSIVE_CAPABILITY_IDS,
   PROGRESSIVE_TOOL_GROUPS,
+  renderEnableToolsOutput,
   resolveCapabilityForSkillName,
 } from './tool-disclosure-helpers.mjs';
 
@@ -216,11 +217,7 @@ export function apply(ctx) {
       },
       output: {
         schema: { type: 'json' },
-        render: (_args, value) => (
-          value && typeof value === 'object' && typeof value.text === 'string'
-            ? value.text
-            : JSON.stringify(value ?? null)
-        ),
+        render: renderEnableToolsOutput,
       },
       isConcurrencySafe: () => true,
       async execute(args, exec) {

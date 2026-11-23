@@ -210,3 +210,18 @@ export function groupMountedProgressiveTools(restrictableNames) {
   }
   return grouped;
 }
+
+/**
+ * Render `lobster_enable_tools` output into DSH's required `ContentBlock[]`
+ * format so downstream hooks (`dsh-spill-policy`, session persistence) always
+ * receive an array of content blocks rather than a raw string.
+ * @param {unknown} _args
+ * @param {unknown} value
+ * @returns {Array<{ type: 'text', text: string }>}
+ */
+export function renderEnableToolsOutput(_args, value) {
+  const text = value && typeof value === 'object' && typeof /** @type {Record<string, unknown>} */ (value).text === 'string'
+    ? /** @type {Record<string, string>} */ (value).text
+    : JSON.stringify(value ?? null);
+  return [{ type: 'text', text }];
+}

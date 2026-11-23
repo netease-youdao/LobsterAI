@@ -36,6 +36,7 @@ export const WebSearchPageErrorCode = {
 } as const;
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
+const ABORTED_SETTLE_GRACE_MS = 1_500;
 const RESULT_WAIT_TIMEOUT_MS = 10_000;
 const RESULT_POLL_INTERVAL_MS = 200;
 const EVALUATE_TIMEOUT_MS = 10_000;
@@ -43,6 +44,30 @@ const IDLE_CLOSE_MS = 5 * 60_000;
 const DEFAULT_MAX_RESULTS = 10;
 const MAX_RESULTS_LIMIT = 50;
 const PAGE_BOUNDS = { x: 0, y: 0, width: 1280, height: 800 };
+const WEB_SEARCH_NAVIGATION_ABORTED_CODE = -3;
+const WEB_SEARCH_NAVIGATION_ABORTED_NAME = 'ERR_ABORTED';
+const POLICY_BLOCKED_NAVIGATION_ERROR = 'Navigation was blocked by the LobsterAI browser access policy.';
+
+/** Minimal Electron WebContents surface needed for navigation helpers and tests. */
+export interface WebSearchWebContents {
+  loadURL(url: string): Promise<void>;
+  executeJavaScript(script: string, userGesture?: boolean): Promise<unknown>;
+  getURL(): string;
+  isDestroyed(): boolean;
+  isLoading(): boolean;
+  isLoadingMainFrame(): boolean;
+  stop(): void;
+  close(): void;
+  setAudioMuted(muted: boolean): void;
+  setWindowOpenHandler(handler: () => { action: 'deny' }): void;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+  removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+export interface WebSearchViewLike {
+  readonly webContents: WebSearchWebContents;
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
+}
 
 /** A page the host can drive; the default one is a detached WebContentsView. */
 export interface WebSearchPage {
@@ -189,8 +214,195 @@ const withTimeout = async <T>(work: Promise<T>, timeoutMs: number, message: stri
   }
 };
 
-const createDetachedPage = (context: WebSearchPageContext): WebSearchPage => {
-  const view = new WebContentsView({
+export const isNavigationAbortedError = (error: unknown): boolean => {
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    if (record.errno === WEB_SEARCH_NAVIGATION_ABORTED_CODE) return true;
+    if (record.code === WEB_SEARCH_NAVIGATION_ABORTED_NAME) return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes(WEB_SEARCH_NAVIGATION_ABORTED_NAME);
+};
+
+export interface NavigateWebContentsOptions {
+  timeoutMs: number;
+  isAllowedUrl: (url: string) => boolean;
+  abortedGraceMs?: number;
+}
+
+/**
+ * Navigate a hidden WebContents to `url`, tolerating Chromium's `ERR_ABORTED (-3)`
+ * when a search engine triggers a client/server redirect chain before `dom-ready`
+ * while still failing promptly on real network errors, policy blocks, or page destruction.
+ */
+export const navigateWebContents = (
+  webContents: WebSearchWebContents,
+  url: string,
+  options: NavigateWebContentsOptions,
+): Promise<void> => new Promise<void>((resolve, reject) => {
+  if (webContents.isDestroyed()) {
+    reject(new Error('Hidden search page was destroyed.'));
+    return;
+  }
+
+  // Cancel any lingering load from a previous search engine before attaching
+  // listeners for this navigation so old events cannot resolve or abort it.
+  if (webContents.isLoading()) {
+    webContents.stop();
+  }
+
+  const abortedGraceMs = options.abortedGraceMs ?? ABORTED_SETTLE_GRACE_MS;
+  let settled = false;
+  let committed = false;
+  let followUpNavigationStarted = false;
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let abortedGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearAbortedGraceTimer = () => {
+    if (abortedGraceTimer) {
+      clearTimeout(abortedGraceTimer);
+      abortedGraceTimer = undefined;
+    }
+  };
+
+  const cleanup = () => {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = undefined;
+    }
+    clearAbortedGraceTimer();
+    webContents.removeListener('did-start-navigation', onStartNavigation);
+    webContents.removeListener('did-navigate', onCommit);
+    webContents.removeListener('dom-ready', onDocumentReady);
+    webContents.removeListener('did-finish-load', onFinishLoad);
+    webContents.removeListener('did-fail-load', onFailLoad);
+    webContents.removeListener('will-navigate', onBeforeNavigate);
+    webContents.removeListener('will-redirect', onBeforeNavigate);
+    webContents.removeListener('destroyed', onDestroyed);
+    webContents.removeListener('render-process-gone', onRendererGone);
+  };
+
+  const succeed = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolve();
+  };
+
+  const fail = (error: unknown) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    reject(error instanceof Error ? error : new Error(String(error)));
+  };
+
+  const onStartNavigation = (...args: unknown[]) => {
+    const isInPlace = args[2] === true;
+    const isMainFrame = args[3] !== false;
+    if (!isMainFrame || isInPlace) return;
+    committed = false;
+    followUpNavigationStarted = true;
+    clearAbortedGraceTimer();
+  };
+
+  const onCommit = () => {
+    committed = true;
+    clearAbortedGraceTimer();
+  };
+
+  const onDocumentReady = () => {
+    if (committed) succeed();
+  };
+
+  const onFinishLoad = () => {
+    if (committed) succeed();
+  };
+
+  const onFailLoad = (...args: unknown[]) => {
+    const errorCode = typeof args[1] === 'number' ? args[1] : 0;
+    const errorDescription = typeof args[2] === 'string' && args[2] ? args[2] : 'ERR_FAILED';
+    const validatedURL = typeof args[3] === 'string' ? args[3] : url;
+    const isMainFrame = args[4] !== false;
+    if (!isMainFrame) return;
+    if (errorCode === WEB_SEARCH_NAVIGATION_ABORTED_CODE) return;
+    fail(new Error(`${errorDescription} (${errorCode}) loading '${validatedURL}'`));
+  };
+
+  const onBeforeNavigate = (...args: unknown[]) => {
+    const event = args[0] as { preventDefault?: () => void } | undefined;
+    const targetUrl = typeof args[1] === 'string' ? args[1] : '';
+    if (targetUrl && !options.isAllowedUrl(targetUrl)) {
+      event?.preventDefault?.();
+      fail(new Error(POLICY_BLOCKED_NAVIGATION_ERROR));
+    }
+  };
+
+  const onDestroyed = () => {
+    fail(new Error('Hidden search page was destroyed during navigation.'));
+  };
+
+  const onRendererGone = () => {
+    fail(new Error('Hidden search page renderer exited during navigation.'));
+  };
+
+  webContents.on('did-start-navigation', onStartNavigation);
+  webContents.on('did-navigate', onCommit);
+  webContents.on('dom-ready', onDocumentReady);
+  webContents.on('did-finish-load', onFinishLoad);
+  webContents.on('did-fail-load', onFailLoad);
+  webContents.on('will-navigate', onBeforeNavigate);
+  webContents.on('will-redirect', onBeforeNavigate);
+  webContents.on('destroyed', onDestroyed);
+  webContents.on('render-process-gone', onRendererGone);
+
+  timeoutTimer = setTimeout(() => {
+    fail(new Error(`Navigation timed out after ${options.timeoutMs}ms.`));
+  }, options.timeoutMs);
+
+  let loaded: Promise<void>;
+  try {
+    loaded = webContents.loadURL(url);
+  } catch (error) {
+    fail(error);
+    return;
+  }
+
+  loaded.then(
+    () => {
+      succeed();
+    },
+    (error: unknown) => {
+      if (settled) return;
+      if (webContents.isDestroyed() || !isNavigationAbortedError(error)) {
+        fail(error);
+        return;
+      }
+      // A redirect chain can abort the initial loadURL() promise with ERR_ABORTED (-3)
+      // while the replacement navigation continues toward did-navigate / dom-ready.
+      if (committed || webContents.isLoadingMainFrame()) {
+        return;
+      }
+      followUpNavigationStarted = false;
+      clearAbortedGraceTimer();
+      abortedGraceTimer = setTimeout(() => {
+        abortedGraceTimer = undefined;
+        if (settled) return;
+        if (committed || followUpNavigationStarted || webContents.isLoadingMainFrame()) {
+          return;
+        }
+        fail(error);
+      }, abortedGraceMs);
+    },
+  );
+});
+
+export const createDetachedPage = (
+  context: WebSearchPageContext,
+  createView: (options: Electron.WebContentsViewConstructorOptions) => WebSearchViewLike = options => (
+    new WebContentsView(options) as unknown as WebSearchViewLike
+  ),
+): WebSearchPage => {
+  const view = createView({
     webPreferences: {
       session: context.session,
       nodeIntegration: false,
@@ -206,50 +418,63 @@ const createDetachedPage = (context: WebSearchPageContext): WebSearchPage => {
     },
   });
   view.setBounds(PAGE_BOUNDS);
+  // Keep a strong reference to the detached WebContentsView for the entire
+  // page lifetime; without it V8 GC finalizes the unattached view and destroys
+  // its WebContents mid-search (`ERR_FAILED` / `Object has been destroyed`).
+  let retainedView: WebSearchViewLike | null = view;
   const webContents = view.webContents;
   webContents.setAudioMuted(true);
   webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  webContents.on('will-navigate', (event, url) => {
-    if (!context.isAllowedUrl(url)) event.preventDefault();
+  const preventBlockedNavigation = (...args: unknown[]) => {
+    const event = args[0] as { preventDefault?: () => void } | undefined;
+    const targetUrl = typeof args[1] === 'string' ? args[1] : '';
+    if (targetUrl && !context.isAllowedUrl(targetUrl)) event?.preventDefault?.();
+  };
+  webContents.on('will-navigate', preventBlockedNavigation);
+  webContents.on('will-redirect', preventBlockedNavigation);
+  webContents.on('destroyed', () => {
+    retainedView = null;
   });
+  webContents.on('render-process-gone', () => {
+    const crashedView = retainedView;
+    retainedView = null;
+    if (crashedView && !crashedView.webContents.isDestroyed()) {
+      crashedView.webContents.close();
+    }
+  });
+
+  const requireLiveWebContents = (): WebSearchWebContents => {
+    if (!retainedView || retainedView.webContents.isDestroyed()) {
+      throw new Error('Hidden search page was destroyed.');
+    }
+    return retainedView.webContents;
+  };
 
   return {
     async navigate(url, timeoutMs) {
       await context.whenReady();
-      let committed = false;
-      const onCommit = () => { committed = true; };
-      let onDocumentReady = () => {};
-      const documentReady = new Promise<void>(resolve => {
-        onDocumentReady = () => { if (committed) resolve(); };
+      const liveWebContents = requireLiveWebContents();
+      await navigateWebContents(liveWebContents, url, {
+        timeoutMs,
+        isAllowedUrl: context.isAllowedUrl,
       });
-      webContents.on('did-navigate', onCommit);
-      webContents.on('dom-ready', onDocumentReady);
-      const loaded = webContents.loadURL(url);
-      // The document is usable before subresources finish; a late rejection
-      // from the abandoned load must not surface as an unhandled rejection.
-      loaded.catch(() => {});
-      try {
-        await withTimeout(
-          Promise.race([loaded, documentReady]),
-          timeoutMs,
-          `Navigation timed out after ${timeoutMs}ms.`,
-        );
-      } finally {
-        webContents.removeListener('did-navigate', onCommit);
-        webContents.removeListener('dom-ready', onDocumentReady);
-      }
     },
     evaluate<T>(script: string, timeoutMs: number): Promise<T> {
+      const liveWebContents = requireLiveWebContents();
       return withTimeout(
-        webContents.executeJavaScript(script, false) as Promise<T>,
+        liveWebContents.executeJavaScript(script, false) as Promise<T>,
         timeoutMs,
         `Page script timed out after ${timeoutMs}ms.`,
       );
     },
-    url: () => webContents.getURL(),
-    isDestroyed: () => webContents.isDestroyed(),
+    url: () => (retainedView && !retainedView.webContents.isDestroyed() ? retainedView.webContents.getURL() : ''),
+    isDestroyed: () => !retainedView || retainedView.webContents.isDestroyed(),
     destroy: () => {
-      if (!webContents.isDestroyed()) webContents.close();
+      const currentView = retainedView;
+      retainedView = null;
+      if (currentView && !currentView.webContents.isDestroyed()) {
+        currentView.webContents.close();
+      }
     },
   };
 };
@@ -389,7 +614,7 @@ export class WebSearchHost {
       throw new Error(`Blocked URL scheme "${protocol}" - only http/https allowed`);
     }
     if (!this.deps.getPageContext().isAllowedUrl(url)) {
-      throw new Error('Navigation was blocked by the LobsterAI browser access policy.');
+      throw new Error(POLICY_BLOCKED_NAVIGATION_ERROR);
     }
     await page.navigate(url, NAVIGATION_TIMEOUT_MS);
   }

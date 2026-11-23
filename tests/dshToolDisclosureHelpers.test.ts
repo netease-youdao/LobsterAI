@@ -25,6 +25,7 @@ type DisclosureHelpers = {
   ) => string[];
   listMountedToolsForCapability: (restrictableNames: Iterable<string>, capabilityId: string) => string[];
   groupMountedProgressiveTools: (restrictableNames: Iterable<string>) => Record<string, string[]>;
+  renderEnableToolsOutput: (args: unknown, value: unknown) => Array<{ type: string; text: string }>;
 };
 
 let cached: DisclosureHelpers | null = null;
@@ -151,5 +152,24 @@ describe('tool-disclosure-helpers', () => {
       'mcp__filter-demo__blocked_secret',
       'mcp__lobster-word__word_delete',
     ]);
+  });
+
+  test('renders lobster_enable_tools output as DSH ContentBlock[] compatible with spill-policy', async () => {
+    const h = await loadHelpers();
+
+    const renderedText = h.renderEnableToolsOutput(
+      { capabilities: ['computer-use'] },
+      { ok: true, text: '- computer-use 已启用（2 个工具）\n下一步可直接调用已启用的工具。' },
+    );
+    expect(Array.isArray(renderedText)).toBe(true);
+    expect(renderedText).toEqual([
+      { type: 'text', text: '- computer-use 已启用（2 个工具）\n下一步可直接调用已启用的工具。' },
+    ]);
+    expect(renderedText.some((block) => block.type === 'image')).toBe(false);
+
+    expect(h.renderEnableToolsOutput({}, { ok: false, unavailable: ['ppt'] })).toEqual([
+      { type: 'text', text: JSON.stringify({ ok: false, unavailable: ['ppt'] }) },
+    ]);
+    expect(h.renderEnableToolsOutput({}, null)).toEqual([{ type: 'text', text: 'null' }]);
   });
 });

@@ -1,15 +1,21 @@
+import { EventEmitter } from 'events';
 import { describe, expect, test, vi } from 'vitest';
 
 vi.mock('electron', () => ({ WebContentsView: class {} }));
 
 import { BrowserDisplayMode } from '../../shared/browserWebAccess/constants';
 import {
+  createDetachedPage,
+  isNavigationAbortedError,
+  navigateWebContents,
   WebSearchEngine,
   WebSearchHost,
   type WebSearchPage,
   type WebSearchPageContext,
   WebSearchPageErrorCode,
   WebSearchPageOp,
+  type WebSearchViewLike,
+  type WebSearchWebContents,
 } from './webSearchHost';
 
 const createFakePage = (options: {
@@ -220,5 +226,202 @@ describe('WebSearchHost', () => {
         success: false,
         code: WebSearchPageErrorCode.SkillDisabled,
       });
+  });
+
+  test('recreates a fresh hidden page after a renderer crash destroys the previous detached page', async () => {
+    const createMockView = () => {
+      const emitter = new EventEmitter();
+      let destroyed = false;
+      let currentUrl = '';
+      const webContents: WebSearchWebContents = {
+        loadURL: vi.fn(async (url: string) => {
+          currentUrl = url;
+          emitter.emit('did-navigate', {}, url);
+          emitter.emit('dom-ready');
+        }),
+        executeJavaScript: vi.fn(async (script: string) => {
+          if (script.startsWith('Boolean(document.querySelector(')) return true;
+          return [{ title: 'Recovered', url: 'https://recovered.example/', snippet: '', source: 'bing', position: 1 }];
+        }),
+        getURL: () => currentUrl,
+        isDestroyed: () => destroyed,
+        isLoading: () => false,
+        isLoadingMainFrame: () => false,
+        stop: vi.fn(),
+        close: vi.fn(() => {
+          if (destroyed) return;
+          destroyed = true;
+          emitter.emit('destroyed');
+        }),
+        setAudioMuted: vi.fn(),
+        setWindowOpenHandler: vi.fn(),
+        on: (event, listener) => emitter.on(event, listener),
+        removeListener: (event, listener) => emitter.removeListener(event, listener),
+      };
+      const view: WebSearchViewLike = {
+        webContents,
+        setBounds: vi.fn(),
+      };
+      return { view, emitter, webContents };
+    };
+
+    const views = [createMockView(), createMockView()];
+    let index = 0;
+    const context = {
+      session: {},
+      whenReady: async () => {},
+      isAllowedUrl: () => true,
+    } as unknown as WebSearchPageContext;
+    const host = new WebSearchHost({
+      getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp }),
+      getPageContext: () => context,
+      createPage: ctx => createDetachedPage(ctx, () => views[index++].view),
+    });
+
+    await expect(host.handleRequest({ op: WebSearchPageOp.Search, engine: WebSearchEngine.Bing, query: 'first' }))
+      .resolves.toMatchObject({ success: true, data: { totalResults: 1 } });
+    expect(index).toBe(1);
+
+    // Simulate renderer crash on the first view -> closed & marked destroyed.
+    views[0].emitter.emit('render-process-gone');
+    expect(views[0].webContents.close).toHaveBeenCalledTimes(1);
+
+    // Next search transparently recreates a healthy page instead of throwing "Object has been destroyed".
+    await expect(host.handleRequest({ op: WebSearchPageOp.Search, engine: WebSearchEngine.Bing, query: 'second' }))
+      .resolves.toMatchObject({ success: true, data: { totalResults: 1 } });
+    expect(index).toBe(2);
+    host.dispose();
+  });
+});
+
+const createMockWebContents = (overrides: Partial<WebSearchWebContents> = {}) => {
+  const emitter = new EventEmitter();
+  let destroyed = false;
+  let loading = false;
+  let loadingMainFrame = false;
+  let currentUrl = '';
+
+  const webContents: WebSearchWebContents = {
+    loadURL: vi.fn(() => new Promise<void>(() => {})),
+    executeJavaScript: vi.fn(async () => null),
+    getURL: () => currentUrl,
+    isDestroyed: () => destroyed,
+    isLoading: () => loading,
+    isLoadingMainFrame: () => loadingMainFrame,
+    stop: vi.fn(() => {
+      loading = false;
+      loadingMainFrame = false;
+    }),
+    close: vi.fn(() => {
+      destroyed = true;
+      emitter.emit('destroyed');
+    }),
+    setAudioMuted: vi.fn(),
+    setWindowOpenHandler: vi.fn(),
+    on: (event, listener) => emitter.on(event, listener),
+    removeListener: (event, listener) => emitter.removeListener(event, listener),
+    ...overrides,
+  };
+
+  return {
+    webContents,
+    emitter,
+    setDestroyed: (value: boolean) => { destroyed = value; },
+    setLoading: (value: boolean) => { loading = value; },
+    setLoadingMainFrame: (value: boolean) => { loadingMainFrame = value; },
+    setUrl: (value: string) => { currentUrl = value; },
+  };
+};
+
+describe('navigateWebContents', () => {
+  test('identifies ERR_ABORTED (-3) errors by errno, code, or message', () => {
+    expect(isNavigationAbortedError(Object.assign(new Error('load failed'), { errno: -3 }))).toBe(true);
+    expect(isNavigationAbortedError(Object.assign(new Error('load failed'), { code: 'ERR_ABORTED' }))).toBe(true);
+    expect(isNavigationAbortedError(new Error("ERR_ABORTED (-3) loading 'https://www.google.com/search?q=test&sei=abc'"))).toBe(true);
+    expect(isNavigationAbortedError(Object.assign(new Error("ERR_FAILED (-2) loading 'https://www.bing.com'"), { errno: -2, code: 'ERR_FAILED' }))).toBe(false);
+  });
+
+  test('recovers from redirect-induced ERR_ABORTED (-3) when the follow-up navigation commits and becomes ready', async () => {
+    const abortError = Object.assign(
+      new Error("ERR_ABORTED (-3) loading 'https://www.google.com/search?q=flask&hl=en&sei=abc'"),
+      { errno: -3, code: 'ERR_ABORTED' },
+    );
+    const mock = createMockWebContents({
+      loadURL: vi.fn(() => Promise.reject(abortError)),
+    });
+    mock.setLoadingMainFrame(true);
+
+    const navPromise = navigateWebContents(mock.webContents, 'https://www.google.com/search?q=flask&hl=en', {
+      timeoutMs: 5_000,
+      isAllowedUrl: () => true,
+      abortedGraceMs: 50,
+    });
+
+    // Wait a tick so the initial ERR_ABORTED rejection is processed.
+    await Promise.resolve();
+    mock.emitter.emit('did-start-navigation', {}, 'https://www.google.com/search?q=flask&hl=en&sei=abc', false, true);
+    mock.emitter.emit('did-navigate', {}, 'https://www.google.com/search?q=flask&hl=en&sei=abc');
+    mock.emitter.emit('dom-ready');
+
+    await expect(navPromise).resolves.toBeUndefined();
+  });
+
+  test('fails immediately when the replacement navigation emits a non-aborted did-fail-load', async () => {
+    const abortError = Object.assign(new Error('ERR_ABORTED (-3)'), { errno: -3, code: 'ERR_ABORTED' });
+    const mock = createMockWebContents({
+      loadURL: vi.fn(() => Promise.reject(abortError)),
+    });
+    mock.setLoadingMainFrame(true);
+
+    const navPromise = navigateWebContents(mock.webContents, 'https://www.google.com/search?q=flask', {
+      timeoutMs: 5_000,
+      isAllowedUrl: () => true,
+      abortedGraceMs: 50,
+    });
+
+    await Promise.resolve();
+    mock.emitter.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://www.google.com/search?q=flask', true);
+
+    await expect(navPromise).rejects.toThrow("ERR_NAME_NOT_RESOLVED (-105) loading 'https://www.google.com/search?q=flask'");
+  });
+
+  test('rejects after the abort grace period when ERR_ABORTED (-3) has no replacement navigation', async () => {
+    vi.useFakeTimers();
+    const abortError = Object.assign(new Error('ERR_ABORTED (-3) loading url'), { errno: -3, code: 'ERR_ABORTED' });
+    const mock = createMockWebContents({
+      loadURL: vi.fn(() => Promise.reject(abortError)),
+    });
+    mock.setLoadingMainFrame(false);
+
+    try {
+      const navPromise = navigateWebContents(mock.webContents, 'https://www.google.com/search?q=flask', {
+        timeoutMs: 15_000,
+        isAllowedUrl: () => true,
+        abortedGraceMs: 100,
+      });
+      const expectation = expect(navPromise).rejects.toThrow('ERR_ABORTED (-3)');
+      await vi.advanceTimersByTimeAsync(100);
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('blocks disallowed redirects immediately with policy error and stops lingering prior loads', async () => {
+    const mock = createMockWebContents();
+    mock.setLoading(true);
+
+    const navPromise = navigateWebContents(mock.webContents, 'https://allowed.example/start', {
+      timeoutMs: 5_000,
+      isAllowedUrl: url => !url.includes('blocked.example'),
+    });
+
+    expect(mock.webContents.stop).toHaveBeenCalledTimes(1);
+
+    const preventDefault = vi.fn();
+    mock.emitter.emit('will-redirect', { preventDefault }, 'https://blocked.example/secret');
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    await expect(navPromise).rejects.toThrow('Navigation was blocked by the LobsterAI browser access policy.');
   });
 });
