@@ -14,12 +14,23 @@ entry point and keep new feature logic in domain modules.
   of providers, agents, permissions, skills, MCP, and IM configuration.
 - `libs/dsh/dshHostManager.ts`: the bundled DSH process, isolated app
   profile, host status, and lifecycle.
+- `libs/dsh/dshProfileManager.ts`: isolated DSH home layout, bundled `pnpm`
+  and Windows `mingit` wiring, and built-in `dsh` CLI shim.
+- `libs/dsh/dshHostBridgeWiring.ts`: loopback bridge exposing desktop host
+  tools, in-app web search, and subagent binding callbacks to
+  `@lobsterai/dsh-bundle`.
+- `libs/dsh/dshProviderSync.ts`, `libs/dsh/dshAgentSync.ts`,
+  `libs/dsh/dshSubagentSessions.ts`: provider/model sync, agent sync, and
+  subagent/delegation session tracking.
 - `libs/agentEngine/dshRuntimeAdapter.ts`: adapts DSH session control, turn
   execution, and streaming events to Cowork.
 - `libs/agentEngine/coworkEngineRouter.ts`: routes Cowork calls to the DSH
   runtime adapter.
-- `migration/legacyOpenClawMigrator.ts`: pre-startup migration of legacy
-  OpenClaw data and reporting of archived data.
+- `migration/legacyOpenClawMigrator.ts`: offline 6-step atomic pre-startup
+  migration of legacy OpenClaw data, rollback handling, and backup reporting.
+- `memory/lobsterMemoryService.ts`: local Markdown workspace memory files,
+  metadata, and host memory tools (`legacyDreamDiaryReader.ts` reads legacy
+  Dreaming diaries).
 - `coworkStore.ts`: Cowork sessions, messages, config, agents, memory metadata,
   and related CRUD over SQLite.
 - `sqliteStore.ts`: database initialization and migrations.
@@ -35,16 +46,17 @@ entry point and keep new feature logic in domain modules.
   `MAIN_OFFICE_FORMATS`. Read
   `specs/features/office-editing/2026-09-28-office-module-architecture.md`
   before adding a format.
-- `ipcHandlers/dshHost/`: DSH host status and plugin operations exposed
-  through IPC.
+- `ipcHandlers/dshHost/`: DSH host status, permission preset, ecosystem view,
+  and plugin operations exposed through IPC.
 - `desktopCompanion/`: the floating orb windows.
 - `scheduledTask/lobsterScheduler.ts`: SQLite task definitions and run
   history, scheduling, and dispatch to DSH turns.
 - `src/scheduledTask/`: shared task model, policies, and migration helpers.
 
 Other features have their own directories (`computerUse/`,
-`browserCredentials/`, `library/`, `plugins/`, `skins/`, and more). List
-`src/main/` rather than treating this map as complete.
+`browserCredentials/`, `browserPasskeys/`, `library/`, `permissions/`,
+`sessionDiagnostics/`, `skins/`, and more). List `src/main/` rather than
+treating this map as complete.
 
 ## Adding Or Changing An IPC Channel
 
@@ -105,6 +117,8 @@ context), `SOUL.md` (persona), and `IDENTITY.md` (identity).
   directory, enable state, and pinning.
 - `user_memories`, `user_memory_sources`: legacy/local memory tracking used for
   migration and source metadata.
+- `memory_file_meta`: workspace memory file metadata created by
+  `memory/lobsterMemoryService.ts`.
 - `im_config`: IM platform configuration.
 - `im_session_mappings`: conversation and agent bindings to Cowork
   sessions, with `openclaw_session_key` kept for legacy data.
@@ -112,8 +126,9 @@ context), `SOUL.md` (persona), and `IDENTITY.md` (identity).
   resolved launch metadata.
 - `user_plugins`: legacy OpenClaw plugin records read by the migrator.
   DSH plugin state lives in the app's DSH profile.
-- `subagent_runs`, `subagent_messages`: subagent run tracking and fetched
-  conversation history.
+- `subagent_runs`, `subagent_messages`, `dsh_subagent_agent_bindings`:
+  subagent run tracking, fetched conversation history, and DSH
+  subagent-to-agent delegation bindings.
 - `browser_credentials`: created by
   `browserCredentials/browserCredentialService.ts`.
 - `library_*` (four tables): created by `library/libraryMigrations.ts`.
@@ -157,7 +172,21 @@ Agents:
 - The main agent ID is `main`. Agents are custom or preset.
 - Agent data covers identity, system prompt, model, skill IDs, icon, enabled
   state, pinning, and an optional working directory.
+- Agents can spawn subagents and delegate across agents (`delegate_agent`,
+  max depth in `DSH_DELEGATE_MAX_DEPTH`); bindings persist in
+  `dsh_subagent_agent_bindings`.
 - IM channels can bind to specific agents.
+
+DSH host and permissions:
+
+- `src/shared/dshEngine/hostConstants.ts` owns shared DSH constants:
+  `DshPermissionPreset` (`read-only`, `workspace-write`, `danger-full-access`),
+  `DSH_REQUIRED_DISABLED_TELEMETRY_IDS`, `DshOpsAction`, `DshChannelsAction`,
+  `RetainedImPlatform`, and `DshHostIpc`.
+- `dsh-bundles/lobsterai-host/cordis.patch.yml` disables upstream telemetry,
+  DeepSeek account plugins, and duplicate DSH features (`office-kit`,
+  `schedule`, `web-search-deepseek`, `web-deepseek-api`), verified by
+  `npm run dsh:upgrade-check`.
 
 IM:
 

@@ -31,11 +31,14 @@ reaches the main process only through `window.electron`, which is typed in
 - `components/im/`: IM platform settings and multi-instance UI.
 - `components/skills/`: skill management UI.
 - `components/mcp/`: MCP management UI.
+- `components/dsh/`: DSH plugin & ecosystem management UI (`DshPluginEcosystemView.tsx`).
+- `components/migration/`: legacy OpenClaw upgrade report modal (`MigrationReportModal.tsx`).
 - `services/i18n.ts`: renderer i18n dictionary and `t()` helper.
 
-Other features have their own component directories (`pptCreation/`,
-`imageCreation/`, `library/`, `kits/`, `experts/`, `desktopCompanion/`, and
-more). List `components/` rather than treating this map as complete.
+Other features have their own component directories (`quick-actions/`,
+`pptCreation/`, `imageCreation/`, `library/`, `kits/`, `experts/`,
+`desktopCompanion/`, and more). List `components/` rather than treating this
+map as complete.
 
 Import aliases: `@/` is `src/renderer/` and `@shared/` is `src/shared/`. Both
 resolve in Vite, `tsc`, and Vitest.
