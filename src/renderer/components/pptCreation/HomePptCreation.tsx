@@ -61,7 +61,7 @@ export default function HomePptCreation({ active, onClose, onDraftReady, childre
     {backup && <div role="status" className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-primary-muted px-4 py-3 text-xs text-secondary">
       <span>{t('pptCreationReady')}</span><button type="button" className="shrink-0 font-medium text-primary hover:underline" onClick={() => { if (restorePptCreationDraft(backup)) onDraftReady(backup.prompt); setBackup(null); }}>{t('pptCreationRestore')}</button>
     </div>}
-    {active && catalog?.enabled ? <section data-ppt-creation-home className="absolute inset-x-0 top-full animate-fade-in-up pb-6 pt-4 motion-reduce:animate-none" aria-labelledby="ppt-home-title">
+    {active && catalog?.enabled ? <section data-ppt-creation-home className="mt-6 w-full animate-fade-in-up pb-4 motion-reduce:animate-none" aria-labelledby="ppt-home-title">
       <div className="mb-3 flex items-center justify-between gap-4">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1"><h2 id="ppt-home-title" className="text-sm font-semibold text-foreground">{t('pptCreationHeading')}</h2><p className="text-xs leading-5 text-foreground/65">{t('pptCreationGalleryHint')}</p></div>
         <button type="button" className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-foreground/70 transition-colors hover:bg-surface-raised hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setShowAll(true)}>{t('pptCreationMore')}<ArrowRightIcon aria-hidden="true" className="h-3.5 w-3.5" /></button>

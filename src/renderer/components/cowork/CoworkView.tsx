@@ -71,20 +71,16 @@ import {
   resolveCoworkStartBlock,
   shouldShowCoworkEngineNotice,
 } from './coworkStartRequest';
+import {
+  COWORK_DETAIL_CONTENT_CLASS,
+  COWORK_DETAIL_GUTTER_CLASS,
+} from './messageDisplayUtils';
 import { reportPromptTemplateAction } from './promptAnalytics';
 import SessionSwipeNavigator from './SessionSwipeNavigator';
 import { buildCoworkContinuationSystemPrompt } from './skillSystemPrompt';
 import { useHomeStartContext } from './useHomeStartContext';
 
-// Time-aware hero greeting: the brand mark stays as the logo, so the heading
-// can greet the user instead of repeating the product name on every visit.
-const resolveHomeGreetingKey = (date: Date = new Date()): string => {
-  const hour = date.getHours();
-  if (hour >= 5 && hour < 12) return 'coworkGreetingMorning';
-  if (hour >= 12 && hour < 18) return 'coworkGreetingAfternoon';
-  if (hour >= 18 && hour < 23) return 'coworkGreetingEvening';
-  return 'coworkGreetingLateNight';
-};
+const HOME_HEADLINE_FONT_FAMILY = '"Songti SC", "STSong", "Noto Serif CJK SC", "Noto Serif SC", Georgia, Cambria, "Times New Roman", serif';
 
 const logCoworkViewModel = (message: string, level: 'debug' | 'warn' = 'debug'): void => {
   if (level === 'warn') console.warn(`[CoworkView] ${message}`);
@@ -953,73 +949,36 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           {/* Header */}
           {homeHeader}
 
-          {/* Main content */}
+          {/* Upper scrollable canvas: editorial headline, quick-action cards, and expanded galleries */}
           <div
             data-session-swipe-area="true"
-            className="relative z-10 flex-1 overflow-y-auto min-h-0 scrollbar-hidden"
+            className="relative z-10 min-h-0 flex-1 overflow-y-auto scrollbar-hidden"
           >
-            <div className="relative flex min-h-full w-full min-w-[320px] flex-col items-center px-4 py-8">
-              {/* Flexible spacers (2:3) keep the welcome block at the optical
-                  center on tall windows; min-h preserves breathing room before
-                  the page starts scrolling on short windows. */}
-              <div aria-hidden="true" className="w-full min-h-[56px] flex-[2_0_0px]" />
-              {/* Welcome Section - staggered entrance animation */}
-              <div data-skin-home-copy="true" className="w-full max-w-3xl text-center">
+            <div className={`relative flex min-h-full w-full min-w-[320px] flex-col items-center pb-4 pt-4 ${COWORK_DETAIL_GUTTER_CLASS}`}>
+              {/* Flexible spacers (3:1.5) seat the headline and cards gently toward the
+                  bottom-docked composer so the gap above the composer never feels hollow. */}
+              <div aria-hidden="true" className="w-full min-h-[28px] flex-[3_0_0px]" />
+
+              <div data-skin-home-copy="true" className={`${COWORK_DETAIL_CONTENT_CLASS} text-center`}>
                 <HomeSkinEmblem
-                  className="mx-auto h-12 w-12 animate-fade-in-up"
+                  onlyWhenCustom
+                  className="mx-auto mb-4 h-12 w-12 animate-fade-in-up"
                 />
                 <h2
-                  className="mt-4 text-2xl font-semibold leading-[var(--lobster-leading-2xl)] tracking-normal text-foreground animate-fade-in-up"
-                  style={{ animationDelay: '70ms', animationFillMode: 'both' }}
-                >
-                  {i18nService.t(resolveHomeGreetingKey())}
-                </h2>
-                <p
-                  className="mt-1.5 text-sm font-normal leading-[var(--lobster-leading-sm)] text-secondary animate-fade-in-up"
-                  style={{ animationDelay: '120ms', animationFillMode: 'both' }}
-                >
-                  {i18nService.t('coworkHomeTagline')}
-                </p>
-              </div>
-
-              {/* Prompt Input Area - Large version with folder selector */}
-              <div
-                className="relative z-30 mt-8 w-full max-w-3xl animate-fade-in-up"
-                style={{ animationDelay: '180ms', animationFillMode: 'both' }}
-              >
-                <CoworkPromptInput
-                  ref={promptInputRef}
-                  onSubmit={handleStartSession}
-                  onStop={handleStopSession}
-                  isStreaming={isStreaming}
-                  disabled={!isEngineReady}
-                  submitDisabled={Boolean(blockingHomeQuotaReason)}
-                  placeholder={i18nService.t('coworkPlaceholder')}
-                  size="large"
-                  workingDirectory={currentAgentWorkingDirectory}
-                  onWorkingDirectoryChange={async (dir: string) => {
-                    await agentService.updateAgent(currentAgentId, { workingDirectory: dir });
+                  className="text-[28px] font-medium leading-[1.3] tracking-[-0.015em] text-foreground sm:text-[30px] animate-fade-in-up"
+                  style={{
+                    fontFamily: HOME_HEADLINE_FONT_FAMILY,
+                    animationDelay: '40ms',
+                    animationFillMode: 'both',
                   }}
-                  showFolderSelector={true}
-                  showModelSelector={true}
-                  showAgentSelector={true}
-                  onManageSkills={() => onShowSkills?.()}
-                  onManageKits={() => onShowKits?.()}
-                  onGoalCommand={handleStartGoalSession}
-                />
-                <EnterpriseQuotaPrompt
-                  reason={blockingHomeQuotaReason}
-                  surface="home"
-                />
+                >
+                  {i18nService.t('coworkHomeHeadline')}
+                </h2>
               </div>
 
-              {/* Quick Actions. Stays `relative`: all quick-action panels
-                  (prompt panel, PPT gallery, and image examples) anchor to this
-                  block and hang below it without taking part in the vertical
-                  centering. */}
               <div
-                className="relative z-0 mt-8 flex w-full max-w-3xl flex-col items-center animate-fade-in-up"
-                style={{ animationDelay: '260ms', animationFillMode: 'both' }}
+                className={`relative z-0 mt-10 flex flex-col items-center animate-fade-in-up ${COWORK_DETAIL_CONTENT_CLASS}`}
+                style={{ animationDelay: '100ms', animationFillMode: 'both' }}
               >
                 <HomeImageCreation
                   actions={quickActions}
@@ -1031,10 +990,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                     promptInputRef.current?.focus();
                   }}
                 >
-                  <HomePptCreation active={selectedActionId === PptCreation.ActionId} onClose={handleQuickActionDeselect}
-                    onDraftReady={prompt => { promptInputRef.current?.setValue(prompt, 'template'); promptInputRef.current?.focus(); }}>
+                  <HomePptCreation
+                    active={selectedActionId === PptCreation.ActionId}
+                    onClose={handleQuickActionDeselect}
+                    onDraftReady={prompt => {
+                      promptInputRef.current?.setValue(prompt, 'template');
+                      promptInputRef.current?.focus();
+                    }}
+                  >
                     {selectedAction && (
-                      <div className="absolute inset-x-0 top-full pb-8 pt-4">
+                      <div className="mt-6 w-full pb-4">
                         <PromptPanel
                           action={selectedAction}
                           onPromptSelect={handleQuickActionPromptSelect}
@@ -1047,7 +1012,37 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                 <CreditsResetCampaignFloat />
               </div>
 
-              <div aria-hidden="true" className="w-full min-h-[24px] flex-[3_0_0px]" />
+              <div aria-hidden="true" className="w-full min-h-[16px] flex-[1.5_0_0px]" />
+            </div>
+          </div>
+
+          {/* Bottom-docked unified composer (aligned with session detail composer width) */}
+          <div className={`relative z-30 shrink-0 pb-6 pt-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
+            <div className={COWORK_DETAIL_CONTENT_CLASS}>
+              <CoworkPromptInput
+                ref={promptInputRef}
+                onSubmit={handleStartSession}
+                onStop={handleStopSession}
+                isStreaming={isStreaming}
+                disabled={!isEngineReady}
+                submitDisabled={Boolean(blockingHomeQuotaReason)}
+                placeholder={i18nService.t('coworkPlaceholder')}
+                size="large"
+                workingDirectory={currentAgentWorkingDirectory}
+                onWorkingDirectoryChange={async (dir: string) => {
+                  await agentService.updateAgent(currentAgentId, { workingDirectory: dir });
+                }}
+                showFolderSelector={true}
+                showModelSelector={true}
+                showAgentSelector={true}
+                onManageSkills={() => onShowSkills?.()}
+                onManageKits={() => onShowKits?.()}
+                onGoalCommand={handleStartGoalSession}
+              />
+              <EnterpriseQuotaPrompt
+                reason={blockingHomeQuotaReason}
+                surface="home"
+              />
             </div>
           </div>
         </>
