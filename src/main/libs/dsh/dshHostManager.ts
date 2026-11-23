@@ -23,6 +23,7 @@ import type { SubagentCollaborationMode } from '../../../shared/agent/constants'
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
   DSH_BRIDGE_SUBAGENT_BINDING_PATH,
+  DSH_BRIDGE_WEB_SEARCH_PATH,
   DSH_PROFILE_DIR_NAME,
   DSH_PROFILE_NAME,
   DshHostBundleEnvVar,
@@ -42,7 +43,6 @@ import type {
   ModelThinkingLevel,
 } from '../../../shared/providers/modelThinking';
 import { DSH_NODE_EXEC_ARGV, DSH_RUNTIME_ENTRY_RELPATH } from '../dshRuntime';
-import { getWebSearchBridgeFilePath, WEB_SEARCH_BRIDGE_FILE_ENV } from '../webSearchBridgeFile';
 import {
   buildIsolatedDshBaseEnv,
   type DshNodeToolchain,
@@ -124,9 +124,12 @@ export interface DshHostMemoryPolicy {
 
 export interface DshHostWebAccessPolicy {
   webFetchEnabled: boolean;
+  browserSearchEnabled?: boolean;
   blockedHostnames: string[];
   allowedHostnames?: string[];
   searchPolicy?: DshSearchPolicy;
+  /** Optional DeepSeek Messages search endpoint override (used in local mock E2E tests). */
+  deepseekSearchBaseUrl?: string | null;
 }
 
 export interface DshHostAgentSkillSummary {
@@ -249,6 +252,30 @@ export type DshBridgeApprovalEvaluator = (
 
 export type DshBridgeChannelEventHandler = (payload: Record<string, unknown>) => Promise<unknown> | unknown;
 
+export interface DshBridgeWebSearchSource {
+  url: string;
+  title?: string;
+  snippet?: string;
+  publishedAt?: string;
+}
+
+export interface DshBridgeWebSearchRequest {
+  query: string;
+  maxResults?: number;
+  signal?: AbortSignal;
+}
+
+export interface DshBridgeWebSearchResult {
+  query: string;
+  engine?: string;
+  sources: DshBridgeWebSearchSource[];
+  duration?: number;
+}
+
+export type DshBridgeWebSearchHandler = (
+  request: DshBridgeWebSearchRequest,
+) => Promise<DshBridgeWebSearchResult> | DshBridgeWebSearchResult;
+
 export interface DshHostStatus {
   phase: DshHostPhase;
   origin: string | null;
@@ -264,7 +291,6 @@ export interface DshHostStatus {
 }
 
 export interface DshChildEnvAdditions {
-  webSearchBridgeFile?: string | null;
   timeZone?: string;
   nodeShimDir?: string | null;
   npmBinDir?: string | null;
@@ -286,8 +312,6 @@ export interface DshHostManagerOptions {
   skillsDir: string;
   /** Path to Electron (or Node in tests) executable used with `ELECTRON_RUN_AS_NODE=1`. */
   executablePath: string;
-  /** Optional path to LobsterAI's web-search in-app bridge JSON file. */
-  webSearchBridgeFile?: string | null;
   /** Optional fallback IANA timezone when `TZ` is unset in the inherited environment. */
   timeZone?: string;
   /** Optional directory containing Electron-backed `node`/`npm`/`npx` shims, prepended to PATH. */
@@ -414,7 +438,6 @@ export function buildIsolatedDshChildEnv(params: {
   searchPolicy: DshSearchPolicy;
   runtimeDir?: string;
   executablePath?: string;
-  webSearchBridgeFile?: string | null;
   timeZone?: string;
   nodeShimDir?: string | null;
   npmBinDir?: string | null;
@@ -456,9 +479,6 @@ export function buildIsolatedDshChildEnv(params: {
 
   if (params.executablePath?.trim()) {
     env.LOBSTERAI_ELECTRON_PATH = params.executablePath.trim();
-  }
-  if (params.webSearchBridgeFile?.trim()) {
-    env[WEB_SEARCH_BRIDGE_FILE_ENV] = params.webSearchBridgeFile.trim();
   }
   if (params.npmBinDir?.trim()) {
     env.LOBSTERAI_NPM_BIN_DIR = params.npmBinDir.trim();
@@ -533,6 +553,7 @@ export class DshHostManager extends EventEmitter {
   private approvalEvaluator: DshBridgeApprovalEvaluator | null = null;
   private channelEventHandler: DshBridgeChannelEventHandler | null = null;
   private subagentBindingHandler: DshBridgeSubagentBindingHandler | null = null;
+  private webSearchHandler: DshBridgeWebSearchHandler | null = null;
 
   // Cached sync payloads replayed automatically after any restart.
   private lastProvidersPayload: {
@@ -631,6 +652,10 @@ export class DshHostManager extends EventEmitter {
 
   setSubagentBindingHandler(handler: DshBridgeSubagentBindingHandler | null): void {
     this.subagentBindingHandler = handler;
+  }
+
+  setWebSearchHandler(handler: DshBridgeWebSearchHandler | null): void {
+    this.webSearchHandler = handler;
   }
 
   /**
@@ -911,10 +936,9 @@ export class DshHostManager extends EventEmitter {
       bridgeSecret: this.bridgeSecret,
       workspacesDir: this.workspacesDir,
       skillsDir: this.options.skillsDir,
-      searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.DeepSeekNativeOnly,
+      searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.AllowAll,
       runtimeDir: this.options.runtimeDir,
       executablePath: this.options.executablePath,
-      webSearchBridgeFile: additions?.webSearchBridgeFile ?? this.options.webSearchBridgeFile ?? getWebSearchBridgeFilePath(this.options.userDataDir),
       timeZone: additions?.timeZone ?? this.options.timeZone,
       nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir ?? this.options.nodeToolchain?.nodeShimDir,
       npmBinDir: additions?.npmBinDir ?? this.options.npmBinDir ?? this.options.nodeToolchain?.npmBinDir,
@@ -1305,6 +1329,46 @@ export class DshHostManager extends EventEmitter {
         });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (pathname === DSH_BRIDGE_WEB_SEARCH_PATH) {
+        const query = typeof body.query === 'string' ? body.query.trim() : '';
+        if (!query) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'query is required' }));
+          return;
+        }
+        if (!this.webSearchHandler) {
+          res.writeHead(503, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'LobsterAI in-app web search handler is not registered' }));
+          return;
+        }
+        const maxResults = typeof body.maxResults === 'number' && Number.isFinite(body.maxResults)
+          ? Math.floor(body.maxResults)
+          : undefined;
+        const controller = new AbortController();
+        const onDisconnect = () => controller.abort();
+        res.once('close', onDisconnect);
+        res.setHeader('content-type', 'application/json');
+        const keepalive = setInterval(() => {
+          if (!res.destroyed) res.write(' ');
+        }, BRIDGE_KEEPALIVE_MS);
+        keepalive.unref();
+        try {
+          if (res.destroyed) return;
+          const result = await this.webSearchHandler({
+            query,
+            ...(maxResults !== undefined ? { maxResults } : {}),
+            signal: controller.signal,
+          });
+          if (!res.destroyed) {
+            res.end(JSON.stringify(result));
+          }
+        } finally {
+          clearInterval(keepalive);
+          res.off('close', onDisconnect);
+        }
         return;
       }
 

@@ -616,7 +616,6 @@ import {
 import { startUninstallAnalytics } from './libs/uninstallAnalytics';
 import { TaskUsageAnalytics } from './libs/usageAnalytics';
 import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
-import { getWebSearchBridgeFilePath, removeWebSearchBridgeFile, writeWebSearchBridgeFile } from './libs/webSearchBridgeFile';
 import { WebSearchHost } from './libs/webSearchHost';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, initLogger } from './logger';
@@ -681,7 +680,6 @@ import {
 } from './openclawSessionPolicy/store';
 import { registerRendererPermissionHandler } from './permissions/rendererPermission';
 import { SkillManager } from './skills/skillManager';
-import { getSkillServiceManager } from './skills/skillServices';
 import {
   notifySkinChanged,
   registerSkinElectronIntegration,
@@ -2303,6 +2301,9 @@ const getDshBootstrap = (): DshBootstrap => {
           fetch: (url, init) => session.defaultSession.fetch(url, init),
         }),
       ],
+      webSearchHandler: ({ query, maxResults, signal }) => (
+        getWebSearchHost().search({ query, maxResults }, signal)
+      ),
       userDataDir,
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
@@ -3046,6 +3047,7 @@ const syncOpenClawConfig = async (options: {
       memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       webAccessPolicy: {
         webFetchEnabled: normalizedBrowserWebAccess.webFetch.enabled,
+        browserSearchEnabled: normalizedBrowserWebAccess.displayMode === BrowserDisplayMode.InApp,
         blockedHostnames,
         allowedHostnames,
       },
@@ -3426,20 +3428,11 @@ const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
   runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
-  runtime.setWebSearchPageHandler(request => getWebSearchHost().handleRequest(request));
-  const webSearchBridgeFile = getWebSearchBridgeFilePath(app.getPath('userData'));
-  const webSearchCallbackUrl = runtime.getWebSearchCallbackUrl();
+  // Clean up any stale legacy web-search bridge file left behind by older installs.
   try {
-    if (webSearchCallbackUrl) {
-      writeWebSearchBridgeFile(webSearchBridgeFile, {
-        bridgeUrl: webSearchCallbackUrl,
-        bridgeSecret: runtime.getBridgeSecret(),
-      });
-    } else {
-      removeWebSearchBridgeFile(webSearchBridgeFile);
-    }
-  } catch (error) {
-    console.warn('[WebSearchHost] Failed to publish the search bridge endpoint:', error);
+    fs.rmSync(path.join(app.getPath('userData'), 'web-search-bridge.json'), { force: true });
+  } catch {
+    // Best-effort cleanup only.
   }
   for (const editor of officeEditing.editors) {
     runtime.setEditorToolHandler(editor.id, editor.editorName, request => officeEditing.callTool(editor.id, request.tool, request.args));
@@ -8947,11 +8940,9 @@ if (!gotTheLock) {
     getSkillManager,
     getSkillStoreUrl,
     onSkillsPolicyChanged: async () => {
-      const webSearchEnabled = isWebSearchSkillEnabled();
-      if (!webSearchEnabled) {
+      if (!isWebSearchSkillEnabled()) {
         webSearchHost?.dispose();
       }
-      await getSkillServiceManager().syncWebSearchSkillEnabled(webSearchEnabled);
       await syncOpenClawConfig({ reason: 'skills-enabled-changed' });
     },
   });
@@ -14895,16 +14886,9 @@ if (!gotTheLock) {
       coworkEngineRouter.stopAllSessions();
     }
 
-    // Stop skill services.
-    currentAppCleanupStep = 'skill-services';
-    const skillServices = getSkillServiceManager();
-    await skillServices.stopAll();
+    // Dispose hidden in-app web search page.
+    currentAppCleanupStep = 'web-search-host';
     webSearchHost?.dispose();
-    try {
-      removeWebSearchBridgeFile(getWebSearchBridgeFilePath(app.getPath('userData')));
-    } catch (error) {
-      console.warn('[WebSearchHost] Failed to remove the search bridge endpoint file:', error);
-    }
 
     // Stop all IM gateways gracefully.
     if (imGatewayManager) {
@@ -15672,26 +15656,6 @@ if (!gotTheLock) {
       })(),
     ]);
 
-    // Skill services (web-search bridge) — fire-and-forget (Step 2).
-    // No IPC handler or downstream init depends on this completing.
-    try {
-      const skillServices = getSkillServiceManager();
-      skillServices.setWebSearchEnabledResolver(isWebSearchSkillEnabled);
-      console.log('[Main] initApp: getSkillServiceManager done');
-      const t0 = performance.now();
-      void skillServices
-        .startAll()
-        .then(() => {
-          console.log(
-            `[Main] initApp: skill services started (background, ${(performance.now() - t0).toFixed(0)}ms)`,
-          );
-        })
-        .catch(error => {
-          console.error('[Main] initApp: skill services failed:', error);
-        });
-    } catch (error) {
-      console.error('[Main] initApp: skill services init failed:', error);
-    }
     profiler.measure('skillManager');
 
     console.log(profiler.summary());

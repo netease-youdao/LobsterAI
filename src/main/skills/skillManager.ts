@@ -1545,59 +1545,6 @@ const parseGithubTreeOrBlobUrl = (source: string): NormalizedGitSource | null =>
   }
 };
 
-const isWebSearchSkillBroken = (skillRoot: string): boolean => {
-  const startServerScript = path.join(skillRoot, 'scripts', 'start-server.sh');
-  const searchScript = path.join(skillRoot, 'scripts', 'search.sh');
-  const serverEntry = path.join(skillRoot, 'dist', 'server', 'index.js');
-  const requiredPaths = [
-    startServerScript,
-    searchScript,
-    serverEntry,
-    path.join(skillRoot, 'node_modules', 'iconv-lite', 'encodings', 'index.js'),
-  ];
-
-  if (requiredPaths.some(requiredPath => !fs.existsSync(requiredPath))) {
-    return true;
-  }
-
-  try {
-    const startScript = fs.readFileSync(startServerScript, 'utf-8');
-    const searchScriptContent = fs.readFileSync(searchScript, 'utf-8');
-    const serverEntryContent = fs.readFileSync(serverEntry, 'utf-8');
-    if (!startScript.includes('WEB_SEARCH_FORCE_REPAIR')) {
-      return true;
-    }
-    if (!startScript.includes('detect_healthy_bridge_server')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('ACTIVE_SERVER_URL')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('try_switch_to_local_server')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('build_search_payload')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('@query_file')) {
-      return true;
-    }
-    if (!serverEntryContent.includes('decodeJsonRequestBody')) {
-      return true;
-    }
-    if (!serverEntryContent.includes("TextDecoder('gb18030'")) {
-      return true;
-    }
-    if (serverEntryContent.includes('scoreDecodedJsonText') && serverEntryContent.includes('Request body decoded using gb18030 (score')) {
-      return true;
-    }
-  } catch {
-    return true;
-  }
-
-  return false;
-};
-
 export class SkillManager {
   private watchers: fs.FSWatcher[] = [];
   private notifyTimer: NodeJS.Timeout | null = null;
@@ -1738,10 +1685,6 @@ export class SkillManager {
           if (bundledVer && compareVersions(bundledVer, this.getSkillVersion(targetDir) || '0.0.0') > 0) {
             shouldRepair = true;
             needsCleanCopy = true;
-          }
-          // web-search has specific broken checks
-          else if (id === 'web-search' && isWebSearchSkillBroken(targetDir)) {
-            shouldRepair = true;
           }
           // Generic check: if bundled has node_modules but target doesn't, repair it
           else if (!this.isSkillRuntimeHealthy(targetDir, dir)) {

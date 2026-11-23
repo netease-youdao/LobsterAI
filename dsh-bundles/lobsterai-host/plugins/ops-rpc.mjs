@@ -604,16 +604,22 @@ export function apply(ctx) {
             const validSearchPolicies = new Set(Object.values(DSH_SEARCH_POLICY));
             state.webAccessPolicy = {
               webFetchEnabled: p.webFetchEnabled !== false,
+              browserSearchEnabled: p.browserSearchEnabled !== false,
               blockedHostnames: normalizeHostnamePolicyList(p.blockedHostnames),
               allowedHostnames: normalizeHostnamePolicyList(p.allowedHostnames),
+              deepseekSearchBaseUrl: typeof p.deepseekSearchBaseUrl === 'string'
+                ? p.deepseekSearchBaseUrl.trim()
+                : '',
             };
             if (typeof p.searchPolicy === 'string' && validSearchPolicies.has(p.searchPolicy)) {
               state.searchPolicy = p.searchPolicy;
             }
+            state.resetWebSearchCooldown?.();
             return jsonResponse({
               ok: true,
               result: {
                 webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+                browserSearchEnabled: state.webAccessPolicy.browserSearchEnabled,
                 blockedHostnamesCount: state.webAccessPolicy.blockedHostnames.length,
                 allowedHostnamesCount: state.webAccessPolicy.allowedHostnames.length,
                 searchPolicy: state.searchPolicy,

@@ -11,7 +11,7 @@
  * 1. The model calls `lobster_enable_tools({ capabilities: [...] })`.
  * 2. A matching skill is loaded via DSH's `skill` tool or `/skill` gesture
  *    (`docx` -> `word`, `xlsx` -> `excel`, `pptx` -> `ppt`,
- *     `computer-use` -> `computer-use`, `web-search` -> `browser`).
+ *     `computer-use` -> `computer-use`).
  * 3. LobsterAI pre-unlocks it via `bindSessionContext.unlockedCapabilities`
  *    (e.g. user selected a matching skill or attached browser annotations).
  * 4. A resumed session's logged `requestHeader().tools` already admitted tools

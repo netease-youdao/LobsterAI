@@ -16,6 +16,7 @@ export const DshSkillInstallAction = { Inspect: 'inspect', Install: 'install' } 
 export const DSH_DELEGATE_AGENT_TOOL = 'delegate_agent';
 export const DSH_DELEGATE_MAX_DEPTH = 2;
 export const DSH_BRIDGE_SUBAGENT_BINDING_PATH = '/dsh-bridge/subagent-binding';
+export const DSH_BRIDGE_WEB_SEARCH_PATH = '/dsh-bridge/web-search';
 
 export const RetainedImPlatform = {
   Feishu: 'feishu',

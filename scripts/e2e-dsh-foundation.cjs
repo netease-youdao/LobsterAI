@@ -224,7 +224,7 @@ async function main() {
       const client = host.getClient();
       const health = await client.callOps(DshOpsAction.Health);
       assert.equal(health.ok, true);
-      for (const plugin of ['modelBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'approvalGuard', 'opsRpc']) {
+      for (const plugin of ['modelBridge', 'webSearchBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'approvalGuard', 'opsRpc']) {
         assert.equal(health.pluginsReady?.[plugin], true, plugin);
       }
       const created = await client.createSession({ cwd: userDataDir });

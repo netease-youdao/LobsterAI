@@ -2037,7 +2037,18 @@ const getWebSearchQuery = (
 ): string | null => {
   if (!toolInput || !isWebSearchToolName(toolName)) return null;
   const query = getToolInputString(toolInput, SEARCH_QUERY_INPUT_KEYS);
-  return query ? truncatePreview(query.replace(/\s+/g, ' ').trim(), ACTIVITY_TARGET_MAX_CHARS) : null;
+  if (query) {
+    return truncatePreview(query.replace(/\s+/g, ' ').trim(), ACTIVITY_TARGET_MAX_CHARS);
+  }
+  if (Array.isArray(toolInput.queries)) {
+    const queries = toolInput.queries
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map(item => item.replace(/\s+/g, ' ').trim());
+    if (queries.length > 0) {
+      return truncatePreview(queries.join(' / '), ACTIVITY_TARGET_MAX_CHARS);
+    }
+  }
+  return null;
 };
 
 const getWebFetchHost = (toolInput: Record<string, unknown> | undefined): string | null => {

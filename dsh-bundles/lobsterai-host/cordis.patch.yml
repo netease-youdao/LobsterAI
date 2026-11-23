@@ -60,10 +60,17 @@
   disabled: true
 
 # ── Search policy guard (0.2.2-rc.5) ─────────────────────────────────────────
-# Non-DeepSeek routes default to DeepSeek Search API when web-deepseek-api is
-# enabled, which fails without DeepSeek Search credentials. Disable it here so
-# DeepSeek routes still use native server-side search when a DeepSeek key is
-# configured, while non-DeepSeek routes use LobsterAI's web-search skill/tools.
+# Disable both stock DSH search providers (`web-search-deepseek` and
+# `web-deepseek-api`) so LobsterAI's single `lobster-web-search-bridge` owns
+# `ctx.web` search routing unconditionally:
+# - Personal DeepSeek official API keys (`api.deepseek.com`, excluding plan
+#   provider `lobsterai-server`) try DeepSeek native search first with
+#   automatic fallback to LobsterAI's in-app browser search.
+# - LobsterAI plan models and all non-DeepSeek / third-party custom models
+#   route directly to LobsterAI's in-app browser search (`WebSearchHost`).
+
+- id: web-search-deepseek
+  disabled: true
 
 - id: web-deepseek-api
   disabled: true
@@ -189,10 +196,14 @@
             name: '@deepseek-ai/dsh-tool-web'
             config:
               fetch: true
+              searchMaxQueries: 4
               searchTimeoutMs: 60000
 
     - id: lobster-model-bridge
       name: './plugins/model-bridge.mjs'
+
+    - id: lobster-web-search-bridge
+      name: './plugins/web-search-bridge.mjs'
 
     - id: lobster-persona-scope
       name: './plugins/persona-scope.mjs'

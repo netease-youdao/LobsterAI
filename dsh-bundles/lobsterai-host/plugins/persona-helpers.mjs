@@ -39,9 +39,9 @@ export const MEMORY_WRITE_POLICY_PROMPT = [
 export const WEB_SEARCH_ROUTING_GUIDANCE = [
   'When you need live web search:',
   '- If a dedicated search MCP tool (such as Tavily) is available and requested or suitable, prefer that MCP search tool.',
-  '- Otherwise use the LobsterAI `web-search` skill (`bash "$SKILLS_ROOT/web-search/scripts/search.sh" "<query>" [max_results]`, or `bash "$env:SKILLS_ROOT/web-search/scripts/search.sh" "<query>" [max_results]` in Windows PowerShell).',
+  '- Otherwise call the built-in `web_search` tool directly.',
   '- Use `web_fetch` only to read a specific known URL, not as a substitute for search engines.',
-  '- Never claim you searched the web unless you actually ran a search tool or the `web-search` skill.',
+  '- Never claim you searched the web unless you actually ran a search tool.',
 ].join('\n');
 
 const MEMORY_TRUNCATED_HINT = '\n\n（长期记忆较长，以上仅展示前段内容；如需检索完整历史记忆或每日笔记，请调用 `lobster_memory_search` / `lobster_memory_get`。）';
@@ -466,6 +466,14 @@ export function discoverLobsterSkills(rootDirs, policy, allowedSkillIds, options
       if (!validateName(skillName)) continue;
 
       const identifiers = collectSkillIdentifiers(rawId, skillName, meta.name);
+
+      // `web-search` is exposed natively through DSH's `web_search` tool via
+      // `lobster-web-search-bridge`; omit it from the model-facing skill
+      // catalog so it consumes zero prompt tokens while its toggle/allowlist
+      // still gates `web_search` admission.
+      if (identifiers.includes(WEB_SEARCH_SKILL_ID)) {
+        continue;
+      }
 
       // Apply global LobsterAI skill toggle policy.
       if (matchesAnyIdentifier(disabledIds, identifiers)) {

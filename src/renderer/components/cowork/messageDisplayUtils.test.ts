@@ -1101,6 +1101,8 @@ test('a short live run folds nothing', () => {
 test('web searches name their query, built-in or MCP', () => {
   expect(getActivityStepDoneLabel(activityToolItem('s-1', 'web_search', { result: 1 }, { query: 'Anthropic 2026 valuation' })))
     .toBe('搜索了「Anthropic 2026 valuation」');
+  expect(getActivityStepDoneLabel(activityToolItem('s-1b', 'web_search', { result: 1 }, { queries: ['Node 24', 'Vitest'] })))
+    .toBe('搜索了「Node 24 / Vitest」');
   expect(getActivityCurrentActionText(activityToolItem('s-2', 'tavily__tavily_search', undefined, { query: 'Claude Cowork' })))
     .toBe('正在搜索「Claude Cowork」');
   expect(getActivityLiveStatusText(activityToolItem('s-3', 'tavily__tavily_search', undefined, { query: 'x' })))

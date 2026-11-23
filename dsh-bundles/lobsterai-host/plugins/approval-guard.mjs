@@ -16,6 +16,7 @@
 import { evaluateOfficeGuiGuard } from './office-gui-guard-helpers.mjs';
 import { callLobsterBridge, getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 import { evaluateWebAccessGuard } from './web-access-guard-helpers.mjs';
+import { isWebSearchEnabledByPolicy } from './web-search-bridge-helpers.mjs';
 
 export const name = 'lobster-approval-guard';
 export const inject = ['tools'];
@@ -31,22 +32,26 @@ export function apply(ctx) {
   ));
 
   // Monotonic synchronous guard enforcing LobsterAI's browser/web access policy
-  // (`webFetch.enabled`, `blockedHostnames`) and `DshSearchPolicy` on DSH's
-  // `web_fetch` / `web_search` tools even under `danger-full-access` or subagents.
-  const disposeWebAccessGuard = ctx.tools.guard((exec) => (
-    evaluateWebAccessGuard(
+  // (`webFetch.enabled`, `blockedHostnames`), `web-search` skill policy, and
+  // `DshSearchPolicy` on DSH's `web_fetch` / `web_search` tools even under
+  // `danger-full-access` or subagents.
+  const disposeWebAccessGuard = ctx.tools.guard((exec) => {
+    const sessionId = resolveSessionId(exec);
+    const bound = sessionId ? resolveSessionContext(ctx, state, sessionId) : undefined;
+    return evaluateWebAccessGuard(
       exec?.name,
       exec?.arguments,
       {
         webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+        webSearchEnabled: isWebSearchEnabledByPolicy(state.skillsPolicy, bound?.allowedSkillIds),
         blockedHostnames: state.webAccessPolicy.blockedHostnames,
         searchPolicy: state.searchPolicy,
       },
       {
         llmProvider: exec?.agent?.session?.requestContext?.()?.provider,
       },
-    )
-  ));
+    );
+  });
 
   ctx.on('tools/pre-execute', async (exec, next) => {
     if (!state.bridgeUrl) {

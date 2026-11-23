@@ -43,11 +43,13 @@ const REQUIRED_DISABLED_IDS = [
   'deliverable-file-references',
   'schedule',
   'mcp-resources',
+  'web-search-deepseek',
   'web-deepseek-api',
 ];
 
 const REQUIRED_LOBSTER_PLUGIN_IDS = [
   'lobster-model-bridge',
+  'lobster-web-search-bridge',
   'lobster-persona-scope',
   'lobster-host-tools',
   'lobster-tool-disclosure',
@@ -365,15 +367,15 @@ async function checkLiveBoot(env) {
       throw new Error(`Expected 401 for unauthenticated /api/lobsterai/ops, got ${unauthRes.status}`);
     }
 
-    // 3. Verify health reports all 7 LobsterAI plugins ready.
+    // 3. Verify health reports all 8 LobsterAI plugins ready.
     const health = await callOps('health');
     if (!health.ok) throw new Error(`health returned ok=false: ${JSON.stringify(health)}`);
-    for (const key of ['modelBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'agentDelegation', 'approvalGuard', 'opsRpc']) {
+    for (const key of ['modelBridge', 'webSearchBridge', 'personaScope', 'hostTools', 'toolDisclosure', 'agentDelegation', 'approvalGuard', 'opsRpc']) {
       if (health.pluginsReady?.[key] !== true) {
         throw new Error(`Plugin "${key}" not ready: ${JSON.stringify(health.pluginsReady)}`);
       }
     }
-    log('All 7 LobsterAI Cordis plugins reported ready.');
+    log('All 8 LobsterAI Cordis plugins reported ready.');
 
     // 4. Verify syncProviders hot-registers provider and exposes it via Typert session.modelCatalog.
     const syncProv = await callOps('syncProviders', {

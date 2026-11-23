@@ -29,7 +29,7 @@ export function getHostState(ctx) {
       workspacesDir: process.env[ENV_KEYS.workspacesDir] || '',
       skillsDir: process.env[ENV_KEYS.skillsDir] || '',
       instanceId: process.env[ENV_KEYS.instanceId] || '',
-      searchPolicy: process.env[ENV_KEYS.searchPolicy] || 'deepseek_native_only',
+      searchPolicy: process.env[ENV_KEYS.searchPolicy] || 'allow_all',
       defaultPermissionPreset: 'workspace-write',
       memoryEnabled: true,
       /** @type {Map<string, Record<string, unknown>>} */
@@ -52,11 +52,13 @@ export function getHostState(ctx) {
         disabledIds: new Set(),
         extraDirs: [],
       },
-      /** @type {{ webFetchEnabled: boolean, blockedHostnames: string[], allowedHostnames: string[] }} */
+      /** @type {{ webFetchEnabled: boolean, browserSearchEnabled: boolean, blockedHostnames: string[], allowedHostnames: string[], deepseekSearchBaseUrl: string }} */
       webAccessPolicy: {
         webFetchEnabled: true,
+        browserSearchEnabled: true,
         blockedHostnames: [],
         allowedHostnames: [],
+        deepseekSearchBaseUrl: '',
       },
       /**
        * Active per-server user MCP tool filters keyed by normalized DSH server
@@ -72,6 +74,7 @@ export function getHostState(ctx) {
       /** @type {Record<string, boolean>} */
       pluginsReady: {
         modelBridge: false,
+        webSearchBridge: false,
         personaScope: false,
         hostTools: false,
         approvalGuard: false,
@@ -81,6 +84,10 @@ export function getHostState(ctx) {
       },
       /** @type {((payload: unknown) => Promise<unknown>) | null} */
       syncProviders: null,
+      /** @type {((providerId: unknown) => { apiKey: string, baseURL: string, api: string } | null) | null} */
+      getProviderAuth: null,
+      /** @type {(() => void) | null} */
+      resetWebSearchCooldown: null,
       /** @type {((payload: unknown) => Promise<unknown>) | null} */
       syncMcpServers: null,
       /** @type {((payload: unknown) => Promise<unknown>) | null} */
