@@ -26,7 +26,9 @@ export const COWORK_START_BLOCK_MESSAGE_KEYS: Record<CoworkStartBlock, string> =
 
 export function isOpenClawReadyForSession(status: OpenClawEngineStatus | null): boolean {
   if (!status) return false;
-  return status.phase === 'running' || status.phase === 'ready';
+  // Cold start runs the engine in the background; submitting a prompt during
+  // 'starting' enters main-process ensureOpenClawRunningForCowork() cleanly.
+  return status.phase === 'running' || status.phase === 'ready' || status.phase === 'starting';
 }
 
 /** An unknown engine status does not block: the start request reports its own failure. */

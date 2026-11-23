@@ -26,6 +26,7 @@ import type {
 } from '../../../scheduledTask/types';
 import {
   DSH_PERMISSION_PRESET_KV_KEY,
+  DSH_PROFILE_DIR_NAME,
   DshHostPhase,
   type DshPermissionPreset,
   parseDshPermissionPreset,
@@ -33,7 +34,11 @@ import {
 } from '../../../shared/dshEngine/hostConstants';
 import { McpIpcChannel } from '../../../shared/mcp/constants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
-import { type DshChannelInstanceConfig, DshChannelsBridge } from '../../im/dshChannelsBridge';
+import {
+  type DshChannelInstanceConfig,
+  DshChannelsBridge,
+  filterRetainedChannelInstances,
+} from '../../im/dshChannelsBridge';
 import {
   decodePlainOrBase64McpOAuthToken,
   type McpOAuthFetch,
@@ -63,10 +68,17 @@ import {
 import { BrowserAnnotationAssetStore } from '../browserAnnotationAssetStore';
 import {
   ensureElectronNodeShim,
+  getCachedUserShellPath,
   getElectronNodeRuntimePath,
-  resolveUserShellPath,
+  getFallbackCommonShellPaths,
+  resolveUserShellPathAsync,
+  seedUserShellPathCache,
 } from '../coworkUtil';
-import { reapOrphanedDshRuntimes } from '../dshOrphanReaper';
+import {
+  clearDshCleanShutdownMarker,
+  reapOrphanedDshRuntimes,
+  writeDshCleanShutdownMarker,
+} from '../dshOrphanReaper';
 import { resolveDshBundledGitBinDir } from '../dshRuntime';
 import { appendPythonRuntimeToEnv } from '../pythonRuntime';
 import {
@@ -127,6 +139,17 @@ export interface DshBootstrapSyncInput {
 }
 
 export type DshInitialConfigSyncFn = () => Promise<{ success?: boolean } | boolean | void>;
+
+export interface DshBootstrapSyncOptions {
+  /**
+   * Startup fast path: await only turn-critical in-memory syncs and local MCP
+   * registration, then run remote SSE MCP handshakes, OAuth MCP token refresh,
+   * and IM channel connections asynchronously in the background.
+   */
+  deferExternalSync?: boolean;
+  /** Skip `syncDynamicHostTools()` when the caller just ran it immediately prior. */
+  skipHostToolsSync?: boolean;
+}
 
 export interface DshBootstrapStartOptions {
   /**
@@ -336,6 +359,10 @@ function resolveBundledNpmBinDir(): string | undefined {
   return fs.existsSync(candidate) ? candidate : undefined;
 }
 
+const DSH_CACHED_SHELL_PATH_KV_KEY = 'dsh_cached_shell_path_v1';
+const DSH_CLEAN_SHUTDOWN_MARKER_FILENAME = 'clean-shutdown.json';
+const FIRST_LAUNCH_SHELL_PATH_TIMEOUT_MS = 1_500;
+
 function resolveDshChildEnvAdditions(
   executablePath: string,
 ): DshChildEnvAdditions {
@@ -346,9 +373,13 @@ function resolveDshChildEnvAdditions(
   const extraEnv: Record<string, string | undefined> = {};
 
   if (process.platform !== 'win32' && app.isPackaged) {
-    const shellPath = resolveUserShellPath();
+    // Never run `execSync(shell -lc ...)` on the Electron main thread during boot;
+    // use the KV-seeded / async-resolved shell PATH with safe POSIX fallbacks.
+    const shellPath = getCachedUserShellPath();
     if (shellPath) {
       appendPathDirs.push(...shellPath.split(path.delimiter).filter(Boolean));
+    } else {
+      appendPathDirs.push(...getFallbackCommonShellPaths());
     }
   }
 
@@ -457,6 +488,8 @@ export class DshBootstrap {
   private lastMcpServerRecords: LobsterMcpServerRecord[] = [];
   private lastNeedsReauthMcpKey = '';
   private readonly mcpOAuthRefreshScheduler: McpOAuthRefreshScheduler;
+  private readonly cleanShutdownMarkerPath: string;
+  private initialShellPathProbe: Promise<string | null> | null = null;
 
   constructor(options: DshBootstrapOptions) {
     this.options = options;
@@ -476,6 +509,41 @@ export class DshBootstrap {
 
     this.kvStorage = createSqliteKvStoragePort(options.db);
     this.defaultPermissionPreset = resolveInitialDshPermissionPreset(options.db, this.kvStorage);
+    this.cleanShutdownMarkerPath = path.join(
+      options.userDataDir,
+      DSH_PROFILE_DIR_NAME,
+      DSH_CLEAN_SHUTDOWN_MARKER_FILENAME,
+    );
+
+    if (process.platform !== 'win32' && app.isPackaged) {
+      const persistedShellPath = this.kvStorage.get(DSH_CACHED_SHELL_PATH_KV_KEY);
+      if (persistedShellPath) {
+        seedUserShellPathCache(persistedShellPath);
+        // Refresh silently in background so next launch picks up any PATH updates.
+        void resolveUserShellPathAsync({ forceRefresh: true }).then((fresh) => {
+          if (fresh && fresh !== persistedShellPath) {
+            try {
+              this.kvStorage.set(DSH_CACHED_SHELL_PATH_KV_KEY, fresh);
+            } catch {
+              // DB may already be closed during rapid quit.
+            }
+          }
+        }).catch((): void => undefined);
+      } else {
+        this.initialShellPathProbe = resolveUserShellPathAsync({
+          timeoutMs: FIRST_LAUNCH_SHELL_PATH_TIMEOUT_MS,
+        }).then((resolved) => {
+          if (resolved) {
+            try {
+              this.kvStorage.set(DSH_CACHED_SHELL_PATH_KV_KEY, resolved);
+            } catch {
+              // DB may already be closed during rapid quit.
+            }
+          }
+          return resolved;
+        }).catch((): string | null => null);
+      }
+    }
 
     this.memoryService = new LobsterMemoryService(this.workspacesDir);
     this.mcpOAuthManager = new McpOAuthManager({
@@ -641,6 +709,10 @@ export class DshBootstrap {
 
   isInitialConfigSynced(): boolean {
     return this.initialConfigSynced;
+  }
+
+  isBootstrapInProgress(): boolean {
+    return this.startingInProgress || this.startPromise !== null;
   }
 
   /**
@@ -891,42 +963,57 @@ export class DshBootstrap {
         console.warn('[MigrationV2] legacy user_memories backfill failed:', error);
       }
 
-      await reapOrphanedDshRuntimes({ executablePath: this.executablePath }).catch(() => 0);
+      await Promise.all([
+        reapOrphanedDshRuntimes({
+          executablePath: this.executablePath,
+          cleanShutdownMarkerPath: this.cleanShutdownMarkerPath,
+        }).catch((): number => 0),
+        this.initialShellPathProbe?.catch((): string | null => null) ?? Promise.resolve(null),
+      ]);
+      this.initialShellPathProbe = null;
+      if (typeof clearDshCleanShutdownMarker === 'function') {
+        clearDshCleanShutdownMarker(this.cleanShutdownMarkerPath);
+      }
       await this.hostManager.start();
       await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
         console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
       });
 
-      const [backfill, dreamDiaryBackfill, tavilyBackfill, oauthBackfill] = await Promise.all([
+      // Legacy backup backfills can extract large tar archives (multi-second I/O);
+      // process their results in the background so startup and turns are never blocked.
+      void Promise.all([
         cronBackfillPromise,
         dreamDiaryBackfillPromise,
         tavilyBackfillPromise,
         mcpOAuthBackfillPromise,
-      ]);
-      if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
-        console.log(
-          `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
-        );
-        this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
-      }
-      if (dreamDiaryBackfill.diariesRestored > 0) {
-        console.log(
-          `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
-        );
-      }
-      if (tavilyBackfill.migrated) {
-        console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');
-        this.broadcastMcpChanged();
-      }
-      if (oauthBackfill.tokensMigrated > 0) {
-        console.log(
-          `[MigrationV2] backfilled ${oauthBackfill.tokensMigrated} MCP OAuth token(s) from legacy backup`,
-        );
-        if (this.lastMcpServerRecords.length > 0) {
-          await this.syncMcpServersOnly('mcp-oauth-legacy-backfill');
+      ]).then(async ([backfill, dreamDiaryBackfill, tavilyBackfill, oauthBackfill]) => {
+        if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
+          console.log(
+            `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
+          );
+          this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
         }
-        this.broadcastMcpChanged();
-      }
+        if (dreamDiaryBackfill.diariesRestored > 0) {
+          console.log(
+            `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
+          );
+        }
+        if (tavilyBackfill.migrated) {
+          console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');
+          this.broadcastMcpChanged();
+        }
+        if (oauthBackfill.tokensMigrated > 0) {
+          console.log(
+            `[MigrationV2] backfilled ${oauthBackfill.tokensMigrated} MCP OAuth token(s) from legacy backup`,
+          );
+          if (this.lastMcpServerRecords.length > 0 && this.hostManager.isReady()) {
+            await this.syncMcpServersOnly('mcp-oauth-legacy-backfill');
+          }
+          this.broadcastMcpChanged();
+        }
+      }).catch((error) => {
+        console.warn('[MigrationV2] background backfill finalization failed:', error);
+      });
 
       if (options?.syncInitialConfig) {
         await this.runInitialConfigSync(options.syncInitialConfig);
@@ -1014,6 +1101,9 @@ export class DshBootstrap {
     this.bridgeWiring.dispose();
     try {
       await this.hostManager.stop();
+      if (typeof writeDshCleanShutdownMarker === 'function') {
+        writeDshCleanShutdownMarker(this.cleanShutdownMarkerPath, this.executablePath);
+      }
     } finally {
       try {
         this.memoryService.close();
@@ -1023,52 +1113,121 @@ export class DshBootstrap {
     }
   }
 
-  async syncAllConfig(input: DshBootstrapSyncInput): Promise<{
+  async syncAllConfig(
+    input: DshBootstrapSyncInput,
+    options: DshBootstrapSyncOptions = {},
+  ): Promise<{
     success: boolean;
     changed: boolean;
     needsReauthMcpIds: string[];
     error?: string;
   }> {
     try {
+      const deferExternalSync = options.deferExternalSync === true;
       const providersPayload = buildDshProvidersPayload({
         providers: input.providers,
         modelAuthProxyUrl: input.modelAuthProxyUrl,
         modelAuthProxySecret: input.modelAuthProxySecret,
         virtualAliases: input.virtualAliases,
       });
-      await this.hostManager.syncProviders(providersPayload);
 
       this.lastMcpServerRecords = input.mcpServers;
-      const { servers, needsReauthIds } = await buildDshMcpServerSpecs(
+
+      const coreSyncTasks: Array<Promise<unknown>> = [
+        this.hostManager.syncProviders(providersPayload),
+        this.hostManager.syncSkillsPolicy(input.skillsPolicy),
+      ];
+      if (typeof input.memoryEnabled === 'boolean') {
+        coreSyncTasks.push(this.hostManager.syncMemoryPolicy({ enabled: input.memoryEnabled }));
+      }
+      if (input.webAccessPolicy) {
+        coreSyncTasks.push(this.hostManager.syncWebAccessPolicy(input.webAccessPolicy));
+      }
+      if (!options.skipHostToolsSync) {
+        coreSyncTasks.push(this.bridgeWiring.syncDynamicHostTools());
+      }
+      if (input.agents) {
+        coreSyncTasks.push(this.hostManager.syncAgents(input.agents));
+      }
+
+      let needsReauthIds: string[] = [];
+
+      if (deferExternalSync) {
+        const hasOAuthMcp = input.mcpServers.some((s) => s.enabled !== false && s.oauthEnabled);
+        const nonOAuthRecords = hasOAuthMcp
+          ? input.mcpServers.filter((s) => !s.oauthEnabled)
+          : input.mcpServers;
+        const { servers: immediateMcpServers } = await buildDshMcpServerSpecs(
+          nonOAuthRecords,
+          this.mcpOAuthManager,
+        );
+        coreSyncTasks.push(
+          this.hostManager.syncMcpServers(immediateMcpServers, { deferSseWait: true }).then((mcpSyncResult) => {
+            if (mcpSyncResult && typeof mcpSyncResult === 'object') {
+              if (mcpSyncResult.available === false) {
+                console.warn('[DshBootstrap] syncMcpServers reported mcpManager unavailable');
+              }
+              const mcpErrors = Array.isArray(mcpSyncResult.errors) ? mcpSyncResult.errors : [];
+              if (mcpErrors.length > 0) {
+                console.warn(`[DshBootstrap] syncMcpServers reported ${mcpErrors.length} error(s): ${mcpErrors.join('; ')}`);
+              }
+            }
+          }),
+        );
+
+        await Promise.all(coreSyncTasks);
+
+        if (this.hostManager.isReady()) {
+          this.initialConfigSynced = true;
+        }
+
+        // Phase 2 (non-blocking): OAuth MCP token resolution + IM channel connections.
+        if (hasOAuthMcp) {
+          void this.syncMcpServersOnly('startup-oauth-mcp');
+        } else {
+          this.mcpOAuthRefreshScheduler.updateTrackedServers([], []);
+          this.notifyNeedsReauthMcpIds([], 'syncAllConfig');
+        }
+
+        if (input.imInstances && this.hostManager.isReady() && this.channelsBundleDir) {
+          const { retained } = filterRetainedChannelInstances(input.imInstances);
+          this.lastImInstances = retained;
+          if (retained.length > 0) {
+            void this.channelsBridge.syncInstances(retained).catch((error) => {
+              console.warn('[DshBootstrap] Background IM channel sync failed:', error);
+            });
+          }
+        }
+
+        return { success: true, changed: true, needsReauthMcpIds: [] };
+      }
+
+      const mcpSpecResult = await buildDshMcpServerSpecs(
         input.mcpServers,
         this.mcpOAuthManager,
       );
-      const mcpSyncResult = await this.hostManager.syncMcpServers(servers);
-      if (mcpSyncResult && typeof mcpSyncResult === 'object') {
-        if (mcpSyncResult.available === false) {
-          console.warn('[DshBootstrap] syncMcpServers reported mcpManager unavailable');
-        }
-        const mcpErrors = Array.isArray(mcpSyncResult.errors) ? mcpSyncResult.errors : [];
-        if (mcpErrors.length > 0) {
-          console.warn(`[DshBootstrap] syncMcpServers reported ${mcpErrors.length} error(s): ${mcpErrors.join('; ')}`);
-        }
-      }
+      needsReauthIds = mcpSpecResult.needsReauthIds;
+      coreSyncTasks.push(
+        this.hostManager.syncMcpServers(mcpSpecResult.servers).then((mcpSyncResult) => {
+          if (mcpSyncResult && typeof mcpSyncResult === 'object') {
+            if (mcpSyncResult.available === false) {
+              console.warn('[DshBootstrap] syncMcpServers reported mcpManager unavailable');
+            }
+            const mcpErrors = Array.isArray(mcpSyncResult.errors) ? mcpSyncResult.errors : [];
+            if (mcpErrors.length > 0) {
+              console.warn(`[DshBootstrap] syncMcpServers reported ${mcpErrors.length} error(s): ${mcpErrors.join('; ')}`);
+            }
+          }
+        }),
+      );
+
+      await Promise.all(coreSyncTasks);
+
       this.mcpOAuthRefreshScheduler.updateTrackedServers(
         input.mcpServers.filter((s) => s.enabled && s.oauthEnabled).map((s) => s.id),
         needsReauthIds,
       );
       this.notifyNeedsReauthMcpIds(needsReauthIds, 'syncAllConfig');
-      await this.hostManager.syncSkillsPolicy(input.skillsPolicy);
-      if (typeof input.memoryEnabled === 'boolean') {
-        await this.hostManager.syncMemoryPolicy({ enabled: input.memoryEnabled });
-      }
-      if (input.webAccessPolicy) {
-        await this.hostManager.syncWebAccessPolicy(input.webAccessPolicy);
-      }
-      await this.bridgeWiring.syncDynamicHostTools();
-      if (input.agents) {
-        await this.hostManager.syncAgents(input.agents);
-      }
 
       if (input.imInstances) {
         if (this.hostManager.isReady() && this.channelsBundleDir) {

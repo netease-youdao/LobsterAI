@@ -65,6 +65,13 @@ import {
   observePublishingSubscriptionRecoveryAuthSnapshot,
 } from './publishingSubscriptionRecovery';
 
+const CachedAuthHydrationResult = {
+  Unauthenticated: 'unauthenticated',
+  AuthenticatedPendingRefresh: 'authenticated-pending-refresh',
+  FallbackBlocking: 'fallback-blocking',
+} as const;
+type CachedAuthHydrationResult = typeof CachedAuthHydrationResult[keyof typeof CachedAuthHydrationResult];
+
 interface AuthStateRefreshResult {
   isLoggedIn: boolean;
   user: UserProfile | null;
@@ -512,10 +519,18 @@ class AuthService {
         handledPendingCode = await this.handleCallback(pendingCode);
       }
       if (!handledPendingCode) {
-        await this.refreshAuthState({
-          clearOnFailure: true,
-          reportLifecycle: true,
-        });
+        const hydratedViaSnapshot = await this.tryHydrateFromCachedSnapshot();
+        if (hydratedViaSnapshot === CachedAuthHydrationResult.AuthenticatedPendingRefresh) {
+          void this.refreshAuthState({
+            clearOnFailure: true,
+            reportLifecycle: true,
+          });
+        } else if (hydratedViaSnapshot === CachedAuthHydrationResult.FallbackBlocking) {
+          await this.refreshAuthState({
+            clearOnFailure: true,
+            reportLifecycle: true,
+          });
+        }
       }
     } catch {
       store.dispatch(setAuthTemporarilyUnavailable({ hasCredentials: false }));
@@ -1351,6 +1366,91 @@ class AuthService {
     );
   }
 
+  private applyLoadedServerModels(
+    rawModels: Parameters<typeof mapAvailableServerModelsToModels>[0],
+    preferences: { success?: boolean; data?: Record<string, unknown> } | null | undefined,
+  ): number {
+    const serverModels = mapAvailableServerModelsToModels(rawModels);
+    const presetModels = serverModels.filter(model => model.presetId);
+    store.dispatch(setServerModels(serverModels));
+    if (preferences?.success) {
+      for (const [agentId, rawPreference] of Object.entries(preferences.data ?? {})) {
+        const preference = parseModelPresetPreference(rawPreference);
+        if (!preference) continue;
+        const model = presetModels.find(item => item.presetId === preference.presetId && item.accessible !== false);
+        if (model) {
+          store.dispatch(setSelectedModel({
+            agentId,
+            model: { ...model, presetThinkingLevel: preference.thinkingLevel },
+          }));
+        }
+      }
+    }
+    return serverModels.length;
+  }
+
+  /**
+   * Stale-While-Revalidate startup hydration: reads locally persisted user,
+   * quota, and server models in a few milliseconds so App can render the main
+   * shell immediately without waiting on remote HTTPS round trips.
+   */
+  private async tryHydrateFromCachedSnapshot(): Promise<CachedAuthHydrationResult> {
+    if (typeof window.electron?.auth?.getCachedSnapshot !== 'function') {
+      return CachedAuthHydrationResult.FallbackBlocking;
+    }
+    try {
+      const snapshot = await window.electron.auth.getCachedSnapshot();
+      if (!snapshot?.success) {
+        return CachedAuthHydrationResult.FallbackBlocking;
+      }
+      if (!snapshot.hasCredentials) {
+        await this.applyLoggedOutState(false);
+        reportAuthLifecycleEvent({
+          eventType: AuthLifecycleEventType.Restore,
+          outcome: AuthSessionStatus.Unauthenticated,
+        });
+        return CachedAuthHydrationResult.Unauthenticated;
+      }
+      const cachedUser = snapshot.cachedUser ?? null;
+      const cachedQuota = snapshot.cachedQuota ?? null;
+      const cachedEnterpriseContext = snapshot.cachedEnterpriseContext ?? null;
+      if (cachedUser) {
+        const isEnterpriseAccount = (
+          cachedUser.accountMode === EnterpriseAccountMode.Enterprise
+          || cachedQuota?.accountMode === EnterpriseAccountMode.Enterprise
+          || cachedQuota?.subscriptionStatus === AuthSubscriptionStatus.Enterprise
+        );
+        const canHydrate = !isEnterpriseAccount || Boolean(cachedEnterpriseContext);
+        if (canHydrate) {
+          try {
+            this.applyAuthenticatedState(
+              cachedUser,
+              cachedQuota,
+              null,
+              cachedEnterpriseContext,
+            );
+            if (Array.isArray(snapshot.cachedModels) && snapshot.cachedModels.length > 0) {
+              const preferences = await window.electron.modelPresets
+                ?.getPreferences()
+                .catch(() => ({ success: false, data: {} }));
+              const count = this.applyLoadedServerModels(snapshot.cachedModels, preferences);
+              writeAuthRendererLog(
+                'debug',
+                `hydrated ${count} cached server model(s) into renderer state`,
+              );
+            }
+          } catch (error) {
+            writeAuthRendererLog('debug', 'skipped cached auth hydration due to incomplete context', error);
+          }
+        }
+      }
+      return CachedAuthHydrationResult.AuthenticatedPendingRefresh;
+    } catch (error) {
+      writeAuthRendererLog('debug', 'failed to read cached auth snapshot, falling back to live refresh', error);
+      return CachedAuthHydrationResult.FallbackBlocking;
+    }
+  }
+
   private async requestServerModels(
     requestSnapshot: AuthAccountRequestSnapshot,
   ): Promise<ServerModelLoadOutcome> {
@@ -1364,20 +1464,10 @@ class AuthService {
         return ServerModelLoadOutcome.Abandoned;
       }
       if (modelsResult.success && Array.isArray(modelsResult.models)) {
-        const serverModels = mapAvailableServerModelsToModels(modelsResult.models);
-        const presetModels = serverModels.filter(model => model.presetId);
-        store.dispatch(setServerModels(serverModels));
-        if (preferences?.success) {
-          for (const [agentId, rawPreference] of Object.entries(preferences.data ?? {})) {
-            const preference = parseModelPresetPreference(rawPreference);
-            if (!preference) continue;
-            const model = presetModels.find(item => item.presetId === preference.presetId && item.accessible !== false);
-            if (model) store.dispatch(setSelectedModel({ agentId, model: { ...model, presetThinkingLevel: preference.thinkingLevel } }));
-          }
-        }
+        const count = this.applyLoadedServerModels(modelsResult.models, preferences);
         writeAuthRendererLog(
           'debug',
-          `loaded ${serverModels.length} server model(s) into renderer state`,
+          `loaded ${count} server model(s) into renderer state`,
         );
         return ServerModelLoadOutcome.Loaded;
       }

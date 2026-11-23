@@ -194,6 +194,7 @@ const restoreCurrentAgentDefaultSkills = (): void => {
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
   private openClawStatus: OpenClawEngineStatus | null = null;
   private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
   private openClawRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
@@ -262,41 +263,52 @@ class CoworkService {
     store.dispatch(setStreaming(isStreaming));
   }
 
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
   async init(): Promise<void> {
     if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
 
-    // Attach listeners before reads so a slow initial snapshot cannot miss
-    // real-time events. Each snapshot is isolated and bounded: the Cowork view
-    // must never remain on a permanent loading screen because one IPC stalls.
-    this.setupStreamListeners();
-    this.setupOpenClawEngineListeners();
+    this.initPromise = (async () => {
+      // Attach listeners before reads so a slow initial snapshot cannot miss
+      // real-time events. Each snapshot is isolated and bounded: the Cowork view
+      // must never remain on a permanent loading screen because one IPC stalls.
+      this.setupStreamListeners();
+      this.setupOpenClawEngineListeners();
 
-    const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          task(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
-              COWORK_INIT_STAGE_TIMEOUT_MS,
-            );
-          }),
-        ]);
-      } catch (error) {
-        this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    };
+      const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            task(),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
+                COWORK_INIT_STAGE_TIMEOUT_MS,
+              );
+            }),
+          ]);
+        } catch (error) {
+          this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
 
-    await Promise.all([
-      runStage('loadConfig', () => this.loadConfig()),
-      runStage('loadSessions', () => this.loadSessions()),
-      runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
-    ]);
+      await Promise.all([
+        runStage('loadConfig', () => this.loadConfig()),
+        runStage('loadSessions', () => this.loadSessions()),
+        runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
+      ]);
 
-    this.initialized = true;
+      this.initialized = true;
+    })().finally(() => {
+      this.initPromise = null;
+    });
+
+    return this.initPromise;
   }
 
   private setupStreamListeners(): void {
@@ -2744,6 +2756,7 @@ class CoworkService {
     this.cleanupListeners();
     this.openClawStatusListeners.clear();
     this.initialized = false;
+    this.initPromise = null;
   }
 }
 

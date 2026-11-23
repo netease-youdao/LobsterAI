@@ -30,6 +30,8 @@ vi.mock('electron', () => ({
 
 vi.mock('../dshOrphanReaper', () => ({
   reapOrphanedDshRuntimes: orphanReapMock,
+  clearDshCleanShutdownMarker: vi.fn(),
+  writeDshCleanShutdownMarker: vi.fn(),
 }));
 
 vi.mock('../../migration/legacyOpenClawMigrator', async () => {
@@ -359,6 +361,138 @@ describe('DshBootstrap.syncAllConfig', () => {
     expect(restartSpy).not.toHaveBeenCalled();
 
     await bootstrap.stop();
+  });
+
+  test('deferExternalSync resolves critical sync immediately without waiting for slow IM sync or OAuth MCP', async () => {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-dsh-bootstrap-'));
+    tempDirs.push(userDataDir);
+    const db = new Database(':memory:');
+    openDbs.push(db);
+
+    const bootstrap = new DshBootstrap({
+      userDataDir,
+      db,
+      skillsDir: path.join(userDataDir, 'SKILLs'),
+      coworkStore: {
+        getSession: () => null,
+        addMessage: () => ({
+          id: 'msg-1',
+          type: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+        }),
+        updateMessageContent: () => undefined,
+        deleteMessage: () => false,
+        updateSession: () => undefined,
+      },
+      getDefaultCwd: () => userDataDir,
+      runtimePaths: {
+        runtimeDir: path.join(userDataDir, 'runtime'),
+        hostBundleDir: path.join(userDataDir, 'host-bundle'),
+        channelsBundleDir: path.join(userDataDir, 'channels-bundle'),
+      },
+    });
+
+    vi.spyOn(bootstrap.hostManager, 'isReady').mockReturnValue(true);
+    vi.spyOn(bootstrap.hostManager, 'syncProviders').mockResolvedValue({ ok: true });
+    vi.spyOn(bootstrap.hostManager, 'syncSkillsPolicy').mockResolvedValue({ ok: true });
+    const syncMcpSpy = vi.spyOn(bootstrap.hostManager, 'syncMcpServers').mockResolvedValue({ ok: true });
+    const syncHostToolsSpy = vi.spyOn(bootstrap.hostManager, 'syncHostTools').mockResolvedValue({ ok: true });
+    const imGate = deferred<{
+      ok: boolean;
+      started: string[];
+      stopped: string[];
+      errors: Array<{ key: string; error: string }>;
+      skippedRetiredPlatforms: string[];
+      statuses: unknown[];
+    }>();
+    const syncImSpy = vi.spyOn(bootstrap.channelsBridge, 'syncInstances').mockImplementation(() => imGate.promise);
+
+    const result = await bootstrap.syncAllConfig(
+      {
+        providers: {},
+        mcpServers: [
+          {
+            id: 'sse-1',
+            name: 'demo-sse',
+            transportType: 'sse',
+            url: 'https://mcp.example.com/sse',
+            enabled: true,
+          },
+        ],
+        skillsPolicy: { enabledIds: null, disabledIds: [] },
+        imInstances: [
+          {
+            platform: 'feishu',
+            instanceId: 'default',
+            enabled: true,
+            config: { appId: 'a', appSecret: 'b' },
+          },
+        ],
+      },
+      { deferExternalSync: true, skipHostToolsSync: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(syncHostToolsSpy).not.toHaveBeenCalled();
+    expect(syncMcpSpy).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: 'demo-sse' })]),
+      { deferSseWait: true },
+    );
+
+    // Deferred IM sync starts asynchronously in the background after critical sync resolves.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(syncImSpy).toHaveBeenCalledTimes(1);
+    imGate.resolve({
+      ok: true,
+      started: ['feishu:default'],
+      stopped: [],
+      errors: [],
+      skippedRetiredPlatforms: [],
+      statuses: [],
+    });
+    await bootstrap.stop();
+  });
+
+  test('doStart completes without blocking on slow legacy backup backfills', async () => {
+    const { bootstrap, db } = createTestBootstrap();
+    const slowBackfill = deferred<{ status: 'skipped'; tasksImported: number; runsImported: number }>();
+    cronBackfillMock.mockImplementationOnce(() => slowBackfill.promise);
+
+    try {
+      let hostReady = false;
+      vi.spyOn(bootstrap.hostManager, 'start').mockImplementation(async () => {
+        hostReady = true;
+      });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap.hostManager, 'getStatus').mockImplementation(() => ({
+        phase: hostReady ? DshHostPhase.Ready : DshHostPhase.Starting,
+        origin: hostReady ? 'http://127.0.0.1:9999' : null,
+        authenticatedWebUrl: null,
+        pid: hostReady ? 12345 : null,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir: '/tmp/profile',
+        dshHomeDir: '/tmp/dsh-profile',
+        cliShimPath: null,
+        lastError: null,
+        startedAt: hostReady ? Date.now() : null,
+        restartCount: 0,
+      }));
+      vi.spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools').mockResolvedValue({ ok: true });
+      vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+
+      // Must resolve even though cronBackfillMock has NOT resolved yet.
+      const status = await bootstrap.start({
+        syncInitialConfig: async () => ({ success: true }),
+      });
+      expect(status.phase).toBe(OpenClawEnginePhase.Running);
+      expect(bootstrap.isReadyForTurns()).toBe(true);
+
+      slowBackfill.resolve({ status: 'skipped', tasksImported: 0, runsImported: 0 });
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
   });
 });
 

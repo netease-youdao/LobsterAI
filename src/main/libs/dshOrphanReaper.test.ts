@@ -1,11 +1,17 @@
-import { describe, expect, test } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { describe, expect, test, vi } from 'vitest';
 
 import {
+  clearDshCleanShutdownMarker,
   findOrphanedDshRuntimes,
   isDshWebCommand,
   parseProcessTable,
   type ProcessTableRow,
   reapOrphanedDshRuntimes,
+  writeDshCleanShutdownMarker,
 } from './dshOrphanReaper';
 import { buildDshWebArgs } from './dshRuntime';
 
@@ -161,5 +167,46 @@ describe('reapOrphanedDshRuntimes', () => {
     };
     expect(await reapOrphanedDshRuntimes({ platform: 'win32', listProcesses: neverCalled })).toBe(0);
     expect(await reapOrphanedDshRuntimes({ platform: 'darwin', listProcesses: neverCalled })).toBe(0);
+  });
+
+  test('skips process table scan when clean shutdown marker matches executablePath', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-orphan-marker-'));
+    const markerPath = path.join(dir, 'dsh-clean-shutdown.json');
+    try {
+      writeDshCleanShutdownMarker(markerPath, EXEC);
+      const listProcesses = vi.fn(async () => table);
+
+      expect(await reapOrphanedDshRuntimes({
+        platform: 'darwin',
+        executablePath: EXEC,
+        cleanShutdownMarkerPath: markerPath,
+        listProcesses,
+      })).toBe(0);
+      expect(listProcesses).not.toHaveBeenCalled();
+
+      // Different executable path must still scan.
+      expect(await reapOrphanedDshRuntimes({
+        platform: 'darwin',
+        executablePath: DEV_EXEC,
+        cleanShutdownMarkerPath: markerPath,
+        listProcesses,
+      })).toBe(0);
+      expect(listProcesses).toHaveBeenCalledTimes(1);
+
+      // Clearing the marker (as on host start / crash recovery) restores scanning.
+      clearDshCleanShutdownMarker(markerPath);
+      expect(fs.existsSync(markerPath)).toBe(false);
+      await reapOrphanedDshRuntimes({
+        platform: 'darwin',
+        executablePath: EXEC,
+        cleanShutdownMarkerPath: markerPath,
+        listProcesses,
+        sendSignal: () => undefined,
+        isAlive: () => false,
+      });
+      expect(listProcesses).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

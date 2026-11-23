@@ -701,10 +701,16 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.SyncProviders, payload);
   }
 
-  async syncMcpServers(servers: DshHostMcpServerSpec[]): Promise<Record<string, unknown>> {
+  async syncMcpServers(
+    servers: DshHostMcpServerSpec[],
+    options?: { deferSseWait?: boolean },
+  ): Promise<Record<string, unknown>> {
     this.lastMcpServers = servers;
     if (!this.isReady()) return { deferred: true };
-    return this.getClient().callOps(DshOpsAction.SyncMcpServers, { servers });
+    return this.getClient().callOps(DshOpsAction.SyncMcpServers, {
+      servers,
+      ...(options?.deferSseWait ? { deferSseWait: true } : {}),
+    });
   }
 
   async syncSkillsPolicy(policy: DshHostSkillsPolicy): Promise<Record<string, unknown>> {
@@ -885,7 +891,10 @@ export class DshHostManager extends EventEmitter {
       await client.callOps(DshOpsAction.SyncHostTools, { tools: this.lastHostTools });
     }
     if (this.lastMcpServers) {
-      const mcpResult = await client.callOps(DshOpsAction.SyncMcpServers, { servers: this.lastMcpServers });
+      const mcpResult = await client.callOps(DshOpsAction.SyncMcpServers, {
+        servers: this.lastMcpServers,
+        deferSseWait: true,
+      });
       if (mcpResult && typeof mcpResult === 'object') {
         if (mcpResult.available === false) {
           console.warn('[DshHostManager] replay syncMcpServers reported mcpManager unavailable');

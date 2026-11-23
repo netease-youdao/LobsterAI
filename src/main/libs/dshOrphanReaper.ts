@@ -12,6 +12,8 @@
 // without WMI, so there the quit-time stop is the only protection.
 
 import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -78,6 +80,46 @@ export interface DshOrphanReapOptions {
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
   isAlive?: (pid: number) => boolean;
   graceMs?: number;
+  /**
+   * Optional sentinel file written on graceful shutdown and cleared before
+   * spawning DSH. When present for the same executable, the previous run shut
+   * down cleanly and the `ps` scan can be skipped.
+   */
+  cleanShutdownMarkerPath?: string;
+}
+
+export function writeDshCleanShutdownMarker(markerPath: string, executablePath: string): void {
+  try {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ clean: true, executablePath, stoppedAt: Date.now() }),
+      { mode: 0o600 },
+    );
+  } catch {
+    // Best-effort optimization only.
+  }
+}
+
+export function clearDshCleanShutdownMarker(markerPath: string): void {
+  try {
+    fs.rmSync(markerPath, { force: true });
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+function consumeCleanShutdownMarker(markerPath: string, executablePath: string): boolean {
+  try {
+    if (!fs.existsSync(markerPath)) return false;
+    const raw = fs.readFileSync(markerPath, 'utf8');
+    fs.rmSync(markerPath, { force: true });
+    const parsed = JSON.parse(raw) as { clean?: unknown; executablePath?: unknown };
+    return parsed?.clean === true && parsed.executablePath === executablePath;
+  } catch {
+    clearDshCleanShutdownMarker(markerPath);
+    return false;
+  }
 }
 
 function listProcessesWithPs(): Promise<string> {
@@ -100,6 +142,12 @@ export async function reapOrphanedDshRuntimes(options: DshOrphanReapOptions = {}
   const platform = options.platform ?? process.platform;
   if (platform === 'win32') return 0;
   const executablePath = options.executablePath ?? process.execPath;
+  if (
+    options.cleanShutdownMarkerPath
+    && consumeCleanShutdownMarker(options.cleanShutdownMarkerPath, executablePath)
+  ) {
+    return 0;
+  }
   const listProcesses = options.listProcesses ?? listProcessesWithPs;
   const sendSignal = options.sendSignal ?? ((pid, signal) => process.kill(pid, signal));
   const isAlive = options.isAlive ?? isProcessAlive;

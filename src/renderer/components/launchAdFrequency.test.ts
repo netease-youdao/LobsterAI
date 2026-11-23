@@ -7,6 +7,7 @@ import {
   markLaunchAdShown,
   normalizeLaunchAdState,
   pickLaunchAd,
+  resolveLaunchAdBlockingState,
   resolveLaunchAdWidth,
 } from './launchAdFrequency';
 import type { ClientBanner } from './sidebarAdBannerState';
@@ -76,5 +77,50 @@ describe('launch ad frequency', () => {
     expect(resolveLaunchAdWidth({ modalWidth: 960 })).toBe(960);
     expect(resolveLaunchAdWidth({ modalWidth: 100 })).toBe(400);
     expect(resolveLaunchAdWidth({ modalWidth: 5000 })).toBe(400);
+  });
+
+  test('blocks secondary startup pop-ups while launch ad is pending or open, and releases after decision or timeout', () => {
+    expect(resolveLaunchAdBlockingState({
+      enabled: true,
+      decided: false,
+      bannerOpen: false,
+      pendingTimedOut: false,
+    })).toBe(true);
+
+    expect(resolveLaunchAdBlockingState({
+      enabled: true,
+      decided: true,
+      bannerOpen: true,
+      pendingTimedOut: false,
+    })).toBe(true);
+
+    expect(resolveLaunchAdBlockingState({
+      enabled: true,
+      decided: true,
+      bannerOpen: false,
+      pendingTimedOut: false,
+    })).toBe(false);
+
+    expect(resolveLaunchAdBlockingState({
+      enabled: true,
+      decided: false,
+      bannerOpen: false,
+      pendingTimedOut: true,
+    })).toBe(false);
+
+    expect(resolveLaunchAdBlockingState({
+      enabled: false,
+      decided: false,
+      bannerOpen: false,
+      pendingTimedOut: false,
+    })).toBe(false);
+
+    // If a banner is visibly open, keep blocking even after timeout or enabled toggle.
+    expect(resolveLaunchAdBlockingState({
+      enabled: false,
+      decided: true,
+      bannerOpen: true,
+      pendingTimedOut: true,
+    })).toBe(true);
   });
 });

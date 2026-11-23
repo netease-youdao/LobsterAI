@@ -810,9 +810,11 @@ export function createMcpSseBridgeController(ctx, deps) {
    * Reconcile the live SSE MCP server fleet against `rawEntries`.
    *
    * @param {Array<Record<string, unknown>>} rawEntries
+   * @param {{ awaitInitialReady?: boolean }} [options]
    * @returns {Promise<{ registered: string[], errors: string[], statuses: ReturnType<typeof list> }>}
    */
-  async function sync(rawEntries) {
+  async function sync(rawEntries, options = {}) {
+    const awaitInitialReady = options?.awaitInitialReady !== false;
     const registered = [];
     const errors = [];
     const listInput = Array.isArray(rawEntries) ? rawEntries : [];
@@ -868,7 +870,7 @@ export function createMcpSseBridgeController(ctx, deps) {
       });
     }
 
-    if (newlyStarted.length > 0) {
+    if (awaitInitialReady && newlyStarted.length > 0) {
       await Promise.all(
         newlyStarted.map(async ({ name, entry, waitMs }) => {
           let waitTimer;

@@ -7,11 +7,33 @@ import { getSidebarBannerVersion } from './sidebarAdBannerState';
 export const LAUNCH_AD_STATE_KEY = 'client_launch_ad.state.v1';
 /** Stop pop-up attempts that would land long after the user started working. */
 export const LAUNCH_AD_MAX_DELAY_MS = 10_000;
+/**
+ * Upper bound on how long secondary startup pop-ups wait for the launch ad
+ * eligibility check when the banner fetch is still pending on a cold cache.
+ */
+export const LAUNCH_AD_PENDING_GUARD_MS = 2_500;
 const MAX_TRACKED_VERSIONS = 50;
 /** Launch-modal width bounds; the server validates the same range when Admin saves a banner. */
 export const LAUNCH_AD_DEFAULT_WIDTH = 400;
 export const LAUNCH_AD_MIN_WIDTH = 320;
 export const LAUNCH_AD_MAX_WIDTH = 960;
+
+export interface LaunchAdBlockingInput {
+  enabled: boolean;
+  decided: boolean;
+  bannerOpen: boolean;
+  pendingTimedOut: boolean;
+}
+
+/**
+ * True while the launch ad owns the startup modal slot — either visibly open
+ * or still resolving its initial eligibility within the brief startup guard.
+ */
+export const resolveLaunchAdBlockingState = (input: LaunchAdBlockingInput): boolean => {
+  if (input.bannerOpen) return true;
+  if (!input.enabled || input.decided || input.pendingTimedOut) return false;
+  return true;
+};
 
 /** Width the launch modal should use for a banner; unknown or out-of-range values fall back to the default. */
 export const resolveLaunchAdWidth = (banner: Pick<ClientBanner, 'modalWidth'>): number => {

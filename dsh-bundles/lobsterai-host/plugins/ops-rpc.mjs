@@ -142,6 +142,7 @@ export function apply(ctx) {
 
     const body = payload && typeof payload === 'object' ? payload : {};
     const servers = Array.isArray(body.servers) ? body.servers : [];
+    const deferSseWait = body.deferSseWait === true;
 
     const standardEntries = [];
     const sseEntries = [];
@@ -214,7 +215,9 @@ export function apply(ctx) {
       }
     }
 
-    const sseResult = await sseBridge.sync(sseEntries);
+    const sseResult = await sseBridge.sync(sseEntries, {
+      awaitInitialReady: !deferSseWait,
+    });
 
     // Prune removed or failed-to-register servers from active toolFilter state,
     // then immediately reconcile restrictions across all live agents.

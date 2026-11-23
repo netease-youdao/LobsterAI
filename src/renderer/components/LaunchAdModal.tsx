@@ -8,12 +8,14 @@ import { openClientBannerLink } from './clientBannerLink';
 import Modal from './common/Modal';
 import {
   LAUNCH_AD_MAX_DELAY_MS,
+  LAUNCH_AD_PENDING_GUARD_MS,
   LAUNCH_AD_STATE_KEY,
   type LaunchAdState,
   markLaunchAdDismissed,
   markLaunchAdShown,
   normalizeLaunchAdState,
   pickLaunchAd,
+  resolveLaunchAdBlockingState,
   resolveLaunchAdWidth,
 } from './launchAdFrequency';
 import SidebarAdBannerHtml from './SidebarAdBannerHtml';
@@ -36,47 +38,90 @@ interface LaunchAdModalProps {
   /** True once first-run onboarding and privacy consent are done and no other overlay is up. */
   enabled: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * True while the launch ad is open or still completing its initial startup
+   * eligibility check (bounded by LAUNCH_AD_PENDING_GUARD_MS), so secondary
+   * startup pop-ups do not race ahead of it.
+   */
+  onBlockingChange?: (blocking: boolean) => void;
 }
 
 /**
- * Launch ad shown right after the window opens. It sits above the engine startup
- * overlay (z-[100]) and never waits for the gateway, which keeps booting underneath.
+ * Launch ad shown right after the main window renders. It sits at z-[220]
+ * above the main UI and never waits for the engine gateway, which boots in
+ * the background.
  */
-const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange }) => {
+const LaunchAdModal: React.FC<LaunchAdModalProps> = ({ enabled, onOpenChange, onBlockingChange }) => {
   const { banners, loading } = useClientBanners(ClientBannerPlacement.DesktopLaunchModal);
   const [banner, setBanner] = useState<ClientBanner | null>(null);
   const [closing, setClosing] = useState(false);
+  const [decided, setDecided] = useState(launchAdDecided);
+  const [pendingTimedOut, setPendingTimedOut] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
   const stateRef = useRef<LaunchAdState | null>(null);
   const mountedAtRef = useRef(Date.now());
 
   useEffect(() => {
+    if (!enabled || decided || pendingTimedOut) return;
+    const timer = window.setTimeout(() => {
+      setPendingTimedOut(true);
+    }, LAUNCH_AD_PENDING_GUARD_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [decided, enabled, pendingTimedOut]);
+
+  useEffect(() => {
     if (launchAdDecided || !enabled || loading) return;
     launchAdDecided = true;
-    if (banners.length === 0 || Date.now() - mountedAtRef.current > LAUNCH_AD_MAX_DELAY_MS) return;
+    if (banners.length === 0 || Date.now() - mountedAtRef.current > LAUNCH_AD_MAX_DELAY_MS) {
+      setDecided(true);
+      return;
+    }
     void (async () => {
-      const state = normalizeLaunchAdState(await localStore.getItem<unknown>(LAUNCH_AD_STATE_KEY));
-      const picked = pickLaunchAd(banners, state);
-      // Another dialog grabbed the screen while we were reading state; skip this launch.
-      if (!picked || otherDialogOpen()) return;
-      const shownState = markLaunchAdShown(state, picked);
-      stateRef.current = shownState;
-      setBanner(picked);
       try {
-        await localStore.setItem(LAUNCH_AD_STATE_KEY, shownState);
+        const state = normalizeLaunchAdState(await localStore.getItem<unknown>(LAUNCH_AD_STATE_KEY));
+        const picked = pickLaunchAd(banners, state);
+        // Another dialog grabbed the screen while we were reading state; skip this launch.
+        if (!picked || otherDialogOpen()) {
+          setDecided(true);
+          return;
+        }
+        const shownState = markLaunchAdShown(state, picked);
+        stateRef.current = shownState;
+        setBanner(picked);
+        setDecided(true);
+        try {
+          await localStore.setItem(LAUNCH_AD_STATE_KEY, shownState);
+        } catch (error) {
+          logSidebarExperienceDiagnostic('warn', 'failed to persist launch ad state', error);
+        }
       } catch (error) {
-        logSidebarExperienceDiagnostic('warn', 'failed to persist launch ad state', error);
+        logSidebarExperienceDiagnostic('warn', 'failed to evaluate launch ad eligibility', error);
+        setDecided(true);
       }
     })();
   }, [banners, enabled, loading]);
+
+  const isBlocking = resolveLaunchAdBlockingState({
+    enabled,
+    decided,
+    bannerOpen: banner !== null,
+    pendingTimedOut,
+  });
 
   useEffect(() => {
     onOpenChange?.(banner !== null);
   }, [banner, onOpenChange]);
 
+  useEffect(() => {
+    onBlockingChange?.(isBlocking);
+  }, [isBlocking, onBlockingChange]);
+
   useEffect(() => () => {
+    onBlockingChange?.(false);
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-  }, []);
+  }, [onBlockingChange]);
 
   const close = useCallback(() => {
     if (!banner || closing) return;
