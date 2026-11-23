@@ -1,10 +1,10 @@
 import {
-  BoltIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   ExclamationTriangleIcon,
   FolderIcon,
   MinusIcon,
+  ShieldExclamationIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -16,6 +16,7 @@ import {
 import { DSH_PERMISSION_PRESET_CHANGED_EVENT } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
+import FullAccessConfirmDialog from './FullAccessConfirmDialog';
 import {
   type ApprovalDangerLevel,
   buildPermissionModalPresentation,
@@ -236,9 +237,11 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [confirmFullAccessOpen, setConfirmFullAccessOpen] = useState(false);
 
   useEffect(() => {
     setShowTechnicalDetails(false);
+    setConfirmFullAccessOpen(false);
   }, [permission.requestId]);
 
   useEffect(() => {
@@ -628,10 +631,10 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                 <div className="pt-1">
                   <button
                     type="button"
-                    onClick={handleSwitchFullAccess}
+                    onClick={() => setConfirmFullAccessOpen(true)}
                     className="inline-flex items-center gap-1.5 text-xs text-secondary hover:text-primary transition-colors"
                   >
-                    <BoltIcon className="h-3.5 w-3.5" />
+                    <ShieldExclamationIcon className="h-3.5 w-3.5" />
                     <span>{i18nService.t('coworkApprovalSwitchFullAccess')}</span>
                   </button>
                 </div>
@@ -700,6 +703,14 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           </div>
         </div>
       </div>
+      <FullAccessConfirmDialog
+        isOpen={confirmFullAccessOpen && !hidden}
+        onCancel={() => setConfirmFullAccessOpen(false)}
+        onConfirm={() => {
+          setConfirmFullAccessOpen(false);
+          handleSwitchFullAccess();
+        }}
+      />
     </div>
   );
 };

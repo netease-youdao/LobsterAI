@@ -20,6 +20,7 @@ import type { AgentSidebarAgentNode, AgentSidebarTaskNode } from './types';
 
 interface AgentTreeNodeProps {
   agent: AgentSidebarAgentNode;
+  isCurrentAgent?: boolean;
   isBatchMode: boolean;
   batchAgentId: string | null;
   selectedKeys: Set<string>;
@@ -67,21 +68,23 @@ const AGENT_TASKS_TRANSITION_MS = 200;
 
 const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
   if (shouldUseDefaultAgentIcon(agent)) {
-    return <DefaultAgentIcon className="h-[18px] w-[18px]" />;
+    return <DefaultAgentIcon className="h-[17px] w-[17px]" />;
   }
 
   return (
     <AgentAvatarIcon
       value={agent.icon}
       expertFallback={usesManagedPresetAvatar(agent)}
-      className="h-[18px] w-[18px]"
-      iconClassName="h-[18px] w-[18px]"
+      inheritColor
+      className="h-[17px] w-[17px]"
+      iconClassName="h-[17px] w-[17px]"
     />
   );
 };
 
 const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   agent,
+  isCurrentAgent = false,
   isBatchMode,
   batchAgentId,
   selectedKeys,
@@ -131,16 +134,17 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     return b.timestamp - a.timestamp;
   });
+  const isHighlighted = isCurrentAgent;
   const menuItemClassName =
-    'flex w-full items-center gap-2 whitespace-nowrap px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]';
+    'flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-surface-raised';
   const dangerMenuItemClassName =
-    'flex w-full items-center gap-2 whitespace-nowrap px-2.5 py-1.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10';
+    'flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] text-red-500 transition-colors hover:bg-red-500/10';
   const disabledMenuItemClassName =
-    'flex w-full cursor-not-allowed items-center gap-2 whitespace-nowrap px-2.5 py-1.5 text-left text-[13px] text-secondary/40';
+    'flex w-full cursor-not-allowed items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] text-secondary/40';
   const rowActionButtonClassName =
-    'inline-flex h-5 w-5 items-center justify-center rounded text-foreground opacity-[0.3] transition-opacity hover:opacity-[0.46]';
+    'inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground';
   const rowEditActionButtonClassName =
-    'inline-flex h-5 w-5 items-center justify-center rounded text-foreground opacity-[0.3] transition-opacity hover:opacity-[0.46]';
+    'inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground';
   const menuIconClassName = 'h-3.5 w-3.5';
 
   const calculateMenuPosition = useCallback(() => {
@@ -297,18 +301,26 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
   return (
     <div className="space-y-0.5">
-      <div className={`group sticky top-10 ${isMenuOpen ? 'z-50' : 'z-20'} -ml-[6px] h-9 w-[calc(100%+12px)] bg-surface-raised`}>
-        <div className="flex h-full items-center gap-1 rounded-full pr-12 group-hover:bg-black/[0.03] dark:group-hover:bg-white/[0.04]">
+      <div className={`group sticky top-9 ${isMenuOpen ? 'z-50' : 'z-20'} -mx-2.5 h-[34px] bg-[var(--lobster-sidebar-bg)] px-2.5`}>
+        <div className="relative flex h-full items-center gap-1 rounded-[10px] pr-14 transition-colors group-hover:bg-[var(--lobster-sidebar-item-hover)]">
           <button
             type="button"
             ref={rowButton}
             onClick={handleAgentClick}
-            className={`flex h-full min-w-0 items-center gap-2.5 rounded-full pl-2 text-left text-[length:var(--lobster-text-sidebarCompact)] font-normal text-foreground ${agent.updateRevision ? '' : 'flex-1'}`}
+            className={`flex h-full min-w-0 items-center gap-2.5 rounded-[10px] pl-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors ${
+              isHighlighted
+                ? 'font-medium text-foreground'
+                : 'font-normal text-foreground/80 group-hover:text-foreground'
+            } ${agent.updateRevision ? '' : 'flex-1'}`}
             role="treeitem"
             aria-level={1}
             aria-expanded={agent.isExpanded}
           >
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none text-foreground transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0">
+            <span
+              className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none transition-all group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 ${
+                isHighlighted ? 'text-foreground' : 'text-foreground/55'
+              }`}
+            >
               <AgentAvatar agent={agent} />
             </span>
             <span className="min-w-0 flex-1 truncate">
@@ -317,66 +329,66 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
           </button>
           {agent.updateRevision !== undefined && <ExpertUpdateBadge key={agent.updateRevision} agentId={agent.id}
             name={agentName} revision={agent.updateRevision} focusRow={() => rowButton.current?.focus({ preventScroll: true })} />}
-        </div>
 
-        <button
-          type="button"
-          onClick={handleToggleExpanded}
-          className="absolute left-[3px] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-foreground/60 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 group-has-[:focus-visible]:opacity-100"
-          aria-label={agent.isExpanded ? i18nService.t('collapse') : i18nService.t('expand')}
-          aria-expanded={agent.isExpanded}
-        >
-          <ChevronRightIcon
-            className={`h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none ${
-              agent.isExpanded ? 'rotate-90' : ''
+          <button
+            type="button"
+            onClick={handleToggleExpanded}
+            className="absolute left-[5px] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-secondary opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 group-has-[:focus-visible]:opacity-100"
+            aria-label={agent.isExpanded ? i18nService.t('collapse') : i18nService.t('expand')}
+            aria-expanded={agent.isExpanded}
+          >
+            <ChevronRightIcon
+              className={`h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none ${
+                agent.isExpanded ? 'rotate-90' : ''
+              }`}
+              strokeWidth={2}
+            />
+          </button>
+
+          <div
+            className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
+              isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
             }`}
-            strokeWidth={2}
-          />
-        </button>
-
-        <div
-          className={`absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
-            isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-          }`}
-        >
-          <button
-            ref={menuButtonRef}
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (isMenuOpen) {
-                closeMenu();
-                return;
-              }
-              const position = calculateMenuPosition();
-              if (position) {
-                onSidebarAction?.('agent_menu_open', {
-                  agentType: isMainAgent ? 'main' : 'custom',
-                  isExpanded: agent.isExpanded,
-                  isPinned: agent.pinned,
-                });
-                setMenuPosition(position);
-              }
-            }}
-            className={rowActionButtonClassName}
-            aria-label={i18nService.t('coworkSessionActions')}
           >
-            <EllipsisHorizontalIcon className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={handleCreateTask}
-            className={rowEditActionButtonClassName}
-            aria-label={i18nService.t('myAgentSidebarNewTask')}
-          >
-            <ComposeIcon className="h-3.5 w-3.5" />
-          </button>
+            <button
+              ref={menuButtonRef}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (isMenuOpen) {
+                  closeMenu();
+                  return;
+                }
+                const position = calculateMenuPosition();
+                if (position) {
+                  onSidebarAction?.('agent_menu_open', {
+                    agentType: isMainAgent ? 'main' : 'custom',
+                    isExpanded: agent.isExpanded,
+                    isPinned: agent.pinned,
+                  });
+                  setMenuPosition(position);
+                }
+              }}
+              className={rowActionButtonClassName}
+              aria-label={i18nService.t('coworkSessionActions')}
+            >
+              <EllipsisHorizontalIcon className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateTask}
+              className={rowEditActionButtonClassName}
+              aria-label={i18nService.t('myAgentSidebarNewTask')}
+            >
+              <ComposeIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {menuPosition && (
           <div
             ref={menuRef}
-            className="fixed z-[60] w-max min-w-[104px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
+            className="fixed z-[60] w-max min-w-[120px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-popover"
             style={{ top: menuPosition.top, right: menuPosition.right }}
             role="menu"
           >
@@ -465,25 +477,25 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             aria-hidden={!agent.isExpanded}
           >
             {/* Bottom padding closes the group so the next agent reads as a new section. */}
-            <div className="min-w-0 max-w-full space-y-0.5 pb-2">
+            <div className="min-w-0 max-w-full space-y-0.5 pb-2 pt-0.5">
               {agent.hasLoadError && !hasVisibleTasks && (
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center rounded-full pl-9 pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="flex h-[30px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>
               )}
 
               {agent.isLoadingTasks && !hasVisibleTasks && (
-                <div className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center pl-9 pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
+                <div className="flex h-[30px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary/80">
                   {i18nService.t('loading')}
                 </div>
               )}
 
               {!agent.isLoadingTasks && !agent.hasLoadError && !hasVisibleTasks && (
-                <div className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center pl-9 pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
+                <div className="flex h-[30px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary/75">
                   {i18nService.t('myAgentSidebarNoTasks')}
                 </div>
               )}
@@ -512,7 +524,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="-ml-[6px] flex h-[30px] w-[calc(100%+12px)] items-center rounded-full pl-9 pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="flex h-[30px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>

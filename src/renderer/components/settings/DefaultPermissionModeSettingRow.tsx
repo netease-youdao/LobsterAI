@@ -11,9 +11,11 @@ import {
   shouldApplyPermissionPresetEvent,
 } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
+import FullAccessConfirmDialog from '../cowork/FullAccessConfirmDialog';
 import {
   getPermissionPresetOption,
   PERMISSION_PRESET_OPTIONS,
+  requiresPermissionPresetConfirmation,
 } from '../cowork/permissionPresetOptions';
 import ThemedSelect from '../ui/ThemedSelect';
 import {
@@ -24,6 +26,7 @@ import {
 const DefaultPermissionModeSettingRow: React.FC = () => {
   const [preset, setPreset] = useState<DshPermissionPreset>(DEFAULT_DSH_PERMISSION_PRESET);
   const [updating, setUpdating] = useState(false);
+  const [confirmFullAccessOpen, setConfirmFullAccessOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -51,8 +54,7 @@ const DefaultPermissionModeSettingRow: React.FC = () => {
 
   const currentOption = getPermissionPresetOption(preset);
 
-  const handleChange = async (value: string) => {
-    const nextPreset = value as DshPermissionPreset;
+  const applyPreset = async (nextPreset: DshPermissionPreset) => {
     if (nextPreset === preset || updating) return;
     setUpdating(true);
     try {
@@ -72,6 +74,21 @@ const DefaultPermissionModeSettingRow: React.FC = () => {
     }
   };
 
+  const handleChange = (value: string) => {
+    const nextPreset = value as DshPermissionPreset;
+    if (nextPreset === preset || updating) return;
+    if (requiresPermissionPresetConfirmation(preset, nextPreset)) {
+      setConfirmFullAccessOpen(true);
+      return;
+    }
+    void applyPreset(nextPreset);
+  };
+
+  const handleConfirmFullAccess = async () => {
+    await applyPreset(DshPermissionPreset.FullAccess);
+    setConfirmFullAccessOpen(false);
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between gap-4">
@@ -82,7 +99,7 @@ const DefaultPermissionModeSettingRow: React.FC = () => {
           <ThemedSelect
             id="default-permission-mode"
             value={preset}
-            onChange={(value) => { void handleChange(value); }}
+            onChange={handleChange}
             options={PERMISSION_PRESET_OPTIONS.map((option) => ({
               value: option.value,
               label: i18nService.t(option.labelKey),
@@ -96,6 +113,12 @@ const DefaultPermissionModeSettingRow: React.FC = () => {
       <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary/80`}>
         {i18nService.t(currentOption.descKey)}
       </p>
+      <FullAccessConfirmDialog
+        isOpen={confirmFullAccessOpen}
+        confirming={updating}
+        onCancel={() => setConfirmFullAccessOpen(false)}
+        onConfirm={() => { void handleConfirmFullAccess(); }}
+      />
     </div>
   );
 };

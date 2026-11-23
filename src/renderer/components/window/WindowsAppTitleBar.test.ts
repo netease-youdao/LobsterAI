@@ -103,9 +103,9 @@ describe('WindowsAppTitleBar', () => {
 
   test('paints the strip above the sidebar only while the sidebar column is shown', () => {
     const withSidebar = renderTitleBar('win32', { sidebarColumnVisible: true, sidebarWidth: 260 });
-    expect(withSidebar).toContain('var(--lobster-surface-raised) 260px, transparent 260px');
+    expect(withSidebar).toContain('var(--lobster-sidebar-bg) 260px, transparent 260px');
 
     const withoutSidebar = renderTitleBar('win32', { sidebarColumnVisible: false, sidebarWidth: 260 });
-    expect(withoutSidebar).not.toContain('--lobster-surface-raised');
+    expect(withoutSidebar).not.toContain('--lobster-sidebar-bg');
   });
 });

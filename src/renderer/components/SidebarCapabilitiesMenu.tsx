@@ -1,4 +1,4 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -18,8 +18,8 @@ const HOVER_CLOSE_DELAY = 180;
 // Keep in sync with the exit animation of `.sidebar-capabilities-menu` in index.css.
 const MENU_EXIT_DURATION = 120;
 const menuItemClassName =
-  'flex h-8 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] text-foreground transition-colors duration-150 hover:bg-black/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 dark:hover:bg-white/[0.06]';
-const selectedMenuItemClassName = `${menuItemClassName} bg-black/[0.04] dark:bg-white/[0.06]`;
+  'flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] text-foreground transition-colors duration-150 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40';
+const selectedMenuItemClassName = `${menuItemClassName} bg-surface-raised font-medium`;
 
 type CapabilityView = typeof menuItems[number]['view'];
 
@@ -30,6 +30,7 @@ interface SidebarCapabilitiesMenuProps {
   className: string;
   activeClassName: string;
   iconClassName: string;
+  activeIconClassName?: string;
 }
 
 const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
@@ -39,6 +40,7 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
   className,
   activeClassName,
   iconClassName,
+  activeIconClassName,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   // Stays true briefly after closing so the menu can play its exit animation.
@@ -163,8 +165,16 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
           }
         }}
       >
-        <SidebarKitsIcon className={iconClassName} />
+        <SidebarKitsIcon className={isActive || isOpen ? (activeIconClassName ?? iconClassName) : iconClassName} />
         <span className="min-w-0 flex-1 truncate">{i18nService.t('skillsAndConnectors')}</span>
+        <ChevronRightIcon
+          aria-hidden="true"
+          className={`h-3.5 w-3.5 shrink-0 transition-all duration-150 ${
+            isActive || isOpen
+              ? 'text-secondary'
+              : 'text-secondary/50 group-hover:translate-x-0.5 group-hover:text-secondary'
+          }`}
+        />
       </button>
       {(isOpen || isMenuMounted) && !isCollapsed && createPortal(
         <div
@@ -174,7 +184,7 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
           aria-label={i18nService.t('skillsAndConnectors')}
           aria-hidden={!isOpen}
           data-state={isOpen ? 'open' : 'closed'}
-          className="sidebar-capabilities-menu non-draggable fixed z-[9999] w-44 max-w-[calc(100vw-16px)] space-y-0.5 rounded-2xl border border-border bg-surface p-1.5 text-foreground shadow-[0_12px_32px_-12px_rgba(0,0,0,0.16),0_4px_12px_-4px_rgba(0,0,0,0.06)]"
+          className="sidebar-capabilities-menu non-draggable fixed z-[9999] w-44 max-w-[calc(100vw-16px)] space-y-0.5 rounded-xl border border-border bg-surface p-1 text-foreground shadow-popover"
           style={position}
           onKeyDown={(event) => {
             const index = itemRefs.current.findIndex(item => item === document.activeElement);

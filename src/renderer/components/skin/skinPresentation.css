@@ -75,6 +75,8 @@
 }
 
 [data-skin-presentation="immersive_shell"] [data-skin-sidebar] {
+  --lobster-sidebar-bg: var(--lobster-skin-panel);
+  --lobster-sidebar-item-hover: color-mix(in srgb, var(--lobster-skin-accent) 10%, transparent);
   color: var(--lobster-skin-foreground);
   background: linear-gradient(
     155deg,

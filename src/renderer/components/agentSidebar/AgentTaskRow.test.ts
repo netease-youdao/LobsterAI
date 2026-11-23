@@ -69,7 +69,7 @@ test('task rows and hidden action controls remain keyboard reachable', () => {
   const html = renderTask(false);
   expect(html).toContain('role="treeitem"');
   expect(html).toContain('tabindex="0"');
-  expect(html).toContain('focus-visible:opacity-[0.46]');
+  expect(html).toContain('focus-visible:opacity-100');
 });
 
 test('IM task rows show platform icons and hide matching title prefixes', () => {
