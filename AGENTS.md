@@ -24,7 +24,8 @@ servers, scheduled tasks, and rich artifacts.
 Names that are easy to misread:
 
 - `Cowork` is LobsterAI's product/session layer: sessions, messages,
-  permissions, UI state, persistence, context usage, artifacts, and IPC
+  permission presets (`read-only`, `workspace-write`, `danger-full-access`)
+  and approvals, UI state, persistence, context usage, artifacts, and IPC
   contracts. Names such as `cowork:*` and `claude_session_id` come from
   earlier releases and remain part of the IPC and storage contracts.
 - DeepSeek Harness (`DSH`) is Cowork's bundled agent runtime.
@@ -40,7 +41,11 @@ Beyond `src/main/`, `src/renderer/`, and `scripts/`:
 - `src/common/`: small pure helpers compiled into both processes.
 - `src/scheduledTask/`: scheduled task model and policies. The SQLite
   scheduler in `src/main/scheduledTask/` runs tasks through DSH.
-- `dsh-bundles/`: LobsterAI's DSH host tools and IM channel drivers.
+- `dsh-bundles/`: LobsterAI's two first-party Cordis bundles layered onto DSH:
+  `lobsterai-host/` (`@lobsterai/dsh-bundle`: host tools, model/web-search/MCP
+  bridges, persona/memory scoping, progressive tool disclosure, approval
+  guards, multi-agent delegation, ops RPC, and upstream telemetry disabling)
+  and `lobsterai-channels/` (`@lobsterai/dsh-channels`: IM channel drivers).
 - `SKILLs/`: bundled skills.
 - `specs/`: design docs per feature, refactor, and bugfix, written in Chinese
   (format in `specs/README.md`). Check `specs/features/<topic>/` before
@@ -63,7 +68,9 @@ npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 --no
 ```
 
 - Node.js `>=24.15.0 <25` and npm `>=11.17.0 <12`. `.npmrc` sets
-  `engine-strict`, so other versions fail at install.
+  `engine-strict`, so other versions fail at install. `better-sqlite3@13.0.3`
+  ships prebuilt N-API binaries, and `allowScripts` in `package.json` skips
+  implicit rebuilds on Windows.
 - New libraries go in `devDependencies` (`npm install -D`). Vite bundles main
   and renderer code, and electron-builder copies every production dependency
   into `app.asar` again. `dependencies` is only for modules loaded or resolved
@@ -109,10 +116,11 @@ Before handing off:
 
 ## DSH Integration
 
-The `dsh` block in `package.json` pins the DeepSeek Harness npm package
-and pnpm. Development uses `vendor/dsh-runtime/current`. The installer ships
-the runtime and LobsterAI's host and channel bundles. See `scripts/AGENTS.md`
-for the build and packaging workflow.
+The `dsh` block in `package.json` pins the `@deepseek-ai/dsh` npm package and
+`pnpm` version (no sibling source checkout is needed). Development uses
+`vendor/dsh-runtime/current`; installers ship the pruned runtime alongside
+`dsh-bundles/`. See `scripts/AGENTS.md` for runtime builds, pruning, checks,
+and packaging gates.
 
 Look for an integration point in the adapter, config sync, host or channel
 bundles, packaging, UI, or data layer. Use a small version-scoped patch when
@@ -120,9 +128,18 @@ the fix needs to live inside DSH. Keep patches in
 `scripts/dsh-patches/<dsh.version>/` and treat `vendor/dsh-runtime/` as
 generated build output.
 
+`dsh-bundles/lobsterai-host/cordis.patch.yml` disables upstream DSH telemetry
+and DeepSeek account plugins (`DSH_REQUIRED_DISABLED_TELEMETRY_IDS`) as well
+as redundant DSH features (`office-kit`, `schedule`, `web-search-deepseek`,
+`web-deepseek-api`). Keep that guard intact and verify bundle, runtime, or
+patch changes with `npm run dsh:upgrade-check` (plus `dsh:runtime:verify` and
+`dsh:e2e`).
+
 Upgrade compatibility lives in `src/main/migration/legacyOpenClawMigrator.ts`
-and related importers. Use the original paths and field names when reading
-legacy OpenClaw data.
+and related importers: it runs an offline 6-step atomic migration before DSH
+boots and archives retired/incompatible modules under
+`userData/legacy-openclaw-backup/`. Use the original paths and field names
+when reading legacy OpenClaw data.
 
 ## Code Placement And Style
 
@@ -144,7 +161,9 @@ legacy OpenClaw data.
 ## Large Files
 
 Search large files such as `src/main/main.ts`,
-`src/main/libs/agentEngine/dshRuntimeAdapter.ts`, and
+`src/main/libs/agentEngine/dshRuntimeAdapter.ts`,
+`src/main/migration/legacyOpenClawMigrator.ts`,
+`src/renderer/components/Settings.tsx`, and
 `src/renderer/services/i18n.ts` with `rg`. Keep changes to them scoped.
 
 If a change would add meaningful complexity to one of them, propose an

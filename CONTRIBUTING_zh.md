@@ -79,8 +79,10 @@ CI 只对 PR 中改动过的 TypeScript 文件执行 lint。请确保你改动�
 ## DeepSeek Harness Runtime
 
 `package.json` 的 `dsh` 字段锁定了 `@deepseek-ai/dsh` 和 pnpm 的版本。
-构建脚本拉取 npm 包、安装对应平台的依赖、应用 `scripts/dsh-patches/<dsh.version>/`
-下的补丁，并准备开发使用的 `vendor/dsh-runtime/current`。
+构建脚本直接拉取已发布的 npm 包（无需维护同级源码仓库）、安装对应平台的生产依赖、
+内置锁定版本的 pnpm、应用 `scripts/dsh-patches/<dsh.version>/` 下的补丁、
+裁剪 LobsterAI 已原生替代的重型依赖（`libreoffice-kit-*`、`sherpa-onnx-*`），
+并准备开发使用的 `vendor/dsh-runtime/current`。
 可用 `DSH_NPM_REGISTRY` 指定 npm registry，用 `DSH_FORCE_BUILD=1` 强制重建。
 
 运行时在 `package-manager/pnpm` 中内置锁定版本的 pnpm。应用启动 DSH 时，
@@ -98,7 +100,7 @@ npm run dsh:runtime:host
 # 启动运行时并验证 Web 与 RPC 接口
 npm run dsh:runtime:verify
 
-# 检查运行时内容、LobsterAI 的 DSH 配置和内置包配置
+# 检查裁剪后的包清单、遥测禁用守卫、内置 Bundle 挂载和鉴权 RPC 启动
 npm run dsh:upgrade-check
 
 # 检查 Electron 内嵌宿主、鉴权 RPC 和数据隔离
@@ -161,10 +163,13 @@ npm run dist:win            # Windows x64
 ```
 
 各命令会构建目标平台的 DSH 运行时，并随包放入 LobsterAI 宿主包和 IM 渠道包。
-macOS 的运行时位于 `Contents/Resources/dsh-runtime/`，同级有 `dsh-bundles/`。
-Windows 安装程序从 `win-resources.tar` 将 `dsh-runtime/`、`dsh-bundles/`、
-`SKILLs/` 和 `python-win/` 解压到安装后的资源目录。
-`setup:python-runtime` 用于准备便携 Python 运行时。
+macOS 的运行时位于 `Contents/Resources/dsh-runtime/`，同级包含 `dsh-bundles/`、
+`SKILLs/` 与可选的 `computer-use/`；`afterPack` 会移除打包后 DSH 目录内的
+`node_modules/.bin` 软链接以兼容代码签名，`dist:mac:arm64` 打包前还会执行
+`dsh:upgrade-check`。Windows 上，`dist:win` 会依次执行 `predist:win`（`dsh:runtime:win-x64`）、
+`verify:installer-patches`、`build:selection-hook` 和 `setup:python-runtime`，
+再将 `dsh-runtime/`、`dsh-bundles/`、`SKILLs/` 与 `python-win/` 打包为 `win-resources.tar`，
+安装时由 `unpack-dsh-resources.cjs` 解压到资源目录。
 
 目标、锁定版本和补丁哈希匹配时，构建会复用 `vendor/dsh-runtime/<目标>`。
 修改构建脚本后可用 `DSH_FORCE_BUILD=1` 强制重建。
@@ -190,6 +195,7 @@ npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目�
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION`
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL`
 - `LOBSTERAI_WINDOWS_GET_PIP_URL`
+- `LOBSTERAI_WINDOWS_PIP_PYZ_URL`
 - `LOBSTERAI_PORTABLE_GIT_ARCHIVE`
 - `LOBSTERAI_PORTABLE_GIT_URL`
 
@@ -213,6 +219,7 @@ npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目�
 | `src/renderer/components/skills/` | 技能管理 UI |
 | `src/renderer/components/mcp/` | MCP 服务管理 UI |
 | `src/renderer/components/scheduledTasks/` | 定时任务列表、表单、详情、运行历史和模板 |
+| `src/renderer/components/dsh/` | DSH 插件与生态管理 UI |
 | `src/renderer/services/i18n.ts` | Renderer i18n 字典和 `t()` helper |
 | `src/shared/` | 主进程和渲染进程共用的常量与类型 |
 | `src/common/` | 两个进程都会编译进去的小型纯函数工具 |
