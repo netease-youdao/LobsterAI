@@ -121,7 +121,7 @@ describe('runLegacyOpenClawMigration', () => {
       '["/tmp/openclaw/mcp-packages/foo/bin.js"]',
     );
     db.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?)').run('m1', 'Linear', '{"oauth":{"enabled":true}}');
-    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('popo', '{"appKey":"x"}', 1);
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('nim', '{"appKey":"x"}', 1);
     db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('feishu', '{"appId":"cli_1"}', 1);
     db.prepare('INSERT INTO cowork_message_versions VALUES (?, ?, ?)').run('v1', 'cw-1', 'old version');
     db.close();
@@ -422,7 +422,7 @@ describe('runLegacyOpenClawMigration', () => {
         sessionTarget: 'isolated',
         wakeMode: 'now',
         payload: { kind: 'agentTurn', message: '工作收尾摘要' },
-        delivery: { mode: 'announce', channel: 'moltbot-popo', to: 'retired-user' },
+        delivery: { mode: 'announce', channel: 'moltbot-popo', to: 'user:legacy-user' },
       }),
       JSON.stringify({ lastRunAtMs: 1_785_837_600_026, lastStatus: 'ok' }),
       1_785_837_600_026,
@@ -543,10 +543,10 @@ describe('runLegacyOpenClawMigration', () => {
     });
     expect(starsTask.state.nextRunAtMs).toBeGreaterThan(Date.parse('2026-11-20T03:00:00.000Z'));
 
-    // Retired POPO delivery downgraded cleanly to mode='none'.
+    // Preserve POPO delivery even when the migrated task itself is disabled.
     const wrapupTask = scheduler.getTask('job-wrapup')!;
     expect(wrapupTask.enabled).toBe(false);
-    expect(wrapupTask.delivery).toEqual({ mode: DeliveryMode.None });
+    expect(wrapupTask.delivery).toMatchObject({ mode: DeliveryMode.Announce, channel: 'moltbot-popo', to: 'user:legacy-user' });
 
     // Verify runs: 3 for job-news (tr-1 deduped against rcpt-1, tr-running downgraded to error, rcpt-old linked to cw-news-1)
     // + 1 synthesized from cowork_sessions for job-wrapup.

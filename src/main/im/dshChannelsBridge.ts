@@ -1,9 +1,7 @@
 // Bridges LobsterAI's SQLite `im_config` and `LobsterScheduler` proactive
 // delivery to the `@lobsterai/dsh-channels` Cordis bundle running inside DSH.
 //
-// Strictly supports the 7 retained mainstream IM platforms:
-// Feishu, Weixin, DingTalk, WeCom, QQ, Telegram, Discord.
-// Retired platforms (POPO, NIM, NetEase Bee, Email) are never synced.
+// Platform support is defined by RETAINED_IM_PLATFORM_LIST.
 
 import {
   DSH_CHANNELS_ROUTE_PATH,
@@ -59,7 +57,7 @@ export function isRetainedImPlatform(platform: string): platform is RetainedImPl
 }
 
 /**
- * Filter arbitrary stored `im_config` entries down to the 7 retained platforms,
+ * Filter arbitrary stored `im_config` entries down to the retained platforms,
  * normalizing instance IDs and preserving `allowFrom` lists.
  */
 export function filterRetainedChannelInstances(

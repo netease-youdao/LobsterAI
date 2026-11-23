@@ -8,7 +8,7 @@
 // - `LobsterMemoryService` (`<userData>/workspaces/<agentId>/` + FTS5)
 // - `LobsterScheduler` (SQLite-backed scheduled tasks -> DSH turns + IM delivery)
 // - `McpOAuthManager` (encrypted Remote MCP OAuth 2.1 PKCE token manager)
-// - `DshChannelsBridge` (7 retained mainstream IM platforms via `@lobsterai/dsh-channels`)
+// - `DshChannelsBridge` (retained IM platforms via `@lobsterai/dsh-channels`)
 // - Isolated Dual-Track DSH Ecosystem Web View (`BrowserWindow`)
 
 import type Database from 'better-sqlite3';

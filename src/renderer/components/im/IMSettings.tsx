@@ -1244,6 +1244,12 @@ const IMSettings: React.FC = () => {
     setConnectivityModalPlatform(platform);
     setTestingPlatform(platform);
 
+    if (platform === 'popo' && activePopoInstanceId) {
+      const selected = config.popo.instances.find(instance => instance.instanceId === activePopoInstanceId);
+      await runConnectivityTest(platform, { popo: { instances: selected ? [selected] : [] } });
+      return;
+    }
+
     // For Telegram, persist telegram config and test (multi-instance)
     if (platform === 'telegram') {
       await imService.persistConfig({ telegram: tgMultiConfig });

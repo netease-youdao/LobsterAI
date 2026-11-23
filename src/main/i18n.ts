@@ -394,8 +394,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoFillWebhookCredentials: '请补全 appKey、appSecret、token 和 aesKey 后重新测试连通性。',
     imPopoFillWsCredentials: '请补全 appKey、appSecret 和 aesKey 后重新测试连通性。',
     imPopoConfigReady: 'POPO 配置已就绪。',
-    imPopoOpenClawHint: 'POPO 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
-    imPopoConfigReadyOpenClaw: 'POPO 配置已就绪，通过 OpenClaw 运行。',
+    imPopoConnected: 'POPO 机器人已连接到 DSH 渠道。',
+    imPopoPairingPrompt: '请在 LobsterAI 的此机器人设置中批准配对码 {code}，然后重新发送消息。',
 
     // Email Channel
     emailSettings: '邮件设置',
@@ -887,9 +887,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoFillWsCredentials:
       'Please provide the appKey, appSecret, and aesKey and test connectivity again.',
     imPopoConfigReady: 'POPO configuration is ready.',
-    imPopoOpenClawHint:
-      'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
+    imPopoConnected: 'The POPO bot is connected to the DSH channel.',
+    imPopoPairingPrompt: 'Approve pairing code {code} in this bot’s LobsterAI settings, then send your message again.',
 
     // Email Channel
     emailSettings: 'Email Settings',

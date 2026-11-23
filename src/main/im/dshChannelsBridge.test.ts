@@ -12,11 +12,11 @@ import {
 } from './dshChannelsBridge';
 
 describe('dshChannelsBridge', () => {
-  test('accepts the 7 retained mainstream platforms and excludes POPO/NIM/Bee/Email', () => {
+  test('accepts the retained platforms and excludes NIM/Bee/Email', () => {
     for (const p of RETAINED_IM_PLATFORM_LIST) {
       expect(isRetainedImPlatform(p)).toBe(true);
     }
-    expect(isRetainedImPlatform(RetiredImPlatform.Popo)).toBe(false);
+    expect(isRetainedImPlatform(RetainedImPlatform.Popo)).toBe(true);
     expect(isRetainedImPlatform(RetiredImPlatform.Nim)).toBe(false);
     expect(isRetainedImPlatform(RetiredImPlatform.NeteaseBee)).toBe(false);
     expect(isRetainedImPlatform(RetiredImPlatform.Email)).toBe(false);
@@ -26,22 +26,22 @@ describe('dshChannelsBridge', () => {
     const filtered = filterRetainedChannelInstances([
       { platform: RetainedImPlatform.Feishu, instanceId: 'f1', config: { appId: 'a' } },
       { platform: RetainedImPlatform.Telegram, instanceId: 't1', config: { botToken: 'b' } },
-      { platform: RetiredImPlatform.Popo, instanceId: 'p1', config: {} },
+      { platform: RetainedImPlatform.Popo, instanceId: 'p1', config: {} },
       { platform: RetiredImPlatform.Email, instanceId: 'e1', config: {} },
     ]);
-    expect(filtered.retained.map((r) => r.platform)).toEqual(['feishu', 'telegram']);
-    expect(filtered.skippedRetiredPlatforms).toEqual(['popo', 'email']);
+    expect(filtered.retained.map((r) => r.platform)).toEqual(['feishu', 'telegram', 'popo']);
+    expect(filtered.skippedRetiredPlatforms).toEqual(['email']);
 
     const requester = vi.fn(async (_url, init) => {
       const body = JSON.parse(init.body ?? '{}') as { action: string; payload?: { instances?: unknown[] } };
       expect(body.action).toBe('syncInstances');
-      expect(body.payload?.instances).toHaveLength(2);
+      expect(body.payload?.instances).toHaveLength(3);
       return {
         status: 200,
         headers: {},
         body: JSON.stringify({
           ok: true,
-          result: { started: ['feishu:f1', 'telegram:t1'], stopped: [], errors: [], statuses: [] },
+          result: { started: ['feishu:f1', 'telegram:t1', 'popo:p1'], stopped: [], errors: [], statuses: [] },
         }),
       };
     });
@@ -60,8 +60,8 @@ describe('dshChannelsBridge', () => {
       { platform: 'telegram', instanceId: 't1', config: { botToken: 'b' } },
       { platform: 'popo', instanceId: 'p1', config: {} },
     ]);
-    expect(res.started).toEqual(['feishu:f1', 'telegram:t1']);
-    expect(res.skippedRetiredPlatforms).toEqual(['popo']);
+    expect(res.started).toEqual(['feishu:f1', 'telegram:t1', 'popo:p1']);
+    expect(res.skippedRetiredPlatforms).toEqual([]);
   });
 
   test('normalizes legacy channel aliases in sendProactiveMessage and rejects retired platforms', async () => {
@@ -98,11 +98,12 @@ describe('dshChannelsBridge', () => {
       chatId: 'cid123',
       text: 'hi',
     });
-    expect(sentPayloads.map((p) => p.platform)).toEqual(['weixin', 'dingtalk']);
+    await bridge.sendProactiveMessage({ platform: 'moltbot-popo', chatId: 'user:qa', text: 'hello' });
+    expect(sentPayloads.map((p) => p.platform)).toEqual(['weixin', 'dingtalk', 'popo']);
 
     await expect(
       bridge.sendProactiveMessage({
-        platform: 'moltbot-popo',
+        platform: RetiredImPlatform.Nim,
         chatId: 'u1',
         text: 'nope',
       }),

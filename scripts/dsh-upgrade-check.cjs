@@ -494,7 +494,7 @@ async function checkLiveBoot(env) {
     }
     log('bindSessionContext + syncSkillsPolicy + syncHostTools + syncAgents + syncSubagentBindings verified.');
 
-    // 6. Verify @lobsterai/dsh-channels exposes exactly the 7 retained platforms.
+    // 6. Verify @lobsterai/dsh-channels exposes exactly the retained platforms.
     const chRes = await httpRequest(`${origin}/api/lobsterai/channels`, {
       method: 'POST',
       headers: {
@@ -508,11 +508,11 @@ async function checkLiveBoot(env) {
     }
     const chJson = JSON.parse(chRes.body);
     const platforms = chJson?.result?.supportedPlatforms || [];
-    const expectedPlatforms = ['feishu', 'weixin', 'dingtalk', 'wecom', 'qq', 'telegram', 'discord'];
+    const expectedPlatforms = ['feishu', 'weixin', 'dingtalk', 'wecom', 'qq', 'telegram', 'discord', 'popo'];
     if (JSON.stringify(platforms) !== JSON.stringify(expectedPlatforms)) {
       throw new Error(`Unexpected IM channels list: ${JSON.stringify(platforms)}`);
     }
-    log('@lobsterai/dsh-channels verified (7 mainstream platforms active, retired platforms excluded).');
+    log('@lobsterai/dsh-channels verified (' + platforms.length + ' supported platforms).');
   } finally {
     child.kill('SIGTERM');
     await new Promise((resolve) => {

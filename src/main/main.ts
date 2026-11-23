@@ -151,7 +151,7 @@ import {
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
-import { DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
+import { DSH_POPO_PAIRING_EVENT, DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -290,6 +290,7 @@ import {
   listPairingRequests,
   readAllowFromStore,
   rejectPairingRequest,
+  requestPopoPairing,
 } from './im/imPairingStore';
 import {
   buildBrowserWebAudioDecodeScript,
@@ -3552,6 +3553,15 @@ const getIMGatewayManager = () => {
 
     let channelStatusBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
     getDshBootstrap().hostManager.setChannelEventHandler(async (payload) => {
+      if (payload?.type === DSH_POPO_PAIRING_EVENT) {
+        const { instanceId, senderId } = payload;
+        if (typeof instanceId !== 'string' || typeof senderId !== 'string' || !senderId
+          || !imGatewayManager?.getConfig().popo.instances.some(i => i.instanceId === instanceId && i.enabled && i.dmPolicy === 'pairing')) {
+          return { approved: false };
+        }
+        const result = requestPopoPairing(instanceId, senderId, path.join(app.getPath('userData'), DSH_PROFILE_DIR_NAME));
+        return { approved: result.approved, message: result.code ? t('imPopoPairingPrompt', { code: result.code }) : undefined };
+      }
       if (payload?.type === 'inbound') {
         const event = parseDshImInboundEvent(payload);
         if (event) {
