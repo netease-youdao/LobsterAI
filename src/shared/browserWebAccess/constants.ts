@@ -25,6 +25,9 @@ export const BrowserRuntimeProfile = {
 
 export type BrowserRuntimeProfile = typeof BrowserRuntimeProfile[keyof typeof BrowserRuntimeProfile];
 
+export const AgentBrowserMcpServerName = 'lobster-browser';
+export const AgentBrowserMcpToolPrefix = `mcp__${AgentBrowserMcpServerName}__`;
+
 export const AgentBrowserPartition = {
   Default: 'persist:lobster-agent-browser',
 } as const;
@@ -34,6 +37,13 @@ export type AgentBrowserPartition =
 
 export const AgentBrowserPageUrl = {
   Blank: 'about:blank',
+} as const;
+
+export const AgentBrowserNavigation = {
+  Url: 'url',
+  Back: 'back',
+  Forward: 'forward',
+  Reload: 'reload',
 } as const;
 
 export const AgentBrowserZoom = {

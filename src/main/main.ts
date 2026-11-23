@@ -75,12 +75,14 @@ import {
   type AgentBrowserHostResponse,
   type AgentBrowserHostSetViewRequest,
   type AgentBrowserHostZoomRequest,
+  AgentBrowserMcpServerName,
   AgentBrowserZoom,
   type BrowserControlGatewayRequest,
   BrowserControlRequestMethod,
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
   BrowserDiagnosticStep,
+  BrowserDisplayMode,
   BrowserIpc,
   BrowserNetworkMode,
   BrowserRuntimeProfile,
@@ -340,7 +342,7 @@ import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscription
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
-import { AgentBrowserHost } from './libs/agentBrowserHost';
+import { AgentBrowserHost, getDshBrowserToolStart } from './libs/agentBrowserHost';
 import { showAgentBrowserHostMenu } from './libs/agentBrowserHostMenu';
 import {
   type CoworkAgentEngine,
@@ -2893,8 +2895,8 @@ const syncOpenClawConfig = async (options: {
         });
         if (browserLaunch) {
           mcpServers.push({
-            id: "lobster-browser",
-            name: "lobster-browser",
+            id: AgentBrowserMcpServerName,
+            name: AgentBrowserMcpServerName,
             enabled: true,
             transportType: "stdio",
             command: browserLaunch.command,
@@ -3080,7 +3082,13 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   bindCoworkTurnOutcomes(runtime, getCoworkStore());
 
-  runtime.on('message', (sessionId: string, message: unknown, beforeMessageId?: string) => {
+  runtime.on('message', (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => {
+    if (message.type === 'tool_use') {
+      const event = getDshBrowserToolStart(sessionId, message.metadata?.toolName, message.metadata?.toolInput);
+      if (event && normalizeBrowserWebAccessConfig(getStore().get<AppConfigSettings>('app_config')?.browserWebAccess).displayMode === BrowserDisplayMode.InApp) {
+        getAgentBrowserHost().handleToolEvent(event);
+      }
+    }
     const safeMessage = sanitizeCoworkMessageForIpc(message);
     const windows = BrowserWindow.getAllWindows();
     const messageType = typeof message === 'object' && message && 'type' in message
