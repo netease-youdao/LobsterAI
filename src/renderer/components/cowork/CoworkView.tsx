@@ -48,6 +48,7 @@ import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
+import HomeCreditsBadge from '../HomeCreditsBadge';
 import HomeShowcaseHub from '../homeShowcase/HomeShowcaseHub';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
@@ -779,7 +780,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const isEngineReady = openClawStatus === null || isOpenClawReadyForSession(openClawStatus);
 
   const homeHeader = (
-    <div className="draggable relative z-10 flex h-12 items-center justify-between px-4 shrink-0">
+    <div className="draggable relative z-20 flex h-12 items-center justify-between px-4 shrink-0">
       <div className="non-draggable h-8 flex items-center">
         {isSidebarCollapsed && !isWindows && (
           <div className={`flex items-center gap-1 mr-2 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
@@ -824,6 +825,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           suppressed={!startupCreditEntry.resolved
             || startupCreditEntry.available}
         />
+        <HomeCreditsBadge />
       </div>
     </div>
   );

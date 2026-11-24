@@ -102,6 +102,7 @@ let oauthProviderUpstreamResolver: ((providerId: string) => Promise<{
 } | null) | null = null;
 let lastUnauthorizedWarnAt = 0;
 let requestFinishedHandler: OpenClawTokenProxyConfig['onRequestFinished'];
+let serverRequestFinishedHandler: OpenClawTokenProxyConfig['onServerRequestFinished'];
 let requestObserver: OpenClawTokenProxyConfig['observeRequest'];
 
 export interface ProxyRequestObservation {
@@ -132,6 +133,8 @@ export type OpenClawTokenProxyConfig = {
   getAccountContextHeaders?: () => Record<string, string>;
   getSessionKey?: () => string | null;
   onRequestFinished?: (origin: { traceId: string; sessionId: string; owner: string }) => void;
+  /** Lightweight notification whenever a LobsterAI server request finishes for the active account. */
+  onServerRequestFinished?: (info: { owner: string; completed: boolean; status: number | null }) => void;
   /** Optional observation, including generated traces without a Cowork turn. */
   observeRequest?: (request: ProxyRequestObservation) => ((result: ProxyRequestResult) => void) | undefined;
   getClientVersion: () => string;
@@ -183,6 +186,7 @@ type ProxyRequestTrace = {
   serverTraceId: string | null;
   status: number | null;
   finished: boolean;
+  owner?: string | null;
   usageOrigin?: { traceId: string; sessionId: string; owner: string };
   /** Prompt prefix compared with the previous request of the same conversation. */
   promptPrefix?: { key: string; observation: PromptPrefixObservation };
@@ -212,6 +216,7 @@ export function startOpenClawTokenProxy(config: OpenClawTokenProxyConfig): Promi
   accountContextHeadersGetter = config.getAccountContextHeaders ?? null;
   sessionKeyGetter = config.getSessionKey ?? null;
   requestFinishedHandler = config.onRequestFinished;
+  serverRequestFinishedHandler = config.onServerRequestFinished;
   requestObserver = config.observeRequest;
   clientVersionGetter = config.getClientVersion;
   enterpriseAuthSessionSnapshotGetter = config.getEnterpriseAuthSessionSnapshot ?? null;
@@ -261,6 +266,7 @@ export function stopOpenClawTokenProxy(): void {
   accountContextHeadersGetter = null;
   sessionKeyGetter = null;
   requestFinishedHandler = undefined;
+  serverRequestFinishedHandler = undefined;
   requestObserver = undefined;
   clientVersionGetter = null;
   enterpriseAuthSessionSnapshotGetter = null;
@@ -366,6 +372,19 @@ function finishProxyRequest(
       requestFinishedHandler?.(trace.usageOrigin);
     } catch (error) {
       console.warn('[OpenClawTokenProxy] failed to refresh completed request usage.', error);
+    }
+  }
+  const mayHaveChargedCredits = completed
+    || (trace.status !== null && trace.status >= 200 && trace.status < 300);
+  if (mayHaveChargedCredits && trace.owner && trace.owner === sessionKeyGetter?.()) {
+    try {
+      serverRequestFinishedHandler?.({
+        owner: trace.owner,
+        completed,
+        status: trace.status,
+      });
+    } catch (error) {
+      console.warn('[OpenClawTokenProxy] failed to notify credits activity.', error);
     }
   }
 }
@@ -697,6 +716,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
     const body = await collectRequestBody(req);
     requestTrace = createProxyRequestTrace(req.headers[LLM_TRACEPARENT_HEADER], effectiveReqUrl.split('?')[0] ?? '/');
+    requestTrace.owner = requestSessionKey;
     const usageContext = requestTrace.generated ? null : getLlmUsageContext(requestTrace.traceId, requestSessionKey);
     if (!isProxySessionKeyCurrent(requestSessionKey, sessionKeyGetter)
       || (usageContext && usageContext.owner !== undefined && usageContext.owner !== requestSessionKey)) {

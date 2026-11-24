@@ -2255,6 +2255,7 @@ interface IElectronAPI {
     getPendingCallback: () => Promise<string | null>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
+    onCreditsActivity: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
   };

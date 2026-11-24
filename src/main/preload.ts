@@ -1583,6 +1583,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(AuthIpcChannel.QuotaChanged, handler);
       return () => ipcRenderer.removeListener(AuthIpcChannel.QuotaChanged, handler);
     },
+    onCreditsActivity: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(AuthIpcChannel.CreditsActivity, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.CreditsActivity, handler);
+    },
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: AuthSessionChangedEvent) => callback(data);
       ipcRenderer.on(AuthIpcChannel.SessionChanged, handler);

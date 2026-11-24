@@ -2734,6 +2734,14 @@ const isLobsteraiServerModelRef = (modelRef: string): boolean => {
   return getAllServerModelMetadata().some(model => model.modelId === normalized);
 };
 
+const broadcastAuthCreditsActivity = (): void => {
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(AuthIpcChannel.CreditsActivity);
+    }
+  });
+};
+
 const shouldRefreshServerQuotaForSession = (sessionId: string): boolean => {
   const session = getCoworkStore().getSession(sessionId);
   const sessionModelRef = session?.modelOverride?.trim();
@@ -3269,6 +3277,13 @@ const bindCoworkRuntimeForwarder = (): void => {
     void coworkTurnUsageService?.settleStoppedTurn(sessionId, turn).catch((error) => {
       console.warn(`[TurnUsage] settlement failed for stopped session ${sessionId}.`, error);
     });
+    try {
+      if (shouldRefreshServerQuotaForSession(sessionId)) {
+        broadcastAuthCreditsActivity();
+      }
+    } catch {
+      // Credits refresh is best-effort after stopping a session.
+    }
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
@@ -3319,7 +3334,7 @@ const bindCoworkRuntimeForwarder = (): void => {
       if (shouldRefreshServerQuotaForSession(sessionId)) {
         windows.forEach(win => {
           if (!win.isDestroyed()) {
-            win.webContents.send('auth:quotaChanged');
+            win.webContents.send(AuthIpcChannel.QuotaChanged);
           }
         });
       }
@@ -15371,6 +15386,9 @@ if (!gotTheLock) {
           void coworkTurnUsageService?.refreshExactTrace(origin).catch(error => {
             console.warn('[TurnUsage] failed to refresh completed background request usage.', error);
           });
+        },
+        onServerRequestFinished: () => {
+          broadcastAuthCreditsActivity();
         },
         getClientVersion: () => app.getVersion(),
         getEnterpriseAuthSessionSnapshot: captureEnterpriseAuthSessionSnapshot,

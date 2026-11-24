@@ -1707,3 +1707,88 @@ describe('auth state restoration', () => {
     expect(getUser).not.toHaveBeenCalled();
   });
 });
+
+describe('lightweight credits activity refresh', () => {
+  test('refreshes only profile summary on credits activity when a display surface is active', async () => {
+    vi.useFakeTimers();
+    const activityListeners: Array<() => void> = [];
+    const getProfileSummary = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        id: 6,
+        nickname: 'User',
+        avatarUrl: null,
+        totalCreditsRemaining: 420,
+        creditItems: [],
+      },
+    });
+    const getQuota = vi.fn();
+    const getModels = vi.fn().mockResolvedValue({ success: true, models: [] });
+
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      electron: {
+        auth: {
+          getPendingCallback: vi.fn().mockResolvedValue(null),
+          getCachedSnapshot: vi.fn().mockResolvedValue({
+            success: true,
+            hasCredentials: true,
+            cachedUser: { yid: 'user@example.com', userId: '6', nickname: 'User', avatarUrl: null },
+            cachedQuota: null,
+            cachedModels: [],
+            cachedEnterpriseContext: null,
+          }),
+          getUser: vi.fn().mockResolvedValue({
+            success: true,
+            user: { yid: 'user@example.com', userId: '6', nickname: 'User', avatarUrl: null },
+            quota: null,
+          }),
+          getQuota,
+          getModels,
+          getPricingCatalog: vi.fn().mockResolvedValue({ success: true, textModels: [] }),
+          getProfileSummary,
+          onCallback: vi.fn(() => () => undefined),
+          onLifecycleEvent: vi.fn(() => () => undefined),
+          onQuotaChanged: vi.fn(() => () => undefined),
+          onCreditsActivity: vi.fn((cb: () => void) => {
+            activityListeners.push(cb);
+            return () => {
+              const idx = activityListeners.indexOf(cb);
+              if (idx >= 0) activityListeners.splice(idx, 1);
+            };
+          }),
+          onSessionChanged: vi.fn(() => () => undefined),
+        },
+        enterpriseAccount: {
+          getContext: vi.fn().mockResolvedValue({ success: true, context: null }),
+          onContextInvalidated: vi.fn(() => () => undefined),
+        },
+        modelPresets: {
+          getPreferences: vi.fn().mockResolvedValue({ success: true, data: {} }),
+        },
+        window: {
+          onStateChanged: vi.fn(() => () => undefined),
+        },
+        log: { fromRenderer: vi.fn() },
+      },
+    });
+
+    await authService.init();
+    await vi.runAllTimersAsync();
+    getProfileSummary.mockClear();
+    getQuota.mockClear();
+    getModels.mockClear();
+
+    const releaseSurface = authService.acquireCreditsDisplaySurface();
+    activityListeners.forEach(listener => listener());
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expect(getProfileSummary).toHaveBeenCalledTimes(1);
+    expect(getQuota).not.toHaveBeenCalled();
+    expect(getModels).not.toHaveBeenCalled();
+    expect(store.getState().auth.profileSummary?.totalCreditsRemaining).toBe(420);
+
+    releaseSurface();
+  });
+});
