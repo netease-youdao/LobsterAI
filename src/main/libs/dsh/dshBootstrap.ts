@@ -52,6 +52,7 @@ import {
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
+  cleanupLegacyOpenClawDisposableCaches,
   type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
@@ -252,6 +253,8 @@ export function createSingleFlightAsyncTracker<T>(): SingleFlightAsyncTracker<T>
  * Run the pure-offline 6-step OpenClaw -> DSH v2 migrator before SQLite is
  * opened by the app store, ensuring clean snapshot, archival, and rollback.
  */
+export { cleanupLegacyOpenClawDisposableCaches };
+
 export function runPreBootLegacyOpenClawMigration(options: {
   userDataDir: string;
   sqlitePath: string;
@@ -260,6 +263,7 @@ export function runPreBootLegacyOpenClawMigration(options: {
     const result = runLegacyOpenClawMigration({
       userDataDir: options.userDataDir,
       sqlitePath: options.sqlitePath,
+      deferDisposableCacheCleanup: true,
     });
     console.log(`[MigrationV2] startup check completed: status=${result.status}`);
     if (result.error) {

@@ -324,7 +324,7 @@ export interface DshHostManagerOptions {
   instanceId?: string;
   /** Search routing policy passed to `@lobsterai/dsh-bundle`. */
   searchPolicy?: DshSearchPolicy;
-  /** Boot timeout in ms (default 35_000). */
+  /** Boot timeout in ms (default 90_000 on Windows, 45_000 elsewhere). */
   bootTimeoutMs?: number;
   /** Max automatic crash restarts before entering Failed phase (default 3). */
   maxAutoRestarts?: number;
@@ -352,11 +352,21 @@ export interface DshHostManagerOptions {
   extraEnv?: Record<string, string>;
 }
 
-const DEFAULT_BOOT_TIMEOUT_MS = 35_000;
+const DEFAULT_BOOT_TIMEOUT_MS = 45_000;
+const DEFAULT_WINDOWS_BOOT_TIMEOUT_MS = 90_000;
 const DEFAULT_MAX_AUTO_RESTARTS = 3;
 const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
 const BRIDGE_KEEPALIVE_MS = 30_000;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
+
+export function resolveDefaultDshBootTimeoutMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? DEFAULT_WINDOWS_BOOT_TIMEOUT_MS : DEFAULT_BOOT_TIMEOUT_MS;
+}
+
+function sanitizeCompileCacheSegment(runtimeVersion: string | null | undefined): string {
+  const cleaned = (runtimeVersion ?? '').trim().replace(/[^a-zA-Z0-9._-]+/g, '_');
+  return cleaned.length > 0 ? cleaned : 'default';
+}
 
 function resolveSystemTimeZone(): string | undefined {
   try {
@@ -437,6 +447,7 @@ export function buildIsolatedDshChildEnv(params: {
   skillsDir: string;
   searchPolicy: DshSearchPolicy;
   runtimeDir?: string;
+  runtimeVersion?: string | null;
   executablePath?: string;
   timeZone?: string;
   nodeShimDir?: string | null;
@@ -491,6 +502,14 @@ export function buildIsolatedDshChildEnv(params: {
   }
   if (params.instanceId) {
     env[DshHostBundleEnvVar.InstanceId] = params.instanceId;
+  }
+  if (!env.NODE_COMPILE_CACHE?.trim()) {
+    env.NODE_COMPILE_CACHE = path.join(
+      params.dshHomeDir,
+      'cache',
+      'node-compile-cache',
+      sanitizeCompileCacheSegment(params.runtimeVersion),
+    );
   }
 
   const prependPathDirs: string[] = [];
@@ -947,6 +966,7 @@ export class DshHostManager extends EventEmitter {
       skillsDir: this.options.skillsDir,
       searchPolicy: this.options.searchPolicy ?? DshSearchPolicy.AllowAll,
       runtimeDir: this.options.runtimeDir,
+      runtimeVersion: this.runtimeVersion,
       executablePath: this.options.executablePath,
       timeZone: additions?.timeZone ?? this.options.timeZone,
       nodeShimDir: additions?.nodeShimDir ?? this.options.nodeShimDir ?? this.options.nodeToolchain?.nodeShimDir,
@@ -1012,7 +1032,8 @@ export class DshHostManager extends EventEmitter {
     });
     this.child = child;
 
-    const bootTimeoutMs = this.options.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
+    const bootTimeoutMs = this.options.bootTimeoutMs ?? resolveDefaultDshBootTimeoutMs();
+    const spawnStartedAt = Date.now();
 
     return new Promise<string>((resolve, reject) => {
       let stdoutBuf = '';
@@ -1034,6 +1055,7 @@ export class DshHostManager extends EventEmitter {
           if (match) {
             settled = true;
             clearTimeout(timer);
+            console.log(`[DSH Host] ready URL received in ${Date.now() - spawnStartedAt}ms`);
             resolve(match[1]);
           }
         }

@@ -42,6 +42,7 @@ import {
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
+  cleanupLegacyOpenClawDisposableCaches,
   computeLegacyMcpOAuthStoreKey,
   dismissMigrationV2Report,
   extractLegacyTavilyConfig,
@@ -179,11 +180,13 @@ describe('runLegacyOpenClawMigration', () => {
     expect(result.report).toBeDefined();
     const report = result.report!;
 
-    // Verify Step 1 snapshot + Step 3 archives exist & are non-empty.
+    // Verify Step 1 snapshot + Step 3 incompatible manifest archive exist & are non-empty.
+    // `openclaw/state` is preserved in place (no full tar.gz archive) to avoid blocking boot
+    // and to keep historical `openclaw/state/media` artifact paths intact.
     expect(fs.existsSync(report.sqliteSnapshotPath)).toBe(true);
     expect(fs.existsSync(report.incompatibleArchivePath)).toBe(true);
     expect(fs.statSync(report.incompatibleArchivePath).size).toBeGreaterThan(0);
-    expect(report.legacyStateArchivePath && fs.existsSync(report.legacyStateArchivePath)).toBe(true);
+    expect(report.legacyStateArchivePath).toBeNull();
     expect(fs.existsSync(path.join(report.backupDir, 'migration-report.json'))).toBe(true);
 
     // Verify Step 2 workspaces migrated & managed AGENTS.md stripped & .dreams omitted.
@@ -214,10 +217,12 @@ describe('runLegacyOpenClawMigration', () => {
       expect.arrayContaining(['im_weixin', 'mcp_oauth']),
     );
 
-    // Verify Step 5 cleaned up old OpenClaw & experimental dsh-runtime caches.
-    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+    // Verify Step 5 cleaned up pure disposable caches while preserving `openclaw/state`
+    // and `third-party-extensions` in place on disk.
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'logs'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'state'))).toBe(true);
     expect(fs.existsSync(path.join(userDataDir, 'dsh-runtime'))).toBe(false);
-    expect(fs.existsSync(path.join(userDataDir, 'third-party-extensions'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'third-party-extensions'))).toBe(true);
 
     // Verify scheduled task landed in LobsterScheduler SQLite table & pending report readable.
     const verifyDb = new Database(sqlitePath);
@@ -1875,8 +1880,8 @@ describe('runLegacyOpenClawMigration', () => {
     expect(result.status).toBe(MigrationV2Status.Completed);
     expect(result.report?.summary.skillsMigrated).toBe(3);
 
-    // OpenClaw dir is cleaned up after migration.
-    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+    // Legacy OpenClaw state is preserved in place after migration.
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'state'))).toBe(true);
 
     // All three legacy skills + nested scripts landed in <userData>/SKILLs/.
     expect(fs.readFileSync(path.join(userSkillsDir, 'legacy-shared', 'SKILL.md'), 'utf8')).toContain('共享旧技能');
@@ -2270,7 +2275,8 @@ describe('runLegacyOpenClawMigration', () => {
     const expectedPkgDir = path.join(userDataDir, 'mcp-packages', 'srv-valid-demo-mcp');
     const expectedBinPath = path.join(expectedPkgDir, 'node_modules', 'demo-mcp', 'bin.js');
     expect(fs.existsSync(expectedBinPath)).toBe(true);
-    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'mcp-packages'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'state'))).toBe(true);
 
     const verifyDb = new Database(sqlitePath);
     const rows = verifyDb
@@ -2900,7 +2906,7 @@ describe('runLegacyOpenClawMigration', () => {
     });
 
     expect(result.status).toBe(MigrationV2Status.Completed);
-    expect(fs.existsSync(path.join(tmp, 'openclaw'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'openclaw', 'state'))).toBe(true);
 
     const migratedPath = path.join(tmp, 'auth', 'xai-oauth.json');
     expect(fs.existsSync(migratedPath)).toBe(true);
@@ -2972,5 +2978,54 @@ describe('runLegacyOpenClawMigration', () => {
         expect.objectContaining({ kind: 'xai_oauth', id: 'xai' }),
       ]),
     );
+  });
+
+  test('deferDisposableCacheCleanup skips sync cache deletion, preserves openclaw/state/media, and cleans pure caches asynchronously', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    const mediaFile = path.join(stateDir, 'media', 'outbound', 'clip.mp4');
+    const compileCacheFile = path.join(stateDir, '.compile-cache', 'chunk.bin');
+    const stateCacheFile = path.join(stateDir, 'cache', 'index.bin');
+    const tmpFile = path.join(stateDir, 'tmp', 'scratch.tmp');
+    const logsFile = path.join(userDataDir, 'openclaw', 'logs', 'gateway.log');
+    const oldDshRuntimeFile = path.join(userDataDir, 'dsh-runtime', 'stale.bin');
+    const extFile = path.join(userDataDir, 'third-party-extensions', 'demo', 'index.js');
+
+    for (const file of [mediaFile, compileCacheFile, stateCacheFile, tmpFile, logsFile, oldDshRuntimeFile, extFile]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'payload', 'utf8');
+    }
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      deferDisposableCacheCleanup: true,
+      now: () => new Date('2026-11-24T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.legacyStateArchivePath).toBeNull();
+    // Deferred mode does not synchronously delete disposable caches during pre-boot.
+    expect(fs.existsSync(compileCacheFile)).toBe(true);
+    expect(fs.existsSync(stateCacheFile)).toBe(true);
+    expect(fs.existsSync(mediaFile)).toBe(true);
+    expect(fs.existsSync(extFile)).toBe(true);
+
+    // Async post-window cleanup removes only pure caches, preserving media & extensions.
+    const cleanup = await cleanupLegacyOpenClawDisposableCaches(userDataDir);
+    expect(cleanup.dirsRemoved).toBeGreaterThanOrEqual(5);
+    expect(fs.existsSync(compileCacheFile)).toBe(false);
+    expect(fs.existsSync(stateCacheFile)).toBe(false);
+    expect(fs.existsSync(tmpFile)).toBe(false);
+    expect(fs.existsSync(logsFile)).toBe(false);
+    expect(fs.existsSync(oldDshRuntimeFile)).toBe(false);
+    expect(fs.existsSync(mediaFile)).toBe(true);
+    expect(fs.existsSync(extFile)).toBe(true);
   });
 });

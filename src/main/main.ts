@@ -444,6 +444,7 @@ import {
 } from './libs/developmentProtocolContext';
 import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
 import {
+  cleanupLegacyOpenClawDisposableCaches,
   createSingleFlightAsyncTracker,
   DshBootstrap,
   type DshCompatEngineStatus,
@@ -617,6 +618,7 @@ import {
   applySystemProxyEnv,
   resolveSystemProxyUrlForTargets,
   restoreOriginalProxyEnv,
+  setSessionProxyModeWithTimeout,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
 import { startUninstallAnalytics } from './libs/uninstallAnalytics';
@@ -4300,14 +4302,15 @@ const updateTitleBarOverlay = () => {
 
 const applyProxyPreference = async (useSystemProxy: boolean): Promise<void> => {
   setSystemProxyEnabled(useSystemProxy);
-  // TUN-mode proxies capture traffic whatever this preference says.
-  await refreshFakeIpNetworkState();
-
-  try {
-    await session.defaultSession.setProxy({ mode: useSystemProxy ? 'system' : 'direct' });
-  } catch (error) {
-    console.error('[Main] Failed to apply session proxy mode:', error);
-  }
+  // TUN-mode proxies capture traffic whatever this preference says. Run DNS
+  // fake-IP probing and session proxy mode application concurrently with
+  // bounded timeouts so a wedged NetworkService or slow WPAD never hangs boot.
+  await Promise.all([
+    refreshFakeIpNetworkState().catch(error => {
+      console.warn('[Main] Failed to refresh fake-IP network state:', error);
+    }),
+    setSessionProxyModeWithTimeout(useSystemProxy ? 'system' : 'direct'),
+  ]);
 
   if (!useSystemProxy) {
     restoreOriginalProxyEnv();
@@ -15495,12 +15498,13 @@ if (!gotTheLock) {
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
 
-    // Start proxy BEFORE DSH spawn so DSH inherits proxy env vars and
-    // proxy-dependent providers (e.g. copilot) get the right baseURL.
-    profiler.mark('applyProxyPreference');
+    // Resolve system proxy asynchronously so it never blocks createWindow();
+    // DSH bootstrap chains onto `proxyPreferenceReady` so the child still
+    // inherits resolved proxy env vars without delaying first paint.
     const appConfig = getStore().get<AppConfigSettings>('app_config');
-    await applyProxyPreference(getUseSystemProxyFromConfig(appConfig));
-    profiler.measure('applyProxyPreference');
+    const proxyPreferenceReady = applyProxyPreference(getUseSystemProxyFromConfig(appConfig)).catch(error => {
+      console.warn('[Main] Startup proxy preference resolution failed (falling back to DIRECT):', error);
+    });
 
     profiler.mark('copilotLoopbackProxy');
     // A stable port keeps the Copilot baseUrl rendered into provider sync consistent.
@@ -15553,7 +15557,8 @@ if (!gotTheLock) {
     });
     profiler.measure('startAskUserServer');
 
-    void bootstrapOpenClawEngine({ reason: 'startup' })
+    void proxyPreferenceReady
+      .then(() => bootstrapOpenClawEngine({ reason: 'startup' }))
       .then(() => {
         try {
           getCronJobService().startPolling();
@@ -15629,6 +15634,18 @@ if (!gotTheLock) {
       },
     });
     console.log('[Main] initApp: window created');
+
+    // Clean up legacy OpenClaw pure disposable caches asynchronously after the
+    // main window is created so removing thousands of NTFS files never blocks boot.
+    void cleanupLegacyOpenClawDisposableCaches(app.getPath('userData'))
+      .then(({ dirsRemoved }) => {
+        if (dirsRemoved > 0) {
+          console.log(`[MigrationV2] deferred disposable cache cleanup removed ${dirsRemoved} dir(s)`);
+        }
+      })
+      .catch(error => {
+        console.warn('[MigrationV2] deferred disposable cache cleanup failed (non-fatal):', error);
+      });
 
     // Refresh quota & model caches in background (SWR) without delaying window or DSH spawn.
     if (getAuthTokens()) {
@@ -15917,7 +15934,13 @@ if (!gotTheLock) {
   };
 
   // 启动应用
-  initApp().catch(console.error);
+  initApp().catch((error) => {
+    console.error('[Main] initApp failed:', error);
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      console.error('[Main] Fatal startup error before main window was created; exiting to release single-instance lock.');
+      app.exit(1);
+    }
+  });
 
   // 当所有窗口关闭时退出应用
   app.on('window-all-closed', () => {

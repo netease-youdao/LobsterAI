@@ -16,6 +16,7 @@ import {
   buildIsolatedDshChildEnv,
   DshHostManager,
   resolveBundledDshPaths,
+  resolveDefaultDshBootTimeoutMs,
 } from './dshHostManager';
 import type { DshTypertClient } from './dshTypertClient';
 
@@ -837,5 +838,27 @@ describe('DshHostManager', () => {
     expect(env.LOBSTERAI_PYTHON_ROOT).toBe(pythonDir);
     expect(env.PYTHONUTF8).toBe('1');
     expect(env.DSH_HOME).toBe(path.join(temp, 'userData', 'dsh-profile'));
+  });
+
+  test('resolveDefaultDshBootTimeoutMs allows longer cold boot on Windows and injects NODE_COMPILE_CACHE', () => {
+    expect(resolveDefaultDshBootTimeoutMs('win32')).toBe(90_000);
+    expect(resolveDefaultDshBootTimeoutMs('darwin')).toBe(45_000);
+    expect(resolveDefaultDshBootTimeoutMs('linux')).toBe(45_000);
+
+    const temp = createTempDir();
+    const dshHomeDir = path.join(temp, 'dsh-profile');
+    const env = buildIsolatedDshChildEnv({
+      baseEnv: {},
+      dshHomeDir,
+      bridgeUrl: 'http://127.0.0.1:41234',
+      bridgeSecret: 'secret',
+      workspacesDir: path.join(temp, 'workspaces'),
+      skillsDir: path.join(temp, 'SKILLs'),
+      searchPolicy: DshSearchPolicy.AllowAll,
+      runtimeVersion: '0.2.2-rc.5',
+    });
+    expect(env.NODE_COMPILE_CACHE).toBe(
+      path.join(dshHomeDir, 'cache', 'node-compile-cache', '0.2.2-rc.5'),
+    );
   });
 });

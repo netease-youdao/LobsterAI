@@ -27,6 +27,29 @@ export const DEFAULT_PROXY_RESOLUTION_TARGETS = [
   'https://openrouter.ai',
 ] as const;
 
+export const DEFAULT_PROXY_OPERATION_TIMEOUT_MS = 2_000;
+
+export function runWithProxyTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return operation;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    operation,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function setEnvValue(key: ProxyEnvKey, value: string | undefined): void {
   if (typeof value === 'string' && value.length > 0) {
     process.env[key] = value;
@@ -105,13 +128,41 @@ export function applySystemProxyEnv(proxyUrl: string | null): void {
   setEnvValue('HTTPS_PROXY', proxyUrl);
 }
 
-export async function resolveSystemProxyUrl(targetUrl: string): Promise<string | null> {
+export async function setSessionProxyModeWithTimeout(
+  mode: 'system' | 'direct',
+  timeoutMs: number = DEFAULT_PROXY_OPERATION_TIMEOUT_MS,
+): Promise<boolean> {
+  if (!app.isReady()) {
+    return false;
+  }
+
+  try {
+    await runWithProxyTimeout(
+      session.defaultSession.setProxy({ mode }),
+      timeoutMs,
+      `session.setProxy(${mode})`,
+    );
+    return true;
+  } catch (error) {
+    console.warn(`[SystemProxy] Failed to apply session proxy mode (${mode}):`, error);
+    return false;
+  }
+}
+
+export async function resolveSystemProxyUrl(
+  targetUrl: string,
+  timeoutMs: number = DEFAULT_PROXY_OPERATION_TIMEOUT_MS,
+): Promise<string | null> {
   if (!app.isReady()) {
     return null;
   }
 
   try {
-    const proxyResult = await session.defaultSession.resolveProxy(targetUrl);
+    const proxyResult = await runWithProxyTimeout(
+      session.defaultSession.resolveProxy(targetUrl),
+      timeoutMs,
+      `session.resolveProxy(${targetUrl})`,
+    );
     if (!proxyResult) {
       return null;
     }
@@ -124,21 +175,43 @@ export async function resolveSystemProxyUrl(targetUrl: string): Promise<string |
       }
     }
   } catch (error) {
-    console.error('Failed to resolve system proxy:', error);
+    console.warn(`[SystemProxy] Failed to resolve system proxy for ${targetUrl}:`, error);
   }
 
   return null;
 }
 
-export async function resolveSystemProxyUrlForTargets(
-  targetUrls: readonly string[] = DEFAULT_PROXY_RESOLUTION_TARGETS,
+export async function resolveProxyForTargetsWithResolver(
+  targetUrls: readonly string[],
+  resolver: (targetUrl: string, timeoutMs: number) => Promise<string | null>,
+  timeoutMs: number = DEFAULT_PROXY_OPERATION_TIMEOUT_MS,
 ): Promise<{ proxyUrl: string | null; targetUrl: string | null }> {
-  for (const targetUrl of targetUrls) {
-    const proxyUrl = await resolveSystemProxyUrl(targetUrl);
-    if (proxyUrl) {
-      return { proxyUrl, targetUrl };
+  if (targetUrls.length === 0) {
+    return { proxyUrl: null, targetUrl: null };
+  }
+
+  // Probe all targets concurrently under a single bounded timeout so a slow
+  // PAC/WPAD lookup cannot multiply across targets, while preserving target
+  // priority order when selecting the result.
+  const results = await Promise.all(
+    targetUrls.map(async (targetUrl) => ({
+      targetUrl,
+      proxyUrl: await resolver(targetUrl, timeoutMs).catch((): null => null),
+    })),
+  );
+
+  for (const result of results) {
+    if (result.proxyUrl) {
+      return result;
     }
   }
 
   return { proxyUrl: null, targetUrl: null };
+}
+
+export async function resolveSystemProxyUrlForTargets(
+  targetUrls: readonly string[] = DEFAULT_PROXY_RESOLUTION_TARGETS,
+  timeoutMs: number = DEFAULT_PROXY_OPERATION_TIMEOUT_MS,
+): Promise<{ proxyUrl: string | null; targetUrl: string | null }> {
+  return resolveProxyForTargetsWithResolver(targetUrls, resolveSystemProxyUrl, timeoutMs);
 }
