@@ -15,6 +15,7 @@ const packageJson = require('../package.json');
 // from outside those bundles belong in dependencies.
 const RUNTIME_DEPENDENCIES: Record<string, string> = {
   'better-sqlite3': 'native addon, external in vite.config.ts',
+  'playwright-core': 'external CDP client, external in vite.config.ts',
   bufferutil: 'optional ws native addon, external in vite.config.ts',
   'utf-8-validate': 'optional ws native addon, external in vite.config.ts',
   koffi: 'native FFI, plain require() in desktopCompanion/windowsNative.ts',
