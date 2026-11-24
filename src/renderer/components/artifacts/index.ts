@@ -1,5 +1,6 @@
 export { default as AgentBrowserInAppPanel } from './AgentBrowserInAppPanel';
 export { default as ArtifactBadge } from './ArtifactBadge';
+export { default as ArtifactNewTabContent } from './ArtifactNewTabContent';
 export {
   default as ArtifactPanel,
   type BrowserAnnotationPayload,
@@ -8,6 +9,7 @@ export {
 export { default as ArtifactPreviewCard } from './ArtifactPreviewCard';
 export { default as ArtifactRenderer } from './ArtifactRenderer';
 export { default as FileDirectoryView } from './FileDirectoryView';
+export { default as InlineVideoGallery } from './InlineVideoGallery';
 export { default as SubagentPanelContent } from './SubagentPanelContent';
 export {
   default as UserAttachmentPanelContent,

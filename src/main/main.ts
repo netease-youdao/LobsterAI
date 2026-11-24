@@ -310,6 +310,7 @@ import type {
 import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
+import { registerArtifactWorkspaceHandlers } from './ipcHandlers/artifactWorkspace';
 import {
   createAsrRealtimeWsOriginStripper,
   createRealtimeAsrSession,
@@ -701,7 +702,12 @@ import {
 import { SqliteStore } from './sqliteStore';
 import { StartupProfiler } from './startupProfiler';
 import { createTray, destroyTray, updateTrayMenu, updateTrayReminder } from './trayManager';
-import { videoConfirmationFailure, videoConfirmationQuestions, videoConfirmationReferences } from './videoGenerationConfirmation';
+import {
+  createVideoReferenceImagePreview,
+  videoConfirmationFailure,
+  videoConfirmationQuestions,
+  videoConfirmationReferences,
+} from './videoGenerationConfirmation';
 import {
   AppWindowStoreKey,
   MIN_APP_WINDOW_HEIGHT,
@@ -6316,6 +6322,7 @@ if (!gotTheLock) {
         '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
         '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
       };
+      const resolvedLocalFileBySource = new Map<string, string>();
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
@@ -6331,7 +6338,9 @@ if (!gotTheLock) {
           const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
           if (dimensions.width < minimum || dimensions.height < minimum) throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
         }
-        return `data:${mime};base64,${buf.toString('base64')}`;
+        const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+        resolvedLocalFileBySource.set(dataUrl, filePath);
+        return dataUrl;
       };
       const resolveStringParam = async (name: string) => {
         if (typeof params[name] === 'string') {
@@ -6459,12 +6468,10 @@ if (!gotTheLock) {
       }
 
       if (mediaType === 'video') {
-        const references = videoConfirmationReferences(params, source => {
-          if (/^https?:\/\//i.test(source)) return source;
-          if (!source.startsWith('data:image/')) return undefined;
-          const image = nativeImage.createFromDataURL(source);
-          return image.isEmpty() ? undefined : `data:image/jpeg;base64,${image.resize({ height: 96 }).toJPEG(80).toString('base64')}`;
-        });
+        const references = videoConfirmationReferences(params, source => createVideoReferenceImagePreview(source, {
+          localPath: resolvedLocalFileBySource.get(source),
+          decodeDataUrl: dataUrl => nativeImage.createFromDataURL(dataUrl),
+        }));
         const confirmationInput = { model: selectedModel, params, prompt, portalUrl: getPortalTasksUrl(), references };
         const confirmResponse = await getMcpRuntime().askUserInternal(
           videoConfirmationQuestions(confirmationInput, modelCapability, t), undefined, {
@@ -13912,6 +13919,10 @@ if (!gotTheLock) {
   });
 
   registerMarkdownEditingHandlers(() => mainWindow);
+  registerArtifactWorkspaceHandlers({
+    getSessionCwd: sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd,
+    getDefaultCwd: () => getCoworkStore().getConfig().workingDirectory.trim() || undefined,
+  });
   officeEditing.register(() => mainWindow);
 
   // ---- artifact file watching ----
@@ -14037,10 +14048,22 @@ if (!gotTheLock) {
   ipcMain.handle(
     LocalWebServicesIpc.List,
     async (_event, options?: ListLocalWebServicesOptions) => {
+      let ownDevServerPort: number | null = null;
+      if (isDev) {
+        try {
+          const parsed = new URL(DEV_SERVER_URL);
+          if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]') {
+            const parsedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+            if (Number.isInteger(parsedPort) && parsedPort > 0) ownDevServerPort = parsedPort;
+          }
+        } catch {
+          ownDevServerPort = null;
+        }
+      }
       const preferredPorts = sanitizeLocalWebServicePorts(options?.preferredPorts);
-      const ports = Array.from(new Set([...preferredPorts, ...LOCAL_WEB_SERVICE_PORTS])).sort(
-        (a, b) => a - b,
-      );
+      const ports = Array.from(new Set([...preferredPorts, ...LOCAL_WEB_SERVICE_PORTS]))
+        .filter(port => port !== ownDevServerPort)
+        .sort((a, b) => a - b);
       const results = await Promise.all(ports.map(port => probeLocalWebService(port)));
       return results.filter((service): service is LocalWebService => service !== null);
     },

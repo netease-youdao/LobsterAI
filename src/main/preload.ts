@@ -16,6 +16,15 @@ import type { UsageContext } from '../shared/analytics/usage';
 import { AppIpcChannel, WindowIpcChannel, type WindowZoomChangedPayload } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
+import {
+  ArtifactWorkspaceIpc,
+  type CreateBlankDocumentRequest,
+  type CreateBlankDocumentResponse,
+  type ProbeGitWorkspaceRequest,
+  type ProbeGitWorkspaceResponse,
+  type RenameArtifactFileRequest,
+  type RenameArtifactFileResponse,
+} from '../shared/artifactPreview/blankDocument';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
@@ -1296,6 +1305,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(ArtifactPreviewIpc.DeleteBrowserAnnotationBatchAssets, input),
     listLocalWebServices: (options?: ListLocalWebServicesOptions) =>
       ipcRenderer.invoke(LocalWebServicesIpc.List, options) as Promise<LocalWebService[]>,
+    createBlankDocument: (request: CreateBlankDocumentRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.CreateBlankDocument, request) as Promise<CreateBlankDocumentResponse>,
+    probeGitWorkspace: (request?: ProbeGitWorkspaceRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.ProbeGitWorkspace, request ?? {}) as Promise<ProbeGitWorkspaceResponse>,
+    renameFile: (request: RenameArtifactFileRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.RenameFile, request) as Promise<RenameArtifactFileResponse>,
   },
   autoLaunch: {
     get: () => ipcRenderer.invoke(AppSettingsIpc.GetAutoLaunch),

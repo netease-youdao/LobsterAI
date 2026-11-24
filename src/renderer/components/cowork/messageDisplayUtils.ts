@@ -101,6 +101,19 @@ export const getTurnReplyMessageIds = (turn: ConversationTurn): string[] => {
   return messageIds;
 };
 
+/** Assistant replies at the end of a turn after the last tool step, oldest first. */
+export const getTurnTrailingReplyMessageIds = (turn: ConversationTurn): string[] => {
+  const messageIds: string[] = [];
+  for (let index = turn.assistantItems.length - 1; index >= 0; index -= 1) {
+    const item = turn.assistantItems[index];
+    if (item.type === 'tool_group' || item.type === 'tool_result') break;
+    if (item.type === 'assistant' && !item.message.metadata?.isThinking) {
+      messageIds.push(item.message.id);
+    }
+  }
+  return messageIds.reverse();
+};
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const COWORK_DETAIL_CONTENT_CLASS = 'mx-auto w-full max-w-[760px]';

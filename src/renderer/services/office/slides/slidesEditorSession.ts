@@ -1260,3 +1260,4 @@ const registry = createOfficeEditorRegistry<SlidesPackageInfo, SlidesEditorSessi
 export const acquireSlidesEditor = registry.acquire;
 /** Route refreshes through the live session instead of replacing its artifact bytes. */
 export const refreshOpenSlidesEditor = registry.refresh;
+export const closeOpenSlidesEditor = registry.close;

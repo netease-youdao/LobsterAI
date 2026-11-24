@@ -15,6 +15,14 @@ import type { AgentModelSelection } from '../../shared/agent/modelSelection';
 import type { ExpertCatalog, ExpertUpgradeStatus } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type {
+  CreateBlankDocumentRequest,
+  CreateBlankDocumentResponse,
+  ProbeGitWorkspaceRequest,
+  ProbeGitWorkspaceResponse,
+  RenameArtifactFileRequest,
+  RenameArtifactFileResponse,
+} from '../../shared/artifactPreview/blankDocument';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
@@ -1748,6 +1756,9 @@ interface IElectronAPI {
       batchId: string;
     }) => Promise<{ success: boolean; error?: string }>;
     listLocalWebServices: (options?: ListLocalWebServicesOptions) => Promise<LocalWebService[]>;
+    createBlankDocument: (request: CreateBlankDocumentRequest) => Promise<CreateBlankDocumentResponse>;
+    probeGitWorkspace: (request?: ProbeGitWorkspaceRequest) => Promise<ProbeGitWorkspaceResponse>;
+    renameFile: (request: RenameArtifactFileRequest) => Promise<RenameArtifactFileResponse>;
   };
   autoLaunch: {
     get: () => Promise<{ enabled: boolean }>;

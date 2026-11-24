@@ -27,6 +27,7 @@ export const ArtifactContentView = {
 export type ArtifactContentView = typeof ArtifactContentView[keyof typeof ArtifactContentView];
 
 export const ArtifactSpecialTab = {
+  NewTab: 'newTab',
   FileList: 'fileList',
   Browser: 'browser',
   AgentBrowser: 'agentBrowser',
@@ -397,6 +398,20 @@ const artifactSlice = createSlice({
       }
     },
 
+    renameArtifactFile(state, action: PayloadAction<{
+      sessionId: string; oldFilePath: string; newFilePath: string; newFileName: string;
+    }>) {
+      const { sessionId, oldFilePath, newFilePath, newFileName } = action.payload;
+      const key = normalizeFilePathForDedup(oldFilePath);
+      for (const item of state.artifactsBySession[sessionId] ?? []) {
+        if (item.filePath && normalizeFilePathForDedup(item.filePath) === key) {
+          item.filePath = newFilePath;
+          item.fileName = newFileName;
+          item.title = newFileName;
+        }
+      }
+    },
+
     updateLocalServiceProjectMetadata(
       state,
       action: PayloadAction<UpdateLocalServiceProjectMetadataPayload>,
@@ -428,6 +443,11 @@ const artifactSlice = createSlice({
 
     activateArtifactPreviewTab(state, action: PayloadAction<{ sessionId: string; tabId: string }>) {
       activatePreviewTab(state, action.payload.sessionId, action.payload.tabId);
+    },
+
+    activateArtifactNewTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
     },
 
     activateArtifactFileListTab(state, action: PayloadAction<{ sessionId: string }>) {
@@ -519,6 +539,7 @@ export const {
   addArtifact,
   addLinkedFileArtifact,
   syncMarkdownFileContent,
+  renameArtifactFile,
   updateLocalServiceProjectMetadata,
   selectArtifact,
   openArtifactPreviewTab,
@@ -527,6 +548,7 @@ export const {
   activateArtifactSubagentTab,
   activateArtifactUserAttachmentTab,
   activateArtifactPreviewTab,
+  activateArtifactNewTab,
   activateArtifactFileListTab,
   closeArtifactPreviewTab,
   setPreviewTabContentView,

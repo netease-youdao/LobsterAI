@@ -40,7 +40,7 @@ const AppIcon: React.FC<{ className?: string }> = ({ className }) => (
 
 // ── Dropdown Menu for Document Artifacts ──────────────────────────
 
-interface OpenDropdownProps {
+export interface ArtifactOpenDropdownProps {
   anchorRef: React.RefObject<HTMLElement>;
   artifact: Artifact;
   filePath?: string;
@@ -54,7 +54,7 @@ interface OpenDropdownProps {
   onClose: () => void;
 }
 
-const OpenDropdown: React.FC<OpenDropdownProps> = ({
+export const ArtifactOpenDropdown: React.FC<ArtifactOpenDropdownProps> = ({
   anchorRef,
   artifact,
   filePath,
@@ -517,7 +517,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           </button>
         )}
         {dropdownOpen && (
-          <OpenDropdown
+          <ArtifactOpenDropdown
             anchorRef={dropdownAnchorRef as React.RefObject<HTMLElement>}
             artifact={artifact}
             filePath={artifact.filePath}

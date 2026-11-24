@@ -9,6 +9,8 @@ export interface RendererOfficeFormat {
   loadAgent: () => Promise<(request: OfficeAgentRequest) => Promise<OfficeAgentToolResult>>;
   /** Reloads an open file from disk through its live editor; resolves false when it is not open. */
   loadRefresh: () => Promise<(filePath: string) => Promise<boolean>>;
+  /** Flushes and closes an open file's live editor before rename/replacement. */
+  loadClose: () => Promise<(filePath: string) => Promise<boolean>>;
 }
 
 /** The renderer side of every editor in OFFICE_EDITORS. */
@@ -18,18 +20,21 @@ export const RENDERER_OFFICE_FORMATS: readonly RendererOfficeFormat[] = [
     agentLogTag: '[WordAgent]',
     loadAgent: () => import('./word/wordAgent').then(module => module.handleWordAgentRequest),
     loadRefresh: () => import('./word/wordEditorSession').then(module => module.refreshOpenWordEditor),
+    loadClose: () => import('./word/wordEditorSession').then(module => module.closeOpenWordEditor),
   },
   {
     spec: SHEET_EDITOR,
     agentLogTag: '[SheetAgent]',
     loadAgent: () => import('./sheet/sheetAgent').then(module => module.handleSheetAgentRequest),
     loadRefresh: () => import('./sheet/sheetEditorSession').then(module => module.refreshOpenSheetEditor),
+    loadClose: () => import('./sheet/sheetEditorSession').then(module => module.closeOpenSheetEditor),
   },
   {
     spec: SLIDES_EDITOR,
     agentLogTag: '[SlidesAgent]',
     loadAgent: () => import('./slides/slidesAgent').then(module => module.handleSlidesAgentRequest),
     loadRefresh: () => import('./slides/slidesEditorSession').then(module => module.refreshOpenSlidesEditor),
+    loadClose: () => import('./slides/slidesEditorSession').then(module => module.closeOpenSlidesEditor),
   },
 ];
 
@@ -69,4 +74,12 @@ export async function refreshOpenOfficeEditor(filePath: string): Promise<boolean
   if (!format) return false;
   const refresh = await format.loadRefresh();
   return refresh(filePath);
+}
+
+/** Flushes and closes an open Office editor session so the underlying file can be renamed cleanly. */
+export async function closeOpenOfficeEditor(filePath: string): Promise<boolean> {
+  const format = officeFormatForPath(filePath);
+  if (!format) return false;
+  const close = await format.loadClose();
+  return close(filePath);
 }
