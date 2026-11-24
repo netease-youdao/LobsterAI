@@ -19,6 +19,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-api-session-controller": "*",
-    "@deepseek-ai/dsh-client-connection": "*"
+    "@deepseek-ai/dsh-client-connection": "*",
+    "ws": "^8.0.0"
   }
 }

@@ -337,7 +337,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   // ==================== Status ====================
-  getStatus(): IMGatewayStatus {
+  getStatus(wecomSnapshots?: ReadonlyMap<string, DshChannelStatusItem>): IMGatewayStatus {
     const config = this.getConfig();
     // Telegram runs via OpenClaw; reflect enabled+configured state per instance
     const telegramStatus = {
@@ -431,16 +431,19 @@ export class IMGatewayManager extends EventEmitter {
         };
       })(),
       wecom: {
-        instances: (config.wecom?.instances || []).map(inst => ({
-          instanceId: inst.instanceId,
-          instanceName: inst.instanceName,
-          connected: Boolean(inst.enabled && inst.botId && inst.secret),
-          startedAt: null as number | null,
-          lastError: null as string | null,
-          botId: inst.botId || null,
-          lastInboundAt: null as number | null,
-          lastOutboundAt: null as number | null,
-        })),
+        instances: (config.wecom?.instances || []).map(inst => {
+          const snapshot = inst.enabled ? wecomSnapshots?.get(inst.instanceId) : undefined;
+          return {
+            instanceId: inst.instanceId,
+            instanceName: inst.instanceName,
+            connected: snapshot?.state === DshChannelState.Connected,
+            startedAt: readNumber(snapshot?.startedAt),
+            lastError: readString(snapshot?.error),
+            botId: inst.botId || null,
+            lastInboundAt: readNumber(snapshot?.lastInboundAt),
+            lastOutboundAt: readNumber(snapshot?.lastOutboundAt),
+          };
+        }),
       },
       weixin: {
         connected: Boolean(config.weixin?.enabled && config.weixin?.botToken?.trim()),
@@ -494,7 +497,9 @@ export class IMGatewayManager extends EventEmitter {
       const { statuses } = await channelsBridge.listStatus();
       this.popoSnapshots = new Map(statuses.filter(item => item.platform === RetainedImPlatform.Popo)
         .map(item => [item.instanceId, item]));
-      const status = this.getStatus();
+      const wecomSnapshots = new Map(statuses.filter(item => item.platform === RetainedImPlatform.WeCom)
+        .map(item => [item.instanceId, item]));
+      const status = this.getStatus(wecomSnapshots);
       const weixinSnapshot = statuses.find(item => item.platform === RetainedImPlatform.Weixin);
       if (!weixinSnapshot) return status;
 

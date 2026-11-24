@@ -1,7 +1,7 @@
 /**
  * Base driver contract for `@lobsterai/dsh-channels`.
- * Every platform driver is pure ESM using Node 24's built-in `fetch` and
- * `WebSocket` (zero native bindings, zero OpenClaw SDK imports).
+ * Platform drivers use Node's HTTP and WebSocket clients without native
+ * bindings or OpenClaw SDK imports.
  */
 
 export class BaseChannelDriver {
