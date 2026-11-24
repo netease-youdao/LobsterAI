@@ -328,7 +328,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.List, () => {
     try {
-      const servers = getMcpRuntime().getStore().listServers();
+      const servers = getMcpRuntime().getDisplayServers();
       return { success: true, servers };
     } catch (error) {
       return {
@@ -366,9 +366,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         if (server.enabled) {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-created');
         }
-        const servers = mcpRuntime.getStore().listServers();
         await syncMcpConfig('mcp-server-created');
-        return { success: true, servers };
+        return { success: true, servers: mcpRuntime.getDisplayServers() };
       } catch (error) {
         return {
           success: false,
@@ -411,9 +410,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         if (server?.enabled) {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-updated');
         }
-        const servers = mcpRuntime.getStore().listServers();
         await syncMcpConfig('mcp-server-updated');
-        return { success: true, servers };
+        return { success: true, servers: mcpRuntime.getDisplayServers() };
       } catch (error) {
         return {
           success: false,
@@ -429,9 +427,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       const existing = mcpRuntime.getStore().getServer(id);
       if (isOAuthRemoteServer(existing)) clearOAuthCredentials(existing);
       mcpRuntime.getStore().deleteServer(id);
-      const servers = mcpRuntime.getStore().listServers();
       await syncMcpConfig('mcp-server-deleted');
-      return { success: true, servers };
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -455,9 +452,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         if (isOAuthRemoteServer(server)) clearOAuthCredentials(server);
         store.deleteServer(server.id);
       }
-      const servers = store.listServers();
       await syncMcpConfig('mcp-registry-deleted');
-      return { success: true, servers };
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -475,9 +471,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       } else {
         cancelMcpOAuthLogin(options.id);
       }
-      const servers = mcpRuntime.getStore().listServers();
       await syncMcpConfig('mcp-server-toggled');
-      return { success: true, servers };
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,
@@ -507,9 +502,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
             cancelMcpOAuthLogin(server.id);
           }
         }
-        const servers = store.listServers();
         await syncMcpConfig('mcp-registry-toggled');
-        return { success: true, servers };
+        return { success: true, servers: mcpRuntime.getDisplayServers() };
       } catch (error) {
         return {
           success: false,
@@ -523,9 +517,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     try {
       const mcpRuntime = getMcpRuntime();
       await mcpRuntime.getLaunchResolverManager().retry(id);
-      const servers = mcpRuntime.getStore().listServers();
       await syncMcpConfig('mcp-launch-manual-retry');
-      return { success: true, servers };
+      return { success: true, servers: mcpRuntime.getDisplayServers() };
     } catch (error) {
       return {
         success: false,

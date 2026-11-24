@@ -2443,6 +2443,7 @@ const getDshBootstrap = (): DshBootstrap => {
           optionSkillIds,
         });
       },
+      waitForMcpConnections: signal => getMcpRuntime().waitForPendingLaunchConnections(signal),
       instanceId: getStore().get<string>('installation_uuid') ?? undefined,
       ecosystemWindowTitle: t('dshEcosystemTitle'),
       mcpOAuthFetcher: (url, init) => session.defaultSession.fetch(url, init),
@@ -2770,10 +2771,12 @@ const syncOpenClawConfig = async (options: {
   skillChangeBatch?: unknown;
   deferExternalSync?: boolean;
   skipHostToolsSync?: boolean;
+  waitForMcpServerId?: string;
 }): Promise<{
   success: boolean;
   changed: boolean;
   needsReauthMcpIds?: string[];
+  mcpServerConnected?: boolean;
   status?: DshCompatEngineStatus;
   error?: string;
 }> => {
@@ -3070,6 +3073,7 @@ const syncOpenClawConfig = async (options: {
     }, {
       deferExternalSync: options.deferExternalSync,
       skipHostToolsSync: options.skipHostToolsSync,
+      waitForMcpServerId: options.waitForMcpServerId,
     });
 
     if (result.needsReauthMcpIds.length > 0) {
@@ -3086,6 +3090,7 @@ const syncOpenClawConfig = async (options: {
       success: result.success,
       changed: result.changed,
       needsReauthMcpIds: result.needsReauthMcpIds,
+      mcpServerConnected: result.mcpServerConnected,
       status: bootstrap.getEngineStatus(),
       error: result.error,
     };

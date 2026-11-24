@@ -186,6 +186,7 @@ export interface DshRuntimeAdapterDeps {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
+  waitForMcpConnections?: (signal: AbortSignal) => Promise<void>;
   resolveDefaultPermissionPreset?: () => DshPermissionPreset;
   onPermissionPresetChanged?: (
     preset: DshPermissionPreset,
@@ -801,6 +802,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly store: DshCoworkStorePort;
   private readonly resolveModelSelection?: DshRuntimeAdapterDeps['resolveModelSelection'];
   private readonly resolveAllowedSkillIds?: DshRuntimeAdapterDeps['resolveAllowedSkillIds'];
+  private readonly waitForMcpConnections?: DshRuntimeAdapterDeps['waitForMcpConnections'];
   private readonly resolveDefaultPermissionPreset?: DshRuntimeAdapterDeps['resolveDefaultPermissionPreset'];
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
   private readonly readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
@@ -828,6 +830,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.store = deps.store;
     this.resolveModelSelection = deps.resolveModelSelection;
     this.resolveAllowedSkillIds = deps.resolveAllowedSkillIds;
+    this.waitForMcpConnections = deps.waitForMcpConnections;
     this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
     this.readBrowserAnnotationAsset = deps.readBrowserAnnotationAsset;
@@ -2379,6 +2382,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         await streamTask;
         return;
       }
+
+      // A managed MCP package may have finished installing while we prepared
+      // the session. Let DSH register its tools before the model samples them.
+      await this.waitForMcpConnections?.(abortController.signal);
+      if (abortController.signal.aborted) return;
 
       const requestId = params.requestId || randomUUID();
       const turn = this.createActiveTurnState({

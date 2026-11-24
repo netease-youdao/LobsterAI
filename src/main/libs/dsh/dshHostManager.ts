@@ -722,13 +722,14 @@ export class DshHostManager extends EventEmitter {
 
   async syncMcpServers(
     servers: DshHostMcpServerSpec[],
-    options?: { deferSseWait?: boolean },
+    options?: { deferSseWait?: boolean; waitForServerName?: string },
   ): Promise<Record<string, unknown>> {
     this.lastMcpServers = servers;
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncMcpServers, {
       servers,
       ...(options?.deferSseWait ? { deferSseWait: true } : {}),
+      ...(options?.waitForServerName ? { waitForServerName: options.waitForServerName } : {}),
     });
   }
 

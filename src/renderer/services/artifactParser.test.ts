@@ -134,9 +134,11 @@ describe('parseFileLinksFromMessage', () => {
     expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toHaveLength(0);
   });
 
-  test('ignores bare-name links without any separator', () => {
-    const content = '[a.md](a.md)';
-    expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toHaveLength(0);
+  test('accepts an explicit link to a supported filename without a separator', () => {
+    const content = '[演示文稿](release%20review.pptx) [下一步](continue)';
+    expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toEqual([
+      expect.objectContaining({ filePath: 'release review.pptx', type: 'document' }),
+    ]);
   });
 });
 

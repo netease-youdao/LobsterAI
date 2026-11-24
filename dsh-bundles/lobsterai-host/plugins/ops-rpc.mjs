@@ -42,6 +42,32 @@ function jsonResponse(body, status = 200) {
   });
 }
 
+const MCP_CONNECTION_WAIT_MS = 15_000;
+
+async function waitForMcpConnection(manager, name) {
+  const getResult = (views) => {
+    const view = views.find((item) => item.name === name && item.configured);
+    if (!view) return false;
+    if (view.status?.state === 'connected') return true;
+    if (['failed', 'disabled', 'waiting-credentials'].includes(view.status?.state)) return false;
+    return undefined;
+  };
+
+  const current = getResult(manager.list());
+  if (current !== undefined) return current;
+  if (typeof manager.watch !== 'function') return false;
+
+  try {
+    for await (const views of manager.watch(AbortSignal.timeout(MCP_CONNECTION_WAIT_MS))) {
+      const result = getResult(views);
+      if (result !== undefined) return result;
+    }
+  } catch {
+    // The host or its MCP manager may have shut down while waiting.
+  }
+  return false;
+}
+
 function sameSkillAllowlist(a, b) {
   if (a === b) return true;
   if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -248,10 +274,19 @@ export function apply(ctx) {
     };
   }
 
-  function syncMcpServers(payload) {
+  async function syncMcpServers(payload) {
     const run = mcpSyncTail.then(() => runSyncMcpServers(payload));
     mcpSyncTail = run.then(() => undefined, () => undefined);
-    return run;
+    const result = await run;
+    const name = payload?.waitForServerName;
+    if (typeof name !== 'string') return result;
+
+    // Keep the config queue free for subsequent changes while the new process
+    // negotiates and registers its tools.
+    const manager = ctx.get('mcpManager');
+    const serverConnected = Boolean(manager && result.registered.includes(name))
+      && await waitForMcpConnection(manager, name);
+    return { ...result, serverConnected };
   }
 
   state.syncMcpServers = syncMcpServers;

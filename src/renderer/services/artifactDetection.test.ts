@@ -72,6 +72,12 @@ describe('collectSessionArtifacts', () => {
     expect(detected[0].filePath).toBe(`${CWD}/output/report.html`);
   });
 
+  test('resolves filename links against the session cwd without collecting unlinked filenames', () => {
+    const messages = [assistantMessage('a1', '产物：[评审](review.pptx)。草稿 draft.pptx。')];
+    const detected = collectSessionArtifacts(messages, 'sess1', 'D:\\workspace');
+    expect(detected.map(artifact => artifact.filePath)).toEqual(['D:\\workspace/review.pptx']);
+  });
+
   test('linked files under .cowork-temp are suppressed', () => {
     const messages = [
       assistantMessage('a1', `[草稿](${CWD}/.cowork-temp/draft.md)`),

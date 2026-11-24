@@ -760,11 +760,13 @@ export async function buildDshMcpServerSpecs(
   servers: DshHostMcpServerSpec[];
   needsReauthIds: string[];
   warnings: string[];
+  namesById: Map<string, string>;
 }> {
   const servers: DshHostMcpServerSpec[] = [];
   const needsReauthIds: string[] = [];
   const warnings: string[] = [];
   const usedNames = new Set<string>();
+  const namesById = new Map<string, string>();
 
   const recordWarning = (message: string): void => {
     warnings.push(message);
@@ -783,6 +785,7 @@ export async function buildDshMcpServerSpecs(
       }
     }
     usedNames.add(candidate);
+    namesById.set(rec.id, candidate);
     return candidate;
   };
 
@@ -874,5 +877,5 @@ export async function buildDshMcpServerSpecs(
     servers.push(draft);
   }
 
-  return { servers, needsReauthIds, warnings };
+  return { servers, needsReauthIds, warnings, namesById };
 }
