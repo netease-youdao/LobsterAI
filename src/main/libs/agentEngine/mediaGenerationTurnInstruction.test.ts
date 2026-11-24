@@ -4,6 +4,7 @@ import { MediaPreferenceMode, MediaSelectionSource } from '../../../shared/media
 import { SkinAssetSlot, SkinWorkflowKind } from '../../../shared/skin/constants';
 import {
   buildMediaGenerationTurnInstruction,
+  buildSkinPackInstruction,
   MANAGED_MEDIA_GENERATION_POLICY_PROMPT,
 } from './mediaGenerationTurnInstruction';
 
@@ -98,4 +99,35 @@ test('a skin workflow cannot bypass a persistent image off preference', () => {
   );
   expect(instruction).toContain('disabled by the user');
   expect(instruction).not.toContain('locked to the OpenClaw-native');
+});
+
+test('skin pack instruction supports direct reuse of attached images with or without image generation', () => {
+  const ref = {
+    token: '@图片1',
+    mediaType: 'image' as const,
+    index: 1,
+    fileId: '/uploads/wow.jpg',
+    fileName: 'wow.jpg',
+    mimeType: 'image/jpeg',
+    localPath: '/uploads/wow.jpg',
+  };
+
+  const withModel = buildSkinPackInstruction({ mode: 'image', imageModelId: 'image-model' }, [ref]);
+  expect(withModel).toContain('Direct reuse mode');
+  expect(withModel).toContain('"@图片1"');
+  expect(withModel).toContain('backdropVisibility="vivid"');
+  expect(withModel).toContain('do NOT misinterpret "1:1" as a square aspect ratio');
+
+  const withoutModel = buildSkinPackInstruction(undefined, [ref]);
+  expect(withoutModel).toContain('Do NOT call lobsterai_image_generate');
+  expect(withoutModel).toContain('"@图片1"');
+  expect(withoutModel).toContain('action="register_asset"');
+
+  const disabledWithRef = buildSkinPackInstruction(
+    { mode: 'none', imagePreference: MediaPreferenceMode.Off, preferencesRevision: 1 },
+    [ref],
+  );
+  expect(disabledWithRef).toContain('Image generation is disabled by the user');
+  expect(disabledWithRef).toContain('"@图片1"');
+  expect(disabledWithRef).toContain('Do NOT call lobsterai_image_generate');
 });

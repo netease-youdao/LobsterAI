@@ -1,6 +1,7 @@
 import {
   SkinAssetSlot,
   type SkinAssetSlot as SkinAssetSlotValue,
+  type SkinBackdropVisibility,
   SkinProtocol,
 } from '../../shared/skin/constants';
 import {
@@ -204,6 +205,19 @@ class SkinService {
     const result = await api.bindTheme(skinId, themeId);
     if (isRecord(result) && result.success === false) {
       throw new Error(readString(result, ['error', 'message']) ?? 'Failed to bind skin theme');
+    }
+    return normalizeActiveSkin(result);
+  }
+
+  async setBackdropVisibility(
+    skinId: string,
+    visibility: SkinBackdropVisibility,
+  ): Promise<ActiveSkin | null> {
+    const api = getRendererSkinApi();
+    if (!api) return null;
+    const result = await api.setBackdropVisibility(skinId, visibility);
+    if (isRecord(result) && result.success === false) {
+      throw new Error(readString(result, ['error', 'message']) ?? 'Failed to update backdrop visibility');
     }
     return normalizeActiveSkin(result);
   }

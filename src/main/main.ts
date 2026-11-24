@@ -4044,6 +4044,9 @@ const getSkinRuntimeController = (): SkinRuntimeController => {
         resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey)
       ),
       resolveMediaSelection: resolveMediaSelectionForSession,
+      resolveMediaReferences: sessionId => (
+        sessionId ? mediaReferencesBySession.get(sessionId) : undefined
+      ),
       onChanged: notifySkinChanged,
     });
   }

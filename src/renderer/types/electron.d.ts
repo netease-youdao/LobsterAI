@@ -211,6 +211,7 @@ import type {
   SiteUpdateAccessStatusInput,
   SiteUpdateTitleInput,
 } from '../../shared/site/constants';
+import type { SkinBackdropVisibility } from '../../shared/skin/constants';
 import type {
   SkinApplyResponse,
   SkinBindThemeResponse,
@@ -218,6 +219,7 @@ import type {
   SkinDeleteResponse,
   SkinGetActiveResponse,
   SkinListResponse,
+  SkinSetBackdropVisibilityResponse,
 } from '../../shared/skin/types';
 import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
 import type { CoworkTempDirPreview, DreamDiaryData, DreamingStatusData } from './cowork';
@@ -827,6 +829,10 @@ interface IElectronAPI {
     list: () => Promise<SkinListResponse>;
     apply: (skinId: string, boundThemeId?: string) => Promise<SkinApplyResponse>;
     bindTheme: (skinId: string, themeId: string) => Promise<SkinBindThemeResponse>;
+    setBackdropVisibility: (
+      skinId: string,
+      visibility: SkinBackdropVisibility,
+    ) => Promise<SkinSetBackdropVisibilityResponse>;
     deactivate: () => Promise<SkinDeactivateResponse>;
     delete: (skinId: string) => Promise<SkinDeleteResponse>;
     onChanged: (callback: () => void) => () => void;

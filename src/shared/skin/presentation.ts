@@ -1,4 +1,6 @@
 import {
+  SkinBackdropVisibility,
+  type SkinBackdropVisibility as SkinBackdropVisibilityValue,
   SkinParticleDensity,
   type SkinParticleDensity as SkinParticleDensityValue,
   SkinPreferredAppearance,
@@ -34,6 +36,7 @@ export interface SkinPresentation {
   palette: SkinPresentationPalette;
   art?: SkinPresentationArt;
   effects?: SkinPresentationEffects;
+  backdropVisibility?: SkinBackdropVisibilityValue;
 }
 
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
@@ -151,6 +154,18 @@ const parseEffects = (value: unknown): SkinPresentationEffects | null => {
   return { particleDensity: value.particleDensity as SkinParticleDensityValue };
 };
 
+const parseBackdropVisibility = (value: unknown): SkinBackdropVisibilityValue | null => (
+  Object.values(SkinBackdropVisibility).includes(value as SkinBackdropVisibilityValue)
+    ? (value as SkinBackdropVisibilityValue)
+    : null
+);
+
+export const resolveSkinBackdropVisibility = (
+  presentation?: SkinPresentation,
+): SkinBackdropVisibilityValue => (
+  presentation?.backdropVisibility ?? SkinBackdropVisibility.Balanced
+);
+
 export const parseSkinPresentation = (value: unknown): SkinPresentation | null => {
   if (!isRecord(value) || !hasOnlyKeys(value, [
     'mode',
@@ -158,6 +173,7 @@ export const parseSkinPresentation = (value: unknown): SkinPresentation | null =
     'palette',
     'art',
     'effects',
+    'backdropVisibility',
   ])) {
     return null;
   }
@@ -179,11 +195,17 @@ export const parseSkinPresentation = (value: unknown): SkinPresentation | null =
   const effects = value.effects === undefined ? undefined : parseEffects(value.effects);
   if (value.effects !== undefined && !effects) return null;
 
+  const backdropVisibility = value.backdropVisibility === undefined
+    ? undefined
+    : parseBackdropVisibility(value.backdropVisibility);
+  if (value.backdropVisibility !== undefined && !backdropVisibility) return null;
+
   return {
     mode: SkinPresentationMode.ImmersiveShell,
     preferredAppearance,
     palette,
     ...(art ? { art } : {}),
     ...(effects ? { effects } : {}),
+    ...(backdropVisibility ? { backdropVisibility } : {}),
   };
 };

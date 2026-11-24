@@ -12,6 +12,10 @@ import {
 } from '../../shared/skin/constants';
 import { SkinPackKitId } from '../../shared/skin/kit';
 import { MediaSelectionMode } from '../mediaGenerationPolicy';
+import {
+  MediaAttachmentKind,
+  type MediaAttachmentRefMain,
+} from '../mediaGenerationReferences';
 import { SkinMediaBridge } from './skinMediaBridge';
 import type { SkinAssetRecord, SkinRecord, SkinStore } from './skinStore';
 import { SkinWorkflowRegistry } from './skinWorkflowRegistry';
@@ -44,7 +48,7 @@ const createAsset = (slot: SkinAssetSlot): SkinAssetRecord => ({
   registeredAt: timestamp,
 });
 
-const createHarness = () => {
+const createHarness = (mediaRefsBySession: Record<string, MediaAttachmentRefMain[]> = {}) => {
   let current: SkinRecord = {
     id: 'skin-one',
     workflowKind: SkinWorkflowKind.SkinPack,
@@ -59,9 +63,16 @@ const createHarness = () => {
       const asset = createAsset(slot);
       current = {
         ...current,
-        status: slot === SkinAssetSlot.HomeEmblem
-          ? SkinRecordStatus.Ready
-          : SkinRecordStatus.Draft,
+        status: SkinRecordStatus.Ready,
+        assets: { ...current.assets, [slot]: asset },
+      };
+      return asset;
+    }),
+    registerAssetBuffer: vi.fn(async ({ slot }: { slot: SkinAssetSlot }) => {
+      const asset = createAsset(slot);
+      current = {
+        ...current,
+        status: SkinRecordStatus.Ready,
         assets: { ...current.assets, [slot]: asset },
       };
       return asset;
@@ -86,6 +97,7 @@ const createHarness = () => {
     workflowRegistry,
     resolveSessionId: key => key === sessionKey ? sessionId : null,
     resolveMediaSelection: () => selection,
+    resolveMediaReferences: id => (id ? mediaRefsBySession[id] : undefined),
   });
   return { bridge, store, workflowRegistry };
 };
@@ -147,5 +159,68 @@ describe('skin media bridge', () => {
 
     expect(result.isError).not.toBe(true);
     expect(workflowRegistry.resolve(sessionId)).toBeUndefined();
+  });
+
+  test('resolves attached image tokens from localPath or inline dataUrl for direct skin registration', async () => {
+    const pastedBytes = Buffer.from([1, 2, 3, 4]);
+    const { bridge, store } = createHarness({
+      [sessionId]: [
+        {
+          token: '@图片1',
+          mediaType: MediaAttachmentKind.Image,
+          index: 1,
+          fileId: '/uploads/wow.jpg',
+          fileName: 'wow.jpg',
+          mimeType: 'image/jpeg',
+          localPath: '/uploads/wow.jpg',
+        },
+        {
+          token: '@图片2',
+          mediaType: MediaAttachmentKind.Image,
+          index: 2,
+          fileId: 'inline:pasted-1',
+          fileName: 'pasted.png',
+          mimeType: 'image/png',
+          dataUrl: `data:image/png;base64,${pastedBytes.toString('base64')}`,
+        },
+      ],
+    });
+
+    await bridge.handleToolRequest({
+      args: { action: SkinToolAction.CreateDraft },
+      context,
+    });
+
+    const fileResult = await bridge.handleToolRequest({
+      args: {
+        action: SkinToolAction.RegisterAsset,
+        skinId: 'skin-one',
+        slot: SkinAssetSlot.WorkspaceBackdrop,
+        sourcePath: '@图片1',
+      },
+      context,
+    });
+    expect(fileResult.isError).not.toBe(true);
+    expect(store.registerAsset).toHaveBeenCalledWith({
+      skinId: 'skin-one',
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      source: '/uploads/wow.jpg',
+    });
+
+    const pastedResult = await bridge.handleToolRequest({
+      args: {
+        action: SkinToolAction.RegisterAsset,
+        skinId: 'skin-one',
+        slot: SkinAssetSlot.HomeEmblem,
+        sourcePath: '@图片2',
+      },
+      context,
+    });
+    expect(pastedResult.isError).not.toBe(true);
+    expect(store.registerAssetBuffer).toHaveBeenCalledWith({
+      skinId: 'skin-one',
+      slot: SkinAssetSlot.HomeEmblem,
+      data: pastedBytes,
+    });
   });
 });

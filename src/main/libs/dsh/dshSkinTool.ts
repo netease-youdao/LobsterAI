@@ -1,4 +1,11 @@
-import { SKIN_ASSET_SLOTS, SkinParticleDensity, SkinPresentationMode, SkinToolAction, SkinToolName } from '../../../shared/skin/constants';
+import {
+  SKIN_ASSET_SLOTS,
+  SkinBackdropVisibility,
+  SkinParticleDensity,
+  SkinPresentationMode,
+  SkinToolAction,
+  SkinToolName,
+} from '../../../shared/skin/constants';
 import type { SkinPresentationPalette } from '../../../shared/skin/presentation';
 import type { DshHostToolDescriptor } from './dshHostManager';
 
@@ -11,7 +18,7 @@ const focus = { type: 'number', minimum: 0, maximum: 1 };
 
 export const dshSkinTool: DshHostToolDescriptor = {
   name: SkinToolName.Manage,
-  description: 'Manage the current AI Skin Designer kit draft. Create it with a name and accessible palette, register the saved backdrop then emblem, check status, and apply the ready skin.',
+  description: 'Manage the current AI Skin Designer kit draft. Create it with a name and accessible palette, register the backdrop (generated local image or attached image token) and optional emblem, check status, and apply the ready skin.',
   inputSchema: {
     type: 'object',
     required: ['action'],
@@ -20,7 +27,10 @@ export const dshSkinTool: DshHostToolDescriptor = {
       name: { type: 'string', description: 'User-visible name for create_draft.' },
       skinId: { type: 'string', description: 'ID returned by create_draft for this workflow.' },
       slot: { type: 'string', enum: SKIN_ASSET_SLOTS },
-      sourcePath: { type: 'string', description: 'Exact local image path or file URL for register_asset.' },
+      sourcePath: {
+        type: 'string',
+        description: 'Exact local image path, file URL, or attached image reference token (e.g. "@图片1") for register_asset.',
+      },
       presentation: {
         type: 'object', required: ['mode', 'palette'], additionalProperties: false,
         properties: {
@@ -28,6 +38,11 @@ export const dshSkinTool: DshHostToolDescriptor = {
           palette: { type: 'object', properties: palette, required: Object.keys(palette), additionalProperties: false },
           art: { type: 'object', properties: { focusX: focus, focusY: focus }, required: ['focusX', 'focusY'], additionalProperties: false },
           effects: { type: 'object', properties: { particleDensity: { type: 'string', enum: Object.values(SkinParticleDensity) } }, required: ['particleDensity'], additionalProperties: false },
+          backdropVisibility: {
+            type: 'string',
+            enum: Object.values(SkinBackdropVisibility),
+            description: 'Host-controlled backdrop clarity preset: subtle, balanced (default), or vivid.',
+          },
         },
       },
     },
