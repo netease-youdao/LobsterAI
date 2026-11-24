@@ -4,7 +4,7 @@ import type { IMSessionMapping, Platform } from './types';
 
 /** OpenClaw kept the bot account and peer kind inside its conversation key. */
 export function findLegacyPopoMapping(
-  store: DshImInboundIMStorePort,
+  store: Pick<DshImInboundIMStorePort, 'getPopoInstances' | 'getSessionMapping'>,
   instanceId: string,
   kind: 'direct' | 'group',
   chatId: string,

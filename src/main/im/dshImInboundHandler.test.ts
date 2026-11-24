@@ -68,6 +68,7 @@ function createFixture(options?: {
   };
 
   const imStore = {
+    findLegacyDirectSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
     getSessionMapping: vi.fn((convId: string, platform: Platform, agentId = 'main') =>
       mappings.get(`${platform}:${convId}:${agentId}`) ?? null,
     ),
@@ -134,6 +135,30 @@ function createFixture(options?: {
 }
 
 describe('DshImInboundHandler', () => {
+  test('continues a recovered original session and replies to the native chat even when a DSH fork exists', async () => {
+    const { handler, runtime, coworkStore, imStore, pushMessage, sendReply } = createFixture();
+    const original = coworkStore.createSession('Original DM', '/original');
+    const split = coworkStore.createSession('DSH fork', '/split');
+    const legacy = imStore.createSessionMapping('12345678:direct:ou_A', 'feishu', original.id);
+    imStore.createSessionMapping('oc_B', 'feishu:12345678-bot' as Platform, split.id);
+    imStore.findLegacyDirectSessionMapping.mockReturnValue(legacy);
+    runtime.continueSession.mockImplementationOnce(async (id: string) => {
+      pushMessage(id, { id: 'answer', type: 'assistant', content: 'recalled' });
+      runtime.emit('complete', id);
+    });
+    await handler.enqueue({
+      platform: 'feishu', instanceId: '12345678-bot', chatType: 'direct', chatId: 'oc_B',
+      senderId: 'ou_A', text: 'recall', replyContext: { messageId: 'wire-message' },
+    });
+    expect(runtime.continueSession).toHaveBeenCalledWith(original.id, 'recall');
+    expect(runtime.startSession).not.toHaveBeenCalled();
+    expect(coworkStore.createSession).toHaveBeenCalledTimes(2);
+    expect(coworkStore.getSession(split.id)?.messages).toEqual([]);
+    expect(sendReply).toHaveBeenCalledWith({
+      platform: 'feishu', instanceId: '12345678-bot', chatId: 'oc_B', text: 'recalled', replyContext: { messageId: 'wire-message' },
+    });
+  });
+
   test('creates a mapped Cowork session on first Weixin message, filters thinking blocks, and replies with contextToken', async () => {
     const { handler, runtime, sendReply, notifySessionsChanged, pushMessage } = createFixture();
 
