@@ -163,30 +163,65 @@ export class CoworkMessageVersionStore {
         WHERE session_id = ? AND type = 'user' AND json_extract(metadata, '$.openclawRequestId') = ?`)
         .get(operation.sessionId, operation.runId) as { id: string } | undefined;
       if (!edit || !head) throw new Error('The committed edit cannot be filed as a version.');
-      const forkKey = operation.prefixEntryIds.at(-1) ?? '';
-      const versions = this.group(operation.sessionId, forkKey);
-      const replaced = versions.find(version => version.active);
-      let lastOrdinal = versions.at(-1)?.ordinal ?? 0;
-      if (replaced) {
-        this.db.prepare(`UPDATE cowork_message_versions
-          SET active = 0, head_message_id = ?, leaf_entry_id = ?, cut_entry_id = ?, snapshot_json = ? WHERE id = ?`)
-          .run(operation.messageId, operation.originalLeafId, operation.originalCutEntryId ?? null, edit.snapshot_json, replaced.id);
-      } else {
-        lastOrdinal += 1;
-        this.db.prepare(`INSERT INTO cowork_message_versions
-          (id, session_id, fork_key, ordinal, active, head_message_id, leaf_entry_id, cut_entry_id, snapshot_json)
-          VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`)
-          .run(randomUUID(), operation.sessionId, forkKey, lastOrdinal,
-            operation.messageId, operation.originalLeafId, operation.originalCutEntryId ?? null, edit.snapshot_json);
-      }
-      this.db.prepare(`INSERT INTO cowork_message_versions
-        (id, session_id, fork_key, ordinal, active, head_message_id) VALUES (?, ?, ?, ?, 1, ?)`)
-        .run(randomUUID(), operation.sessionId, forkKey, lastOrdinal + 1, head.id);
-      const count = versions.length + (replaced ? 1 : 2);
-      // The version now owns the replaced conversation; a second copy would only grow the database.
-      this.db.prepare('DELETE FROM cowork_message_edits WHERE operation_id = ?').run(operation.operationId);
-      this.stampHead(operation.sessionId, head.id, { index: count, count });
+      this.recordReplacement(operation, head.id, operation.prefixEntryIds.at(-1) ?? '', edit.snapshot_json, {
+        leafEntryId: operation.originalLeafId ?? null,
+        cutEntryId: operation.originalCutEntryId,
+      });
     });
+  }
+
+  /** Files the replaced projection with the DSH session that can continue it. */
+  recordDshEdit(operation: CoworkMessageEditOperation, headMessageId: string): void {
+    this.write(operation.sessionId, () => {
+      const edit = this.db.prepare('SELECT snapshot_json FROM cowork_message_edits WHERE operation_id = ? AND session_id = ?')
+        .get(operation.operationId, operation.sessionId) as { snapshot_json: string } | undefined;
+      const head = this.db.prepare("SELECT id FROM cowork_messages WHERE id = ? AND session_id = ? AND type = 'user'")
+        .get(headMessageId, operation.sessionId);
+      if (!edit || !head || !operation.dsh || headMessageId === operation.messageId) {
+        throw new Error('The accepted edit cannot be filed as a version.');
+      }
+      const forkKey = this.activeVersion(operation.sessionId, operation.messageId)?.fork_key ?? operation.messageId;
+      const snapshot = JSON.parse(edit.snapshot_json) as ProjectionSnapshot;
+      snapshot.storedSessionId = operation.dsh.originalSessionId;
+      this.recordReplacement(operation, headMessageId, forkKey, JSON.stringify(snapshot), { leafEntryId: null });
+    });
+  }
+
+  private recordReplacement(
+    operation: CoworkMessageEditOperation,
+    headMessageId: string,
+    forkKey: string,
+    snapshotJson: string,
+    position: CoworkGatewayPosition,
+  ): void {
+    const { sessionId, messageId } = operation;
+    const versions = this.group(sessionId, forkKey);
+    const replaced = versions.find(version => version.active);
+    let lastOrdinal = versions.at(-1)?.ordinal ?? 0;
+    if (replaced) {
+      this.db.prepare(`UPDATE cowork_message_versions
+        SET active = 0, head_message_id = ?, leaf_entry_id = ?, cut_entry_id = ?, snapshot_json = ? WHERE id = ?`)
+        .run(messageId, position.leafEntryId, position.cutEntryId ?? null, snapshotJson, replaced.id);
+    } else {
+      lastOrdinal += 1;
+      this.db.prepare(`INSERT INTO cowork_message_versions
+        (id, session_id, fork_key, ordinal, active, head_message_id, leaf_entry_id, cut_entry_id, snapshot_json)
+        VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`)
+        .run(randomUUID(), sessionId, forkKey, lastOrdinal,
+          messageId, position.leafEntryId, position.cutEntryId ?? null, snapshotJson);
+    }
+    this.db.prepare(`INSERT INTO cowork_message_versions
+      (id, session_id, fork_key, ordinal, active, head_message_id) VALUES (?, ?, ?, ?, 1, ?)`)
+      .run(randomUUID(), sessionId, forkKey, lastOrdinal + 1, headMessageId);
+    const count = versions.length + (replaced ? 1 : 2);
+    // The version owns the projection now, so the recovery copy is no longer needed.
+    this.db.prepare('DELETE FROM cowork_message_edits WHERE operation_id = ?').run(operation.operationId);
+    this.stampHead(sessionId, headMessageId, { index: count, count });
+  }
+
+  private activeVersion(sessionId: string, headMessageId: string): VersionRow | undefined {
+    return this.db.prepare(`SELECT * FROM cowork_message_versions
+      WHERE session_id = ? AND head_message_id = ? AND active = 1`).get(sessionId, headMessageId) as VersionRow | undefined;
   }
 
   /**
@@ -220,8 +255,7 @@ export class CoworkMessageVersionStore {
   beginSwitch(sessionId: string, headMessageId: string, targetIndex: number, gateway: CoworkGatewayActivePath): CoworkMessageVersionSwitch {
     return this.write(sessionId, () => {
       if (this.pendingSwitch(sessionId)) throw new Error('A version switch is already pending.');
-      const from = this.db.prepare(`SELECT * FROM cowork_message_versions
-        WHERE session_id = ? AND head_message_id = ? AND active = 1`).get(sessionId, headMessageId) as VersionRow | undefined;
+      const from = this.activeVersion(sessionId, headMessageId);
       const to = from ? this.group(sessionId, from.fork_key)[targetIndex - 1] : undefined;
       if (!from || !to || to.active || !to.snapshot_json) throw new Error('Unknown message version.');
       const active = this.livePosition(sessionId, gateway, from.fork_key);
@@ -249,22 +283,59 @@ export class CoworkMessageVersionStore {
       if (!pending) return undefined;
       const from = this.row(pending.fromVersionId);
       const to = this.row(pending.toVersionId);
-      const head = from ? this.db.prepare('SELECT sequence FROM cowork_messages WHERE session_id = ? AND id = ?')
-        .get(sessionId, from.head_message_id) as { sequence: number | null } | undefined : undefined;
-      if (!from || !to?.snapshot_json || head?.sequence == null) throw new Error('The version switch can no longer be applied.');
-      const target = JSON.parse(to.snapshot_json) as ProjectionSnapshot;
-      const live = readProjectionSnapshot(this.db, sessionId, head.sequence);
-      this.db.prepare('UPDATE cowork_message_versions SET active = 0, leaf_entry_id = ?, cut_entry_id = ?, snapshot_json = ? WHERE id = ?')
-        .run(pending.activeLeafEntryId, pending.activeCutEntryId ?? null, JSON.stringify(live), from.id);
-      // Looking at another version is not new activity: the session keeps its place in the list.
-      writeProjectionSnapshot(this.db, sessionId, Math.min(head.sequence, target.messages[0].sequence), target,
-        { keepUpdatedAt: true });
-      this.db.prepare('UPDATE cowork_message_versions SET active = 1, leaf_entry_id = NULL, cut_entry_id = NULL, snapshot_json = NULL WHERE id = ?')
-        .run(to.id);
-      const versions = this.group(sessionId, to.fork_key);
-      this.stampHead(sessionId, to.head_message_id, { index: versions.findIndex(version => version.id === to.id) + 1, count: versions.length });
+      if (!from || !to) throw new Error('The version switch can no longer be applied.');
+      const head = this.swapActiveProjection(sessionId, from, to, {
+        leafEntryId: pending.activeLeafEntryId,
+        cutEntryId: pending.activeCutEntryId,
+      });
       this.cancelSwitch(sessionId);
-      return to.head_message_id;
+      return head;
     });
+  }
+
+  /** DSH stores separate logs, so its projection and session binding can switch atomically. */
+  switchDshVersion(sessionId: string, headMessageId: string, targetIndex: number): string {
+    return this.write(sessionId, () => {
+      const from = this.activeVersion(sessionId, headMessageId);
+      const to = from ? this.group(sessionId, from.fork_key)[targetIndex - 1] : undefined;
+      if (!from || !to || to.active) throw new Error('Unknown message version.');
+      const head = this.swapActiveProjection(sessionId, from, to, { leafEntryId: null }, true);
+      this.cancelSwitch(sessionId);
+      return head;
+    });
+  }
+
+  private swapActiveProjection(
+    sessionId: string,
+    from: VersionRow,
+    to: VersionRow,
+    position: CoworkGatewayPosition,
+    switchDshBinding = false,
+  ): string {
+    const head = this.db.prepare('SELECT sequence FROM cowork_messages WHERE session_id = ? AND id = ?')
+      .get(sessionId, from.head_message_id) as { sequence: number | null } | undefined;
+    if (!to.snapshot_json || head?.sequence == null) throw new Error('The version switch can no longer be applied.');
+    const target = JSON.parse(to.snapshot_json) as ProjectionSnapshot;
+    if (!target.messages.length) throw new Error('The target message version is empty.');
+    const live = readProjectionSnapshot(this.db, sessionId, head.sequence);
+    if (switchDshBinding) {
+      const session = this.db.prepare('SELECT claude_session_id FROM cowork_sessions WHERE id = ?')
+        .get(sessionId) as { claude_session_id: string | null };
+      live.storedSessionId = session.claude_session_id;
+    }
+    this.db.prepare('UPDATE cowork_message_versions SET active = 0, leaf_entry_id = ?, cut_entry_id = ?, snapshot_json = ? WHERE id = ?')
+      .run(position.leafEntryId, position.cutEntryId ?? null, JSON.stringify(live), from.id);
+    writeProjectionSnapshot(this.db, sessionId, Math.min(head.sequence, target.messages[0].sequence), target,
+      { keepUpdatedAt: true });
+    if (switchDshBinding) {
+      // Old versions can continue through the existing lazy migration from their restored local prefix.
+      this.db.prepare('UPDATE cowork_sessions SET claude_session_id = ? WHERE id = ?')
+        .run(target.storedSessionId ?? null, sessionId);
+    }
+    this.db.prepare('UPDATE cowork_message_versions SET active = 1, leaf_entry_id = NULL, cut_entry_id = NULL, snapshot_json = NULL WHERE id = ?')
+      .run(to.id);
+    const versions = this.group(sessionId, to.fork_key);
+    this.stampHead(sessionId, to.head_message_id, { index: versions.findIndex(version => version.id === to.id) + 1, count: versions.length });
+    return to.head_message_id;
   }
 }

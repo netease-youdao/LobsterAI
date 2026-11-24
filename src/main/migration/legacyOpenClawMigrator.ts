@@ -2666,48 +2666,17 @@ export function backfillLegacyUserMemories(options: {
   }
 }
 
-/**
- * Resets any persisted `app_config.browserWebAccess` external browser mode to
- * `in-app`, strips dead external-only fields, and preserves all reusable
- * browser settings (`networkMode`, `credentialUseMode`, `credentialSaveMode`,
- * `blockedHostnames`, etc.).
- *
- * When `incompatibleEntries` / `archivedModules` are supplied during the full
- * v2 migration and an external browser configuration was active, archives the
- * removed external browser fields and records an `external_chrome` notice.
- */
-function migrateLegacyBrowserDisplayModeConfig(
-  db: Database.Database,
-  incompatibleEntries?: TarEntryInput[],
-  archivedModules?: MigrationV2ArchivedItem[],
-): number {
+function migrateLegacyBrowserDisplayModeConfig(db: Database.Database): void {
   const rawAppConfig = getKv(db, APP_CONFIG_KEY);
-  if (!rawAppConfig) return 0;
+  if (!rawAppConfig) return;
 
   const parsedAppConfig = safeParseJsonObject(rawAppConfig);
-  if (!parsedAppConfig) return 0;
+  if (!parsedAppConfig) return;
 
-  const result = migrateBrowserDisplayModeConfig(parsedAppConfig);
-  if (!result.changed) return 0;
-
-  setKv(db, APP_CONFIG_KEY, JSON.stringify(result.nextConfig));
-
-  if (!result.migratedExternalConfig) return 0;
-
-  if (incompatibleEntries) {
-    incompatibleEntries.push({
-      archivePath: 'sqlite/external_browser_config.json',
-      content: Buffer.from(JSON.stringify(result.archivedExternalConfig ?? {}, null, 2), 'utf8'),
-    });
+  const migrated = migrateBrowserDisplayModeConfig(parsedAppConfig);
+  if (migrated !== parsedAppConfig) {
+    setKv(db, APP_CONFIG_KEY, JSON.stringify(migrated));
   }
-  if (archivedModules) {
-    archivedModules.push({
-      category: 'external_chrome',
-      label: 'External browser configuration (migrated to in-app browser)',
-      count: 1,
-    });
-  }
-  return 1;
 }
 
 /**
@@ -3060,11 +3029,7 @@ export function runLegacyOpenClawMigration(
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
-      const externalBrowserConfigsMigrated = migrateLegacyBrowserDisplayModeConfig(
-        db,
-        incompatibleEntries,
-        archivedModules,
-      );
+      migrateLegacyBrowserDisplayModeConfig(db);
       const { workspacesMigrated, dreamDiariesMigrated } = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,
@@ -3352,7 +3317,6 @@ export function runLegacyOpenClawMigration(
           tavilyMcpMigrated,
           mcpOAuthTokensMigrated,
           disposableBytesFreed,
-          externalBrowserConfigsMigrated,
         },
         archivedModules,
         reauthRequired,

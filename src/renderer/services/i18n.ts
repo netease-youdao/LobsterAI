@@ -1966,6 +1966,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataMigrationTitle: '数据迁移',
     openClawDataMigrationDesc: '导入另一台机器导出的备份，替换当前应用数据。',
     openClawDataMigrationAction: '导入备份',
+    openClawDataMigrationUnderDevelopment: '备份与恢复正在开发中，很快回归。',
     openClawDataMigrationRunning: '正在导入...',
     openClawDataMigrationSuccess: '数据迁移已完成。',
     openClawDataMigrationFailed: '数据迁移失败',
@@ -7009,6 +7010,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataMigrationDesc:
       'Import a backup exported from another machine and replace current app data.',
     openClawDataMigrationAction: 'Import Backup',
+    openClawDataMigrationUnderDevelopment: 'Backup and restore are under development and will return soon.',
     openClawDataMigrationRunning: 'Importing...',
     openClawDataMigrationSuccess: 'Data migration completed.',
     openClawDataMigrationFailed: 'Data migration failed',
