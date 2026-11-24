@@ -163,7 +163,7 @@ import {
   type SiteUpdateAccessStatusInput,
   type SiteUpdateTitleInput,
 } from '../shared/site/constants';
-import { SkinIpc } from '../shared/skin/constants';
+import { type SkinBackdropVisibility, SkinIpc } from '../shared/skin/constants';
 import type {
   SkinApplyResponse,
   SkinBindThemeResponse,
@@ -171,6 +171,7 @@ import type {
   SkinDeleteResponse,
   SkinGetActiveResponse,
   SkinListResponse,
+  SkinSetBackdropVisibilityResponse,
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { createMessageSpeechBridge } from './conversation/messageSpeechPreload';
@@ -352,6 +353,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(SkinIpc.Apply, skinId, boundThemeId),
     bindTheme: (skinId: string, themeId: string): Promise<SkinBindThemeResponse> =>
       ipcRenderer.invoke(SkinIpc.BindTheme, skinId, themeId),
+    setBackdropVisibility: (
+      skinId: string,
+      visibility: SkinBackdropVisibility,
+    ): Promise<SkinSetBackdropVisibilityResponse> =>
+      ipcRenderer.invoke(SkinIpc.SetBackdropVisibility, skinId, visibility),
     deactivate: (): Promise<SkinDeactivateResponse> => ipcRenderer.invoke(SkinIpc.Deactivate),
     delete: (skinId: string): Promise<SkinDeleteResponse> => ipcRenderer.invoke(SkinIpc.Delete, skinId),
     onChanged: (callback: () => void) => {

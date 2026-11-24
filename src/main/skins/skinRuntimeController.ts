@@ -1,6 +1,7 @@
 import type { InstalledKitRecord } from '../../shared/kit/constants';
 import { SkinToolName, SkinWorkflowKind } from '../../shared/skin/constants';
 import type { MediaSelectionState } from '../mediaGenerationPolicy';
+import type { MediaAttachmentRefMain } from '../mediaGenerationReferences';
 import { SkinMediaBridge } from './skinMediaBridge';
 import { SkinStore } from './skinStore';
 import type { SkinToolRequest, SkinToolResult } from './skinToolHandler';
@@ -16,6 +17,7 @@ export interface SkinRuntimeControllerOptions {
   getParentSessionId: (sessionId: string) => string | null;
   resolveSessionId: (sessionKey: string) => string | null;
   resolveMediaSelection: (sessionId: string | null) => MediaSelectionState | undefined;
+  resolveMediaReferences?: (sessionId: string | null) => MediaAttachmentRefMain[] | undefined;
   onChanged?: () => void;
 }
 
@@ -35,6 +37,7 @@ export class SkinRuntimeController {
       workflowRegistry: this.workflowRegistry,
       resolveSessionId: options.resolveSessionId,
       resolveMediaSelection: options.resolveMediaSelection,
+      resolveMediaReferences: options.resolveMediaReferences,
       onChanged: options.onChanged,
     });
   }

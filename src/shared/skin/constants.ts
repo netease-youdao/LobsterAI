@@ -16,6 +16,10 @@ export const SKIN_ASSET_SLOTS: readonly SkinAssetSlot[] = [
   SkinAssetSlot.HomeEmblem,
 ];
 
+export const SKIN_REQUIRED_ASSET_SLOTS: readonly SkinAssetSlot[] = [
+  SkinAssetSlot.WorkspaceBackdrop,
+];
+
 export const SkinRecordStatus = {
   Draft: 'draft',
   Ready: 'ready',
@@ -43,6 +47,15 @@ export const SkinParticleDensity = {
 } as const;
 
 export type SkinParticleDensity = typeof SkinParticleDensity[keyof typeof SkinParticleDensity];
+
+export const SkinBackdropVisibility = {
+  Subtle: 'subtle',
+  Balanced: 'balanced',
+  Vivid: 'vivid',
+} as const;
+
+export type SkinBackdropVisibility =
+  typeof SkinBackdropVisibility[keyof typeof SkinBackdropVisibility];
 
 export const SkinAssetFormat = {
   Png: 'png',
@@ -78,6 +91,7 @@ export const SkinIpc = {
   List: 'skin:list',
   Apply: 'skin:apply',
   BindTheme: 'skin:bindTheme',
+  SetBackdropVisibility: 'skin:setBackdropVisibility',
   Deactivate: 'skin:deactivate',
   Delete: 'skin:delete',
   Changed: 'skin:changed',

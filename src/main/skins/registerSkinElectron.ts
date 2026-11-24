@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, protocol } from 'electron';
 
 import {
+  type SkinBackdropVisibility,
   SkinIpc,
   SkinProtocol,
   SkinRecordStatus,
@@ -12,6 +13,7 @@ import type {
   SkinDeleteResponse,
   SkinGetActiveResponse,
   SkinListResponse,
+  SkinSetBackdropVisibilityResponse,
 } from '../../shared/skin/types';
 import { presentSkin } from './skinPresentation';
 import { createSkinProtocolHandler } from './skinProtocol';
@@ -111,6 +113,27 @@ export function registerSkinElectronIntegration(store: SkinStore): void {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to bind skin theme',
+      };
+    }
+  });
+
+  ipcMain.handle(SkinIpc.SetBackdropVisibility, async (
+    _event,
+    skinId: string,
+    visibility: SkinBackdropVisibility,
+  ): Promise<SkinSetBackdropVisibilityResponse> => {
+    try {
+      const skin = await store.setBackdropVisibility(skinId, visibility);
+      notifySkinChanged();
+      return {
+        success: true,
+        skin: presentSkin(skin),
+      };
+    } catch (error) {
+      console.error('[Skin] failed to update skin backdrop visibility:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update skin backdrop visibility',
       };
     }
   });

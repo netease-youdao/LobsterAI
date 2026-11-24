@@ -1,19 +1,21 @@
-# Skin Pack MVP Asset Contract
+# Skin Pack Asset Contract
 
-The MVP contains exactly two generated raster assets. Both are content images, never executable theme code.
+A skin pack contains one required raster backdrop (`workspace.backdrop`) and one optional raster emblem (`home.emblem`). Both are content images, never executable theme code.
 
 ## `workspace.backdrop`
 
 - Format: PNG, JPEG, or WebP.
-- Composition: landscape, preferably 16:9 and 2K-class.
-- No text, logos, UI mockups, watermarks, borders, or fake controls.
-- Keep the central content band and lower prompt-input area low-detail.
-- Put the main decorative focal point toward an outer third.
-- Match the structured presentation palette registered with the draft.
-- Use broad shapes and restrained contrast so the host's fixed wash can preserve readability.
-- The same image may be reused by the active conversation view at a host-controlled low opacity. Do not generate a separate conversation background.
+- Composition: landscape (`>= 800×450`, aspect ratio `1.25–2.5`), preferably 16:9 and 2K-class when AI-generated.
+- Direct-reuse exception: when the user explicitly asks to apply their own attached image unchanged, register the original image token directly without redrawing it or stripping its existing composition/logos.
+- When AI-generated:
+  - No text, logos, UI mockups, watermarks, borders, or fake controls.
+  - Keep the central content band and lower prompt-input area low-detail.
+  - Put the main decorative focal point toward an outer third.
+  - Match the structured presentation palette registered with the draft.
+  - Use broad shapes and restrained contrast so the host's readability wash can preserve legibility.
+- The same image may be reused by the active conversation view at a host-controlled opacity/wash determined by `backdropVisibility` (`subtle`, `balanced`, or `vivid`). Do not generate a separate conversation background.
 
-Prompt suffix template:
+Prompt suffix template (AI-generated backdrops only):
 
 ```text
 Create a polished desktop application atmosphere backdrop in the shared art direction and the exact registered presentation palette. Landscape 16:9 composition, no text, no logo, no UI, no watermark. Keep the central 45% and lower 25% visually quiet for readable interface content. Place the decorative focal interest near the registered focus coordinates, with broad shapes, controlled contrast, and clean edges suitable for CSS cover cropping.
@@ -21,6 +23,7 @@ Create a polished desktop application atmosphere backdrop in the shared art dire
 
 ## `home.emblem`
 
+- Optional for direct-reuse skins; generated for AI-created packs.
 - Format: PNG, JPEG, or WebP.
 - Composition: square.
 - Must remain recognizable at 48 px.
