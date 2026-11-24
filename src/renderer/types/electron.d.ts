@@ -148,6 +148,7 @@ import type {
   LocalWebService,
 } from '../../shared/localWebServices/constants';
 import type { McpAuthMode, McpOAuthActionResult, McpOAuthStatusResult } from '../../shared/mcp/auth';
+import type { McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
 import type {
   MediaPreference,
@@ -523,6 +524,7 @@ interface McpServerConfigIPC {
   isBuiltIn: boolean;
   githubUrl?: string;
   registryId?: string;
+  runtimeConnection?: McpManagedConnection;
   launchResolution?: {
     serverId: string;
     resolverKind: 'npx' | 'uvx' | 'python' | 'raw';

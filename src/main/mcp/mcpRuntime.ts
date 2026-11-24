@@ -5,7 +5,7 @@ import path from 'path';
 import { COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS } from '../../shared/computerUse/constants';
 import { ASK_USER_QUESTION_TOOL_NAME, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpAuthMode } from '../../shared/mcp/auth';
-import { McpIpcChannel } from '../../shared/mcp/constants';
+import { McpIpcChannel, McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
 import {
@@ -41,6 +41,15 @@ import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
 import type { ResolvedMcpServer } from './types';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
+
+// Covers the host's bounded connection wait and the surrounding config sync.
+const MANAGED_MCP_SYNC_TIMEOUT_MS = 18_000;
+
+interface ManagedLaunchConnection {
+  sourceFingerprint: string;
+  serverUpdatedAt: number;
+  pending: Promise<void> | null;
+}
 
 const getPackagedNpmBinDir = (): string => (app.isPackaged
   ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
@@ -83,7 +92,8 @@ export interface McpRuntimeDeps {
     reason: string;
     restartGatewayIfRunning?: boolean;
     expectedImpact?: string;
-  }) => Promise<{ success: boolean; changed: boolean }>;
+    waitForMcpServerId?: string;
+  }) => Promise<{ success: boolean; changed: boolean; mcpServerConnected?: boolean }>;
   /** Fired when an AskUserQuestion request is surfaced to the renderer. */
   onAskUserRequested?: (sessionId: string, request: { requestId: string; toolName: string }) => void;
   /** Fired when a pending AskUserQuestion request is dismissed upstream. */
@@ -98,6 +108,7 @@ export interface McpRuntimeDeps {
 export class McpRuntime {
   private mcpStore: McpStore | null = null;
   private launchResolverManager: McpLaunchResolverManager | null = null;
+  private readonly launchConnections = new Map<string, ManagedLaunchConnection>();
   private bridgeServer: McpBridgeServer | null = null;
   private readonly bridgeSecret: string;
   private resolvedServersCache: ResolvedMcpServer[] = [];
@@ -127,14 +138,7 @@ export class McpRuntime {
       this.launchResolverManager = new McpLaunchResolverManager(
         this.getStore(),
         () => this.broadcastServersChanged(),
-        reason => {
-          this.deps.syncOpenClawConfig({
-            reason,
-            expectedImpact: 'sync',
-          }).catch(err =>
-            console.error('[MCP] config sync error after launch resolution:', err),
-          );
-        },
+        (reason, readyServerId) => this.syncLaunchConnection(reason, readyServerId),
       );
     }
     return this.launchResolverManager;
@@ -142,6 +146,83 @@ export class McpRuntime {
 
   ensureLaunchResolution(serverId: string, reason: string): void {
     this.getLaunchResolverManager().ensureResolved(serverId, reason);
+  }
+
+  private getLaunchConnection(server: McpServerRecord): ManagedLaunchConnection | undefined {
+    const connection = this.launchConnections.get(server.id);
+    if (
+      !server.enabled
+      || connection?.serverUpdatedAt !== server.updatedAt
+      || connection.sourceFingerprint !== server.launchResolution?.sourceFingerprint
+    ) return undefined;
+    return connection;
+  }
+
+  getDisplayServers(): Array<McpServerRecord & { runtimeConnection?: McpManagedConnection }> {
+    return this.getStore().listServers().map(server => {
+      const connection = this.getLaunchConnection(server);
+      return connection ? {
+        ...server,
+        runtimeConnection: connection.pending ? McpManagedConnection.Connecting : McpManagedConnection.Connected,
+      } : server;
+    });
+  }
+
+  private syncLaunchConnection(reason: string, serverId?: string): void {
+    const server = serverId ? this.getStore().getServer(serverId) : null;
+    const resolution = server?.enabled ? this.getLaunchResolverManager().getReadyResolution(server) : undefined;
+    const waitForMcpServerId = resolution && server ? server.id : undefined;
+    const sync = Promise.resolve().then(() => this.deps.syncOpenClawConfig({
+      reason,
+      expectedImpact: 'sync',
+      ...(waitForMcpServerId ? { waitForMcpServerId } : {}),
+    })).catch((err): null => {
+      console.error('[MCP] config sync error after launch resolution:', err);
+      return null;
+    });
+    if (!server || !resolution) return;
+
+    const connection: ManagedLaunchConnection = {
+      sourceFingerprint: resolution.sourceFingerprint,
+      serverUpdatedAt: server.updatedAt,
+      pending: null,
+    };
+    const timeout = AbortSignal.timeout(MANAGED_MCP_SYNC_TIMEOUT_MS);
+    connection.pending = new Promise<void>(resolve => {
+      const finish = (connected: boolean) => {
+        timeout.removeEventListener('abort', onTimeout);
+        if (this.launchConnections.get(server.id) === connection) {
+          if (connected) connection.pending = null;
+          else this.launchConnections.delete(server.id);
+          this.broadcastServersChanged();
+        }
+        resolve();
+      };
+      const onTimeout = () => finish(false);
+      timeout.addEventListener('abort', onTimeout, { once: true });
+      void sync.then(result => finish(result?.success === true && result.mcpServerConnected === true));
+    });
+    this.launchConnections.set(server.id, connection);
+  }
+
+  async waitForPendingLaunchConnections(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    const pending: Promise<void>[] = [];
+    for (const [id, connection] of this.launchConnections) {
+      if (!connection.pending) continue;
+      const server = this.getStore().getServer(id);
+      if (server && this.getLaunchConnection(server) === connection) pending.push(connection.pending);
+    }
+    if (pending.length === 0) return;
+
+    await new Promise<void>(resolve => {
+      const finish = () => {
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      signal.addEventListener('abort', finish, { once: true });
+      void Promise.all(pending).then(finish, finish);
+    });
   }
 
   setMediaGenerationHandler(

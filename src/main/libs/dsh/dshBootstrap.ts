@@ -150,6 +150,7 @@ export interface DshBootstrapSyncOptions {
   deferExternalSync?: boolean;
   /** Skip `syncDynamicHostTools()` when the caller just ran it immediately prior. */
   skipHostToolsSync?: boolean;
+  waitForMcpServerId?: string;
 }
 
 export interface DshBootstrapStartOptions {
@@ -178,6 +179,7 @@ export interface DshBootstrapOptions {
   };
   getDefaultCwd: (agentId?: string) => string;
   getMemoryEnabled?: () => boolean;
+  waitForMcpConnections?: (signal: AbortSignal) => Promise<void>;
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
@@ -615,6 +617,7 @@ export class DshBootstrap {
       store: options.coworkStore,
       resolveModelSelection: options.resolveModelSelection,
       resolveAllowedSkillIds: options.resolveAllowedSkillIds,
+      waitForMcpConnections: options.waitForMcpConnections,
       resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
       onPermissionPresetChanged: async (preset, coworkSessionId) => {
         if (!coworkSessionId) {
@@ -1124,6 +1127,7 @@ export class DshBootstrap {
     success: boolean;
     changed: boolean;
     needsReauthMcpIds: string[];
+    mcpServerConnected?: boolean;
     error?: string;
   }> {
     try {
@@ -1211,9 +1215,17 @@ export class DshBootstrap {
         this.mcpOAuthManager,
       );
       needsReauthIds = mcpSpecResult.needsReauthIds;
+      const waitForServerName = options.waitForMcpServerId !== undefined
+        ? mcpSpecResult.namesById.get(options.waitForMcpServerId)
+        : undefined;
+      let mcpServerConnected = false;
       coreSyncTasks.push(
-        this.hostManager.syncMcpServers(mcpSpecResult.servers).then((mcpSyncResult) => {
+        this.hostManager.syncMcpServers(
+          mcpSpecResult.servers,
+          waitForServerName ? { waitForServerName } : undefined,
+        ).then((mcpSyncResult) => {
           if (mcpSyncResult && typeof mcpSyncResult === 'object') {
+            mcpServerConnected = mcpSyncResult.serverConnected === true;
             if (mcpSyncResult.available === false) {
               console.warn('[DshBootstrap] syncMcpServers reported mcpManager unavailable');
             }
@@ -1253,7 +1265,12 @@ export class DshBootstrap {
         this.initialConfigSynced = true;
       }
 
-      return { success: true, changed: true, needsReauthMcpIds: needsReauthIds };
+      return {
+        success: true,
+        changed: true,
+        needsReauthMcpIds: needsReauthIds,
+        ...(options.waitForMcpServerId !== undefined ? { mcpServerConnected } : {}),
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[DshBootstrap] syncAllConfig failed:', message);

@@ -9,6 +9,7 @@ import {
 } from '../../shared/computerUse/constants';
 import { type InstalledKitRecord, KitStoreKey } from '../../shared/kit/constants';
 import { McpAuthMode } from '../../shared/mcp/auth';
+import { McpManagedConnection } from '../../shared/mcp/constants';
 import { ComputerUseMcpEnv, ComputerUseMcpServerName } from '../computerUse/computerUseMcpServer';
 import {
   ComputerUseRuntimeMode,
@@ -17,9 +18,9 @@ import {
   getComputerUseRuntimeRoot,
 } from '../computerUse/computerUseRuntime';
 import { buildDshMcpServerSpecs } from '../libs/dsh/dshProviderSync';
-import { McpLaunchResolutionStatus, McpLaunchResolverKind } from './mcpLaunchResolution';
+import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus, McpLaunchResolverKind } from './mcpLaunchResolution';
 import { McpRuntime } from './mcpRuntime';
-import type { McpServerRecord } from './mcpStore';
+import type { McpServerRecord, McpStore } from './mcpStore';
 
 const TEST_USER_DATA = path.join(process.cwd(), '.test-mcp-runtime-computer-use');
 const originalPlatform = process.platform;
@@ -62,6 +63,64 @@ vi.mock('./mcpStore', () => ({
     }
   },
 }));
+
+test('holds a chat turn until DSH acknowledges a managed MCP connection', async () => {
+  const server: McpServerRecord = {
+    id: 'context7',
+    name: 'Context7',
+    description: '',
+    enabled: true,
+    transportType: 'stdio',
+    command: 'npx',
+    args: ['-y', '@upstash/context7-mcp'],
+    isBuiltIn: true,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const resolution = {
+    serverId: server.id,
+    sourceFingerprint: createMcpLaunchSourceFingerprint(server),
+    resolverKind: McpLaunchResolverKind.Npx,
+    status: McpLaunchResolutionStatus.Ready,
+    command: 'node',
+    args: ['context7.js'],
+    updatedAt: 2,
+  };
+  server.launchResolution = resolution;
+  const store = {
+    getServer: vi.fn(() => server),
+    listServers: vi.fn(() => [server]),
+    getLaunchResolution: vi.fn(() => resolution),
+  };
+  const { promise, resolve } = Promise.withResolvers<{
+    success: boolean;
+    changed: boolean;
+    mcpServerConnected: boolean;
+  }>();
+  const syncOpenClawConfig = vi.fn(() => promise);
+  const runtime = new McpRuntime({ getStore: vi.fn(), syncOpenClawConfig });
+  vi.spyOn(runtime, 'getStore').mockReturnValue(store as unknown as McpStore);
+
+  runtime.ensureLaunchResolution(server.id, 'mcp-server-enabled');
+  expect(runtime.getDisplayServers()[0].runtimeConnection).toBe(McpManagedConnection.Connecting);
+  const controller = new AbortController();
+  const proceeded = vi.fn();
+  const ongoingTurn = runtime.waitForPendingLaunchConnections(controller.signal).then(proceeded);
+  await Promise.resolve();
+  expect(syncOpenClawConfig).toHaveBeenCalledWith(expect.objectContaining({ waitForMcpServerId: server.id }));
+  expect(proceeded).not.toHaveBeenCalled();
+
+  const cancelled = new AbortController();
+  const cancelledTurn = runtime.waitForPendingLaunchConnections(cancelled.signal);
+  cancelled.abort();
+  await cancelledTurn;
+  expect(runtime.getDisplayServers()[0].runtimeConnection).toBe(McpManagedConnection.Connecting);
+
+  resolve({ success: true, changed: true, mcpServerConnected: true });
+  await ongoingTurn;
+  expect(proceeded).toHaveBeenCalledOnce();
+  expect(runtime.getDisplayServers()[0].runtimeConnection).toBe(McpManagedConnection.Connected);
+});
 
 function buildInstalledComputerUseRecord(runtime: MacRuntime): InstalledKitRecord {
   return {

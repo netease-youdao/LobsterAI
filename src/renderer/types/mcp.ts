@@ -1,4 +1,5 @@
 import type { McpAuthMode } from '../../shared/mcp/auth';
+import type { McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpMarketplaceConnector } from '../../shared/mcp/marketplace';
 import type { McpToolFilter } from '../../shared/mcp/toolFilter';
 
@@ -34,6 +35,7 @@ export interface McpServerConfig {
   githubUrl?: string;            // GitHub repository URL
   registryId?: string;           // matching registry entry ID
   launchResolution?: McpLaunchResolution;
+  runtimeConnection?: McpManagedConnection;
   createdAt: number;
   updatedAt: number;
 }

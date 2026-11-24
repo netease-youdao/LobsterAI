@@ -4,6 +4,7 @@ import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
+import { McpManagedConnection } from '../../../shared/mcp/constants';
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
@@ -313,6 +314,8 @@ const McpManager: React.FC = () => {
     const isManagedCandidate = command === 'npx' || command === 'npx.cmd';
     if (!server.launchResolution && !isManagedCandidate) return null;
     const status = server.launchResolution?.status;
+    if (server.runtimeConnection === McpManagedConnection.Connecting) return i18nService.t('mcpLaunchConnecting');
+    if (server.runtimeConnection === McpManagedConnection.Connected) return i18nService.t('mcpLaunchConnected');
     if (!status) return i18nService.t('mcpLaunchPending');
     if (status === 'pending') return i18nService.t('mcpLaunchPending');
     if (status === 'installing') return i18nService.t('mcpLaunchInstalling');
@@ -324,6 +327,8 @@ const McpManager: React.FC = () => {
 
   const getLaunchStatusClass = (server: McpServerConfig): string => {
     const status = server.launchResolution?.status || 'pending';
+    if (server.runtimeConnection === McpManagedConnection.Connecting) return LAUNCH_STATUS_COLORS.installing;
+    if (status === 'ready' && server.runtimeConnection !== McpManagedConnection.Connected) return LAUNCH_STATUS_COLORS.pending;
     return LAUNCH_STATUS_COLORS[status] || LAUNCH_STATUS_COLORS.pending;
   };
 
