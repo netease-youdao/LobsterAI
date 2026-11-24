@@ -31,6 +31,7 @@ export interface PresetAgent {
   category: string;
   tags: LocalizedExpertText[];
   starterPrompts: LocalizedExpertText[];
+  isNew?: boolean;
   revision?: number;
   installed?: boolean;
 }
