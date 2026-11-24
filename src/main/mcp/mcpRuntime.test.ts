@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { BrowserCredentialUseMode } from '../../shared/browserCredentials/constants';
+import { BrowserCredentialTimeout, BrowserCredentialUseMode } from '../../shared/browserCredentials/constants';
 import { CoworkIpcChannel, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { ConfirmationBehavior, MediaConfirmationAction } from '../../shared/media/confirmation';
 import { BrowserCredentialApprovalService } from '../browserCredentials/browserCredentialApprovalService';
@@ -82,9 +82,25 @@ async function fixture(authority = false, account = { generation: 0 }) {
   return { runtime, permissionSessions, requested, dismissed, registered, settled, deps };
 }
 
+function attachQuestionAuthority(f: Awaited<ReturnType<typeof fixture>>, account = { generation: 0 }) {
+  const rows = new Map<string, string>();
+  const authority = new RemoteQuestionService({
+    get: (key: string) => rows.has(key) ? JSON.parse(rows.get(key)!) : undefined,
+    put: (key: string, value: unknown) => rows.set(key, JSON.stringify(value)),
+    transaction: (operation: () => unknown) => operation(), updateQuestion: () => {},
+  } as unknown as RemoteStore, () => ({ runId: 'run-a', owner: { userId: `user-${account.generation}`, scopeKey: 'personal' }, agentId: 'main', cwd: '/workspace' }));
+  f.registered.mockImplementation(input => authority.register(input));
+  f.settled.mockImplementation((id, result) => authority.settle(id, result));
+  f.deps.runtime.getQuestionState = id => authority.getState(id);
+  f.deps.runtime.respondToQuestionConfirmed = (id, result, options) => authority.submit(id, result, options);
+  return authority;
+}
+
 describe('AskUserQuestion creation to IPC response', () => {
   test.each([true, false])('saved login with session binding=%s accepts allow, deny choice and close locally', async bound => {
-    const { runtime, requested, registered, dismissed, deps } = await fixture(true);
+    const f = await fixture(true);
+    const { runtime, requested, registered, dismissed, deps } = f;
+    attachQuestionAuthority(f);
     const service = new BrowserCredentialApprovalService({
       askUser: (items, timeout, options) => runtime.askUserInternal(items, timeout, options),
       translate: key => key,
@@ -101,14 +117,66 @@ describe('AskUserQuestion creation to IPC response', () => {
         candidates: [{ id: 'credential-1', origin: 'https://example.com', username: 'alice', createdAt: 1, updatedAt: 1 }],
       });
       const requestId = requested.mock.calls[index][1].requestId;
-      expect(registered).not.toHaveBeenCalled();
-      await expect(submitCoworkPermission({ requestId, result }, deps)).resolves.toEqual({ kind: 'question_resolved' });
+      expect(registered).toHaveBeenCalledTimes(bound ? index + 1 : 0);
+      await expect(submitCoworkPermission({ requestId, result }, deps)).resolves.toMatchObject({ kind: bound ? 'confirmed' : 'question_resolved' });
       await expect(response).resolves.toMatchObject({ approved: index === 0 });
       expect(send).toHaveBeenCalledWith(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
       expect(runtime.canAccessLocalQuestion(requestId)).toBe(false);
-      await expect(submitCoworkPermission({ requestId, result }, deps)).rejects.toThrow('APPROVAL_ACCESS_DENIED');
+      if (bound) await expect(submitCoworkPermission({ requestId, result }, deps)).resolves.toMatchObject({ kind: 'known_not_applied' });
+      else await expect(submitCoworkPermission({ requestId, result }, deps)).rejects.toThrow('APPROVAL_ACCESS_DENIED');
     }
     expect(dismissed).toHaveBeenCalledTimes(3);
+  });
+
+  test.each(['allow', 'deny', 'skip', 'cancel', 'timeout', 'disconnect', 'account-change'] as const)(
+    'saved login supports mobile %s through the real authority', async action => {
+      const account = { generation: 0 };
+      const f = await fixture(true, account);
+      const authority = attachQuestionAuthority(f, account);
+      const controller = new AbortController();
+      const service = new BrowserCredentialApprovalService({
+        askUser: (items, timeout, options) => f.runtime.askUserInternal(items, timeout, options), translate: key => key,
+      });
+      const response = service.requestApproval({
+        sessionId: 'session-a', sessionKey, signal: controller.signal,
+        origin: 'https://example.com', useMode: BrowserCredentialUseMode.AlwaysAsk,
+        candidates: [{ id: 'credential-1', origin: 'https://example.com', username: 'alice', createdAt: 1, updatedAt: 1 }],
+      });
+      const registration = f.registered.mock.calls[0][0];
+      const state = authority.getState(registration.requestId)!;
+      expect(state.questions[0]).toMatchObject({ isOther: false, allowSkip: true });
+      expect(JSON.stringify(state)).not.toContain('password');
+      const options = {
+        submissionId: 'mobile-login', source: 'mobile' as const, expectedVersion: state.questionVersion,
+        operationDigest: state.operationDigest, beforeDispatch: () => {},
+      };
+      if (action === 'timeout') await vi.advanceTimersByTimeAsync(BrowserCredentialTimeout.Approval);
+      else await vi.advanceTimersByTimeAsync(90_000); // Beyond the old 60-second tool deadline.
+      if (action === 'disconnect') controller.abort();
+      if (action === 'account-change') account.generation += 1;
+      const decision: PermissionResult = action === 'cancel' ? { behavior: 'deny' } : {
+        behavior: 'allow', updatedInput: { answers: { q_0: action === 'skip' ? [] : [action === 'deny' ? 'browserCredentialApprovalDeny' : 'browserCredentialApprovalAllow'] } },
+      };
+      const outcome = await authority.submit(state.questionId, decision, options);
+      const stale = ['timeout', 'disconnect', 'account-change'].includes(action);
+      expect(outcome.kind).toBe(stale ? 'known_not_applied' : 'confirmed');
+      if (action === 'account-change') await vi.advanceTimersByTimeAsync(BrowserCredentialTimeout.Approval);
+      await expect(response).resolves.toMatchObject({ approved: action === 'allow' });
+      await expect(authority.submit(registration.requestId, { behavior: 'deny' }, {
+        submissionId: 'late-desktop', source: 'desktop',
+      })).resolves.toMatchObject({ kind: 'known_not_applied' });
+      expect(f.dismissed).toHaveBeenCalledExactlyOnceWith(registration.requestId);
+    },
+  );
+
+  test('remote callback cannot approve saved login after the account generation changes and returns', async () => {
+    const account = { generation: 0 };
+    const f = await fixture(true, account);
+    const response = f.runtime.askUserInternal(questions, 10_000, { sessionKey });
+    const registration = f.registered.mock.calls[0][0];
+    account.generation += 1;
+    expect(registration.resolve({ action: 'answer', answers: { q_0: ['Yes'] } })).toMatchObject({ kind: 'known_not_applied' });
+    await expect(response).resolves.toMatchObject({ behavior: 'deny' });
   });
 
   test.each([true, false])('local questions with session binding=%s reject unknown IDs and account changes', async bound => {

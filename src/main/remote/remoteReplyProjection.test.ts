@@ -25,6 +25,17 @@ describe('public reply projection', () => {
     const output = replyBlocks({ ...row, type: 'system' }, { status: 25, progress: 'wrong', isMediaStatusPolling: 'true', kind: 'internal' })[0];
     expect(output.display).toBeUndefined();
   });
+  it('keeps valid tool IDs and maps invalid IDs stably without truncation collisions', () => {
+    const block = (value: string, type = 'tool_use') => replyBlocks({ ...row, type }, { toolUseId: value })[0];
+    for (const value of ['call_valid-1', 'x'.repeat(64)]) expect(block(value).toolCallId).toBe(value);
+    const invalid = ['call:1', 'call/1', 'x'.repeat(65), 'x'.repeat(64) + 'y'];
+    const ids = invalid.map(value => block(value).toolCallId);
+    expect(new Set(ids).size).toBe(invalid.length);
+    for (const [index, value] of invalid.entries()) {
+      expect(ids[index]).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+      expect(block(value, 'tool_result').toolCallId).toBe(ids[index]);
+    }
+  });
   it('masks credential fields while retaining ordinary paths, tool input and result text', () => {
     const blocks = replyBlocks({ ...row, type: 'tool_use', content: 'Using tool' }, { toolUseId: 'call', toolInput: { file_path: '/Users/name/report.md', headers: { Authorization: 'Bearer private' }, apiKey: 'secret' } }, 'Edit');
     expect(blocks[0]).toMatchObject({ type: 'tool_input', toolCallId: 'call', toolName: 'Edit' });

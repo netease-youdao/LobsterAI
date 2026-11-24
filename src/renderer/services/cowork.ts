@@ -469,6 +469,7 @@ class CoworkService {
 
     // Permission request listener
     const permissionCleanup = cowork.onStreamPermission(({ sessionId, request }) => {
+      this.logDiagnostic('debug', `permission received requestId=${request.requestId} sessionId=${sessionId}`);
       store.dispatch(enqueuePendingPermission({
         sessionId,
         toolName: request.toolName,
@@ -518,6 +519,7 @@ class CoworkService {
 
     // Permission dismiss listener (timeout or server-side resolution)
     const permissionDismissCleanup = cowork.onStreamPermissionDismiss(({ requestId }) => {
+      this.logDiagnostic('debug', `permission dismissed requestId=${requestId}`);
       store.dispatch(dequeuePendingPermission({ requestId }));
     });
     this.streamListenerCleanups.push(permissionDismissCleanup);

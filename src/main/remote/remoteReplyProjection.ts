@@ -30,6 +30,9 @@ export function redactReplyValue(value: unknown): unknown {
   return value;
 }
 export const replyBlockId = (messageId: string, part: string): string => createHash('sha256').update(`${messageId}:${part}`).digest('hex').slice(0, 32);
+/** Preserve published IDs; normalize runtime-only nested IDs to the remote wire contract. */
+export const replyToolCallId = (value: string): string => /^[A-Za-z0-9_-]{1,64}$/.test(value)
+  ? value : createHash('sha256').update(value).digest('hex');
 const displayFields = ['kind', 'status', 'mediaType', 'taskId', 'upstreamTaskId', 'pollCount', 'progress', 'isMediaStatusPolling', 'mode', 'startedAt', 'completedAt'] as const;
 export function replyDisplay(metadata: Record<string, any>): RemoteReplyBlock['display'] | undefined {
   const source = { ...metadata, ...metadata.mediaStatusDetails, ...metadata.toolResultDetails };
@@ -51,7 +54,7 @@ export function replyUserText(content: string, metadata: Record<string, unknown>
 export function replyBlocks(row: { id: string; type: string; content: string }, metadata: Record<string, any>, toolName?: string, annotationText?: string): RemoteReplyBlock[] {
   const id = (part: string): string => replyBlockId(row.id, part);
   const text = redactReplyText(row.content || '');
-  const toolCallId = String(metadata.toolUseId || metadata.toolCallId || row.id);
+  const toolCallId = replyToolCallId(String(metadata.toolUseId || metadata.toolCallId || row.id));
   const display = replyDisplay(metadata);
   if (row.type === 'tool_use') return [{ blockId: id('input'), type: RemoteReplyBlockType.ToolInput, toolCallId,
     ...(toolName ? { toolName } : {}), text: metadata.toolInput == null ? text : JSON.stringify(redactReplyValue(metadata.toolInput), null, 2), ...(display ? { display } : {}) }];

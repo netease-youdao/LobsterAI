@@ -385,3 +385,23 @@ describe('McpBridgeServer decision tool', () => {
     }
   });
 });
+
+
+test('internal caller cancellation dismisses a pending question once and prevents late approval', async () => {
+  vi.useFakeTimers();
+  const server = new McpBridgeServer('test-secret');
+  const controller = new AbortController();
+  let requestId = '';
+  const dismiss = vi.fn();
+  server.onAskUser(request => { requestId = request.requestId; });
+  server.onAskUserDismiss(dismiss);
+  const response = server.askUserInternal(makeQuestions(), 120_000, { signal: controller.signal });
+  controller.abort();
+  await expect(response).resolves.toMatchObject({ behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+  expect(server.resolveAskUser(requestId, { behavior: 'allow' })).toBe(false);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(dismiss).toHaveBeenCalledTimes(1);
+  const created = vi.fn(); server.onAskUser(created);
+  await expect(server.askUserInternal(makeQuestions(), 120_000, { signal: controller.signal })).resolves.toMatchObject({ behavior: 'deny' });
+  expect(created).not.toHaveBeenCalled();
+});

@@ -28,6 +28,9 @@ function applyRecord(state: ServerState, record: ProjectionRecord): void {
   } else if (record.eventType === 'run.updated') {
     const control = BigInt(record.payload.controlVersion);
     if (control > state.control) { state.control = control; state.runId = record.payload.run.runId; }
+  } else if (record.eventType === 'question.updated' || record.eventType === 'approval.updated') {
+    const control = BigInt(record.payload.controlVersion);
+    if (control > state.control) state.control = control;
   } else if (record.eventType === 'message.upsert') state.messages.add(record.payload.message.messageId);
 }
 function clone(state: ServerState): ServerState { return { ...state, messages: new Set(state.messages) }; }
@@ -137,6 +140,35 @@ describe('remote run publication and durable recovery', () => {
     await bridge.syncSessions();
     expect(server.runId).toBe('second-run'); expect(store.pending('task')).toEqual([]);
   });
+
+  for (const decision of ['question', 'approval'] as const) {
+    for (const mobile of [false, true]) it(`continues after a closed ${decision} into a ${mobile ? 'mobile' : 'desktop'} run without a control conflict`, async () => {
+      const { store, bridge, server, imports } = fixture();
+      if (decision === 'question') {
+        store.setQuestionProjectionSupported(true);
+        store.updateQuestion('task', { questionId: 'closed-question', runId: 'first-run', questionVersion: '2',
+          operationDigest: 'a'.repeat(64), title: 'Choose', status: 'answered', expiresAt: new Date().toISOString(),
+          remoteAllowed: false, requiresLocalAction: false, allowCancel: true, questions: [],
+          resolution: { phase: 'finished', source: 'mobile', answeredAt: new Date().toISOString(), answers: {} } });
+      } else {
+        store.updateApproval('task', { approvalId: 'closed-approval', runId: 'first-run', approvalVersion: '2',
+          status: 'approved', remoteAllowed: false, requiresLocalAction: false });
+      }
+      await bridge.syncSessions();
+      expect(store.pending('task')).toEqual([]);
+      const initialImports = imports.length;
+      for (const runId of ['second-run', 'third-run']) {
+        store.beginRun('task', runId, mobile ? `command-${runId}` : null);
+        if (mobile) { await bridge.syncSessions(); expect(server.runId).toBeNull(); store.markRunDispatched('task'); }
+        await bridge.syncSessions();
+        expect(store.get('syncFailure:task')).toBeNull();
+        expect(store.pending('task')).toEqual([]);
+        expect(server.runId).toBe(runId);
+        store.updateRun('task', 'succeeded'); await bridge.syncSessions();
+      }
+      expect(imports).toHaveLength(initialImports);
+    });
+  }
 
   for (const partialAck of [false, true]) it(`recovers immutable legacy events through a snapshot (${partialAck ? 'reserved prefix already acknowledged' : 'entire batch rolled back'})`, async () => {
     const { store, bridge, server, imports } = fixture(); reserve(store);

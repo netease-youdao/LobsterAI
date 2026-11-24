@@ -595,7 +595,7 @@ export class AgentBrowserHost {
     }
 
     try {
-      return await this.dispatchTool(request.tool, request.args);
+      return await this.dispatchTool(request.tool, request.args, request.signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // Tool failures belong to the tool result, not the page's navigation state.
@@ -630,7 +630,7 @@ export class AgentBrowserHost {
     console.log('[AgentBrowserHost] Persistent browser storage flushed on quit.');
   }
 
-  private async dispatchTool(tool: string, args: Record<string, unknown>): Promise<BrowserToolResponse> {
+  private async dispatchTool(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<BrowserToolResponse> {
     switch (tool) {
       case BrowserMcpTool.ListPages:
         await this.ensureBrowserToolPageBaseline();
@@ -708,6 +708,7 @@ export class AgentBrowserHost {
       case BrowserMcpTool.LoginWithSavedCredential: {
         const page = this.resolvePage(args.pageId);
         const result = await this.credentialLogin.login({
+          signal,
           url: page.view.webContents.getURL(),
           sessionId: this.activeSessionId,
           accountHint: readString(args.accountHint) || undefined,

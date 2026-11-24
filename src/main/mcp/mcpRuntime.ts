@@ -404,9 +404,15 @@ export class McpRuntime {
         createdAt: request.createdAt, expiresAt: request.expiresAt,
         questions: snapshot.questions.map((question, index) => ({
           questionId: `q_${index}`, header: question.header ?? '', question: question.question,
-          options: question.options, multiSelect: question.multiSelect === true, isOther: true, allowSkip: true,
+          options: question.options, multiSelect: question.multiSelect === true,
+          isOther: question.isOther ?? true, allowSkip: question.allowSkip ?? true,
         })),
         resolve: response => {
+          if (!this.canAccessLocalQuestion(request.requestId)) {
+            const applied = this.resolveAskUser(request.requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+            return { kind: 'known_not_applied', reason: 'QUESTION_UNAVAILABLE',
+              ...(applied && pending.terminal ? { status: questionStatus(pending.terminal) } : {}) };
+          }
           const answers: Record<string, string> = Object.create(null);
           const skippedQuestionIds: string[] = [];
           if (response.action === 'answer') snapshot.questions.forEach((question, index) => {

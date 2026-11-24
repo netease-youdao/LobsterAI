@@ -15,6 +15,7 @@ import {
   resolveLobsterBrowserMcpCommand,
   resolveLobsterBrowserMcpStdioLaunch,
 } from './lobsterBrowserMcpServer';
+import { McpBridgeServer } from './mcpBridgeServer';
 
 const createdDirectories: string[] = [];
 
@@ -331,4 +332,42 @@ describe('resolveLobsterBrowserMcpCommand', () => {
       bridgeSecret: 'secret',
     })).toThrow('active browser bridge');
   });
+});
+
+
+test('MCP cancellation closes the HTTP login approval and rejects a late allow', async () => {
+  const bridge = new McpBridgeServer('cancel-test-secret');
+  let ready!: () => void;
+  const requested = new Promise<void>(resolve => { ready = resolve; });
+  let dismissed!: () => void;
+  const closed = new Promise<void>(resolve => { dismissed = resolve; });
+  let requestId = '';
+  bridge.onAskUser(request => { requestId = request.requestId; ready(); });
+  bridge.onAskUserDismiss(() => dismissed());
+  let approved = false;
+  bridge.onBrowserTool(async request => {
+    const answer = await bridge.askUserInternal([{ question: 'Allow login?', options: [{ label: 'Allow' }, { label: 'Deny' }] }], 120_000, { signal: request.signal });
+    approved = answer.behavior === 'allow';
+    return { content: [{ type: 'text', text: 'Cancelled' }] };
+  });
+  const client = new Client({ name: 'login-cancellation-test', version: '1.0.0' });
+  try {
+    await bridge.start();
+    const launch = resolveLobsterBrowserMcpStdioLaunch(createTempDirectory(), {
+      electronNodeRuntimePath: process.execPath, bridgeUrl: bridge.browserCallbackUrl!, bridgeSecret: 'cancel-test-secret',
+    });
+    await client.connect(new StdioClientTransport({ ...launch, stderr: 'pipe' }));
+    const controller = new AbortController();
+    const result = client.callTool({ name: BrowserCredentialLoginTool.Name, arguments: {} }, undefined, { signal: controller.signal });
+    const rejected = expect(result).rejects.toBeDefined();
+    await requested;
+    controller.abort();
+    await rejected;
+    await closed;
+    expect(bridge.resolveAskUser(requestId, { behavior: 'allow' })).toBe(false);
+    expect(approved).toBe(false);
+  } finally {
+    await client.close();
+    await bridge.stop();
+  }
 });

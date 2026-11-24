@@ -264,3 +264,30 @@ test('destroy cancels native question recovery and removes the account change su
   await Promise.resolve();
   expect(store.getState().cowork.pendingPermissions).toEqual([]);
 });
+
+
+test('permission receive and dismiss diagnostics persist correlation IDs without form content', () => {
+  let receive!: (event: { sessionId: string; request: CoworkPermissionRequest }) => void;
+  const dismiss = new Set<(event: { requestId: string }) => void>();
+  const noop = () => () => undefined;
+  const fromRenderer = vi.fn();
+  vi.stubGlobal('window', { electron: { log: { fromRenderer }, cowork: {
+    onStreamMessage: noop, onStreamMessageUpdate: noop, onStreamComplete: noop,
+    onStreamError: noop, onSessionsChanged: noop,
+    onStreamPermission: (listener: typeof receive) => { receive = listener; return () => undefined; },
+    onStreamPermissionDismiss: (listener: (event: { requestId: string }) => void) => {
+      dismiss.add(listener); return () => { dismiss.delete(listener); };
+    },
+  } } });
+  (coworkService as unknown as { setupStreamListeners: () => void }).setupStreamListeners();
+  const request = { ...nativeQuestion('log'), toolInput: { questions: ['private-question'], password: 'private-password' } };
+  receive({ sessionId: request.sessionId, request });
+  expect(store.getState().cowork.pendingPermissions).toHaveLength(1);
+  dismiss.forEach(listener => listener({ requestId: request.requestId }));
+  expect(store.getState().cowork.pendingPermissions).toEqual([]);
+  const logs = JSON.stringify(fromRenderer.mock.calls);
+  expect(logs).toContain('permission received'); expect(logs).toContain('permission dismissed');
+  expect(logs).toContain(request.requestId);
+  expect(logs).not.toContain('private-question'); expect(logs).not.toContain('private-password');
+  coworkService.destroy(); expect(dismiss.size).toBe(0);
+});
