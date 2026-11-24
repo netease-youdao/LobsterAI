@@ -118,6 +118,15 @@ export const readMediaConfirmationState = (value: unknown): MediaConfirmationSta
 export const VideoReferenceKind = { Image: 'image', Video: 'video' } as const;
 export type VideoReferenceKind = (typeof VideoReferenceKind)[keyof typeof VideoReferenceKind];
 
+export interface VideoConfirmationReference {
+  kind: VideoReferenceKind;
+  thumbnail?: string;
+  /** Full-resolution or screen-sized source for lightbox preview; falls back to `thumbnail`. */
+  previewUrl?: string;
+  /** Optional display label (e.g. filename) shown in the preview dialog. */
+  name?: string;
+}
+
 /**
  * Structured facts for the desktop confirmation card. The question text keeps
  * the same facts in prose because it is also the answer key.
@@ -132,7 +141,7 @@ export interface VideoConfirmationDetails {
   audio?: boolean;
   estimatedCredits?: number;
   pricingNote?: string;
-  references: Array<{ kind: VideoReferenceKind; thumbnail?: string }>;
+  references: VideoConfirmationReference[];
 }
 
 const optionalString = (value: unknown): string | undefined =>
@@ -149,9 +158,19 @@ export const readVideoConfirmationDetails = (value: unknown): VideoConfirmationD
   if (!model || !prompt || !portalUrl) return undefined;
   const kinds = Object.values(VideoReferenceKind) as string[];
   const references = (Array.isArray(item.references) ? item.references : [])
-    .filter((reference): reference is { kind: VideoReferenceKind; thumbnail?: unknown } =>
+    .filter((reference): reference is { kind: VideoReferenceKind; thumbnail?: unknown; previewUrl?: unknown; name?: unknown } =>
       !!reference && typeof reference === 'object' && kinds.includes((reference as { kind?: string }).kind ?? ''))
-    .map(reference => ({ kind: reference.kind, thumbnail: optionalString(reference.thumbnail) }));
+    .map(reference => {
+      const thumbnail = optionalString(reference.thumbnail);
+      const previewUrl = optionalString(reference.previewUrl);
+      const name = optionalString(reference.name);
+      return {
+        kind: reference.kind,
+        ...(thumbnail ? { thumbnail } : {}),
+        ...(previewUrl ? { previewUrl } : {}),
+        ...(name ? { name } : {}),
+      };
+    });
   return {
     model,
     prompt,

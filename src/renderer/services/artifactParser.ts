@@ -134,7 +134,7 @@ interface DedupeArtifactsOptions {
   defaultProjectDirectory?: string;
 }
 
-const getArtifactIdentityKeys = (artifact: Artifact): string[] => {
+export const getArtifactIdentityKeys = (artifact: Artifact): string[] => {
   const keys: string[] = [];
   if (artifact.filePath) {
     keys.push(`file:${artifact.type}:${normalizeFilePathForDedup(artifact.filePath)}`);

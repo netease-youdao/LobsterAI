@@ -1,10 +1,20 @@
 import { expect, test } from 'vitest';
 
 import { UsageOutcome } from '../shared/analytics/usage';
-import { MediaConfirmationReason as Reason } from '../shared/media/confirmation';
+import {
+  MediaConfirmationReason as Reason,
+  readVideoConfirmationDetails,
+} from '../shared/media/confirmation';
 import { MediaTaskStatus } from '../shared/media/constants';
 import { mediaTranslations } from '../shared/media/copy';
-import { videoConfirmationFailure, videoConfirmationQuestions, videoConfirmationReferences } from './videoGenerationConfirmation';
+import {
+  buildLocalFileImagePreviewUrl,
+  createVideoReferenceImagePreview,
+  type DecodedPreviewImage,
+  videoConfirmationFailure,
+  videoConfirmationQuestions,
+  videoConfirmationReferences,
+} from './videoGenerationConfirmation';
 
 const t = (key: string, params: Record<string, string | number> = {}) => Object.entries(params)
   .reduce((text, [name, value]) => text.replaceAll('{' + name + '}', String(value)),
@@ -63,4 +73,95 @@ test('collects each reference once and previews only images', () => {
     { kind: 'image' },
   ]);
   expect(videoConfirmationReferences({ images: [image] }, () => { throw new Error('decode failed'); })).toEqual([{ kind: 'image' }]);
+});
+
+test('builds localfile preview URLs only for servable local image files', () => {
+  expect(buildLocalFileImagePreviewUrl('/Users/me/my photo #1.png'))
+    .toBe('localfile://local/Users/me/my%20photo%20%231.png');
+  expect(buildLocalFileImagePreviewUrl('/Users/me/参考图100%.webp'))
+    .toBe('localfile://local/Users/me/%E5%8F%82%E8%80%83%E5%9B%BE100%25.webp');
+  expect(buildLocalFileImagePreviewUrl('/Users/me/clip.mp4')).toBeUndefined();
+  expect(buildLocalFileImagePreviewUrl('relative/image.png')).toBeUndefined();
+});
+
+test('creates high-res preview metadata for local files, HTTP URLs, and inline data URLs', () => {
+  const resizeCalls: Array<{ width?: number; height?: number }> = [];
+  const makeImage = (width: number, height: number, empty = false): DecodedPreviewImage => ({
+    isEmpty: () => empty,
+    getSize: () => ({ width, height }),
+    resize: (options) => {
+      resizeCalls.push(options);
+      return makeImage(options.width ?? width, options.height ?? height, empty);
+    },
+    toJPEG: (quality) => Buffer.from(`jpg-${width}x${height}-q${quality}`),
+  });
+
+  expect(createVideoReferenceImagePreview('https://example.invalid/pic.png', {
+    decodeDataUrl: () => makeImage(100, 100),
+  })).toBe('https://example.invalid/pic.png');
+
+  const localPreview = createVideoReferenceImagePreview('data:image/png;base64,AAAA', {
+    localPath: '/Users/me/shot 1.png',
+    decodeDataUrl: () => makeImage(1920, 1080),
+  });
+  expect(localPreview).toEqual({
+    thumbnail: `data:image/jpeg;base64,${Buffer.from('jpg-1920x96-q80').toString('base64')}`,
+    previewUrl: 'localfile://local/Users/me/shot%201.png',
+    name: 'shot 1.png',
+  });
+
+  const undecodableLocal = createVideoReferenceImagePreview('data:image/webp;base64,AAAA', {
+    localPath: '/Users/me/frame.webp',
+    decodeDataUrl: () => makeImage(0, 0, true),
+  });
+  expect(undecodableLocal).toEqual({
+    thumbnail: 'localfile://local/Users/me/frame.webp',
+    previewUrl: 'localfile://local/Users/me/frame.webp',
+    name: 'frame.webp',
+  });
+
+  const smallInline = createVideoReferenceImagePreview('data:image/png;base64,SMALL', {
+    decodeDataUrl: () => makeImage(800, 600),
+  });
+  expect(smallInline).toEqual({
+    thumbnail: `data:image/jpeg;base64,${Buffer.from('jpg-800x96-q80').toString('base64')}`,
+    previewUrl: 'data:image/png;base64,SMALL',
+  });
+
+  resizeCalls.length = 0;
+  const largeInlineDataUrl = `data:image/png;base64,${'A'.repeat(300 * 1024)}`;
+  const largeInline = createVideoReferenceImagePreview(largeInlineDataUrl, {
+    decodeDataUrl: () => makeImage(2560, 1440),
+  });
+  expect(resizeCalls).toEqual([{ height: 96 }, { width: 1280 }]);
+  expect(largeInline).toEqual({
+    thumbnail: `data:image/jpeg;base64,${Buffer.from('jpg-2560x96-q80').toString('base64')}`,
+    previewUrl: `data:image/jpeg;base64,${Buffer.from('jpg-1280x1440-q85').toString('base64')}`,
+  });
+});
+
+test('propagates previewUrl and name through videoConfirmationReferences and readVideoConfirmationDetails', () => {
+  const references = videoConfirmationReferences({
+    images: ['data:image/png;base64,ONE'],
+  }, () => ({
+    thumbnail: 'data:image/jpeg;base64,THUMB',
+    previewUrl: 'localfile://local/Users/me/one.png',
+    name: 'one.png',
+  }));
+  expect(references).toEqual([
+    {
+      kind: 'image',
+      thumbnail: 'data:image/jpeg;base64,THUMB',
+      previewUrl: 'localfile://local/Users/me/one.png',
+      name: 'one.png',
+    },
+  ]);
+
+  const parsed = readVideoConfirmationDetails({
+    model: 'seedance-fast',
+    prompt: 'Ocean waves',
+    portalUrl: 'https://example.invalid/tasks',
+    references,
+  });
+  expect(parsed?.references).toEqual(references);
 });

@@ -59,6 +59,7 @@ describe('autoPreviewPolicy', () => {
       }),
       category: ArtifactAutoPreviewCategory.Video,
       openTarget: ArtifactAutoPreviewOpenTarget.PreviewTab,
+      autoPreview: false,
     },
     {
       label: 'image',
@@ -99,9 +100,10 @@ describe('autoPreviewPolicy', () => {
     expect(selectAutoPreviewArtifact([artifact])?.id).toBe(autoPreview ? artifact.id : undefined);
   });
 
-  test('leaves raster images to the inline gallery but still previews svg', () => {
+  test('leaves raster images and videos to inline galleries while still previewing svg', () => {
     const selected = selectAutoPreviewArtifact([
       makeArtifact('image', ArtifactTypeValue.Image, { filePath: '/Users/admin/project/cover.png' }),
+      makeArtifact('video', ArtifactTypeValue.Video, { filePath: '/Users/admin/project/clip.mp4' }),
       makeArtifact('svg', ArtifactTypeValue.Svg, { filePath: '/Users/admin/project/vector.svg' }),
     ]);
 
@@ -153,11 +155,11 @@ describe('autoPreviewPolicy', () => {
 
   test('selects the first artifact for the same category', () => {
     const selected = selectAutoPreviewArtifact([
-      makeArtifact('video-first', ArtifactTypeValue.Video),
-      makeArtifact('video-second', ArtifactTypeValue.Video),
+      makeArtifact('doc-first', ArtifactTypeValue.Document, { filePath: '/Users/admin/project/a.pdf' }),
+      makeArtifact('doc-second', ArtifactTypeValue.Document, { filePath: '/Users/admin/project/b.pdf' }),
     ]);
 
-    expect(selected?.id).toBe('video-first');
+    expect(selected?.id).toBe('doc-first');
   });
 
   test('within a category, prefers the file the turn replies link over an earlier one', () => {
@@ -203,16 +205,16 @@ describe('autoPreviewPolicy', () => {
 
   test('uses display dedupe before selecting', () => {
     const selected = selectAutoPreviewArtifact([
-      makeArtifact('video-old', ArtifactTypeValue.Video, {
-        filePath: '/Users/admin/work/output.mp4',
+      makeArtifact('doc-old', ArtifactTypeValue.Document, {
+        filePath: '/Users/admin/work/report.pdf',
         createdAt: 1,
       }),
-      makeArtifact('video-new', ArtifactTypeValue.Video, {
-        filePath: '/Users/admin/work/output.mp4',
+      makeArtifact('doc-new', ArtifactTypeValue.Document, {
+        filePath: '/Users/admin/work/report.pdf',
         createdAt: 2,
       }),
     ]);
 
-    expect(selected?.id).toBe('video-new');
+    expect(selected?.id).toBe('doc-new');
   });
 });

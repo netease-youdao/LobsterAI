@@ -1,7 +1,7 @@
 import './officeEditor.css';
 
 import { CheckIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { i18nService } from '@/services/i18n';
 import { type OfficeDocument, type OfficeDocumentState, OfficeSaveState } from '@/services/office/core/officeDocument';
@@ -9,6 +9,10 @@ import type { OfficeEditorSession } from '@/services/office/core/officeEditorSes
 import { openLocalPathWithToast, revealLocalPathWithToast } from '@/utils/localFileActions';
 
 import { OfficeFileError, type OfficePackageInfo, type OfficeResult } from '../../../../../../shared/office/core/officeFile';
+import {
+  useOfficePreviewActions,
+  useRegisterOfficePreviewSaveStatus,
+} from './OfficePreviewActionsContext';
 
 const t = (key: string) => i18nService.t(key);
 
@@ -141,6 +145,19 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
     try { await document.resolveConflict(next === ConflictChoice.Mine); } finally { setResolving(false); setChoice(null); }
   };
   const saveLabel = state.status === OfficeSaveState.Loading ? labels.loading : SAVE_LABEL[state.status];
+  const previewActions = useOfficePreviewActions();
+  const hasHostHeaderStatus = Boolean(previewActions?.setSaveStatus);
+  const isDirty = document.dirty;
+  const saveStatusConfig = useMemo(() => ({
+    label: readOnly ? t('officeReadOnlyStatus') : t(saveLabel),
+    isSaved: !readOnly && state.status === OfficeSaveState.Saved,
+    isReadOnly: readOnly,
+    canSave: !readOnly && isDirty && !resolving && state.status !== OfficeSaveState.Saving,
+    isBusy: resolving || state.status === OfficeSaveState.Saving,
+    draftSafe: !readOnly && state.status !== OfficeSaveState.Saved && state.draftSafe,
+    onSave: () => { void document.flush(); },
+  }), [document, isDirty, readOnly, resolving, saveLabel, state.draftSafe, state.status]);
+  useRegisterOfficePreviewSaveStatus(saveStatusConfig);
 
   return (
     <section className={`lobster-office-editor ${className}`} aria-label={t(labels.editor)}
@@ -151,21 +168,23 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
         }
         onKeyDown?.(event);
       }}>
-      <div className="lobster-office-statusbar">
-        {readOnly ? (
-          <span className="text-xs" role="status">{t('officeReadOnlyStatus')}</span>
-        ) : (
-          <span className="flex items-center gap-1.5 text-xs" role="status" aria-live="polite">
-            {state.status === OfficeSaveState.Saved && <CheckIcon className="h-3.5 w-3.5 text-emerald-600" />}
-            {t(saveLabel)}
-            {state.status !== OfficeSaveState.Saved && state.draftSafe && <span className="opacity-60">· {t('officeDraftSafe')}</span>}
-          </span>
-        )}
-        {!readOnly && (
-          <button type="button" disabled={resolving || state.status === OfficeSaveState.Saving || !document.dirty}
-            onClick={() => { void document.flush(); }}>{t('save')}</button>
-        )}
-      </div>
+      {!hasHostHeaderStatus && (
+        <div className="lobster-office-statusbar">
+          {readOnly ? (
+            <span className="text-xs" role="status">{t('officeReadOnlyStatus')}</span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-xs" role="status" aria-live="polite">
+              {state.status === OfficeSaveState.Saved && <CheckIcon className="h-3.5 w-3.5 text-emerald-600" />}
+              {t(saveLabel)}
+              {state.status !== OfficeSaveState.Saved && state.draftSafe && <span className="opacity-60">· {t('officeDraftSafe')}</span>}
+            </span>
+          )}
+          {!readOnly && (
+            <button type="button" disabled={resolving || state.status === OfficeSaveState.Saving || !document.dirty}
+              onClick={() => { void document.flush(); }}>{t('save')}</button>
+          )}
+        </div>
+      )}
       {state.needsResolution && (
         <div className="lobster-office-notice" role="alert">
           <p>{t(state.restored ? 'officeRecovered' : 'officeConflictHelp')}</p>
