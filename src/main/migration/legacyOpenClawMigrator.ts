@@ -91,6 +91,7 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
+import { preserveLegacyImBotIdentities } from './legacyImBotIdentities';
 import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
@@ -2994,6 +2995,7 @@ export function runLegacyOpenClawMigration(
         // Non-JSON completion marker is treated as an upgraded database.
       }
       if (!isFreshInstall) {
+        preserveLegacyImBotIdentities(db, userDataDir);
         migrateLegacyPermissionPresets(db);
       }
       migrateLegacyBrowserDisplayModeConfig(db);
@@ -3078,6 +3080,7 @@ export function runLegacyOpenClawMigration(
         path.join(userDataDir, 'SKILLs'),
       );
       backfillAgentPersonaFiles(db, workspacesDir);
+      preserveLegacyImBotIdentities(db);
       migrateLegacyPermissionPresets(db);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
