@@ -566,8 +566,6 @@ const AssistantTurnBlock: React.FC<{
   enableMessageSpeech?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
-  modelSwitchNoticeMessageId?: string | null;
-  onDismissModelSwitchNotice?: () => void;
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
@@ -599,8 +597,6 @@ const AssistantTurnBlock: React.FC<{
   enableMessageSpeech = false,
   completedGoal,
   hiddenSystemMessageId,
-  modelSwitchNoticeMessageId,
-  onDismissModelSwitchNotice,
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
@@ -744,13 +740,7 @@ const AssistantTurnBlock: React.FC<{
 
   const renderSystemMessage = (message: CoworkMessage) => {
     if (isModelChangeMessage(message) && message.metadata?.modelChange) {
-      return (
-        <ModelChangeDivider
-          change={message.metadata.modelChange}
-          showNotice={message.id === modelSwitchNoticeMessageId}
-          onDismissNotice={onDismissModelSwitchNotice}
-        />
-      );
+      return <ModelChangeDivider change={message.metadata.modelChange} />;
     }
     if (message.id === hiddenSystemMessageId) {
       return null;

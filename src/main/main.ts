@@ -317,6 +317,7 @@ import {
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
+import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
@@ -10984,18 +10985,22 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(
-    'cowork:session:list',
-    async (_event, options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) => {
+    CoworkIpcChannel.ListSessions,
+    async (
+      _event,
+      options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string; pinnedFirst?: boolean },
+    ) => {
       try {
         const limit = options?.limit ?? COWORK_SESSION_PAGE_SIZE;
         const offset = options?.offset ?? 0;
         const agentId = options?.agentId;
         const searchQuery = options?.searchQuery?.trim() ?? '';
+        const pinnedFirst = options?.pinnedFirst;
         const store = getCoworkStore();
         const startedAt = searchQuery ? Date.now() : 0;
         const sessions = searchQuery
           ? store.searchSessions({ query: searchQuery, limit, offset, agentId })
-          : store.listSessions(limit, offset, agentId);
+          : store.listSessions(limit, offset, agentId, { pinnedFirst });
         const total = searchQuery
           ? store.countSearchSessions({ query: searchQuery, agentId })
           : store.countSessions(agentId);
@@ -11059,6 +11064,7 @@ if (!gotTheLock) {
           statuses: Array.isArray(query?.statuses) ? query.statuses : undefined,
           sessionIds: Array.isArray(query?.sessionIds) ? query.sessionIds : undefined,
           updatedSince: typeof query?.updatedSince === 'number' ? query.updatedSince : undefined,
+          pinnedOnly: query?.pinnedOnly === true ? true : undefined,
           limit: typeof query?.limit === 'number' ? query.limit : undefined,
         });
         console.debug(
@@ -11216,6 +11222,7 @@ if (!gotTheLock) {
     cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
   });
   registerPptCreationHandlers(pptCreationStore);
+  registerCoworkPinnedHandlers({ getCoworkStore });
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },

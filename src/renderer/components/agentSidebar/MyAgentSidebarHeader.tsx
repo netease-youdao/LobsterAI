@@ -8,18 +8,22 @@ import {
   SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
 } from './sidebarHeaderTooltip';
 import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './SidebarTaskFilterButton';
-import type { SidebarTaskFilter } from './taskFilter';
+import {
+  EMPTY_SIDEBAR_TASK_STATUS_COUNTS,
+  type SidebarTaskFilter,
+  type SidebarTaskStatusCounts,
+} from './taskFilter';
 
 interface MyAgentSidebarHeaderProps {
   taskFilter: SidebarTaskFilter;
-  hasUnreadCompletedTasks: boolean;
+  taskStatusCounts?: SidebarTaskStatusCounts;
   onTaskFilterChange: (filter: SidebarTaskFilter) => void;
   onCreateAgent: () => void;
 }
 
 const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
   taskFilter,
-  hasUnreadCompletedTasks,
+  taskStatusCounts = EMPTY_SIDEBAR_TASK_STATUS_COUNTS,
   onTaskFilterChange,
   onCreateAgent,
 }) => {
@@ -33,7 +37,7 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
           <SidebarTaskFilterButton
             filter={taskFilter}
             onChange={onTaskFilterChange}
-            hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+            statusCounts={taskStatusCounts}
             label={i18nService.t('sidebarFilter')}
             tooltipAlign={TooltipAlign.End}
           />

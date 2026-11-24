@@ -1,13 +1,11 @@
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
-import {
-  type AgentSidebarActivityItem,
-  type SidebarTaskFilter,
-  SidebarTaskStatusFilter,
-  SidebarTaskTimeFilter,
+import type {
+  AgentSidebarActivityItem,
+  SidebarTaskFilter,
 } from './taskFilter';
-import { getSidebarTaskStatusFilterLabel, getSidebarTaskTimeFilterLabel } from './taskFilterLabels';
+import { getSidebarTaskFilterSummary } from './taskFilterLabels';
 
 interface AgentSidebarFilteredViewProps {
   filter: SidebarTaskFilter;
@@ -70,11 +68,6 @@ const groupItemsByDay = (items: AgentSidebarActivityItem[]): DateGroup[] => {
   return Array.from(groups.values());
 };
 
-const getFilterSummary = (filter: SidebarTaskFilter): string => [
-  filter.status !== SidebarTaskStatusFilter.All ? getSidebarTaskStatusFilterLabel(filter.status) : null,
-  filter.time !== SidebarTaskTimeFilter.All ? getSidebarTaskTimeFilterLabel(filter.time) : null,
-].filter(Boolean).join(' · ');
-
 const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
   filter,
   items,
@@ -85,6 +78,7 @@ const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
 }) => {
   // Recompute at render time so an in-place language switch updates date labels.
   const groups = groupItemsByDay(items);
+  const showResultCount = !isLoading && !hasError && items.length > 0;
   const statusMessage = items.length > 0
     ? null
     : isLoading
@@ -98,7 +92,10 @@ const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
       <div className="sticky top-9 z-20 -mx-2.5 flex h-7 items-center gap-2 bg-[var(--lobster-sidebar-bg)] px-2.5">
         <span className="min-w-0 flex-1 truncate pl-2.5 text-[11.5px] text-secondary/85">
           {i18nService.t('sidebarFilterActiveLabel')}
-          <span className="font-medium text-foreground/85">{getFilterSummary(filter)}</span>
+          <span className="font-medium text-foreground/85">{getSidebarTaskFilterSummary(filter)}</span>
+          {showResultCount && (
+            <span className="ml-1 tabular-nums text-secondary/75">({items.length})</span>
+          )}
         </span>
         <button
           type="button"

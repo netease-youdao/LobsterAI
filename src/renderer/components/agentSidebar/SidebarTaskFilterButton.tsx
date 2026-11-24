@@ -3,6 +3,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'reac
 import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
+import LoadingIcon from '../icons/LoadingIcon';
 import SidebarFilterIcon from '../icons/SidebarFilterIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import {
@@ -11,12 +12,21 @@ import {
 } from './sidebarHeaderTooltip';
 import {
   DEFAULT_SIDEBAR_TASK_FILTER,
+  EMPTY_SIDEBAR_TASK_STATUS_COUNTS,
+  hasSidebarTaskAttention,
   isSidebarTaskFilterActive,
   SIDEBAR_TASK_STATUS_FILTER_OPTIONS,
   SIDEBAR_TASK_TIME_FILTER_OPTIONS,
   type SidebarTaskFilter,
+  type SidebarTaskStatusCounts,
+  SidebarTaskStatusFilter,
 } from './taskFilter';
-import { getSidebarTaskStatusFilterLabel, getSidebarTaskTimeFilterLabel } from './taskFilterLabels';
+import {
+  formatSidebarTaskStatusCount,
+  getSidebarTaskFilterTooltip,
+  getSidebarTaskStatusFilterLabel,
+  getSidebarTaskTimeFilterLabel,
+} from './taskFilterLabels';
 
 // Shows the task filter entry in the sidebar agent section header.
 export const SIDEBAR_TASK_FILTER_ENABLED: boolean = true;
@@ -32,7 +42,7 @@ const menuItemClassName =
 interface SidebarTaskFilterButtonProps {
   filter: SidebarTaskFilter;
   onChange: (filter: SidebarTaskFilter) => void;
-  hasUnreadCompletedTasks: boolean;
+  statusCounts?: SidebarTaskStatusCounts;
   label: string;
   className?: string;
   tooltipAlign?: TooltipAlign;
@@ -42,13 +52,55 @@ interface MenuOption {
   key: string;
   label: string;
   isSelected: boolean;
+  hasAttention?: boolean;
+  badge?: React.ReactNode;
   next: SidebarTaskFilter;
 }
+
+const renderStatusOptionBadge = (
+  status: SidebarTaskStatusFilter,
+  counts: SidebarTaskStatusCounts,
+): { hasAttention: boolean; badge?: React.ReactNode } => {
+  if (status === SidebarTaskStatusFilter.CompletedUnread && counts.completedUnread > 0) {
+    return {
+      hasAttention: true,
+      badge: (
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none tabular-nums text-primary">
+          <span className="h-[6px] w-[6px] rounded-full bg-primary" aria-hidden="true" />
+          {formatSidebarTaskStatusCount(counts.completedUnread)}
+        </span>
+      ),
+    };
+  }
+  if (status === SidebarTaskStatusFilter.PendingPermission && counts.pendingPermission > 0) {
+    return {
+      hasAttention: true,
+      badge: (
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none tabular-nums text-primary">
+          <span className="h-[6px] w-[6px] rounded-full bg-primary animate-pulse" aria-hidden="true" />
+          {formatSidebarTaskStatusCount(counts.pendingPermission)}
+        </span>
+      ),
+    };
+  }
+  if (status === SidebarTaskStatusFilter.Running && counts.running > 0) {
+    return {
+      hasAttention: false,
+      badge: (
+        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium leading-none tabular-nums text-secondary">
+          <LoadingIcon className="h-3 w-3 animate-spin" aria-hidden="true" />
+          {formatSidebarTaskStatusCount(counts.running)}
+        </span>
+      ),
+    };
+  }
+  return { hasAttention: false };
+};
 
 const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
   filter,
   onChange,
-  hasUnreadCompletedTasks,
+  statusCounts = EMPTY_SIDEBAR_TASK_STATUS_COUNTS,
   label,
   className = '',
   tooltipAlign = TooltipAlign.End,
@@ -66,13 +118,21 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const menuId = useId();
   const isActive = isSidebarTaskFilterActive(filter);
+  const hasAttentionTasks = hasSidebarTaskAttention(statusCounts);
+  const hasPendingPermission = statusCounts.pendingPermission > 0;
+  const tooltipContent = getSidebarTaskFilterTooltip(label, filter, statusCounts);
 
-  const statusOptions: MenuOption[] = SIDEBAR_TASK_STATUS_FILTER_OPTIONS.map(status => ({
-    key: `status:${status}`,
-    label: getSidebarTaskStatusFilterLabel(status),
-    isSelected: filter.status === status,
-    next: { ...filter, status },
-  }));
+  const statusOptions: MenuOption[] = SIDEBAR_TASK_STATUS_FILTER_OPTIONS.map((status) => {
+    const { hasAttention, badge } = renderStatusOptionBadge(status, statusCounts);
+    return {
+      key: `status:${status}`,
+      label: getSidebarTaskStatusFilterLabel(status),
+      isSelected: filter.status === status,
+      hasAttention,
+      badge,
+      next: { ...filter, status },
+    };
+  });
   const timeOptions: MenuOption[] = SIDEBAR_TASK_TIME_FILTER_OPTIONS.map(time => ({
     key: `time:${time}`,
     label: getSidebarTaskTimeFilterLabel(time),
@@ -148,9 +208,15 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
           aria-checked={option.isSelected}
           tabIndex={-1}
           className={menuItemClassName}
-          onClick={() => onChange(option.next)}
+          onClick={() => {
+            onChange(option.next);
+            closeAndFocusTrigger();
+          }}
         >
-          <span className="min-w-0 flex-1 truncate">{option.label}</span>
+          <span className={`min-w-0 flex-1 truncate ${option.hasAttention ? 'font-medium' : ''}`}>
+            {option.label}
+          </span>
+          {option.badge}
           {option.isSelected && <CheckIcon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
         </button>
       ))}
@@ -166,7 +232,7 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
         align={tooltipAlign}
         delay={300}
         bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
-        content={label}
+        content={tooltipContent}
         disabled={isOpen}
       >
         <button
@@ -197,9 +263,11 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
           aria-controls={isOpen ? menuId : undefined}
         >
           <SidebarFilterIcon className="h-4 w-4" isActive={isActive} />
-          {hasUnreadCompletedTasks && (
+          {hasAttentionTasks && (
             <span
-              className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-primary"
+              className={`absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-primary ${
+                hasPendingPermission ? 'animate-pulse' : ''
+              }`}
               aria-hidden="true"
             />
           )}
@@ -213,14 +281,14 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
           aria-label={label}
           aria-hidden={!isOpen}
           data-state={isOpen ? 'open' : 'closed'}
-          className="sidebar-task-filter-menu non-draggable fixed z-[9999] w-48 max-w-[calc(100vw-16px)] rounded-xl border border-border bg-surface p-1 text-foreground shadow-popover"
+          className="sidebar-task-filter-menu non-draggable fixed z-[9999] w-52 max-w-[calc(100vw-16px)] rounded-xl border border-border bg-surface p-1 text-foreground shadow-popover"
           style={position}
           onKeyDown={(event) => {
-            const index = itemRefs.current.findIndex(item => item === document.activeElement);
-            const count = allOptions.length;
+            const count = isActive ? allOptions.length + 1 : allOptions.length;
+            const index = itemRefs.current.slice(0, count).findIndex(item => item === document.activeElement);
             let nextIndex: number;
-            if (event.key === 'ArrowDown') nextIndex = (index + 1) % count;
-            else if (event.key === 'ArrowUp') nextIndex = (index - 1 + count) % count;
+            if (event.key === 'ArrowDown') nextIndex = index < 0 ? 0 : (index + 1) % count;
+            else if (event.key === 'ArrowUp') nextIndex = index < 0 ? count - 1 : (index - 1 + count) % count;
             else if (event.key === 'Home') nextIndex = 0;
             else if (event.key === 'End') nextIndex = count - 1;
             else if (event.key === 'Escape') {
@@ -243,6 +311,7 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
             <>
               <div className="mx-1 my-1 border-t border-border" role="separator" />
               <button
+                ref={(node) => { itemRefs.current[allOptions.length] = node; }}
                 type="button"
                 role="menuitem"
                 tabIndex={-1}
