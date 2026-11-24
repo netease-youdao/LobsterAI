@@ -1,4 +1,6 @@
 import { createDecipheriv, randomBytes } from 'node:crypto';
+import WebSocket from 'ws';
+
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
 import { detectImageMime, fetchBinaryWithLimit, isImageAttachment } from './media-utils.mjs';
 
@@ -265,6 +267,7 @@ export class WeComChannelDriver extends BaseChannelDriver {
 
   async openSingleAiBotWs(signal, failHardOnAuth) {
     await new Promise((resolve, reject) => {
+      // The WeCom gateway rejects the lowercase sec-websocket-key sent by Node's built-in client.
       const ws = new WebSocket(this.wsUrl);
       this.ws = ws;
       let authenticated = false;
@@ -313,7 +316,7 @@ export class WeComChannelDriver extends BaseChannelDriver {
           authenticated = true;
           this.setState('connected', null, { botId: this.botId, mode: 'websocket' });
           heartbeatTimer = setInterval(() => {
-            if (ws.readyState === 1) {
+            if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ cmd: 'ping', headers: { req_id: generateReqId('ping') } }));
             }
           }, HEARTBEAT_INTERVAL_MS);
@@ -387,7 +390,7 @@ export class WeComChannelDriver extends BaseChannelDriver {
 
   sendWsFrameWithAck(cmd, reqId, body) {
     const ws = this.ws;
-    if (!ws || ws.readyState !== 1) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('WeCom AI Bot WebSocket is not connected'));
     }
     return new Promise((resolve, reject) => {
