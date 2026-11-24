@@ -2207,3 +2207,26 @@ test('persists per-session permissionPreset independently, copies on fork, and s
   expect(reloaded.getSession(sessionA.id)?.permissionPreset).toBeNull();
   expect(reloaded.getSession(sessionB.id)?.permissionPreset).toBe(DshPermissionPreset.ReadOnly);
 });
+
+test('getSession populates imPlatform from im_session_mappings and returns null for desktop chats', () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS im_session_mappings (
+      im_conversation_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      cowork_session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL DEFAULT 'main',
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      PRIMARY KEY (im_conversation_id, platform, agent_id)
+    )
+  `);
+  const desktop = store.createSession('Desktop chat', '/tmp/desktop', '', 'local', [], 'main');
+  const imSession = store.createSession('[飞书] Alice', '/tmp/im', '', 'local', [], 'main');
+  db.prepare(
+    'INSERT INTO im_session_mappings (im_conversation_id, platform, cowork_session_id, agent_id, created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run('feishu:dm:ou_1', 'feishu', imSession.id, 'main', 1000, 2000);
+
+  expect(desktop.imPlatform).toBeNull();
+  expect(store.getSession(desktop.id)?.imPlatform).toBeNull();
+  expect(store.getSession(imSession.id)?.imPlatform).toBe('feishu');
+});

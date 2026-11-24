@@ -625,6 +625,7 @@ export interface CoworkSession {
   permissionPreset?: DshPermissionPreset | null;
   activeSkillIds: string[];
   agentId: string;
+  imPlatform?: Platform | null;
   messages: CoworkMessage[];
   /** Offset of the first loaded message in the full message history. */
   messagesOffset: number;
@@ -1126,6 +1127,7 @@ export class CoworkStore {
       permissionPreset,
       activeSkillIds,
       agentId,
+      imPlatform: null,
       messages: [],
       messagesOffset: 0,
       totalMessages: 0,
@@ -1166,14 +1168,25 @@ export class CoworkStore {
       permission_preset?: string | null;
       active_skill_ids?: string | null;
       agent_id?: string | null;
+      im_platform?: string | null;
       goal_json?: string | null;
       created_at: number;
       updated_at: number;
     }
 
+    const imPlatformColumn = this.hasIMSessionMappingsTable()
+      ? `(
+          SELECT m.platform
+          FROM im_session_mappings m
+          WHERE m.cowork_session_id = cowork_sessions.id
+          ORDER BY m.last_active_at DESC
+          LIMIT 1
+        ) AS im_platform`
+      : 'NULL AS im_platform';
+
     const row = this.getOne<SessionRow>(
       `
-      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, permission_preset, active_skill_ids, agent_id, goal_json, created_at, updated_at
+      SELECT id, title, claude_session_id, scheduled_task_id, status, pinned, pin_order, cwd, system_prompt, model_override, model_preset_id, context_window_override, context_window_owner_key, thinking_level, execution_mode, permission_preset, active_skill_ids, agent_id, ${imPlatformColumn}, goal_json, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `,
@@ -1223,6 +1236,7 @@ export class CoworkStore {
       permissionPreset: parseDshPermissionPreset(row.permission_preset),
       activeSkillIds,
       agentId: row.agent_id || 'main',
+      imPlatform: this.normalizeIMPlatform(row.im_platform),
       messages,
       messagesOffset: messageOffset,
       totalMessages,

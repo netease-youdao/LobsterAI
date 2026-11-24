@@ -1,6 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { AgentSource } from '@shared/agent/constants';
 import { AuthSessionStatus } from '@shared/auth/constants';
+import { DSH_SESSION_ID_PREFIX } from '@shared/dshEngine/hostConstants';
 import { ModelPresetId } from '@shared/modelPresets/constants';
 import { ProviderName } from '@shared/providers';
 import React from 'react';
@@ -201,5 +202,37 @@ describe('old chat model recovery', () => {
     expect(coworkService.selectSessionModelPreset).toHaveBeenCalledTimes(2);
     expect(store.getState().cowork.currentSession?.modelOverride).toBe('lobsterai-server/deepseek-flash-YoudaoInner');
     expect(agentService.updateAgent).not.toHaveBeenCalled();
+  });
+
+  test('keeps model presets enabled for existing DSH desktop sessions and disabled for DSH IM sessions', () => {
+    const dshPresetSession: CoworkSession = {
+      ...oldSession,
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}session-fast-1`,
+      modelPresetId: ModelPresetId.Balanced,
+      imPlatform: null,
+    };
+    setup({ session: dshPresetSession }).render();
+    expect(selectorProps.allowPresets).toBe(true);
+    expect(selectorProps.allowContextWindowSelection).toBe(true);
+
+    const dshConcreteSession: CoworkSession = {
+      ...oldSession,
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}session-concrete-1`,
+      modelPresetId: null,
+      modelOverride: `${ProviderName.LobsteraiServer}/${currentFlash.id}`,
+      imPlatform: null,
+    };
+    setup({ session: dshConcreteSession }).render();
+    expect(selectorProps.allowPresets).toBe(true);
+    expect(selectorProps.allowContextWindowSelection).toBe(true);
+
+    const dshImSession: CoworkSession = {
+      ...dshConcreteSession,
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}session-im-1`,
+      imPlatform: 'feishu',
+    };
+    setup({ session: dshImSession }).render();
+    expect(selectorProps.allowPresets).toBe(false);
+    expect(selectorProps.allowContextWindowSelection).toBe(false);
   });
 });
