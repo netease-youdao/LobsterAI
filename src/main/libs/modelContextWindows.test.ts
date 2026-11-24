@@ -127,18 +127,46 @@ describe('explicit context window intent', () => {
     expect(harness.session.contextWindowOverride).toBeNull();
   });
 
-  test('restoring a mode default preserves the mode budget and does not select a different model', async () => {
+  test.each(['lobsterai:session', 'dsh:session-existing', 'session-existing'])(
+    'uses the saved preset to read, change, and reset the context window for %s',
+    async (claudeSessionId) => {
+      const harness = createHarness();
+      harness.session.claudeSessionId = claudeSessionId;
+      harness.session.modelPresetId = ModelPresetId.Balanced;
+      const model = metadata.get('model-a')!;
+      Object.assign(model, {
+        contextWindow: 1_000_000,
+        presetContextWindows: { [ModelPresetId.Balanced]: 450_000 },
+        presetContextWindowOptions: { [ModelPresetId.Balanced]: [400_000, 1_000_000] },
+      });
+      const request = { modelId: 'yd-fast', presetId: ModelPresetId.Balanced, sessionId: harness.session.id };
+      expect(await harness.invoke(ModelContextWindowIpc.Get, request)).toMatchObject({
+        success: true, data: { defaultWindow: 450_000, override: null },
+      });
+      expect(await harness.invoke(ModelContextWindowIpc.Set, request, 1_000_000)).toMatchObject({
+        success: true, data: { override: 1_000_000 },
+      });
+      expect(harness.patchSession).toHaveBeenLastCalledWith(harness.session.id, {
+        contextWindow: 'user-context:yd-fast:1000000',
+      });
+      expect(sessionContextWindowSelection(harness.session, model, harness.session.contextWindowOwnerKey!))
+        .toBe('user-context:yd-fast:1000000');
+      expect(await harness.invoke(ModelContextWindowIpc.Set, request, null)).toMatchObject({
+        success: true, data: { defaultWindow: 450_000, override: null },
+      });
+      expect(harness.patchSession).toHaveBeenLastCalledWith(harness.session.id, { contextWindow: 'yd-fast' });
+      expect(harness.session.modelOverride).toBe('lobsterai-server/model-a');
+    },
+  );
+
+  test('a native runtime session without a saved preset does not gain preset context controls', async () => {
     const harness = createHarness();
-    harness.session.modelPresetId = ModelPresetId.Balanced;
-    Object.assign(metadata.get('model-a')!, { contextWindow: 1_000_000,
-      presetContextWindows: { [ModelPresetId.Balanced]: 450_000 },
-      presetContextWindowOptions: { [ModelPresetId.Balanced]: [400_000, 1_000_000] } });
-    const request = { modelId: 'yd-fast', presetId: ModelPresetId.Balanced, sessionId: 'session' };
-    expect(await harness.invoke(ModelContextWindowIpc.Set, request, 1_000_000)).toMatchObject({ success: true });
-    expect(sessionContextWindowSelection(harness.session, metadata.get('model-a')!, harness.session.contextWindowOwnerKey!)).toBe('user-context:yd-fast:1000000');
-    await harness.invoke(ModelContextWindowIpc.Set, request, null);
-    expect(harness.patchSession).toHaveBeenLastCalledWith('session', { contextWindow: 'yd-fast' });
-    expect(harness.session.modelOverride).toBe('lobsterai-server/model-a');
+    harness.session.claudeSessionId = 'dsh:session-existing';
+    const request = { modelId: 'yd-fast', presetId: ModelPresetId.Balanced, sessionId: harness.session.id };
+    expect(await harness.invoke(ModelContextWindowIpc.Get, request)).toMatchObject({
+      success: false, error: 'modelContextWindowUnavailable',
+    });
+    expect(harness.patchSession).not.toHaveBeenCalled();
   });
 
   test('running sessions and absent login cannot persist a choice', async () => {
