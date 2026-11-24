@@ -2,7 +2,7 @@ import React from 'react';
 
 import { ShortcutAction } from '../../config';
 import SidebarSearchIcon from '../icons/SidebarSearchIcon';
-import Tooltip from '../ui/Tooltip';
+import Tooltip, { TooltipAlign } from '../ui/Tooltip';
 import {
   SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME,
   SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
@@ -13,17 +13,20 @@ interface SidebarTaskSearchButtonProps {
   label: string;
   onClick: () => void;
   className?: string;
+  tooltipAlign?: TooltipAlign;
 }
 
 const SidebarTaskSearchButton: React.FC<SidebarTaskSearchButtonProps> = ({
   label,
   onClick,
   className = '',
+  tooltipAlign = TooltipAlign.Center,
 }) => {
   const shortcutHint = useShortcutHint(ShortcutAction.Search);
   return (
     <Tooltip
       className={`shrink-0 ${className}`}
+      align={tooltipAlign}
       bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
       content={(
         <span className="inline-flex items-center gap-1.5">

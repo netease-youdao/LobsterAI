@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 import SidebarFilterIcon from '../icons/SidebarFilterIcon';
-import Tooltip from '../ui/Tooltip';
+import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
 import {
   SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME,
   SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
@@ -18,7 +18,7 @@ import {
 } from './taskFilter';
 import { getSidebarTaskStatusFilterLabel, getSidebarTaskTimeFilterLabel } from './taskFilterLabels';
 
-// Shows the filter entry in both the macOS sidebar header and the Windows title bar.
+// Shows the task filter entry in the sidebar agent section header.
 export const SIDEBAR_TASK_FILTER_ENABLED: boolean = true;
 
 const MENU_EDGE_GAP = 8;
@@ -35,6 +35,7 @@ interface SidebarTaskFilterButtonProps {
   hasUnreadCompletedTasks: boolean;
   label: string;
   className?: string;
+  tooltipAlign?: TooltipAlign;
 }
 
 interface MenuOption {
@@ -50,6 +51,7 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
   hasUnreadCompletedTasks,
   label,
   className = '',
+  tooltipAlign = TooltipAlign.End,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   // Stays true briefly after closing so the menu can play its exit animation.
@@ -160,6 +162,9 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
       {/* Hidden while the menu is open so the bubble never covers it. */}
       <Tooltip
         className={`shrink-0 ${className}`}
+        position={TooltipPosition.Bottom}
+        align={tooltipAlign}
+        delay={300}
         bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
         content={label}
         disabled={isOpen}
@@ -178,8 +183,8 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
               setIsOpen(false);
             }
           }}
-          // Same size, colour and hover as the sidebar toggle and search buttons beside it.
-          className={`sidebar-filter-button relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+          // Matches the size, colour, and hover of the sibling Create Agent button.
+          className={`sidebar-filter-button relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
             isActive
               ? 'bg-primary/10 text-primary'
               : isOpen
@@ -191,10 +196,10 @@ const SidebarTaskFilterButton: React.FC<SidebarTaskFilterButtonProps> = ({
           aria-expanded={isOpen}
           aria-controls={isOpen ? menuId : undefined}
         >
-          <SidebarFilterIcon className="h-[18px] w-[18px]" isActive={isActive} />
+          <SidebarFilterIcon className="h-4 w-4" isActive={isActive} />
           {hasUnreadCompletedTasks && (
             <span
-              className="absolute right-1 top-1 h-[7px] w-[7px] rounded-full bg-primary"
+              className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-primary"
               aria-hidden="true"
             />
           )}

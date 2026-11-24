@@ -1,5 +1,6 @@
 import { messageEditTranslations } from '../../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../../shared/desktopCompanion/copy';
+import { homeShowcaseTranslations } from '../../shared/homeShowcase/copy';
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
@@ -27,6 +28,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelPresetAccountChanged: '账号已切换，请重新选择模型。',
 
     ...desktopCompanionTranslations.zh,
+    ...homeShowcaseTranslations.zh,
     ...mediaTranslations.zh,
     ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
@@ -1621,6 +1623,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkExpandedConversationStatusRunning: '执行中',
     coworkRailUnloadedMessageTitle: '未加载消息',
     coworkRailUnloadedMessageHint: '点击加载该位置附近的消息',
+    coworkRailTurnPosition: '第 {current} / {total} 轮',
     artifactBrowserBlankPage: '空白页',
     artifactBrowserShowDeviceToolbar: '显示设备工具栏',
     artifactBrowserHideDeviceToolbar: '隐藏设备工具栏',
@@ -2380,7 +2383,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkPermissionModeFullAccess: '完全权限',
     coworkPermissionModeFullAccessShort: '完全权限',
     coworkPermissionModeFullAccessDesc: '自动执行所有操作，不再反复弹窗确认（仅建议在信任任务时开启）',
-    coworkPermissionModeSwitchedToast: '已切换权限模式为「{mode}」',
     coworkDefaultPermissionModeTitle: '新任务默认权限',
     coworkDefaultPermissionModeDescription: '新建任务时默认启用的文件与命令执行权限，会话中仍可随时单独切换',
     coworkFullAccessConfirmTitle: '确认启用完全权限？',
@@ -4975,6 +4977,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelPresetAccountChanged: 'The account changed. Please select a model again.',
 
     ...desktopCompanionTranslations.en,
+    ...homeShowcaseTranslations.en,
     ...mediaTranslations.en,
     ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
@@ -6642,6 +6645,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkExpandedConversationStatusRunning: 'Running',
     coworkRailUnloadedMessageTitle: 'Unloaded message',
     coworkRailUnloadedMessageHint: 'Click to load messages around this position',
+    coworkRailTurnPosition: '{current} of {total}',
     artifactBrowserBlankPage: 'Blank page',
     artifactBrowserShowDeviceToolbar: 'Show device toolbar',
     artifactBrowserHideDeviceToolbar: 'Hide device toolbar',
@@ -7435,7 +7439,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkPermissionModeFullAccess: 'Full Access',
     coworkPermissionModeFullAccessShort: 'Full Access',
     coworkPermissionModeFullAccessDesc: 'Run actions directly without approval popups (use when you trust the task)',
-    coworkPermissionModeSwitchedToast: 'Switched permission mode to "{mode}"',
     coworkDefaultPermissionModeTitle: 'Default permission mode',
     coworkDefaultPermissionModeDescription: 'Default file and command permissions for new tasks; can still be changed per session',
     coworkFullAccessConfirmTitle: 'Enable Full Access?',

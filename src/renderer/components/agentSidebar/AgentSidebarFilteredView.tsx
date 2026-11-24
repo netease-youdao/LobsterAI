@@ -94,8 +94,8 @@ const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
         : i18nService.t('sidebarFilterNoResults');
 
   return (
-    <div className="pb-3 pt-1" role="tree" aria-label={i18nService.t('sidebarFilterResults')}>
-      <div className="sticky top-0 z-30 -mx-2.5 flex h-9 items-center gap-2 bg-[var(--lobster-sidebar-bg)] px-2.5">
+    <div className="pb-3" role="tree" aria-label={i18nService.t('sidebarFilterResults')}>
+      <div className="sticky top-9 z-20 -mx-2.5 flex h-7 items-center gap-2 bg-[var(--lobster-sidebar-bg)] px-2.5">
         <span className="min-w-0 flex-1 truncate pl-2.5 text-[11.5px] text-secondary/85">
           {i18nService.t('sidebarFilterActiveLabel')}
           <span className="font-medium text-foreground/85">{getFilterSummary(filter)}</span>
@@ -110,16 +110,20 @@ const AgentSidebarFilteredView: React.FC<AgentSidebarFilteredViewProps> = ({
       </div>
       {statusMessage ? (
         <p className="px-2.5 py-3 text-[13px] text-secondary/75">{statusMessage}</p>
-      ) : groups.map(group => (
-        <div key={group.key} role="group" aria-label={group.label} className="mb-2">
-          <h3 className="px-2.5 py-1 text-[11.5px] font-medium text-secondary/80">
-            {group.label}
-          </h3>
-          <div className="space-y-0.5">
-            {group.items.map(renderTask)}
-          </div>
+      ) : (
+        <div className="pt-1">
+          {groups.map(group => (
+            <div key={group.key} role="group" aria-label={group.label} className="mb-2">
+              <h3 className="px-2.5 py-1 text-[11.5px] font-medium text-secondary/80">
+                {group.label}
+              </h3>
+              <div className="space-y-0.5">
+                {group.items.map(renderTask)}
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 };

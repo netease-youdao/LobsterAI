@@ -184,9 +184,10 @@ describe('CoworkPromptInput unified top-cap home layout', () => {
     // Folder and agent appear in the top-cap strip before the nested white card.
     expect(html.slice(trayIndex, cardIndex)).toContain('ai-toolbox');
     expect(html.slice(trayIndex, cardIndex)).toContain('网站开发');
-    // Standalone magic wand and custom media pill are absent under System Default.
+    // Standalone magic wand, custom media pill, and redundant Deep Research mode toggle are absent.
     expect(html).not.toContain(`aria-label="${i18nService.t('mediaGenerationMenuItem')}"`);
     expect(html).not.toContain('data-custom-media-pill');
+    expect(html).not.toContain('data-deep-research-toggle');
   });
 
   test('provides localized Manus-style home headline in zh and en', () => {

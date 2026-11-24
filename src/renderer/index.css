@@ -6,6 +6,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Bundled common-CJK subset of Noto Serif SC Medium (SIL OFL 1.1) for the
+   home headline so macOS Songti SC's narrow, floating U+FF1F question mark
+   and cross-OS serif fallback inconsistencies are avoided. */
+@font-face {
+  font-family: 'Lobster Home Serif';
+  src: url('./assets/fonts/LobsterHomeSerif-Medium.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* KaTeX styles */
 .katex-display {
   overflow-x: auto;
@@ -112,21 +123,15 @@ blockquote {
 }
 
 :root {
-  /* Sidebar rail: soft light-gray surface in light themes so active white pills
-     separate cleanly from the rail without affecting content canvases. */
+  /* Sidebar rail: soft light-gray surface in light themes so the rail
+     separates cleanly from content canvases. */
   --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface-raised) 88%, var(--lobster-background));
   --lobster-sidebar-item-hover: rgba(0, 0, 0, 0.045);
-  --lobster-sidebar-item-active-bg: var(--lobster-surface);
-  --lobster-sidebar-item-active-border: rgba(0, 0, 0, 0.08);
-  --lobster-sidebar-item-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0.5px 1px rgba(0, 0, 0, 0.02);
 }
 
 .dark {
   --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface) 58%, var(--lobster-background));
   --lobster-sidebar-item-hover: rgba(255, 255, 255, 0.055);
-  --lobster-sidebar-item-active-bg: color-mix(in srgb, var(--lobster-surface-raised) 76%, var(--lobster-surface));
-  --lobster-sidebar-item-active-border: rgba(255, 255, 255, 0.08);
-  --lobster-sidebar-item-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
 }
 
 :root {

@@ -1,0 +1,22 @@
+[
+  {
+    "file": "LobsterHomeSerif-Medium.woff2",
+    "upstreamFile": "NotoSerifSC-Medium.otf",
+    "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Serif/SubsetOTF/SC/NotoSerifSC-Medium.otf",
+    "upstreamSha256": "e4e9beb5aaeb951e101aa8f122e2a6801ea9e48ac9f9b6bdfeef2436b55bc8ee",
+    "sha256": "d7632bb01b6a77ee6204736f1544a94795b4be2c1a5b8566327ff6f39aad85df",
+    "bytes": 1030024,
+    "glyphCount": 4141,
+    "codepointCount": 4020,
+    "subset": "GB2312 Level 1 + renderer i18n CJK + modern conversational CJK + ASCII + CJK/General punctuation",
+    "generator": "uv run --with fonttools --with brotli python3 scripts/build-home-serif-font.py",
+    "license": "OFL-1.1"
+  },
+  {
+    "file": "OFL-NotoSerifSC.txt",
+    "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Serif/LICENSE",
+    "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+    "bytes": 4301,
+    "license": "OFL-1.1"
+  }
+]

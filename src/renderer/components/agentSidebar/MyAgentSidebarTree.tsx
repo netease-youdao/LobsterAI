@@ -39,10 +39,9 @@ import {
   type CoworkSwitchAgentEventDetail,
   CoworkUiEvent,
 } from '../cowork/constants';
-import UserGroupIcon from '../icons/UserGroupIcon';
 import AgentSidebarFilteredView from './AgentSidebarFilteredView';
 import AgentTaskRow from './AgentTaskRow';
-import AgentTreeNode from './AgentTreeNode';
+import AgentTreeNode, { AgentAvatar } from './AgentTreeNode';
 import {
   type AgentSidebarBatchItem,
   createSessionBatchItem,
@@ -64,9 +63,9 @@ interface MyAgentSidebarTreeProps {
   deletedSessionIds: string[];
   selectedKeys: Set<string>;
   taskFilter: SidebarTaskFilter;
+  onTaskFilterChange: (filter: SidebarTaskFilter) => void;
   onClearTaskFilter: () => void;
   onShowCowork: () => void;
-  onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onTaskSelected?: (params: {
     agentType: 'main' | 'custom';
     isCurrentSession: boolean;
@@ -149,9 +148,9 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   deletedSessionIds,
   selectedKeys,
   taskFilter,
+  onTaskFilterChange,
   onClearTaskFilter,
   onShowCowork,
-  onTaskFilterSummaryChange,
   onTaskSelected,
   onSidebarAction,
   onToggleSelection,
@@ -221,10 +220,6 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     isTaskFilterActive,
     pendingPermissionSessionIds,
   ]);
-
-  useEffect(() => {
-    onTaskFilterSummaryChange(hasUnreadCompletedTasks);
-  }, [hasUnreadCompletedTasks, onTaskFilterSummaryChange]);
 
   const getAgentType = useCallback((agentId: string): 'main' | 'custom' => (
     isDefaultAgentId(agentId) ? 'main' : 'custom'
@@ -584,7 +579,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
         isBatchMode={isBatchAgent}
         isSelected={selectedKeys.has(createSessionBatchKey(task.id))}
         contextLabel={getAgentDisplayName(agent)}
-        contextIcon={<UserGroupIcon className="h-3 w-3" />}
+        contextIcon={<AgentAvatar agent={agent} className="h-3.5 w-3.5" />}
         isSelectionDisabled={isOutsideBatchAgent}
         showBatchOption={!isBatchMode}
         onSelect={() => void handleSelectTask(task)}
@@ -643,6 +638,16 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
 
   return (
     <div className="pb-3">
+      <MyAgentSidebarHeader
+        taskFilter={taskFilter}
+        hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+        onTaskFilterChange={onTaskFilterChange}
+        onCreateAgent={() => {
+          setCreateAgentSource('home_agent_sidebar');
+          setIsCreateOpen(true);
+        }}
+      />
+
       {isTaskFilterActive ? (
         <AgentSidebarFilteredView
           filter={taskFilter}
@@ -655,22 +660,18 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       ) : (
         <div role="tree" aria-label={i18nService.t('myAgents')}>
           {hasPinnedAgents && (
-            <div className="mb-1 space-y-0.5">
-              <div className="sticky top-0 z-30 -mx-2.5 flex h-9 items-center bg-[var(--lobster-sidebar-bg)] px-2.5">
-                <h2 className="min-w-0 truncate pl-2.5 text-[length:var(--lobster-text-sidebarMeta)] font-medium tracking-[0.01em] text-secondary">
+            <div className="mb-1.5 space-y-0.5">
+              <div className="flex h-6 items-center px-2.5">
+                <h3 className="min-w-0 truncate text-[11px] font-medium tracking-[0.01em] text-secondary/75">
                   {i18nService.t('myAgentSidebarPinned')}
-                </h2>
+                </h3>
               </div>
               {renderSortableAgentGroup(pinnedAgentNodes)}
+              {projectAgentNodes.length > 0 && (
+                <div className="mx-2.5 !mt-1.5 border-t border-border/60" role="separator" />
+              )}
             </div>
           )}
-
-          <MyAgentSidebarHeader
-            onCreateAgent={() => {
-              setCreateAgentSource('home_agent_sidebar');
-              setIsCreateOpen(true);
-            }}
-          />
 
           {agentNodes.length === 0 ? (
             <div className="px-3 py-6 text-center">

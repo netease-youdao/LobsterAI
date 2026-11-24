@@ -138,12 +138,6 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       const res = await dshHostService.setPermissionPreset(nextPreset, normalizedSessionId);
       if (res.ok) {
         setPreset(res.preset ?? nextPreset);
-        const nextMeta = getPermissionPresetOption(nextPreset);
-        window.dispatchEvent(new CustomEvent('app:showToast', {
-          detail: i18nService
-            .t('coworkPermissionModeSwitchedToast')
-            .replace('{mode}', i18nService.t(nextMeta.labelKey)),
-        }));
       }
     } finally {
       setUpdating(false);

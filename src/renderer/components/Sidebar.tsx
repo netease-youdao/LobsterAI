@@ -28,7 +28,6 @@ import {
   SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME,
   SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
 } from './agentSidebar/sidebarHeaderTooltip';
-import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from './agentSidebar/SidebarTaskSearchButton';
 import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './agentSidebar/taskFilter';
 import { useShortcutHint } from './agentSidebar/useShortcutHint';
@@ -69,9 +68,7 @@ interface SidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   taskFilter: SidebarTaskFilter;
-  hasUnreadCompletedTasks: boolean;
   onTaskFilterChange: (filter: SidebarTaskFilter) => void;
-  onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onWidthChange?: (width: number) => void;
   updateNotice?: React.ReactNode;
   /** The expanded update card owns the sidebar bottom; temporarily hide the
@@ -97,7 +94,7 @@ const sidebarNavItemBaseClassName =
 const sidebarNavItemClassName =
   `${sidebarNavItemBaseClassName} font-normal text-foreground/90 hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground`;
 const activeSidebarNavItemClassName =
-  `${sidebarNavItemBaseClassName} font-medium text-foreground bg-[var(--lobster-sidebar-item-active-bg)] ring-1 ring-inset ring-[var(--lobster-sidebar-item-active-border)] shadow-[var(--lobster-sidebar-item-active-shadow)]`;
+  `${sidebarNavItemBaseClassName} font-medium text-foreground bg-[var(--lobster-sidebar-item-hover)]`;
 const sidebarNavIconClassName =
   'h-[17px] w-[17px] shrink-0 text-foreground/65 transition-colors group-hover:text-foreground';
 const activeSidebarNavIconClassName = 'h-[17px] w-[17px] shrink-0 text-foreground';
@@ -201,9 +198,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   taskFilter,
-  hasUnreadCompletedTasks,
   onTaskFilterChange,
-  onTaskFilterSummaryChange,
   onWidthChange,
   updateNotice,
   hideAdBanner,
@@ -675,26 +670,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                   </button>
                 </Tooltip>
                 {!isCollapsed && (
-                  <>
-                    <SidebarTaskSearchButton
-                      onClick={() => {
-                        reportSidebarAction('open_search', { activeView, isCollapsed });
-                        openTaskSearch(CoworkTaskSearchRequestSource.SidebarHeader);
-                      }}
-                      className="non-draggable"
-                      label={i18nService.t('search')}
-                    />
-                    {/* Shown on every page: the task list below is visible and filtered on all of them. */}
-                    {SIDEBAR_TASK_FILTER_ENABLED && (
-                      <SidebarTaskFilterButton
-                        filter={taskFilter}
-                        onChange={onTaskFilterChange}
-                        hasUnreadCompletedTasks={hasUnreadCompletedTasks}
-                        label={i18nService.t('sidebarFilter')}
-                        className="non-draggable"
-                      />
-                    )}
-                  </>
+                  <SidebarTaskSearchButton
+                    onClick={() => {
+                      reportSidebarAction('open_search', { activeView, isCollapsed });
+                      openTaskSearch(CoworkTaskSearchRequestSource.SidebarHeader);
+                    }}
+                    className="non-draggable"
+                    tooltipAlign={alignHeaderStart ? TooltipAlign.Center : TooltipAlign.End}
+                    label={i18nService.t('search')}
+                  />
                 )}
               </>
             )}
@@ -814,9 +798,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             deletedSessionIds={deletedSessionIds}
             selectedKeys={selectedKeys}
             taskFilter={taskFilter}
+            onTaskFilterChange={onTaskFilterChange}
             onClearTaskFilter={() => onTaskFilterChange(DEFAULT_SIDEBAR_TASK_FILTER)}
             onShowCowork={onShowCowork}
-            onTaskFilterSummaryChange={onTaskFilterSummaryChange}
             onTaskSelected={(params) => {
               console.debug('[Sidebar] reporting agent sidebar task selection analytics');
               void reportYdAnalyzer({

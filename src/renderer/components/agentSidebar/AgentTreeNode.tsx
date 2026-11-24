@@ -16,7 +16,7 @@ import AgentTaskRow from './AgentTaskRow';
 import { createSessionBatchKey } from './batchSelection';
 import ExpandAgentTasksRow from './ExpandAgentTasksRow';
 import ExpertUpdateBadge from './ExpertUpdateBadge';
-import type { AgentSidebarAgentNode, AgentSidebarTaskNode } from './types';
+import type { AgentSidebarAgentNode, AgentSidebarAgentSummary, AgentSidebarTaskNode } from './types';
 
 interface AgentTreeNodeProps {
   agent: AgentSidebarAgentNode;
@@ -66,9 +66,12 @@ const ACTION_MENU_VERTICAL_GAP = 4;
 const ACTION_MENU_HEIGHT = 104;
 const AGENT_TASKS_TRANSITION_MS = 200;
 
-const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
+export const AgentAvatar: React.FC<{
+  agent: Pick<AgentSidebarAgentSummary, 'id' | 'icon' | 'iconCustomized' | 'source' | 'presetId'>;
+  className?: string;
+}> = ({ agent, className = 'h-[17px] w-[17px]' }) => {
   if (shouldUseDefaultAgentIcon(agent)) {
-    return <DefaultAgentIcon className="h-[17px] w-[17px]" />;
+    return <DefaultAgentIcon className={className} />;
   }
 
   return (
@@ -76,8 +79,8 @@ const AgentAvatar: React.FC<{ agent: AgentSidebarAgentNode }> = ({ agent }) => {
       value={agent.icon}
       expertFallback={usesManagedPresetAvatar(agent)}
       inheritColor
-      className="h-[17px] w-[17px]"
-      iconClassName="h-[17px] w-[17px]"
+      className={className}
+      iconClassName={className}
     />
   );
 };

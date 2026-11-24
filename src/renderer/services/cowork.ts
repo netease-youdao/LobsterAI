@@ -121,6 +121,7 @@ const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
 interface LoadMessageWindowAroundIndexOptions {
   pageSize?: number;
+  leadingContext?: number;
   expectedMessageId?: string;
   isRequestCurrent?: () => boolean;
 }
@@ -204,6 +205,10 @@ class CoworkService {
   // Only the current session can request a history window, so one monotonic
   // generation invalidates stale responses without retaining session ids.
   private messageWindowRequestGeneration = 0;
+  // Separate from messageWindowRequestGeneration so pagination jumps never
+  // discard an in-flight full rail index load.
+  private railIndexRequestGeneration = 0;
+  private railIndexInFlightBySessionId = new Map<string, Promise<CoworkMessageRailIndexItem[]>>();
   private contextUsageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private contextUsageInFlightBySessionId = new Map<string, Promise<CoworkContextUsage | null>>();
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
@@ -851,6 +856,8 @@ class CoworkService {
     this.contextUsageAutoSuppressedUntilBySessionId.clear();
     this.contextUsageBackoffUntil.clear();
     this.messageWindowRequestGeneration += 1;
+    this.railIndexRequestGeneration += 1;
+    this.railIndexInFlightBySessionId.clear();
     this.btwAbortRunIds.clear();
   }
 
@@ -1766,6 +1773,8 @@ class CoworkService {
     // Fence already-running page refreshes before replacing the history projection.
     this.latestLoadSessionRequestId += 1;
     this.messageWindowRequestGeneration += 1;
+    this.railIndexRequestGeneration += 1;
+    this.railIndexInFlightBySessionId.delete(sessionId);
     try {
       const result = await action();
       if (result.success || result.pending) {
@@ -2061,37 +2070,45 @@ class CoworkService {
   }
 
   async loadSessionMessageRailIndex(sessionId: string): Promise<CoworkMessageRailIndexItem[]> {
-    const editGeneration = this.messageWindowRequestGeneration;
-    const cowork = window.electron?.cowork;
-    if (!cowork?.getSessionMessageRailIndex) return [];
+    const getSessionMessageRailIndex = window.electron?.cowork?.getSessionMessageRailIndex;
+    if (!getSessionMessageRailIndex) return [];
 
-    const state = store.getState().cowork;
-    if (state.messageRailIndexLoadingBySessionId[sessionId]) {
-      return state.messageRailIndexBySessionId[sessionId] ?? [];
+    const existingPromise = this.railIndexInFlightBySessionId.get(sessionId);
+    if (existingPromise) {
+      return existingPromise;
     }
 
+    const requestGeneration = this.railIndexRequestGeneration;
     store.dispatch(setMessageRailIndexLoading({ sessionId, loading: true }));
-    try {
-      const result = await cowork.getSessionMessageRailIndex(sessionId);
-      if (editGeneration !== this.messageWindowRequestGeneration) return [];
-      if (result.success && result.items) {
-        store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
+    const loadPromise = (async (): Promise<CoworkMessageRailIndexItem[]> => {
+      try {
+        const result = await getSessionMessageRailIndex(sessionId);
+        if (requestGeneration !== this.railIndexRequestGeneration) return [];
+        if (result.success && result.items) {
+          store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
+          this.logDiagnostic(
+            'info',
+            `loaded message rail index for session ${sessionId}; received ${result.items.length} items.`,
+          );
+          return result.items;
+        }
+        this.logDiagnostic('warn', `failed to load message rail index for session ${sessionId}: ${result.error ?? 'unknown error'}`);
+      } catch (error) {
         this.logDiagnostic(
-          'info',
-          `loaded message rail index for session ${sessionId}; received ${result.items.length} items.`,
+          'warn',
+          `failed to load message rail index for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return result.items;
       }
-      this.logDiagnostic('warn', `failed to load message rail index for session ${sessionId}: ${result.error ?? 'unknown error'}`);
-    } catch (error) {
-      this.logDiagnostic(
-        'warn',
-        `failed to load message rail index for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
+      return [];
+    })().finally(() => {
+      if (this.railIndexInFlightBySessionId.get(sessionId) === loadPromise) {
+        this.railIndexInFlightBySessionId.delete(sessionId);
+      }
       store.dispatch(setMessageRailIndexLoading({ sessionId, loading: false }));
-    }
-    return [];
+    });
+
+    this.railIndexInFlightBySessionId.set(sessionId, loadPromise);
+    return loadPromise;
   }
 
   async loadMessageWindowAroundIndex(
@@ -2114,9 +2131,13 @@ class CoworkService {
     const requestedPageSize = options.pageSize ?? 50;
     const safePageSize = Number.isFinite(requestedPageSize) ? Math.floor(requestedPageSize) : 50;
     const boundedPageSize = Math.max(COWORK_MESSAGE_PAGE_SIZE, Math.min(100, safePageSize));
+    const defaultLeadingContext = Math.floor(boundedPageSize / 2);
+    const resolvedLeadingContext = options.leadingContext !== undefined && Number.isFinite(options.leadingContext)
+      ? Math.max(0, Math.min(boundedPageSize - 1, Math.floor(options.leadingContext)))
+      : defaultLeadingContext;
     const offset = Math.max(0, Math.min(
       Math.max(0, totalMessages - boundedPageSize),
-      safeAbsoluteIndex - Math.floor(boundedPageSize / 2),
+      safeAbsoluteIndex - resolvedLeadingContext,
     ));
 
     this.logDiagnostic(

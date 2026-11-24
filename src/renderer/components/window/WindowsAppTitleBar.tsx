@@ -1,9 +1,7 @@
 import React, { useCallback, useEffect } from 'react';
 
 import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from '../agentSidebar/sidebarHeaderTooltip';
-import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from '../agentSidebar/SidebarTaskSearchButton';
-import type { SidebarTaskFilter } from '../agentSidebar/taskFilter';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from './WindowTitleBar';
@@ -20,11 +18,6 @@ interface WindowsAppTitleBarProps {
   onNewChat?: () => void;
   sidebarToggleLabel?: string;
   searchLabel: string;
-  showFilterIcon?: boolean;
-  filterLabel?: string;
-  taskFilter?: SidebarTaskFilter;
-  hasFilterNotice?: boolean;
-  onTaskFilterChange?: (filter: SidebarTaskFilter) => void;
   newChatLabel?: string;
   updateBadge?: React.ReactNode;
 }
@@ -39,11 +32,6 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   onNewChat,
   sidebarToggleLabel,
   searchLabel,
-  showFilterIcon = false,
-  filterLabel,
-  taskFilter,
-  hasFilterNotice = false,
-  onTaskFilterChange,
   newChatLabel,
   updateBadge,
 }) => {
@@ -97,7 +85,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
             LobsterAI
           </span>
         </div>
-        {(onToggleSidebar || onSearch || showFilterIcon || onNewChat || updateBadge) && (
+        {(onToggleSidebar || onSearch || onNewChat || updateBadge) && (
           <div className="non-draggable flex shrink-0 items-center gap-1">
             {onToggleSidebar && (
               <button
@@ -114,14 +102,6 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
               <SidebarTaskSearchButton
                 onClick={onSearch}
                 label={searchLabel}
-              />
-            )}
-            {showFilterIcon && taskFilter && onTaskFilterChange && (
-              <SidebarTaskFilterButton
-                filter={taskFilter}
-                onChange={onTaskFilterChange}
-                hasUnreadCompletedTasks={hasFilterNotice}
-                label={filterLabel ?? ''}
               />
             )}
             {onNewChat && (
