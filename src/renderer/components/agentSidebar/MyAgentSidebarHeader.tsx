@@ -1,14 +1,26 @@
-import { PlusIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
 import { i18nService } from '../../services/i18n';
+import SidebarCreateAgentIcon from '../icons/SidebarCreateAgentIcon';
 import Tooltip, { TooltipAlign, TooltipPosition } from '../ui/Tooltip';
+import {
+  SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME,
+  SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME,
+} from './sidebarHeaderTooltip';
+import SidebarTaskFilterButton, { SIDEBAR_TASK_FILTER_ENABLED } from './SidebarTaskFilterButton';
+import type { SidebarTaskFilter } from './taskFilter';
 
 interface MyAgentSidebarHeaderProps {
+  taskFilter: SidebarTaskFilter;
+  hasUnreadCompletedTasks: boolean;
+  onTaskFilterChange: (filter: SidebarTaskFilter) => void;
   onCreateAgent: () => void;
 }
 
 const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
+  taskFilter,
+  hasUnreadCompletedTasks,
+  onTaskFilterChange,
   onCreateAgent,
 }) => {
   return (
@@ -16,22 +28,34 @@ const MyAgentSidebarHeader: React.FC<MyAgentSidebarHeaderProps> = ({
       <h2 className="min-w-0 truncate pl-2.5 text-[length:var(--lobster-text-sidebarMeta)] font-medium tracking-[0.01em] text-secondary">
         {i18nService.t('myAgents')}
       </h2>
-      <Tooltip
-        content={i18nService.t('createNewAgent')}
-        position={TooltipPosition.Bottom}
-        align={TooltipAlign.End}
-        delay={300}
-        className="mr-0.5 opacity-75 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:opacity-100"
-      >
-        <button
-          type="button"
-          onClick={onCreateAgent}
-          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground"
-          aria-label={i18nService.t('createNewAgent')}
+      <div className="mr-0.5 flex shrink-0 items-center gap-0.5">
+        {SIDEBAR_TASK_FILTER_ENABLED && (
+          <SidebarTaskFilterButton
+            filter={taskFilter}
+            onChange={onTaskFilterChange}
+            hasUnreadCompletedTasks={hasUnreadCompletedTasks}
+            label={i18nService.t('sidebarFilter')}
+            tooltipAlign={TooltipAlign.End}
+          />
+        )}
+        <Tooltip
+          content={i18nService.t('createNewAgent')}
+          position={TooltipPosition.Bottom}
+          align={TooltipAlign.End}
+          delay={300}
+          bubbleClassName={SIDEBAR_HEADER_TOOLTIP_BUBBLE_CLASS_NAME}
+          className="shrink-0"
         >
-          <PlusIcon className="h-3.5 w-3.5" strokeWidth={2} />
-        </button>
-      </Tooltip>
+          <button
+            type="button"
+            onClick={onCreateAgent}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
+            aria-label={i18nService.t('createNewAgent')}
+          >
+            <SidebarCreateAgentIcon className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      </div>
     </div>
   );
 };

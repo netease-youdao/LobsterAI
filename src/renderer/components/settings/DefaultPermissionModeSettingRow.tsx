@@ -62,12 +62,6 @@ const DefaultPermissionModeSettingRow: React.FC = () => {
       if (res.ok) {
         const applied = res.defaultPreset ?? res.preset ?? nextPreset;
         setPreset(applied);
-        const appliedOption = getPermissionPresetOption(applied);
-        window.dispatchEvent(new CustomEvent('app:showToast', {
-          detail: i18nService
-            .t('coworkPermissionModeSwitchedToast')
-            .replace('{mode}', i18nService.t(appliedOption.labelKey)),
-        }));
       }
     } finally {
       setUpdating(false);

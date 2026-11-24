@@ -420,11 +420,6 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
       window.dispatchEvent(new CustomEvent(DSH_PERMISSION_PRESET_CHANGED_EVENT, {
         detail: eventDetail,
       }));
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService
-          .t('coworkPermissionModeSwitchedToast')
-          .replace('{mode}', i18nService.t('coworkPermissionModeFullAccess')),
-      }));
     }
     onRespond(response);
   };

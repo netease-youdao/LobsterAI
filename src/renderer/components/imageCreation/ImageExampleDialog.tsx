@@ -18,10 +18,18 @@ interface Props {
   onUse: (prompt: string, reference?: ImageExampleReference) => Promise<boolean>;
 }
 
+const IMAGE_RATIO_CHOICES = [
+  { id: 'default', labelKey: 'imageRatioDefault', value: '' },
+  { id: '16:9', labelKey: '', value: '16:9' },
+  { id: '3:4', labelKey: '', value: '3:4' },
+  { id: '1:1', labelKey: '', value: '1:1' },
+] as const;
+
 export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
   const t = (key: string) => i18nService.t(key);
   const language = i18nService.getLanguage();
   const [prompt, setPrompt] = useState(example.prompt[language]);
+  const [aspectRatio, setAspectRatio] = useState<string>('');
   const { scrollRef: promptRef, canScrollUp, canScrollDown, scrollNext } = useScrollAffordance<HTMLTextAreaElement>(prompt);
   const [reference, setReference] = useState<ImageExampleReference>();
   const [busy, setBusy] = useState(false);
@@ -50,7 +58,11 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
       if (!mounted.current) return;
       if (example.referenceImageUrl && !selectedReference) throw new Error('Reference required');
       const label = selectedReference && computeMediaLabels([{ name: selectedReference.name, path: selectedReference.name, isImage: true }])[0]?.label;
-      const draftPrompt = label ? `@${label}\n\n${prompt.trim()}` : prompt.trim();
+      const ratioSuffix = aspectRatio
+        ? (language === 'zh' ? `\n\n画幅比例要求：${aspectRatio}` : `\n\nAspect ratio: ${aspectRatio}`)
+        : '';
+      const finalPrompt = `${prompt.trim()}${ratioSuffix}`;
+      const draftPrompt = label ? `@${label}\n\n${finalPrompt}` : finalPrompt;
       const applied = await onUse(draftPrompt, selectedReference);
       if (mounted.current) {
         if (applied) onClose();
@@ -106,6 +118,28 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
             className="image-creation-scrollbar block h-40 w-full resize-none rounded-xl border border-border bg-background p-3 text-sm leading-6 text-foreground focus:border-primary focus:outline-none" />
           {canScrollUp && <div aria-hidden="true" className="image-creation-prompt-fade image-creation-prompt-fade-top" />}
           {canScrollDown && <div aria-hidden="true" className="image-creation-prompt-fade image-creation-prompt-fade-bottom" />}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs font-medium text-secondary">{t('imageRatioLabel')}</span>
+          {IMAGE_RATIO_CHOICES.map(choice => {
+            const active = aspectRatio === choice.value;
+            return (
+              <button
+                key={choice.id}
+                type="button"
+                disabled={busy}
+                aria-pressed={active}
+                onClick={() => setAspectRatio(choice.value)}
+                className={`rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors ${
+                  active
+                    ? 'border-primary/45 bg-primary-muted/75 text-primary'
+                    : 'border-border/80 bg-background text-secondary hover:border-border hover:text-foreground'
+                }`}
+              >
+                {choice.labelKey ? t(choice.labelKey) : choice.value}
+              </button>
+            );
+          })}
         </div>
         {example.referenceImageUrl && <div className="mt-4 rounded-xl border border-border p-3">
           <p className="mb-2 text-xs font-medium text-foreground">{t('imageCreationReferenceNeeded')}</p>

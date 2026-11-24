@@ -302,7 +302,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
         isSelectionDisabled
           ? 'cursor-default font-normal text-foreground/30'
           : task.isSelected && !hasActiveSubagent
-          ? 'cursor-pointer bg-[var(--lobster-sidebar-item-active-bg)] font-medium text-foreground ring-1 ring-inset ring-[var(--lobster-sidebar-item-active-border)] shadow-[var(--lobster-sidebar-item-active-shadow)]'
+          ? 'cursor-pointer bg-[var(--lobster-sidebar-item-hover)] font-medium text-foreground'
           : `cursor-pointer font-normal hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground ${
             isActivityRow ? 'text-foreground' : 'text-foreground/85'
           }`
@@ -406,9 +406,9 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           >
             <span className="truncate">{displayTitle}</span>
             {contextLabel && (
-              <span className="flex min-w-0 items-center gap-1 text-[length:var(--lobster-text-sidebarMeta)] font-normal leading-4 text-secondary">
+              <span className="flex min-w-0 items-center gap-1.5 text-[length:var(--lobster-text-sidebarMeta)] font-normal leading-4 text-secondary">
                 {contextIcon && (
-                  <span className="flex h-3 w-3 shrink-0 items-center justify-center" aria-hidden="true">
+                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
                     {contextIcon}
                   </span>
                 )}

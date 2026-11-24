@@ -8,8 +8,11 @@ import { buildSessionTitleFromInput, buildSessionTitleInput } from '../../../com
 import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import {
+  HOME_SHOWCASE_EXPLORE_MORE_ID,
+  type HomeShowcasePrimaryEntryId,
+} from '../../../shared/homeShowcase/constants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
-import { PptCreation } from '../../../shared/pptCreation/constants';
 import startupCreditEntryGiftUrl from '../../assets/startup-credit-entry-gift.svg';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import { refreshEnterpriseAccountContext } from '../../features/enterpriseAccount/context';
@@ -45,12 +48,10 @@ import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
+import HomeShowcaseHub from '../homeShowcase/HomeShowcaseHub';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import HomeImageCreation from '../imageCreation/HomeImageCreation';
 import { ModelAccessPromptKind, ModelAccessPromptModal } from '../ModelSelector';
-import HomePptCreation from '../pptCreation/HomePptCreation';
-import { PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
 import HomeSkinEmblem from '../skin/HomeSkinEmblem';
 import SkinAmbientEffects from '../skin/SkinAmbientEffects';
@@ -80,7 +81,7 @@ import SessionSwipeNavigator from './SessionSwipeNavigator';
 import { buildCoworkContinuationSystemPrompt } from './skillSystemPrompt';
 import { useHomeStartContext } from './useHomeStartContext';
 
-const HOME_HEADLINE_FONT_FAMILY = '"Songti SC", "STSong", "Noto Serif CJK SC", "Noto Serif SC", Georgia, Cambria, "Times New Roman", serif';
+export const HOME_HEADLINE_FONT_FAMILY = '"Lobster Home Serif", "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", Georgia, Cambria, "Times New Roman", "Songti SC", "STSong", serif';
 
 const logCoworkViewModel = (message: string, level: 'debug' | 'warn' = 'debug'): void => {
   if (level === 'warn') console.warn(`[CoworkView] ${message}`);
@@ -673,58 +674,49 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     await coworkService.stopSession(currentSession.id);
   }, [currentSession]);
 
-  // Get selected quick action
-  const selectedAction = React.useMemo(() => {
-    return quickActions.find(action => action.id === selectedActionId);
-  }, [quickActions, selectedActionId]);
-
-  // Deselect quick action: restore the chip bar and deactivate the auto-enabled skill
-  const handleQuickActionDeselect = () => {
-    const action = quickActions.find(a => a.id === selectedActionId);
-    dispatch(clearSelection());
-    if (action && activeSkillIds.includes(action.skillMapping)) {
-      dispatch(setActiveSkillIds(activeSkillIds.filter(id => id !== action.skillMapping)));
-    }
-  };
-
-  // Handle quick action button click: select action + activate skill in one batch.
-  // Clicking the selected chip again collapses the prompt panel.
-  const handleActionSelect = (actionId: string) => {
-    if (actionId === selectedActionId) {
-      handleQuickActionDeselect();
+  const handleHomeCategorySelect = (entryId: HomeShowcasePrimaryEntryId | null) => {
+    const previousAction = quickActions.find(a => a.id === selectedActionId);
+    if (!entryId || entryId === selectedActionId) {
+      dispatch(clearSelection());
+      if (previousAction && activeSkillIds.includes(previousAction.skillMapping)) {
+        dispatch(setActiveSkillIds(activeSkillIds.filter(id => id !== previousAction.skillMapping)));
+      }
       return;
     }
-    dispatch(selectAction(actionId));
-    const action = quickActions.find(a => a.id === actionId);
-    if (action) {
-      const targetSkill = skills.find(s => s.id === action.skillMapping);
-      console.debug(`[CoworkView] reporting prompt template analytics: template_card_click ${action.id}`);
-      reportPromptTemplateAction({
-        templateActionType: 'template_card_click',
-        templateId: action.id,
-        templateName: action.label,
-        templateIndex: quickActions.findIndex(item => item.id === action.id),
-        mappedSkillId: action.skillMapping,
-        mappedSkillName: targetSkill?.name,
-        hasAutoEnabledSkill: Boolean(targetSkill),
-        params: {
-          promptCount: action.prompts.length,
-          modelId: currentAgentSelectedModel?.id,
-          modelName: currentAgentSelectedModel?.name,
-          agentId: currentAgentId,
-          isMainAgent: currentAgentId === 'main',
-          isPlanMode: homeDraftCollaborationMode === CoworkCollaborationMode.Plan,
-        },
-      });
-      if (targetSkill) {
-        dispatch(setActiveSkillIds([targetSkill.id]));
-      }
+
+    dispatch(selectAction(entryId));
+    const action = entryId === HOME_SHOWCASE_EXPLORE_MORE_ID
+      ? undefined
+      : quickActions.find(a => a.id === entryId);
+    const targetSkill = action ? skills.find(s => s.id === action.skillMapping) : undefined;
+    console.debug(`[CoworkView] reporting prompt template analytics: template_card_click ${entryId}`);
+    reportPromptTemplateAction({
+      templateActionType: 'template_card_click',
+      templateId: entryId,
+      templateName: action?.label ?? entryId,
+      templateIndex: quickActions.findIndex(item => item.id === entryId),
+      mappedSkillId: action?.skillMapping,
+      mappedSkillName: targetSkill?.name,
+      hasAutoEnabledSkill: Boolean(targetSkill),
+      params: {
+        promptCount: action?.prompts.length ?? 0,
+        modelId: currentAgentSelectedModel?.id,
+        modelName: currentAgentSelectedModel?.name,
+        agentId: currentAgentId,
+        isMainAgent: currentAgentId === 'main',
+        isPlanMode: homeDraftCollaborationMode === CoworkCollaborationMode.Plan,
+      },
+    });
+    if (targetSkill) {
+      dispatch(setActiveSkillIds([targetSkill.id]));
+    } else if (previousAction && activeSkillIds.includes(previousAction.skillMapping)) {
+      dispatch(setActiveSkillIds(activeSkillIds.filter(id => id !== previousAction.skillMapping)));
     }
   };
 
-  // When the mapped skill is deactivated from input area, restore the QuickActionBar.
+  // When the mapped skill is deactivated from input area, restore the home category grid.
   // Only applies when the mapped skill exists (and thus was auto-enabled on select);
-  // otherwise a missing skill would make the prompt panel impossible to open.
+  // otherwise a missing skill would make the showcase gallery impossible to open.
   useEffect(() => {
     if (!selectedActionId) return;
     const action = quickActions.find(a => a.id === selectedActionId);
@@ -735,38 +727,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       }
     }
   }, [activeSkillIds, dispatch, quickActions, selectedActionId, skills]);
-
-  // Handle prompt selection from QuickAction
-  const handleQuickActionPromptSelect = (prompt: string, promptId?: string) => {
-    if (selectedAction) {
-      const selectedPrompt = selectedAction.prompts.find(item => item.id === promptId);
-      const targetSkill = skills.find(skill => skill.id === selectedAction.skillMapping);
-      console.debug(`[CoworkView] reporting prompt template analytics: template_prompt_click ${selectedAction.id}/${promptId ?? 'unknown'}`);
-      reportPromptTemplateAction({
-        templateActionType: 'template_prompt_click',
-        templateId: selectedAction.id,
-        templateName: selectedAction.label,
-        templateIndex: quickActions.findIndex(item => item.id === selectedAction.id),
-        mappedSkillId: selectedAction.skillMapping,
-        mappedSkillName: targetSkill?.name,
-        promptId,
-        promptName: selectedPrompt?.label,
-        promptIndex: selectedAction.prompts.findIndex(item => item.id === promptId),
-        promptLength: prompt.length,
-        hasAutoEnabledSkill: activeSkillIds.includes(selectedAction.skillMapping),
-        params: {
-          modelId: currentAgentSelectedModel?.id,
-          modelName: currentAgentSelectedModel?.name,
-          agentId: currentAgentId,
-          isMainAgent: currentAgentId === 'main',
-          isPlanMode: homeDraftCollaborationMode === CoworkCollaborationMode.Plan,
-        },
-      });
-    }
-    // Fill the prompt into input
-    promptInputRef.current?.setValue(prompt, 'template');
-    promptInputRef.current?.focus();
-  };
 
   useEffect(() => {
     const handleNewSession = () => {
@@ -955,9 +915,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             className="relative z-10 min-h-0 flex-1 overflow-y-auto scrollbar-hidden"
           >
             <div className={`relative flex min-h-full w-full min-w-[320px] flex-col items-center pb-4 pt-4 ${COWORK_DETAIL_GUTTER_CLASS}`}>
-              {/* Flexible spacers (3:1.5) seat the headline and cards gently toward the
-                  bottom-docked composer so the gap above the composer never feels hollow. */}
-              <div aria-hidden="true" className="w-full min-h-[28px] flex-[3_0_0px]" />
+              {/* Flexible spacers seat the headline and single-row cards gently toward the
+                  composer when idle, and tighten smoothly when a cover gallery opens below. */}
+              <div
+                aria-hidden="true"
+                className={selectedActionId ? 'w-full min-h-[12px] flex-[0.4_0_0px]' : 'w-full min-h-[28px] flex-[3_0_0px]'}
+              />
 
               <div data-skin-home-copy="true" className={`${COWORK_DETAIL_CONTENT_CLASS} text-center`}>
                 <HomeSkinEmblem
@@ -965,9 +928,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                   className="mx-auto mb-4 h-12 w-12 animate-fade-in-up"
                 />
                 <h2
-                  className="text-[28px] font-medium leading-[1.3] tracking-[-0.015em] text-foreground sm:text-[30px] animate-fade-in-up"
+                  className={`font-medium leading-[1.3] tracking-[-0.015em] text-foreground transition-all duration-200 animate-fade-in-up ${
+                    selectedActionId ? 'text-[22px] sm:text-[24px]' : 'text-[28px] sm:text-[30px]'
+                  }`}
                   style={{
                     fontFamily: HOME_HEADLINE_FONT_FAMILY,
+                    fontFeatureSettings: '"palt" 1',
                     animationDelay: '40ms',
                     animationFillMode: 'both',
                   }}
@@ -977,42 +943,24 @@ const CoworkView: React.FC<CoworkViewProps> = ({
               </div>
 
               <div
-                className={`relative z-0 mt-10 flex flex-col items-center animate-fade-in-up ${COWORK_DETAIL_CONTENT_CLASS}`}
+                className={`relative z-0 flex flex-col items-center animate-fade-in-up ${selectedActionId ? 'mt-5' : 'mt-10'} ${COWORK_DETAIL_CONTENT_CLASS}`}
                 style={{ animationDelay: '100ms', animationFillMode: 'both' }}
               >
-                <HomeImageCreation
-                  actions={quickActions}
-                  selectedActionId={selectedActionId}
-                  onActionSelect={handleActionSelect}
-                  onDeselect={handleQuickActionDeselect}
+                <HomeShowcaseHub
+                  selectedCategoryId={selectedActionId}
+                  onCategorySelect={handleHomeCategorySelect}
                   onDraftReady={prompt => {
                     promptInputRef.current?.setValue(prompt, 'template');
                     promptInputRef.current?.focus();
                   }}
-                >
-                  <HomePptCreation
-                    active={selectedActionId === PptCreation.ActionId}
-                    onClose={handleQuickActionDeselect}
-                    onDraftReady={prompt => {
-                      promptInputRef.current?.setValue(prompt, 'template');
-                      promptInputRef.current?.focus();
-                    }}
-                  >
-                    {selectedAction && (
-                      <div className="mt-6 w-full pb-4">
-                        <PromptPanel
-                          action={selectedAction}
-                          onPromptSelect={handleQuickActionPromptSelect}
-                          onClose={handleQuickActionDeselect}
-                        />
-                      </div>
-                    )}
-                  </HomePptCreation>
-                </HomeImageCreation>
+                />
                 <CreditsResetCampaignFloat />
               </div>
 
-              <div aria-hidden="true" className="w-full min-h-[16px] flex-[1.5_0_0px]" />
+              <div
+                aria-hidden="true"
+                className={selectedActionId ? 'w-full min-h-[12px] flex-[0.5_0_0px]' : 'w-full min-h-[16px] flex-[1.5_0_0px]'}
+              />
             </div>
           </div>
 

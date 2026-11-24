@@ -2,7 +2,6 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { DEFAULT_SIDEBAR_TASK_FILTER } from '../agentSidebar/taskFilter';
 import WindowsAppTitleBar from './WindowsAppTitleBar';
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -60,25 +59,19 @@ describe('WindowsAppTitleBar', () => {
     expect(renderTitleBar(platform)).toBe('');
   });
 
-  test('renders icon-only task search between the sidebar and filter actions', () => {
+  test('renders icon-only task search beside the sidebar toggle without duplicating the task filter', () => {
     const html = renderTitleBar('win32', {
       sidebarToggleLabel: 'Toggle sidebar',
       onSearch: () => undefined,
       searchLabel: 'Search tasks',
-      showFilterIcon: true,
-      filterLabel: 'Filter tasks',
-      taskFilter: DEFAULT_SIDEBAR_TASK_FILTER,
-      onTaskFilterChange: () => undefined,
     });
 
     const sidebarActionIndex = html.indexOf('aria-label="Toggle sidebar"');
     const searchActionIndex = html.indexOf('aria-label="Search tasks"');
-    const filterActionIndex = html.indexOf('aria-label="Filter tasks"');
 
     expect(sidebarActionIndex).toBeGreaterThanOrEqual(0);
     expect(searchActionIndex).toBeGreaterThan(sidebarActionIndex);
-    expect(filterActionIndex).toBeGreaterThan(searchActionIndex);
-    expect(html).toContain('class="sidebar-filter-icon h-[18px] w-[18px]"');
+    expect(html).not.toContain('sidebar-filter-icon');
     expect(html).not.toContain('title="Search tasks');
     expect(html).not.toContain('>Search tasks<');
   });

@@ -35,7 +35,7 @@ export default function ImageExampleThumbnail({ example, alt, referenceAlt }: {
   const reference = example.showReferencePreview ? example.referenceImageUrl : undefined;
   const framed = !reference && shape === ThumbnailShape.Framed;
 
-  return <div className="relative aspect-[8/5] overflow-hidden rounded-xl bg-surface-raised">
+  return <div className="relative aspect-[8/5] overflow-hidden rounded-2xl bg-surface-raised">
     <div className="h-full w-full transition-transform duration-300 ease-out group-hover:scale-[1.03] motion-reduce:transition-none">
       {reference
         // Before and after share the tile; each half is close to a portrait
@@ -55,6 +55,6 @@ export default function ImageExampleThumbnail({ example, alt, referenceAlt }: {
         </>}
     </div>
     {/* Hairline so near-white artwork keeps its edge on a light page. */}
-    <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset ring-black/[0.06] dark:ring-white/10" />
+    <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.08]" />
   </div>;
 }
