@@ -49,6 +49,7 @@ import {
   DshProgressiveCapability,
   parseDshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
+import { imageEditMessageMetadata } from '../../../shared/imageEditing/messageSnapshot';
 import {
   modelPresetModelId,
   parseModelPresetId,
@@ -941,6 +942,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       autoApprove: options.autoApprove,
       imageAttachments: options.imageAttachments,
       mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
+      mediaReferences: options.mediaReferences,
       localMediaAttachments: options.localMediaAttachments,
       agentId: options.agentId,
       workspaceRoot: options.workspaceRoot,
@@ -966,6 +968,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
       mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
+      mediaReferences: options.mediaReferences,
       localMediaAttachments: options.localMediaAttachments,
     });
   }
@@ -2046,6 +2049,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       autoApprove?: boolean;
       imageAttachments?: CoworkStartOptions['imageAttachments'];
       mediaInstruction?: string;
+      mediaReferences?: CoworkStartOptions['mediaReferences'];
       localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
       agentId?: string;
       workspaceRoot?: string;
@@ -2109,15 +2113,18 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const imageAttachmentPreviews = !localMediaAttachments && params.imageAttachments?.length
         ? buildCoworkImageAttachmentPreviews(params.imageAttachments)
         : undefined;
+      const editMetadata = imageEditMessageMetadata(params.mediaReferences);
       const hasPersistableUserMessage = persistedContent.trim().length > 0
         || Boolean(localMediaAttachments?.length)
         || Boolean(imageAttachmentPreviews?.length)
+        || Boolean(editMetadata.imageEdits?.length)
         || Boolean(selectedTextSnippets?.length)
         || Boolean(browserAnnotations?.length);
 
       if (!params.skipInitialUserMessage && hasPersistableUserMessage) {
         const userMetadata: Record<string, unknown> = {
           llmTrace,
+          ...editMetadata,
           ...(localMediaAttachments ? { localMediaAttachments } : {}),
           ...(imageAttachmentPreviews ? { imageAttachmentPreviews } : {}),
           ...(selectedTextSnippets ? { selectedTextSnippets } : {}),
@@ -2164,8 +2171,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           : undefined)
         ?? modelSelection?.model;
 
-      // Persist resolved preset attribution onto the turn's user message so
-      // `llmUsageContext` recovery and `x-lobster-model-preset` stay aligned.
+      // Keep model attribution in sync across persisted usage and the live turn footer.
       if (
         turnUserMessage
         && (
@@ -2173,13 +2179,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           || (effectiveResolvedModelId && !turnUserMessage.metadata?.resolvedModelId)
         )
       ) {
-        const attributedMetadata: Record<string, unknown> = {
-          ...(turnUserMessage.metadata ?? {}),
+        const modelMetadata = {
           ...(effectiveModelPresetId ? { modelPresetId: effectiveModelPresetId } : {}),
           ...(effectiveResolvedModelId ? { resolvedModelId: effectiveResolvedModelId } : {}),
         };
+        const attributedMetadata: Record<string, unknown> = { ...turnUserMessage.metadata, ...modelMetadata };
         this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, attributedMetadata);
         turnUserMessage = { ...turnUserMessage, metadata: attributedMetadata };
+        this.emit('messageUpdate', sessionId, turnUserMessage.id, turnUserMessage.content, modelMetadata);
       }
 
       registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {

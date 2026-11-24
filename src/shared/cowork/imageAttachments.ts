@@ -6,6 +6,17 @@ export const COWORK_IMAGE_ATTACHMENT_MAX_BYTES = 30 * 1000 * 1000;
 export const COWORK_IMAGE_ATTACHMENT_MODEL_MAX_BYTES = 6 * 1024 * 1024;
 export const COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES = 512 * 1024;
 
+/** Identifies an image by its signature when the file name or stored MIME type is unavailable or stale. */
+export function sniffImageMimeType(bytes: Uint8Array): string | undefined {
+  const startsWith = (signature: number[], offset = 0) => signature.every((value, index) => bytes[offset + index] === value);
+  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return 'image/png';
+  if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWith([0x47, 0x49, 0x46, 0x38])) return 'image/gif';
+  if (startsWith([0x52, 0x49, 0x46, 0x46]) && startsWith([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp';
+  if (startsWith([0x42, 0x4d])) return 'image/bmp';
+  return undefined;
+}
+
 export const CoworkImageAttachmentRole = {
   /** Browser-annotation screenshot attached only as model transport. */
   BrowserAnnotation: 'browser-annotation',

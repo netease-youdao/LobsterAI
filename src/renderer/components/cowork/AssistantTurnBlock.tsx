@@ -96,8 +96,8 @@ import {
   isDuplicateGeneratedVideoAssistantMessage,
   isModelChangeMessage,
   isModelReconnectMessage,
+  resolveTurnModelMetadata,
   type ToolGroupItem,
-  withTurnModelPreset,
 } from './messageDisplayUtils';
 import ModelChangeDivider from './ModelChangeDivider';
 import ModelReconnectStatusLine from './ModelReconnectStatusLine';
@@ -969,9 +969,10 @@ const AssistantTurnBlock: React.FC<{
           enableMessageSpeech={enableMessageSpeech && showInlineMeta && planConfirmationMessageId !== item.message.id}
           onFork={showInlineMeta ? onForkMessage : undefined}
           turnMetadata={showInlineMeta
-            ? withTurnModelPreset(
+            ? resolveTurnModelMetadata(
               item.message.metadata as CoworkMessageMetadata,
               turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+              turnUsage,
             )
             : undefined}
           completedGoal={showInlineMeta && !hasAssistantAfter ? completedGoal : null}
@@ -1223,9 +1224,10 @@ const AssistantTurnBlock: React.FC<{
                     ? mapDisplayText(deferredReplyMetaMessage.content)
                     : deferredReplyMetaMessage.content,
                 )}
-                turnMetadata={withTurnModelPreset(
+                turnMetadata={resolveTurnModelMetadata(
                   deferredReplyMetaMessage.metadata as CoworkMessageMetadata,
                   turn.userMessage?.metadata as CoworkMessageMetadata | undefined,
+                  turnUsage,
                 )}
                 turnUsageSlot={deferredReplyMetaMessage.id === turnUsageReplyId ? turnUsageSlot : null}
                 onFork={onForkMessage}
