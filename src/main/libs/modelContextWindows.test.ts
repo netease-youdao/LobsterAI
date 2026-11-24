@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { CoworkSessionStatusValue } from '../../shared/cowork/constants';
+import { DSH_SESSION_ID_PREFIX } from '../../shared/dshEngine/hostConstants';
 import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { ModelContextWindowIpc, type ModelContextWindowMetadata } from '../../shared/providers/modelContextWindow';
 import { ModelThinkingLevel } from '../../shared/providers/modelThinking';
@@ -159,14 +160,22 @@ describe('explicit context window intent', () => {
     },
   );
 
-  test('a native runtime session without a saved preset does not gain preset context controls', async () => {
+  test('allows DSH native desktop sessions without a saved preset and rejects DSH IM sessions', async () => {
     const harness = createHarness();
-    harness.session.claudeSessionId = 'dsh:session-existing';
-    const request = { modelId: 'yd-fast', presetId: ModelPresetId.Balanced, sessionId: harness.session.id };
-    expect(await harness.invoke(ModelContextWindowIpc.Get, request)).toMatchObject({
+    harness.session.claudeSessionId = `${DSH_SESSION_ID_PREFIX}session-native`;
+    harness.session.imPlatform = null;
+    expect(await harness.invoke(ModelContextWindowIpc.Get)).toMatchObject({ success: true, data: { defaultWindow: 400_000 } });
+    expect(await harness.invoke(ModelContextWindowIpc.Set, undefined, 1_000_000)).toMatchObject({
+      success: true, data: { override: 1_000_000 },
+    });
+
+    harness.session.imPlatform = 'feishu';
+    const presetRequest = { modelId: 'yd-fast', presetId: ModelPresetId.Balanced, sessionId: harness.session.id };
+    expect(await harness.invoke(ModelContextWindowIpc.Get, presetRequest)).toMatchObject({
       success: false, error: 'modelContextWindowUnavailable',
     });
-    expect(harness.patchSession).not.toHaveBeenCalled();
+    expect(await harness.invoke(ModelContextWindowIpc.Get)).toMatchObject({ success: false });
+    expect(await harness.invoke(ModelContextWindowIpc.Set, undefined, 400_000)).toMatchObject({ success: false });
   });
 
   test('running sessions and absent login cannot persist a choice', async () => {
