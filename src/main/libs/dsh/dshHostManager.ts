@@ -18,6 +18,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
+import { createInterface } from 'readline';
 
 import type { SubagentCollaborationMode } from '../../../shared/agent/constants';
 import {
@@ -1037,7 +1038,6 @@ export class DshHostManager extends EventEmitter {
     const spawnStartedAt = Date.now();
 
     return new Promise<string>((resolve, reject) => {
-      let stdoutBuf = '';
       let stderrBuf = '';
       let settled = false;
 
@@ -1047,12 +1047,11 @@ export class DshHostManager extends EventEmitter {
         reject(new Error(`DSH host boot timed out after ${bootTimeoutMs}ms.\nSTDERR:\n${stderrBuf.slice(-2000)}`));
       }, bootTimeoutMs);
 
-      child.stdout?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf8');
-        this.emit('log', { stream: 'stdout', text });
+      createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {
+        // Keep the launch credential for the handshake only.
+        this.emit('log', { stream: 'stdout', text: line.replace(/([?&]token=)[^&#\s]+/gi, '$1[redacted]') });
         if (!settled) {
-          stdoutBuf += text;
-          const match = LAUNCH_URL_PATTERN.exec(stdoutBuf);
+          const match = LAUNCH_URL_PATTERN.exec(line);
           if (match) {
             settled = true;
             clearTimeout(timer);
@@ -1062,11 +1061,10 @@ export class DshHostManager extends EventEmitter {
         }
       });
 
-      child.stderr?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf8');
+      createInterface({ input: child.stderr, crlfDelay: Infinity }).on('line', (text) => {
         this.emit('log', { stream: 'stderr', text });
         if (!settled) {
-          stderrBuf += text;
+          stderrBuf = (stderrBuf + text + '\n').slice(-2000);
         }
       });
 

@@ -115,6 +115,29 @@ afterEach(() => {
   }
 });
 
+test('preserves Cordis severity and the default levels of ordinary host output', async () => {
+  const { bootstrap, db } = createTestBootstrap();
+  const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+  try {
+    for (const [level, sink] of [['info', info], ['warn', warn], ['error', error]] as const) {
+      const text = `[dsh-logger][${level}][probe] message`;
+      bootstrap.hostManager.emit('log', { stream: 'stderr', text });
+      expect(sink).toHaveBeenCalledWith(text);
+    }
+    bootstrap.hostManager.emit('log', { stream: 'stderr', text: 'plain stderr' });
+    bootstrap.hostManager.emit('log', { stream: 'stdout', text: 'plain stdout' });
+    expect(warn).toHaveBeenCalledWith('[DSH:stderr] plain stderr');
+    expect(debug).toHaveBeenCalledWith('[DSH:stdout] plain stdout');
+  } finally {
+    vi.restoreAllMocks();
+    await bootstrap.stop();
+    db.close();
+  }
+});
+
 describe('DshBootstrap startup deduplication and initial config sync gate', () => {
   test('deduplicates concurrent start() calls and keeps engine in Starting until syncInitialConfig completes', async () => {
     const phases: OpenClawEnginePhase[] = [];

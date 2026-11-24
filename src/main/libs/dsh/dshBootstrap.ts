@@ -686,7 +686,9 @@ export class DshBootstrap {
       const trimmed = entry.text.trim();
       if (!trimmed) return;
       if (entry.stream === 'stderr') {
-        console.warn(`[DSH:stderr] ${trimmed}`);
+        const level = /^\[dsh-logger\]\[(info|warn|error)\]\[/.exec(trimmed)?.[1] as 'info' | 'warn' | 'error' | undefined;
+        if (level) console[level](trimmed);
+        else console.warn(`[DSH:stderr] ${trimmed}`);
       } else {
         console.debug(`[DSH:stdout] ${trimmed}`);
       }

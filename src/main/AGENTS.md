@@ -145,9 +145,9 @@ own tables.
 - Main logs: `main-YYYY-MM-DD.log` in `%APPDATA%/LobsterAI/logs/` (Windows),
   `~/Library/Logs/LobsterAI/` (macOS), or `~/.config/LobsterAI/logs/` (Linux).
   Kept 7 days; 80 MB per file, overflow rotates to `.old.log`.
-- DSH runtime log: `userData/dsh-profile/dsh.log`. The app includes it
-  in log exports when present. Host lifecycle and migration messages
-  also appear in the main log.
+- Search the main log for `[dsh-logger]` to find Cordis info, warn, and error
+  records from the DSH host. Log export includes the same main log and picks up
+  `userData/dsh-profile/dsh.log` if a separate file already exists.
 
 Logs can be large. Use `rg`, `tail`, `Select-String`, `Get-Content -Tail`, or
 other targeted filters instead of reading whole files.

@@ -199,6 +199,9 @@
               searchMaxQueries: 4
               searchTimeoutMs: 60000
 
+    - id: lobster-log-forwarder
+      name: './plugins/log-forwarder.mjs'
+
     - id: lobster-model-bridge
       name: './plugins/model-bridge.mjs'
 
