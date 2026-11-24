@@ -316,6 +316,7 @@ import {
   registerAsrIpcHandlers,
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
+import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
@@ -372,7 +373,7 @@ import {
 } from './libs/authSessionManager';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
 import { BrowserAnnotationAssetStore } from './libs/browserAnnotationAssetStore';
-import { migrateBrowserDisplayModeToInApp } from './libs/browserDisplayModeMigration';
+import { migrateBrowserDisplayMode } from './libs/browserDisplayModeMigration';
 import { getResourceAnalyticsSalt } from './libs/capabilityUsage';
 import {
   clearServerModelMetadata,
@@ -473,7 +474,9 @@ import {
   syncEnterpriseConfig,
 } from './libs/enterpriseConfigSync';
 import { ExpertStore } from './libs/expertStore';
+import { ExternalBrowserHost } from './libs/externalBrowserHost';
 import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
+import { fitImageBytesForModel } from './libs/fitImageForModel';
 import {
   createOfficePreviewSession,
   createPreviewSession,
@@ -2216,6 +2219,7 @@ let createRealtimeAsrSessionForIm:
 let dshBootstrap: DshBootstrap | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let agentBrowserHost: AgentBrowserHost | null = null;
+let externalBrowserHost: ExternalBrowserHost | null = null;
 let webSearchHost: WebSearchHost | null = null;
 let browserCredentialService: BrowserCredentialService | null = null;
 let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
@@ -2316,7 +2320,9 @@ const getDshBootstrap = (): DshBootstrap => {
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
       coworkStore: {
-        getSession: sessionId => storeInstance.getSession(sessionId),
+        messageEdits: storeInstance.messageEdits,
+        messageVersions: storeInstance.messageVersions,
+        getSession: (sessionId, messageLimit) => storeInstance.getSession(sessionId, messageLimit),
         getLatestUserMessage: sessionId => storeInstance.getLatestUserMessage(sessionId),
         addMessage: (sessionId, message) => storeInstance.addMessage(sessionId, message),
         updateMessageContent: (sessionId, messageId, content, metadata) => {
@@ -2522,6 +2528,20 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
     });
   }
   return agentBrowserHost;
+};
+
+const getBrowserWebAccessConfig = () => normalizeBrowserWebAccessConfig(
+  getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
+);
+
+const getExternalBrowserHost = (): ExternalBrowserHost => {
+  externalBrowserHost ??= new ExternalBrowserHost({
+    profilePath: path.join(app.getPath('userData'), 'external-browser'),
+    getConfig: getBrowserWebAccessConfig,
+    useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config'))
+      && getBrowserWebAccessConfig().networkMode === BrowserNetworkMode.ProxyCompatible,
+  });
+  return externalBrowserHost;
 };
 
 const isWebSearchSkillEnabled = (): boolean => {
@@ -3464,7 +3484,11 @@ const getMcpRuntime = (): McpRuntime => {
 const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
-  runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
+  runtime.setBrowserToolHandler(request => (
+    getBrowserWebAccessConfig().displayMode === BrowserDisplayMode.External
+      ? getExternalBrowserHost()
+      : getAgentBrowserHost()
+  ).handleToolRequest(request));
   // Clean up any stale legacy web-search bridge file left behind by older installs.
   try {
     fs.rmSync(path.join(app.getPath('userData'), 'web-search-bridge.json'), { force: true });
@@ -4702,6 +4726,11 @@ if (!gotTheLock) {
       const browserHostConfigChanged = hasBrowserHostConfigChanged(previousAppConfig, nextAppConfig);
       if (browserHostConfigChanged || previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy) {
         agentBrowserHost?.refreshConfig();
+        if (externalBrowserHost && getBrowserWebAccessConfig().displayMode !== BrowserDisplayMode.External) {
+          await externalBrowserHost.dispose().catch(error => {
+            console.warn('[ExternalBrowserHost] Could not close after changing browser mode:', error);
+          });
+        }
       }
       refreshEndpointsTestMode(getStore());
       const proxyChanged = previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy;
@@ -9577,6 +9606,11 @@ if (!gotTheLock) {
     const profile = options?.profile;
 
     try {
+      if (getBrowserWebAccessConfig().displayMode === BrowserDisplayMode.External) {
+        await getExternalBrowserHost().open();
+        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
+        return { success: true, steps };
+      }
       const engineStatus = getDshBootstrap().getEngineStatus();
       if (engineStatus.phase !== 'running') {
         addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Error, 'browserDiagnosticGatewayNotRunning', engineStatus.message);
@@ -10012,6 +10046,7 @@ if (!gotTheLock) {
       _event: Electron.IpcMainInvokeEvent,
       options: {
         editRequest?: CoworkMessageEditRequest;
+        localMediaAttachments?: CoworkMessage['metadata']['localMediaAttachments'];
         analytics?: UsageContext;
         sessionId: string;
         prompt: string;
@@ -10030,8 +10065,6 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        // In-place message editing and recovery are retired in DSH v2 (replaced by Fork),
-        // so leftover `cowork_message_edits` rows must never block follow-up messages.
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -10071,6 +10104,9 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
+        if (runtime.hasPendingMessageEdit(options.sessionId)) {
+          return { success: false, error: t('coworkEditRecoveryNeeded') };
+        }
         // A version switch interrupted by a restart must land before the next message does.
         await runtime.reconcileMessageVersionSwitch(options.sessionId);
         const coworkStoreInstance = getCoworkStore();
@@ -10176,6 +10212,7 @@ if (!gotTheLock) {
             kitReferences: options.kitReferences,
             resolvedKitCapabilities: options.resolvedKitCapabilities,
             imageAttachments,
+            localMediaAttachments: options.localMediaAttachments,
             mediaSelection: normalizedMediaSelection,
             workflowKind,
             mediaReferences: options.mediaReferences,
@@ -10239,32 +10276,28 @@ if (!gotTheLock) {
   ipcMain.handle(CoworkIpcChannel.SessionContinue, (event, options) =>
     continueCoworkSession(event, { ...options, editRequest: undefined }));
 
-  // Option B simplification: in-place historical message editing and `< 1 / 2 >`
-  // version switching are retired in favor of Fork-from-any-message (`ForkSession`).
-  ipcMain.handle(CoworkIpcChannel.CheckMessageEdit, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.EditMessage, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.SwitchMessageVersion, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.GetMessageEdit, () => ({
-    success: true,
-    pending: undefined,
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.RecoverMessageEdit, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
+  registerCoworkMessageEditHandlers(ipcMain, {
+    getStore: getCoworkStore,
+    getRuntime: getCoworkEngineRouter,
+    isRemoteManaged: sessionId => Boolean(getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId)),
+    hasPendingMedia: sessionId => [...pendingMediaTasks.values()].some(task => task.sessionId === sessionId),
+    resolveImageEdit: (sessionId, requestId) => {
+      try {
+        return imageEditing.resolve(sessionId, requestId);
+      } catch {
+        return undefined;
+      }
+    },
+    fitImage: fitImageBytesForModel,
+    resend: (event, request, prepared) => continueCoworkSession(event, {
+      ...prepared,
+      sessionId: request.sessionId,
+      prompt: request.prompt,
+      activeSkillIds: prepared.messageSkillIds,
+      runtimeSkillIds: prepared.skillIds,
+      editRequest: request,
+    }),
+  });
 
   ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
     _event,
@@ -14973,6 +15006,13 @@ if (!gotTheLock) {
         console.error('[AgentBrowserHost] Failed to flush persistent browser storage on quit:', error);
       });
     }
+    if (externalBrowserHost) {
+      currentAppCleanupStep = 'external-browser';
+      await externalBrowserHost.dispose().catch(error => {
+        console.warn('[ExternalBrowserHost] Could not close on quit:', error);
+      });
+      externalBrowserHost = null;
+    }
 
     // Stop Cowork sessions without blocking shutdown.
     if (coworkEngineRouter) {
@@ -15563,11 +15603,11 @@ if (!gotTheLock) {
     runAgentModelMigration();
     profiler.measure('agentModelMigration');
 
-    // One-time migration: existing installs switch to the in-app browser.
+    // Preserve existing installs' browser mode and connection configuration.
     profiler.mark('browserDisplayModeMigration');
     try {
-      if (migrateBrowserDisplayModeToInApp(getStore())) {
-        console.log('[Browser] switched the browser display mode to in-app for an existing install.');
+      if (migrateBrowserDisplayMode(getStore())) {
+        console.log('[Browser] updated the persisted browser display settings.');
       }
     } catch (err) {
       console.warn('[Browser] browser display mode migration failed (non-fatal):', err);

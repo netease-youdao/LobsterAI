@@ -99,6 +99,7 @@
     "cheerio": "^1.2.0",
     "koffi": "^3.3.2",
     "npm": "^11.11.0",
+    "playwright-core": "1.65.1",
     "pptx-preview": "^1.0.7",
     "protobufjs": "^7.2.6",
     "react": "^18.2.0",

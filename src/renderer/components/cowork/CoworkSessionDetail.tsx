@@ -327,6 +327,8 @@ const AutoScrollDetachSource = {
   ScrollToBottomControlWheel: 'scroll_to_bottom_control_wheel',
   MessageVersionSwitch: 'message_version_switch',
 } as const;
+const MESSAGE_VERSION_DIM_DELAY_MS = 180;
+const MESSAGE_VERSION_SETTLE_MS = 250;
 const MessageVersionSwitchPhase = {
   /** Requested; a quick switch finishes here and simply replaces the content. */
   Waiting: 'waiting',
@@ -5355,9 +5357,39 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // switcher is held at the same spot on screen so it can be clicked again.
   // A quick switch just replaces the content; only a slow one dims the part
   // being replaced, so nothing flickers for a response that is already there.
-  const [messageVersionSwitch, _setMessageVersionSwitch] = useState<{ turnIndex: number; phase: MessageVersionSwitchPhase } | null>(null);
+  const [messageVersionSwitch, setMessageVersionSwitch] = useState<{ turnIndex: number; phase: MessageVersionSwitchPhase } | null>(null);
   const messageVersionAnchorRef = useRef<{ fromMessageId: string; absoluteIndex: number; bottom: number } | null>(null);
   const messageVersionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const switchMessageVersion = messageEdit.switchVersion;
+
+  const handleSwitchMessageVersion = useCallback((message: CoworkMessage, targetIndex: number) => {
+    const container = scrollContainerRef.current;
+    const windowIndex = currentSession?.messages.findIndex(item => item.id === message.id) ?? -1;
+    const element = container?.querySelector<HTMLElement>(`[data-rail-message-id="${CSS.escape(message.id)}"]`);
+    if (!currentSession || !container || !element || windowIndex < 0) return;
+    detachAutoScrollForUserIntent(AutoScrollDetachSource.MessageVersionSwitch);
+    messageVersionAnchorRef.current = {
+      fromMessageId: message.id,
+      absoluteIndex: currentSession.messagesOffset + windowIndex,
+      bottom: element.getBoundingClientRect().bottom - container.getBoundingClientRect().top,
+    };
+    if (messageVersionTimerRef.current) clearTimeout(messageVersionTimerRef.current);
+    setMessageVersionSwitch({
+      turnIndex: turns.findIndex(turn => turn.userMessage?.id === message.id),
+      phase: MessageVersionSwitchPhase.Waiting,
+    });
+    messageVersionTimerRef.current = setTimeout(() => {
+      setMessageVersionSwitch(current => current && { ...current, phase: MessageVersionSwitchPhase.Dimmed });
+    }, MESSAGE_VERSION_DIM_DELAY_MS);
+    void switchMessageVersion(message, targetIndex).then(switched => {
+      messageVersionAnchorRef.current = null;
+      if (messageVersionTimerRef.current) clearTimeout(messageVersionTimerRef.current);
+      setMessageVersionSwitch(current => switched && current?.phase === MessageVersionSwitchPhase.Dimmed
+        ? { ...current, phase: MessageVersionSwitchPhase.Settling }
+        : null);
+      messageVersionTimerRef.current = setTimeout(() => setMessageVersionSwitch(null), MESSAGE_VERSION_SETTLE_MS);
+    });
+  }, [currentSession, detachAutoScrollForUserIntent, switchMessageVersion, turns]);
 
   // Runs before paint, so the replaced conversation never shows at the wrong scroll position.
   useLayoutEffect(() => {
@@ -6392,10 +6424,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 skills={skills}
                 marketplaceKits={marketplaceKits}
                 sessionId={sessionId}
-                onReEdit={undefined}
-                reEditDisabled
-                onSwitchVersion={undefined}
-                versionSwitchDisabled
+                onReEdit={remoteManaged ? undefined : messageEdit.begin}
+                reEditDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending)}
+                onSwitchVersion={remoteManaged ? undefined : handleSwitchMessageVersion}
+                versionSwitchDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending || messageEdit.editing)}
                 onLocateSelectedText={handleLocateSelectedText}
                 onOpenAnnotation={handleOpenMessageAnnotation}
               />}
