@@ -290,10 +290,12 @@ interface CoworkSessionSummary {
   status: 'idle' | 'running' | 'completed' | 'error';
   pinned: boolean;
   pinOrder?: number | null;
+  cwd?: string;
   agentId?: string;
   parentSessionId?: string | null;
   forkedAt?: number | null;
   forkMode?: 'none' | 'conversation' | 'worktree';
+  forkGitBranch?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -1111,6 +1113,9 @@ interface IElectronAPI {
       sessionId: string;
       pinned: boolean;
     }) => Promise<{ success: boolean; pinOrder?: number | null; error?: string }>;
+    reorderPinnedSessions: (options: {
+      sessionIds: string[];
+    }) => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
     renameSession: (options: {
       sessionId: string;
       title: string;
@@ -1138,7 +1143,13 @@ interface IElectronAPI {
     remoteManaged: (
       sessionId: string,
     ) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
-    listSessions: (options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) => Promise<{
+    listSessions: (options?: {
+      limit?: number;
+      offset?: number;
+      agentId?: string;
+      searchQuery?: string;
+      pinnedFirst?: boolean;
+    }) => Promise<{
       success: boolean;
       sessions?: CoworkSessionSummary[];
       hasMore?: boolean;

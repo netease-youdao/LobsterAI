@@ -51,6 +51,7 @@ export const useSidebarTaskFilterResults = (filter: SidebarTaskFilter): SidebarT
   const [hasError, setHasError] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const requestIdRef = useRef(0);
+  const lastQueriedFilterRef = useRef<SidebarTaskFilter | null>(null);
 
   useEffect(() => {
     if (!isActive) return undefined;
@@ -60,6 +61,7 @@ export const useSidebarTaskFilterResults = (filter: SidebarTaskFilter): SidebarT
   useEffect(() => {
     const requestId = ++requestIdRef.current;
     if (!isActive) {
+      lastQueriedFilterRef.current = null;
       setQueried([]);
       setIsLoading(false);
       setHasError(false);
@@ -67,13 +69,19 @@ export const useSidebarTaskFilterResults = (filter: SidebarTaskFilter): SidebarT
     }
     const query = buildSidebarTaskFilterQuery(filter, runtime);
     if (!query) {
+      lastQueriedFilterRef.current = null;
       setQueried([]);
       setIsLoading(false);
       setHasError(false);
       return undefined;
     }
+    const isFilterChange = (
+      lastQueriedFilterRef.current?.status !== filter.status
+      || lastQueriedFilterRef.current?.time !== filter.time
+    );
     setIsLoading(true);
-    const timer = window.setTimeout(() => {
+    const runQuery = () => {
+      lastQueriedFilterRef.current = filter;
       void coworkService.listFilteredSessions(query).then((result) => {
         if (requestId !== requestIdRef.current) return;
         if (!result.success) {
@@ -83,7 +91,12 @@ export const useSidebarTaskFilterResults = (filter: SidebarTaskFilter): SidebarT
         setHasError(!result.success);
         setIsLoading(false);
       });
-    }, REFRESH_DEBOUNCE_MS);
+    };
+    if (isFilterChange) {
+      runQuery();
+      return undefined;
+    }
+    const timer = window.setTimeout(runQuery, REFRESH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [filter, isActive, liveSignature, refreshKey, runtime]);
 

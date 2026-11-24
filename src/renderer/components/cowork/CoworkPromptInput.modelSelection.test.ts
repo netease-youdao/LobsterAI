@@ -20,6 +20,7 @@ import type { Agent } from '../../types/agent';
 import { type CoworkSession, CoworkSessionStatusValue } from '../../types/cowork';
 import ModelSelector, { ModelSelectorGroup } from '../ModelSelector';
 import CoworkPromptInput from './CoworkPromptInput';
+import { MODEL_SWITCH_CONFIRM_SKIP_STORAGE_KEY } from './modelSwitchConfirm';
 
 vi.hoisted(() => {
   vi.stubGlobal('navigator', { platform: 'MacIntel' });
@@ -234,5 +235,39 @@ describe('old chat model recovery', () => {
     setup({ session: dshImSession }).render();
     expect(selectorProps.allowPresets).toBe(false);
     expect(selectorProps.allowContextWindowSelection).toBe(false);
+  });
+
+  test('defers switching a valid active session model until confirmed unless dont-ask-again is stored', async () => {
+    const validSession: CoworkSession = {
+      ...oldSession,
+      modelPresetId: null,
+      modelOverride: `${ProviderName.LobsteraiServer}/${currentFlash.id}`,
+    };
+    const { render } = setup({ session: validSession });
+    render();
+
+    await selectorProps.onChange!(custom, { group: ModelSelectorGroup.User });
+    expect(coworkService.patchSession).not.toHaveBeenCalled();
+
+    const storage = new Map<string, string>([[MODEL_SWITCH_CONFIRM_SKIP_STORAGE_KEY, '1']]);
+    vi.stubGlobal('window', {
+      dispatchEvent: vi.fn(),
+      electron: {},
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => { storage.set(key, value); },
+        removeItem: (key: string) => { storage.delete(key); },
+      },
+    });
+    try {
+      render();
+      await selectorProps.onChange!(custom, { group: ModelSelectorGroup.User });
+      expect(coworkService.patchSession).toHaveBeenCalledExactlyOnceWith(validSession.id, {
+        model: 'openai/gpt-test',
+        thinkingLevel: null,
+      });
+    } finally {
+      vi.stubGlobal('window', { dispatchEvent: vi.fn(), electron: {} });
+    }
   });
 });

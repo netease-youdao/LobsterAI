@@ -1451,16 +1451,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
-  const [modelSwitchNotice, setModelSwitchNotice] = useState<{ sessionId: string; messageId: string } | null>(null);
-  useEffect(() => {
-    if (!modelSwitchNotice) return;
-    if (modelSwitchNotice.sessionId !== currentSession?.id) {
-      setModelSwitchNotice(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setModelSwitchNotice(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [modelSwitchNotice, currentSession?.id]);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
@@ -6478,12 +6468,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   hasRunningSubagents: turnHasRunningSubagents,
                 })}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
-                modelSwitchNoticeMessageId={
-                  !isExportingImage && modelSwitchNotice?.sessionId === currentSession.id
-                    ? modelSwitchNotice.messageId
-                    : null
-                }
-                onDismissModelSwitchNotice={() => setModelSwitchNotice(null)}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
                     ? currentSession.goal
@@ -7367,7 +7351,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onManageSkills={remoteManaged ? undefined : onManageSkills}
             onManageKits={remoteManaged ? undefined : onManageKits}
             showModelSelector={true}
-            onModelSwitch={(noticeSessionId, messageId) => setModelSwitchNotice({ sessionId: noticeSessionId, messageId })}
             showReadOnlyContext={!isArtifactPanelExpanded}
             showNewUserWelcomeLoginOverlay={isNewUserWelcomeSession}
             readOnlyContextTrailingText={isArtifactPanelExpanded ? undefined : i18nService.t('aiGeneratedDisclaimer')}

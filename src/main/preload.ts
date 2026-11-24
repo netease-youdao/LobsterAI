@@ -759,6 +759,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.DeleteSessions, sessionIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>
       ipcRenderer.invoke('cowork:session:pin', options),
+    reorderPinnedSessions: (options: { sessionIds: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.ReorderPinnedSessions, options),
     renameSession: (options: { sessionId: string; title: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.RenameSession, options),
     forkSession: (options: {
@@ -777,8 +779,13 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.OpenSessionFromNotificationReady),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: (options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) =>
-      ipcRenderer.invoke('cowork:session:list', options),
+    listSessions: (options?: {
+      limit?: number;
+      offset?: number;
+      agentId?: string;
+      searchQuery?: string;
+      pinnedFirst?: boolean;
+    }) => ipcRenderer.invoke(CoworkIpcChannel.ListSessions, options),
     getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('cowork:session:getMessages', options),
     getSessionSearchMessages: (options: {

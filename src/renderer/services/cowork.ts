@@ -1017,7 +1017,12 @@ class CoworkService {
     offset: number,
   ): Promise<CoworkSessionListResult> {
     try {
-      const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
+      const result = await window.electron?.cowork?.listSessions({
+        limit,
+        offset,
+        agentId,
+        pinnedFirst: false,
+      });
       const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
       if (!resolved.success) {
         this.logDiagnostic(
@@ -1085,6 +1090,23 @@ class CoworkService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+      };
+    }
+  }
+
+  async listPinnedSessions(): Promise<CoworkSessionListResult> {
+    return this.listFilteredSessions({ pinnedOnly: true });
+  }
+
+  async reorderPinnedSessions(sessionIds: string[]): Promise<CoworkSessionListResult> {
+    try {
+      const result = await window.electron?.cowork?.reorderPinnedSessions({ sessionIds });
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[Cowork] failed to reorder pinned sessions:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to reorder pinned sessions',
       };
     }
   }

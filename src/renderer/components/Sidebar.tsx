@@ -222,7 +222,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
-  const [agentScrollEdges, setAgentScrollEdges] = useState({ top: false, bottom: false });
+  const [hasAgentBottomScrollEdge, setHasAgentBottomScrollEdge] = useState(false);
   const [isSidebarBannerVisible, setIsSidebarBannerVisible] = useState(false);
   const [showExpertsNewBadge, setShowExpertsNewBadge] = useState(false);
   const [showLoginPromoTip, setShowLoginPromoTip] = useState(true);
@@ -415,24 +415,13 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const updateAgentScrollEdges = useCallback((element: HTMLDivElement | null) => {
     if (!element) {
-      setAgentScrollEdges((previousEdges) => (
-        previousEdges.top || previousEdges.bottom ? { top: false, bottom: false } : previousEdges
-      ));
+      setHasAgentBottomScrollEdge(false);
       return;
     }
 
     const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-    const nextEdges = {
-      top: element.scrollTop > 1,
-      bottom: maxScrollTop - element.scrollTop > 1,
-    };
-
-    setAgentScrollEdges((previousEdges) => {
-      if (previousEdges.top === nextEdges.top && previousEdges.bottom === nextEdges.bottom) {
-        return previousEdges;
-      }
-      return nextEdges;
-    });
+    const hasBottomEdge = maxScrollTop - element.scrollTop > 1;
+    setHasAgentBottomScrollEdge((previous) => (previous === hasBottomEdge ? previous : hasBottomEdge));
   }, []);
 
   const handleAgentScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
@@ -829,13 +818,8 @@ const Sidebar: React.FC<SidebarProps> = ({
           />
         )}
         <div
-          className={`pointer-events-none absolute inset-x-0 top-9 z-10 h-5 bg-gradient-to-b from-[var(--lobster-sidebar-bg)] to-transparent transition-opacity duration-150 ${
-            agentScrollEdges.top ? 'opacity-100' : 'opacity-0'
-          }`}
-        />
-        <div
           className={`pointer-events-none absolute inset-x-0 bottom-0 z-[25] h-10 bg-gradient-to-t from-[var(--lobster-sidebar-bg)] via-[var(--lobster-sidebar-bg)]/80 to-transparent transition-opacity duration-150 ${
-            agentScrollEdges.bottom ? 'opacity-100' : 'opacity-0'
+            hasAgentBottomScrollEdge ? 'opacity-100' : 'opacity-0'
           }`}
         />
       </div>

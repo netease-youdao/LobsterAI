@@ -5,7 +5,7 @@ import { expect, test, vi } from 'vitest';
 import { i18nService } from '../../services/i18n';
 import AgentTaskRow from './AgentTaskRow';
 import { AgentAvatar } from './AgentTreeNode';
-import { AgentSidebarIndicator } from './constants';
+import { AgentSidebarIndicator, AgentTaskRowVariant } from './constants';
 import type { AgentSidebarTaskNode } from './types';
 
 const makeTask = (
@@ -121,4 +121,33 @@ test('filtered activity rows render the agent avatar inside the context icon slo
   );
   expect(html).toContain('Lobster数据查询');
   expect(html).toContain(expectedAvatarHtml);
+});
+
+test('pin action renders on the right action slot instead of the left indent gutter across variants', () => {
+  const unpinnedHtml = renderTask(false, { pinned: false });
+  expect(unpinnedHtml).not.toContain('left-[9px]');
+  expect(unpinnedHtml).toContain('aria-pressed="false"');
+  expect(unpinnedHtml).toContain('fill="none"');
+
+  const pinnedHtml = renderToStaticMarkup(
+    React.createElement(AgentTaskRow, {
+      task: makeTask(false, { pinned: true, title: 'Pinned top task' }),
+      variant: AgentTaskRowVariant.Pinned,
+      isBatchMode: false,
+      isSelected: false,
+      onSelect: vi.fn(),
+      onDelete: vi.fn(async () => {}),
+      onShare: vi.fn(async () => {}),
+      onTogglePin: vi.fn(async () => {}),
+      onRename: vi.fn(async () => {}),
+      onToggleSelection: vi.fn(),
+      onEnterBatchMode: vi.fn(),
+    }),
+  );
+  expect(pinnedHtml).not.toContain('left-[9px]');
+  expect(pinnedHtml).toContain('pl-2.5');
+  expect(pinnedHtml).toContain('aria-level="1"');
+  expect(pinnedHtml).toContain('aria-pressed="true"');
+  expect(pinnedHtml).toContain('fill="currentColor"');
+  expect(pinnedHtml).toContain('Pinned top task');
 });

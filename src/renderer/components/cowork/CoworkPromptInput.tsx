@@ -19,7 +19,6 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { CoworkSystemMessageKind } from '../../../common/coworkSystemMessages';
 import { buildSessionTitleInput } from '../../../common/sessionTitle';
 import {
   CoworkBtwCommandValidationError,
@@ -113,7 +112,6 @@ import { setActiveKitIds, toggleActiveKit } from '../../store/slices/kitSlice';
 import type { Model } from '../../store/slices/modelSlice';
 import { isSameModelIdentity } from '../../store/slices/modelSlice';
 import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
-import type { CoworkSession } from '../../types/cowork';
 import { CoworkCollaborationMode, CoworkImageAttachment, CoworkSessionStatusValue } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
@@ -183,6 +181,11 @@ import {
 } from './mediaMentionUtils';
 import MediaModelPicker from './MediaModelPicker';
 import { resolveCustomMediaModelBadge } from './mediaOverrideBadge';
+import {
+  resolveModelSwitchConfirmation,
+  setModelSwitchConfirmSkipped,
+} from './modelSwitchConfirm';
+import ModelSwitchConfirmDialog from './ModelSwitchConfirmDialog';
 import { PastedTextAttachmentCard } from './PastedTextCards';
 import PermissionModeSelector from './PermissionModeSelector';
 import {
@@ -468,7 +471,6 @@ interface CoworkPromptInputProps {
   onWorkingDirectoryChange?: (dir: string) => void;
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
-  onModelSwitch?: (sessionId: string, messageId: string) => void;
   showAgentSelector?: boolean;
   showReadOnlyContext?: boolean;
   readOnlyContextTrailingText?: string;
@@ -514,7 +516,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       onWorkingDirectoryChange,
       showFolderSelector = false,
       showModelSelector = false,
-      onModelSwitch,
       showAgentSelector = false,
       showReadOnlyContext = false,
       readOnlyContextTrailingText,
@@ -582,6 +583,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
     const [isPatchingModel, setIsPatchingModel] = useState(false);
+    const [pendingModelSwitch, setPendingModelSwitch] = useState<{
+      sessionId: string;
+      selectedModel: Model;
+      meta: ModelSelectorChangeMeta;
+      previousModelName: string;
+      nextModelName: string;
+    } | null>(null);
     const [showAgentMenu, setShowAgentMenu] = useState(false);
     const [isReadOnlyContextCompact, setIsReadOnlyContextCompact] = useState(false);
     const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
@@ -3121,6 +3129,116 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     return () => window.removeEventListener(ConfigServiceEvent.Updated, syncFromConfig);
   }, []);
 
+  useEffect(() => {
+    setPendingModelSwitch(null);
+  }, [sessionId]);
+
+  const applySessionModelSelection = async (
+    targetSessionId: string,
+    selectedModel: Model,
+    meta: ModelSelectorChangeMeta,
+  ) => {
+    const nextThinkingLevel = selectedModel.presetId
+      ? meta.thinkingLevel ?? ''
+      : resolveModelThinkingLevel(selectedModel, meta.thinkingLevel) ?? '';
+    if (selectedModel.presetId) {
+      setIsPatchingModel(true);
+      try {
+        await coworkService.selectSessionModelPreset(targetSessionId, selectedModel.presetId, nextThinkingLevel || undefined);
+        void coworkService.refreshContextUsage(targetSessionId, { notifyCompaction: false });
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: error instanceof Error ? error.message : i18nService.t('coworkModelSwitchFailed') }));
+      } finally {
+        setIsPatchingModel(false);
+      }
+      return;
+    }
+
+    const modelRef = toOpenClawModelRef(selectedModel);
+    const keepsSessionModel = meta.thinkingOnly === true
+      || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
+    const requestId = modelPatchRequestIdRef.current + 1;
+    modelPatchRequestIdRef.current = requestId;
+    const previousModelOverride = currentSession?.id === targetSessionId
+      ? currentSession.modelOverride
+      : '';
+    const previousThinkingLevel = currentSession?.id === targetSessionId
+      ? currentSession.thinkingLevel ?? ''
+      : '';
+
+    setIsPatchingModel(true);
+    logPromptModelSelection(
+      'debug',
+      `switching session ${targetSessionId} to ${modelRef}; thinking level is ${nextThinkingLevel || 'default'}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
+    );
+    dispatch(updateCurrentSessionModelOverride({
+      sessionId: targetSessionId,
+      modelOverride: modelRef,
+      thinkingLevel: nextThinkingLevel,
+    }));
+
+    try {
+      const patchedSession = await coworkService.patchSession(targetSessionId,
+        buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
+      if (requestId !== modelPatchRequestIdRef.current) return;
+
+      if (!patchedSession) {
+        dispatch(updateCurrentSessionModelOverride({
+          sessionId: targetSessionId,
+          modelOverride: previousModelOverride,
+          thinkingLevel: previousThinkingLevel,
+        }));
+        logPromptModelSelection('warn', `model switch for session ${targetSessionId} returned no session`);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkModelSwitchFailed'),
+        }));
+        return;
+      }
+
+      logPromptModelSelection('debug', `switched session ${targetSessionId} to ${patchedSession.modelOverride || modelRef}`);
+      reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, targetSessionId);
+      void coworkService.refreshContextUsage(targetSessionId, { notifyCompaction: false });
+    } catch (error) {
+      if (requestId === modelPatchRequestIdRef.current) {
+        dispatch(updateCurrentSessionModelOverride({
+          sessionId: targetSessionId,
+          modelOverride: previousModelOverride,
+          thinkingLevel: previousThinkingLevel,
+        }));
+        console.warn(`[CoworkPromptInput] model switch for session ${targetSessionId} failed:`, error);
+        window.electron?.log?.fromRenderer?.('warn', 'CoworkPromptInput', `model switch for session ${targetSessionId} failed`);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkModelSwitchFailed'),
+        }));
+      }
+    } finally {
+      if (requestId === modelPatchRequestIdRef.current) {
+        setIsPatchingModel(false);
+      }
+    }
+  };
+
+  const handleConfirmModelSwitch = async (dontAskAgain: boolean) => {
+    if (!pendingModelSwitch || isPatchingModel) return;
+    const nextPending = pendingModelSwitch;
+    if (dontAskAgain) {
+      setModelSwitchConfirmSkipped(true);
+    }
+    if (nextPending.sessionId !== sessionId) {
+      setPendingModelSwitch(null);
+      return;
+    }
+    try {
+      await applySessionModelSelection(
+        nextPending.sessionId,
+        nextPending.selectedModel,
+        nextPending.meta,
+      );
+    } finally {
+      setPendingModelSwitch(null);
+    }
+  };
+
   const largeModelSelector = showModelSelector ? (
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
@@ -3149,108 +3267,44 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
           if (!nextModel) return;
-          const modelSwitchStartedAt = Date.now();
-          const previousMessageIds = new Set(currentSession?.messages.map(message => message.id));
-          const notifyModelSwitch = (updatedSession: CoworkSession) => {
-            const notice = updatedSession.messages.find(message => (
-              message.metadata?.kind === CoworkSystemMessageKind.ModelChanged
-              && message.timestamp >= modelSwitchStartedAt
-              && !previousMessageIds.has(message.id)
-            ));
-            if (notice) onModelSwitch?.(updatedSession.id, notice.id);
-          };
           // Reuse only a valid binding. Reselecting a stale preset must resolve it again.
           const keepsBoundPreset = !!(!sessionModelIsInvalid && sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
             && currentSession.modelPresetId === nextModel.presetId && currentSession.modelOverride);
           if (keepsBoundPreset) return;
-          const selectedModel = !keepsBoundPreset && meta.group === ModelSelectorGroup.Server
+          const selectedModel = meta.group === ModelSelectorGroup.Server
             ? availableModels.find(model => (
               model.isServerModel
               && model.id === nextModel.id
               && model.accessible !== false
             )) ?? nextModel
             : nextModel;
-          const nextThinkingLevel = selectedModel.presetId && !keepsBoundPreset
+          if (sessionId) {
+            const matchedSession = currentSession?.id === sessionId ? currentSession : null;
+            const confirmInfo = resolveModelSwitchConfirmation({
+              session: matchedSession,
+              availableModels,
+              currentEffectiveModel: effectiveSelectedModel,
+              nextModel: selectedModel,
+              sessionModelIsInvalid,
+              thinkingOnly: meta.thinkingOnly === true,
+            });
+            if (confirmInfo) {
+              setPendingModelSwitch({
+                sessionId,
+                selectedModel,
+                meta,
+                previousModelName: confirmInfo.previousModelName,
+                nextModelName: confirmInfo.nextModelName,
+              });
+              return;
+            }
+            await applySessionModelSelection(sessionId, selectedModel, meta);
+            return;
+          }
+          const nextThinkingLevel = selectedModel.presetId
             ? meta.thinkingLevel ?? ''
             : resolveModelThinkingLevel(selectedModel, meta.thinkingLevel) ?? '';
-          if (sessionId && selectedModel.presetId && !keepsBoundPreset) {
-            setIsPatchingModel(true);
-            try {
-              const updatedSession = await coworkService.selectSessionModelPreset(sessionId, selectedModel.presetId, nextThinkingLevel || undefined);
-              notifyModelSwitch(updatedSession);
-              void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
-            } catch (error) {
-              window.dispatchEvent(new CustomEvent('app:showToast', { detail: error instanceof Error ? error.message : i18nService.t('coworkModelSwitchFailed') }));
-            } finally { setIsPatchingModel(false); }
-            return;
-          }
-          const modelRef = keepsBoundPreset ? currentSession!.modelOverride
-            : selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
-          if (sessionId) {
-            const keepsSessionModel = keepsBoundPreset || meta.thinkingOnly === true
-              || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
-            const requestId = modelPatchRequestIdRef.current + 1;
-            modelPatchRequestIdRef.current = requestId;
-            const previousModelOverride = currentSession?.id === sessionId
-              ? currentSession.modelOverride
-              : '';
-            const previousThinkingLevel = currentSession?.id === sessionId
-              ? currentSession.thinkingLevel ?? ''
-              : '';
-
-            setIsPatchingModel(true);
-            logPromptModelSelection(
-              'debug',
-              `switching session ${sessionId} to ${modelRef}; thinking level is ${nextThinkingLevel || 'default'}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
-            );
-            dispatch(updateCurrentSessionModelOverride({
-              sessionId,
-              modelOverride: modelRef,
-              thinkingLevel: nextThinkingLevel,
-            }));
-
-            try {
-              const patchedSession = await coworkService.patchSession(sessionId,
-                buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
-              if (requestId !== modelPatchRequestIdRef.current) return;
-
-              if (!patchedSession) {
-                dispatch(updateCurrentSessionModelOverride({
-                  sessionId,
-                  modelOverride: previousModelOverride,
-                  thinkingLevel: previousThinkingLevel,
-                }));
-                logPromptModelSelection('warn', `model switch for session ${sessionId} returned no session`);
-                window.dispatchEvent(new CustomEvent('app:showToast', {
-                  detail: i18nService.t('coworkModelSwitchFailed'),
-                }));
-                return;
-              }
-
-              logPromptModelSelection('debug', `switched session ${sessionId} to ${patchedSession.modelOverride || modelRef}`);
-              notifyModelSwitch(patchedSession);
-              reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, sessionId);
-              void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
-            } catch (error) {
-              if (requestId === modelPatchRequestIdRef.current) {
-                dispatch(updateCurrentSessionModelOverride({
-                  sessionId,
-                  modelOverride: previousModelOverride,
-                  thinkingLevel: previousThinkingLevel,
-                }));
-                console.warn(`[CoworkPromptInput] model switch for session ${sessionId} failed:`, error);
-                window.electron?.log?.fromRenderer?.('warn', 'CoworkPromptInput', `model switch for session ${sessionId} failed`);
-                window.dispatchEvent(new CustomEvent('app:showToast', {
-                  detail: i18nService.t('coworkModelSwitchFailed'),
-                }));
-              }
-            } finally {
-              if (requestId === modelPatchRequestIdRef.current) {
-                setIsPatchingModel(false);
-              }
-            }
-            return;
-          }
+          const modelRef = selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
           logPromptModelSelection(
             'debug',
             `persisting agent ${currentAgentId} model ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
@@ -4461,6 +4515,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           onStart={() => { void handleChatLoginExperienceStart(); }}
         />
       )}
+      <ModelSwitchConfirmDialog
+        isOpen={Boolean(pendingModelSwitch && pendingModelSwitch.sessionId === sessionId)}
+        previousModelName={pendingModelSwitch?.previousModelName ?? ''}
+        nextModelName={pendingModelSwitch?.nextModelName ?? ''}
+        confirming={isPatchingModel}
+        onCancel={() => setPendingModelSwitch(null)}
+        onConfirm={(dontAskAgain) => { void handleConfirmModelSwitch(dontAskAgain); }}
+      />
       {modelAccessPrompt && (
         <ModelAccessPromptModal
           promptKind={modelAccessPrompt}

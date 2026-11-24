@@ -6,18 +6,20 @@ import { i18nService } from '../../services/i18n';
 import MyAgentSidebarHeader from './MyAgentSidebarHeader';
 import {
   DEFAULT_SIDEBAR_TASK_FILTER,
+  EMPTY_SIDEBAR_TASK_STATUS_COUNTS,
   type SidebarTaskFilter,
+  type SidebarTaskStatusCounts,
   SidebarTaskStatusFilter,
   SidebarTaskTimeFilter,
 } from './taskFilter';
 
 const renderHeader = (options: {
   taskFilter?: SidebarTaskFilter;
-  hasUnreadCompletedTasks?: boolean;
+  taskStatusCounts?: SidebarTaskStatusCounts;
 } = {}) => renderToStaticMarkup(
   React.createElement(MyAgentSidebarHeader, {
     taskFilter: options.taskFilter ?? DEFAULT_SIDEBAR_TASK_FILTER,
-    hasUnreadCompletedTasks: options.hasUnreadCompletedTasks ?? false,
+    taskStatusCounts: options.taskStatusCounts ?? EMPTY_SIDEBAR_TASK_STATUS_COUNTS,
     onTaskFilterChange: () => undefined,
     onCreateAgent: () => undefined,
   }),
@@ -50,22 +52,30 @@ describe('MyAgentSidebarHeader', () => {
     }
   });
 
-  test('highlights active filters and shows the unread indicator dot on the header filter button', () => {
+  test('highlights active filters and shows the attention indicator dot on the header filter button', () => {
     const activeHtml = renderHeader({
       taskFilter: {
         status: SidebarTaskStatusFilter.Running,
         time: SidebarTaskTimeFilter.All,
       },
-      hasUnreadCompletedTasks: true,
+      taskStatusCounts: { completedUnread: 2, pendingPermission: 0, running: 1 },
     });
 
     expect(activeHtml).toContain('bg-primary/10 text-primary');
     expect(activeHtml).toContain('data-active="true"');
     expect(activeHtml).toContain('h-[6px] w-[6px] rounded-full bg-primary');
+    expect(activeHtml).not.toContain('animate-pulse');
 
-    const idleHtml = renderHeader({ hasUnreadCompletedTasks: false });
-    expect(idleHtml).not.toContain('bg-primary/10 text-primary');
-    expect(idleHtml).not.toContain('data-active="true"');
-    expect(idleHtml).not.toContain('rounded-full bg-primary');
+    const pendingHtml = renderHeader({
+      taskStatusCounts: { completedUnread: 0, pendingPermission: 1, running: 1 },
+    });
+    expect(pendingHtml).toContain('h-[6px] w-[6px] rounded-full bg-primary animate-pulse');
+
+    const runningOnlyHtml = renderHeader({
+      taskStatusCounts: { completedUnread: 0, pendingPermission: 0, running: 2 },
+    });
+    expect(runningOnlyHtml).not.toContain('bg-primary/10 text-primary');
+    expect(runningOnlyHtml).not.toContain('data-active="true"');
+    expect(runningOnlyHtml).not.toContain('rounded-full bg-primary');
   });
 });

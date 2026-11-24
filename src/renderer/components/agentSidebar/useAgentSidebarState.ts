@@ -19,11 +19,17 @@ import {
   AgentSidebarIndicator,
   AgentSidebarPageSize,
   AgentSidebarPreferenceKey,
+  PinnedTaskSortMode,
 } from './constants';
 import {
   hasLegacyScheduledTaskTitle,
   isScheduledTaskSession,
 } from './scheduledTaskSession';
+import {
+  type AgentSidebarActivityItem,
+  computeSidebarTaskStatusCounts,
+  type SidebarTaskStatusCounts,
+} from './taskFilter';
 import type {
   AgentSidebarAgentNode,
   AgentSidebarAgentSummary,
@@ -62,6 +68,8 @@ export const logAgentSidebarDebug = (message: string): void => {
   }
 };
 
+const PINNED_REFRESH_DEBOUNCE_MS = 250;
+
 const hasSessionChanged = (
   previous: CoworkSessionSummary,
   next: CoworkSessionSummary,
@@ -71,6 +79,8 @@ const hasSessionChanged = (
     || previous.status !== next.status
     || previous.pinned !== next.pinned
     || previous.pinOrder !== next.pinOrder
+    || (previous.cwd ?? '') !== (next.cwd ?? '')
+    || (previous.forkGitBranch ?? null) !== (next.forkGitBranch ?? null)
     || previous.imPlatform !== next.imPlatform
     || previous.parentSessionId !== next.parentSessionId
     || previous.updatedAt !== next.updatedAt
@@ -109,17 +119,97 @@ export const sortAgentSidebarTasks = (
   tasks: CoworkSessionSummary[],
 ): CoworkSessionSummary[] => {
   return [...tasks].sort((a, b) => {
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    if (a.pinned && b.pinned) {
-      const aPinOrder = a.pinOrder ?? a.updatedAt ?? a.createdAt;
-      const bPinOrder = b.pinOrder ?? b.updatedAt ?? b.createdAt;
-      if (aPinOrder !== bPinOrder) return aPinOrder - bPinOrder;
-    }
     const aUpdatedAt = a.updatedAt || a.createdAt;
     const bUpdatedAt = b.updatedAt || b.createdAt;
     if (bUpdatedAt !== aUpdatedAt) return bUpdatedAt - aUpdatedAt;
     return b.createdAt - a.createdAt;
   });
+};
+
+export const sortPinnedSidebarTasks = (
+  tasks: CoworkSessionSummary[],
+  sortMode: PinnedTaskSortMode = PinnedTaskSortMode.Manual,
+): CoworkSessionSummary[] => {
+  return [...tasks]
+    .filter((task) => task.pinned)
+    .sort((a, b) => {
+      if (sortMode === PinnedTaskSortMode.Manual) {
+        const aHasOrder = a.pinOrder !== null && a.pinOrder !== undefined;
+        const bHasOrder = b.pinOrder !== null && b.pinOrder !== undefined;
+        if (aHasOrder !== bHasOrder) return aHasOrder ? -1 : 1;
+        if (aHasOrder && bHasOrder && b.pinOrder !== a.pinOrder) {
+          return (b.pinOrder as number) - (a.pinOrder as number);
+        }
+      }
+      const aUpdatedAt = a.updatedAt || a.createdAt;
+      const bUpdatedAt = b.updatedAt || b.createdAt;
+      if (bUpdatedAt !== aUpdatedAt) return bUpdatedAt - aUpdatedAt;
+      return b.createdAt - a.createdAt;
+    });
+};
+
+export const applyOptimisticPinnedTaskOrder = (
+  current: CoworkSessionSummary[],
+  orderedSessionIds: string[],
+): CoworkSessionSummary[] => {
+  if (orderedSessionIds.length === 0 || current.length === 0) return current;
+  const orderIndexById = new Map<string, number>();
+  orderedSessionIds.forEach((id, index) => {
+    if (!orderIndexById.has(id)) {
+      orderIndexById.set(id, index);
+    }
+  });
+  const maxExistingOrder = current.reduce(
+    (max, session) => Math.max(max, session.pinOrder ?? 0),
+    0,
+  );
+  const baseOrder = Math.max(Date.now(), maxExistingOrder + current.length);
+  const orderedExisting = [
+    ...orderedSessionIds
+      .map((id) => current.find((session) => session.id === id))
+      .filter((session): session is CoworkSessionSummary => Boolean(session)),
+    ...current.filter((session) => !orderIndexById.has(session.id)),
+  ];
+  return orderedExisting.map((session, index) => ({
+    ...session,
+    pinOrder: baseOrder - index,
+  }));
+};
+
+export const reconcilePinnedSidebarSessions = (
+  current: CoworkSessionSummary[],
+  liveSessions: CoworkSessionSummary[],
+): CoworkSessionSummary[] => {
+  if (liveSessions.length === 0) return current;
+
+  const byId = new Map<string, CoworkSessionSummary>();
+  current.forEach((session) => byId.set(session.id, session));
+  let changed = false;
+
+  liveSessions.forEach((live) => {
+    const existing = byId.get(live.id);
+    if (!live.pinned) {
+      if (existing) {
+        byId.delete(live.id);
+        changed = true;
+      }
+      return;
+    }
+
+    const merged: CoworkSessionSummary = {
+      ...existing,
+      ...live,
+      cwd: live.cwd || existing?.cwd || '',
+      forkGitBranch: live.forkGitBranch !== undefined ? live.forkGitBranch : (existing?.forkGitBranch ?? null),
+      imPlatform: live.imPlatform !== undefined ? live.imPlatform : (existing?.imPlatform ?? null),
+    };
+    if (!existing || hasSessionChanged(existing, merged)) {
+      byId.set(live.id, merged);
+      changed = true;
+    }
+  });
+
+  return changed ? Array.from(byId.values()) : current;
 };
 
 export const sortAgentSidebarAgents = (
@@ -152,6 +242,8 @@ export const toAgentSidebarTaskNode = (
     status: session.status,
     pinned: session.pinned,
     pinOrder: session.pinOrder ?? null,
+    cwd: session.cwd?.trim() || '',
+    forkGitBranch: session.forkGitBranch ?? null,
     imPlatform: session.imPlatform ?? null,
     updatedAt: session.updatedAt,
     createdAt: session.createdAt,
@@ -221,8 +313,13 @@ export const useAgentSidebarState = () => {
 
   const [expandedAgentIds, setExpandedAgentIds] = useState<string[]>([]);
   const [expandedTaskListAgentIds, setExpandedTaskListAgentIds] = useState<string[]>([]);
+  const [isPinnedSectionCollapsed, setIsPinnedSectionCollapsed] = useState(false);
+  const [pinnedTaskSortMode, setPinnedTaskSortMode] = useState<PinnedTaskSortMode>(
+    PinnedTaskSortMode.Manual,
+  );
   const [visibleTaskLimitByAgentId, setVisibleTaskLimitByAgentId] = useState<Record<string, number>>({});
   const [taskPreviewsByAgentId, setTaskPreviewsByAgentId] = useState<Record<string, CoworkSessionSummary[]>>({});
+  const [pinnedSessions, setPinnedSessions] = useState<CoworkSessionSummary[]>([]);
   const [hasMoreTasksByAgentId, setHasMoreTasksByAgentId] = useState<Record<string, boolean>>({});
   const [loadingAgentIds, setLoadingAgentIds] = useState<string[]>([]);
   const [failedAgentIds, setFailedAgentIds] = useState<string[]>([]);
@@ -231,8 +328,52 @@ export const useAgentSidebarState = () => {
   const loadedAgentIdsRef = useRef(new Set<string>());
   const loadingKeysRef = useRef(new Set<string>());
   const activeAgentIdsRef = useRef(new Set<string>());
+  const taskPreviewsByAgentIdRef = useRef(taskPreviewsByAgentId);
+  taskPreviewsByAgentIdRef.current = taskPreviewsByAgentId;
+  const pinnedRequestIdRef = useRef(0);
   const loggedScheduledMarkerSignatureByAgentIdRef = useRef(new Map<string, string>());
   const initializedDefaultExpansionRef = useRef(false);
+
+  const loadPinnedSessions = useCallback(async () => {
+    const requestId = ++pinnedRequestIdRef.current;
+    try {
+      const result = await coworkService.listPinnedSessions();
+      if (requestId !== pinnedRequestIdRef.current) return;
+      if (!result.success) {
+        logAgentSidebarLoadIssue(
+          'warn',
+          `failed to load pinned tasks: ${result.error ?? 'unknown error'}.`,
+        );
+        return;
+      }
+      setPinnedSessions(result.sessions ?? []);
+    } catch (error) {
+      logAgentSidebarLoadIssue('error', 'pinned tasks request rejected.', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPinnedSessions();
+  }, [loadPinnedSessions]);
+
+  useEffect(() => {
+    let refreshTimer: number | null = null;
+    const unsubscribe = window.electron?.cowork?.onSessionsChanged?.(() => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void loadPinnedSessions();
+      }, PINNED_REFRESH_DEBOUNCE_MS);
+    });
+    return () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      unsubscribe?.();
+    };
+  }, [loadPinnedSessions]);
 
   useEffect(() => {
     return () => {
@@ -248,6 +389,7 @@ export const useAgentSidebarState = () => {
         name: agent.name,
         icon: agent.icon,
         iconCustomized: agent.iconCustomized,
+        workingDirectory: agent.workingDirectory,
         source: agent.source,
         presetId: agent.presetId,
         updateRevision: agent.source === AgentSource.Preset && agent.presetId
@@ -287,6 +429,12 @@ export const useAgentSidebarState = () => {
         if (cancelled) return;
         setExpandedAgentIds(preference?.expandedAgentIds ?? []);
         setExpandedTaskListAgentIds(preference?.expandedTaskListAgentIds ?? []);
+        setIsPinnedSectionCollapsed(preference?.isPinnedSectionCollapsed ?? false);
+        setPinnedTaskSortMode(
+          preference?.pinnedTaskSortMode === PinnedTaskSortMode.UpdatedAt
+            ? PinnedTaskSortMode.UpdatedAt
+            : PinnedTaskSortMode.Manual,
+        );
       })
       .finally(() => {
         if (!cancelled) {
@@ -303,6 +451,8 @@ export const useAgentSidebarState = () => {
     const preference: AgentSidebarPreferenceState = {
       expandedAgentIds,
       expandedTaskListAgentIds,
+      isPinnedSectionCollapsed,
+      pinnedTaskSortMode,
       selectedAgentId: currentAgentId,
       selectedTaskId: currentSessionId ?? undefined,
     };
@@ -312,6 +462,8 @@ export const useAgentSidebarState = () => {
     currentSessionId,
     expandedAgentIds,
     expandedTaskListAgentIds,
+    isPinnedSectionCollapsed,
+    pinnedTaskSortMode,
     preferenceLoaded,
   ]);
 
@@ -503,9 +655,21 @@ export const useAgentSidebarState = () => {
           return;
         }
 
-        if (hasSessionChanged(existingTasks[index], session)) {
+        const existing = existingTasks[index];
+        const mergedSession: CoworkSessionSummary = {
+          ...existing,
+          ...session,
+          cwd: session.cwd || existing.cwd || '',
+          forkGitBranch: session.forkGitBranch !== undefined
+            ? session.forkGitBranch
+            : (existing.forkGitBranch ?? null),
+          imPlatform: session.imPlatform !== undefined
+            ? session.imPlatform
+            : (existing.imPlatform ?? null),
+        };
+        if (hasSessionChanged(existing, mergedSession)) {
           const updatedTasks = [...existingTasks];
-          updatedTasks[index] = session;
+          updatedTasks[index] = mergedSession;
           next[agentId] = updatedTasks;
           changed = true;
         }
@@ -513,7 +677,16 @@ export const useAgentSidebarState = () => {
 
       return changed ? next : previous;
     });
+    setPinnedSessions((previous) => reconcilePinnedSidebarSessions(previous, sessions));
   }, [sessions]);
+
+  const togglePinnedSectionCollapsed = useCallback(() => {
+    setIsPinnedSectionCollapsed((previous) => !previous);
+  }, []);
+
+  const expandPinnedSection = useCallback(() => {
+    setIsPinnedSectionCollapsed(false);
+  }, []);
 
   const toggleAgentExpanded = useCallback((agentId: string) => {
     setExpandedAgentIds((previous) => {
@@ -656,7 +829,7 @@ export const useAgentSidebarState = () => {
   const patchTaskPreview = useCallback((
     sessionId: string,
     updates: Partial<Pick<CoworkSessionSummary, 'title' | 'pinned' | 'pinOrder' | 'status'>>,
-    options: { preserveUpdatedAt?: boolean } = {},
+    options: { preserveUpdatedAt?: boolean; fallbackTask?: AgentSidebarTaskNode } = {},
   ) => {
     setTaskPreviewsByAgentId((previous) => {
       let changed = false;
@@ -675,18 +848,111 @@ export const useAgentSidebarState = () => {
       });
       return changed ? next : previous;
     });
+
+    setPinnedSessions((previous) => {
+      const index = previous.findIndex((task) => task.id === sessionId);
+      if (updates.pinned === false) {
+        if (index === -1) return previous;
+        return previous.filter((task) => task.id !== sessionId);
+      }
+
+      if (index !== -1) {
+        const updated = [...previous];
+        updated[index] = {
+          ...updated[index],
+          ...updates,
+          updatedAt: options.preserveUpdatedAt ? updated[index].updatedAt : Date.now(),
+        };
+        return updated;
+      }
+
+      if (updates.pinned !== true) {
+        return previous;
+      }
+
+      let source: CoworkSessionSummary | undefined;
+      for (const tasks of Object.values(taskPreviewsByAgentIdRef.current)) {
+        const match = tasks.find((task) => task.id === sessionId);
+        if (match) {
+          source = match;
+          break;
+        }
+      }
+      if (!source && options.fallbackTask) {
+        const fallback = options.fallbackTask;
+        source = {
+          id: fallback.id,
+          title: fallback.title,
+          scheduledTaskId: fallback.isScheduledTask ? fallback.id : null,
+          status: fallback.status,
+          pinned: true,
+          pinOrder: fallback.pinOrder ?? null,
+          cwd: fallback.cwd ?? '',
+          agentId: fallback.agentId,
+          imPlatform: fallback.imPlatform ?? null,
+          forkGitBranch: fallback.forkGitBranch ?? null,
+          createdAt: fallback.createdAt,
+          updatedAt: fallback.updatedAt,
+        };
+      }
+      if (!source) {
+        return previous;
+      }
+
+      return [
+        {
+          ...source,
+          ...updates,
+          pinned: true,
+          updatedAt: options.preserveUpdatedAt ? source.updatedAt : Date.now(),
+        },
+        ...previous,
+      ];
+    });
   }, []);
 
   const removeTaskPreview = useCallback((sessionId: string) => {
     setTaskPreviewsByAgentId((previous) => {
       return removeAgentSidebarTaskPreviews(previous, [sessionId]);
     });
+    setPinnedSessions((previous) => (
+      previous.some((session) => session.id === sessionId)
+        ? previous.filter((session) => session.id !== sessionId)
+        : previous
+    ));
   }, []);
 
   const removeTaskPreviews = useCallback((sessionIds: string[]) => {
     setTaskPreviewsByAgentId((previous) => {
       return removeAgentSidebarTaskPreviews(previous, sessionIds);
     });
+    if (sessionIds.length > 0) {
+      const idSet = new Set(sessionIds);
+      setPinnedSessions((previous) => (
+        previous.some((session) => idSet.has(session.id))
+          ? previous.filter((session) => !idSet.has(session.id))
+          : previous
+      ));
+    }
+  }, []);
+
+  const reorderPinnedTasks = useCallback(async (orderedSessionIds: string[]): Promise<boolean> => {
+    if (orderedSessionIds.length === 0) return true;
+    let previousSnapshot: CoworkSessionSummary[] = [];
+    setPinnedSessions((previous) => {
+      previousSnapshot = previous;
+      return applyOptimisticPinnedTaskOrder(previous, orderedSessionIds);
+    });
+
+    const result = await coworkService.reorderPinnedSessions(orderedSessionIds);
+    if (!result.success) {
+      setPinnedSessions(previousSnapshot);
+      return false;
+    }
+    if (result.sessions) {
+      setPinnedSessions(result.sessions);
+    }
+    return true;
   }, []);
 
   const removeAgentTaskPreviews = useCallback((agentId: string) => {
@@ -700,6 +966,11 @@ export const useAgentSidebarState = () => {
     setTaskPreviewsByAgentId((previous) => {
       return removeAgentSidebarAgentTaskPreviews(previous, agentId);
     });
+    setPinnedSessions((previous) => (
+      previous.some((session) => normalizeAgentId(session.agentId) === agentId)
+        ? previous.filter((session) => normalizeAgentId(session.agentId) !== agentId)
+        : previous
+    ));
     setHasMoreTasksByAgentId((previous) => {
       if (!Object.prototype.hasOwnProperty.call(previous, agentId)) return previous;
       const next = { ...previous };
@@ -720,17 +991,21 @@ export const useAgentSidebarState = () => {
 
   const {
     agentNodes,
-    hasUnreadCompletedTasks,
+    pinnedTaskItems,
+    taskStatusCounts,
   } = useMemo<{
     agentNodes: AgentSidebarAgentNode[];
-    hasUnreadCompletedTasks: boolean;
+    pinnedTaskItems: AgentSidebarActivityItem[];
+    taskStatusCounts: SidebarTaskStatusCounts;
   }>(() => {
     const visibleNodes: AgentSidebarAgentNode[] = [];
-    let hasUnreadCompletedTasks = false;
+    const previewsByEnabledAgent: CoworkSessionSummary[][] = [];
+    const agentNodeById = new Map<string, AgentSidebarAgentNode>();
 
     sortedEnabledAgents.forEach((agent) => {
       const taskPreviews = taskPreviewsByAgentId[agent.id] ?? [];
       const sortedTaskPreviews = sortAgentSidebarTasks(taskPreviews);
+      previewsByEnabledAgent.push(sortedTaskPreviews);
       const isTaskListExpanded = expandedTaskListAgentIdSet.has(agent.id);
       const visibleTaskLimit =
         visibleTaskLimitByAgentId[agent.id]
@@ -741,12 +1016,6 @@ export const useAgentSidebarState = () => {
       const canExpandTasks =
         (hasMoreTasksByAgentId[agent.id] ?? false) || hasMoreLoadedTasks;
       const canCollapseTasks = isTaskListExpanded;
-      if (
-        !hasUnreadCompletedTasks
-        && sortedTaskPreviews.some((session) => completedUnreadSessionIdSet.has(session.id))
-      ) {
-        hasUnreadCompletedTasks = true;
-      }
       const visibleTaskPreviews = sortedTaskPreviews.slice(0, visibleTaskLimit);
       const tasks = visibleTaskPreviews.map((session) => {
         return toAgentSidebarTaskNode(
@@ -756,7 +1025,7 @@ export const useAgentSidebarState = () => {
           pendingPermissionSessionIdSet,
         );
       });
-      visibleNodes.push({
+      const node: AgentSidebarAgentNode = {
         ...agent,
         isExpanded: expandedAgentIdSet.has(agent.id),
         isTaskListExpanded,
@@ -765,12 +1034,42 @@ export const useAgentSidebarState = () => {
         isLoadingTasks: loadingAgentIdSet.has(agent.id),
         hasLoadError: failedAgentIdSet.has(agent.id),
         tasks,
+      };
+      visibleNodes.push(node);
+      agentNodeById.set(agent.id, node);
+    });
+
+    const sortedPinnedSessions = sortPinnedSidebarTasks(pinnedSessions, pinnedTaskSortMode);
+    const pinnedItems: AgentSidebarActivityItem[] = [];
+    const enabledPinnedSessions: CoworkSessionSummary[] = [];
+    sortedPinnedSessions.forEach((session) => {
+      const agent = agentNodeById.get(normalizeAgentId(session.agentId));
+      if (!agent) return;
+      enabledPinnedSessions.push(session);
+      pinnedItems.push({
+        agent,
+        task: toAgentSidebarTaskNode(
+          session,
+          currentSessionId,
+          completedUnreadSessionIdSet,
+          pendingPermissionSessionIdSet,
+        ),
       });
+    });
+
+    if (enabledPinnedSessions.length > 0) {
+      previewsByEnabledAgent.push(enabledPinnedSessions);
+    }
+
+    const taskStatusCounts = computeSidebarTaskStatusCounts(previewsByEnabledAgent, {
+      completedUnreadSessionIds: completedUnreadSessionIdSet,
+      pendingPermissionSessionIds: pendingPermissionSessionIdSet,
     });
 
     return {
       agentNodes: visibleNodes,
-      hasUnreadCompletedTasks,
+      pinnedTaskItems: pinnedItems,
+      taskStatusCounts,
     };
   }, [
     completedUnreadSessionIdSet,
@@ -781,6 +1080,8 @@ export const useAgentSidebarState = () => {
     hasMoreTasksByAgentId,
     loadingAgentIdSet,
     pendingPermissionSessionIdSet,
+    pinnedSessions,
+    pinnedTaskSortMode,
     sortedEnabledAgents,
     taskPreviewsByAgentId,
     visibleTaskLimitByAgentId,
@@ -788,11 +1089,16 @@ export const useAgentSidebarState = () => {
 
   return {
     agentNodes,
-    hasUnreadCompletedTasks,
+    pinnedTaskItems,
+    isPinnedSectionCollapsed,
+    pinnedTaskSortMode,
+    taskStatusCounts,
+    hasUnreadCompletedTasks: taskStatusCounts.completedUnread > 0,
     expandedTaskListAgentIdSet,
     patchTaskPreview,
     removeTaskPreview,
     removeTaskPreviews,
+    reorderPinnedTasks,
     removeAgentTaskPreviews,
     retryLoadTasks,
     loadMoreTasks,
@@ -801,5 +1107,8 @@ export const useAgentSidebarState = () => {
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,
+    togglePinnedSectionCollapsed,
+    expandPinnedSection,
+    setPinnedTaskSortMode,
   };
 };
