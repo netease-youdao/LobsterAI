@@ -53,10 +53,14 @@ export function parseModelPresetPreference(value: unknown): ModelPresetPreferenc
   return presetId ? { presetId, thinkingLevel: parseModelThinkingLevel(record?.thinkingLevel) } : null;
 }
 
-export function isChatPresetSession(session: { scheduledTaskId?: string | null; claudeSessionId?: string | null }): boolean {
-  // Manual replies in scheduled-task conversations use a managed chat session,
-  // so they support the same preset selection and binding as ordinary chats.
-  if (session.scheduledTaskId?.trim()) return true;
+export function isChatPresetSession(session: {
+  scheduledTaskId?: string | null;
+  claudeSessionId?: string | null;
+  modelPresetId?: ModelPresetId | null;
+}): boolean {
+  // A saved preset keeps the chat managed after DSH assigns its runtime key.
+  // Manual replies in scheduled-task conversations also use managed chat.
+  if (parseModelPresetId(session.modelPresetId) || session.scheduledTaskId?.trim()) return true;
   const key = session.claudeSessionId?.trim();
   return !key || key.startsWith('lobsterai:') || /^agent:[^:]+:lobsterai:.+/.test(key);
 }
