@@ -60,8 +60,6 @@ import type {
   AgentBrowserHostSetViewRequest,
   AgentBrowserHostStateEvent,
   AgentBrowserHostZoomRequest,
-  BrowserDiagnosticResult,
-  BrowserRuntimeProfile,
 } from '../../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
 import type {
@@ -98,6 +96,13 @@ import type { CoworkSessionFilterQuery } from '../../shared/cowork/sessionFilter
 import type {
   DataMigrationBackupResult,
   DataMigrationLastRestoreResponse,
+  DataMigrationPickArchiveResult,
+  DataMigrationPreviewRequest,
+  DataMigrationPreviewResult,
+  DataMigrationProgressEvent,
+  DataMigrationReinstallPluginsRequest,
+  DataMigrationReinstallPluginsResult,
+  DataMigrationRestoreRequest,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
 import type {
@@ -990,10 +995,6 @@ interface IElectronAPI {
       }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     };
     browser: {
-      getStatus: (options?: { profile?: BrowserRuntimeProfile }) => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
-      listProfiles: () => Promise<{ success: boolean; profiles?: unknown[]; error?: string }>;
-      test: (options?: { profile?: BrowserRuntimeProfile }) => Promise<BrowserDiagnosticResult>;
-      resetProfile: (options?: { profile?: BrowserRuntimeProfile }) => Promise<{ success: boolean; result?: Record<string, unknown>; error?: string }>;
       getHostState: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       setHostView: (request: AgentBrowserHostSetViewRequest) => Promise<AgentBrowserHostResponse>;
       navigateHost: (request: AgentBrowserHostNavigateRequest) => Promise<AgentBrowserHostResponse>;
@@ -1027,8 +1028,14 @@ interface IElectronAPI {
     };
     dataMigration: {
       backup: () => Promise<DataMigrationBackupResult>;
-      restore: () => Promise<DataMigrationRestoreScheduleResult>;
+      pickRestoreArchive: () => Promise<DataMigrationPickArchiveResult>;
+      preview: (request: DataMigrationPreviewRequest) => Promise<DataMigrationPreviewResult>;
+      restore: (request?: DataMigrationRestoreRequest) => Promise<DataMigrationRestoreScheduleResult>;
       getLastRestoreResult: () => Promise<DataMigrationLastRestoreResponse>;
+      reinstallPlugins: (
+        request: DataMigrationReinstallPluginsRequest,
+      ) => Promise<DataMigrationReinstallPluginsResult>;
+      onProgress: (callback: (event: DataMigrationProgressEvent) => void) => () => void;
     };
   };
   ipcRenderer: {
@@ -2899,6 +2906,8 @@ interface WeixinOpenClawConfig {
 interface IMSettings {
   /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
   platformAgentBindings?: Record<string, string>;
+  /** Per-platform/instance default DSH permission preset. Absent = follow global default. */
+  platformPermissionPresets?: Record<string, 'read-only' | 'workspace-write' | 'danger-full-access'>;
 }
 
 interface IMGatewayStatus {

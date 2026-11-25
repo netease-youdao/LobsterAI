@@ -6,7 +6,8 @@ import path from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { getFileMatchers, copyFiles } = require('app-builder-lib/out/fileMatcher');
+const { getFileMatchers, getMainFileMatchers, copyFiles } = require('app-builder-lib/out/fileMatcher');
+const { computeFileSets } = require('app-builder-lib/out/util/appFileCopier');
 const builderConfig = require('../electron-builder.json');
 const packageJson = require('../package.json');
 
@@ -87,6 +88,104 @@ test('app files ship the bundles without source maps or the tsc output tree', as
 
   for (const relative of shipped) expect(fs.existsSync(path.join(out, relative)), relative).toBe(true);
   for (const relative of dropped) expect(fs.existsSync(path.join(out, relative)), relative).toBe(false);
+});
+
+test('dsh-runtime maps into app.asar/dsh-runtime without .bin symlinks, maps, or test files, and unpacks native/pnpm payloads', async () => {
+  const root = tempDir();
+  const kept = [
+    'vendor/dsh-runtime/current/package.json',
+    'vendor/dsh-runtime/current/lib/bin.js',
+    'vendor/dsh-runtime/current/package-manager/pnpm/package.json',
+    'vendor/dsh-runtime/current/package-manager/pnpm/bin/pnpm.cjs',
+    'vendor/dsh-runtime/current/node_modules/koffi/build/koffi/win32_x64/koffi.node',
+    'vendor/dsh-runtime/current/node_modules/node-pty/lib/index.js',
+    'vendor/dsh-runtime/current/node_modules/@deepseek-ai/dsh-sandbox-windows-acl/lib/acl.ps1',
+  ];
+  const dropped = [
+    'vendor/dsh-runtime/current/node_modules/.bin/tsc',
+    'vendor/dsh-runtime/current/lib/bin.js.map',
+    'vendor/dsh-runtime/current/node_modules/pkg/index.d.ts',
+    'vendor/dsh-runtime/current/node_modules/pkg/test/spec.js',
+  ];
+  for (const relative of [...kept, ...dropped]) write(root, relative);
+
+  const out = path.join(root, 'out');
+  const matchers = getFileMatchers(builderConfig, 'files', out, {
+    defaultSrc: root,
+    globalOutDir: out,
+    customBuildOptions: {},
+    macroExpander: (value: string) => value,
+  });
+  const dshMatcher = matchers.filter((matcher: { to: string }) =>
+    path.relative(out, matcher.to) === 'dsh-runtime');
+  expect(dshMatcher).toHaveLength(1);
+  await copyFiles(dshMatcher);
+
+  for (const relative of kept) {
+    const destRel = relative.replace('vendor/dsh-runtime/current/', 'dsh-runtime/');
+    expect(fs.existsSync(path.join(out, destRel)), destRel).toBe(true);
+  }
+  for (const relative of dropped) {
+    const destRel = relative.replace('vendor/dsh-runtime/current/', 'dsh-runtime/');
+    expect(fs.existsSync(path.join(out, destRel)), destRel).toBe(false);
+  }
+
+  // Verify electron-builder's asarUnpack filter matches source paths under vendor/dsh-runtime/current.
+  const unpackMatchers = getFileMatchers(builderConfig, 'asarUnpack', out, {
+    defaultSrc: root,
+    globalOutDir: out,
+    customBuildOptions: {},
+    macroExpander: (value: string) => value,
+  });
+  const unpackFilter = unpackMatchers[0].createFilter();
+  const dummyStat = { isDirectory: () => false };
+  expect(unpackFilter(path.join(root, 'vendor/dsh-runtime/current/package-manager/pnpm/bin/pnpm.cjs'), dummyStat)).toBe(true);
+  expect(unpackFilter(path.join(root, 'vendor/dsh-runtime/current/node_modules/koffi/build/koffi/win32_x64/koffi.node'), dummyStat)).toBe(true);
+  expect(unpackFilter(path.join(root, 'vendor/dsh-runtime/current/node_modules/node-pty/lib/index.js'), dummyStat)).toBe(true);
+  expect(unpackFilter(path.join(root, 'vendor/dsh-runtime/current/node_modules/@deepseek-ai/dsh-sandbox-windows-acl/lib/acl.ps1'), dummyStat)).toBe(true);
+  // Pure JS runtime files stay packed inside app.asar.
+  expect(unpackFilter(path.join(root, 'vendor/dsh-runtime/current/lib/bin.js'), dummyStat)).toBe(false);
+  expect(unpackFilter(path.join(root, 'vendor/dsh-runtime/current/package.json'), dummyStat)).toBe(false);
+
+  // AppFileWalker drops sub-node_modules inside `files` entries unless
+  // includeSubNodeModules is enabled, while root node_modules must still be
+  // excluded from the root matcher (production deps come from computeNodeModuleFileSets).
+  expect(builderConfig.includeSubNodeModules).toBe(true);
+  write(root, 'package.json');
+  write(root, 'node_modules/dev-only-pkg/index.js');
+  write(root, 'vendor/dsh-runtime/current/node_modules/@deepseek-ai/dsh-app-boot/package.json');
+  const packager = {
+    info: {
+      appDir: root,
+      projectDir: root,
+      buildResourcesDir: 'build',
+      config: builderConfig,
+      isPrepackedAppAsar: false,
+      areNodeModulesHandledExternally: false,
+      debugLogger: { isEnabled: false },
+    },
+  };
+  const mainMatchers = getMainFileMatchers(
+    root,
+    path.join(out, 'app'),
+    (value: string) => value,
+    {},
+    packager,
+    out,
+    false,
+  );
+  const computedSets: Array<{ src: string; destination: string; files: string[] }> = await computeFileSets(
+    mainMatchers,
+    null,
+    packager,
+    false,
+  );
+  const collectedDestPaths = computedSets.flatMap((set) =>
+    set.files.map((file) => path.relative(path.join(out, 'app'), path.join(set.destination, path.relative(set.src, file))).replace(/\\/g, '/')),
+  );
+  expect(collectedDestPaths).toContain('dsh-runtime/node_modules/@deepseek-ai/dsh-app-boot/package.json');
+  expect(collectedDestPaths).toContain('dsh-runtime/package-manager/pnpm/bin/pnpm.cjs');
+  expect(collectedDestPaths).not.toContain('node_modules/dev-only-pkg/index.js');
 });
 
 test('production dependencies are only the modules loaded outside the Vite bundles', () => {

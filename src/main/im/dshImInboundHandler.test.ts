@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events';
 import { describe, expect, test, vi } from 'vitest';
 
+import { DSH_APPROVAL_REQUEST_ID_PREFIX } from '../../shared/dshEngine/hostConstants';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
+import type { PermissionResult } from '../libs/agentEngine/types';
 import {
   DshImAttachmentKind,
   DshImInboundHandler,
@@ -17,9 +19,14 @@ class FakeRuntime extends EventEmitter {
   stopSession = vi.fn((sessionId: string) => {
     this.emit('sessionStopped', sessionId);
   });
+  respondToPermission = vi.fn(async (requestId: string, _result: PermissionResult) => {
+    this.emit('permissionResolved', 'cowork-session-1', requestId);
+  });
 }
 
 function createFixture(options?: {
+  getWeixinOwnerUserId?: () => string | undefined;
+  approvalTimeoutMs?: number;
   transcribeVoice?: (attachment: {
     dataBase64: string;
     encodeType?: number;
@@ -69,6 +76,9 @@ function createFixture(options?: {
 
   const imStore = {
     findLegacyDirectSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
+    findLegacyFeishuTopicSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
+    getConversationReplyRoute: vi.fn<() => { to: string } | null>(() => null),
+    setConversationReplyRoute: vi.fn(),
     getSessionMapping: vi.fn((convId: string, platform: Platform, agentId = 'main') =>
       mappings.get(`${platform}:${convId}:${agentId}`) ?? null,
     ),
@@ -115,6 +125,8 @@ function createFixture(options?: {
     runtime: runtime as never,
     sendReply,
     getDefaultCwd: () => '/tmp/workspace',
+    getWeixinOwnerUserId: options?.getWeixinOwnerUserId,
+    approvalTimeoutMs: options?.approvalTimeoutMs,
     notifySessionsChanged,
     transcribeVoice: options?.transcribeVoice,
     persistInboundImage: options?.persistInboundImage,
@@ -135,6 +147,36 @@ function createFixture(options?: {
 }
 
 describe('DshImInboundHandler', () => {
+  test('keeps separate Feishu threads on the same bot and resumes a thread from its root-only event', async () => {
+    const { handler, runtime, imStore, coworkStore, pushMessage, sendReply } = createFixture();
+    let count = 0;
+    const respond = async (sessionId: string) => {
+      pushMessage(sessionId, { id: String(++count), type: 'assistant', content: 'answer' });
+      runtime.emit('complete', sessionId);
+    };
+    runtime.startSession.mockImplementation(respond);
+    runtime.continueSession.mockImplementation(respond);
+    const event = { platform: 'feishu', instanceId: 'bot', chatType: 'group' as const, chatId: 'oc_Group', agentId: 'expert', text: 'hello' };
+    const topic = (threadId: string, rootMessageId: string) => ({
+      threadId, rootMessageId, replyToMessageId: 'om_Message', replyInThread: true,
+    });
+    await handler.enqueue({ ...event, replyContext: topic('omt_X', 'om_One') });
+    await handler.enqueue({ ...event, replyContext: topic('omt_x', 'om_Two') });
+    imStore.getConversationReplyRoute.mockReturnValue({ to: 'oc_Group#__feishu_reply_to=om_One&__feishu_thread_id=omt_X' });
+    await handler.enqueue({ ...event, replyContext: topic('om_One', 'om_One') });
+    expect(coworkStore.createSession).toHaveBeenCalledTimes(2);
+    expect(runtime.continueSession).toHaveBeenCalledWith('cowork-session-1', 'hello');
+    expect(imStore.getSessionMapping('group:oc_Group:thread:omt_x', 'feishu:bot' as Platform, 'expert')?.coworkSessionId)
+      .toBe('cowork-session-2');
+    expect(imStore.setConversationReplyRoute).toHaveBeenCalledWith('feishu:bot', 'group:oc_Group:thread:omt_X', {
+      channel: 'feishu', accountId: 'bot', to: 'oc_Group#__feishu_reply_to=om_One&__feishu_thread_id=omt_X',
+    });
+    expect(sendReply).toHaveBeenCalledTimes(3);
+    expect(imStore.setConversationReplyRoute).toHaveBeenLastCalledWith('feishu:bot', 'group:oc_Group:thread:om_One', {
+      channel: 'feishu', accountId: 'bot', to: 'oc_Group#__feishu_reply_to=om_One&__feishu_thread_id=omt_X',
+    });
+  });
+
   test('continues a recovered original session and replies to the native chat even when a DSH fork exists', async () => {
     const { handler, runtime, coworkStore, imStore, pushMessage, sendReply } = createFixture();
     const original = coworkStore.createSession('Original DM', '/original');
@@ -666,5 +708,137 @@ describe('DshImInboundHandler', () => {
       text: '综合两张图的最终回复',
       replyContext: { contextToken: 'ctx-int-2' },
     });
+  });
+
+  test('names WeChat owner sessions "我的微信" and non-owner sessions with a short suffix', async () => {
+    const ownerId = 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat';
+    const guestId = 'o9cq809ZEC25-otherUser99AB@im.wechat';
+    const { handler, runtime, coworkStore, pushMessage } = createFixture({
+      getWeixinOwnerUserId: () => ownerId,
+    });
+
+    runtime.startSession.mockImplementation(async (sessionId: string) => {
+      pushMessage(sessionId, { id: `reply-${sessionId}`, type: 'assistant', content: 'ok' });
+      runtime.emit('complete', sessionId);
+    });
+
+    await handler.enqueue({
+      platform: 'weixin',
+      instanceId: 'default',
+      chatId: ownerId,
+      senderId: ownerId,
+      text: '你好',
+    });
+    await handler.enqueue({
+      platform: 'weixin',
+      instanceId: 'default',
+      chatId: guestId,
+      senderId: guestId,
+      text: '你好',
+    });
+
+    expect(coworkStore.createSession).toHaveBeenNthCalledWith(
+      1,
+      '[微信] 我的微信',
+      '/tmp/workspace',
+      '',
+      'auto',
+      undefined,
+      'main',
+    );
+    expect(coworkStore.createSession).toHaveBeenNthCalledWith(
+      2,
+      '[微信] 微信联系人 · 99AB',
+      '/tmp/workspace',
+      '',
+      'auto',
+      undefined,
+      'main',
+    );
+    handler.dispose();
+  });
+
+  test('relays WeChat approval requests without interrupting the turn and refreshes contextToken for the final reply', async () => {
+    const { handler, runtime, sendReply, pushMessage } = createFixture({
+      approvalTimeoutMs: 30_000,
+    });
+
+    let approvalEmittedResolve!: () => void;
+    const approvalEmitted = new Promise<void>((resolve) => {
+      approvalEmittedResolve = resolve;
+    });
+
+    runtime.startSession.mockImplementationOnce(async (sessionId: string) => {
+      runtime.emit('permissionRequest', sessionId, {
+        requestId: `${DSH_APPROVAL_REQUEST_ID_PREFIX}req-1`,
+        toolName: 'bash',
+        toolInput: { command: 'rm -rf ./cache' },
+      });
+      approvalEmittedResolve();
+    });
+
+    runtime.respondToPermission.mockImplementationOnce(async (requestId: string) => {
+      runtime.emit('permissionResolved', 'cowork-session-1', requestId);
+      pushMessage('cowork-session-1', {
+        id: 'final-after-approval',
+        type: 'assistant',
+        content: '缓存已清理完成。',
+      });
+      runtime.emit('complete', 'cowork-session-1');
+    });
+
+    const turnPromise = handler.enqueue({
+      platform: 'weixin',
+      instanceId: 'default',
+      chatId: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      senderId: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      text: '帮我清理缓存目录',
+      messageId: 'wx-msg-1',
+      replyContext: { contextToken: 'ctx-turn-1' },
+    });
+
+    await approvalEmitted;
+
+    // User replies "1" in WeChat to allow the pending tool call.
+    await handler.enqueue({
+      platform: 'weixin',
+      instanceId: 'default',
+      chatId: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      senderId: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      text: '1',
+      messageId: 'wx-msg-2',
+      replyContext: { contextToken: 'ctx-approval-reply' },
+    });
+
+    await turnPromise;
+
+    expect(runtime.stopSession).not.toHaveBeenCalled();
+    expect(runtime.respondToPermission).toHaveBeenCalledWith(
+      `${DSH_APPROVAL_REQUEST_ID_PREFIX}req-1`,
+      { behavior: 'allow' },
+    );
+    expect(sendReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        chatId: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+        replyContext: { contextToken: 'ctx-turn-1' },
+        text: expect.stringContaining('bash: rm -rf ./cache'),
+      }),
+    );
+    expect(sendReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: '✅ 已允许本次操作，继续执行…',
+        replyContext: { contextToken: 'ctx-approval-reply' },
+      }),
+    );
+    expect(sendReply).toHaveBeenLastCalledWith({
+      platform: 'weixin',
+      instanceId: 'default',
+      chatId: 'o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat',
+      text: '缓存已清理完成。',
+      replyContext: { contextToken: 'ctx-approval-reply' },
+    });
+    handler.dispose();
   });
 });

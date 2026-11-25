@@ -1,4 +1,5 @@
-import { type ModelPresetId, modelPresetModelId } from '../modelPresets/constants';
+import { DSH_SESSION_ID_PREFIX } from '../dshEngine/hostConstants';
+import { type ModelPresetId, modelPresetModelId, parseModelPresetId } from '../modelPresets/constants';
 
 export const CONTEXT_WINDOW_SELECTION_CAPABILITY = 'context-window-selection-v1';
 export const DEFAULT_CONTEXT_WINDOW_SELECTION = 'model-default';
@@ -50,4 +51,28 @@ export function userContextWindowSelection(tokens: number, presetId?: ModelPrese
 
 export function contextWindowPreferenceModelKey(modelId: string, presetId?: ModelPresetId): string {
   return presetId ? modelPresetModelId(presetId) : modelId;
+}
+
+const LEGACY_OPENCLAW_CHANNEL_KEY_PATTERN = /^agent:[^:]+:(?!lobsterai:).+/;
+
+/**
+ * Manual context-window controls and remembered desktop chat preferences apply
+ * to desktop chats, not IM sessions (including migrated OpenClaw IM sessions).
+ */
+export function isManualContextWindowSession(session: {
+  scheduledTaskId?: string | null;
+  claudeSessionId?: string | null;
+  modelPresetId?: ModelPresetId | null;
+  imPlatform?: string | null;
+}): boolean {
+  if (session.imPlatform?.trim()) return false;
+  if (session.scheduledTaskId?.trim()) return true;
+  const key = session.claudeSessionId?.trim();
+  if (key && LEGACY_OPENCLAW_CHANNEL_KEY_PATTERN.test(key)) return false;
+  if (parseModelPresetId(session.modelPresetId)) return true;
+  return !key
+    || key.startsWith(DSH_SESSION_ID_PREFIX)
+    || key.startsWith('session-')
+    || key.startsWith('lobsterai:')
+    || /^agent:[^:]+:lobsterai:.+/.test(key);
 }

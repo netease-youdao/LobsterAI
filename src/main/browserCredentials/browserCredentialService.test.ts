@@ -237,4 +237,19 @@ describe('BrowserCredentialService', () => {
     expect(() => restarted.getSecret(saved.id, 'https://other.example.com')).toThrow(/does not match/);
     expect(probe).not.toHaveBeenCalled();
   });
+
+  test('does not disable device storage when a single cross-machine ciphertext fails to decrypt', () => {
+    const saved = service.save({ origin: 'example.com', username: 'alice', password: 'secret' });
+    const decryptSpy = vi.spyOn(encryption, 'decryptString').mockImplementationOnce(() => {
+      throw new Error('Ciphertext from another device');
+    });
+
+    expect(() => service.getSecret(saved.id, 'https://example.com'))
+      .toThrow(/could not be decrypted on this device/i);
+    expect(decryptSpy).toHaveBeenCalledTimes(1);
+    // Global OS encryption remains available so new saves still work cleanly.
+    expect(service.getAvailability()).toEqual({ available: true });
+    const added = service.save({ origin: 'new.example.com', username: 'bob', password: 'fresh-password' });
+    expect(service.getSecret(added.id, 'https://new.example.com').password).toBe('fresh-password');
+  });
 });

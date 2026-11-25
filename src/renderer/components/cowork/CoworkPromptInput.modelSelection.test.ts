@@ -205,7 +205,7 @@ describe('old chat model recovery', () => {
     expect(agentService.updateAgent).not.toHaveBeenCalled();
   });
 
-  test('keeps model presets enabled for existing DSH desktop sessions and disabled for DSH IM sessions', () => {
+  test('keeps model presets enabled for both DSH desktop and IM sessions while keeping manual context windows desktop-only', async () => {
     const dshPresetSession: CoworkSession = {
       ...oldSession,
       claudeSessionId: `${DSH_SESSION_ID_PREFIX}session-fast-1`,
@@ -231,10 +231,18 @@ describe('old chat model recovery', () => {
       ...dshConcreteSession,
       claudeSessionId: `${DSH_SESSION_ID_PREFIX}session-im-1`,
       imPlatform: 'feishu',
+      messages: [],
+      totalMessages: 0,
     };
     setup({ session: dshImSession }).render();
-    expect(selectorProps.allowPresets).toBe(false);
+    expect(selectorProps.allowPresets).toBe(true);
     expect(selectorProps.allowContextWindowSelection).toBe(false);
+    await selectorProps.onChange!(fast, { group: ModelSelectorGroup.Server });
+    expect(coworkService.selectSessionModelPreset).toHaveBeenCalledExactlyOnceWith(
+      dshImSession.id,
+      ModelPresetId.Balanced,
+      undefined,
+    );
   });
 
   test('defers switching a valid active session model until confirmed unless dont-ask-again is stored', async () => {

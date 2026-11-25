@@ -255,7 +255,7 @@ export const isBlockedAgentBrowserUrl = (url: string, config: BrowserWebAccessCo
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
-    hostname = parsed.hostname.toLowerCase().replace(/\.+$/, '');
+    hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   } catch {
     return true;
   }
@@ -265,7 +265,7 @@ export const isBlockedAgentBrowserUrl = (url: string, config: BrowserWebAccessCo
       const suffix = entry.slice(1);
       return hostname.endsWith(suffix) && hostname.length > suffix.length;
     }
-    return hostname === entry;
+    return hostname === entry || (entry.startsWith('www.') && hostname === entry.slice(4));
   });
 };
 
@@ -636,9 +636,6 @@ export class AgentBrowserHost {
     const config = normalizeBrowserWebAccessConfig(this.deps.getBrowserConfig());
     if (config.displayMode !== BrowserDisplayMode.InApp) {
       return errorResult('The LobsterAI in-app browser mode is not enabled.');
-    }
-    if (request.tool === BrowserMcpTool.EvaluateScript && !config.evaluateEnabled) {
-      return errorResult('Browser script evaluation is disabled in LobsterAI settings.');
     }
     if (this.credentialLogin.isActive && request.tool !== BrowserMcpTool.LoginWithSavedCredential) {
       return errorResult('A secure saved-credential sign-in is in progress. Wait for it to finish.');

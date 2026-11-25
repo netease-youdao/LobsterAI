@@ -13,7 +13,6 @@ import {
 import {
   BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   BrowserDisplayMode,
-  BrowserNetworkMode,
 } from '../../shared/browserWebAccess/constants';
 import { CoworkMessageEditPhase } from '../../shared/cowork/messageEdit';
 import {
@@ -2681,7 +2680,7 @@ describe('runLegacyOpenClawMigration', () => {
     const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
     const browserWebAccess = {
       displayMode: BrowserDisplayMode.External,
-      networkMode: BrowserNetworkMode.Strict,
+      networkMode: 'strict',
       credentialUseMode: BrowserCredentialUseMode.OncePerTask,
       credentialSaveMode: BrowserCredentialSaveMode.Never,
       blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
@@ -2766,7 +2765,7 @@ describe('runLegacyOpenClawMigration', () => {
         browserDisplayModeMigrationVersion: 1,
         browserWebAccess: {
           displayMode: BrowserDisplayMode.InApp,
-          networkMode: BrowserNetworkMode.Strict,
+          networkMode: 'strict',
           blockedHostnames: ['https://blocked.example.com'],
         },
       }),
@@ -2791,7 +2790,7 @@ describe('runLegacyOpenClawMigration', () => {
       browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
       browserWebAccess: {
         displayMode: BrowserDisplayMode.InApp,
-        networkMode: BrowserNetworkMode.Strict,
+        networkMode: 'strict',
         blockedHostnames: ['https://blocked.example.com'],
       },
     });

@@ -27,6 +27,45 @@ function configure(key: string, config: Record<string, unknown> = {}) {
   db.prepare('INSERT OR REPLACE INTO im_config VALUES (?, ?, 1)').run(key, JSON.stringify(config));
 }
 
+describe('Feishu topic and bot ownership across upgrades', () => {
+  const group = 'oc_shared';
+  const topic = 'group:oc_shared:thread:omt_TopicA';
+  const other = '87654321-second';
+  const route = { instanceId, agentId, chatId: group, conversationIds: [topic] };
+
+  test('finds legacy scoped and accountless topics without confusing case or bot identity', () => {
+    configure('feishu:' + instanceId, { instanceId, appId: 'cli_original' });
+    configure('feishu:' + other, { instanceId: other, appId: 'cli_other' });
+    store.setIMSettings({ platformAgentBindings: { ['feishu:' + instanceId]: agentId, ['feishu:' + other]: 'agent-b' } });
+    preserveLegacyImBotIdentities(db);
+    store.createSessionMapping(topic, Im.Feishu, 'old', agentId);
+    expect(store.findLegacyFeishuTopicSessionMapping(route)?.coworkSessionId).toBe('old');
+    expect(store.findLegacyFeishuTopicSessionMapping({ ...route, conversationIds: [topic.toLowerCase()] })).toBeNull();
+    expect(store.findLegacyFeishuTopicSessionMapping({ ...route, instanceId: other })).toBeNull();
+    store.setIMSettings({ platformAgentBindings: { ['feishu:' + instanceId]: agentId, ['feishu:' + other]: agentId } });
+    expect(store.findLegacyFeishuTopicSessionMapping(route)).toBeNull();
+    store.createSessionMapping('feishu:' + topic, 'feishu:12345678' as Platform, 'old', agentId);
+    expect(store.findLegacyFeishuTopicSessionMapping(route)?.coworkSessionId).toBe('old');
+    configure('feishu:' + instanceId, { instanceId, appId: 'cli_replaced' });
+    expect(store.findLegacyFeishuTopicSessionMapping(route)).toBeNull();
+  });
+
+  test('lists the selected bot by full or unique short ID even when both bots share a peer and expert', () => {
+    configure('feishu:' + instanceId, { instanceId });
+    configure('feishu:' + other, { instanceId: other });
+    store.createSessionMapping(group, ('feishu:' + instanceId) as Platform, 'old', agentId);
+    store.createSessionMapping(group, ('feishu:' + other) as Platform, 'split', agentId);
+    store.createSessionMapping(topic, 'feishu:12345678' as Platform, 'old', agentId);
+    for (const selected of [instanceId, instanceId.slice(0, 8)]) {
+      expect(store.listSessionMappings(Im.Feishu, selected).map(row => row.coworkSessionId)).toEqual(['old', 'old']);
+    }
+    expect(store.listSessionMappings(Im.Feishu, other.slice(0, 8)).map(row => row.coworkSessionId)).toEqual(['split']);
+    configure('feishu:12345678-collision', { instanceId: '12345678-collision' });
+    expect(store.listSessionMappings(Im.Feishu, '12345678')).toEqual([]);
+    expect(store.listSessionMappings(Im.Feishu, instanceId)).toHaveLength(1);
+  });
+});
+
 describe('OpenClaw to DSH direct conversation keys', () => {
   test.each([
     [Im.DingTalk, '12345678:direct:staff42', 'cid_DingTalk', 'staff42'],

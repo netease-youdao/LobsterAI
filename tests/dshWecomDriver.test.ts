@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { setTimeout as delay } from 'node:timers/promises';
 
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { type WebSocket, WebSocketServer } from 'ws';
 
 const WECOM_DRIVER_PATH = '../dsh-bundles/lobsterai-channels/plugins/drivers/wecom.mjs';
@@ -87,5 +88,107 @@ test('accepts the WeCom handshake, waits for subscription, and replies to a dire
     for (const client of webSocketServer.clients) client.terminate();
     webSocketServer.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+async function exerciseSubscriptions(
+  onSubscribe: (socket: WebSocket, reply: (code: number) => void, attempt: number) => void,
+  check: (driver: InstanceType<typeof import('../dsh-bundles/lobsterai-channels/plugins/drivers/wecom.mjs').WeComChannelDriver>, attempts: () => number) => Promise<void>,
+) {
+  const { WeComChannelDriver } = await import(WECOM_DRIVER_PATH);
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  let attempts = 0;
+  server.on('connection', socket => socket.on('message', data => {
+    const frame = JSON.parse(data.toString());
+    if (frame.cmd !== 'aibot_subscribe') return;
+    onSubscribe(socket, errcode => socket.send(JSON.stringify({ headers: frame.headers, errcode })), ++attempts);
+  }));
+  const driver = new WeComChannelDriver({
+    instanceId: 'retry-test',
+    config: { botId: 'bot', secret: 'secret', websocketUrl: `ws://127.0.0.1:${(server.address() as AddressInfo).port}` },
+    onInbound: async () => {},
+  });
+  try {
+    await check(driver, () => attempts);
+  } finally {
+    await driver.stop();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}
+
+test.concurrent('recovers from a dropped first handshake and a transient subscription rejection', async () => {
+  await exerciseSubscriptions((socket, reply, attempt) => {
+    if (attempt === 1) socket.terminate();
+    else reply(attempt === 2 ? -1 : 0);
+  }, async (driver, attempts) => {
+    await driver.start();
+    expect(driver.getStatus()).toMatchObject({ state: 'reconnecting', error: 'imWecomReconnecting' });
+    await expect.poll(() => driver.getStatus().state, { timeout: 15_000 }).toBe('connected');
+    expect(attempts()).toBe(3);
+    expect(driver.getStatus().error).toBeNull();
+  });
+});
+
+test.concurrent('recovers an established socket and yields ownership to a subsequent takeover', async () => {
+  let owner: WebSocket;
+  await exerciseSubscriptions((socket, reply, attempt) => {
+    owner = socket;
+    reply(0);
+    if (attempt === 1) socket.close();
+  }, async (driver, attempts) => {
+    await driver.start();
+    await expect.poll(() => driver.getStatus().state, { timeout: 2000 }).toBe('reconnecting');
+    await expect.poll(() => driver.getStatus().state, { timeout: 6000 }).toBe('connected');
+    owner.send(JSON.stringify({ cmd: 'aibot_event_callback', body: { event: { eventtype: 'disconnected_event' } } }));
+    await expect.poll(() => driver.getStatus().error).toBe('imWecomConnectionReplaced');
+    await delay(3300);
+    expect(driver.getStatus().state).toBe('error');
+    expect(attempts()).toBe(2);
+    await driver.stop();
+    await driver.start();
+    expect(driver.getStatus()).toMatchObject({ state: 'connected', error: null });
+    expect(attempts()).toBe(3);
+  });
+});
+
+test.concurrent('stops on invalid credentials and cancels pending retries when disabled', async () => {
+  await exerciseSubscriptions((_socket, reply, attempt) => reply(attempt === 1 ? 853000 : -1), async (driver, attempts) => {
+    await expect(driver.start()).rejects.toThrow('imWecomInvalidCredentials');
+    await delay(3300);
+    expect(attempts()).toBe(1);
+    await driver.stop();
+    await driver.start();
+    expect(driver.getStatus().state).toBe('reconnecting');
+    await driver.stop();
+    await delay(3300);
+    expect(attempts()).toBe(2);
+    expect(driver.getStatus()).toMatchObject({ state: 'stopped', error: null });
+  });
+});
+
+test('a silent gateway cannot leave an unacknowledged subscription or heartbeat stuck', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+  const firstSubscription = Promise.withResolvers<void>();
+  const nextSubscription = Promise.withResolvers<void>();
+  try {
+    await exerciseSubscriptions((_socket, reply, attempt) => {
+      if (attempt === 1) firstSubscription.resolve();
+      else { reply(0); nextSubscription.resolve(); }
+    }, async driver => {
+      const starting = driver.start();
+      await firstSubscription.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await starting;
+      expect(driver.getStatus().state).toBe('reconnecting');
+      await vi.advanceTimersByTimeAsync(3000);
+      await nextSubscription.promise;
+      await expect.poll(() => driver.getStatus().state).toBe('connected');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect.poll(() => driver.getStatus().state).toBe('reconnecting');
+    });
+  } finally {
+    vi.useRealTimers();
   }
 });

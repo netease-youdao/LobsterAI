@@ -3,7 +3,6 @@ import { describe, expect, test, vi } from 'vitest';
 import {
   BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   BrowserDisplayMode,
-  BrowserProfileMode,
 } from '../../shared/browserWebAccess/constants';
 import { migrateBrowserDisplayMode, migrateBrowserDisplayModeConfig } from './browserDisplayModeMigration';
 
@@ -12,7 +11,7 @@ describe('browser display migration', () => {
     const config = {
       browserWebAccess: {
         displayMode: BrowserDisplayMode.External,
-        profileMode: BrowserProfileMode.Custom,
+        profileMode: 'custom',
         cdpUrl: 'http://127.0.0.1:9222',
         executablePath: 'browser-executable',
         remoteCdpHandshakeTimeoutMs: 4000,

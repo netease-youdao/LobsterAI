@@ -208,13 +208,13 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
                 role="menuitemradio"
                 aria-checked={selected}
                 onClick={() => handleSelect(option.value)}
-                className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-foreground transition-colors ${
                   selected
-                    ? 'bg-primary/10 text-foreground'
-                    : 'text-foreground hover:bg-surface-raised'
+                    ? 'bg-surface-raised'
+                    : 'hover:bg-surface-raised'
                 }`}
               >
-                <OptionIcon className={`mt-0.5 h-4 w-4 shrink-0 ${selected ? 'text-primary' : option.accentClass}`} />
+                <OptionIcon className={`mt-0.5 h-4 w-4 shrink-0 ${option.accentClass}`} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-foreground">

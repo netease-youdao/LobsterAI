@@ -78,15 +78,8 @@ import {
   type AgentBrowserHostZoomRequest,
   AgentBrowserMcpServerName,
   AgentBrowserZoom,
-  type BrowserControlGatewayRequest,
-  BrowserControlRequestMethod,
-  type BrowserDiagnosticResultStep,
-  BrowserDiagnosticStatus,
-  BrowserDiagnosticStep,
   BrowserDisplayMode,
   BrowserIpc,
-  BrowserNetworkMode,
-  BrowserRuntimeProfile,
   type BrowserWebAccessConfig,
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
@@ -145,15 +138,16 @@ import {
   CoworkSteerStatus,
 } from '../shared/cowork/steer';
 import { stripNullChars } from '../shared/cowork/text';
-import {
-  DataMigrationIpc,
-  type DataMigrationLastRestoreResult,
-  DataMigrationRestoreStatus,
-} from '../shared/dataMigration/constants';
+import type { DataMigrationLastRestoreResult } from '../shared/dataMigration/constants';
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
-import { DSH_POPO_PAIRING_EVENT, DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
+import {
+  DSH_APPROVAL_REQUEST_ID_PREFIX,
+  DSH_POPO_PAIRING_EVENT,
+  DSH_PROFILE_DIR_NAME,
+  DSH_QUESTION_REQUEST_ID_PREFIX,
+} from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -205,7 +199,6 @@ import { mediaServerFailureFields } from '../shared/media/usage';
 import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
 import {
-  isChatPresetSession,
   type ModelPresetId,
   modelPresetModelId,
   parseModelPresetId,
@@ -229,7 +222,11 @@ import {
   parseModelThinkingLevel,
   ProviderName,
 } from '../shared/providers';
-import { selectableContextWindows, userContextWindowSelection } from '../shared/providers/modelContextWindow';
+import {
+  isManualContextWindowSession,
+  selectableContextWindows,
+  userContextWindowSelection,
+} from '../shared/providers/modelContextWindow';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -287,6 +284,7 @@ import { registerFeedbackIpc } from './feedback/feedbackIpc';
 import { getLanguage, setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import { DshImInboundHandler, parseDshImInboundEvent } from './im/dshImInboundHandler';
+import { lookupSessionImChannelPermissionPreset } from './im/imChannelPermissionLookup';
 import {
   approvePairingCode,
   listPairingRequests,
@@ -322,6 +320,10 @@ import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredenti
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
 import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
+import {
+  createRestoreProgressWindowController,
+  registerDataMigrationHandlers,
+} from './ipcHandlers/dataMigration';
 import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
@@ -421,6 +423,7 @@ import {
   createCoworkTempJanitor,
   ensureCoworkTempGitignore,
   findCoworkTempRoot,
+  getLegacySqliteBackupDirs,
 } from './libs/coworkTempJanitor';
 import { CoworkTurnUsageService, type NativeTurnRuns } from './libs/coworkTurnUsage';
 import {
@@ -433,16 +436,7 @@ import {
   type CoworkWorkingDirectoryProblem,
   getDefaultCoworkProjectDirectory,
 } from './libs/coworkWorkingDirectory';
-import {
-  assertDataMigrationSqliteSnapshotMatchesLiveSync,
-  buildDataMigrationBackupFileName,
-  consumeLastRestoreResultSync,
-  createMigrationArchive,
-  ensureTarGzFileName,
-  inspectMigrationArchive,
-  performDataMigrationRestoreSync,
-  performPendingDataMigrationRestoreSync,
-} from './libs/dataMigration/dataMigrationService';
+import { performPendingDataMigrationRestoreSync } from './libs/dataMigration/dataMigrationService';
 import { DesktopNotificationManager } from './libs/desktopNotificationManager';
 import { clearLegacyDevelopmentServerHttpCache } from './libs/developmentHttpCache';
 import {
@@ -615,8 +609,6 @@ import {
   ShareDeploymentAccessSyncOperation,
   ShareDeploymentOperationCoordinator,
 } from './libs/shareDeployment/shareDeploymentOperationCoordinator';
-import { SqliteBackupTrigger } from './libs/sqliteBackup/constants';
-import { SqliteBackupManager } from './libs/sqliteBackup/sqliteBackupManager';
 import {
   clearStartupAuthCache,
   extractAuthCacheUserId,
@@ -2078,6 +2070,7 @@ try {
   startupDataMigrationRestoreResult = performPendingDataMigrationRestoreSync({
     userDataPath: app.getPath('userData'),
     rollbackRootPath: path.join(app.getPath('appData'), `${APP_NAME}-migration-rollbacks`),
+    defaultWorkingDirectory: getDefaultCoworkProjectDirectory(),
   });
 } catch (error) {
   console.error('[DataMigration] pending restore failed before logger initialization:', error);
@@ -2244,7 +2237,6 @@ const officeEditing = new OfficeEditing(MAIN_OFFICE_FORMATS);
 let skinRuntimeController: SkinRuntimeController | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
-let sqliteBackupManager: SqliteBackupManager | null = null;
 let cachedSubscriptionStatus: string = AuthSubscriptionStatus.Free;
 let cachedMediaGenerationEntitled = false;
 let coworkRuntimeForwarderBound = false;
@@ -2396,6 +2388,9 @@ const getDshBootstrap = (): DshBootstrap => {
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
+      resolveSessionDefaultPermissionPreset: (coworkSessionId: string) => (
+        lookupSessionImChannelPermissionPreset(getStore().getDatabase(), coworkSessionId)
+      ),
       resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {
         const session = storeInstance.getSession(sessionId, 0);
         const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
@@ -2543,13 +2538,7 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
     agentBrowserHost = new AgentBrowserHost({
       getMainWindow: () => mainWindow,
       getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
-      useSystemProxy: () => {
-        const appConfig = getStore().get<AppConfigSettings>('app_config');
-        const browserConfig = normalizeBrowserWebAccessConfig(appConfig?.browserWebAccess);
-        return getUseSystemProxyFromConfig(appConfig)
-          && browserConfig.followGlobalProxy
-          && browserConfig.networkMode === BrowserNetworkMode.ProxyCompatible;
-      },
+      useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config')),
       emitState: event => {
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.isDestroyed()) {
@@ -2578,8 +2567,7 @@ const getExternalBrowserHost = (): ExternalBrowserHost => {
   externalBrowserHost ??= new ExternalBrowserHost({
     profilePath: path.join(app.getPath('userData'), 'external-browser'),
     getConfig: getBrowserWebAccessConfig,
-    useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config'))
-      && getBrowserWebAccessConfig().networkMode === BrowserNetworkMode.ProxyCompatible,
+    useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config')),
   });
   return externalBrowserHost;
 };
@@ -2595,7 +2583,6 @@ const isWebSearchSkillEnabled = (): boolean => {
 const getWebSearchHost = (): WebSearchHost => {
   if (!webSearchHost) {
     webSearchHost = new WebSearchHost({
-      getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
       getPageContext: () => getAgentBrowserHost().getBackgroundPageContext(),
       isSkillEnabled: isWebSearchSkillEnabled,
     });
@@ -2827,6 +2814,9 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
 const hasActiveGatewayWorkloads = (): boolean => {
   if (dshBootstrap?.runtimeAdapter.isSessionActive && coworkEngineRouter) {
     if (coworkEngineRouter.getActiveSessionIds().length > 0) return true;
+  }
+  if (dshBootstrap?.scheduler.hasRunningTasks()) {
+    return true;
   }
   return false;
 };
@@ -3101,6 +3091,7 @@ const syncOpenClawConfig = async (options: {
       const imConfig = getIMGatewayManager().getConfig() as unknown as Record<string, unknown>;
       imInstances = buildDshImChannelInstances({
         imConfig,
+        userDataDir: app.getPath('userData'),
         getDefaultCwd: agentId => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       });
     } catch {
@@ -3112,10 +3103,6 @@ const syncOpenClawConfig = async (options: {
     const blockedHostnames = Array.from(new Set([
       ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.blockedHostnames),
       ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.blockedHostnames),
-    ]));
-    const allowedHostnames = Array.from(new Set([
-      ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.allowedHostnames),
-      ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.allowedHostnames),
     ]));
 
     const result = await bootstrap.syncAllConfig({
@@ -3131,10 +3118,9 @@ const syncOpenClawConfig = async (options: {
       },
       memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       webAccessPolicy: {
-        webFetchEnabled: normalizedBrowserWebAccess.webFetch.enabled,
-        browserSearchEnabled: normalizedBrowserWebAccess.displayMode === BrowserDisplayMode.InApp,
+        webFetchEnabled: true,
+        browserSearchEnabled: true,
         blockedHostnames,
-        allowedHostnames,
       },
       agents,
       imInstances,
@@ -3323,7 +3309,11 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
     getDesktopNotificationManager().handlePermissionResolved(requestId);
-    if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+    if (
+      requestId.startsWith(OpenClawQuestion.RequestIdPrefix)
+      || requestId.startsWith(DSH_APPROVAL_REQUEST_ID_PREFIX)
+      || requestId.startsWith(DSH_QUESTION_REQUEST_ID_PREFIX)
+    ) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) {
           win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
@@ -3450,6 +3440,7 @@ const getCoworkTempJanitor = (): CoworkTempJanitor => {
           return [];
         }
       },
+      listLegacyDirs: () => getLegacySqliteBackupDirs(app.getPath('userData')),
     });
   }
   return coworkTempJanitor;
@@ -3604,6 +3595,7 @@ const getIMGatewayManager = () => {
       runtime,
       sendReply: (params) => getDshBootstrap().channelsBridge.sendProactiveMessage(params),
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
+      getWeixinOwnerUserId: () => imGatewayManager?.getConfig().weixin.userId,
       notifySessionsChanged: (sessionId: string) => {
         BrowserWindow.getAllWindows().forEach(win => {
           if (!win.isDestroyed()) {
@@ -3840,7 +3832,7 @@ const getNotificationIconPath = (): string | null => {
 
 // 保存对主窗口的引用
 let mainWindow: BrowserWindow | null = null;
-let dataMigrationRestoreWindow: BrowserWindow | null = null;
+const dataMigrationRestoreProgressWindow = createRestoreProgressWindowController();
 let desktopNotificationManager: DesktopNotificationManager | null = null;
 let desktopCompanionManager: DesktopCompanionManager | null = null;
 let messageSpeechController: MessageSpeechController | null = null;
@@ -4216,7 +4208,6 @@ type AppConfigSettings = {
   theme?: string;
   language?: string;
   useSystemProxy?: boolean;
-  sqliteAutoBackupEnabled?: boolean;
   usageAnalyticsEnabled?: boolean;
   notificationSettings?: Partial<NotificationSettings>;
   browserWebAccess?: Partial<BrowserWebAccessConfig>;
@@ -4226,34 +4217,11 @@ const getUseSystemProxyFromConfig = (config?: { useSystemProxy?: boolean }): boo
   return config?.useSystemProxy === true;
 };
 
-const hasBrowserWebAccessConfigChanged = (
-  previousConfig?: AppConfigSettings,
-  nextConfig?: AppConfigSettings,
-): boolean => {
-  const previousBrowserConfig = normalizeBrowserWebAccessConfig(previousConfig?.browserWebAccess);
-  const nextBrowserConfig = normalizeBrowserWebAccessConfig(nextConfig?.browserWebAccess);
-  return JSON.stringify({
-    ...previousBrowserConfig,
-    credentialUseMode: undefined,
-    credentialSaveMode: undefined,
-  }) !== JSON.stringify({
-    ...nextBrowserConfig,
-    credentialUseMode: undefined,
-    credentialSaveMode: undefined,
-  });
-};
-
 const hasBrowserHostConfigChanged = (
   previousConfig?: AppConfigSettings,
   nextConfig?: AppConfigSettings,
 ): boolean => JSON.stringify(normalizeBrowserWebAccessConfig(previousConfig?.browserWebAccess)) !==
   JSON.stringify(normalizeBrowserWebAccessConfig(nextConfig?.browserWebAccess));
-
-const getSqliteAutoBackupEnabledFromConfig = (
-  config?: { sqliteAutoBackupEnabled?: boolean },
-): boolean => {
-  return config?.sqliteAutoBackupEnabled === true;
-};
 
 const resolveThemeFromConfig = (config?: AppConfigSettings): 'light' | 'dark' => {
   if (config?.theme === 'dark') {
@@ -4765,7 +4733,6 @@ if (!gotTheLock) {
           'question notifications disabled',
         );
       }
-      const browserWebAccessChanged = hasBrowserWebAccessConfigChanged(previousAppConfig, nextAppConfig);
       const browserHostConfigChanged = hasBrowserHostConfigChanged(previousAppConfig, nextAppConfig);
       if (browserHostConfigChanged || previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy) {
         agentBrowserHost?.refreshConfig();
@@ -4783,7 +4750,6 @@ if (!gotTheLock) {
       }
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
-        restartGatewayIfRunning: browserWebAccessChanged,
       });
       if (!syncResult.success) {
         console.error('[DSH] Failed to sync config after app_config update:', syncResult.error);
@@ -9226,7 +9192,10 @@ if (!gotTheLock) {
         if (repair.outcome !== OpenClawLoopbackRepairOutcome.Repaired) {
           return { ...repair, status: getDshBootstrap().getEngineStatus() };
         }
-        const status = await getDshBootstrap().restart();
+        const status = await bootstrapOpenClawEngine({
+          forceReinstall: true,
+          reason: 'repair-loopback-firewall',
+        });
         return { ...repair, status };
       } catch (error) {
         console.error('[DSH] loopback firewall repair failed:', error);
@@ -9242,169 +9211,28 @@ if (!gotTheLock) {
     return repairLoopbackFirewallPromise;
   });
 
-  ipcMain.handle(DataMigrationIpc.Backup, async event => {
-    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
-    try {
-      const saveOptions = {
-        title: t('dataMigrationBackupDialogTitle'),
-        defaultPath: path.join(app.getPath('downloads'), buildDataMigrationBackupFileName()),
-        filters: [{ name: t('dataMigrationBackupArchiveFilter'), extensions: ['gz'] }],
-      };
-      const saveResult = ownerWindow
-        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
-        : await dialog.showSaveDialog(saveOptions);
-      if (saveResult.canceled || !saveResult.filePath) {
-        return { success: true, canceled: true };
-      }
-
-      const outputPath = ensureTarGzFileName(saveResult.filePath);
-      if (hasActiveGatewayWorkloads()) {
-        return {
-          success: false,
-          error: t('dataMigrationBackupBlockedByActiveWorkloads'),
-        };
-      }
-      const backupManager = sqliteBackupManager ?? new SqliteBackupManager(app.getPath('userData'));
-      const sqliteRecord = await backupManager.createBackup({
-        db: getStore().getDatabase(),
-        trigger: SqliteBackupTrigger.Manual,
-      });
-      const sqliteSnapshotPath = path.join(
-        backupManager.getPaths().snapshotsDir,
-        sqliteRecord.fileName,
-      );
-      assertDataMigrationSqliteSnapshotMatchesLiveSync(
-        path.join(app.getPath('userData'), DB_FILENAME),
-        sqliteSnapshotPath,
-      );
-
-      const archive = await createMigrationArchive({
-        userDataPath: app.getPath('userData'),
-        outputPath,
-        sqliteSnapshotPath,
-        archiveKind: 'backup',
-      });
-      return {
-        success: true,
-        canceled: false,
-        path: archive.outputPath,
-        sizeBytes: archive.sizeBytes,
-      };
-    } catch (error) {
-      console.error('[DataMigration] backup failed:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to back up LobsterAI data',
-      };
-    }
+  registerDataMigrationHandlers({
+    getDatabase: () => getStore().getDatabase(),
+    hasActiveWorkloads: () => hasActiveGatewayWorkloads(),
+    getDefaultWorkingDirectory: () => getDefaultCoworkProjectDirectory(),
+    restoreProgressWindow: dataMigrationRestoreProgressWindow,
+    setRestoreLifecycleFlags: (state) => {
+      if (state.restoreInProgress !== undefined) isDataMigrationRestoreInProgress = state.restoreInProgress;
+      if (state.cleanupInProgress !== undefined) isCleanupInProgress = state.cleanupInProgress;
+      if (state.cleanupFinished !== undefined) isCleanupFinished = state.cleanupFinished;
+      if (state.quitting !== undefined) isQuitting = state.quitting;
+    },
+    runAppCleanup: (reason, options) => runAppCleanup(reason, options),
+    closeMemoryService: () => {
+      dshBootstrap?.memoryService.close();
+    },
+    relaunchApp: () => relaunchApp(),
+    exitApp: (code) => app.exit(code),
+    getDshHostManager: () => (dshBootstrap ? dshBootstrap.hostManager : null),
+    getDshRuntimeDir: () => getDshBootstrap().runtimeDir,
+    getDshExecutablePath: () => getDshBootstrap().executablePath,
+    getDshNodeToolchain: () => getDshBootstrap().resolveNodeToolchain(),
   });
-
-  ipcMain.handle(DataMigrationIpc.Restore, async event => {
-    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
-    let rendererReleased = false;
-    try {
-      const openOptions = {
-        title: t('dataMigrationRestoreDialogTitle'),
-        properties: ['openFile'] as 'openFile'[],
-        filters: [
-          { name: t('dataMigrationBackupArchiveFilter'), extensions: ['gz', 'tgz'] },
-          { name: t('dataMigrationAllFilesFilter'), extensions: ['*'] },
-        ],
-      };
-      const openResult = ownerWindow
-        ? await dialog.showOpenDialog(ownerWindow, openOptions)
-        : await dialog.showOpenDialog(openOptions);
-      if (openResult.canceled || openResult.filePaths.length === 0) {
-        return { success: true, canceled: true };
-      }
-
-      const archivePath = openResult.filePaths[0];
-      await inspectMigrationArchive(archivePath);
-      isDataMigrationRestoreInProgress = true;
-      isCleanupInProgress = true;
-      isQuitting = true;
-      await releaseRendererWindowsForDataMigrationRestore();
-      rendererReleased = true;
-      await showDataMigrationRestoreProgressWindow();
-      await runAppCleanup('data migration restore', { requireGatewayStopped: true });
-      try {
-        dshBootstrap?.memoryService.close();
-      } catch (error) {
-        console.warn('[DataMigration] failed to close memory service before restore:', error);
-      }
-      isCleanupFinished = true;
-      isCleanupInProgress = false;
-
-      const restoreResult = performDataMigrationRestoreSync({
-        userDataPath: app.getPath('userData'),
-        rollbackRootPath: path.join(app.getPath('appData'), `${APP_NAME}-migration-rollbacks`),
-        archivePath,
-      });
-      const success = restoreResult?.status === DataMigrationRestoreStatus.Success;
-      console.log(
-        `[DataMigration] restore finished with status ${restoreResult?.status ?? 'unknown'}; `
-        + `rollback archive ${restoreResult?.rollbackPath ?? 'was not created'}.`,
-      );
-      if (!success) {
-        console.error('[DataMigration] restore failed:', restoreResult?.error ?? 'Unknown restore error');
-      }
-      if (rendererReleased) {
-        setTimeout(() => {
-          relaunchApp();
-          app.exit(0);
-        }, 100);
-      }
-      return {
-        success,
-        scheduledRestart: rendererReleased,
-        rollbackPath: restoreResult?.rollbackPath,
-        error: success ? undefined : restoreResult?.error || 'Failed to import LobsterAI data backup',
-      };
-    } catch (error) {
-      isCleanupInProgress = false;
-      const message = error instanceof Error ? error.message : 'Failed to import LobsterAI data backup';
-      console.error('[DataMigration] restore scheduling failed:', error);
-      if (rendererReleased) {
-        dialog.showErrorBox(t('dataMigrationRestoreDialogTitle'), message);
-        setTimeout(() => {
-          relaunchApp();
-          app.exit(0);
-        }, 100);
-      } else {
-        isDataMigrationRestoreInProgress = false;
-        isQuitting = false;
-      }
-      return {
-        success: false,
-        scheduledRestart: rendererReleased,
-        error: message,
-      };
-    }
-  });
-
-  ipcMain.handle(DataMigrationIpc.GetLastRestoreResult, async () => {
-    try {
-      return {
-        success: true,
-        result: consumeLastRestoreResultSync(app.getPath('userData')),
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to read data migration result',
-      };
-    }
-  });
-
-  const requestBrowserControl = async <T,>(
-    _request: BrowserControlGatewayRequest,
-  ): Promise<T> => {
-    throw new Error(t('agentBrowserRuntimeUnavailable'));
-  };
-
-  const buildBrowserProfileQuery = (profile?: BrowserRuntimeProfile): Record<string, string> | undefined => (
-    profile ? { profile } : undefined
-  );
 
   registerBrowserCredentialHandlers({
     ipcMain,
@@ -9594,143 +9422,6 @@ if (!gotTheLock) {
         );
       }),
   );
-
-  ipcMain.handle(BrowserIpc.GetStatus, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
-    try {
-      const status = await requestBrowserControl<Record<string, unknown>>({
-        method: BrowserControlRequestMethod.Get,
-        path: '/',
-        query: buildBrowserProfileQuery(options?.profile),
-      });
-      return { success: true, status };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get browser status',
-      };
-    }
-  });
-
-  ipcMain.handle(BrowserIpc.ListProfiles, async () => {
-    try {
-      const result = await requestBrowserControl<{ profiles?: unknown[] }>({
-        method: BrowserControlRequestMethod.Get,
-        path: '/profiles',
-      });
-      return { success: true, profiles: result.profiles ?? [] };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to list browser profiles',
-      };
-    }
-  });
-
-  ipcMain.handle(BrowserIpc.ResetProfile, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
-    try {
-      const profile = options?.profile || BrowserRuntimeProfile.Managed;
-      const result = await requestBrowserControl<Record<string, unknown>>({
-        method: BrowserControlRequestMethod.Post,
-        path: '/reset-profile',
-        query: buildBrowserProfileQuery(profile),
-        timeoutMs: 20000,
-      });
-      return { success: true, result };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to reset browser profile',
-      };
-    }
-  });
-
-  ipcMain.handle(BrowserIpc.Test, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
-    const steps: BrowserDiagnosticResultStep[] = [];
-    const addStep = (step: BrowserDiagnosticStep, status: BrowserDiagnosticStatus, message: string, details?: string) => {
-      steps.push({
-        step,
-        status,
-        message,
-        ...(details ? { details } : {}),
-      });
-    };
-    const profile = options?.profile;
-
-    try {
-      if (getBrowserWebAccessConfig().displayMode === BrowserDisplayMode.External) {
-        await getExternalBrowserHost().open();
-        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
-        return { success: true, steps };
-      }
-      const engineStatus = getDshBootstrap().getEngineStatus();
-      if (engineStatus.phase !== 'running') {
-        addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Error, 'browserDiagnosticGatewayNotRunning', engineStatus.message);
-        return { success: false, steps, error: engineStatus.message || 'DSH host is not running.' };
-      }
-      addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticGatewayReady');
-
-      try {
-        const profiles = await requestBrowserControl<{ profiles?: unknown[] }>({
-          method: BrowserControlRequestMethod.Get,
-          path: '/profiles',
-        });
-        addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Success, 'browserDiagnosticProfilesReady', `${profiles.profiles?.length ?? 0}`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Error, 'browserDiagnosticProfilesFailed', message);
-        return { success: false, steps, error: message };
-      }
-
-      try {
-        await requestBrowserControl<Record<string, unknown>>({
-          method: BrowserControlRequestMethod.Get,
-          path: '/',
-          query: buildBrowserProfileQuery(profile),
-        });
-        addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticStatusReady');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Warning, 'browserDiagnosticStatusWarning', message);
-      }
-
-      try {
-        await requestBrowserControl<Record<string, unknown>>({
-          method: BrowserControlRequestMethod.Post,
-          path: '/start',
-          query: buildBrowserProfileQuery(profile),
-          timeoutMs: 20000,
-        });
-        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Error, 'browserDiagnosticStartFailed', message);
-        return { success: false, steps, error: message };
-      }
-
-      try {
-        await requestBrowserControl<Record<string, unknown>>({
-          method: BrowserControlRequestMethod.Post,
-          path: '/tabs/open',
-          query: buildBrowserProfileQuery(profile),
-          body: { url: 'https://example.com' },
-          timeoutMs: 20000,
-        });
-        addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Success, 'browserDiagnosticOpenPageReady');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Error, 'browserDiagnosticOpenPageFailed', message);
-        return { success: false, steps, error: message };
-      }
-
-      return { success: true, steps };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Browser diagnostic failed';
-      if (steps.length === 0) {
-        addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Error, 'browserDiagnosticGatewayFailed', message);
-      }
-      return { success: false, steps, error: message };
-    }
-  });
 
   registerMcpHandlers({
     getMcpRuntime,
@@ -11636,7 +11327,7 @@ if (!gotTheLock) {
       const previousSession = getCoworkStore().getSession(sessionId);
       const contextOwner = getContextWindowOwnerKey();
       const targetModelId = patch.model?.slice(patch.model.indexOf('/') + 1) ?? '';
-      const contextOverride = patch.model !== undefined && isChatPresetSession(previousSession ?? {})
+      const contextOverride = patch.model !== undefined && isManualContextWindowSession(previousSession ?? {})
         ? rememberedContextWindow(getStore(), contextOwner, targetModelId, undefined,
           selectableContextWindows(getServerModelMetadata(targetModelId))) : null;
       if (patch.model !== undefined) {
@@ -12054,6 +11745,8 @@ if (!gotTheLock) {
             .getIMStore()
             .getSessionMapping(conversationId, platform as Platform),
         getIMSettings: () => getIMGatewayManager().getIMStore().getIMSettings(),
+        getConversationReplyRoute: (platform: Platform, conversationId: string) =>
+          getIMGatewayManager().getIMStore().getConversationReplyRoute(platform, conversationId),
         listSessionMappings: (platform: string, accountId?: string) =>
           getIMGatewayManager()
             .getIMStore()
@@ -14892,168 +14585,6 @@ if (!gotTheLock) {
   let isCleanupFinished = false;
   let isCleanupInProgress = false;
 
-  const escapeDataMigrationHtml = (value: string): string => value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-  const showDataMigrationRestoreProgressWindow = async (): Promise<void> => {
-    if (dataMigrationRestoreWindow && !dataMigrationRestoreWindow.isDestroyed()) {
-      dataMigrationRestoreWindow.show();
-      dataMigrationRestoreWindow.focus();
-      return;
-    }
-
-    const dark = nativeTheme.shouldUseDarkColors;
-    const windowTitle = t('dataMigrationRestoreProgressTitle');
-    const title = escapeDataMigrationHtml(windowTitle);
-    const desc = escapeDataMigrationHtml(t('dataMigrationRestoreProgressDesc'));
-    const warning = escapeDataMigrationHtml(t('dataMigrationRestoreProgressWarning'));
-    const background = dark ? '#111827' : '#f8fafc';
-    const surface = dark ? '#1f2937' : '#ffffff';
-    const foreground = dark ? '#f9fafb' : '#111827';
-    const secondary = dark ? '#d1d5db' : '#4b5563';
-    const border = dark ? '#374151' : '#e5e7eb';
-    const primary = '#2563eb';
-    const html = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-  <title>${title}</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: ${background};
-      color: ${foreground};
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    .panel {
-      width: min(360px, calc(100vw - 40px));
-      border: 1px solid ${border};
-      border-radius: 14px;
-      background: ${surface};
-      padding: 28px 24px;
-      text-align: center;
-      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
-    }
-    .spinner {
-      width: 42px;
-      height: 42px;
-      margin: 0 auto 18px;
-      border-radius: 999px;
-      border: 4px solid rgba(37, 99, 235, 0.18);
-      border-top-color: ${primary};
-      animation: spin 0.9s linear infinite;
-    }
-    h1 {
-      margin: 0;
-      font-size: 17px;
-      line-height: 1.4;
-      font-weight: 650;
-    }
-    p {
-      margin: 12px 0 0;
-      color: ${secondary};
-      font-size: 13px;
-      line-height: 1.65;
-    }
-    .warning {
-      margin-top: 18px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      background: rgba(245, 158, 11, 0.12);
-      color: ${dark ? '#fde68a' : '#92400e'};
-      text-align: left;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
-  <main class="panel">
-    <div class="spinner" aria-hidden="true"></div>
-    <h1>${title}</h1>
-    <p>${desc}</p>
-    <p class="warning">${warning}</p>
-  </main>
-</body>
-</html>`;
-
-    const progressWindow = new BrowserWindow({
-      width: 440,
-      height: 300,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      show: false,
-      title: windowTitle,
-      autoHideMenuBar: true,
-      backgroundColor: background,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        partition: `data-migration-restore-${Date.now()}`,
-      },
-    });
-    dataMigrationRestoreWindow = progressWindow;
-    progressWindow.setMenu(null);
-    progressWindow.on('closed', () => {
-      if (dataMigrationRestoreWindow === progressWindow) {
-        dataMigrationRestoreWindow = null;
-      }
-    });
-
-    try {
-      await progressWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-    } catch (error) {
-      console.warn('[DataMigration] failed to load restore progress window:', error);
-    }
-    if (!progressWindow.isDestroyed()) {
-      progressWindow.show();
-      progressWindow.focus();
-    }
-  };
-
-  const releaseRendererWindowsForDataMigrationRestore = async (): Promise<void> => {
-    const windows = BrowserWindow.getAllWindows()
-      .filter(win => !win.isDestroyed() && win !== dataMigrationRestoreWindow);
-    if (windows.length === 0) {
-      return;
-    }
-
-    console.log(`[DataMigration] closing ${windows.length} renderer window(s) before restore.`);
-    await Promise.all(windows.map(win => new Promise<void>(resolve => {
-      let resolved = false;
-      let timeout: ReturnType<typeof setTimeout> | null = null;
-      const finish = () => {
-        if (resolved) return;
-        resolved = true;
-        if (timeout) clearTimeout(timeout);
-        resolve();
-      };
-      timeout = setTimeout(finish, 3_000);
-      win.once('closed', finish);
-      try {
-        win.destroy();
-      } catch (error) {
-        console.warn('[DataMigration] failed to destroy renderer window before restore:', error);
-        finish();
-      }
-    })));
-
-    // Give Chromium a short window to release LevelDB handles such as Local Storage on Windows.
-    await new Promise(resolve => { setTimeout(resolve, 500); });
-  };
-
   // Read by the quit watchdog to report which cleanup step was in flight when
   // it had to force-exit.
   let currentAppCleanupStep = 'not-started';
@@ -15144,7 +14675,6 @@ if (!gotTheLock) {
       // CronJobService may not have been initialized — safe to ignore.
     }
 
-    sqliteBackupManager?.stopPeriodicBackupLoop();
     unsubscribeLibrarySessionChanges?.();
     unsubscribeLibrarySessionChanges = null;
     libraryIndexService?.stop();
@@ -15410,17 +14940,6 @@ if (!gotTheLock) {
     const legacyKeys = database.prepare('SELECT key FROM kv WHERE key GLOB ?')
       .all(MediaDefaultsProtocol.LegacyKey + ':*') as Array<{ key: string }>;
     mediaDefaults.migrateLegacyPreferences(legacyKeys.map(row => row.key));
-
-    sqliteBackupManager = new SqliteBackupManager(app.getPath('userData'));
-
-    const startSqliteBackupLoop = async (): Promise<void> => {
-      if (!sqliteBackupManager) return;
-      await sqliteBackupManager.startPeriodicBackupLoop(() => getStore().getDatabase());
-    };
-
-    const stopSqliteBackupLoop = (): void => {
-      sqliteBackupManager?.stopPeriodicBackupLoop();
-    };
 
     // Defensive recovery: app may be force-closed during execution and leave
     // stale running flags in DB. Normalize them on startup.
@@ -15953,12 +15472,6 @@ if (!gotTheLock) {
           .finally(() => { mediaRecoveryInFlight = false; });
       }, 15_000);
       app.once('before-quit', () => clearInterval(mediaRecoveryTimer));
-
-      if (getSqliteAutoBackupEnabledFromConfig(getStore().get<AppConfigSettings>('app_config'))) {
-        void startSqliteBackupLoop().catch(error => {
-          console.error('[SqliteBackup] Failed to start periodic backup loop:', error);
-        });
-      }
     }, 2_500);
     deferredStartupTimer.unref();
     app.once('before-quit', () => clearTimeout(deferredStartupTimer));
@@ -16011,9 +15524,6 @@ if (!gotTheLock) {
     let lastUseSystemProxy = getUseSystemProxyFromConfig(
       getStore().get<AppConfigSettings>('app_config'),
     );
-    let lastSqliteAutoBackupEnabled = getSqliteAutoBackupEnabledFromConfig(
-      getStore().get<AppConfigSettings>('app_config'),
-    );
     getStore().onDidChange<AppConfigSettings>('app_config', (newConfig, oldConfig) => {
       if (newConfig?.usageAnalyticsEnabled === false) {
         mediaUsage.clear();
@@ -16050,21 +15560,6 @@ if (!gotTheLock) {
         });
       }
       lastUseSystemProxy = currentUseSystemProxy;
-
-      const previousSqliteAutoBackupEnabled = oldConfig
-        ? getSqliteAutoBackupEnabledFromConfig(oldConfig)
-        : lastSqliteAutoBackupEnabled;
-      const currentSqliteAutoBackupEnabled = getSqliteAutoBackupEnabledFromConfig(newConfig);
-      if (currentSqliteAutoBackupEnabled !== previousSqliteAutoBackupEnabled) {
-        if (currentSqliteAutoBackupEnabled) {
-          void startSqliteBackupLoop().catch(error => {
-            console.error('[SqliteBackup] Failed to enable periodic backup loop:', error);
-          });
-        } else {
-          stopSqliteBackupLoop();
-        }
-      }
-      lastSqliteAutoBackupEnabled = currentSqliteAutoBackupEnabled;
     });
 
     // 在 macOS 上，当点击 dock 图标时显示已有窗口或重新创建

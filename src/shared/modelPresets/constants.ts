@@ -1,4 +1,3 @@
-import { DSH_SESSION_ID_PREFIX } from '../dshEngine/hostConstants';
 import { type ModelThinkingConfig, type ModelThinkingLevel, parseModelThinkingLevel } from '../providers/modelThinking';
 
 export const ModelPresetId = {
@@ -52,22 +51,4 @@ export function parseModelPresetPreference(value: unknown): ModelPresetPreferenc
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : null;
   const presetId = parseModelPresetId(record ? record.presetId : value);
   return presetId ? { presetId, thinkingLevel: parseModelThinkingLevel(record?.thinkingLevel) } : null;
-}
-
-export function isChatPresetSession(session: {
-  scheduledTaskId?: string | null;
-  claudeSessionId?: string | null;
-  modelPresetId?: ModelPresetId | null;
-  imPlatform?: string | null;
-}): boolean {
-  if (session.imPlatform?.trim()) return false;
-  // A saved preset or scheduled-task conversation keeps the chat managed after
-  // DSH assigns its runtime key, and native DSH desktop chats remain eligible.
-  if (parseModelPresetId(session.modelPresetId) || session.scheduledTaskId?.trim()) return true;
-  const key = session.claudeSessionId?.trim();
-  return !key
-    || key.startsWith(DSH_SESSION_ID_PREFIX)
-    || key.startsWith('session-')
-    || key.startsWith('lobsterai:')
-    || /^agent:[^:]+:lobsterai:.+/.test(key);
 }

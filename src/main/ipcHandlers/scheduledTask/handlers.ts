@@ -14,6 +14,8 @@ import type {
   ScheduledTaskPayload,
 } from '../../../scheduledTask/types';
 import { AgentId } from '../../../shared/agent/constants';
+import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
 import { sanitizeWeixinDeliveryError } from '../../../shared/im/weixin';
 import {
   imConversationDisplayName,
@@ -63,6 +65,10 @@ function normalizeImAnnounceDeliveryTo(
   mappings: readonly ConversationMappingForList[],
   platform: Platform,
 ): string {
+  if (platform === RetainedImPlatform.Feishu) {
+    const route = parseFeishuReplyRoute(rawTo);
+    if (route) return formatFeishuReplyRoute(route);
+  }
   const parsed = parseImConversationId(rawTo);
   let candidate: string;
   if (
@@ -106,6 +112,10 @@ export interface ScheduledTaskHandlerDeps {
           getIMSettings?: () => {
             platformAgentBindings?: Record<string, string>;
           };
+          getConversationReplyRoute: (platform: Platform, conversationId: string) => {
+            to: string;
+            accountId?: string;
+          } | null;
           listSessionMappings: (
             platform: string,
             accountId?: string,
@@ -140,7 +150,9 @@ function applyLocalAnnounceDeliveryNormalization(
   const platform = PlatformRegistry.platformOfChannel(delivery.channel);
   if (!platform) return null;
   const imStore = getIMGatewayManager()?.getIMStore();
-  const mappings = imStore?.listSessionMappings(platform) ?? [];
+  const mappings = (platform === RetainedImPlatform.Feishu && delivery.accountId
+    ? imStore?.listSessionMappings(platform, delivery.accountId)
+    : imStore?.listSessionMappings(platform)) ?? [];
   const imSettings = imStore?.getIMSettings?.();
 
   normalizedInput.sessionTarget = STSessionTarget.Isolated;
@@ -160,9 +172,11 @@ function applyLocalAnnounceDeliveryNormalization(
     : '';
   if (!existingAgentId || existingAgentId === AgentId.Main) {
     try {
+      const topic = platform === RetainedImPlatform.Feishu ? parseFeishuReplyRoute(rawTo) : null;
+      const mappingTarget = topic?.threadId ? buildFeishuTopicConversationId(topic.chatId, topic.threadId) : rawTo;
       const boundAgentId = resolveConversationAgentIdFromMappings(
         mappings,
-        rawTo,
+        mappingTarget,
         parsedConversation.accountId ?? delivery.accountId,
         {
           platform,
@@ -477,20 +491,34 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
           selectedAccountId,
           platformAgentBindings,
         );
-        const mappings = dedupeConversationMappings(filteredMappings);
-        const conversations = mappings.map(m => {
+        const mappings = dedupeConversationMappings(filteredMappings, platform);
+        const listedTopics = new Set<string>();
+        const conversations = mappings.flatMap(m => {
           const parsed = parseImConversationId(m.imConversationId);
+          const topic = platform === RetainedImPlatform.Feishu ? parseFeishuReplyRoute(m.imConversationId) : null;
+          const cachedRoute = topic && imStore.getConversationReplyRoute(m.platform as Platform, m.imConversationId);
+          if (selectedAccountId && cachedRoute?.accountId && cachedRoute.accountId !== selectedAccountId
+            && cachedRoute.accountId.slice(0, 8) !== selectedAccountId
+            && selectedAccountId.slice(0, 8) !== cachedRoute.accountId) return [];
+          const deliveryRoute = cachedRoute ? parseFeishuReplyRoute(cachedRoute.to) : topic;
+          // A native thread ID alone is not a Feishu message that can be
+          // replied to. Once a message arrives, its route is saved on disk.
+          if (topic && !deliveryRoute?.replyToMessageId) return [];
+          if (topic) {
+            if (listedTopics.has(m.coworkSessionId)) return [];
+            listedTopics.add(m.coworkSessionId);
+          }
           const sessionTitle = getCoworkSessionTitle(m.coworkSessionId)?.trim();
           const customTitle =
             sessionTitle && !AUTO_CHANNEL_TITLE_RE.test(sessionTitle) ? sessionTitle : undefined;
-          return {
-            conversationId: m.imConversationId,
+          return [{
+            conversationId: deliveryRoute ? formatFeishuReplyRoute(deliveryRoute) : m.imConversationId,
             platform: m.platform,
             coworkSessionId: m.coworkSessionId,
             lastActiveAt: m.lastActiveAt,
             ...(parsed.peerKind ? { peerKind: parsed.peerKind } : {}),
             displayName: customTitle ?? imConversationDisplayName(m.imConversationId),
-          };
+          }];
         });
         return { success: true, conversations };
       } catch (error) {

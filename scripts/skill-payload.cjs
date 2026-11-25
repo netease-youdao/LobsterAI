@@ -19,10 +19,11 @@ function readLockPackages(skillDir) {
  * Bundled skills ship prebuilt code (skillServices never runs `tsc` in a
  * packaged app), so packages that a skill's lockfile marks dev-only, such as
  * typescript and @types/*, are never loaded. macOS installs skills with
- * `npm ci --omit=dev`; the Windows tar packs the developer node_modules.
+ * `npm ci --omit=dev`; Windows filters dev-only packages out of `win.extraResources`.
  * Returns paths relative to the SKILLs root, e.g. web-search/node_modules/typescript.
  */
 function listSkillDevOnlyPackages(skillsRoot) {
+  if (!fs.existsSync(skillsRoot)) return [];
   const result = [];
   for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -34,7 +35,44 @@ function listSkillDevOnlyPackages(skillsRoot) {
   return result.sort();
 }
 
-/** Windows tar filter for paths relative to the SKILLs root. */
+/** Glob exclusions relative to SKILLs/ for electron-builder extraResources filters. */
+function createSkillsExtraResourceExclusions(skillsRoot) {
+  return listSkillDevOnlyPackages(skillsRoot).flatMap(pkg => [`!${pkg}`, `!${pkg}/**`]);
+}
+
+/**
+ * Append dev-only package exclusions to the Windows `SKILLs` extraResources
+ * entry so `electron-builder` copies skill runtime code without developer
+ * dependencies like `typescript` or `@types/*`.
+ */
+function configureWindowsSkillsPayload(context, skillsRoot) {
+  const options = context?.packager?.platformSpecificBuildOptions;
+  if (!options || !Array.isArray(options.extraResources)) return;
+  const exclusions = createSkillsExtraResourceExclusions(skillsRoot);
+  if (exclusions.length === 0) return;
+
+  let updated = false;
+  options.extraResources = options.extraResources.map(resource => {
+    if (!resource || typeof resource !== 'object' || resource.to !== 'SKILLs') {
+      return resource;
+    }
+    updated = true;
+    const baseFilter = Array.isArray(resource.filter)
+      ? [...resource.filter]
+      : resource.filter
+        ? [resource.filter]
+        : ['**/*'];
+    for (const pattern of exclusions) {
+      if (!baseFilter.includes(pattern)) baseFilter.push(pattern);
+    }
+    return { ...resource, filter: baseFilter };
+  });
+  if (!updated) {
+    throw new Error('[skill-payload] Missing Windows SKILLs extraResources mapping');
+  }
+}
+
+/** Filter predicate for paths relative to the SKILLs root. */
 function createSkillsPayloadFilter(skillsRoot) {
   const excluded = listSkillDevOnlyPackages(skillsRoot);
   return filePath => {
@@ -43,4 +81,9 @@ function createSkillsPayloadFilter(skillsRoot) {
   };
 }
 
-module.exports = { createSkillsPayloadFilter, listSkillDevOnlyPackages };
+module.exports = {
+  configureWindowsSkillsPayload,
+  createSkillsExtraResourceExclusions,
+  createSkillsPayloadFilter,
+  listSkillDevOnlyPackages,
+};

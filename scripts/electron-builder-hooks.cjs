@@ -3,10 +3,10 @@
 const path = require('path');
 const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, writeFileSync } = require('fs');
 const { spawnSync } = require('child_process');
+const asar = require('@electron/asar');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
-const { packMultipleSources } = require('./pack-dsh-win-resources.cjs');
 const { configureBetterSqlite3Payload } = require('./better-sqlite3-payload.cjs');
-const { createSkillsPayloadFilter } = require('./skill-payload.cjs');
+const { configureWindowsSkillsPayload } = require('./skill-payload.cjs');
 const { prepareMacSkills, verifyPackagedMacSkills } = require('./skill-mac-dependencies.cjs');
 
 const HEAVY_PRUNED_PACKAGES = [
@@ -327,6 +327,58 @@ function directoryTotalFileBytes(rootDir) {
   return total;
 }
 
+function verifyPackagedDshRuntimeAsar(resourcesDir, { isWindows = false } = {}) {
+  const asarPath = path.join(resourcesDir, 'app.asar');
+  if (!existsSync(asarPath)) {
+    throw new Error(`[electron-builder-hooks] Packed archive not found: ${asarPath}`);
+  }
+
+  for (const rel of [
+    'dsh-runtime/package.json',
+    'dsh-runtime/lib/bin.js',
+    'dsh-runtime/node_modules/@deepseek-ai/dsh-app-boot/package.json',
+  ]) {
+    try {
+      const stat = asar.statFile(asarPath, rel.split('/').join(path.sep));
+      if (!stat || stat.files) {
+        throw new Error('not a file');
+      }
+    } catch (error) {
+      throw new Error(
+        `[electron-builder-hooks] ${rel} is missing from ${asarPath}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const requiredDiskPaths = [
+    path.join(resourcesDir, 'app.asar.unpacked', 'dsh-runtime', 'package-manager', 'pnpm', 'package.json'),
+    path.join(resourcesDir, 'dsh-bundles', 'lobsterai-host', 'package.json'),
+    path.join(resourcesDir, 'dsh-bundles', 'lobsterai-channels', 'package.json'),
+  ];
+  if (isWindows) {
+    requiredDiskPaths.push(path.join(resourcesDir, 'SKILLs'));
+    requiredDiskPaths.push(path.join(resourcesDir, 'python-win'));
+  }
+
+  const missing = requiredDiskPaths.filter((candidate) => !existsSync(candidate));
+  if (missing.length > 0) {
+    throw new Error(
+      `[electron-builder-hooks] Packaged resources are incomplete. Missing: ${missing.join(', ')}`,
+    );
+  }
+
+  if (isWindows) {
+    const hasPythonExe = existsSync(path.join(resourcesDir, 'python-win', 'python.exe'))
+      || existsSync(path.join(resourcesDir, 'python-win', 'python3.exe'));
+    if (!hasPythonExe) {
+      throw new Error(`[electron-builder-hooks] Missing python executable under ${path.join(resourcesDir, 'python-win')}`);
+    }
+  }
+
+  asar.uncacheAll();
+  console.log(`[electron-builder-hooks] Verified app.asar/dsh-runtime, unpacked pnpm, and bundles in ${resourcesDir}`);
+}
+
 /**
  * Emit the build-time payload size metadata consumed by scripts/nsis-installer.nsh
  * (via `!include "${PROJECT_DIR}\build-tar\win-installer-payload-size.nsh"`).
@@ -334,36 +386,22 @@ function directoryTotalFileBytes(rootDir) {
 function writeWindowsPayloadSizeFragment(context) {
   const toMb = (bytes) => Math.ceil(bytes / (1024 * 1024));
   const buildTarDir = path.join(__dirname, '..', 'build-tar');
-  const tarPath = path.join(buildTarDir, 'win-resources.tar');
-  if (!existsSync(tarPath)) {
-    throw new Error(
-      `[electron-builder-hooks] ${tarPath} is missing in afterPack; beforePack should have packed it. `
-      + 'The NSIS installer cannot be built without its payload size metadata.',
-    );
-  }
-  const tarBytes = statSync(tarPath).size;
+  mkdirSync(buildTarDir, { recursive: true });
 
-  const packagedTarPath = path.join(context.appOutDir, 'resources', 'win-resources.tar');
-  if (!existsSync(packagedTarPath)) {
+  const packagedAsarPath = path.join(context.appOutDir, 'resources', 'app.asar');
+  if (!existsSync(packagedAsarPath)) {
     throw new Error(
-      `[electron-builder-hooks] ${packagedTarPath} is missing from the packed app; `
-      + 'win.extraResources should have copied build-tar/win-resources.tar there.',
+      `[electron-builder-hooks] ${packagedAsarPath} is missing from the packed app; `
+      + 'cannot generate NSIS payload size metadata.',
     );
   }
-  const packagedTarBytes = statSync(packagedTarPath).size;
-  if (packagedTarBytes !== tarBytes) {
-    throw new Error(
-      `[electron-builder-hooks] win-resources.tar size mismatch: build-tar copy is ${tarBytes} bytes `
-      + `but the packed app copy is ${packagedTarBytes} bytes. The build machine likely ran out of disk `
-      + 'space while copying extraResources.',
-    );
-  }
+  const asarBytes = statSync(packagedAsarPath).size;
 
   const unpackedBytes = directoryTotalFileBytes(context.appOutDir);
-  if (tarBytes <= 0 || unpackedBytes < tarBytes) {
+  if (asarBytes <= 0 || unpackedBytes < asarBytes) {
     throw new Error(
-      `[electron-builder-hooks] Implausible payload sizes (tar=${tarBytes} bytes, unpacked=${unpackedBytes} bytes); `
-      + 'the app directory must contain at least the tar it ships.',
+      `[electron-builder-hooks] Implausible payload sizes (asar=${asarBytes} bytes, unpacked=${unpackedBytes} bytes); `
+      + 'the app directory must contain at least app.asar.',
     );
   }
 
@@ -371,15 +409,14 @@ function writeWindowsPayloadSizeFragment(context) {
   const fragment = [
     '; Generated by scripts/electron-builder-hooks.cjs (afterPack). Do not edit or commit.',
     '; Consumed by scripts/nsis-installer.nsh for staging preflight and payload validation.',
-    `!define LOBSTER_WIN_RESOURCES_TAR_BYTES "${tarBytes}"`,
-    `!define LOBSTER_WIN_RESOURCES_TAR_MB "${toMb(tarBytes)}"`,
+    `!define LOBSTER_APP_ASAR_BYTES "${asarBytes}"`,
     `!define LOBSTER_PAYLOAD_UNPACKED_MB "${toMb(unpackedBytes)}"`,
     '',
   ].join('\r\n');
   writeFileSync(fragmentPath, fragment);
   console.log(
     '[electron-builder-hooks] Wrote NSIS payload size fragment: '
-    + `tar=${tarBytes} bytes (${toMb(tarBytes)} MB), unpacked=${toMb(unpackedBytes)} MB -> ${fragmentPath}`,
+    + `asar=${asarBytes} bytes (${toMb(asarBytes)} MB), unpacked=${toMb(unpackedBytes)} MB -> ${fragmentPath}`,
   );
 }
 
@@ -396,6 +433,9 @@ async function beforePack(context) {
     return;
   }
 
+  const projectRoot = path.join(__dirname, '..');
+  configureWindowsSkillsPayload(context, path.join(projectRoot, 'SKILLs'));
+
   console.log('[electron-builder-hooks] Windows target detected, ensuring portable Python runtime is prepared...');
   await ensurePortablePythonRuntime({ required: true });
   const pythonRuntimeRoot = path.join(__dirname, '..', 'resources', 'python-win');
@@ -406,49 +446,6 @@ async function beforePack(context) {
       + runtimeHealth.missing.join(', '),
     );
   }
-
-  // Pack all large resource directories into a single tar for faster NSIS installation.
-  const projectRoot = path.join(__dirname, '..');
-  const buildTarDir = path.join(projectRoot, 'build-tar');
-  mkdirSync(buildTarDir, { recursive: true });
-
-  const outputTar = path.join(buildTarDir, 'win-resources.tar');
-  const dshRuntimeRoot = path.join(projectRoot, 'vendor', 'dsh-runtime', 'current');
-  const sources = [
-    {
-      label: 'DSH runtime',
-      dir: dshRuntimeRoot,
-      prefix: 'dsh-runtime',
-    },
-    {
-      label: 'DSH bundles',
-      dir: path.join(projectRoot, 'dsh-bundles'),
-      prefix: 'dsh-bundles',
-    },
-    {
-      label: 'SKILLs',
-      dir: path.join(projectRoot, 'SKILLs'),
-      prefix: 'SKILLs',
-      filter: createSkillsPayloadFilter(path.join(projectRoot, 'SKILLs')),
-    },
-    {
-      label: 'Python runtime',
-      dir: pythonRuntimeRoot,
-      prefix: 'python-win',
-    },
-  ];
-
-  console.log(`[electron-builder-hooks] Packing combined Windows tar: ${outputTar}`);
-  const t0 = Date.now();
-  if (existsSync(outputTar)) rmSync(outputTar);
-
-  const { totalFiles, skipped } = packMultipleSources(sources, outputTar);
-  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  const sizeMB = (statSync(outputTar).size / (1024 * 1024)).toFixed(1);
-  console.log(
-    `[electron-builder-hooks] Combined tar packed in ${elapsed}s: `
-    + `${totalFiles} files, ${skipped} skipped, ${sizeMB} MB`,
-  );
 }
 
 async function afterPack(context) {
@@ -457,6 +454,7 @@ async function afterPack(context) {
   }
 
   if (isWindowsTarget(context)) {
+    verifyPackagedDshRuntimeAsar(path.join(context.appOutDir, 'resources'), { isWindows: true });
     writeWindowsPayloadSizeFragment(context);
   }
 
@@ -466,7 +464,8 @@ async function afterPack(context) {
 
     if (existsSync(appPath)) {
       const resourcesDir = path.join(appPath, 'Contents', 'Resources');
-      removeAllBinDirsInResourceTree(path.join(resourcesDir, 'dsh-runtime'), 'dsh-runtime');
+      verifyPackagedDshRuntimeAsar(resourcesDir);
+      removeAllBinDirsInResourceTree(path.join(resourcesDir, 'app.asar.unpacked'), 'app.asar.unpacked');
       removeAllBinDirsInResourceTree(path.join(resourcesDir, 'dsh-bundles'), 'dsh-bundles');
       applyMacIconFix(appPath);
     } else {

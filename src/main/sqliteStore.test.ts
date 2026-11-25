@@ -718,6 +718,69 @@ test('migrates legacy agents to all collaboration mode unless an explicit allowl
   migrated.close();
 });
 
+test('restores legacy selections after a downgrade and preserves explicit DSH modes', async () => {
+  const userDataPath = createTempUserDataPath();
+  const beforeFix = await SqliteStore.create(userDataPath);
+  const agents = new CoworkStore(beforeFix.getDatabase());
+  agents.createAgent({ id: 'owner', name: 'Owner' });
+  agents.createAgent({ id: 'keep-all', name: 'Keep all', subagentAllowAgentIds: ['writer', 'reviewer'] });
+  beforeFix.getDatabase().exec('ALTER TABLE agents DROP COLUMN subagent_allow_agent_ids_snapshot');
+  beforeFix.close();
+
+  const firstDsh = await SqliteStore.create(userDataPath);
+  const firstAgents = new CoworkStore(firstDsh.getDatabase());
+  expect(firstAgents.getAgent('keep-all')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  firstAgents.createAgent({
+    id: 'keep-disabled',
+    name: 'Keep disabled',
+    subagentCollaborationMode: SubagentCollaborationMode.Disabled,
+    subagentAllowAgentIds: ['writer'],
+  });
+  firstAgents.createAgent({ id: 'modern-write', name: 'Modern write' });
+  firstAgents.updateAgent('modern-write', {
+    subagentCollaborationMode: SubagentCollaborationMode.All,
+    subagentAllowAgentIds: ['reviewer'],
+  });
+  firstAgents.createAgent({ id: 'self-only', name: 'Self only' });
+  firstDsh.close();
+
+  const legacy = new Database(path.join(userDataPath, DB_FILENAME));
+  const saveLegacySelection = legacy.prepare('UPDATE agents SET subagent_allow_agent_ids = ? WHERE id = ?');
+  saveLegacySelection.run('["writer"]', 'owner');
+  saveLegacySelection.run('["reviewer", "writer"]', 'keep-all');
+  saveLegacySelection.run('["reviewer"]', 'keep-disabled');
+  saveLegacySelection.run('["self-only", " "]', 'self-only');
+  legacy.prepare(`
+    INSERT INTO agents (id, name, subagent_allow_agent_ids, created_at, updated_at)
+    VALUES ('legacy-created', 'Legacy created', '["reviewer"]', 1, 1)
+  `).run();
+  legacy.close();
+
+  const upgraded = await SqliteStore.create(userDataPath);
+  const upgradedAgents = new CoworkStore(upgraded.getDatabase());
+  expect(upgradedAgents.getAgent('owner')).toMatchObject({
+    subagentCollaborationMode: SubagentCollaborationMode.Allowlist,
+    subagentAllowAgentIds: ['writer'],
+  });
+  expect(upgradedAgents.getAgent('legacy-created')).toMatchObject({
+    subagentCollaborationMode: SubagentCollaborationMode.Allowlist,
+    subagentAllowAgentIds: ['reviewer'],
+  });
+  expect(upgradedAgents.getAgent('keep-all')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(upgradedAgents.getAgent('keep-disabled')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.Disabled);
+  expect(upgradedAgents.getAgent('modern-write')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  expect(upgradedAgents.getAgent('self-only')?.subagentCollaborationMode).toBe(SubagentCollaborationMode.All);
+  upgradedAgents.updateAgent('owner', { subagentCollaborationMode: SubagentCollaborationMode.All });
+  upgraded.close();
+
+  const reopened = await SqliteStore.create(userDataPath);
+  expect(new CoworkStore(reopened.getDatabase()).getAgent('owner')).toMatchObject({
+    subagentCollaborationMode: SubagentCollaborationMode.All,
+    subagentAllowAgentIds: ['writer'],
+  });
+  reopened.close();
+});
+
 test('adds required cowork_sessions.permission_preset column to legacy databases on open', async () => {
   const userDataPath = createTempUserDataPath();
   const legacyDb = new Database(path.join(userDataPath, DB_FILENAME));
@@ -751,4 +814,28 @@ test('adds required cowork_sessions.permission_preset column to legacy databases
   coworkStore.updateSession('legacy-1', { permissionPreset: 'read-only' });
   expect(coworkStore.getSession('legacy-1')?.permissionPreset).toBe('read-only');
   migrated.close();
+});
+
+test('quarantines a corrupted database file and reinitializes a usable store on startup', async () => {
+  const userDataPath = createTempUserDataPath();
+  const dbPath = path.join(userDataPath, DB_FILENAME);
+  fs.writeFileSync(dbPath, 'not-a-valid-sqlite-database', 'utf8');
+  fs.writeFileSync(`${dbPath}-wal`, 'stale-wal', 'utf8');
+  fs.writeFileSync(`${dbPath}-shm`, 'stale-shm', 'utf8');
+
+  const store = await SqliteStore.create(userDataPath);
+  try {
+    store.set('recovered', true);
+    expect(store.get<boolean>('recovered')).toBe(true);
+
+    const quarantineRoot = path.join(userDataPath, 'backups', 'sqlite', 'quarantine');
+    const entries = fs.readdirSync(quarantineRoot);
+    expect(entries).toHaveLength(1);
+    const quarantinedDir = path.join(quarantineRoot, entries[0]);
+    expect(fs.readFileSync(path.join(quarantinedDir, DB_FILENAME), 'utf8')).toBe('not-a-valid-sqlite-database');
+    expect(store.getDatabase().prepare('PRAGMA quick_check').pluck().get()).toBe('ok');
+    expect(store.getDatabase().pragma('journal_mode', { simple: true })).toBe('wal');
+  } finally {
+    store.close();
+  }
 });

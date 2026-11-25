@@ -46,7 +46,6 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "test": "vitest run",
-    "test:sqlite-backup:seed": "node tests/sqlite-backup/generate-large-db.cjs",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
     "build:skill:email": "cd SKILLs/imap-smtp-email && npm install --production",

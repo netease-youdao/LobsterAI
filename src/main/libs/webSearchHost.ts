@@ -1,11 +1,5 @@
 import { type Session, WebContentsView } from 'electron';
 
-import {
-  BrowserDisplayMode,
-  type BrowserWebAccessConfig,
-  normalizeBrowserWebAccessConfig,
-} from '../../shared/browserWebAccess/constants';
-
 export const WebSearchEngine = {
   Google: 'google',
   Bing: 'bing',
@@ -86,7 +80,6 @@ export interface WebSearchPageContext {
 }
 
 export interface WebSearchHostDeps {
-  getBrowserConfig: () => Partial<BrowserWebAccessConfig> | null | undefined;
   getPageContext: () => WebSearchPageContext;
   isSkillEnabled?: () => boolean;
   createPage?: (context: WebSearchPageContext) => WebSearchPage;
@@ -602,10 +595,6 @@ export class WebSearchHost {
       this.dispose();
       throw new Error('The LobsterAI web-search skill is disabled.');
     }
-    if (!this.isInAppMode()) {
-      this.dispose();
-      throw new Error('The LobsterAI in-app browser mode is not enabled.');
-    }
     const query = typeof request.query === 'string' ? request.query.trim() : '';
     if (!query) {
       throw new Error('query is required');
@@ -642,11 +631,6 @@ export class WebSearchHost {
       : DEFAULT_GOOGLE_COOLDOWN_MS;
   }
 
-  private isInAppMode(): boolean {
-    return normalizeBrowserWebAccessConfig(this.deps.getBrowserConfig()).displayMode
-      === BrowserDisplayMode.InApp;
-  }
-
   private async runAutoSearch(
     query: string,
     maxResults: number,
@@ -657,10 +641,6 @@ export class WebSearchHost {
     if (this.deps.isSkillEnabled && !this.deps.isSkillEnabled()) {
       this.dispose();
       throw new Error('The LobsterAI web-search skill is disabled.');
-    }
-    if (!this.isInAppMode()) {
-      this.dispose();
-      throw new Error('The LobsterAI in-app browser mode is not enabled.');
     }
 
     const engines: WebSearchEngine[] = explicitEngine

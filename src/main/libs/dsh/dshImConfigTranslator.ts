@@ -2,8 +2,12 @@
 // retained channel instance configs consumed by `@lobsterai/dsh-channels`.
 // Retired platforms (`nim`, `netease-bee`, `email`) are excluded.
 
+import path from 'node:path';
+
 import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { legacyWeixinAccountId, WeixinPlugin } from '../../../shared/im/weixin';
 import type { DshChannelInstanceConfig } from '../../im/dshChannelsBridge';
+import { wecomDuplicateOwners } from '../../im/wecomConnections';
 
 const MULTI_INSTANCE_PLATFORMS: readonly RetainedImPlatform[] = [
   RetainedImPlatform.Feishu,
@@ -39,6 +43,7 @@ function resolveBindingAgentId(
 
 export function buildDshImChannelInstances(options: {
   imConfig: Record<string, unknown>;
+  userDataDir?: string;
   getDefaultCwd?: (agentId?: string) => string;
 }): DshChannelInstanceConfig[] {
   const { imConfig, getDefaultCwd } = options;
@@ -53,6 +58,7 @@ export function buildDshImChannelInstances(options: {
     if (!section || typeof section !== 'object') continue;
     const instances = (section as { instances?: unknown[] }).instances;
     if (!Array.isArray(instances)) continue;
+    const duplicateOwners = platform === RetainedImPlatform.WeCom ? wecomDuplicateOwners(instances) : undefined;
     for (const raw of instances) {
       if (!raw || typeof raw !== 'object') continue;
       const inst = raw as Record<string, unknown>;
@@ -63,7 +69,7 @@ export function buildDshImChannelInstances(options: {
       result.push({
         platform,
         instanceId,
-        enabled: inst.enabled === true,
+        enabled: inst.enabled === true && !duplicateOwners?.has(instanceId),
         agentId,
         cwd: getDefaultCwd?.(agentId),
         config: { ...inst },
@@ -76,13 +82,17 @@ export function buildDshImChannelInstances(options: {
   if (weixin && typeof weixin === 'object') {
     const rec = weixin as Record<string, unknown>;
     const agentId = resolveBindingAgentId(bindings, RetainedImPlatform.Weixin, 'default');
+    const account = typeof rec.accountId === 'string' ? legacyWeixinAccountId(rec.accountId) : '';
+    const legacyContextFile = options.userDataDir && account
+      ? path.join(options.userDataDir, 'openclaw', 'state', WeixinPlugin.Id, 'accounts', account + '.context-tokens.json')
+      : undefined;
     result.push({
       platform: RetainedImPlatform.Weixin,
       instanceId: 'default',
       enabled: rec.enabled === true,
       agentId,
       cwd: getDefaultCwd?.(agentId),
-      config: { ...rec },
+      config: { ...rec, legacyContextFile },
     });
   }
 

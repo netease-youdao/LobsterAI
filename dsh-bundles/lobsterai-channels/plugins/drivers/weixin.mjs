@@ -1,5 +1,6 @@
 import { createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import { DirectRecipientStore } from './direct-recipient-store.mjs';
 
 export const DEFAULT_WEIXIN_BASE_URL = 'https://ilinkai.weixin.qq.com';
 export const DEFAULT_WEIXIN_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
@@ -258,8 +259,11 @@ export class WeixinChannelDriver extends BaseChannelDriver {
   constructor(options) {
     super({ ...options, platform: 'weixin' });
     this.cursor = '';
-    /** @type {Map<string, string>} */
-    this.contextTokens = new Map();
+    const account = String(this.config.accountId || '').trim();
+    this.privateRecipients = new DirectRecipientStore('weixin', account, {
+      legacyFile: account ? this.config.legacyContextFile : undefined,
+      limit: MAX_CACHED_CONTEXT_TOKENS,
+    });
   }
 
   get baseUrl() {
@@ -359,16 +363,7 @@ export class WeixinChannelDriver extends BaseChannelDriver {
   rememberContextToken(chatId, contextToken) {
     const key = String(chatId || '').trim();
     const val = String(contextToken || '').trim();
-    if (!key || !val) return;
-    if (this.contextTokens.has(key)) {
-      this.contextTokens.delete(key);
-    }
-    this.contextTokens.set(key, val);
-    while (this.contextTokens.size > MAX_CACHED_CONTEXT_TOKENS) {
-      const oldest = this.contextTokens.keys().next().value;
-      if (oldest === undefined) break;
-      this.contextTokens.delete(oldest);
-    }
+    this.privateRecipients.remember(key, val);
   }
 
   async notifyLifecycle(endpoint, signal) {
@@ -474,10 +469,10 @@ export class WeixinChannelDriver extends BaseChannelDriver {
           // Ignore echoed bot messages (message_type === 2)
           if (msg?.message_type !== undefined && msg.message_type !== 1) continue;
           const senderId = String(msg?.from_user_id || '').trim();
+          if (!senderId || !this.isSenderAllowed(senderId)) continue;
           if (msg?.context_token) {
             this.rememberContextToken(senderId, msg.context_token);
           }
-          if (!senderId || !this.isSenderAllowed(senderId)) continue;
           eligibleMsgs.push({ msg, senderId });
         }
 
@@ -531,11 +526,19 @@ export class WeixinChannelDriver extends BaseChannelDriver {
     if (!this.token) {
       throw new Error('Weixin not configured: iLink token is required');
     }
-    const targetUserId = String(chatId || '').trim().replace(/^(?:[^:]+:)?direct:/i, '');
-    const contextToken =
-      (replyContext?.contextToken ? String(replyContext.contextToken).trim() : '') ||
-      this.contextTokens.get(targetUserId) ||
-      '';
+    let targetUserId = String(chatId || '').trim().replace(/^(?:[^:]+:)?direct:/i, '');
+    const tokens = this.privateRecipients.entries;
+    const replyToken = String(replyContext?.contextToken || '').trim();
+    // OpenClaw lowercased its session keys. iLink requires the original peer ID.
+    if (!replyToken && targetUserId === targetUserId.toLowerCase()) {
+      const owner = String(this.config.userId || '').trim();
+      const peers = new Set(tokens.keys());
+      if (owner) peers.add(owner);
+      const matches = [...peers].filter(peer => peer.toLowerCase() === targetUserId);
+      if (matches.length > 1) throw new Error('WEIXIN_AMBIGUOUS_RECIPIENT');
+      if (matches.length === 1) targetUserId = matches[0];
+    }
+    const contextToken = replyToken || tokens.get(targetUserId) || '';
     const clientId = `lobsterai-weixin-${randomUUID()}`;
     const reqAbort = createRequestAbort(API_TIMEOUT_MS);
     try {

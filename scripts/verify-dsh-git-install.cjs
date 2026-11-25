@@ -26,12 +26,13 @@ const {
   buildDshLauncherSource,
   buildDshPackageManager,
   DSH_NODE_EXEC_ARGV,
-  DSH_PNPM_PACKAGE_RELPATH,
   DSH_RUNTIME_ENTRY_RELPATH,
-  parseDshPnpmBinRelPath,
   resolveDshBundledGitBinDir,
 } = require(path.join(rootDir, 'dist-electron', 'main', 'libs', 'dshRuntime.js'));
-const electronPath = require('electron');
+const { resolveBundledPnpmEntry } = require(
+  path.join(rootDir, 'dist-electron', 'main', 'libs', 'dsh', 'dshProfileManager.js'),
+);
+const electronPath = process.versions.electron ? process.execPath : require('electron');
 const bundledGitDir = resolveDshBundledGitBinDir(path.join(rootDir, 'resources'), process.platform, fs.existsSync, path.join);
 assert.ok(bundledGitDir, 'Bundled Git is missing; run npm run setup:mingit -- --required');
 
@@ -93,9 +94,8 @@ try {
     assert.equal(result.status, 0, result.output);
   }
 
-  const pnpmRoot = path.join(runtimeDir, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
-  const pnpmBin = parseDshPnpmBinRelPath(fs.readFileSync(path.join(pnpmRoot, 'package.json'), 'utf8'));
-  assert.ok(pnpmBin, 'Runtime must bundle pnpm');
+  const pnpmEntry = resolveBundledPnpmEntry(runtimeDir);
+  assert.ok(pnpmEntry, 'Runtime must bundle pnpm');
   const entryUrl = pathToFileURL(path.join(runtimeDir, DSH_RUNTIME_ENTRY_RELPATH)).href;
   const spec = `git+${pathToFileURL(repoDir).href}`;
 
@@ -108,7 +108,7 @@ try {
     }));
     const manager = buildDshPackageManager({
       electronPath,
-      pnpmEntry: path.join(pnpmRoot, pnpmBin),
+      pnpmEntry,
       nodeShimDir: null,
       npmBinDir: null,
       gitBinDir: withGit ? gitBinDir : null,

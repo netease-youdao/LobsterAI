@@ -624,6 +624,14 @@ export class LobsterScheduler extends EventEmitter {
     }, this.tickIntervalMs);
   }
 
+  hasRunningTasks(): boolean {
+    return this.runningControllers.size > 0;
+  }
+
+  getRunningTaskIds(): string[] {
+    return [...this.runningControllers.keys()];
+  }
+
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);

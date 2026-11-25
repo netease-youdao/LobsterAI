@@ -360,6 +360,13 @@ const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
 const BRIDGE_KEEPALIVE_MS = 30_000;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
 
+export class DshHostBootTimeoutError extends Error {
+  constructor(timeoutMs: number, stderr: string) {
+    super(`DSH host boot timed out after ${timeoutMs}ms.\nSTDERR:\n${stderr.slice(-2000)}`);
+    this.name = 'DshHostBootTimeoutError';
+  }
+}
+
 export function resolveDefaultDshBootTimeoutMs(platform: NodeJS.Platform = process.platform): number {
   return platform === 'win32' ? DEFAULT_WINDOWS_BOOT_TIMEOUT_MS : DEFAULT_BOOT_TIMEOUT_MS;
 }
@@ -406,6 +413,18 @@ function mergeEnvPathEntries(
   return merged.length > 0 ? merged.join(path.delimiter) : existingPath;
 }
 
+function resolvePackagedDshRuntimeDir(resourcesDir: string): string {
+  const asarRuntimeDir = path.join(resourcesDir, 'app.asar', 'dsh-runtime');
+  if (fs.existsSync(path.join(asarRuntimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')))) {
+    return asarRuntimeDir;
+  }
+  const unpackedRuntimeDir = path.join(resourcesDir, 'dsh-runtime');
+  if (fs.existsSync(path.join(unpackedRuntimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')))) {
+    return unpackedRuntimeDir;
+  }
+  return asarRuntimeDir;
+}
+
 /**
  * Resolve runtime and bundle directories for packaged vs dev layouts.
  */
@@ -422,7 +441,7 @@ export function resolveBundledDshPaths(options: {
     ? options.resourcesDir
     : options.appRootDir;
   const runtimeDir = options.isPackaged && options.resourcesDir
-    ? path.join(options.resourcesDir, 'dsh-runtime')
+    ? resolvePackagedDshRuntimeDir(options.resourcesDir)
     : path.join(options.appRootDir, 'vendor', 'dsh-runtime', 'current');
   const hostBundleDir = path.join(baseDir, 'dsh-bundles', 'lobsterai-host');
   const candidateChannels = path.join(baseDir, 'dsh-bundles', 'lobsterai-channels');
@@ -585,7 +604,7 @@ export class DshHostManager extends EventEmitter {
   private lastMemoryPolicy: DshHostMemoryPolicy | null = null;
   private lastWebAccessPolicy: DshHostWebAccessPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
-  private lastAgents: DshHostAgentSpec[] | null = null;
+  private lastAgentSync: { agents: DshHostAgentSpec[]; workspaceDirectories?: string[] } | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
   private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
   private readonly lastSessionPermissionPresets = new Map<string, DshPermissionPreset>();
@@ -758,10 +777,11 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.SyncHostTools, { tools });
   }
 
-  async syncAgents(agents: DshHostAgentSpec[]): Promise<Record<string, unknown>> {
-    this.lastAgents = agents;
+  async syncAgents(agents: DshHostAgentSpec[], workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
+    const payload = { agents, workspaceDirectories };
+    this.lastAgentSync = payload;
     if (!this.isReady()) return { deferred: true };
-    return this.getClient().callOps(DshOpsAction.SyncAgents, { agents });
+    return this.getClient().callOps(DshOpsAction.SyncAgents, payload);
   }
 
   async syncSubagentBindings(
@@ -926,8 +946,8 @@ export class DshHostManager extends EventEmitter {
         }
       }
     }
-    if (this.lastAgents) {
-      await client.callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
+    if (this.lastAgentSync) {
+      await client.callOps(DshOpsAction.SyncAgents, this.lastAgentSync);
     }
     if (this.lastSubagentBindings.size > 0) {
       await client.callOps(DshOpsAction.SyncSubagentBindings, {
@@ -1044,7 +1064,7 @@ export class DshHostManager extends EventEmitter {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error(`DSH host boot timed out after ${bootTimeoutMs}ms.\nSTDERR:\n${stderrBuf.slice(-2000)}`));
+        reject(new DshHostBootTimeoutError(bootTimeoutMs, stderrBuf));
       }, bootTimeoutMs);
 
       createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {

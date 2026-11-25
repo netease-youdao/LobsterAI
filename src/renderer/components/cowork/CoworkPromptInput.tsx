@@ -48,8 +48,9 @@ import {
 } from '../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
 import { MediaPreferenceMode } from '../../../shared/media/defaultPolicy';
-import { isChatPresetSession, modelPresetModelId } from '../../../shared/modelPresets/constants';
+import { modelPresetModelId } from '../../../shared/modelPresets/constants';
 import { buildPptOutlineSystemPrompt, shouldUsePptOutlinePrompt } from '../../../shared/pptCreation/outline';
+import { isManualContextWindowSession } from '../../../shared/providers/modelContextWindow';
 import { SkinPackKitId } from '../../../shared/skin/kit';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
@@ -461,6 +462,7 @@ interface CoworkPromptInputProps {
   isStreaming?: boolean;
   placeholder?: string;
   disabled?: boolean;
+  permissionDisabled?: boolean;
   submitDisabled?: boolean;
   size?: 'normal' | 'large' | 'compact';
   workingDirectory?: string;
@@ -506,6 +508,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       isStreaming = false,
       placeholder = 'Enter your task...',
       disabled = false,
+      permissionDisabled,
       submitDisabled = false,
       size = 'normal',
       workingDirectory = '',
@@ -697,7 +700,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const isPlanMode = draftCollaborationMode === CoworkCollaborationMode.Plan;
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const currentAgentSelectedModel = useAgentSelectedModel(
-    currentAgentId, currentAgent?.model ?? '', !sessionId || !currentSession || isChatPresetSession(currentSession),
+    currentAgentId, currentAgent?.model ?? '',
   );
   const {
     isPersistingAgentModel,
@@ -3219,8 +3222,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const largeModelSelector = showModelSelector ? (
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
-        allowPresets={!sessionId || !currentSession || isChatPresetSession(currentSession)}
-        allowContextWindowSelection={!sessionId || !!currentSession && isChatPresetSession(currentSession)}
+        allowPresets
+        allowContextWindowSelection={!sessionId || !!currentSession && isManualContextWindowSession(currentSession)}
         contextWindowSessionId={sessionId ?? undefined}
         contextWindowDisabled={isStreaming || currentSession?.status === CoworkSessionStatusValue.Running}
         compact={useHomeContextLayout}
@@ -4299,7 +4302,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     <PermissionModeSelector
                       sessionId={sessionId}
                       compact={narrow || isLargeToolbarCompact}
-                      disabled={disabled || voiceInputLocksEditing}
+                      disabled={(permissionDisabled ?? (disabled && !remoteManaged)) || voiceInputLocksEditing}
                     />
                   )}
                   {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}
@@ -4396,7 +4399,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     <PermissionModeSelector
                       sessionId={sessionId}
                       compact={isCompact || isLargeToolbarCompact}
-                      disabled={disabled || voiceInputLocksEditing}
+                      disabled={(permissionDisabled ?? (disabled && !remoteManaged)) || voiceInputLocksEditing}
                     />
                   )}
                   {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}

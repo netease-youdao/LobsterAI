@@ -7,8 +7,9 @@ import {
   DSH_CHANNELS_ROUTE_PATH,
   DshChannelsAction,
   RETAINED_IM_PLATFORM_LIST,
-  type RetainedImPlatform,
+  RetainedImPlatform,
 } from '../../shared/dshEngine/hostConstants';
+import { parseFeishuReplyRoute } from '../../shared/im/feishuTopicRoute';
 import type { WeixinQrPollStatus } from '../../shared/im/weixin';
 import { PlatformRegistry } from '../../shared/platform';
 import type { DshHostManager } from '../libs/dsh/dshHostManager';
@@ -191,7 +192,22 @@ export class DshChannelsBridge {
     if (!isRetainedImPlatform(resolvedPlatform)) {
       throw new Error(`Platform "${params.platform}" is retired and no longer supported`);
     }
-    return this.callChannels(DshChannelsAction.Send, { ...params, platform: resolvedPlatform });
+    const route = resolvedPlatform === RetainedImPlatform.Feishu ? parseFeishuReplyRoute(params.chatId) : null;
+    if (route && !route.replyToMessageId) {
+      throw new Error('Feishu topic delivery needs a message from the target topic');
+    }
+    return this.callChannels(DshChannelsAction.Send, {
+      ...params,
+      platform: resolvedPlatform,
+      ...(route ? {
+        chatId: route.chatId,
+        replyContext: {
+          ...params.replyContext,
+          replyToMessageId: route.replyToMessageId,
+          replyInThread: Boolean(route.threadId),
+        },
+      } : {}),
+    });
   }
 
   async weixinQrStart(params?: {

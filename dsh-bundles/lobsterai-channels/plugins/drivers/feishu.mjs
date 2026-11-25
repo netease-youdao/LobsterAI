@@ -214,6 +214,7 @@ export class FeishuChannelDriver extends BaseChannelDriver {
     this.tokenExpiresAt = 0;
     this.ws = null;
     this.fragments = new Map();
+    this.threadModes = new Map();
   }
 
   get baseUrl() {
@@ -285,6 +286,31 @@ export class FeishuChannelDriver extends BaseChannelDriver {
       return Array.isArray(items) && items.length > 0 ? items[0] : null;
     } catch {
       return null;
+    } finally {
+      reqAbort.cleanup();
+    }
+  }
+
+  async isThreadGroup(chatId, signal) {
+    const cached = this.threadModes.get(chatId);
+    if (cached && cached.expiresAt > Date.now()) return cached.threaded;
+
+    const reqAbort = createTimeoutSignal(API_TIMEOUT_MS, signal);
+    try {
+      const token = await this.getTenantAccessToken(reqAbort.signal);
+      const res = await fetch(`${this.baseUrl}/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: reqAbort.signal,
+      });
+      const body = await res.json();
+      if (!res.ok || body.code !== 0) return false;
+      const threaded = body.data?.chat_mode === 'topic' || body.data?.group_message_type === 'thread';
+      this.threadModes.delete(chatId);
+      if (this.threadModes.size >= 512) this.threadModes.delete(this.threadModes.keys().next().value);
+      this.threadModes.set(chatId, { threaded, expiresAt: Date.now() + 60 * 60 * 1000 });
+      return threaded;
+    } catch {
+      return false;
     } finally {
       reqAbort.cleanup();
     }
@@ -500,6 +526,12 @@ export class FeishuChannelDriver extends BaseChannelDriver {
 
     if (!text && attachments.length === 0) return;
 
+    const isGroup = message.chat_type !== 'p2p';
+    const rootMessageId = String(message.root_id || '').trim();
+    // Topic-group reply events can omit thread_id. A quote in a regular
+    // group can also have root_id, so verify the group mode before using it.
+    const threadId = isGroup && (String(message.thread_id || '').trim()
+      || (rootMessageId && await this.isThreadGroup(chatId, signal) ? rootMessageId : ''));
     await this.onInbound({
       platform: 'feishu',
       instanceId: this.instanceId,
@@ -508,8 +540,12 @@ export class FeishuChannelDriver extends BaseChannelDriver {
       text,
       ...(attachments.length > 0 ? { attachments } : {}),
       messageId,
-      chatType: message.chat_type === 'p2p' ? 'direct' : 'group',
-      replyContext: { receiveIdType: 'chat_id', replyToMessageId: messageId },
+      chatType: isGroup ? 'group' : 'direct',
+      replyContext: {
+        receiveIdType: 'chat_id',
+        replyToMessageId: messageId,
+        ...(threadId ? { threadId, rootMessageId: rootMessageId || undefined, replyInThread: true } : {}),
+      },
     });
   }
 
@@ -661,12 +697,20 @@ export class FeishuChannelDriver extends BaseChannelDriver {
     try { this.ws?.close(1000, 'stopped'); } catch {}
     this.ws = null;
     this.fragments.clear();
+    this.threadModes.clear();
   }
 
   async sendMessage({ chatId, text, replyContext }) {
     const token = await this.getTenantAccessToken();
-    const receiveIdType = String(replyContext?.receiveIdType || 'chat_id');
-    const url = `${this.baseUrl}/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`;
+    const recipient = String(chatId).trim().replace(/^(?:[^:]+:)?direct:/i, '').replace(/^user:(?=ou_)/i, '');
+    const receiveIdType = String(replyContext?.receiveIdType || (recipient.startsWith('ou_') ? 'open_id' : 'chat_id'));
+    const useReply = typeof replyContext?.replyInThread === 'boolean';
+    const replyTo = String(replyContext?.replyToMessageId || '').trim();
+    if (useReply && !replyTo) throw new Error('Feishu reply target is missing its message ID');
+    const messagesUrl = `${this.baseUrl}/open-apis/im/v1/messages`;
+    const url = useReply
+      ? `${messagesUrl}/${encodeURIComponent(replyTo)}/reply`
+      : `${messagesUrl}?receive_id_type=${encodeURIComponent(receiveIdType)}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -674,7 +718,7 @@ export class FeishuChannelDriver extends BaseChannelDriver {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        receive_id: chatId,
+        ...(useReply ? { reply_in_thread: replyContext.replyInThread } : { receive_id: recipient }),
         msg_type: 'text',
         content: JSON.stringify({ text: String(text || '') }),
       }),
@@ -683,6 +727,8 @@ export class FeishuChannelDriver extends BaseChannelDriver {
     if (!res.ok || data.code !== 0) {
       throw new Error(`Feishu sendMessage failed: ${data.msg || res.status}`);
     }
-    return { messageId: String(data.data?.message_id ?? '') };
+    const messageId = String(data.data?.message_id ?? '').trim();
+    if (!messageId) throw new Error('Feishu sendMessage did not acknowledge a message ID');
+    return { messageId };
   }
 }

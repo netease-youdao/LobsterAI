@@ -1,4 +1,5 @@
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import { DirectRecipientStore } from './direct-recipient-store.mjs';
 import {
   createTimeoutSignal,
   detectImageMime,
@@ -77,6 +78,7 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
     this.ws = null;
     this.accessToken = '';
     this.tokenExpiresAt = 0;
+    this.privateRecipients = new DirectRecipientStore('dingtalk', this.clientId && JSON.stringify([this.instanceId, this.clientId]));
   }
 
   get clientId() {
@@ -404,6 +406,9 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
             try { payload = JSON.parse(String(frame.data || '{}')); } catch { return; }
             const senderId = String(payload.senderStaffId || payload.senderId || '').trim();
             if (!senderId || !this.isSenderAllowed(senderId)) return;
+            if (payload.conversationType === '1' && payload.conversationId && payload.senderStaffId) {
+              this.privateRecipients.remember(String(payload.conversationId), String(payload.senderStaffId));
+            }
 
             void this.extractInboundPayload(payload, signal)
               .then(({ text, attachments }) => {
@@ -474,12 +479,14 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
     }
 
     // Proactive OpenAPI fallback when no sessionWebhook is present (e.g. scheduled tasks)
-    const target = String(chatId || '').trim();
+    const target = String(chatId || '').trim().replace(/^(?:[^:]+:)?direct:/i, '');
     if (!target) {
       throw new Error('DingTalk sendMessage requires sessionWebhook or chatId');
     }
     const token = await this.getAppAccessToken();
-    const isGroup = target.startsWith('cid') || replyContext?.conversationType === '2';
+    const staffId = replyContext?.senderStaffId && replyContext.conversationType === '1'
+      ? String(replyContext.senderStaffId) : this.privateRecipients.entries.get(target);
+    const isGroup = replyContext?.conversationType === '2' || (!staffId && target.startsWith('cid'));
     const url = isGroup
       ? `${DINGTALK_API_BASE}/v1.0/robot/groupMessages/send`
       : `${DINGTALK_API_BASE}/v1.0/robot/oToMessages/batchSend`;
@@ -492,7 +499,7 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
         }
       : {
           robotCode: this.clientId,
-          userIds: [String(replyContext?.senderStaffId || target)],
+          userIds: [staffId || target],
           msgKey: 'sampleText',
           msgParam: JSON.stringify({ content }),
         };
@@ -507,6 +514,11 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
     if (!res.ok) {
       throw new Error(`DingTalk proactive send failed (HTTP ${res.status}): ${await res.text()}`);
     }
-    return { delivered: true };
+    if (isGroup) return { delivered: true };
+    const receipt = await res.json();
+    if (!receipt.processQueryKey || receipt.invalidStaffIdList?.length || receipt.flowControlledStaffIdList?.length) {
+      throw new Error('DingTalk did not accept the message for the selected private recipient');
+    }
+    return { delivered: true, messageId: receipt.processQueryKey };
   }
 }

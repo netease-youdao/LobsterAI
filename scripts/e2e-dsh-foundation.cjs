@@ -187,9 +187,23 @@ async function assertNativeDirectoryPicker(client) {
 async function main() {
   const args = process.argv.slice(2);
   assert(args.length === 0 || (args.length === 2 && args[0] === '--resources'), 'Usage: npm run dsh:e2e -- [--resources <directory>]');
-  step('compile desktop modules', 'npm', ['run', 'compile:electron']);
-  if (!args.length) step('build and activate the embedded runtime', 'npm', ['run', 'dsh:runtime:host']);
+  if (!process.versions.electron) {
+    step('compile desktop modules', 'npm', ['run', 'compile:electron']);
+  }
+  if (!args.length) {
+    step('build and activate the embedded runtime', 'npm', ['run', 'dsh:runtime:host']);
+  } else if (!process.versions.electron) {
+    // Packaged layouts store dsh-runtime inside app.asar, which requires
+    // Electron's ASAR-patched fs module (ELECTRON_RUN_AS_NODE=1).
+    const electron = electronRuntimeFor(args[1]);
+    assert(fs.existsSync(electron), 'Electron executable missing from the selected application layout');
+    step('run packaged E2E inside Electron Node runtime', electron, [__filename, ...args], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+    return;
+  }
   const { DshHostManager, resolveBundledDshPaths } = require('../dist-electron/main/libs/dsh/dshHostManager.js');
+  const { resolveBundledPnpmEntry } = require('../dist-electron/main/libs/dsh/dshProfileManager.js');
   const { findOrphanedDshRuntimes, isDshWebCommand, parseProcessTable } = require('../dist-electron/main/libs/dshOrphanReaper.js');
   const { DshOpsAction } = require('../dist-electron/shared/dshEngine/hostConstants.js');
   const layout = resolveBundledDshPaths({
@@ -200,13 +214,14 @@ async function main() {
   const electron = electronRuntimeFor(args[1]);
   assert(fs.existsSync(electron), 'Electron executable missing from the selected application layout');
   const childEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
-  const pnpm = path.join(layout.runtimeDir, 'package-manager', 'pnpm');
-  const manifest = require(path.join(pnpm, 'package.json'));
-  const pnpmRun = spawnSync(electron, [path.join(pnpm, typeof manifest.bin === 'string' ? manifest.bin : manifest.bin.pnpm), '--version'], {
+  const pnpmEntry = resolveBundledPnpmEntry(layout.runtimeDir);
+  assert(pnpmEntry, 'Bundled pnpm entry missing from DSH runtime');
+  const pnpmManifest = JSON.parse(fs.readFileSync(path.join(layout.runtimeDir, 'package-manager', 'pnpm', 'package.json'), 'utf8'));
+  const pnpmRun = spawnSync(electron, [pnpmEntry, '--version'], {
     encoding: 'utf8', env: { ...childEnv, PATH: '' },
   });
   assert.equal(pnpmRun.status, 0, pnpmRun.stderr);
-  assert.equal(pnpmRun.stdout.trim(), manifest.version);
+  assert.equal(pnpmRun.stdout.trim(), pnpmManifest.version);
 
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-embedded-e2e-'));
   const hosts = [];
@@ -247,7 +262,7 @@ async function main() {
     await hosts[1].stop();
     assert.equal((await hosts[0].getClient().callOps(DshOpsAction.Health)).ok, true);
     if (process.platform === 'win32') {
-      step('bundled Git with no system Git', process.execPath, [path.join(__dirname, 'verify-dsh-git-install.cjs'), layout.runtimeDir]);
+      step('bundled Git with no system Git', electron, [path.join(__dirname, 'verify-dsh-git-install.cjs'), layout.runtimeDir], { env: childEnv });
       step('native picker paths', electron, [path.join(__dirname, 'verify-dsh-picker-path-read.cjs'), layout.runtimeDir], { env: childEnv });
       await assertNativeDirectoryPicker(hosts[0].getClient());
     }

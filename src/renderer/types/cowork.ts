@@ -8,6 +8,7 @@ import type {
   CoworkMemoryStatus as SharedCoworkMemoryStatus,
   CoworkMemoryStatusFilter as SharedCoworkMemoryStatusFilter,
   CoworkSessionStatus,
+  CoworkTempDirKind,
   CoworkUserMemoryEntry as SharedCoworkUserMemoryEntry,
   CoworkUserMemorySourceSummary as SharedCoworkUserMemorySourceSummary,
 } from '../../shared/cowork/constants';
@@ -258,6 +259,7 @@ export interface CoworkConfig {
 export interface CoworkTempDirPreview {
   cwd: string;
   tempDir: string;
+  kind?: CoworkTempDirKind;
   totalBytes: number;
   totalFiles: number;
   cleanableBytes: number;

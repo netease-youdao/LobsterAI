@@ -103,7 +103,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentBrowserMenuClearCookies: '清除 Cookie',
     agentBrowserMenuClearCache: '清除缓存',
     agentBrowserMenuUnavailable: '浏览器窗口当前不可用。',
-    agentBrowserRuntimeUnavailable: 'Agent 浏览器暂不可用，请稍后重试。',
     agentBrowserMenuOpenFailed: '无法打开浏览器菜单。',
     agentBrowserZoomFailed: '调整浏览器缩放失败。',
 
@@ -265,6 +264,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dataMigrationRestoreProgressTitle: '正在导入 LobsterAI 数据',
     dataMigrationRestoreProgressDesc: '正在恢复备份并校验数据，完成后应用会自动重启。',
     dataMigrationRestoreProgressWarning: '请不要关闭应用或重启电脑，否则可能中断本次数据迁移。',
+    dataMigrationPhaseCheckingSpace: '正在检查磁盘剩余空间...',
+    dataMigrationPhaseCreatingRollback: '正在为当前数据生成回滚备份...',
+    dataMigrationPhaseExtracting: '正在解压并校验备份内容...',
+    dataMigrationPhaseSanitizing: '正在重写路径并处理跨机配置...',
+    dataMigrationPhaseApplying: '正在替换应用数据并校验完整性...',
+    dataMigrationPhaseCompleted: '导入完成，正在重启应用...',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common
@@ -351,6 +356,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // WeCom
     imWecomFillBotIdSecret: '请补全 Bot ID 和 Secret 后重新测试连通性。',
+    imWecomConnectionReplaced: '另一客户端已接管此机器人。如需在本机接管，请关闭并保存，再启用并保存。',
+    imWecomInvalidCredentials: '企微拒绝了 Bot ID 或 Secret。请更新凭据并保存。',
+    imWecomReconnecting: '暂时无法连接企微，正在自动重试。',
+    imWecomDuplicateBot: '本机的「{name}」已启用同一 Bot ID。如需切换，请先关闭该机器人。',
     imWecomConfigReady: '企业微信配置已就绪（Bot ID: {botId}）。',
     imWecomOpenClawHint:
       '企业微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
@@ -375,7 +384,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinConnected: '微信渠道已连接到运行引擎。',
     imWeixinVoiceDownloadFailed: '语音下载失败，请重试或直接发送文字。',
     imWeixinVoiceTranscribeFailed: '语音识别失败，请重试或直接发送文字。',
+    imWeixinOwnerSessionTitle: '我的微信',
+    imWeixinContactSessionPrefix: '微信联系人',
     imImageDefaultPrompt: '请查看这张图片。',
+    // IM approval relay
+    imApprovalPromptHeader: '⚠️ 需要你的确认才能继续执行',
+    imApprovalActionLabel: '操作：{action}',
+    imApprovalReasonLabel: '说明：{reason}',
+    imApprovalReplyHint: '请直接回复：\n• 1 或 同意 — 本次允许\n• 2 或 总是允许 — 本次会话不再询问此类操作\n• 0 或 拒绝 — 拒绝本次操作',
+    imApprovalTimeoutFooter: '（{seconds} 秒内未回复将自动拒绝，也可在电脑端弹窗操作）',
+    imApprovalAllowedOnceAck: '✅ 已允许本次操作，继续执行…',
+    imApprovalAllowedSessionAck: '✅ 已允许本次会话中的此类操作，继续执行…',
+    imApprovalDeniedAck: '❌ 已拒绝该操作。',
+    imApprovalDeniedForModel: '用户在 IM 端拒绝了该操作。',
+    imApprovalTimedOutNotice: '⏱️ 确认已超时，本次操作已自动拒绝。',
+    imApprovalTimedOutForModel: 'IM 端确认超时（{seconds} 秒未回复），已自动拒绝该操作。',
+    imApprovalResolvedOnDesktopNotice: 'ℹ️ 该操作已在电脑端处理。',
+    imApprovalInvalidReplyReminder: '当前有待确认的操作，请回复 1（本次允许）、2（本次会话允许）或 0（拒绝）。',
+    imApprovalSupersededForModel: '该审批请求已被新的审批请求替代。',
     openClawConfigSyncFailed: 'AI 引擎配置同步失败，请重试。',
     imWeixinEnableSuggestion: '请启用微信渠道后重新测试连通性。',
     imWeixinConfigReady: '微信配置已就绪。',
@@ -552,7 +578,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentBrowserMenuClearCookies: 'Clear Cookie',
     agentBrowserMenuClearCache: 'Clear cache',
     agentBrowserMenuUnavailable: 'The browser window is unavailable.',
-    agentBrowserRuntimeUnavailable: 'The Agent browser is temporarily unavailable. Try again later.',
     agentBrowserMenuOpenFailed: 'Failed to open the browser menu.',
     agentBrowserZoomFailed: 'Failed to adjust browser zoom.',
 
@@ -735,6 +760,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Restoring the backup and validating data. LobsterAI will restart automatically when finished.',
     dataMigrationRestoreProgressWarning:
       'Do not close the app or restart the computer, or the migration may be interrupted.',
+    dataMigrationPhaseCheckingSpace: 'Checking available disk space...',
+    dataMigrationPhaseCreatingRollback: 'Creating rollback backup of current data...',
+    dataMigrationPhaseExtracting: 'Extracting and validating backup archive...',
+    dataMigrationPhaseSanitizing: 'Rewriting paths and preparing migrated data...',
+    dataMigrationPhaseApplying: 'Applying restored data and verifying integrity...',
+    dataMigrationPhaseCompleted: 'Import complete. Restarting LobsterAI...',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common
@@ -841,6 +872,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // WeCom
     imWecomFillBotIdSecret: 'Please provide the Bot ID and Secret and test connectivity again.',
+    imWecomConnectionReplaced: 'Another client took over this bot. To reconnect here, turn it off and save, then turn it on and save again.',
+    imWecomInvalidCredentials: 'WeCom rejected the Bot ID or Secret. Update the credentials and save.',
+    imWecomReconnecting: 'Unable to connect to WeCom. Retrying automatically.',
+    imWecomDuplicateBot: '“{name}” already uses this Bot ID on this device. Turn it off before switching.',
     imWecomConfigReady: 'WeCom configuration is ready (Bot ID: {botId}).',
     imWecomOpenClawHint:
       'WeCom runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
@@ -866,7 +901,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinConnected: 'WeChat channel is connected to the AI engine.',
     imWeixinVoiceDownloadFailed: 'Failed to download the voice message. Please try again or send text.',
     imWeixinVoiceTranscribeFailed: 'Could not transcribe the voice message. Please try again or send text.',
+    imWeixinOwnerSessionTitle: 'My WeChat',
+    imWeixinContactSessionPrefix: 'WeChat Contact',
     imImageDefaultPrompt: 'Please inspect this image.',
+    // IM approval relay
+    imApprovalPromptHeader: '⚠️ Confirmation required to continue',
+    imApprovalActionLabel: 'Action: {action}',
+    imApprovalReasonLabel: 'Reason: {reason}',
+    imApprovalReplyHint: 'Reply directly:\n• 1 or yes — Allow once\n• 2 or always — Allow similar actions in this session\n• 0 or no — Deny',
+    imApprovalTimeoutFooter: '(Auto-denied in {seconds}s if unanswered; you can also respond on desktop)',
+    imApprovalAllowedOnceAck: '✅ Allowed once. Continuing…',
+    imApprovalAllowedSessionAck: '✅ Allowed similar actions for this session. Continuing…',
+    imApprovalDeniedAck: '❌ Denied this action.',
+    imApprovalDeniedForModel: 'The user denied this action from IM.',
+    imApprovalTimedOutNotice: '⏱️ Confirmation timed out. This action was automatically denied.',
+    imApprovalTimedOutForModel: 'IM confirmation timed out after {seconds}s; action was automatically denied.',
+    imApprovalResolvedOnDesktopNotice: 'ℹ️ This confirmation was handled on desktop.',
+    imApprovalInvalidReplyReminder: 'A confirmation is pending. Reply 1 (allow once), 2 (allow for session), or 0 (deny).',
+    imApprovalSupersededForModel: 'Superseded by a newer approval request.',
     openClawConfigSyncFailed: 'Failed to sync the AI engine configuration. Please try again.',
     imWeixinEnableSuggestion: 'Please enable the WeChat channel and test connectivity again.',
     imWeixinConfigReady: 'WeChat configuration is ready.',

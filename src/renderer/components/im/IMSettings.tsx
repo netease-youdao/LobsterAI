@@ -7,6 +7,12 @@ import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroico
 import { ArrowLeftIcon, CheckCircleIcon, EllipsisVerticalIcon, ExclamationTriangleIcon, PlusIcon, QrCodeIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
+import type { DshPermissionPreset } from '@shared/dshEngine/hostConstants';
+import {
+  buildImChannelPermissionKey,
+  resolveImChannelPermissionPreset,
+  updateImChannelPermissionPresets,
+} from '@shared/im/permissionPolicy';
 import { weixinCredentialErrorKey } from '@shared/im/weixin';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
@@ -19,7 +25,7 @@ import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
 import { RootState } from '../../store';
-import { clearError,setDingTalkConfig, setDingTalkInstanceConfig, setDiscordConfig, setDiscordInstanceConfig, setEmailInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setNeteaseBeeChanConfig, setNimConfig, setNimInstanceConfig, setPopoInstanceConfig, setQQConfig, setQQInstanceConfig, setTelegramInstanceConfig, setTelegramOpenClawConfig, setWecomConfig, setWecomInstanceConfig, setWeixinConfig } from '../../store/slices/imSlice';
+import { clearError, setDingTalkConfig, setDingTalkInstanceConfig, setDiscordConfig, setDiscordInstanceConfig, setEmailInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setIMSettings, setNeteaseBeeChanConfig, setNimConfig, setNimInstanceConfig, setPopoInstanceConfig, setQQConfig, setQQInstanceConfig, setTelegramInstanceConfig, setTelegramOpenClawConfig, setWecomConfig, setWecomInstanceConfig, setWeixinConfig } from '../../store/slices/imSlice';
 import type { EmailInstanceConfig, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig } from '../../types/im';
 import { MAX_DINGTALK_INSTANCES, MAX_DISCORD_INSTANCES, MAX_EMAIL_INSTANCES, MAX_FEISHU_INSTANCES, MAX_NIM_INSTANCES, MAX_POPO_INSTANCES, MAX_QQ_INSTANCES, MAX_TELEGRAM_INSTANCES, MAX_WECOM_INSTANCES } from '../../types/im';
 import { getAgentDisplayNameById } from '../../utils/agentDisplay';
@@ -35,6 +41,7 @@ import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT, SETTINGS_SECTION_T
 import DingTalkInstanceSettings from './DingTalkInstanceSettings';
 import DiscordInstanceSettings from './DiscordInstanceSettings';
 import FeishuInstanceSettings from './FeishuInstanceSettings';
+import IMChannelPermissionSetting from './IMChannelPermissionSetting';
 import IMPlatformHeader from './IMPlatformHeader';
 import NimInstanceSettings from './NimInstanceSettings';
 import { nimFallbackInstanceSchema, nimFallbackUiHints } from './nimSchemaFallback';
@@ -373,6 +380,7 @@ const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
   const agents = useSelector((state: RootState) => state.agent.agents);
+  const defaultWorkingDirectory = useSelector((state: RootState) => state.cowork.config.workingDirectory);
   const [activePlatform, setActivePlatform] = useState<Platform>('weixin');
   const [activeQQInstanceId, setActiveQQInstanceId] = useState<string | null>(null);
   const [activeFeishuInstanceId, setActiveFeishuInstanceId] = useState<string | null>(null);
@@ -688,6 +696,59 @@ const IMSettings: React.FC = () => {
     agents,
   );
   const weixinLastInboundAt = status.weixin?.lastInboundAt ?? null;
+
+  const resolveBoundWorkingDirectory = (platform: Platform, instanceId?: string): string => {
+    const scopeKey = buildImChannelPermissionKey(platform, instanceId);
+    const bindings = config.settings?.platformAgentBindings;
+    const boundAgentId = (scopeKey ? bindings?.[scopeKey] : undefined)
+      || bindings?.[platform]
+      || AgentId.Main;
+    const agentDir = agents.find(agent => agent.id === boundAgentId)?.workingDirectory?.trim();
+    return agentDir || defaultWorkingDirectory?.trim() || '';
+  };
+
+  const handleChannelPermissionPresetChange = async (
+    platform: Platform,
+    instanceId: string | undefined,
+    nextPreset: DshPermissionPreset | null,
+  ) => {
+    const scopeKey = buildImChannelPermissionKey(platform, instanceId);
+    if (!scopeKey) return;
+    const nextPresets = updateImChannelPermissionPresets(
+      config.settings?.platformPermissionPresets,
+      scopeKey,
+      nextPreset,
+    );
+    dispatch(setIMSettings({ platformPermissionPresets: nextPresets }));
+    await imService.persistConfig({
+      settings: {
+        ...config.settings,
+        platformPermissionPresets: nextPresets,
+      },
+    });
+  };
+
+  const renderChannelPermissionSetting = (
+    platform: Platform,
+    instanceId?: string,
+    variant: 'item' | 'card' = 'card',
+  ) => {
+    const scopeKey = buildImChannelPermissionKey(platform, instanceId);
+    const configuredPreset = resolveImChannelPermissionPreset(
+      config.settings?.platformPermissionPresets,
+      platform,
+      instanceId,
+    );
+    return (
+      <IMChannelPermissionSetting
+        id={`im-permission-preset-${scopeKey || platform}`}
+        configuredPreset={configuredPreset}
+        workingDirectory={resolveBoundWorkingDirectory(platform, instanceId)}
+        onChangePreset={(nextPreset) => handleChannelPermissionPresetChange(platform, instanceId, nextPreset)}
+        variant={variant}
+      />
+    );
+  };
 
   const persistConnectedWeixinConfig = async (accountId: string) => {
     dispatch(setWeixinConfig({ enabled: true, accountId }));
@@ -1325,7 +1386,7 @@ const IMSettings: React.FC = () => {
     // For WeCom, persist wecom config and test (OpenClaw mode)
     if (platform === 'wecom') {
       const wecomMultiConfig = config.wecom;
-      await imService.persistConfig({ wecom: wecomMultiConfig });
+      if (!await imService.persistConfig({ wecom: wecomMultiConfig })) return;
       const result = await runConnectivityTest(platform, {
         wecom: wecomMultiConfig,
       } as Partial<IMGatewayConfig>);
@@ -1335,9 +1396,9 @@ const IMSettings: React.FC = () => {
         if (inst && !inst.enabled) {
           const authCheck = result.checks.find((c) => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId, config: { enabled: true } }));
-            await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true });
-            setSaveReminderTarget('wecom', activeWecomInstanceId, true);
+            if (await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true })) {
+              setSaveReminderTarget('wecom', activeWecomInstanceId, true);
+            }
           }
         }
       }
@@ -1943,7 +2004,7 @@ const IMSettings: React.FC = () => {
                       </span>
                     </div>
                     {lastError && (
-                      <p className="mt-1 line-clamp-1 text-xs text-red-500">
+                      <p className={`mt-1 text-xs text-red-500 ${platform === 'wecom' ? '' : 'line-clamp-1'}`}>
                         {translateIMError(lastError)}
                       </p>
                     )}
@@ -2122,6 +2183,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
+              {renderChannelPermissionSetting('dingtalk', activeDingTalkInstanceId)}
               {renderInstanceSaveReminder('dingtalk', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
             </div>
           );
@@ -2169,6 +2231,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
+              {renderChannelPermissionSetting('feishu', activeFeishuInstanceId)}
               {renderInstanceSaveReminder('feishu', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
             </div>
           );
@@ -2212,6 +2275,7 @@ const IMSettings: React.FC = () => {
                 testingPlatform={testingPlatform}
                 connectivityResults={connectivityResults}
               />
+              {renderChannelPermissionSetting('qq', activeQQInstanceId)}
               {renderInstanceSaveReminder('qq', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
             </div>
           );
@@ -2598,6 +2662,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
+              {renderChannelPermissionSetting('telegram', activeTelegramInstanceId)}
               {renderInstanceSaveReminder('telegram', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
             </div>
           );
@@ -2642,6 +2707,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
+              {renderChannelPermissionSetting('discord', activeDiscordInstanceId)}
               {renderInstanceSaveReminder('discord', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
             </div>
           );
@@ -2932,6 +2998,7 @@ const IMSettings: React.FC = () => {
                           </span>
                         )}
                       />
+                      {renderChannelPermissionSetting('weixin', undefined, 'item')}
                     </SettingsCard>
                   </section>
 
@@ -2985,7 +3052,8 @@ const IMSettings: React.FC = () => {
                       ? { ...activeWecomInstance, ...override }
                       : activeWecomInstance;
                     const success = await imService.persistWecomInstanceConfig(activeWecomInstanceId!, configToSave);
-                    if (success) reportIMSettingsSaved('wecom', config);
+                    if (!success) return;
+                    reportIMSettingsSaved('wecom', config);
                     if (typeof override?.enabled === 'boolean') {
                       setSaveReminderTarget('wecom', activeWecomInstanceId!, override.enabled);
                     }
@@ -3001,16 +3069,18 @@ const IMSettings: React.FC = () => {
                     try {
                       const bot = await WecomAIBotSDK.openBotInfoAuthWindow({ source: 'lobster-ai' });
                       if (!isMountedRef.current) return;
-                      dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: { botId: bot.botid, secret: bot.secret, enabled: true } }));
                       dispatch(clearError());
                       const quickSetupSaved = await imService.updateWecomInstanceConfig(
                         activeWecomInstanceId!,
                         { botId: bot.botid, secret: bot.secret, enabled: true },
                         IM_AUTH_RESTART_ON_SAVE_OPTIONS,
                       );
-                      if (quickSetupSaved) {
-                        reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
+                      if (!isMountedRef.current) return;
+                      if (!quickSetupSaved) {
+                        setWecomQuickSetupStatus('idle');
+                        return;
                       }
+                      reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
                       setSaveReminderTarget('wecom', activeWecomInstanceId!, true);
                       if (!isMountedRef.current) return;
                       await imService.loadStatus();
@@ -3030,6 +3100,7 @@ const IMSettings: React.FC = () => {
                   language={language}
                   renderPairingSection={renderPairingSection}
                 />
+                {renderChannelPermissionSetting('wecom', activeWecomInstanceId!)}
                 {renderInstanceSaveReminder('wecom', activeWecomInstance as unknown as IMInstanceConfigCard, activeWecomStatus)}
               </div>
             );
@@ -3082,6 +3153,7 @@ const IMSettings: React.FC = () => {
                 connectivityResults={connectivityResults}
                 language={language}
               />
+              {renderChannelPermissionSetting('popo', activePopoInstanceId)}
               {renderInstanceSaveReminder('popo', selectedInstance as unknown as IMInstanceConfigCard, selectedStatus)}
             </div>
           );

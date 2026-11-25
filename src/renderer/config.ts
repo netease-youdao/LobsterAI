@@ -151,8 +151,6 @@ export interface AppConfig {
   artifactAutoPreviewEnabled?: boolean;
   // 已应用的自动打开文件预览默认值迁移版本(见 ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION)
   artifactAutoPreviewMigrationVersion?: number;
-  // 是否启用 SQLite 自动备份与恢复
-  sqliteAutoBackupEnabled?: boolean;
   // 是否允许发送基础产品使用统计
   usageAnalyticsEnabled?: boolean;
   // 通知配置
@@ -214,7 +212,6 @@ export const defaultConfig: AppConfig = {
   useSystemProxy: false,
   artifactAutoPreviewEnabled: false,
   artifactAutoPreviewMigrationVersion: ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
-  sqliteAutoBackupEnabled: false,
   usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
   browserWebAccess: defaultBrowserWebAccessConfig,
