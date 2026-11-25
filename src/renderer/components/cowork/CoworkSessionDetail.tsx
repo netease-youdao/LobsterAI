@@ -43,7 +43,6 @@ import {
   type CoworkSelectedTextValidationError,
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
-import { isChatPresetSession } from '../../../shared/modelPresets/constants';
 import { classifyWaitingNotificationKind, WaitingNotificationKind } from '../../../shared/notifications/constants';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
 import { resolveArtifactAutoPreviewEnabled, ShortcutAction } from '../../config';
@@ -245,6 +244,12 @@ import {
 import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
+import {
+  getIMSessionDisplayTitle,
+  getIMSessionPlatformIconClassName,
+  getIMSessionPlatformLabel,
+  getIMSessionPlatformLogo,
+} from './imSessionDisplay';
 import QuestionDock from './interactions/QuestionDock';
 import { isQuestionDockRequest } from './interactions/questionDockModel';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
@@ -1499,7 +1504,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const currentAgentSelectedModel = useAgentSelectedModel(
     currentAgentId,
     currentAgent?.model ?? '',
-    !currentSession || isChatPresetSession(currentSession),
   );
   const selectedDraftSnippets = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.draftSelectedTextSnippets[currentSession.id] ?? [] : []
@@ -7005,9 +7009,38 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               {updateBadge}
             </div>
           )}
-          <h1 className="text-sm leading-5 font-medium text-foreground truncate max-w-[360px]">
-            {getSessionTitleForDisplay(currentSession.title) || i18nService.t('coworkNewSession')}
-          </h1>
+          {(() => {
+            const baseHeaderTitle = getSessionTitleForDisplay(currentSession.title);
+            const isScheduledSession = Boolean(currentSession.scheduledTaskId);
+            const headerPlatform = isScheduledSession ? null : currentSession.imPlatform;
+            const headerTitle = getIMSessionDisplayTitle(baseHeaderTitle, headerPlatform).title
+              || i18nService.t('coworkNewSession');
+            const headerLogo = getIMSessionPlatformLogo(headerPlatform);
+            const headerLabel = getIMSessionPlatformLabel(headerPlatform);
+            const headerIconClassName = getIMSessionPlatformIconClassName(headerPlatform);
+            return (
+              <div className="flex min-w-0 items-center gap-1.5 max-w-[360px]">
+                {headerLogo && headerLabel && (
+                  <span
+                    className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
+                    role="img"
+                    title={headerLabel}
+                    aria-label={headerLabel}
+                  >
+                    <img
+                      src={headerLogo}
+                      alt=""
+                      className={headerIconClassName ?? undefined}
+                      draggable={false}
+                    />
+                  </span>
+                )}
+                <h1 className="text-sm leading-5 font-medium text-foreground truncate">
+                  {headerTitle}
+                </h1>
+              </div>
+            );
+          })()}
           {isConversationSearchOpen && (
             <div className="non-draggable absolute right-2 top-0 z-40 flex h-full items-start">
               <CoworkConversationSearch
@@ -7848,6 +7881,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             canSteer={isStreaming && !isContextBusy}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
             disabled={remoteManaged || Boolean(messageEdit.editing) || Boolean(messageEdit.pending) || messageEdit.busy}
+            permissionDisabled={Boolean(messageEdit.editing) || Boolean(messageEdit.pending) || messageEdit.busy}
             submitDisabled={Boolean(activeEnterpriseQuotaSignal)}
             size={isArtifactPanelExpanded ? 'compact' : 'large'}
             remoteManaged={remoteManaged}

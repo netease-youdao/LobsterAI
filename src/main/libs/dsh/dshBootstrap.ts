@@ -202,6 +202,7 @@ export interface DshBootstrapOptions {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
+  resolveSessionDefaultPermissionPreset?: (coworkSessionId: string) => DshPermissionPreset | null;
   allowRules?: ApprovalAllowRulePort;
   toolProviders?: HostToolProvider[];
   webSearchHandler?: DshBridgeWebSearchHandler;
@@ -636,7 +637,13 @@ export class DshBootstrap {
       resolveModelSelection: options.resolveModelSelection,
       resolveAllowedSkillIds: options.resolveAllowedSkillIds,
       waitForMcpConnections: options.waitForMcpConnections,
-      resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
+      resolveDefaultPermissionPreset: (coworkSessionId?: string) => {
+        if (coworkSessionId) {
+          const channelPreset = options.resolveSessionDefaultPermissionPreset?.(coworkSessionId);
+          if (channelPreset) return channelPreset;
+        }
+        return this.defaultPermissionPreset;
+      },
       onPermissionPresetChanged: async (preset, coworkSessionId) => {
         if (!coworkSessionId) {
           this.defaultPermissionPreset = preset;

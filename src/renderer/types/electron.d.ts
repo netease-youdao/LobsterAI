@@ -2902,6 +2902,8 @@ interface WeixinOpenClawConfig {
 interface IMSettings {
   /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
   platformAgentBindings?: Record<string, string>;
+  /** Per-platform/instance default DSH permission preset. Absent = follow global default. */
+  platformPermissionPresets?: Record<string, 'read-only' | 'workspace-write' | 'danger-full-access'>;
 }
 
 interface IMGatewayStatus {

@@ -141,7 +141,12 @@ import type { DataMigrationLastRestoreResult } from '../shared/dataMigration/con
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
-import { DSH_POPO_PAIRING_EVENT, DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
+import {
+  DSH_APPROVAL_REQUEST_ID_PREFIX,
+  DSH_POPO_PAIRING_EVENT,
+  DSH_PROFILE_DIR_NAME,
+  DSH_QUESTION_REQUEST_ID_PREFIX,
+} from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -193,7 +198,6 @@ import { mediaServerFailureFields } from '../shared/media/usage';
 import { hasLayerDecompositionWarning } from '../shared/media/warnings';
 import { canonicalizeMediaModelId, HAPPYHORSE_1_1_MODEL_ID, mediaModelDisplayName } from '../shared/mediaModelAliases';
 import {
-  isChatPresetSession,
   type ModelPresetId,
   modelPresetModelId,
   parseModelPresetId,
@@ -217,7 +221,11 @@ import {
   parseModelThinkingLevel,
   ProviderName,
 } from '../shared/providers';
-import { selectableContextWindows, userContextWindowSelection } from '../shared/providers/modelContextWindow';
+import {
+  isManualContextWindowSession,
+  selectableContextWindows,
+  userContextWindowSelection,
+} from '../shared/providers/modelContextWindow';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -275,6 +283,7 @@ import { registerFeedbackIpc } from './feedback/feedbackIpc';
 import { getLanguage, setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import { DshImInboundHandler, parseDshImInboundEvent } from './im/dshImInboundHandler';
+import { lookupSessionImChannelPermissionPreset } from './im/imChannelPermissionLookup';
 import {
   approvePairingCode,
   listPairingRequests,
@@ -2361,6 +2370,9 @@ const getDshBootstrap = (): DshBootstrap => {
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
+      resolveSessionDefaultPermissionPreset: (coworkSessionId: string) => (
+        lookupSessionImChannelPermissionPreset(getStore().getDatabase(), coworkSessionId)
+      ),
       resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {
         const session = storeInstance.getSession(sessionId, 0);
         const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
@@ -3279,7 +3291,11 @@ const bindCoworkRuntimeForwarder = (): void => {
 
   runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
     getDesktopNotificationManager().handlePermissionResolved(requestId);
-    if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
+    if (
+      requestId.startsWith(OpenClawQuestion.RequestIdPrefix)
+      || requestId.startsWith(DSH_APPROVAL_REQUEST_ID_PREFIX)
+      || requestId.startsWith(DSH_QUESTION_REQUEST_ID_PREFIX)
+    ) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) {
           win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
@@ -3561,6 +3577,7 @@ const getIMGatewayManager = () => {
       runtime,
       sendReply: (params) => getDshBootstrap().channelsBridge.sendProactiveMessage(params),
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
+      getWeixinOwnerUserId: () => imGatewayManager?.getConfig().weixin.userId,
       notifySessionsChanged: (sessionId: string) => {
         BrowserWindow.getAllWindows().forEach(win => {
           if (!win.isDestroyed()) {
@@ -11285,7 +11302,7 @@ if (!gotTheLock) {
       const previousSession = getCoworkStore().getSession(sessionId);
       const contextOwner = getContextWindowOwnerKey();
       const targetModelId = patch.model?.slice(patch.model.indexOf('/') + 1) ?? '';
-      const contextOverride = patch.model !== undefined && isChatPresetSession(previousSession ?? {})
+      const contextOverride = patch.model !== undefined && isManualContextWindowSession(previousSession ?? {})
         ? rememberedContextWindow(getStore(), contextOwner, targetModelId, undefined,
           selectableContextWindows(getServerModelMetadata(targetModelId))) : null;
       if (patch.model !== undefined) {

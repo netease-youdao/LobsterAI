@@ -12,12 +12,14 @@ import {
   type RetainedImPlatform as RetainedImPlatformType,
 } from '../../shared/dshEngine/hostConstants';
 import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../shared/im/feishuTopicRoute';
+import { buildWeixinSessionLabel } from '../../shared/im/sessionNaming';
 import { ImPeerKind } from '../../shared/platform';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkLocalMediaAttachment, CoworkRuntime } from '../libs/agentEngine/types';
 import { isRetainedImPlatform } from './dshChannelsBridge';
 import type { FeishuTopicSessionRoute } from './feishuTopicSessionMapping';
+import { ImApprovalRelay } from './imApprovalRelay';
 import { stripThinkingBlocks } from './imReplyGuard';
 import type { DirectSessionRoute } from './legacyDirectSessionMapping';
 import { findLegacyPopoMapping } from './popoSessionMapping';
@@ -116,7 +118,7 @@ export interface DshImInboundHandlerDeps {
   coworkStore: DshImInboundCoworkStorePort;
   imStore: DshImInboundIMStorePort;
   runtime: Pick<CoworkRuntime, 'startSession' | 'continueSession' | 'on' | 'off'>
-    & Partial<Pick<CoworkRuntime, 'stopSession'>>;
+    & Partial<Pick<CoworkRuntime, 'stopSession' | 'respondToPermission'>>;
   sendReply: (params: {
     platform: string;
     instanceId?: string;
@@ -125,6 +127,7 @@ export interface DshImInboundHandlerDeps {
     replyContext?: Record<string, unknown>;
   }) => Promise<unknown>;
   getDefaultCwd: (agentId?: string) => string;
+  getWeixinOwnerUserId?: () => string | undefined;
   notifySessionsChanged?: (sessionId: string) => void;
   transcribeVoice?: (attachment: {
     dataBase64: string;
@@ -136,6 +139,7 @@ export interface DshImInboundHandlerDeps {
     attachment: Pick<CoworkImageAttachmentPayload, 'mimeType' | 'base64Data' | 'localPath' | 'name'>,
   ) => string | null;
   turnTimeoutMs?: number;
+  approvalTimeoutMs?: number;
   /** Delay (ms) to coalesce rapid multi-image / image+text bursts before starting a turn. */
   mediaCoalesceMs?: number;
   /** Maximum total coalesce wait (ms) for a continuous burst before dispatching. */
@@ -152,6 +156,7 @@ interface ActiveImRun {
   interrupted: boolean;
   dispatchedToRuntime: boolean;
   events: DshImInboundEvent[];
+  latestReplyContext?: Record<string, unknown>;
 }
 
 interface ConversationQueueState {
@@ -294,12 +299,24 @@ export class DshImInboundHandler {
   private readonly maxCoalesceWaitMs: number;
   private readonly conversations = new Map<string, ConversationQueueState>();
   private readonly seenMessageIds = new Set<string>();
+  private readonly approvalRelay: ImApprovalRelay | null;
 
   constructor(deps: DshImInboundHandlerDeps) {
     this.deps = deps;
     this.turnTimeoutMs = deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
     this.mediaCoalesceMs = deps.mediaCoalesceMs ?? DEFAULT_MEDIA_COALESCE_MS;
     this.maxCoalesceWaitMs = deps.maxCoalesceWaitMs ?? DEFAULT_MAX_COALESCE_WAIT_MS;
+    this.approvalRelay = typeof deps.runtime.respondToPermission === 'function'
+      ? new ImApprovalRelay({
+          runtime: deps.runtime as DshImInboundHandlerDeps['runtime'] & Pick<CoworkRuntime, 'respondToPermission'>,
+          sendReply: deps.sendReply,
+          ...(deps.approvalTimeoutMs !== undefined ? { timeoutMs: deps.approvalTimeoutMs } : {}),
+        })
+      : null;
+  }
+
+  dispose(): void {
+    this.approvalRelay?.dispose();
   }
 
   enqueue(event: DshImInboundEvent): Promise<void> {
@@ -325,6 +342,39 @@ export class DshImInboundHandler {
       ? buildFeishuTopicConversationId(event.chatId, thread.rootMessageId || thread.threadId)
       : event.chatId;
     const queueKey = `${platform}:${instanceId}:${conversationId}:${agentId}`;
+
+    // If an approval request is currently awaiting confirmation for this IM
+    // conversation, intercept the reply instead of interrupting the active turn.
+    if (this.approvalRelay?.hasPendingApproval(queueKey)) {
+      return this.approvalRelay.tryHandleInboundReply(queueKey, {
+        text: event.text,
+        senderId: event.senderId,
+        chatType: event.chatType,
+        replyContext: event.replyContext,
+        onReplyContextUpdated: (updated) => {
+          const activeState = this.conversations.get(queueKey);
+          if (activeState?.activeRun) {
+            activeState.activeRun.latestReplyContext = updated;
+          }
+        },
+      }).then((result) => {
+        if (result.handled) {
+          return;
+        }
+        return this.enqueueConversationEvent(queueKey, event, {
+          interruptActiveRun: !result.ignoredUnauthorizedSender,
+        });
+      });
+    }
+
+    return this.enqueueConversationEvent(queueKey, event, { interruptActiveRun: true });
+  }
+
+  private enqueueConversationEvent(
+    queueKey: string,
+    event: DshImInboundEvent,
+    options: { interruptActiveRun: boolean },
+  ): Promise<void> {
     let state = this.conversations.get(queueKey);
     if (!state) {
       state = {
@@ -349,7 +399,7 @@ export class DshImInboundHandler {
     if (state.activeRun) {
       // Interrupt the in-flight turn immediately so rapid multi-image bursts or
       // follow-up corrections don't wait for the stale reply to finish.
-      if (!state.activeRun.interrupted) {
+      if (options.interruptActiveRun && !state.activeRun.interrupted) {
         state.activeRun.interrupted = true;
         if (state.activeRun.sessionId) {
           console.log(
@@ -430,7 +480,7 @@ export class DshImInboundHandler {
     state.activeRun = run;
 
     try {
-      await this.processBatch(batch, run);
+      await this.processBatch(batch, run, queueKey);
     } catch (error: unknown) {
       console.error(`[DshImInbound] Unhandled error processing ${queueKey}:`, error);
     } finally {
@@ -475,7 +525,7 @@ export class DshImInboundHandler {
     }
   }
 
-  private async processBatch(batch: DshImInboundEvent[], run: ActiveImRun): Promise<void> {
+  private async processBatch(batch: DshImInboundEvent[], run: ActiveImRun, queueKey: string): Promise<void> {
     if (batch.length === 0) return;
     const latestEvent = batch[batch.length - 1];
     const platform = latestEvent.platform.trim().toLowerCase();
@@ -487,6 +537,7 @@ export class DshImInboundHandler {
     if (!chatId) return;
 
     const latestReplyContext = [...batch].reverse().find((ev) => ev.replyContext)?.replyContext;
+    run.latestReplyContext = latestReplyContext;
     const senderName = [...batch].reverse().find((ev) => ev.senderName)?.senderName;
     const eventCwd = [...batch].reverse().find((ev) => ev.cwd)?.cwd;
 
@@ -616,7 +667,16 @@ export class DshImInboundHandler {
 
     if (!session) {
       const prefix = getPlatformTitlePrefix(platform);
-      const label = (senderName || chatId).slice(0, 32);
+      const label = platform === RetainedImPlatform.Weixin
+        ? buildWeixinSessionLabel({
+            chatId,
+            senderId: latestEvent.senderId,
+            senderName,
+            ownerUserId: this.deps.getWeixinOwnerUserId?.(),
+            ownerLabel: t('imWeixinOwnerSessionTitle'),
+            contactLabelPrefix: t('imWeixinContactSessionPrefix'),
+          })
+        : (senderName || chatId).slice(0, 32);
       session = this.deps.coworkStore.createSession(
         `[${prefix}] ${label}${topic ? ` · ${topic.threadId}` : ''}`,
         resolvedCwd,
@@ -698,16 +758,33 @@ export class DshImInboundHandler {
     );
 
     run.dispatchedToRuntime = true;
-    const outcome = await this.runTurnAndAwaitOutcome(sessionId, modelPrompt, {
-      isExistingSession,
-      agentId,
-      cwd: resolvedCwd,
-      ...(resolvedImageAttachments.length > 0 ? { imageAttachments: resolvedImageAttachments } : {}),
-      ...(localMediaAttachments.length > 0 ? { localMediaAttachments } : {}),
-      ...(userMessageContent !== undefined ? { userMessageContent } : {}),
+    this.approvalRelay?.registerActiveRoute({
+      sessionId,
+      queueKey,
+      platform,
+      instanceId,
+      chatId,
+      chatType: latestEvent.chatType ?? 'direct',
+      requesterSenderId: latestEvent.senderId,
+      replyContext: run.latestReplyContext,
     });
+    let outcome: { kind: 'complete' } | { kind: 'stopped' } | { kind: 'error'; error: string };
+    try {
+      outcome = await this.runTurnAndAwaitOutcome(sessionId, modelPrompt, {
+        isExistingSession,
+        agentId,
+        cwd: resolvedCwd,
+        ...(resolvedImageAttachments.length > 0 ? { imageAttachments: resolvedImageAttachments } : {}),
+        ...(localMediaAttachments.length > 0 ? { localMediaAttachments } : {}),
+        ...(userMessageContent !== undefined ? { userMessageContent } : {}),
+      });
+    } finally {
+      this.approvalRelay?.unregisterActiveRoute(sessionId);
+    }
 
     this.deps.notifySessionsChanged?.(sessionId);
+
+    const effectiveReplyContext = run.latestReplyContext ?? latestReplyContext;
 
     if (run.interrupted || outcome.kind === 'stopped') {
       console.log(
@@ -721,7 +798,7 @@ export class DshImInboundHandler {
         `[DshImInbound] Turn failed for ${platform}:${instanceId} chat=${chatId} session=${sessionId}: ${outcome.error}`,
       );
       const errorReply = `⚠️ ${outcome.error.slice(0, 300)}`;
-      await this.sendReplySafe(platform, instanceId, chatId, errorReply, latestReplyContext);
+      await this.sendReplySafe(platform, instanceId, chatId, errorReply, effectiveReplyContext);
       return;
     }
 
@@ -734,7 +811,7 @@ export class DshImInboundHandler {
       return;
     }
 
-    const sent = await this.sendReplySafe(platform, instanceId, chatId, replyText, latestReplyContext);
+    const sent = await this.sendReplySafe(platform, instanceId, chatId, replyText, effectiveReplyContext);
     if (sent) {
       console.log(
         `[DshImInbound] Replied to ${platform}:${instanceId} chat=${chatId} session=${sessionId} chars=${replyText.length}`,

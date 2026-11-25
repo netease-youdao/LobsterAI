@@ -170,6 +170,7 @@ describe('explicit context window intent', () => {
     });
 
     harness.session.imPlatform = 'feishu';
+    harness.session.modelPresetId = ModelPresetId.Balanced;
     const presetRequest = { modelId: 'yd-fast', presetId: ModelPresetId.Balanced, sessionId: harness.session.id };
     expect(await harness.invoke(ModelContextWindowIpc.Get, presetRequest)).toMatchObject({
       success: false, error: 'modelContextWindowUnavailable',
