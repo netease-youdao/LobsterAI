@@ -127,8 +127,8 @@ export interface ArtifactNewTabContentProps {
   onOpenFileList: () => void;
   onOpenBrowserUrl: (url?: string) => void;
   onOpenAgentBrowser?: () => void;
-  onOpenSubagents: () => void;
-  onOpenWorkspaceChanges: () => Promise<void> | void;
+  onOpenSubagents?: () => void;
+  onOpenWorkspaceChanges?: () => Promise<void> | void;
 }
 
 const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
@@ -162,7 +162,8 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
 
   const language = i18nService.getLanguage();
-  const mode = resolveNewTabMode(gitProbe.isGitRepository);
+  const supportsWorkspaceChanges = Boolean(onOpenWorkspaceChanges);
+  const mode = resolveNewTabMode(gitProbe.isGitRepository && supportsWorkspaceChanges);
   const workspaceName = useMemo(() => getWorkspaceDisplayName(workingDirectory), [workingDirectory]);
 
   const runningSubagentCount = useMemo(
@@ -410,6 +411,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         }
         return;
       case ArtifactNewTabCardId.WorkspaceChanges:
+        if (!onOpenWorkspaceChanges) return;
         setBusyCardId(cardId);
         try {
           await onOpenWorkspaceChanges();
@@ -418,7 +420,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         }
         return;
       case ArtifactNewTabCardId.Subagents:
-        onOpenSubagents();
+        onOpenSubagents?.();
         return;
       case ArtifactNewTabCardId.OpenLocalFile:
         setBusyCardId(cardId);
@@ -450,10 +452,11 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   const primaryCards = useMemo(() => resolveNewTabPrimaryCards(mode), [mode]);
   const overflowItems = useMemo(
     () => resolveNewTabOverflowItems(mode, {
-      isGitRepository: gitProbe.isGitRepository,
+      isGitRepository: gitProbe.isGitRepository && supportsWorkspaceChanges,
       hasWorkingDirectory: Boolean(workingDirectory?.trim()),
+      includeSubagents: Boolean(onOpenSubagents),
     }),
-    [gitProbe.isGitRepository, mode, workingDirectory],
+    [gitProbe.isGitRepository, mode, onOpenSubagents, supportsWorkspaceChanges, workingDirectory],
   );
 
   const quickSessionFiles = useMemo(
@@ -548,7 +551,8 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   };
 
   const showOmniDropdown = isOmniFocused && omniResults.length > 0;
-  const hasContextualItems = runningSubagentCount > 0 || localServices.length > 0 || quickSessionFiles.length > 0;
+  const showRunningSubagents = runningSubagentCount > 0 && Boolean(onOpenSubagents);
+  const hasContextualItems = showRunningSubagents || localServices.length > 0 || quickSessionFiles.length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto bg-background">
@@ -757,7 +761,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         {/* Contextual Live Strip (shown only when relevant) */}
         {hasContextualItems && (
           <div className="mt-6 space-y-2">
-            {runningSubagentCount > 0 && (
+            {showRunningSubagents && (
               <button
                 type="button"
                 onClick={onOpenSubagents}

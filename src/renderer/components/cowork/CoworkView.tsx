@@ -5,6 +5,7 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import { buildGoalSettingMessageMetadata } from '../../../common/goalCommandDisplay';
 import { buildSessionTitleFromInput, buildSessionTitleInput } from '../../../common/sessionTitle';
+import { BlankDocumentKind } from '../../../shared/artifactPreview/blankDocument';
 import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
@@ -21,6 +22,7 @@ import {
   selectIsEnterpriseAccount,
 } from '../../features/enterpriseAccount/selectors';
 import { agentService } from '../../services/agent';
+import { openWorkspaceDirectoryInSystem } from '../../services/artifactWorkspace';
 import { coworkService } from '../../services/cowork';
 import { buildCoworkCapabilitySelection } from '../../services/coworkCapabilitySelection';
 import { i18nService } from '../../services/i18n';
@@ -43,9 +45,15 @@ import {
   type CoworkPermissionResult,
   type CoworkSession,
   type OpenClawEngineStatus,
+  type SubagentSessionSummary,
 } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
+import { isDefaultAgentId, usesManagedPresetAvatar } from '../../utils/agentDisplay';
 import { applyOptimisticGoalCommand } from '../../utils/goalCommand';
+import AgentSettingsPanel from '../agent/AgentSettingsPanel';
+import { ArtifactNewTabContent, ArtifactPanel } from '../artifacts';
+import { ArtifactFileShareProvider } from '../artifacts/ArtifactFileShareController';
+import ImageStudioHost from '../artifacts/imageEditor/ImageStudioHost';
 import CreditsResetCampaignFloat from '../CreditsResetCampaignFloat';
 import { DailyCheckInHeaderEntry } from '../DailyCheckInActivity';
 import HomeCreditsBadge from '../HomeCreditsBadge';
@@ -62,6 +70,14 @@ import {
   useStartupCreditCampaignEntry,
 } from '../startupCreditCampaignBridge';
 import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
+import AgentHomeHero from './AgentHomeHero';
+import {
+  ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH,
+  ArtifactPanelErrorBoundary,
+  COWORK_DETAIL_MIN_WIDTH,
+  PromptInputCollapseIcon,
+  PromptInputExpandIcon,
+} from './artifactPanelChrome';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import CoworkSessionDetail from './CoworkSessionDetail';
@@ -73,6 +89,7 @@ import {
   resolveCoworkStartBlock,
   shouldShowCoworkEngineNotice,
 } from './coworkStartRequest';
+import HomeArtifactPanelHeader from './HomeArtifactPanelHeader';
 import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
@@ -80,9 +97,12 @@ import {
 import { reportPromptTemplateAction } from './promptAnalytics';
 import SessionSwipeNavigator from './SessionSwipeNavigator';
 import { buildCoworkContinuationSystemPrompt } from './skillSystemPrompt';
+import { useHomeArtifactPanel } from './useHomeArtifactPanel';
 import { useHomeStartContext } from './useHomeStartContext';
 
 export const HOME_HEADLINE_FONT_FAMILY = '"Lobster Home Serif", "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", Georgia, Cambria, "Times New Roman", "Songti SC", "STSong", serif';
+
+const EMPTY_SUBAGENTS: SubagentSessionSummary[] = [];
 
 const logCoworkViewModel = (message: string, level: 'debug' | 'warn' = 'debug'): void => {
   if (level === 'warn') console.warn(`[CoworkView] ${message}`);
@@ -130,6 +150,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   // Shown when a session start is blocked because no usable model config exists;
   // guides the user to plan models instead of pushing them into custom-model settings.
   const [modelAccessPrompt, setModelAccessPrompt] = useState<ModelAccessPromptKind | null>(null);
+  const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
+  const [agentHeroMetaRevision, setAgentHeroMetaRevision] = useState(0);
   // Track if we're starting/continuing a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
   const isContinuingRef = useRef(false);
@@ -175,6 +197,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     blockingQuotaReason: blockingHomeQuotaReason,
     thinkingLevel: currentAgentThinkingLevel,
   } = useHomeStartContext();
+
+  const homePanel = useHomeArtifactPanel({
+    isActive: isHomeView,
+    workingDirectory: currentAgentWorkingDirectory,
+    promptInputRef,
+  });
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -780,53 +808,105 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const isEngineReady = openClawStatus === null || isOpenClawReadyForSession(openClawStatus);
 
   const homeHeader = (
-    <div className="draggable relative z-20 flex h-12 items-center justify-between px-4 shrink-0">
-      <div className="non-draggable h-8 flex items-center">
-        {isSidebarCollapsed && !isWindows && (
-          <div className={`flex items-center gap-1 mr-2 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
-            <button
-              type="button"
-              onClick={onToggleSidebar}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            >
-              <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
-            </button>
-            <button
-              type="button"
-              onClick={onNewChat}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            >
-              <ComposeIcon className="h-4 w-4" />
-            </button>
-            {updateBadge}
+    <div
+      className={`draggable relative z-30 flex h-12 shrink-0 items-center justify-between overflow-visible ${
+        homePanel.isArtifactPanelVisible ? 'border-b border-border' : ''
+      } ${
+        homePanel.isArtifactPanelExpanded ? 'bg-background pl-0 pr-4' : 'px-4'
+      }`}
+    >
+      {!homePanel.isArtifactPanelExpanded && (
+        <div
+          className={`flex h-full min-w-0 flex-1 items-center justify-between gap-2 ${
+            homePanel.isArtifactPanelVisible ? 'pr-3' : 'pr-2'
+          }`}
+        >
+          <div className="non-draggable h-8 flex shrink-0 items-center">
+            {isSidebarCollapsed && !isWindows && (
+              <div className={`flex items-center gap-1 mr-2 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
+                <button
+                  type="button"
+                  onClick={onToggleSidebar}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                >
+                  <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
+                </button>
+                <button
+                  type="button"
+                  onClick={onNewChat}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                >
+                  <ComposeIcon className="h-4 w-4" />
+                </button>
+                {updateBadge}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      <div className="non-draggable flex items-center">
-        {!isEnterpriseAccount && startupCreditEntry.available && (
-          <button
-            type="button"
-            onClick={() => openStartupCreditCampaign()}
-            className="mr-2 inline-flex h-8 max-w-[240px] items-center gap-2 rounded-full border border-[#F0B58E] bg-[#FFF7F0] px-3 text-xs font-medium text-[#7C351C] shadow-[0_3px_12px_rgba(235,94,40,0.16)] transition-colors hover:border-[#E89C6C] hover:bg-[#FFEBDD] dark:border-[#704530] dark:bg-[#352A25] dark:text-[#F5C4A5] dark:shadow-[0_3px_14px_rgba(0,0,0,0.32)] dark:hover:bg-[#403029]"
-          >
-            <img
-              src={startupCreditEntryGiftUrl}
-              alt=""
-              aria-hidden="true"
-              className="startup-credit-entry-gift h-5 w-5 shrink-0"
+          <div className="non-draggable flex min-w-0 items-center">
+            {!isEnterpriseAccount && startupCreditEntry.available && (
+              <button
+                type="button"
+                onClick={() => openStartupCreditCampaign()}
+                className="mr-2 inline-flex h-8 max-w-[240px] items-center gap-2 rounded-full border border-[#F0B58E] bg-[#FFF7F0] px-3 text-xs font-medium text-[#7C351C] shadow-[0_3px_12px_rgba(235,94,40,0.16)] transition-colors hover:border-[#E89C6C] hover:bg-[#FFEBDD] dark:border-[#704530] dark:bg-[#352A25] dark:text-[#F5C4A5] dark:shadow-[0_3px_14px_rgba(0,0,0,0.32)] dark:hover:bg-[#403029]"
+              >
+                <img
+                  src={startupCreditEntryGiftUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="startup-credit-entry-gift h-5 w-5 shrink-0"
+                />
+                <span className="truncate">
+                  {startupCreditEntry.label || i18nService.t('startupCreditMenuEntry')}
+                </span>
+              </button>
+            )}
+            <DailyCheckInHeaderEntry
+              enabled={!isEnterpriseAccount}
+              suppressed={!startupCreditEntry.resolved
+                || startupCreditEntry.available}
             />
-            <span className="truncate">
-              {startupCreditEntry.label || i18nService.t('startupCreditMenuEntry')}
-            </span>
-          </button>
-        )}
-        <DailyCheckInHeaderEntry
-          enabled={!isEnterpriseAccount}
-          suppressed={!startupCreditEntry.resolved
-            || startupCreditEntry.available}
-        />
-        <HomeCreditsBadge />
-      </div>
+            <HomeCreditsBadge />
+          </div>
+        </div>
+      )}
+      <HomeArtifactPanelHeader
+        isPanelOpen={homePanel.isPanelOpen}
+        isArtifactPanelVisible={homePanel.isArtifactPanelVisible}
+        isArtifactPanelTransitioning={homePanel.isArtifactPanelTransitioning}
+        isArtifactPanelExpanded={homePanel.isArtifactPanelExpanded}
+        artifactHeaderWidth={homePanel.layout.artifactHeaderWidth}
+        needsMacTrafficLightInsetWhenExpanded={Boolean(isSidebarCollapsed && !isWindows && isMac)}
+        artifactTabsScrollRef={homePanel.artifactTabsScrollRef}
+        isFileListPreviewTabOpen={homePanel.isFileListPreviewTabOpen}
+        browserTabs={homePanel.browserTabs}
+        activeBrowserTabId={homePanel.activeBrowserTabId}
+        artifactTabsWithArtifacts={homePanel.artifactTabsWithArtifacts}
+        activeArtifactPreviewTab={homePanel.activeArtifactPreviewTab}
+        activeSpecialPreviewTab={homePanel.activeSpecialPreviewTab}
+        isNewTabPreviewTabOpen={homePanel.isNewTabPreviewTabOpen}
+        renamingArtifactTabId={homePanel.renamingArtifactTabId}
+        shouldShowArtifactAddButton={homePanel.shouldShowArtifactAddButton}
+        shouldPinArtifactAddTab={homePanel.shouldPinArtifactAddTab}
+        artifactTabsCanScrollLeft={homePanel.artifactTabsCanScrollLeft}
+        artifactTabsCanScrollRight={homePanel.artifactTabsCanScrollRight}
+        artifactTabActionTargets={homePanel.artifactTabActionTargets}
+        onActivateFileListTab={homePanel.handleActivateArtifactFileListTab}
+        onCloseFileListTab={homePanel.handleCloseArtifactFileListTab}
+        onActivateBrowserTab={homePanel.handleActivateArtifactBrowserTab}
+        onCloseBrowserTab={homePanel.handleCloseArtifactBrowserTab}
+        onStartArtifactTabRename={homePanel.handleStartArtifactTabRename}
+        onCancelArtifactTabRename={(tabId) => {
+          homePanel.setRenamingArtifactTabId(current => (current === tabId ? null : current));
+        }}
+        onCommitArtifactTabRename={homePanel.handleCommitArtifactTabRename}
+        onActivateArtifactTab={homePanel.handleActivateArtifactTab}
+        onCloseArtifactTab={homePanel.handleCloseArtifactTab}
+        onActivateNewTab={homePanel.handleActivateArtifactNewTab}
+        onCloseNewTab={homePanel.handleCloseArtifactNewTab}
+        onOpenNewTab={homePanel.handleOpenArtifactNewTab}
+        onToggleExpanded={homePanel.handleToggleArtifactPanelExpanded}
+        onTogglePanel={homePanel.handleToggleArtifactPanel}
+      />
     </div>
   );
 
@@ -876,8 +956,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     </div>
   ) : null;
 
+  const isAgentHome = !isDefaultAgentId(currentAgentId) && Boolean(currentAgent) && !selectedActionId;
+
   return (
-    <div data-skin-cowork="true" className="relative flex-1 flex flex-col bg-background h-full">
+    <div data-skin-cowork="true" className="relative flex-1 flex flex-col bg-background h-full overflow-hidden">
       <SessionSwipeNavigator />
       <SkinBackdrop
         variant={shouldPresentConversation
@@ -904,98 +986,253 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           />
         </div>
       ) : (
-        <>
-          {/* Engine status banner for non-blocking states */}
-          {engineStatusBanner}
+        <ArtifactFileShareProvider sessionId={homePanel.sessionId}>
+          <div className="relative z-10 flex flex-1 flex-col h-full overflow-hidden">
+            {/* Engine status banner for non-blocking states */}
+            {engineStatusBanner}
 
-          {/* Header */}
-          {homeHeader}
+            {/* Header */}
+            {homeHeader}
 
-          {/* Upper scrollable canvas: editorial headline, quick-action cards, and expanded galleries */}
-          <div
-            data-session-swipe-area="true"
-            className="relative z-10 min-h-0 flex-1 overflow-y-auto scrollbar-hidden"
-          >
-            <div className={`relative flex min-h-full w-full min-w-[320px] flex-col items-center pb-4 pt-4 ${COWORK_DETAIL_GUTTER_CLASS}`}>
-              {/* Flexible spacers seat the headline and single-row cards gently toward the
-                  composer when idle, and tighten smoothly when a cover gallery opens below. */}
+            {/* Content row: home canvas/composer + right artifact panel */}
+            <div ref={homePanel.contentRowRef} className="relative flex-1 flex overflow-hidden">
               <div
-                aria-hidden="true"
-                className={selectedActionId ? 'w-full min-h-[12px] flex-[0.4_0_0px]' : 'w-full min-h-[28px] flex-[3_0_0px]'}
-              />
-
-              <div data-skin-home-copy="true" className={`${COWORK_DETAIL_CONTENT_CLASS} text-center`}>
-                <HomeSkinEmblem
-                  onlyWhenCustom
-                  className="mx-auto mb-4 h-12 w-12 animate-fade-in-up"
-                />
-                <h2
-                  className={`font-medium leading-[1.3] tracking-[-0.015em] text-foreground transition-all duration-200 animate-fade-in-up ${
-                    selectedActionId ? 'text-[22px] sm:text-[24px]' : 'text-[28px] sm:text-[30px]'
-                  }`}
-                  style={{
-                    fontFamily: HOME_HEADLINE_FONT_FAMILY,
-                    fontFeatureSettings: '"palt" 1',
-                    animationDelay: '40ms',
-                    animationFillMode: 'both',
-                  }}
-                >
-                  {i18nService.t('coworkHomeHeadline')}
-                </h2>
-              </div>
-
-              <div
-                className={`relative z-0 flex flex-col items-center animate-fade-in-up ${selectedActionId ? 'mt-5' : 'mt-10'} ${COWORK_DETAIL_CONTENT_CLASS}`}
-                style={{ animationDelay: '100ms', animationFillMode: 'both' }}
+                className="relative flex-1 flex flex-col h-full min-w-0"
+                style={{ minWidth: homePanel.isArtifactPanelExpanded ? 0 : COWORK_DETAIL_MIN_WIDTH }}
               >
-                <HomeShowcaseHub
-                  selectedCategoryId={selectedActionId}
-                  onCategorySelect={handleHomeCategorySelect}
-                  onDraftReady={prompt => {
-                    promptInputRef.current?.setValue(prompt, 'template');
-                    promptInputRef.current?.focus();
-                  }}
-                />
-                <CreditsResetCampaignFloat />
+                {/* Upper scrollable canvas: editorial headline, quick-action cards, and expanded galleries */}
+                <div
+                  data-session-swipe-area="true"
+                  className="relative z-10 min-h-0 flex-1 overflow-y-auto scrollbar-hidden"
+                >
+                  <div className={`relative flex min-h-full w-full min-w-[320px] flex-col items-center pb-4 pt-4 ${COWORK_DETAIL_GUTTER_CLASS}`}>
+                    {/* Flexible spacers center the agent hero vertically above the bottom-docked
+                        composer, seat the default headline/cards gently toward it, and tighten
+                        smoothly when a cover gallery opens below. */}
+                    <div
+                      aria-hidden="true"
+                      className={
+                        selectedActionId
+                          ? 'w-full min-h-[12px] flex-[0.4_0_0px]'
+                          : isAgentHome
+                            ? 'w-full min-h-[24px] flex-1'
+                            : 'w-full min-h-[28px] flex-[3_0_0px]'
+                      }
+                    />
+
+                    {isAgentHome && currentAgent ? (
+                      <div className={`${COWORK_DETAIL_CONTENT_CLASS} flex flex-col items-center`}>
+                        <AgentHomeHero
+                          agent={currentAgent}
+                          effectiveWorkingDirectory={currentAgentWorkingDirectory}
+                          metaRevision={agentHeroMetaRevision}
+                          onOpenSettings={() => setSettingsAgentId(currentAgent.id)}
+                          onChangeIcon={async icon => {
+                            if (icon === currentAgent.icon && !usesManagedPresetAvatar(currentAgent)) {
+                              return;
+                            }
+                            const updated = await agentService.updateAgent(currentAgent.id, { icon });
+                            if (!updated) {
+                              window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
+                            }
+                          }}
+                          onUsePrompt={prompt => {
+                            promptInputRef.current?.setValue(prompt, 'template');
+                            promptInputRef.current?.focus();
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div data-skin-home-copy="true" className={`${COWORK_DETAIL_CONTENT_CLASS} text-center`}>
+                          <HomeSkinEmblem
+                            onlyWhenCustom
+                            className="mx-auto mb-4 h-12 w-12 animate-fade-in-up"
+                          />
+                          <h2
+                            className={`font-medium leading-[1.3] tracking-[-0.015em] text-foreground transition-all duration-200 animate-fade-in-up ${
+                              selectedActionId ? 'text-[22px] sm:text-[24px]' : 'text-[28px] sm:text-[30px]'
+                            }`}
+                            style={{
+                              fontFamily: HOME_HEADLINE_FONT_FAMILY,
+                              fontFeatureSettings: '"palt" 1',
+                              animationDelay: '40ms',
+                              animationFillMode: 'both',
+                            }}
+                          >
+                            {i18nService.t('coworkHomeHeadline')}
+                          </h2>
+                        </div>
+
+                        <div
+                          className={`relative z-0 flex flex-col items-center animate-fade-in-up ${selectedActionId ? 'mt-5' : 'mt-10'} ${COWORK_DETAIL_CONTENT_CLASS}`}
+                          style={{ animationDelay: '100ms', animationFillMode: 'both' }}
+                        >
+                          <HomeShowcaseHub
+                            selectedCategoryId={selectedActionId}
+                            onCategorySelect={handleHomeCategorySelect}
+                            onDraftReady={prompt => {
+                              promptInputRef.current?.setValue(prompt, 'template');
+                              promptInputRef.current?.focus();
+                            }}
+                          />
+                          <CreditsResetCampaignFloat />
+                        </div>
+                      </>
+                    )}
+
+                    <div
+                      aria-hidden="true"
+                      className={
+                        selectedActionId
+                          ? 'w-full min-h-[12px] flex-[0.5_0_0px]'
+                          : isAgentHome
+                            ? 'w-full min-h-[24px] flex-1'
+                            : 'w-full min-h-[16px] flex-[1.5_0_0px]'
+                      }
+                    />
+                  </div>
+                </div>
+
+                {/* Bottom-docked unified composer (aligned with session detail composer width) */}
+                <div
+                  ref={homePanel.promptInputAreaRef}
+                  className={`relative shrink-0 ${COWORK_DETAIL_GUTTER_CLASS} ${
+                    homePanel.isArtifactPanelExpanded
+                      ? 'z-50 bg-background pb-2 pt-1'
+                      : 'z-30 pb-6 pt-2'
+                  } ${homePanel.isArtifactPanelExpanded && homePanel.isExpandedPromptInputHidden ? 'hidden' : ''}`}
+                >
+                  {homePanel.isArtifactPanelExpanded && !homePanel.isExpandedPromptInputHidden && (
+                    <button
+                      type="button"
+                      onClick={homePanel.handleToggleExpandedPromptInput}
+                      className="absolute right-3 top-1 z-20 inline-flex h-5 w-5 items-center justify-center rounded-md border border-border bg-surface-raised text-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-foreground"
+                      aria-label={i18nService.t('artifactBrowserHideInput')}
+                      title={i18nService.t('artifactBrowserHideInput')}
+                    >
+                      <PromptInputCollapseIcon className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <div className={COWORK_DETAIL_CONTENT_CLASS}>
+                    <CoworkPromptInput
+                      ref={promptInputRef}
+                      onSubmit={handleStartSession}
+                      onStop={handleStopSession}
+                      isStreaming={isStreaming}
+                      disabled={!isEngineReady}
+                      submitDisabled={Boolean(blockingHomeQuotaReason)}
+                      placeholder={i18nService.t('coworkPlaceholder')}
+                      size={homePanel.isArtifactPanelExpanded ? 'compact' : 'large'}
+                      workingDirectory={currentAgentWorkingDirectory}
+                      onWorkingDirectoryChange={async (dir: string) => {
+                        await agentService.updateAgent(currentAgentId, { workingDirectory: dir });
+                      }}
+                      showFolderSelector={true}
+                      showModelSelector={true}
+                      showAgentSelector={true}
+                      onManageSkills={() => onShowSkills?.()}
+                      onManageKits={() => onShowKits?.()}
+                      onGoalCommand={handleStartGoalSession}
+                    />
+                    <EnterpriseQuotaPrompt
+                      reason={blockingHomeQuotaReason}
+                      surface="home"
+                    />
+                  </div>
+                </div>
+                {homePanel.isArtifactPanelExpanded && homePanel.isExpandedPromptInputHidden && (
+                  <button
+                    type="button"
+                    onClick={homePanel.handleToggleExpandedPromptInput}
+                    className="absolute bottom-2 right-2 z-50 inline-flex h-5 w-5 items-center justify-center rounded-md border border-border bg-surface-raised text-muted shadow-sm transition-colors hover:bg-surface-hover hover:text-foreground"
+                    aria-label={i18nService.t('artifactBrowserShowInput')}
+                    title={i18nService.t('artifactBrowserShowInput')}
+                  >
+                    <PromptInputExpandIcon className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
 
-              <div
-                aria-hidden="true"
-                className={selectedActionId ? 'w-full min-h-[12px] flex-[0.5_0_0px]' : 'w-full min-h-[16px] flex-[1.5_0_0px]'}
-              />
+              {homePanel.shouldRenderArtifactPanel && (
+                <div
+                  className={`${
+                    homePanel.layout.artifactPanelIsOverlay
+                      ? 'absolute inset-x-0 top-0 z-40 overflow-hidden bg-background'
+                      : 'h-full shrink-0 overflow-hidden'
+                  } ${
+                    homePanel.isArtifactPanelTransitioning
+                      ? 'transition-[width,opacity] duration-200 ease-out motion-reduce:transition-none'
+                      : ''
+                  } ${homePanel.isArtifactPanelVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+                  style={homePanel.layout.artifactPanelIsOverlay
+                    ? {
+                        bottom: homePanel.layout.artifactPanelOverlayBottom,
+                        width: 'auto',
+                        maxWidth: 'none',
+                      }
+                    : {
+                        width: homePanel.layout.artifactPanelFrameWidth,
+                        maxWidth: homePanel.artifactPanelMaxWidth + ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH,
+                      }}
+                  aria-hidden={!homePanel.isPanelOpen}
+                >
+                  <div
+                    className="flex h-full"
+                    style={{ width: homePanel.layout.artifactPanelInnerWidth }}
+                  >
+                    <ArtifactPanelErrorBoundary onClose={homePanel.handleClosePanel}>
+                      <ArtifactPanel
+                        key={homePanel.sessionId}
+                        sessionId={homePanel.sessionId}
+                        artifacts={homePanel.homeArtifacts}
+                        workingDirectory={currentAgentWorkingDirectory}
+                        activeSpecialTab={homePanel.activeSpecialPreviewTab}
+                        minPanelWidth={homePanel.layout.artifactPanelRenderMinWidth}
+                        maxPanelWidth={homePanel.layout.artifactPanelRenderMaxWidth}
+                        isPanelExpanded={homePanel.isArtifactPanelExpanded}
+                        browserTabs={homePanel.browserTabsForPanel}
+                        activeBrowserTabId={homePanel.activeBrowserTabId}
+                        onBrowserAddressChange={homePanel.handleBrowserPreviewAddressChange}
+                        onBrowserUrlChange={homePanel.handleBrowserPreviewUrlChange}
+                        onBrowserTitleChange={homePanel.handleBrowserPreviewTitleChange}
+                        onBrowserLocalServiceContextChange={homePanel.handleBrowserLocalServiceContextChange}
+                        onOpenFileListTab={homePanel.handleOpenArtifactFileListTab}
+                        onOpenBrowserTab={homePanel.handleOpenArtifactBrowserTab}
+                        onOpenLocalServiceInBrowser={homePanel.handleOpenLocalServiceArtifact}
+                        onOpenHtmlFileInBrowser={homePanel.handleOpenHtmlFileInBrowser}
+                        newTabPanel={(
+                          <ArtifactNewTabContent
+                            sessionId={homePanel.sessionId}
+                            workingDirectory={currentAgentWorkingDirectory}
+                            artifacts={homePanel.homeArtifacts}
+                            subagents={EMPTY_SUBAGENTS}
+                            onSelectArtifact={homePanel.handleNewTabSelectArtifact}
+                            onOpenLocalFilePath={homePanel.handleNewTabOpenLocalFilePath}
+                            onOpenLocalFilePicker={homePanel.handleNewTabOpenLocalFilePicker}
+                            onCreateBlankDocument={homePanel.handleNewTabCreateBlankDocument}
+                            onOpenFileList={homePanel.handleNewTabOpenFileList}
+                            onOpenBrowserUrl={homePanel.handleNewTabOpenBrowserUrl}
+                          />
+                        )}
+                        onOpenLocalFilePicker={() => void homePanel.handleNewTabOpenLocalFilePicker()}
+                        onOpenWorkspaceFile={homePanel.handleOpenWorkspaceFilePath}
+                        onCreateBlankDocumentFromFileList={() => void homePanel.handleNewTabCreateBlankDocument(BlankDocumentKind.Word)}
+                        onRevealWorkspaceFromFileList={currentAgentWorkingDirectory
+                          ? () => void openWorkspaceDirectoryInSystem(currentAgentWorkingDirectory)
+                          : undefined}
+                        onAnnotationSend={homePanel.handleAnnotationSendRequest}
+                        onAddSelectedText={homePanel.handleAddSelectedTextSnippet}
+                        selectedTextEnabled={true}
+                      />
+                    </ArtifactPanelErrorBoundary>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-
-          {/* Bottom-docked unified composer (aligned with session detail composer width) */}
-          <div className={`relative z-30 shrink-0 pb-6 pt-2 ${COWORK_DETAIL_GUTTER_CLASS}`}>
-            <div className={COWORK_DETAIL_CONTENT_CLASS}>
-              <CoworkPromptInput
-                ref={promptInputRef}
-                onSubmit={handleStartSession}
-                onStop={handleStopSession}
-                isStreaming={isStreaming}
-                disabled={!isEngineReady}
-                submitDisabled={Boolean(blockingHomeQuotaReason)}
-                placeholder={i18nService.t('coworkPlaceholder')}
-                size="large"
-                workingDirectory={currentAgentWorkingDirectory}
-                onWorkingDirectoryChange={async (dir: string) => {
-                  await agentService.updateAgent(currentAgentId, { workingDirectory: dir });
-                }}
-                showFolderSelector={true}
-                showModelSelector={true}
-                showAgentSelector={true}
-                onManageSkills={() => onShowSkills?.()}
-                onManageKits={() => onShowKits?.()}
-                onGoalCommand={handleStartGoalSession}
-              />
-              <EnterpriseQuotaPrompt
-                reason={blockingHomeQuotaReason}
-                surface="home"
-              />
-            </div>
-          </div>
-        </>
+          <ImageStudioHost sessionId={homePanel.sessionId} />
+        </ArtifactFileShareProvider>
       )}
       {modelAccessPrompt && (
         <ModelAccessPromptModal
@@ -1003,6 +1240,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           onClose={() => setModelAccessPrompt(null)}
         />
       )}
+      <AgentSettingsPanel
+        agentId={settingsAgentId}
+        onClose={() => {
+          setSettingsAgentId(null);
+          setAgentHeroMetaRevision(v => v + 1);
+        }}
+      />
     </div>
   );
 };

@@ -175,6 +175,36 @@ describe('buildDshHostAgentSpecs', () => {
       { id: 'codex-specialist', modelSelection: { provider: 'openai', model: 'gpt-5.4' } },
     ]);
   });
+
+  test('derives routing description from systemPrompt, identity, or workingDirectory when description is blank', () => {
+    const agents: Agent[] = [
+      makeAgent({
+        id: 'rules-only',
+        name: '周报助手',
+        description: '',
+        systemPrompt: '## 角色定位\n- 定位：将零散工作资料整理成结论先行的结构化周报。',
+      }),
+      makeAgent({
+        id: 'identity-only',
+        name: '知识管家',
+        description: '   ',
+        identity: '专注维护和检索个人 Obsidian 知识库。',
+      }),
+      makeAgent({
+        id: 'folder-only',
+        name: '项目助手',
+        description: '',
+        workingDirectory: '/Users/dev/lobsterai/',
+      }),
+    ];
+
+    const specs = buildDshHostAgentSpecs({ agents });
+    expect(specs.map(s => ({ id: s.id, description: s.description }))).toEqual([
+      { id: 'rules-only', description: '将零散工作资料整理成结论先行的结构化周报。' },
+      { id: 'identity-only', description: '专注维护和检索个人 Obsidian 知识库。' },
+      { id: 'folder-only', description: 'workspace: lobsterai' },
+    ]);
+  });
 });
 
 describe('resolveAllowedSkillIdsForTurn', () => {

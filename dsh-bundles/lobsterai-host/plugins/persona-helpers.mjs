@@ -36,6 +36,12 @@ export const MEMORY_WRITE_POLICY_PROMPT = [
   '- Use `lobster_memory_search` and `lobster_memory_get` to recall older memories or daily notes not shown inline.',
 ].join('\n');
 
+export const AGENT_RULES_POLICY_PROMPT = [
+  '## Agent Rules Policy',
+  '- To save or update THIS agent\'s durable role, persona, output style, or working guidelines (角色设定/工作准则), use `lobster_agent_rules` (call `action: "read"` first when updating existing rules, then `action: "save"` after user confirmation).',
+  '- `lobster_agent_rules` is isolated to this agent\'s own `SOUL.md` and persists across working directories. Never create or edit `AGENTS.md` / `CLAUDE.md` in the working directory for an agent\'s own style or guidelines unless the user explicitly asks to edit a repository instruction file, because the working directory may be shared across agents.',
+].join('\n');
+
 export const WEB_SEARCH_ROUTING_GUIDANCE = [
   'When you need live web search:',
   '- If a dedicated search MCP tool (such as Tavily) is available and requested or suitable, prefer that MCP search tool.',
@@ -75,14 +81,14 @@ export function readTextCached(filePath) {
     const stat = statSync(filePath);
     if (!stat.isFile() || stat.size === 0) return '';
     const cached = fileCache.get(filePath);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && cached.ino === stat.ino) {
       return cached.content;
     }
     const raw = readFileSync(filePath, 'utf8');
     const content = raw.length > MAX_PERSONA_FILE_BYTES
       ? `${raw.slice(0, MAX_PERSONA_FILE_BYTES)}\n...(已截断)`
       : raw;
-    fileCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content });
+    fileCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, content });
     return content;
   } catch {
     return '';

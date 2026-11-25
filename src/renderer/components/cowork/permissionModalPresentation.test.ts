@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  DSH_AGENT_RULES_TOOL,
+  DshAgentRulesAction,
   DshApprovalPermissionAction,
   DshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
@@ -93,6 +95,26 @@ describe('buildPermissionModalPresentation', () => {
     expect(presentation.targetLabel).toBe('coworkApprovalTargetFile');
     expect(presentation.targetValue).toBe('/Users/alice/project/README.md');
     expect(presentation.canAllowForSession).toBe(true);
+  });
+
+  test('presents lobster_agent_rules approvals with dedicated copy, rules preview, and no full-access switch', () => {
+    const presentation = buildPermissionModalPresentation(
+      DSH_AGENT_RULES_TOOL,
+      {
+        action: DshAgentRulesAction.Save,
+        description: '整理团队周报',
+        rules: '- 先给核心结论\n- 再列进展与待办',
+        permissionPreset: DshPermissionPreset.WorkspaceWrite,
+      },
+      identityT,
+    );
+
+    expect(presentation.title).toBe('coworkApprovalTitleAgentRules');
+    expect(presentation.summary).toBe('coworkApprovalSummaryAgentRules');
+    expect(presentation.modelNote).toBe('整理团队周报\n\n- 先给核心结论\n- 再列进展与待办');
+    expect(presentation.approvalScopeKey).toBe(`tool:${DSH_AGENT_RULES_TOOL}`);
+    expect(presentation.canAllowForSession).toBe(true);
+    expect(presentation.canSwitchFullAccess).toBe(false);
   });
 
   test('buildSwitchFullAccessAction scopes to active sessionId instead of setting global=true', () => {

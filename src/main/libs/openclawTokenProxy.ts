@@ -636,6 +636,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
               ? req.headers['content-type']
               : 'application/json',
             ...(typeof req.headers.accept === 'string' ? { accept: req.headers.accept } : {}),
+            ...(typeof req.headers['openai-beta'] === 'string' ? { 'openai-beta': req.headers['openai-beta'] } : {}),
+            ...(typeof req.headers.originator === 'string' ? { originator: req.headers.originator } : {}),
             ...upstream.headers,
           };
           const response = await net.fetch(targetUrl, {
@@ -672,6 +674,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
             res.end();
           }
         } catch (error) {
+          console.warn(`[OpenClawTokenProxy] OAuth upstream request failed for ${providerId}:`, error);
           if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(buildUpstreamRequestFailureBody(error));

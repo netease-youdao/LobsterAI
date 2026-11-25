@@ -46,6 +46,9 @@ export const AgentIpcChannel = {
   Update: 'agents:update',
   Reorder: 'agents:reorder',
   Delete: 'agents:delete',
+  GenerateDraft: 'agents:generateDraft',
+  GenerateDraftChunk: 'agents:generateDraft:chunk',
+  CancelDraft: 'agents:generateDraft:cancel',
   CleanupLegacyIdentityBlock: 'agents:cleanupLegacyIdentityBlock',
   Presets: 'agents:presets',
   PresetTemplates: 'agents:presetTemplates',
@@ -59,6 +62,12 @@ export const AgentIpcChannel = {
 } as const;
 
 export type AgentIpcChannel = typeof AgentIpcChannel[keyof typeof AgentIpcChannel];
+
+export const AgentUiEvent = {
+  OpenImSettings: 'agent:open-im-settings',
+} as const;
+
+export type AgentUiEvent = typeof AgentUiEvent[keyof typeof AgentUiEvent];
 
 export const AgentLegacyIdentityCleanupStatus = {
   Cleaned: 'cleaned',

@@ -168,6 +168,37 @@ describe('agentService.updateAgent', () => {
 
     expect(store.getState().skill.activeSkillIds).toEqual(['xlsx']);
   });
+
+  test('preserves systemPrompt and identity in Redux store on loadAgents and updateAgent', async () => {
+    (globalThis as { window?: unknown }).window = {
+      electron: {
+        agents: {
+          list: vi.fn().mockResolvedValue([
+            makeAgent({
+              id: 'agent-1',
+              systemPrompt: '- 先给结论',
+              identity: '专属助手',
+            }),
+          ]),
+          update: vi.fn().mockResolvedValue(
+            makeAgent({
+              id: 'agent-1',
+              systemPrompt: '- 更新后的规则',
+              identity: '',
+            }),
+          ),
+        },
+      },
+    };
+
+    await agentService.loadAgents();
+    expect(store.getState().agent.agents[0].systemPrompt).toBe('- 先给结论');
+    expect(store.getState().agent.agents[0].identity).toBe('专属助手');
+
+    await agentService.updateAgent('agent-1', { systemPrompt: '- 更新后的规则', identity: '' });
+    expect(store.getState().agent.agents[0].systemPrompt).toBe('- 更新后的规则');
+    expect(store.getState().agent.agents[0].identity).toBe('');
+  });
 });
 
 describe('agentService.switchAgent', () => {

@@ -17,7 +17,13 @@ import {
   WakeMode,
 } from '../../../scheduledTask/constants';
 import type { Schedule, ScheduledTask, ScheduledTaskInput } from '../../../scheduledTask/types';
-import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
+import {
+  DSH_AGENT_RULES_TOOL,
+  DSH_SKILL_INSTALL_TOOL,
+  DshAgentRulesAction,
+  DshPermissionPreset,
+  DshSkillInstallAction,
+} from '../../../shared/dshEngine/hostConstants';
 import { t } from '../../i18n';
 import { type LobsterMemoryService, WorkspaceFileName } from '../../memory/lobsterMemoryService';
 import {
@@ -158,6 +164,31 @@ export function evaluateDshToolApproval(
       return { kind: 'allow' };
     }
     return { kind: 'ask', reason: t('skillChatInstallPermission') };
+  }
+
+  if (
+    toolName === DSH_AGENT_RULES_TOOL
+    && (request.args as { action?: unknown } | null)?.action === DshAgentRulesAction.Save
+  ) {
+    if (request.permissionPreset === DshPermissionPreset.ReadOnly) {
+      return { kind: 'deny', reason: t('agentRulesChatReadOnly') };
+    }
+    if (request.permissionPreset === DshPermissionPreset.FullAccess) {
+      return { kind: 'allow' };
+    }
+    if (
+      allowRules?.isToolAllowedAlways({
+        toolName,
+        args: request.args,
+        sessionId: request.sessionId,
+        coworkSessionId: request.coworkSessionId,
+        agentId: request.agentId,
+        scopeKey,
+      })
+    ) {
+      return { kind: 'allow' };
+    }
+    return { kind: 'ask', reason: t('agentRulesChatSavePermission') };
   }
 
   // Explicit DSH `danger-full-access` preset sets DSH approvalPolicy='never' and

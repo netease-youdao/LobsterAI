@@ -11,6 +11,7 @@
 
 import { isSkillName } from '@deepseek-ai/dsh-skill';
 import {
+  AGENT_RULES_POLICY_PROMPT,
   assembleWorkspacePersona,
   buildWebSearchRoutingGuidance,
   DEFAULT_AGENT_ID,
@@ -76,7 +77,7 @@ export function apply(ctx) {
       const officeGuidance = bound && typeof bound.officeAgentPrompt === 'string' && bound.officeAgentPrompt.trim().length > 0
         ? bound.officeAgentPrompt.trim()
         : 'When editing an existing `.docx`, `.xlsx`, or `.pptx` file, prefer LobsterAI\'s live in-place editor tools (`word_read`/`word_edit`, `excel_read`/`excel_edit`, `ppt_read`/`ppt_edit`; enable `word`/`excel`/`ppt` via `lobster_enable_tools` first if not yet visible) instead of rewriting the file with scripts.';
-      return [persona, memoryPolicy, webSearchGuidance, install, officeGuidance].filter(Boolean).join('\n\n');
+      return [persona, memoryPolicy, AGENT_RULES_POLICY_PROMPT, webSearchGuidance, install, officeGuidance].filter(Boolean).join('\n\n');
     },
   });
 

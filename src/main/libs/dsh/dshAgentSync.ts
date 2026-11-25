@@ -8,6 +8,7 @@ import {
   normalizeSubagentCollaborationMode,
   type SubagentCollaborationMode,
 } from '../../../shared/agent/constants';
+import { deriveAgentRoutingDescription } from '../../../shared/agent/description';
 import { canonicalizeDshProviderId } from '../../../shared/providers/constants';
 import type { Agent } from '../../coworkStore';
 import type { DshHostAgentSpec } from './dshHostManager';
@@ -107,7 +108,7 @@ export function buildDshHostAgentSpecs(input: BuildDshHostAgentSpecsInput): DshH
     specs.push({
       id,
       name: agent.name.trim() || id,
-      description: agent.description?.trim() || '',
+      description: deriveAgentRoutingDescription(agent),
       enabled: Boolean(agent.enabled),
       ...(agent.presetId?.trim() ? { presetId: agent.presetId.trim() } : {}),
       ...(agent.systemPrompt?.trim() ? { systemPrompt: agent.systemPrompt } : {}),

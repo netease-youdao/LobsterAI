@@ -7,12 +7,21 @@ import {
   AgentLegacyIdentityCleanupStatus,
   AgentSource,
 } from '../../../shared/agent/constants';
+import {
+  AgentDraftErrorCode,
+  type AgentDraftStreamChunk,
+  type AgentDraftStreamPreview,
+  type GenerateAgentDraftRequest,
+  type GenerateAgentDraftResult,
+} from '../../../shared/agent/draft';
 import { parseAgentModelSelection } from '../../../shared/agent/modelSelection';
 import { ExpertUpgradeStatus } from '../../../shared/agent/presets';
 import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
+import { getLanguage } from '../../i18n';
 import type { IMGatewayManager } from '../../im';
+import { createAgentDescriptionBackfiller } from '../../libs/agentDescriptionBackfill';
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
 import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
@@ -39,6 +48,14 @@ export interface AgentHandlerDeps {
   resolveDefaultAgentModelRef: () => string;
   deleteAgentWithRuntime: (agentId: string, commitLocalDeletion: () => boolean) => Promise<boolean>;
   syncOpenClawConfig: SyncOpenClawConfig;
+  getLanguage?: () => 'zh' | 'en';
+  generateAgentDraft?: (
+    request: GenerateAgentDraftRequest,
+    options?: {
+      signal?: AbortSignal;
+      onProgress?: (preview: AgentDraftStreamPreview) => void;
+    },
+  ) => Promise<GenerateAgentDraftResult>;
 }
 
 const buildLegacyIdentityCleanupFailure = (
@@ -94,10 +111,10 @@ function writeNewAgentPersonaFiles(
   }
 }
 
-/** Lets other windows (e.g. the desktop companion's composer) reload agents after a change. */
-function notifyAgentsChanged(sender: WebContents): void {
+/** Lets renderer windows reload agents after a change; omit excludeSender to broadcast to all windows. */
+function notifyAgentsChanged(excludeSender?: WebContents): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.id === sender.id) continue;
+    if (win.isDestroyed() || (excludeSender && win.webContents.id === excludeSender.id)) continue;
     win.webContents.send(AgentIpcChannel.Changed);
   }
 }
@@ -113,6 +130,14 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     resolveDefaultAgentModelRef,
     syncOpenClawConfig,
   } = deps;
+
+  const descriptionBackfiller = createAgentDescriptionBackfiller({
+    getAgentManager,
+    generateAgentDraft: deps.generateAgentDraft,
+    syncOpenClawConfig,
+    onAgentDescriptionUpdated: () => notifyAgentsChanged(),
+    getLanguage: deps.getLanguage ?? getLanguage,
+  });
 
   ipcMain.handle(AgentIpcChannel.List, async () => {
     try {
@@ -147,6 +172,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
         syncOpenClawConfig({ reason: 'agent-created' }).catch(err => {
           console.error('[OpenClaw] config sync after agent-created failed:', err);
         });
+        descriptionBackfiller.scheduleForCreatedAgent(agent);
         notifyAgentsChanged(event.sender);
         return { success: true, agent };
       } catch (error) {
@@ -186,6 +212,13 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
             console.error('[OpenClaw] config sync after agent update failed:', err);
           });
         }
+        if (agent) {
+          descriptionBackfiller.scheduleForUpdatedAgent({
+            previousAgent,
+            nextAgent: agent,
+            updates,
+          });
+        }
         notifyAgentsChanged(event.sender);
         return { success: true, agent };
       } catch (error) {
@@ -221,6 +254,70 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
     }
   });
 
+  const activeDraftControllers = new Map<string, AbortController>();
+
+  ipcMain.handle(AgentIpcChannel.GenerateDraft, async (event, request: GenerateAgentDraftRequest) => {
+    if (!deps.generateAgentDraft) {
+      return {
+        success: false,
+        errorCode: AgentDraftErrorCode.RequestFailed,
+        error: 'Agent draft generator is unavailable',
+      } satisfies GenerateAgentDraftResult;
+    }
+    const sender = event?.sender;
+    const senderId = sender?.id ?? 0;
+    const requestId = typeof request?.requestId === 'string' ? request.requestId.trim() : '';
+    const activeKey = requestId ? `${senderId}:${requestId}` : '';
+    const controller = new AbortController();
+    if (activeKey) {
+      activeDraftControllers.get(activeKey)?.abort();
+      activeDraftControllers.set(activeKey, controller);
+    }
+    const onSenderDestroyed = () => controller.abort();
+    sender?.once?.('destroyed', onSenderDestroyed);
+
+    try {
+      const onProgress = requestId && sender
+        ? (preview: AgentDraftStreamPreview) => {
+            if (controller.signal.aborted || sender.isDestroyed()) return;
+            const payload: AgentDraftStreamChunk = {
+              requestId,
+              ...(preview.instructions !== undefined ? { instructions: preview.instructions } : {}),
+              ...(preview.description !== undefined ? { description: preview.description } : {}),
+            };
+            sender.send(AgentIpcChannel.GenerateDraftChunk, payload);
+          }
+        : undefined;
+      return await deps.generateAgentDraft(request, {
+        signal: controller.signal,
+        ...(onProgress ? { onProgress } : {}),
+      });
+    } catch (error) {
+      console.error('[Agents] Failed to generate agent draft:', error);
+      return {
+        success: false,
+        errorCode: AgentDraftErrorCode.RequestFailed,
+        error: error instanceof Error ? error.message : 'Failed to generate agent draft',
+      } satisfies GenerateAgentDraftResult;
+    } finally {
+      sender?.removeListener?.('destroyed', onSenderDestroyed);
+      if (activeKey && activeDraftControllers.get(activeKey) === controller) {
+        activeDraftControllers.delete(activeKey);
+      }
+    }
+  });
+
+  ipcMain.handle(AgentIpcChannel.CancelDraft, (event, rawRequestId: unknown) => {
+    const requestId = typeof rawRequestId === 'string' ? rawRequestId.trim() : '';
+    if (!requestId) return false;
+    const activeKey = `${event?.sender?.id ?? 0}:${requestId}`;
+    const controller = activeDraftControllers.get(activeKey);
+    if (!controller) return false;
+    controller.abort();
+    activeDraftControllers.delete(activeKey);
+    return true;
+  });
+
   ipcMain.handle(AgentIpcChannel.Delete, async (event, id: string) => {
     try {
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
@@ -232,6 +329,9 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       }
 
       const result = await deps.deleteAgentWithRuntime(id, () => getAgentManager().deleteAgent(id));
+      if (result) {
+        descriptionBackfiller.cancel(id);
+      }
 
       try {
         const imStore = getIMGatewayManager()?.getIMStore();

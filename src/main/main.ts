@@ -32,6 +32,7 @@ import type { GenerateSessionTitleRequest } from '../common/sessionTitle';
 import { buildSessionTitleFromInput } from '../common/sessionTitle';
 import {
   AgentId,
+  AgentIpcChannel,
   AgentModelSelectionMode,
 } from '../shared/agent/constants';
 import {
@@ -349,6 +350,7 @@ import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
 import { AgentBrowserHost, getDshBrowserToolStart } from './libs/agentBrowserHost';
 import { showAgentBrowserHostMenu } from './libs/agentBrowserHostMenu';
+import { generateAgentDraft } from './libs/agentDraftGenerator';
 import {
   type CoworkAgentEngine,
   CoworkEngineRouter,
@@ -448,6 +450,7 @@ import {
   DevelopmentProtocolSwitch,
   resolveDevelopmentLaunchContext,
 } from './libs/developmentProtocolContext';
+import { createDshAgentRulesProvider } from './libs/dsh/dshAgentRulesTool';
 import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
 import {
   cleanupLegacyOpenClawDisposableCaches,
@@ -2319,6 +2322,21 @@ const getDshBootstrap = (): DshBootstrap => {
             return session ? { cwd: session.cwd, userMessage: storeInstance.getLatestUserMessage(id)?.content } : null;
           },
           ask: (...args) => getMcpRuntime().askUserInternal(...args),
+        }),
+        createDshAgentRulesProvider({
+          getAgent: agentId => getAgentManager().getAgent(agentId),
+          updateAgent: (agentId, updates) => getAgentManager().updateAgent(agentId, updates),
+          resolveWorkspaceDir: agentId => getDshBootstrap().memoryService.getAgentWorkspaceDir(agentId),
+          onAgentUpdated: () => {
+            syncOpenClawConfig({ reason: 'agent-rules-updated' }).catch(err => {
+              console.error('[DshBootstrap] config sync after agent-rules-updated failed:', err);
+            });
+            for (const win of BrowserWindow.getAllWindows()) {
+              if (!win.isDestroyed()) {
+                win.webContents.send(AgentIpcChannel.Changed);
+              }
+            }
+          },
         }),
         createDshDecisionToolProvider({
           getConfig: () => readDecisionModelConfig(getStore()),
@@ -11276,6 +11294,13 @@ if (!gotTheLock) {
       return committed;
     },
     syncOpenClawConfig,
+    generateAgentDraft: (request, options) => generateAgentDraft(request, {
+      getProxyToken: () => getOpenClawLoopbackState().proxyToken,
+      getProxyBaseUrl: getModelAuthProxyUrl,
+      resolvePreset: (presetId, signal) => modelPresetClient.resolve(crypto.randomUUID(), presetId, false, signal),
+      signal: options?.signal,
+      onProgress: options?.onProgress,
+    }),
   });
 
   ipcMain.handle(

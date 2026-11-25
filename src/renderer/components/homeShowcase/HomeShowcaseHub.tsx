@@ -383,27 +383,29 @@ const HomeShowcaseHub: React.FC<HomeShowcaseHubProps> = ({
   return (
     <div className="w-full" data-home-showcase-hub={activeEntry ? 'expanded' : 'overview'}>
       {/* Single-row 5 clean Manus-style cards */}
-      <div
-        data-skin-quick-actions="true"
-        className="grid w-full grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5"
-      >
-        {HOME_SHOWCASE_PRIMARY_ORDER.map((entryId) => {
-          const meta = PRIMARY_CARDS[entryId];
-          const Icon = meta.icon;
-          const selected = activeEntry === entryId;
-          return (
-            <QuickActionChip
-              key={entryId}
-              selected={selected}
-              data-home-category-card={entryId}
-              data-image-creation-tab={entryId === HomeShowcaseCategoryId.ImageCreation ? ImageCreation.TabId : undefined}
-              onClick={() => handleCardClick(entryId)}
-              icon={<Icon className="h-[22px] w-[22px]" />}
-              iconAccentClassName={meta.iconAccent}
-              label={t(meta.titleKey)}
-            />
-          );
-        })}
+      <div className="[container-type:inline-size] w-full">
+        <div
+          data-skin-quick-actions="true"
+          className="grid w-full grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 [@container_(max-width:559px)]:!grid-cols-3 [@container_(max-width:399px)]:!grid-cols-2"
+        >
+          {HOME_SHOWCASE_PRIMARY_ORDER.map((entryId) => {
+            const meta = PRIMARY_CARDS[entryId];
+            const Icon = meta.icon;
+            const selected = activeEntry === entryId;
+            return (
+              <QuickActionChip
+                key={entryId}
+                selected={selected}
+                data-home-category-card={entryId}
+                data-image-creation-tab={entryId === HomeShowcaseCategoryId.ImageCreation ? ImageCreation.TabId : undefined}
+                onClick={() => handleCardClick(entryId)}
+                icon={<Icon className="h-[22px] w-[22px]" />}
+                iconAccentClassName={meta.iconAccent}
+                label={t(meta.titleKey)}
+              />
+            );
+          })}
+        </div>
       </div>
 
       {/* Direct primary category visual cover gallery (Data Analysis / Deep Research / Website) */}

@@ -2,6 +2,7 @@ import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
+import { AgentUiEvent } from '../shared/agent/constants';
 import { ExpertUiEvent } from '../shared/agent/presets';
 import { AppIpcChannel, type OpenSettingsRequest, OpenSettingsTab } from '../shared/app/constants';
 import {
@@ -1526,8 +1527,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const openBrowserSettings = () => handleShowSettings({ initialTab: 'browserWebAccess' });
+    const openImSettings = () => handleShowSettings({ initialTab: SettingsTabId.Im });
     window.addEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
-    return () => window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
+    window.addEventListener(AgentUiEvent.OpenImSettings, openImSettings);
+    return () => {
+      window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
+      window.removeEventListener(AgentUiEvent.OpenImSettings, openImSettings);
+    };
   }, [handleShowSettings]);
 
   useEffect(() => {

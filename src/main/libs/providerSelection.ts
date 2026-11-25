@@ -6,14 +6,24 @@ import {
   canonicalizeDshProviderId,
   OpenAIApiMode,
   OpenClawApi,
+  OpenClawProviderId,
+  ProviderAuthType,
   ProviderName,
 } from '../../shared/providers';
 
 export const PROXY_TOKEN_PLACEHOLDER = '${LOBSTER_PROXY_TOKEN}';
 
+export const ProxyRouteSegment = {
+  LobsteraiServer: ProviderName.LobsteraiServer,
+  Copilot: ProviderName.Copilot,
+  OpenAICodex: OpenClawProviderId.OpenAICodex,
+  XaiOAuth: 'xai-oauth',
+} as const;
+export type ProxyRouteSegment = typeof ProxyRouteSegment[keyof typeof ProxyRouteSegment];
+
 const PROXY_BACKED_PROVIDER_PATHS: Readonly<Record<string, string>> = {
-  [ProviderName.LobsteraiServer]: `/v1/${ProviderName.LobsteraiServer}`,
-  [ProviderName.Copilot]: `/v1/${ProviderName.Copilot}`,
+  [ProviderName.LobsteraiServer]: `/v1/${ProxyRouteSegment.LobsteraiServer}`,
+  [ProviderName.Copilot]: `/v1/${ProxyRouteSegment.Copilot}`,
 };
 
 /**
@@ -54,16 +64,42 @@ function normalizeProxyOrigin(proxyBaseUrl: string | null | undefined): string |
   return trimmed.endsWith('/v1') ? trimmed.slice(0, -'/v1'.length) : trimmed;
 }
 
+function resolveProxyBackedPath(
+  providerName: string,
+  authType?: 'apikey' | 'oauth',
+): string | null {
+  const raw = providerName.trim();
+  const canonical = canonicalizeDshProviderId(raw);
+  const scopedPath = PROXY_BACKED_PROVIDER_PATHS[canonical];
+  if (scopedPath) {
+    return scopedPath;
+  }
+  if (
+    raw === ProxyRouteSegment.OpenAICodex
+    || (canonical === ProviderName.OpenAI && authType === ProviderAuthType.OAuth)
+  ) {
+    return `/v1/${ProxyRouteSegment.OpenAICodex}`;
+  }
+  if (
+    raw === ProxyRouteSegment.XaiOAuth
+    || (canonical === ProviderName.Xai && authType === ProviderAuthType.OAuth)
+  ) {
+    return `/v1/${ProxyRouteSegment.XaiOAuth}`;
+  }
+  return null;
+}
+
 /**
- * Rewrite a proxy-backed provider (`lobsterai-server`, `github-copilot`) to its
- * provider-scoped route on the local model auth proxy (`<origin>/v1/<provider>`).
+ * Rewrite a proxy-backed provider (`lobsterai-server`, `github-copilot`,
+ * OpenAI Codex OAuth, xAI OAuth) to its provider-scoped route on the local
+ * model auth proxy (`<origin>/v1/<provider>`).
  */
 export function resolveProxyBackedBaseUrl(
   providerName: string,
   proxyBaseUrl?: string | null,
+  authType?: 'apikey' | 'oauth',
 ): string | null {
-  const canonical = canonicalizeDshProviderId(providerName);
-  const scopedPath = PROXY_BACKED_PROVIDER_PATHS[canonical];
+  const scopedPath = resolveProxyBackedPath(providerName, authType);
   if (!scopedPath) {
     return null;
   }
@@ -107,7 +143,11 @@ export interface ProviderSelectionResult {
 export function buildProviderSelection(
   options: ProviderSelectionInput,
 ): ProviderSelectionResult {
-  const providerName = canonicalizeDshProviderId(options.providerName ?? '');
+  const rawProviderName = (options.providerName ?? '').trim();
+  const providerName = canonicalizeDshProviderId(rawProviderName);
+  const isCodexOAuth =
+    rawProviderName === ProxyRouteSegment.OpenAICodex
+    || (providerName === ProviderName.OpenAI && options.authType === ProviderAuthType.OAuth);
   let api: string = OpenClawApi.OpenAICompletions;
   if (options.geminiNative === true || providerName === ProviderName.Gemini) {
     api = OpenClawApi.GoogleGenerativeAI;
@@ -115,16 +155,18 @@ export function buildProviderSelection(
     api = OpenClawApi.AnthropicMessages;
   } else if (
     options.openaiApiMode === OpenAIApiMode.Responses
-    || (providerName === ProviderName.OpenAI && options.authType === 'oauth')
+    || isCodexOAuth
   ) {
     api = OpenClawApi.OpenAIResponses;
   }
 
-  const usesProxyPlaceholder =
-    providerName === ProviderName.LobsteraiServer
-    || providerName === ProviderName.Copilot;
+  const usesProxyPlaceholder = resolveProxyBackedPath(rawProviderName, options.authType) !== null;
+  const hasDirectOAuthKey =
+    options.authType === ProviderAuthType.OAuth
+    && !usesProxyPlaceholder
+    && Boolean(options.apiKey?.trim());
   const isExternalOAuth =
-    options.authType === 'oauth' && !usesProxyPlaceholder;
+    options.authType === ProviderAuthType.OAuth && !usesProxyPlaceholder && !hasDirectOAuthKey;
 
   const apiKey = isExternalOAuth
     ? undefined
@@ -137,7 +179,7 @@ export function buildProviderSelection(
     baseUrl = stripResponsesSuffix(baseUrl);
   }
   if (apiKey === PROXY_TOKEN_PLACEHOLDER) {
-    const rewrittenProxyBaseUrl = resolveProxyBackedBaseUrl(providerName, options.proxyBaseUrl);
+    const rewrittenProxyBaseUrl = resolveProxyBackedBaseUrl(rawProviderName, options.proxyBaseUrl, options.authType);
     if (rewrittenProxyBaseUrl) {
       baseUrl = rewrittenProxyBaseUrl;
     }

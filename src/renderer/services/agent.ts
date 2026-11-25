@@ -1,9 +1,13 @@
 import {
+  AgentDraftErrorCode,
+  type AgentDraftStreamPreview,
   AgentId,
   type AgentLegacyIdentityCleanupResult,
   AgentLegacyIdentityCleanupStatus,
   AgentModelSelectionMode,
   AgentSource,
+  type GenerateAgentDraftRequest,
+  type GenerateAgentDraftResult,
   normalizeSubagentCollaborationMode,
   type SubagentCollaborationMode,
 } from '@shared/agent';
@@ -24,6 +28,7 @@ import { clearCurrentSession } from '../store/slices/coworkSlice';
 import { clearAgentSelectedModel } from '../store/slices/modelSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
+import { removeAgentOnboardingMeta } from './agentOnboarding';
 import { i18nService } from './i18n';
 import { captureExpertModelSelection } from './newTaskModelSelection';
 import { resetDraftAnalytics } from './usageAnalytics';
@@ -87,6 +92,8 @@ class AgentService {
           id: a.id,
           name: a.name,
           description: a.description,
+          systemPrompt: a.systemPrompt ?? '',
+          identity: a.identity ?? '',
           icon: a.icon,
           iconCustomized: a.iconCustomized,
           model: a.model ?? '',
@@ -135,6 +142,8 @@ class AgentService {
           id: agent.id,
           name: agent.name,
           description: agent.description,
+          systemPrompt: agent.systemPrompt ?? '',
+          identity: agent.identity ?? '',
           icon: agent.icon,
           iconCustomized: agent.iconCustomized,
           model: agent.model ?? '',
@@ -196,6 +205,8 @@ class AgentService {
           updates: {
             name: agent.name,
             description: agent.description,
+            systemPrompt: agent.systemPrompt ?? '',
+            identity: agent.identity ?? '',
             icon: agent.icon,
             iconCustomized: agent.iconCustomized,
             model: agent.model ?? '',
@@ -234,6 +245,8 @@ class AgentService {
         id: agent.id,
         name: agent.name,
         description: agent.description,
+        systemPrompt: agent.systemPrompt ?? '',
+        identity: agent.identity ?? '',
         icon: agent.icon,
         iconCustomized: agent.iconCustomized,
         model: agent.model ?? '',
@@ -279,6 +292,61 @@ class AgentService {
     }
   }
 
+  async generateDraft(
+    request: GenerateAgentDraftRequest,
+    options: {
+      onProgress?: (preview: AgentDraftStreamPreview) => void;
+    } = {},
+  ): Promise<GenerateAgentDraftResult> {
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const agentsApi = window.electron?.agents;
+      const api = agentsApi?.generateDraft;
+      if (!api) {
+        return {
+          success: false,
+          errorCode: AgentDraftErrorCode.RequestFailed,
+          error: 'Agent draft generation API is unavailable',
+        };
+      }
+      const requestId = request.requestId?.trim() || (
+        options.onProgress
+          ? `agent-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          : undefined
+      );
+      if (requestId && options.onProgress && agentsApi?.onDraftChunk) {
+        const onProgress = options.onProgress;
+        unsubscribe = agentsApi.onDraftChunk((chunk) => {
+          if (chunk.requestId !== requestId) return;
+          onProgress({
+            ...(chunk.instructions !== undefined ? { instructions: chunk.instructions } : {}),
+            ...(chunk.description !== undefined ? { description: chunk.description } : {}),
+          });
+        });
+      }
+      return await api(requestId ? { ...request, requestId } : request);
+    } catch (error) {
+      console.error('Failed to generate agent draft:', error);
+      return {
+        success: false,
+        errorCode: AgentDraftErrorCode.RequestFailed,
+        error: error instanceof Error ? error.message : 'Failed to generate agent draft',
+      };
+    } finally {
+      unsubscribe?.();
+    }
+  }
+
+  async cancelGenerateDraft(requestId: string): Promise<boolean> {
+    const id = requestId.trim();
+    if (!id) return false;
+    try {
+      return Boolean(await window.electron?.agents?.cancelDraft?.(id));
+    } catch {
+      return false;
+    }
+  }
+
   async deleteAgent(id: string): Promise<boolean> {
     try {
       const wasCurrentAgent = store.getState().agent.currentAgentId === id;
@@ -288,6 +356,7 @@ class AgentService {
       }
       store.dispatch(removeAgent(id));
       store.dispatch(clearAgentSelectedModel(id));
+      removeAgentOnboardingMeta(id);
       if (wasCurrentAgent) {
         this.switchAgent(AgentId.Main);
         const { coworkService } = await import('./cowork');
@@ -337,6 +406,8 @@ class AgentService {
           id: agent.id,
           name: agent.name,
           description: agent.description,
+          systemPrompt: agent.systemPrompt ?? '',
+          identity: agent.identity ?? '',
           icon: agent.icon,
           iconCustomized: agent.iconCustomized,
           model: agent.model ?? '',

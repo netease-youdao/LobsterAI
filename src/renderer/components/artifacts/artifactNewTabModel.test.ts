@@ -135,6 +135,16 @@ describe('NewTab card layout selection', () => {
     expect(codeOverflow).toContain(ArtifactNewTabCardId.NewDocument);
     expect(codeOverflow).toContain(ArtifactNewTabCardId.NewPresentation);
     expect(codeOverflow).not.toContain(ArtifactNewTabCardId.RevealWorkspace);
+
+    const homeOverflow = resolveNewTabOverflowItems(ArtifactNewTabMode.Work, {
+      isGitRepository: false,
+      hasWorkingDirectory: true,
+      includeSubagents: false,
+    });
+    expect(homeOverflow).not.toContain(ArtifactNewTabCardId.Subagents);
+    expect(homeOverflow).not.toContain(ArtifactNewTabCardId.WorkspaceChanges);
+    expect(homeOverflow).toContain(ArtifactNewTabCardId.OpenLocalFile);
+    expect(homeOverflow).toContain(ArtifactNewTabCardId.RevealWorkspace);
   });
 });
 

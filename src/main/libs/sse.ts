@@ -101,7 +101,7 @@ export function readOpenAIResponsesStreamEvent(event: SseEvent): StreamChunk {
   if (type === 'response.output_text.delta') {
     return typeof payload.delta === 'string' && payload.delta ? { text: payload.delta } : {};
   }
-  if (type === 'response.completed' || type === 'response.incomplete') return { done: true };
+  if (type === 'response.completed' || type === 'response.done' || type === 'response.incomplete') return { done: true };
   if (type === 'response.failed' || type === 'error') {
     const response = payload.response as Record<string, unknown> | undefined;
     return {

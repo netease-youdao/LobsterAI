@@ -108,10 +108,54 @@ describe('toOneShotTarget', () => {
       },
     });
 
+    const codex = toOneShotTarget({
+      selection: selection(OpenClawApi.OpenAIResponses, '${LOBSTER_PROXY_TOKEN}', 'https://api.openai.com/v1'),
+      providerName: ProviderName.OpenAI,
+      authType: 'oauth',
+      apiKey: '',
+      proxyToken: 'loopback-secret',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(codex).toMatchObject({
+      target: {
+        api: OpenClawApi.OpenAICodexResponses,
+        apiKey: 'loopback-secret',
+        baseUrl: 'http://127.0.0.1:45555/v1/openai-codex',
+      },
+    });
+
+    const xai = toOneShotTarget({
+      selection: selection(OpenClawApi.OpenAICompletions, '${LOBSTER_PROXY_TOKEN}', 'https://api.x.ai/v1'),
+      providerName: ProviderName.Xai,
+      authType: 'oauth',
+      apiKey: '',
+      proxyToken: 'loopback-secret',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(xai).toMatchObject({
+      target: {
+        api: OpenClawApi.OpenAICompletions,
+        apiKey: 'loopback-secret',
+        baseUrl: 'http://127.0.0.1:45555/v1/xai-oauth',
+      },
+    });
+
     expect(toOneShotTarget({
       selection: selection(OpenClawApi.OpenAICompletions, '${LOBSTER_PROXY_TOKEN}', 'https://lobsterai-server.youdao.com/api/proxy/v1'),
       providerName: ProviderName.LobsteraiServer,
       apiKey: 'real-jwt',
+      proxyToken: 'loopback-secret',
+      proxyBaseUrl: null,
+    })).toEqual({
+      error: OneShotTargetError.UnsupportedModel,
+      detail: 'proxy-unavailable',
+    });
+
+    expect(toOneShotTarget({
+      selection: selection(OpenClawApi.OpenAIResponses, '${LOBSTER_PROXY_TOKEN}', 'https://api.openai.com/v1'),
+      providerName: ProviderName.OpenAI,
+      authType: 'oauth',
+      apiKey: '',
       proxyToken: 'loopback-secret',
       proxyBaseUrl: null,
     })).toEqual({
@@ -242,6 +286,8 @@ describe('buildOneShotHttpRequest', () => {
     const openAI = buildOneShotHttpRequest(target(OpenClawApi.OpenAICompletions, { providerName: ProviderName.OpenAI, model: 'gpt-5.5' }), request);
     expect(bodyOf(openAI.init)).toMatchObject({ max_completion_tokens: 2048 });
     expect(bodyOf(openAI.init)).not.toHaveProperty('max_tokens');
+    const openAIGpt6 = buildOneShotHttpRequest(target(OpenClawApi.OpenAICompletions, { providerName: ProviderName.OpenAI, model: 'gpt-6-astra' }), request);
+    expect(bodyOf(openAIGpt6.init)).toMatchObject({ max_completion_tokens: 2048 });
     const other = buildOneShotHttpRequest(target(OpenClawApi.OpenAICompletions, { model: 'gpt-5.5' }), request);
     expect(bodyOf(other.init)).toMatchObject({ max_tokens: 2048 });
   });
@@ -273,6 +319,64 @@ describe('buildOneShotHttpRequest', () => {
     expect(url).toBe('https://gw.example.com/v1/responses');
   });
 
+  test('openai codex responses sends instructions, store=false, structured input, and omits max_output_tokens', () => {
+    const { url, init } = buildOneShotHttpRequest(
+      target(OpenClawApi.OpenAICodexResponses, {
+        baseUrl: 'http://127.0.0.1:45555/v1/openai-codex',
+        apiKey: 'loopback-secret',
+        model: 'gpt-6-astra',
+        providerName: ProviderName.OpenAI,
+      }),
+      {
+        ...request,
+        messages: [
+          { role: 'user', content: 'Hello' },
+          { role: 'assistant', content: 'Hi there' },
+          { role: 'user', content: 'Polish this' },
+        ],
+      },
+    );
+    expect(url).toBe('http://127.0.0.1:45555/v1/openai-codex/responses');
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer loopback-secret',
+      Accept: 'text/event-stream',
+      'OpenAI-Beta': 'responses=experimental',
+      originator: 'pi',
+    });
+    const body = bodyOf(init);
+    expect(body).toEqual({
+      model: 'gpt-6-astra',
+      store: false,
+      stream: true,
+      instructions: 'Be brief.',
+      input: [
+        { role: 'user', content: [{ type: 'input_text', text: 'Hello' }] },
+        {
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'Hi there', annotations: [] }],
+        },
+        { role: 'user', content: [{ type: 'input_text', text: 'Polish this' }] },
+      ],
+    });
+    expect(body).not.toHaveProperty('max_output_tokens');
+
+    const fast = buildOneShotHttpRequest(
+      target(OpenClawApi.OpenAICodexResponses, {
+        baseUrl: 'http://127.0.0.1:45555/v1/openai-codex',
+        apiKey: 'loopback-secret',
+        model: 'gpt-6-astra',
+        providerName: ProviderName.OpenAI,
+      }),
+      { ...request, lowLatency: true },
+    );
+    expect(bodyOf(fast.init)).toMatchObject({
+      reasoning: { effort: 'low' },
+      text: { verbosity: 'low' },
+    });
+  });
+
   test('gemini generateContent', () => {
     const { url, init } = buildOneShotHttpRequest(
       target(OpenClawApi.GoogleGenerativeAI, { baseUrl: 'https://relay.example.com/v1beta', model: 'gemini-3-pro' }),
@@ -300,6 +404,10 @@ describe('readOneShotStreamEvent', () => {
       .toEqual({ text: 'b' });
     expect(readOneShotStreamEvent(OpenClawApi.OpenAIResponses, { data: '{"type":"response.output_text.delta","delta":"c"}' }))
       .toEqual({ text: 'c' });
+    expect(readOneShotStreamEvent(OpenClawApi.OpenAICodexResponses, { data: '{"type":"response.output_text.delta","delta":"c2"}' }))
+      .toEqual({ text: 'c2' });
+    expect(readOneShotStreamEvent(OpenClawApi.OpenAICodexResponses, { data: '{"type":"response.done"}' }))
+      .toEqual({ done: true });
     expect(readOneShotStreamEvent(OpenClawApi.GoogleGenerativeAI, {
       data: '{"candidates":[{"content":{"parts":[{"text":"d"}]}}]}',
     })).toEqual({ text: 'd' });

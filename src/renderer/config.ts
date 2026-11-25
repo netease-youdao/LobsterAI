@@ -293,7 +293,7 @@ export const GLOBAL_PROVIDERS = ProviderRegistry.idsByRegion('global');
 
 export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] => {
   if (language === 'zh') {
-    return [...CHINA_PROVIDERS];
+    return ProviderRegistry.idsForZhLocale();
   }
   return ProviderRegistry.idsForEnLocale();
 };

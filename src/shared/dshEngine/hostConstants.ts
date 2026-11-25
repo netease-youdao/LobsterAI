@@ -14,6 +14,20 @@ export const DSH_QUESTION_REQUEST_ID_PREFIX = 'dsh-question:';
 export const DSH_APPROVAL_REQUEST_ID_PREFIX = 'dsh-approval:';
 export const DSH_SKILL_INSTALL_TOOL = 'lobster_skill_install';
 export const DshSkillInstallAction = { Inspect: 'inspect', Install: 'install' } as const;
+export const DSH_AGENT_RULES_TOOL = 'lobster_agent_rules' as const;
+export const DshAgentRulesAction = {
+  Read: 'read',
+  Save: 'save',
+} as const;
+export type DshAgentRulesAction = typeof DshAgentRulesAction[keyof typeof DshAgentRulesAction];
+export const DshAgentRulesMode = {
+  Replace: 'replace',
+  Append: 'append',
+} as const;
+export type DshAgentRulesMode = typeof DshAgentRulesMode[keyof typeof DshAgentRulesMode];
+export const AGENT_RULES_LIMITS = {
+  MaxRulesChars: 32_000,
+} as const;
 export const DSH_HTML_RENDER_TOOL = 'lobsterai_render_html_to_image' as const;
 export const HtmlRenderFormat = {
   Png: 'png',
