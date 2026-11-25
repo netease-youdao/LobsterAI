@@ -1,17 +1,12 @@
-import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { RETAINED_IM_PLATFORM_LIST, RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
 import { buildFeishuTopicConversationId, parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
 import { ImPeerKind, parseImConversationId, PlatformRegistry } from '../../../shared/platform';
 import { isRetainedImPlatform } from '../../im/dshChannelsBridge';
 import type { Platform } from '../../im/types';
 
-const MULTI_INSTANCE_BINDING_PLATFORMS = new Set<string>([
-  'dingtalk',
-  'feishu',
-  'qq',
-  'wecom',
-  'telegram',
-  'discord',
-]);
+const MULTI_INSTANCE_CONFIG_KEYS = new Set<string>(
+  RETAINED_IM_PLATFORM_LIST.filter(platform => platform !== RetainedImPlatform.Weixin),
+);
 
 function resolveAgentBinding(
   bindings: Record<string, string> | undefined,
@@ -19,7 +14,7 @@ function resolveAgentBinding(
   accountId?: string | null,
 ): string {
   if (!bindings) return 'main';
-  if (MULTI_INSTANCE_BINDING_PLATFORMS.has(platform) && accountId) {
+  if (MULTI_INSTANCE_CONFIG_KEYS.has(platform) && accountId) {
     const prefix = `${platform}:`;
     for (const key of Object.keys(bindings)) {
       if (key.startsWith(prefix)) {
@@ -46,8 +41,6 @@ const WECOM_PLATFORM: Platform = 'wecom';
 export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
 }
-
-const MULTI_INSTANCE_CONFIG_KEYS = new Set(['dingtalk', 'feishu', 'qq', 'wecom', 'telegram', 'discord']);
 
 function deriveNimRuntimeAccountId(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
