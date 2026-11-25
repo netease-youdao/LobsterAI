@@ -69,6 +69,9 @@ function createFixture(options?: {
 
   const imStore = {
     findLegacyDirectSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
+    findLegacyFeishuTopicSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
+    getConversationReplyRoute: vi.fn<() => { to: string } | null>(() => null),
+    setConversationReplyRoute: vi.fn(),
     getSessionMapping: vi.fn((convId: string, platform: Platform, agentId = 'main') =>
       mappings.get(`${platform}:${convId}:${agentId}`) ?? null,
     ),
@@ -135,6 +138,36 @@ function createFixture(options?: {
 }
 
 describe('DshImInboundHandler', () => {
+  test('keeps separate Feishu threads on the same bot and resumes a thread from its root-only event', async () => {
+    const { handler, runtime, imStore, coworkStore, pushMessage, sendReply } = createFixture();
+    let count = 0;
+    const respond = async (sessionId: string) => {
+      pushMessage(sessionId, { id: String(++count), type: 'assistant', content: 'answer' });
+      runtime.emit('complete', sessionId);
+    };
+    runtime.startSession.mockImplementation(respond);
+    runtime.continueSession.mockImplementation(respond);
+    const event = { platform: 'feishu', instanceId: 'bot', chatType: 'group' as const, chatId: 'oc_Group', agentId: 'expert', text: 'hello' };
+    const topic = (threadId: string, rootMessageId: string) => ({
+      threadId, rootMessageId, replyToMessageId: 'om_Message', replyInThread: true,
+    });
+    await handler.enqueue({ ...event, replyContext: topic('omt_X', 'om_One') });
+    await handler.enqueue({ ...event, replyContext: topic('omt_x', 'om_Two') });
+    imStore.getConversationReplyRoute.mockReturnValue({ to: 'oc_Group#__feishu_reply_to=om_One&__feishu_thread_id=omt_X' });
+    await handler.enqueue({ ...event, replyContext: topic('om_One', 'om_One') });
+    expect(coworkStore.createSession).toHaveBeenCalledTimes(2);
+    expect(runtime.continueSession).toHaveBeenCalledWith('cowork-session-1', 'hello');
+    expect(imStore.getSessionMapping('group:oc_Group:thread:omt_x', 'feishu:bot' as Platform, 'expert')?.coworkSessionId)
+      .toBe('cowork-session-2');
+    expect(imStore.setConversationReplyRoute).toHaveBeenCalledWith('feishu:bot', 'group:oc_Group:thread:omt_X', {
+      channel: 'feishu', accountId: 'bot', to: 'oc_Group#__feishu_reply_to=om_One&__feishu_thread_id=omt_X',
+    });
+    expect(sendReply).toHaveBeenCalledTimes(3);
+    expect(imStore.setConversationReplyRoute).toHaveBeenLastCalledWith('feishu:bot', 'group:oc_Group:thread:om_One', {
+      channel: 'feishu', accountId: 'bot', to: 'oc_Group#__feishu_reply_to=om_One&__feishu_thread_id=omt_X',
+    });
+  });
+
   test('continues a recovered original session and replies to the native chat even when a DSH fork exists', async () => {
     const { handler, runtime, coworkStore, imStore, pushMessage, sendReply } = createFixture();
     const original = coworkStore.createSession('Original DM', '/original');

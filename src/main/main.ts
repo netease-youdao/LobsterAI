@@ -11885,6 +11885,8 @@ if (!gotTheLock) {
             .getIMStore()
             .getSessionMapping(conversationId, platform as Platform),
         getIMSettings: () => getIMGatewayManager().getIMStore().getIMSettings(),
+        getConversationReplyRoute: (platform: Platform, conversationId: string) =>
+          getIMGatewayManager().getIMStore().getConversationReplyRoute(platform, conversationId),
         listSessionMappings: (platform: string, accountId?: string) =>
           getIMGatewayManager()
             .getIMStore()

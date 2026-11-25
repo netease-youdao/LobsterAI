@@ -360,6 +360,13 @@ const MAX_BRIDGE_BODY_BYTES = 32 * 1024 * 1024;
 const BRIDGE_KEEPALIVE_MS = 30_000;
 const LAUNCH_URL_PATTERN = /dsh web:\s*(https?:\/\/\S+)/;
 
+export class DshHostBootTimeoutError extends Error {
+  constructor(timeoutMs: number, stderr: string) {
+    super(`DSH host boot timed out after ${timeoutMs}ms.\nSTDERR:\n${stderr.slice(-2000)}`);
+    this.name = 'DshHostBootTimeoutError';
+  }
+}
+
 export function resolveDefaultDshBootTimeoutMs(platform: NodeJS.Platform = process.platform): number {
   return platform === 'win32' ? DEFAULT_WINDOWS_BOOT_TIMEOUT_MS : DEFAULT_BOOT_TIMEOUT_MS;
 }
@@ -1044,7 +1051,7 @@ export class DshHostManager extends EventEmitter {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error(`DSH host boot timed out after ${bootTimeoutMs}ms.\nSTDERR:\n${stderrBuf.slice(-2000)}`));
+        reject(new DshHostBootTimeoutError(bootTimeoutMs, stderrBuf));
       }, bootTimeoutMs);
 
       createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {
