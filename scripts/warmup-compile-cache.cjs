@@ -58,7 +58,9 @@ try {
 
 // Find the bundled DSH runtime entry
 const entryCandidates = [
+  path.join(__dirname, 'app.asar', 'dsh-runtime', 'lib', 'bin.js'),
   path.join(__dirname, 'dsh-runtime', 'lib', 'bin.js'),
+  path.join(__dirname, '..', 'resources', 'app.asar', 'dsh-runtime', 'lib', 'bin.js'),
   path.join(__dirname, '..', 'resources', 'dsh-runtime', 'lib', 'bin.js'),
 ];
 

@@ -413,6 +413,18 @@ function mergeEnvPathEntries(
   return merged.length > 0 ? merged.join(path.delimiter) : existingPath;
 }
 
+function resolvePackagedDshRuntimeDir(resourcesDir: string): string {
+  const asarRuntimeDir = path.join(resourcesDir, 'app.asar', 'dsh-runtime');
+  if (fs.existsSync(path.join(asarRuntimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')))) {
+    return asarRuntimeDir;
+  }
+  const unpackedRuntimeDir = path.join(resourcesDir, 'dsh-runtime');
+  if (fs.existsSync(path.join(unpackedRuntimeDir, ...DSH_RUNTIME_ENTRY_RELPATH.split('/')))) {
+    return unpackedRuntimeDir;
+  }
+  return asarRuntimeDir;
+}
+
 /**
  * Resolve runtime and bundle directories for packaged vs dev layouts.
  */
@@ -429,7 +441,7 @@ export function resolveBundledDshPaths(options: {
     ? options.resourcesDir
     : options.appRootDir;
   const runtimeDir = options.isPackaged && options.resourcesDir
-    ? path.join(options.resourcesDir, 'dsh-runtime')
+    ? resolvePackagedDshRuntimeDir(options.resourcesDir)
     : path.join(options.appRootDir, 'vendor', 'dsh-runtime', 'current');
   const hostBundleDir = path.join(baseDir, 'dsh-bundles', 'lobsterai-host');
   const candidateChannels = path.join(baseDir, 'dsh-bundles', 'lobsterai-channels');

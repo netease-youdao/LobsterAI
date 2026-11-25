@@ -49,8 +49,12 @@ import {
   DecisionModelProvider,
 } from '../../../shared/decisionModel/constants';
 import { DshHostPhase } from '../../../shared/dshEngine/hostConstants';
-import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
+import {
+  OpenClawEngineErrorCode,
+  OpenClawEnginePhase,
+} from '../../../shared/openclawEngine/constants';
 import { type DecisionModelConfig, DEFAULT_DECISION_MODEL_CONFIG } from '../decisionModelConfig';
+import { type LoopbackBlockCheck, LoopbackSelfTestOutcome } from '../loopbackSelfTest';
 import {
   createSingleFlightAsyncTracker,
   DshBootstrap,
@@ -70,6 +74,8 @@ function createTempDir(): string {
 
 function createTestBootstrap(options: {
   onStatusChange?: (status: DshCompatEngineStatus) => void;
+  platform?: NodeJS.Platform;
+  detectLoopbackBlock?: () => Promise<LoopbackBlockCheck>;
 } = {}) {
   const userDataDir = createTempDir();
   const db = new Database(path.join(userDataDir, 'lobsterai.sqlite'));
@@ -93,6 +99,8 @@ function createTestBootstrap(options: {
     },
     executablePath: process.execPath,
     skipElectronRunAsNode: true,
+    platform: options.platform,
+    detectLoopbackBlock: options.detectLoopbackBlock,
     onStatusChange: (compat) => options.onStatusChange?.(compat),
   });
 
@@ -355,6 +363,124 @@ describe('DshBootstrap startup deduplication and initial config sync gate', () =
       expect(hostStartSpy).toHaveBeenCalledTimes(1);
       expect(succeedingSync).toHaveBeenCalledTimes(1);
     } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+
+  test('pauses Windows DSH startup with LoopbackBlocked when loopback self-test is blocked, and recovers after restart()', async () => {
+    let blocked = true;
+    const emitted: DshCompatEngineStatus[] = [];
+    const { bootstrap, db } = createTestBootstrap({
+      platform: 'win32',
+      detectLoopbackBlock: async () => (
+        blocked
+          ? {
+              blocked: true,
+              attempts: 2,
+              last: { outcome: LoopbackSelfTestOutcome.Blocked, code: 'ETIMEDOUT', elapsedMs: 610 },
+            }
+          : {
+              blocked: false,
+              attempts: 1,
+              last: { outcome: LoopbackSelfTestOutcome.Ok, elapsedMs: 4 },
+            }
+      ),
+      onStatusChange: (status) => emitted.push(status),
+    });
+
+    try {
+      let hostReady = false;
+      const hostStartSpy = vi.spyOn(bootstrap.hostManager, 'start').mockImplementation(async () => {
+        hostReady = true;
+      });
+      const hostRestartSpy = vi.spyOn(bootstrap.hostManager, 'restart').mockImplementation(async () => {
+        hostReady = true;
+      });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap.hostManager, 'getStatus').mockImplementation(() => ({
+        phase: hostReady ? DshHostPhase.Ready : DshHostPhase.Stopped,
+        origin: hostReady ? 'http://127.0.0.1:9999' : null,
+        authenticatedWebUrl: null,
+        pid: hostReady ? 12345 : null,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir: '/tmp/profile',
+        dshHomeDir: '/tmp/dsh-profile',
+        cliShimPath: null,
+        lastError: null,
+        startedAt: hostReady ? Date.now() : null,
+        restartCount: 0,
+      }));
+      vi.spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools').mockResolvedValue({ ok: true });
+      const schedulerStartSpy = vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+      const syncInitialConfig = vi.fn(async () => ({ success: true }));
+
+      const blockedStatus = await bootstrap.start({ syncInitialConfig });
+      expect(blockedStatus.phase).toBe(OpenClawEnginePhase.Error);
+      expect(blockedStatus.errorCode).toBe(OpenClawEngineErrorCode.LoopbackBlocked);
+      expect(blockedStatus.canRetry).toBe(true);
+      expect(blockedStatus.message).toContain('ETIMEDOUT');
+      expect(bootstrap.getEngineStatus()).toEqual(blockedStatus);
+      expect(emitted.at(-1)).toEqual(blockedStatus);
+      expect(hostStartSpy).not.toHaveBeenCalled();
+      expect(syncInitialConfig).not.toHaveBeenCalled();
+      expect(schedulerStartSpy).not.toHaveBeenCalled();
+      expect(bootstrap.isReadyForTurns()).toBe(false);
+
+      // Simulate user clicking "Allow Local Connections" and repairing the firewall.
+      blocked = false;
+      const recovered = await bootstrap.restart();
+      expect(recovered.phase).toBe(OpenClawEnginePhase.Running);
+      expect(recovered.errorCode).toBeUndefined();
+      expect(hostRestartSpy).toHaveBeenCalledTimes(1);
+      expect(syncInitialConfig).toHaveBeenCalledTimes(1);
+      expect(schedulerStartSpy).toHaveBeenCalledTimes(1);
+      expect(bootstrap.isReadyForTurns()).toBe(true);
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+
+  test('continues Windows DSH startup when loopback self-test is inconclusive', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { bootstrap, db } = createTestBootstrap({
+      platform: 'win32',
+      detectLoopbackBlock: async () => ({
+        blocked: false,
+        attempts: 1,
+        last: { outcome: LoopbackSelfTestOutcome.Inconclusive, code: 'ECONNRESET', elapsedMs: 12 },
+      }),
+    });
+
+    try {
+      let hostReady = false;
+      const hostStartSpy = vi.spyOn(bootstrap.hostManager, 'start').mockImplementation(async () => {
+        hostReady = true;
+      });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap.hostManager, 'getStatus').mockImplementation(() => ({
+        phase: hostReady ? DshHostPhase.Ready : DshHostPhase.Starting,
+        origin: hostReady ? 'http://127.0.0.1:9999' : null,
+        authenticatedWebUrl: null,
+        pid: hostReady ? 12345 : null,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir: '/tmp/profile',
+        dshHomeDir: '/tmp/dsh-profile',
+        cliShimPath: null,
+        lastError: null,
+        startedAt: hostReady ? Date.now() : null,
+        restartCount: 0,
+      }));
+      vi.spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools').mockResolvedValue({ ok: true });
+      vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+
+      const status = await bootstrap.start({ syncInitialConfig: async () => ({ success: true }) });
+      expect(status.phase).toBe(OpenClawEnginePhase.Running);
+      expect(hostStartSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('loopback self-test inconclusive (ECONNRESET)'));
+    } finally {
+      warnSpy.mockRestore();
       await bootstrap.stop();
       db.close();
     }

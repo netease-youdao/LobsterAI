@@ -57,11 +57,12 @@ describe('loopback firewall rule', () => {
     );
   });
 
-  test('matches the rule the installer writes', () => {
+  test('runs on demand at runtime instead of requiring elevation in the installer', () => {
     const installer = fs.readFileSync(path.resolve(process.cwd(), 'scripts/nsis-installer.nsh'), 'utf8');
 
-    expect(installer).toContain(String.raw`firewall add rule \"name=${WINDOWS_LOOPBACK_FIREWALL_RULE_NAME}\" dir=in action=allow $$program protocol=TCP localip=127.0.0.1 remoteip=127.0.0.1 profile=any`);
-    expect(installer).toContain(String.raw`firewall delete rule \"name=${WINDOWS_LOOPBACK_FIREWALL_RULE_NAME}\" dir=in`);
+    expect(WINDOWS_LOOPBACK_FIREWALL_RULE_NAME).toBe('LobsterAI loopback');
+    expect(installer).not.toContain('RequestExecutionLevel admin');
+    expect(installer).not.toContain('advfirewall');
   });
 });
 

@@ -80,12 +80,15 @@ export interface DshRuntimeCandidateContext {
   joinPath: (...segments: string[]) => string;
 }
 
-// Mirrors the OpenClaw runtime resolution order: packaged apps read the
-// extraResources copy; dev builds read vendor/dsh-runtime/current.
+// Packaged apps ship dsh-runtime inside app.asar (with an unpacked fallback);
+// dev builds read vendor/dsh-runtime/current.
 export function resolveDshRuntimeCandidates(context: DshRuntimeCandidateContext): string[] {
   const { isPackaged, resourcesPath, appPath, cwd, joinPath } = context;
   if (isPackaged) {
-    return [joinPath(resourcesPath, 'dsh')];
+    return [
+      joinPath(resourcesPath, 'app.asar', 'dsh-runtime'),
+      joinPath(resourcesPath, 'dsh-runtime'),
+    ];
   }
   const candidates = [joinPath(appPath, 'vendor', 'dsh-runtime', 'current')];
   const fromCwd = joinPath(cwd, 'vendor', 'dsh-runtime', 'current');

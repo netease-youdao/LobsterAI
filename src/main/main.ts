@@ -9157,7 +9157,10 @@ if (!gotTheLock) {
         if (repair.outcome !== OpenClawLoopbackRepairOutcome.Repaired) {
           return { ...repair, status: getDshBootstrap().getEngineStatus() };
         }
-        const status = await getDshBootstrap().restart();
+        const status = await bootstrapOpenClawEngine({
+          forceReinstall: true,
+          reason: 'repair-loopback-firewall',
+        });
         return { ...repair, status };
       } catch (error) {
         console.error('[DSH] loopback firewall repair failed:', error);

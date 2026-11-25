@@ -44,7 +44,7 @@ describe('resolveBundledDshPaths', () => {
     expect(res.channelsBundleDir).toBeNull();
   });
 
-  test('resolves packaged layout under resourcesPath and detects channels bundle when present', () => {
+  test('resolves packaged layout inside app.asar by default and detects channels bundle when present', () => {
     const resources = createTempDir();
     const channelsDir = path.join(resources, 'dsh-bundles', 'lobsterai-channels');
     fs.mkdirSync(channelsDir, { recursive: true });
@@ -55,9 +55,23 @@ describe('resolveBundledDshPaths', () => {
       appRootDir: '/ignored',
       resourcesDir: resources,
     });
-    expect(res.runtimeDir).toBe(path.join(resources, 'dsh-runtime'));
+    expect(res.runtimeDir).toBe(path.join(resources, 'app.asar', 'dsh-runtime'));
     expect(res.hostBundleDir).toBe(path.join(resources, 'dsh-bundles', 'lobsterai-host'));
     expect(res.channelsBundleDir).toBe(channelsDir);
+  });
+
+  test('falls back to unpacked resources/dsh-runtime when app.asar/dsh-runtime is absent', () => {
+    const resources = createTempDir();
+    const legacyEntry = path.join(resources, 'dsh-runtime', 'lib', 'bin.js');
+    fs.mkdirSync(path.dirname(legacyEntry), { recursive: true });
+    fs.writeFileSync(legacyEntry, 'export async function runCli() {}\n');
+
+    const res = resolveBundledDshPaths({
+      isPackaged: true,
+      appRootDir: '/ignored',
+      resourcesDir: resources,
+    });
+    expect(res.runtimeDir).toBe(path.join(resources, 'dsh-runtime'));
   });
 });
 

@@ -69,7 +69,7 @@ describe('classifyDshStartupError', () => {
 });
 
 describe('resolveDshRuntimeCandidates', () => {
-  test('packaged apps read only the resources copy', () => {
+  test('packaged apps check app.asar/dsh-runtime before the unpacked resources copy', () => {
     const candidates = resolveDshRuntimeCandidates({
       isPackaged: true,
       resourcesPath: '/app/Resources',
@@ -77,7 +77,7 @@ describe('resolveDshRuntimeCandidates', () => {
       cwd: '/somewhere',
       joinPath: path.posix.join,
     });
-    expect(candidates).toEqual(['/app/Resources/dsh']);
+    expect(candidates).toEqual(['/app/Resources/app.asar/dsh-runtime', '/app/Resources/dsh-runtime']);
   });
 
   test('dev builds read vendor/dsh-runtime/current from app path and cwd', () => {
