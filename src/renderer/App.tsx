@@ -48,6 +48,7 @@ import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduct
 import { MigrationReportModal } from './components/migration/MigrationReportModal';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
+import { SettingsTabId } from './components/settings/settingsTabs';
 import Sidebar from './components/Sidebar';
 import { SkillsAndConnectorsView, SkillsConnectorsSection } from './components/skillsAndConnectors';
 import SkinBackdrop, { SkinBackdropVariant } from './components/skin/SkinBackdrop';
@@ -135,16 +136,17 @@ const SETTINGS_TAB_SHORTCUT_ACTIONS: Array<{
   action: ShortcutAction;
   initialTab: NonNullable<SettingsOpenOptions['initialTab']>;
 }> = [
-  { action: ShortcutAction.OpenSettingsGeneral, initialTab: 'general' },
-  { action: ShortcutAction.OpenSettingsAppearance, initialTab: 'appearance' },
+  { action: ShortcutAction.OpenSettingsGeneral, initialTab: SettingsTabId.General },
+  { action: ShortcutAction.OpenSettingsAppearance, initialTab: SettingsTabId.Appearance },
   { action: ShortcutAction.OpenSettingsDesktopCompanion, initialTab: OpenSettingsTab.DesktopCompanion },
-  { action: ShortcutAction.OpenSettingsModel, initialTab: 'model' },
-  { action: ShortcutAction.OpenSettingsIm, initialTab: 'im' },
-  { action: ShortcutAction.OpenSettingsBrowser, initialTab: 'browserWebAccess' },
-  { action: ShortcutAction.OpenSettingsEmail, initialTab: 'email' },
-  { action: ShortcutAction.OpenSettingsMemory, initialTab: 'coworkMemory' },
-  { action: ShortcutAction.OpenSettingsPlugins, initialTab: 'plugins' },
-  { action: ShortcutAction.OpenSettingsAbout, initialTab: 'about' },
+  { action: ShortcutAction.OpenSettingsModel, initialTab: SettingsTabId.Model },
+  { action: ShortcutAction.OpenSettingsIm, initialTab: SettingsTabId.Im },
+  { action: ShortcutAction.OpenSettingsBrowser, initialTab: SettingsTabId.BrowserWebAccess },
+  { action: ShortcutAction.OpenSettingsEmail, initialTab: SettingsTabId.Email },
+  { action: ShortcutAction.OpenSettingsMemory, initialTab: SettingsTabId.CoworkMemory },
+  { action: ShortcutAction.OpenSettingsPlugins, initialTab: SettingsTabId.Plugins },
+  { action: ShortcutAction.OpenSettingsDataPrivacy, initialTab: SettingsTabId.DataPrivacy },
+  { action: ShortcutAction.OpenSettingsAbout, initialTab: SettingsTabId.About },
 ];
 
 /** Used for config + i18n init; longer on Windows where main-process IPC can stall during cold start. */

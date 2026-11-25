@@ -1,7 +1,7 @@
 import { ProviderName } from '@shared/providers';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { type AppConfig, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction, SHORTCUTS_MIGRATION_VERSION, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
+import { type AppConfig, ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION, CODE_FONT_SIZE_MIGRATION_VERSION, CONFIG_KEYS, defaultConfig, FontPreferences, resolveArtifactAutoPreviewEnabled, ShortcutAction, SHORTCUTS_MIGRATION_VERSION, UI_FONT_SIZE_MIGRATION_VERSION } from '../config';
 
 const makeLegacyConfigWithoutMiniMaxAddedModels = (): AppConfig => ({
   ...defaultConfig,
@@ -287,38 +287,71 @@ describe('configService theme persistence', () => {
 });
 
 describe('configService artifact auto-preview persistence', () => {
-  test('disables auto-preview only for an explicit false value', () => {
-    expect(resolveArtifactAutoPreviewEnabled(false)).toBe(false);
+  test('enables auto-preview only for an explicit true value', () => {
     expect(resolveArtifactAutoPreviewEnabled(true)).toBe(true);
-    expect(resolveArtifactAutoPreviewEnabled(undefined)).toBe(true);
-    expect(resolveArtifactAutoPreviewEnabled(null)).toBe(true);
+    expect(resolveArtifactAutoPreviewEnabled(false)).toBe(false);
+    expect(resolveArtifactAutoPreviewEnabled(undefined)).toBe(false);
+    expect(resolveArtifactAutoPreviewEnabled(null)).toBe(false);
   });
 
-  test('defaults legacy configs to auto-preview enabled', async () => {
+  test('defaults legacy configs without the preference to auto-preview disabled', async () => {
     const legacyConfig: Partial<AppConfig> = { ...defaultConfig };
     delete legacyConfig.artifactAutoPreviewEnabled;
+    delete legacyConfig.artifactAutoPreviewMigrationVersion;
     const { configService, storeData } = await loadConfigServiceWithStoredConfig(
       legacyConfig as AppConfig,
     );
 
     await configService.init();
 
-    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(true);
-    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).artifactAutoPreviewEnabled).toBe(true);
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewMigrationVersion).toBe(
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
+    );
   });
 
-  test('preserves a disabled auto-preview preference across partial updates', async () => {
-    const storedConfig: AppConfig = {
+  test('force-resets pre-migration enabled configs to disabled exactly once', async () => {
+    const preMigrationConfig = {
       ...defaultConfig,
-      artifactAutoPreviewEnabled: false,
-    };
-    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+      artifactAutoPreviewEnabled: true,
+    } as AppConfig;
+    delete (preMigrationConfig as Partial<AppConfig>).artifactAutoPreviewMigrationVersion;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
 
     await configService.init();
+
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewEnabled).toBe(false);
+    expect(savedConfig.artifactAutoPreviewMigrationVersion).toBe(
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
+    );
+  });
+
+  test('preserves re-enabled auto-preview after the forced reset across partial updates and restarts', async () => {
+    const preMigrationConfig = {
+      ...defaultConfig,
+      artifactAutoPreviewEnabled: true,
+    } as AppConfig;
+    delete (preMigrationConfig as Partial<AppConfig>).artifactAutoPreviewMigrationVersion;
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(preMigrationConfig);
+
+    await configService.init();
+    await configService.updateConfig({ artifactAutoPreviewEnabled: true });
     await configService.updateConfig({ useSystemProxy: true });
 
-    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(false);
-    expect((storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig).artifactAutoPreviewEnabled).toBe(false);
+    const savedConfig = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(configService.getConfig().artifactAutoPreviewEnabled).toBe(true);
+    expect(savedConfig.artifactAutoPreviewEnabled).toBe(true);
+    expect(savedConfig.artifactAutoPreviewMigrationVersion).toBe(
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
+    );
+
+    const { configService: restartedService } = await loadConfigServiceWithStoredConfig(savedConfig);
+    await restartedService.init();
+    expect(restartedService.getConfig().artifactAutoPreviewEnabled).toBe(true);
   });
 });
 
