@@ -237,7 +237,7 @@ export class BrowserCredentialService {
     }
     return {
       summary: rowToSummary(row),
-      password: this.withEncryption(() => this.encryption.decryptString(row.encrypted_password)),
+      password: this.withDecryption(() => this.encryption.decryptString(row.encrypted_password)),
     };
   }
 
@@ -277,6 +277,34 @@ export class BrowserCredentialService {
         reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
       });
       throw error;
+    }
+  }
+
+  private withDecryption<T>(operation: () => T): T {
+    this.assertAvailable();
+    try {
+      return operation();
+    } catch (error) {
+      // A single ciphertext imported from another device cannot be decrypted by
+      // this OS keychain/DPAPI, even though local encryption is healthy. Only
+      // downgrade global device availability if the OS backend itself reports
+      // unavailable.
+      let backendStillAvailable = false;
+      try {
+        backendStillAvailable = this.encryption.isEncryptionAvailable();
+      } catch {
+        backendStillAvailable = false;
+      }
+      if (!backendStillAvailable) {
+        this.rememberAvailability({
+          available: false,
+          reason: BrowserCredentialAvailabilityReason.EncryptionUnavailable,
+        });
+        throw error;
+      }
+      throw new Error(
+        'This saved browser credential could not be decrypted on this device. Please delete and save it again.',
+      );
     }
   }
 

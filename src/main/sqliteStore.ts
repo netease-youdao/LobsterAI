@@ -21,10 +21,6 @@ import {
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
 import { repairForkedSessionToolUseIds } from './libs/coworkForkToolUseIds';
-import {
-  openSqliteDatabaseWithRecovery,
-  SqliteBackupManager,
-} from './libs/sqliteBackup/sqliteBackupManager';
 import { migrateAgentCollaboration } from './migration/agentCollaborationMigration';
 
 type ChangePayload<T = unknown> = {
@@ -56,6 +52,67 @@ const extractScheduledTaskIdFromMessageMetadata = (metadata: unknown): string | 
   }
 };
 
+const SQLITE_QUARANTINE_DIR_RELATIVE_PATH = path.join('backups', 'sqlite', 'quarantine');
+
+const applyRecommendedPragmas = (db: Database.Database): void => {
+  // WAL mode persists across connections. NORMAL sync is crash-safe under WAL.
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = -8000'); // 8 MB; negative value = kibibytes
+  db.pragma('wal_autocheckpoint = 1000'); // checkpoint every ~4 MB of WAL writes
+};
+
+const isSqliteCorruptionError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: string; message?: string };
+  if (candidate.code === 'SQLITE_CORRUPT' || candidate.code === 'SQLITE_NOTADB') {
+    return true;
+  }
+  const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+  return (
+    message.includes('database disk image is malformed') ||
+    message.includes('file is not a database') ||
+    message.includes('malformed')
+  );
+};
+
+const quarantineCorruptedDatabaseFiles = (userDataPath: string, dbPath: string): string => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const quarantineDir = path.join(userDataPath, SQLITE_QUARANTINE_DIR_RELATIVE_PATH, stamp);
+  fs.mkdirSync(quarantineDir, { recursive: true });
+  for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (!fs.existsSync(filePath)) continue;
+    fs.renameSync(filePath, path.join(quarantineDir, path.basename(filePath)));
+  }
+  return quarantineDir;
+};
+
+const openSqliteDatabase = (userDataPath: string, dbPath: string): Database.Database => {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath);
+    applyRecommendedPragmas(db);
+    return db;
+  } catch (error) {
+    try {
+      db?.close();
+    } catch {
+      // Ignore close failures before quarantine fallback.
+    }
+    if (!isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    const quarantineDir = quarantineCorruptedDatabaseFiles(userDataPath, dbPath);
+    console.warn(
+      `[SqliteStore] Database corrupted on open; quarantined files to ${quarantineDir} and reinitializing:`,
+      error,
+    );
+    const freshDb = new Database(dbPath);
+    applyRecommendedPragmas(freshDb);
+    return freshDb;
+  }
+};
+
 export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
@@ -73,28 +130,7 @@ export class SqliteStore {
     const basePath = userDataPath ?? app.getPath('userData');
     const dbPath = path.join(basePath, DB_FILENAME);
 
-    let db = openSqliteDatabaseWithRecovery(basePath, dbPath);
-
-    const autoBackupEnabled = SqliteStore.readSqliteAutoBackupEnabled(db);
-    if (autoBackupEnabled) {
-      const backupManager = new SqliteBackupManager(basePath);
-      const health = backupManager.verifyDatabaseHealth(db);
-      if (!health.ok) {
-        const healthReason = 'reason' in health ? health.reason : 'unknown reason';
-        console.warn(`[SqliteBackup] Startup health check failed: ${healthReason}`);
-        try {
-          db.close();
-        } catch {
-          // Ignore close failures before restore.
-        }
-        const restoreResult = backupManager.restoreLatestBackup(dbPath);
-        if (!restoreResult.restored) {
-          console.warn('[SqliteBackup] No valid snapshot was restored; continuing with database reinitialization');
-        }
-        db = openSqliteDatabaseWithRecovery(basePath, dbPath);
-      }
-    }
-
+    const db = openSqliteDatabase(basePath, dbPath);
     const store = new SqliteStore(db, dbPath);
     store.initializeTables(basePath);
     return store;
@@ -957,19 +993,6 @@ export class SqliteStore {
 
   close(): void {
     this.db.close();
-  }
-
-  private static readSqliteAutoBackupEnabled(db: Database.Database): boolean {
-    try {
-      const row = db.prepare("SELECT value FROM kv WHERE key = 'app_config'").get() as
-        | { value: string }
-        | undefined;
-      if (!row?.value) return false;
-      const parsed = JSON.parse(row.value) as { sqliteAutoBackupEnabled?: boolean };
-      return parsed.sqliteAutoBackupEnabled === true;
-    } catch {
-      return false;
-    }
   }
 
   private tryReadLegacyMemoryText(): string {

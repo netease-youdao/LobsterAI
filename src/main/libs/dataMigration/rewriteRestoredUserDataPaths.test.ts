@@ -354,4 +354,108 @@ describe('rewriteRestoredUserDataPathsInSqliteSync', () => {
       checkDb.close();
     }
   });
+
+  test('rewrites message versions, edits, library artifacts/manual sources, and new managed subdirs safely', () => {
+    const dir = makeTempDir();
+    const dbPath = path.join(dir, 'lobsterai.sqlite');
+    const db = new Database(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE cowork_messages (id TEXT PRIMARY KEY, metadata TEXT);
+        CREATE TABLE cowork_message_versions (id TEXT PRIMARY KEY, snapshot_json TEXT);
+        CREATE TABLE cowork_message_edits (operation_id TEXT PRIMARY KEY, operation_json TEXT NOT NULL, snapshot_json TEXT NOT NULL);
+        CREATE TABLE library_local_artifacts (id TEXT PRIMARY KEY, path_key TEXT NOT NULL UNIQUE, file_path TEXT NOT NULL);
+        CREATE TABLE library_manual_sources (path_key TEXT PRIMARY KEY, file_path TEXT NOT NULL);
+      `);
+
+      db.prepare('INSERT INTO cowork_message_versions (id, snapshot_json) VALUES (?, ?)').run(
+        'v1',
+        JSON.stringify([
+          {
+            id: 'm1',
+            metadata: {
+              attachments: [{ path: '/old/data/browser-annotation-assets/a1.png' }],
+              localMediaAttachments: [{ localPath: '/old/data/qq-media/img.jpg' }],
+            },
+          },
+        ]),
+      );
+
+      db.prepare('INSERT INTO cowork_message_edits (operation_id, operation_json, snapshot_json) VALUES (?, ?, ?)').run(
+        'op1',
+        JSON.stringify({
+          metadata: { retainedOriginalPath: '/old/data/word-drafts/doc1.docx' },
+        }),
+        JSON.stringify({
+          messages: [{ metadata: { attachments: [{ path: '/old/data/slides-drafts/deck.pptx' }] } }],
+        }),
+      );
+
+      db.prepare('INSERT INTO library_local_artifacts (id, path_key, file_path) VALUES (?, ?, ?)').run(
+        'art1',
+        '/old/data/generated-images/s1/pic.png',
+        '/old/data/generated-images/s1/pic.png',
+      );
+      // Pre-existing target key to verify unique collision safety
+      db.prepare('INSERT INTO library_local_artifacts (id, path_key, file_path) VALUES (?, ?, ?)').run(
+        'art-existing',
+        '/new/data/generated-images/s1/dup.png',
+        '/new/data/generated-images/s1/dup.png',
+      );
+      db.prepare('INSERT INTO library_local_artifacts (id, path_key, file_path) VALUES (?, ?, ?)').run(
+        'art-dup',
+        '/old/data/generated-images/s1/dup.png',
+        '/old/data/generated-images/s1/dup.png',
+      );
+
+      db.prepare('INSERT INTO library_manual_sources (path_key, file_path) VALUES (?, ?)').run(
+        '/old/data/sheet-drafts/book.xlsx',
+        '/old/data/sheet-drafts/book.xlsx',
+      );
+    } finally {
+      db.close();
+    }
+
+    const result = rewriteRestoredUserDataPathsInSqliteSync(dbPath, {
+      sourceUserDataPath: '/old/data',
+      targetUserDataPath: '/new/data',
+      targetPathStyle: 'posix',
+    });
+
+    expect(result.updatedVersionRows).toBe(1);
+    expect(result.updatedEditRows).toBe(1);
+    expect(result.updatedLibraryArtifactRows).toBe(1);
+    expect(result.updatedLibraryManualSourceRows).toBe(1);
+    expect(result.updatedRows).toBe(4);
+
+    const checkDb = new Database(dbPath, { readonly: true });
+    try {
+      const versionSnap = JSON.parse(
+        (checkDb.prepare('SELECT snapshot_json FROM cowork_message_versions WHERE id = ?').get('v1') as { snapshot_json: string }).snapshot_json,
+      ) as Array<{ metadata: { attachments: Array<{ path: string }>; localMediaAttachments: Array<{ localPath: string }> } }>;
+      expect(versionSnap[0].metadata.attachments[0].path).toBe('/new/data/browser-annotation-assets/a1.png');
+      expect(versionSnap[0].metadata.localMediaAttachments[0].localPath).toBe('/new/data/qq-media/img.jpg');
+
+      const editRow = checkDb.prepare('SELECT operation_json, snapshot_json FROM cowork_message_edits WHERE operation_id = ?')
+        .get('op1') as { operation_json: string; snapshot_json: string };
+      expect(editRow.operation_json).toContain('/new/data/word-drafts/doc1.docx');
+      expect(editRow.snapshot_json).toContain('/new/data/slides-drafts/deck.pptx');
+
+      const art1 = checkDb.prepare('SELECT path_key, file_path FROM library_local_artifacts WHERE id = ?')
+        .get('art1') as { path_key: string; file_path: string };
+      expect(art1).toEqual({
+        path_key: '/new/data/generated-images/s1/pic.png',
+        file_path: '/new/data/generated-images/s1/pic.png',
+      });
+
+      const manual = checkDb.prepare('SELECT path_key, file_path FROM library_manual_sources')
+        .get() as { path_key: string; file_path: string };
+      expect(manual).toEqual({
+        path_key: '/new/data/sheet-drafts/book.xlsx',
+        file_path: '/new/data/sheet-drafts/book.xlsx',
+      });
+    } finally {
+      checkDb.close();
+    }
+  });
 });

@@ -15,8 +15,8 @@ import {
   CoworkMemoryStatus,
   CoworkMemoryStatusFilter,
   type CoworkMemoryStatusFilter as CoworkMemoryStatusFilterValue,
+  CoworkTempDirKind,
 } from '../../shared/cowork/constants';
-import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
 import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
 import {
@@ -89,6 +89,8 @@ import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
+import DataMigrationDialogs from './settings/DataMigrationDialogs';
+import DataMigrationRestoreReportCard from './settings/DataMigrationRestoreReportCard';
 import DataPrivacySettingsSection from './settings/DataPrivacySettingsSection';
 import GeneralSettingsSection from './settings/GeneralSettingsSection';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
@@ -138,6 +140,7 @@ import {
   SETTINGS_PAGE_TITLE_TEXT,
   SETTINGS_SECTION_TITLE_TEXT,
 } from './settings/settingsTypography';
+import { useDataMigration } from './settings/useDataMigration';
 import { useProviderTransfer } from './settings/useProviderTransfer';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
@@ -150,12 +153,6 @@ const MemorySubTab = {
   LegacyDreamDiary: 'legacyDreamDiary',
 } as const;
 type MemorySubTab = typeof MemorySubTab[keyof typeof MemorySubTab];
-
-const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => resolve());
-  });
-});
 
 const getAutoLaunchErrorMessage = (errorCode?: string): string => {
   if (errorCode === AppSettingsAutoLaunchErrorCode.RequiresApproval) {
@@ -1306,7 +1303,6 @@ const Settings: React.FC<SettingsProps> = ({
   const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
-  const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
   const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
   const [taskCompletionNotificationMode, setTaskCompletionNotificationMode] =
     useState<TaskCompletionNotificationMode>(TaskCompletionNotificationMode.Unfocused);
@@ -1717,10 +1713,6 @@ const Settings: React.FC<SettingsProps> = ({
   const [isRepairingOpenClaw, setIsRepairingOpenClaw] = useState<boolean>(false);
   const [openClawRepairResult, setOpenClawRepairResult] = useState<OpenClawGatewayRepairResult | null>(null);
   const [openClawGatewayCopied, setOpenClawGatewayCopied] = useState<boolean>(false);
-  const [isBackingUpOpenClawData, setIsBackingUpOpenClawData] = useState<boolean>(false);
-  const [isRestoringOpenClawData, setIsRestoringOpenClawData] = useState<boolean>(false);
-  const [openClawDataBackupResult, setOpenClawDataBackupResult] = useState<{ path: string; sizeBytes?: number } | null>(null);
-  const [showOpenClawDataRestoreConfirm, setShowOpenClawDataRestoreConfirm] = useState<boolean>(false);
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || 'dsh');
@@ -1860,27 +1852,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     let active = true;
-    void window.electron.openclaw.dataMigration.getLastRestoreResult().then((response) => {
-      if (!active || !response.success || !response.result) return;
-      if (response.result.status === DataMigrationRestoreStatus.Success) {
-        setNoticeMessage(i18nService.t('openClawDataMigrationSuccess'));
-        return;
-      }
-      const message = response.result.error
-        ? `${i18nService.t('openClawDataMigrationFailed')}: ${response.result.error}`
-        : i18nService.t('openClawDataMigrationFailed');
-      setError(message);
-    }).catch((loadError) => {
-      if (!active) return;
-      setError(loadError instanceof Error ? loadError.message : i18nService.t('openClawDataMigrationFailed'));
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
     void coworkService.getOpenClawEngineStatus().then((status) => {
       if (!active || !status) return;
       setOpenClawEngineStatus(status);
@@ -1926,7 +1897,6 @@ const Settings: React.FC<SettingsProps> = ({
         resolveArtifactAutoPreviewEnabled(config.artifactAutoPreviewEnabled),
       );
       setUseSystemProxy(config.useSystemProxy ?? false);
-      setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
       setUsageAnalyticsEnabled(config.usageAnalyticsEnabled !== false);
       {
         const notificationSettings = normalizeNotificationSettings(config.notificationSettings);
@@ -2955,19 +2925,6 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [openClawRepairResult?.backupPath]);
 
-  const handleRevealOpenClawDataBackup = useCallback(async () => {
-    const backupPath = openClawDataBackupResult?.path;
-    if (!backupPath) return;
-    try {
-      const result = await window.electron.shell.showItemInFolder(backupPath);
-      if (!result?.success) {
-        setError(result?.error || i18nService.t('showInFolderFailed'));
-      }
-    } catch (revealError) {
-      setError(revealError instanceof Error ? revealError.message : i18nService.t('showInFolderFailed'));
-    }
-  }, [openClawDataBackupResult?.path]);
-
   const persistModelSettingsBeforeDataBackup = useCallback(async () => {
     const normalizedProviders = normalizeProvidersForSettingsSave(providers);
     const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
@@ -2980,71 +2937,12 @@ const Settings: React.FC<SettingsProps> = ({
     });
   }, [activeProvider, providers]);
 
-  const handleOpenClawDataBackup = useCallback(async () => {
-    if (isBackingUpOpenClawData) return;
-    setError(null);
-    setNoticeMessage(null);
-    setOpenClawDataBackupResult(null);
-    setIsBackingUpOpenClawData(true);
-    try {
-      await waitForNextPaint();
-      await persistModelSettingsBeforeDataBackup();
-      const result = await window.electron.openclaw.dataMigration.backup();
-      if (!result.success) {
-        setError(result.error || i18nService.t('openClawDataBackupFailed'));
-        reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
-        return;
-      }
-      if (result.canceled) {
-        return;
-      }
-      if (result.path) {
-        setOpenClawDataBackupResult({ path: result.path, sizeBytes: result.sizeBytes });
-      }
-      setNoticeMessage(i18nService.t('openClawDataBackupSuccess'));
-      reportAgentEngineMaintenanceAction('backup_data', 'success', {
-        sizeBytes: result.sizeBytes,
-      });
-    } catch (backupError) {
-      setError(backupError instanceof Error ? backupError.message : i18nService.t('openClawDataBackupFailed'));
-      reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
-    } finally {
-      setIsBackingUpOpenClawData(false);
-    }
-  }, [isBackingUpOpenClawData, persistModelSettingsBeforeDataBackup]);
-
-  const handleConfirmOpenClawDataRestore = useCallback(async () => {
-    if (isRestoringOpenClawData) return;
-    setShowOpenClawDataRestoreConfirm(false);
-    setError(null);
-    setNoticeMessage(null);
-    setIsRestoringOpenClawData(true);
-    let keepLoadingUntilRestart = false;
-    try {
-      await waitForNextPaint();
-      const result = await window.electron.openclaw.dataMigration.restore();
-      if (!result.success) {
-        setError(result.error || i18nService.t('openClawDataMigrationFailed'));
-        reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
-        return;
-      }
-      if (result.canceled) {
-        return;
-      }
-      if (result.scheduledRestart) {
-        keepLoadingUntilRestart = true;
-        setNoticeMessage(i18nService.t('openClawDataMigrationRestarting'));
-      }
-      reportAgentEngineMaintenanceAction('restore_data', 'success');
-    } catch (restoreError) {
-      setError(restoreError instanceof Error ? restoreError.message : i18nService.t('openClawDataMigrationFailed'));
-      reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
-    } finally {
-      if (!keepLoadingUntilRestart) {
-        setIsRestoringOpenClawData(false);
-      }
-    }
-  }, [isRestoringOpenClawData]);
+  const dataMigration = useDataMigration({
+    persistModelSettingsBeforeBackup: persistModelSettingsBeforeDataBackup,
+    onError: setError,
+    onNotice: setNoticeMessage,
+    onReportAction: reportAgentEngineMaintenanceAction,
+  });
 
   const memoryAgentOptions = useMemo(() => {
     const mainAgent = agents.find((agent) => agent.id === AgentId.Main);
@@ -3509,7 +3407,6 @@ const Settings: React.FC<SettingsProps> = ({
         language,
         artifactAutoPreviewEnabled,
         useSystemProxy,
-        sqliteAutoBackupEnabled,
         usageAnalyticsEnabled,
         notificationSettings: normalizeNotificationSettings({
           taskCompletionNotificationMode,
@@ -3644,13 +3541,6 @@ const Settings: React.FC<SettingsProps> = ({
         if ((previousConfig.useSystemProxy ?? false) !== useSystemProxy) {
           reportGeneralSettingChanged('useSystemProxy', useSystemProxy, previousConfig.useSystemProxy ?? false);
         }
-        if ((previousConfig.sqliteAutoBackupEnabled === true) !== sqliteAutoBackupEnabled) {
-          reportGeneralSettingChanged(
-            'sqliteAutoBackupEnabled',
-            sqliteAutoBackupEnabled,
-            previousConfig.sqliteAutoBackupEnabled === true,
-          );
-        }
         if (previousNotificationSettings.taskCompletionNotificationMode !== taskCompletionNotificationMode) {
           reportGeneralSettingChanged(
             'taskCompletionNotificationMode',
@@ -3783,15 +3673,15 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   const handleTabChange = useCallback((tab: TabType) => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
+    if (dataMigration.isBusy) return;
     doTabChange(tab);
-  }, [doTabChange, isBackingUpOpenClawData, isRestoringOpenClawData]);
+  }, [dataMigration.isBusy, doTabChange]);
 
   // Guarded close: prevent closing while backup/restore is active
   const guardedClose = useCallback(() => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
+    if (dataMigration.isBusy) return;
     onClose();
-  }, [isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
+  }, [dataMigration.isBusy, onClose]);
 
   const shortcutCommandMap = useMemo(
     () => new Map(SHORTCUT_COMMANDS.map(command => [command.key, command])),
@@ -4117,8 +4007,7 @@ const Settings: React.FC<SettingsProps> = ({
   // Dialogs rendered through Modal handle Escape themselves.
   const handleEscape = () => {
     const resolution = resolveSettingsEscapeAction({
-      isBlocked: isBackingUpOpenClawData
-        || isRestoringOpenClawData
+      isBlocked: dataMigration.isBusy
         || isRepairingOpenClaw
         || isCleaningTempStorage
         || isShortcutInputActive(),
@@ -4129,8 +4018,8 @@ const Settings: React.FC<SettingsProps> = ({
         { isOpen: showOpenClawRepairConfirm, dismiss: () => setShowOpenClawRepairConfirm(false) },
         { isOpen: showTempCleanConfirm, dismiss: () => setShowTempCleanConfirm(false) },
         {
-          isOpen: showOpenClawDataRestoreConfirm,
-          dismiss: () => setShowOpenClawDataRestoreConfirm(false),
+          isOpen: dataMigration.hasOpenModal,
+          dismiss: () => dataMigration.dismissTopModal(),
         },
         { isOpen: showMemoryModal, dismiss: resetCoworkMemoryEditor },
       ],
@@ -4754,20 +4643,29 @@ const Settings: React.FC<SettingsProps> = ({
             onOpenTempCleanConfirm={() => {
               void handleOpenTempCleanConfirm();
             }}
-            sqliteAutoBackupEnabled={sqliteAutoBackupEnabled}
-            onToggleSqliteAutoBackup={() => {
-              setSqliteAutoBackupEnabled((prev) => !prev);
-            }}
-            dataBackupResult={openClawDataBackupResult}
-            isBackingUpData={isBackingUpOpenClawData}
-            isRestoringData={isRestoringOpenClawData}
+            dataBackupResult={dataMigration.backupResult}
+            lastRestoreResult={dataMigration.lastRestoreResult}
+            pluginInstallOutcomes={dataMigration.pluginInstallOutcomes}
+            isBackingUpData={dataMigration.isBackingUp}
+            isRestoringData={dataMigration.isRestoring}
+            isPreviewingData={dataMigration.isPreviewing}
+            isReinstallingPlugins={dataMigration.isReinstallingPlugins}
             onRevealDataBackup={() => {
-              void handleRevealOpenClawDataBackup();
+              void dataMigration.revealBackupResult();
             }}
+            onRevealRollback={() => {
+              void dataMigration.revealRollbackPath();
+            }}
+            onReinstallPlugins={() => {
+              void dataMigration.reinstallMissingPlugins();
+            }}
+            onDismissRestoreResult={dataMigration.dismissLastRestoreResult}
             onDataBackup={() => {
-              void handleOpenClawDataBackup();
+              void dataMigration.runBackup();
             }}
-            onOpenDataRestoreConfirm={() => setShowOpenClawDataRestoreConfirm(true)}
+            onOpenDataRestoreConfirm={() => {
+              void dataMigration.startRestoreFlow();
+            }}
             usageAnalyticsEnabled={usageAnalyticsEnabled}
             onToggleUsageAnalytics={() => {
               setUsageAnalyticsEnabled((prev) => !prev);
@@ -4992,24 +4890,24 @@ const Settings: React.FC<SettingsProps> = ({
                       </button>
                     </div>
 
-                    {openClawDataBackupResult && (
+                    {dataMigration.backupResult && (
                       <div className={`flex flex-col gap-3 p-4 ${SETTINGS_ITEM_TITLE_TEXT} sm:flex-row sm:items-center sm:justify-between`}>
                         <div className="min-w-0 space-y-1">
                           <div className="font-medium text-foreground">
                             {i18nService.t('openClawDataBackupSavedTitle')}
                           </div>
                           <div className="break-all font-mono text-xs leading-5 text-secondary">
-                            {openClawDataBackupResult.path}
+                            {dataMigration.backupResult.path}
                           </div>
-                          {formatBackupSize(openClawDataBackupResult.sizeBytes) && (
+                          {formatBackupSize(dataMigration.backupResult.sizeBytes) && (
                             <div className="text-xs text-secondary">
-                              {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(openClawDataBackupResult.sizeBytes)}
+                              {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(dataMigration.backupResult.sizeBytes)}
                             </div>
                           )}
                         </div>
                         <button
                           type="button"
-                          onClick={() => { void handleRevealOpenClawDataBackup(); }}
+                          onClick={() => { void dataMigration.revealBackupResult(); }}
                           className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
                         >
                           {i18nService.t('showInFolder')}
@@ -5031,11 +4929,14 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <ManualDataMigrationAction onClick={() => { void handleOpenClawDataBackup(); }}>
-                        {isBackingUpOpenClawData && (
+                      <ManualDataMigrationAction
+                        onClick={() => { void dataMigration.runBackup(); }}
+                        disabled={dataMigration.isBusy || dataMigration.isPreviewing}
+                      >
+                        {dataMigration.isBackingUp && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
-                        {isBackingUpOpenClawData
+                        {dataMigration.isBackingUp
                           ? i18nService.t('openClawDataBackupRunning')
                           : i18nService.t('openClawDataBackupAction')}
                       </ManualDataMigrationAction>
@@ -5055,11 +4956,14 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <ManualDataMigrationAction onClick={() => setShowOpenClawDataRestoreConfirm(true)}>
-                        {isRestoringOpenClawData && (
+                      <ManualDataMigrationAction
+                        onClick={() => { void dataMigration.startRestoreFlow(); }}
+                        disabled={dataMigration.isBusy || dataMigration.isPreviewing}
+                      >
+                        {dataMigration.isRestoring && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
-                        {isRestoringOpenClawData
+                        {dataMigration.isRestoring
                           ? i18nService.t('openClawDataMigrationRunning')
                           : i18nService.t('openClawDataMigrationAction')}
                       </ManualDataMigrationAction>
@@ -5828,6 +5732,23 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
+          {dataMigration.lastRestoreResult && activeTab !== SettingsTabId.DataPrivacy && (
+            <div className="px-6 pt-2">
+              <DataMigrationRestoreReportCard
+                result={dataMigration.lastRestoreResult}
+                isReinstallingPlugins={dataMigration.isReinstallingPlugins}
+                pluginInstallOutcomes={dataMigration.pluginInstallOutcomes}
+                onRevealRollback={() => {
+                  void dataMigration.revealRollbackPath();
+                }}
+                onReinstallPlugins={() => {
+                  void dataMigration.reinstallMissingPlugins();
+                }}
+                onDismiss={dataMigration.dismissLastRestoreResult}
+              />
+            </div>
+          )}
+
           {error && (
             <div className="px-6">
               <ErrorMessage
@@ -6019,6 +5940,11 @@ const Settings: React.FC<SettingsProps> = ({
                               }}
                             />
                             <span className="min-w-0 flex-1">
+                              {dir.kind === CoworkTempDirKind.LegacySqliteBackup && (
+                                <span className="mb-0.5 inline-flex items-center rounded bg-surface-raised px-1.5 py-0.5 text-[11px] font-medium text-secondary">
+                                  {i18nService.t('coworkTempCleanDialogLegacyBackupTag')}
+                                </span>
+                              )}
                               <span className="block truncate text-sm text-foreground" title={dir.tempDir}>
                                 {dir.tempDir}
                               </span>
@@ -6077,87 +6003,17 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-          {showOpenClawDataRestoreConfirm && (
-            <div
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
-              onClick={() => {
-                if (!isRestoringOpenClawData) setShowOpenClawDataRestoreConfirm(false);
-              }}
-            >
-              <div
-                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-md"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="px-5 pt-5 pb-4 border-b border-border">
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
-                      <ArrowPathRoundedSquareIcon className="h-5 w-5" />
-                    </span>
-                    <h3 className="text-base font-semibold text-foreground">
-                      {i18nService.t('openClawDataMigrationConfirmTitle')}
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="space-y-3 px-5 py-4 text-sm text-secondary">
-                  <p>{i18nService.t('openClawDataMigrationConfirmDesc')}</p>
-                  <p>{i18nService.t('openClawDataMigrationConfirmSafeDesc')}</p>
-                </div>
-
-                <div className="flex justify-end space-x-2 px-5 pb-5">
-                  <button
-                    type="button"
-                    onClick={() => setShowOpenClawDataRestoreConfirm(false)}
-                    disabled={isRestoringOpenClawData}
-                    className="px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-xl border border-border disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {i18nService.t('cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleConfirmOpenClawDataRestore(); }}
-                    disabled={isRestoringOpenClawData}
-                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                  >
-                    {isRestoringOpenClawData
-                      ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
-                      : <ArrowPathRoundedSquareIcon className="h-4 w-4" />}
-                    {isRestoringOpenClawData
-                      ? i18nService.t('openClawDataMigrationRunning')
-                      : i18nService.t('openClawDataMigrationConfirmAction')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {(isBackingUpOpenClawData || isRestoringOpenClawData) && (
-            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4">
-              <div className="w-full max-w-md rounded-2xl border border-border bg-surface px-5 py-5 text-center shadow-xl">
-                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-primary-muted text-primary">
-                  <ArrowPathIcon className="h-5 w-5 animate-spin" />
-                </div>
-                <h3 className="mt-4 text-base font-semibold text-foreground">
-                  {i18nService.t(isBackingUpOpenClawData
-                    ? 'openClawDataBackupBlockingTitle'
-                    : 'openClawDataMigrationBlockingTitle')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-secondary">
-                  {i18nService.t(isBackingUpOpenClawData
-                    ? 'openClawDataBackupBlockingDesc'
-                    : 'openClawDataMigrationBlockingDesc')}
-                </p>
-                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>
-                    {i18nService.t(isBackingUpOpenClawData
-                      ? 'openClawDataBackupBlockingWarning'
-                      : 'openClawDataMigrationBlockingWarning')}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
+          <DataMigrationDialogs
+            restorePreview={dataMigration.restorePreview}
+            onCancelRestorePreview={dataMigration.cancelRestorePreview}
+            onConfirmRestore={() => {
+              void dataMigration.confirmRestore();
+            }}
+            isBackingUp={dataMigration.isBackingUp}
+            isRestoring={dataMigration.isRestoring}
+            progress={dataMigration.progress}
+            formatSize={formatBackupSize}
+          />
 
           {/* Memory Modal */}
           {showMemoryModal && (

@@ -88,6 +88,12 @@ export const COWORK_TEMP_DIR_NAME = '.cowork-temp';
  */
 export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
 
+export const CoworkTempDirKind = {
+  SessionTemp: 'session-temp',
+  LegacySqliteBackup: 'legacy-sqlite-backup',
+} as const;
+export type CoworkTempDirKind = typeof CoworkTempDirKind[keyof typeof CoworkTempDirKind];
+
 export const CoworkIpcChannel = {
   SessionStart: 'cowork:session:start',
   SessionContinue: 'cowork:session:continue',

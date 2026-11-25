@@ -84,7 +84,13 @@ import {
 import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import type { CoworkSessionFilterQuery } from '../shared/cowork/sessionFilter';
-import { DataMigrationIpc } from '../shared/dataMigration/constants';
+import {
+  DataMigrationIpc,
+  type DataMigrationPreviewRequest,
+  type DataMigrationProgressEvent,
+  type DataMigrationReinstallPluginsRequest,
+  type DataMigrationRestoreRequest,
+} from '../shared/dataMigration/constants';
 import { type DecisionModelConfigUpdate, DecisionModelIpcChannel } from '../shared/decisionModel/constants';
 import {
   type CompanionQuickAnswerEvent,
@@ -608,9 +614,27 @@ contextBridge.exposeInMainWorld('electron', {
       },
     },
     dataMigration: {
-      backup: () => ipcRenderer.invoke(DataMigrationIpc.Backup),
-      restore: () => ipcRenderer.invoke(DataMigrationIpc.Restore),
-      getLastRestoreResult: () => ipcRenderer.invoke(DataMigrationIpc.GetLastRestoreResult),
+      backup: () =>
+        ipcRenderer.invoke(DataMigrationIpc.Backup),
+      pickRestoreArchive: () =>
+        ipcRenderer.invoke(DataMigrationIpc.PickRestoreArchive),
+      preview: (request: DataMigrationPreviewRequest) =>
+        ipcRenderer.invoke(DataMigrationIpc.Preview, request),
+      restore: (request?: DataMigrationRestoreRequest) =>
+        ipcRenderer.invoke(DataMigrationIpc.Restore, request),
+      getLastRestoreResult: () =>
+        ipcRenderer.invoke(DataMigrationIpc.GetLastRestoreResult),
+      reinstallPlugins: (request: DataMigrationReinstallPluginsRequest) =>
+        ipcRenderer.invoke(DataMigrationIpc.ReinstallPlugins, request),
+      onProgress: (callback: (event: DataMigrationProgressEvent) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, payload: DataMigrationProgressEvent) => {
+          callback(payload);
+        };
+        ipcRenderer.on(DataMigrationIpc.Progress, listener);
+        return () => {
+          ipcRenderer.removeListener(DataMigrationIpc.Progress, listener);
+        };
+      },
     },
   },
   agents: {

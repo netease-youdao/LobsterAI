@@ -97,6 +97,13 @@ import type { CoworkSessionFilterQuery } from '../../shared/cowork/sessionFilter
 import type {
   DataMigrationBackupResult,
   DataMigrationLastRestoreResponse,
+  DataMigrationPickArchiveResult,
+  DataMigrationPreviewRequest,
+  DataMigrationPreviewResult,
+  DataMigrationProgressEvent,
+  DataMigrationReinstallPluginsRequest,
+  DataMigrationReinstallPluginsResult,
+  DataMigrationRestoreRequest,
   DataMigrationRestoreScheduleResult,
 } from '../../shared/dataMigration/constants';
 import type {
@@ -1023,8 +1030,14 @@ interface IElectronAPI {
     };
     dataMigration: {
       backup: () => Promise<DataMigrationBackupResult>;
-      restore: () => Promise<DataMigrationRestoreScheduleResult>;
+      pickRestoreArchive: () => Promise<DataMigrationPickArchiveResult>;
+      preview: (request: DataMigrationPreviewRequest) => Promise<DataMigrationPreviewResult>;
+      restore: (request?: DataMigrationRestoreRequest) => Promise<DataMigrationRestoreScheduleResult>;
       getLastRestoreResult: () => Promise<DataMigrationLastRestoreResponse>;
+      reinstallPlugins: (
+        request: DataMigrationReinstallPluginsRequest,
+      ) => Promise<DataMigrationReinstallPluginsResult>;
+      onProgress: (callback: (event: DataMigrationProgressEvent) => void) => () => void;
     };
   };
   ipcRenderer: {
