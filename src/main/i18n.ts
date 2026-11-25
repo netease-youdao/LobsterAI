@@ -263,6 +263,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dataMigrationRestoreProgressTitle: '正在导入 LobsterAI 数据',
     dataMigrationRestoreProgressDesc: '正在恢复备份并校验数据，完成后应用会自动重启。',
     dataMigrationRestoreProgressWarning: '请不要关闭应用或重启电脑，否则可能中断本次数据迁移。',
+    dataMigrationPhaseCheckingSpace: '正在检查磁盘剩余空间...',
+    dataMigrationPhaseCreatingRollback: '正在为当前数据生成回滚备份...',
+    dataMigrationPhaseExtracting: '正在解压并校验备份内容...',
+    dataMigrationPhaseSanitizing: '正在重写路径并处理跨机配置...',
+    dataMigrationPhaseApplying: '正在替换应用数据并校验完整性...',
+    dataMigrationPhaseCompleted: '导入完成，正在重启应用...',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common
@@ -731,6 +737,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Restoring the backup and validating data. LobsterAI will restart automatically when finished.',
     dataMigrationRestoreProgressWarning:
       'Do not close the app or restart the computer, or the migration may be interrupted.',
+    dataMigrationPhaseCheckingSpace: 'Checking available disk space...',
+    dataMigrationPhaseCreatingRollback: 'Creating rollback backup of current data...',
+    dataMigrationPhaseExtracting: 'Extracting and validating backup archive...',
+    dataMigrationPhaseSanitizing: 'Rewriting paths and preparing migrated data...',
+    dataMigrationPhaseApplying: 'Applying restored data and verifying integrity...',
+    dataMigrationPhaseCompleted: 'Import complete. Restarting LobsterAI...',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common

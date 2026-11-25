@@ -1,10 +1,16 @@
 import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
+import type {
+  DataMigrationLastRestoreResult,
+  DataMigrationPluginInstallOutcome,
+} from '../../../shared/dataMigration/constants';
 import { i18nService } from '../../services/i18n';
+import DataMigrationRestoreReportCard from './DataMigrationRestoreReportCard';
 import ManualDataMigrationAction from './ManualDataMigrationAction';
 import { SettingsGroup, SettingsRow, SettingsToggleRow } from './SettingsLayout';
 import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT } from './settingsTypography';
+import type { DataBackupSavedSummary } from './useDataMigration';
 
 interface DataPrivacySettingsSectionProps {
   tempStorageUsageBytes: number | null;
@@ -14,12 +20,17 @@ interface DataPrivacySettingsSectionProps {
   isCleaningTempStorage: boolean;
   formatSize: (sizeBytes?: number) => string;
   onOpenTempCleanConfirm: () => void;
-  sqliteAutoBackupEnabled: boolean;
-  onToggleSqliteAutoBackup: () => void;
-  dataBackupResult: { path: string; sizeBytes?: number } | null;
+  dataBackupResult: DataBackupSavedSummary | null;
+  lastRestoreResult: DataMigrationLastRestoreResult | null;
+  pluginInstallOutcomes: DataMigrationPluginInstallOutcome[] | null;
   isBackingUpData: boolean;
   isRestoringData: boolean;
+  isPreviewingData: boolean;
+  isReinstallingPlugins: boolean;
   onRevealDataBackup: () => void;
+  onRevealRollback: () => void;
+  onReinstallPlugins: () => void;
+  onDismissRestoreResult: () => void;
   onDataBackup: () => void;
   onOpenDataRestoreConfirm: () => void;
   usageAnalyticsEnabled: boolean;
@@ -34,19 +45,24 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
   isCleaningTempStorage,
   formatSize,
   onOpenTempCleanConfirm,
-  sqliteAutoBackupEnabled,
-  onToggleSqliteAutoBackup,
   dataBackupResult,
+  lastRestoreResult,
+  pluginInstallOutcomes,
   isBackingUpData,
   isRestoringData,
+  isPreviewingData,
+  isReinstallingPlugins,
   onRevealDataBackup,
+  onRevealRollback,
+  onReinstallPlugins,
+  onDismissRestoreResult,
   onDataBackup,
   onOpenDataRestoreConfirm,
   usageAnalyticsEnabled,
   onToggleUsageAnalytics,
 }) => (
   <div className="space-y-8">
-    <SettingsGroup title={i18nService.t('settingsGroupStorageProtection')}>
+    <SettingsGroup title={i18nService.t('settingsGroupStorage')}>
       <SettingsRow>
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -82,18 +98,22 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
           <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{tempStorageCleanResult}</p>
         )}
       </SettingsRow>
-
-      <SettingsRow>
-        <SettingsToggleRow
-          title={i18nService.t('sqliteAutoBackupEnabled')}
-          description={i18nService.t('sqliteAutoBackupEnabledDescription')}
-          checked={sqliteAutoBackupEnabled}
-          onToggle={onToggleSqliteAutoBackup}
-        />
-      </SettingsRow>
     </SettingsGroup>
 
     <SettingsGroup title={i18nService.t('settingsGroupBackupMigration')}>
+      {lastRestoreResult && (
+        <SettingsRow>
+          <DataMigrationRestoreReportCard
+            result={lastRestoreResult}
+            isReinstallingPlugins={isReinstallingPlugins}
+            pluginInstallOutcomes={pluginInstallOutcomes}
+            onRevealRollback={onRevealRollback}
+            onReinstallPlugins={onReinstallPlugins}
+            onDismiss={onDismissRestoreResult}
+          />
+        </SettingsRow>
+      )}
+
       {dataBackupResult && (
         <SettingsRow>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -109,6 +129,9 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
                   {i18nService.t('openClawDataBackupSize')}: {formatSize(dataBackupResult.sizeBytes)}
                 </div>
               )}
+              <div className="text-xs text-amber-700 dark:text-amber-300">
+                {i18nService.t('dataMigrationBackupPrivacyHint')}
+              </div>
             </div>
             <button
               type="button"
@@ -136,7 +159,10 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
               </div>
             </div>
           </div>
-          <ManualDataMigrationAction onClick={onDataBackup}>
+          <ManualDataMigrationAction
+            onClick={onDataBackup}
+            disabled={isBackingUpData || isRestoringData || isPreviewingData}
+          >
             {isBackingUpData && (
               <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
             )}
@@ -162,13 +188,18 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
               </div>
             </div>
           </div>
-          <ManualDataMigrationAction onClick={onOpenDataRestoreConfirm}>
-            {isRestoringData && (
+          <ManualDataMigrationAction
+            onClick={onOpenDataRestoreConfirm}
+            disabled={isBackingUpData || isRestoringData || isPreviewingData}
+          >
+            {(isRestoringData || isPreviewingData) && (
               <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
             )}
             {isRestoringData
               ? i18nService.t('openClawDataMigrationRunning')
-              : i18nService.t('openClawDataMigrationAction')}
+              : isPreviewingData
+                ? i18nService.t('dataMigrationPreviewLoading')
+                : i18nService.t('openClawDataMigrationAction')}
           </ManualDataMigrationAction>
         </div>
       </SettingsRow>

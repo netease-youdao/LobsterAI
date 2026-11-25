@@ -752,3 +752,27 @@ test('adds required cowork_sessions.permission_preset column to legacy databases
   expect(coworkStore.getSession('legacy-1')?.permissionPreset).toBe('read-only');
   migrated.close();
 });
+
+test('quarantines a corrupted database file and reinitializes a usable store on startup', async () => {
+  const userDataPath = createTempUserDataPath();
+  const dbPath = path.join(userDataPath, DB_FILENAME);
+  fs.writeFileSync(dbPath, 'not-a-valid-sqlite-database', 'utf8');
+  fs.writeFileSync(`${dbPath}-wal`, 'stale-wal', 'utf8');
+  fs.writeFileSync(`${dbPath}-shm`, 'stale-shm', 'utf8');
+
+  const store = await SqliteStore.create(userDataPath);
+  try {
+    store.set('recovered', true);
+    expect(store.get<boolean>('recovered')).toBe(true);
+
+    const quarantineRoot = path.join(userDataPath, 'backups', 'sqlite', 'quarantine');
+    const entries = fs.readdirSync(quarantineRoot);
+    expect(entries).toHaveLength(1);
+    const quarantinedDir = path.join(quarantineRoot, entries[0]);
+    expect(fs.readFileSync(path.join(quarantinedDir, DB_FILENAME), 'utf8')).toBe('not-a-valid-sqlite-database');
+    expect(store.getDatabase().prepare('PRAGMA quick_check').pluck().get()).toBe('ok');
+    expect(store.getDatabase().pragma('journal_mode', { simple: true })).toBe('wal');
+  } finally {
+    store.close();
+  }
+});
