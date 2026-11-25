@@ -127,6 +127,7 @@ import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPreview,
   formatCoworkImageAttachmentLimit,
+  sniffImageMimeType,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
 import type { CoworkMessageEditRequest } from '../shared/cowork/messageEdit';
@@ -456,6 +457,7 @@ import {
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
 import { createDshDecisionToolProvider } from './libs/dsh/dshDecisionTool';
+import { createDshHtmlRenderProvider } from './libs/dsh/dshHtmlRenderTool';
 import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
@@ -481,6 +483,7 @@ import { ExpertStore } from './libs/expertStore';
 import { ExternalBrowserHost } from './libs/externalBrowserHost';
 import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
 import { fitImageBytesForModel } from './libs/fitImageForModel';
+import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import {
   createOfficePreviewSession,
   createPreviewSession,
@@ -2320,6 +2323,16 @@ const getDshBootstrap = (): DshBootstrap => {
         createDshDecisionToolProvider({
           getConfig: () => readDecisionModelConfig(getStore()),
           fetch: (url, init) => session.defaultSession.fetch(url, init),
+        }),
+        createDshHtmlRenderProvider({
+          resolveAllowedRoots: ({ coworkSessionId, agentId }) => {
+            const roots: string[] = [];
+            const coworkSession = coworkSessionId ? storeInstance.getSession(coworkSessionId, 0) : null;
+            if (coworkSession?.cwd) roots.push(coworkSession.cwd);
+            roots.push(path.join(userDataDir, 'workspaces', agentId || 'main'));
+            return roots;
+          },
+          render: (jobs, signal) => renderHtmlFilesOffscreen(jobs, signal),
         }),
       ],
       webSearchHandler: ({ query, maxResults, signal }) => (
@@ -6324,18 +6337,25 @@ if (!gotTheLock) {
         '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
         '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
       };
+      const maxImageBytes = 20 * 1024 * 1024;
+      const maxMediaBytes = 50 * 1024 * 1024;
       const resolvedLocalFileBySource = new Map<string, string>();
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
-        const mime = MEDIA_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-        if (selectedModel.toLowerCase().includes('seedance') && mime.startsWith('video/')) {
+        const extensionMime = MEDIA_MIME[path.extname(filePath).toLowerCase()];
+        if (selectedModel.toLowerCase().includes('seedance') && extensionMime?.startsWith('video/')) {
           throw new Error(t('mediaTaskVideoUrlRequired'));
         }
         const stat = await fs.promises.stat(filePath);
-        if (stat.size > (mime.startsWith('image/') ? 20 : 50) * 1024 * 1024) throw new Error(t('mediaTaskInputTooLarge'));
+        if (stat.size > (extensionMime?.startsWith('image/') ? maxImageBytes : maxMediaBytes)) {
+          throw new Error(t('mediaTaskInputTooLarge'));
+        }
         const buf = await fs.promises.readFile(filePath);
+        // DSH stores attached images at content-addressed paths without extensions.
+        const mime = extensionMime ?? sniffImageMimeType(buf) ?? 'application/octet-stream';
         if (mime.startsWith('image/')) {
+          if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
           const dimensions = nativeImage.createFromBuffer(buf).getSize();
           const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
           if (dimensions.width < minimum || dimensions.height < minimum) throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));

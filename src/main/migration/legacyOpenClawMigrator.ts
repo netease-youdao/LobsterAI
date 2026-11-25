@@ -56,6 +56,7 @@ import {
   MIGRATION_V2_REPORT_KV_KEY,
   MIGRATION_V2_TAVILY_BACKFILL_KV_KEY,
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
+  MIGRATION_V2_WEIXIN_CREDENTIALS_KEY,
   type MigrationV2ArchivedItem,
   type MigrationV2ReauthItem,
   type MigrationV2Report,
@@ -91,7 +92,7 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
-import { preserveLegacyImBotIdentities } from './legacyImBotIdentities';
+import { legacyImBotIdentities, preserveLegacyImBotIdentities } from './legacyImBotIdentities';
 import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
@@ -101,6 +102,7 @@ import {
   type LegacyUserPluginRow,
   migrateLegacyTavilyPluginToMcp,
 } from './legacyTavilyMigration';
+import { migrateLegacyWeixinCredentials, WEIXIN_REAUTH_ITEM } from './legacyWeixinCredentials';
 import {
   collectDirectoryTarEntries,
   extractMatchingEntriesFromTarGz,
@@ -2965,6 +2967,20 @@ export function runLegacyOpenClawMigration(
       }
       if (!isFreshInstall) {
         preserveLegacyImBotIdentities(db, userDataDir);
+        if (!getKv(db, MIGRATION_V2_WEIXIN_CREDENTIALS_KEY)) {
+          const raw = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
+          const report = safeParseJsonObject(raw) as Partial<MigrationV2Report> | null;
+          const original = legacyImBotIdentities(db)?.find(bot => bot.key === WEIXIN_REAUTH_ITEM.id);
+          db.transaction(() => {
+            if (original && Array.isArray(report?.reauthRequired) && report.reauthRequired.some(item => item.kind === WEIXIN_REAUTH_ITEM.kind)
+              && !migrateLegacyWeixinCredentials(db, openclawStateDir, original)) {
+              report.reauthRequired = report.reauthRequired.filter(item => item.kind !== WEIXIN_REAUTH_ITEM.kind);
+              if (!report.reauthRequired.length && !report.archivedModules?.length) report.dismissed = true;
+              setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
+            }
+            setKv(db, MIGRATION_V2_WEIXIN_CREDENTIALS_KEY, '1');
+          })();
+        }
         migrateLegacyPermissionPresets(db);
       }
       migrateLegacyBrowserDisplayModeConfig(db);
@@ -3099,14 +3115,8 @@ export function runLegacyOpenClawMigration(
         });
       }
 
-      // Detect Weixin state requiring re-login on new DSH channel driver.
-      if (fs.existsSync(path.join(openclawStateDir, 'openclaw-weixin'))) {
-        reauthRequired.push({
-          kind: 'im_weixin',
-          id: 'weixin',
-          label: 'Weixin Bot (QR re-login required)',
-        });
-      }
+      const weixinReauth = migrateLegacyWeixinCredentials(db, openclawStateDir);
+      if (weixinReauth) reauthRequired.push(weixinReauth);
 
       // Relocate cached MCP packages out of `openclaw/mcp-packages` to
       // `<userData>/mcp-packages` and rewrite valid `mcp_launch_resolutions`
@@ -3326,6 +3336,7 @@ export function runLegacyOpenClawMigration(
         setKv(db, 'cowork.agent_engine', 'dsh');
         setKv(db, MIGRATION_V2_REPORT_KV_KEY, JSON.stringify(report));
         setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt: report.migratedAt, backupDir }));
+        setKv(db, MIGRATION_V2_WEIXIN_CREDENTIALS_KEY, '1');
         setKv(
           db,
           MIGRATION_V2_CRON_BACKFILL_KV_KEY,

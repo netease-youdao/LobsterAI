@@ -14,6 +14,22 @@ export const DSH_QUESTION_REQUEST_ID_PREFIX = 'dsh-question:';
 export const DSH_APPROVAL_REQUEST_ID_PREFIX = 'dsh-approval:';
 export const DSH_SKILL_INSTALL_TOOL = 'lobster_skill_install';
 export const DshSkillInstallAction = { Inspect: 'inspect', Install: 'install' } as const;
+export const DSH_HTML_RENDER_TOOL = 'lobsterai_render_html_to_image' as const;
+export const HtmlRenderFormat = {
+  Png: 'png',
+  Jpeg: 'jpeg',
+} as const;
+export type HtmlRenderFormat = typeof HtmlRenderFormat[keyof typeof HtmlRenderFormat];
+export const HTML_RENDER_LIMITS = {
+  MaxItems: 20,
+  MinDimension: 64,
+  MaxDimension: 4096,
+  DefaultWidth: 1242,
+  DefaultHeight: 1656,
+  DefaultQuality: 92,
+  MaxWaitMs: 5000,
+  DefaultTimeoutMs: 60_000,
+} as const;
 export const DSH_DELEGATE_AGENT_TOOL = 'delegate_agent';
 export const DSH_DELEGATE_MAX_DEPTH = 2;
 export const DSH_BRIDGE_SUBAGENT_BINDING_PATH = '/dsh-bridge/subagent-binding';

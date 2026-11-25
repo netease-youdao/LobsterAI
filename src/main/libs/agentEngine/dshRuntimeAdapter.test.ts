@@ -25,7 +25,10 @@ import {
   DshPermissionPreset,
   DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
+import { ImageEditOperation } from '../../../shared/imageEditing/types';
+import { ModelPresetId } from '../../../shared/modelPresets/constants';
 import type { CoworkMessage } from '../../coworkStore';
+import { MediaAttachmentKind } from '../../mediaGenerationReferences';
 import type { DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from '../dsh/dshTypertClient';
 import { getLlmUsageHeaders, hasLlmUsageContext } from '../llmUsageContext';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
@@ -852,7 +855,7 @@ describe('DshRuntimeAdapter', () => {
     expect(onPermissionPresetChanged).toHaveBeenCalledWith(DshPermissionPreset.FullAccess, undefined);
   });
 
-  test('persists localMediaAttachments with empty display text for IM image-only turns while sending model prompt + image', async () => {
+  test('persists IM images, desktop image previews, and image-edit snapshots', async () => {
     const { store, messages } = createInMemoryStore({
       id: 'cw-im-img',
       cwd: '/tmp/work',
@@ -945,6 +948,24 @@ describe('DshRuntimeAdapter', () => {
         isPreview: true,
       }),
     ]);
+
+    // Image edits must keep their source even when the chat model receives no image payload.
+    const source = {
+      id: 'original', rootId: 'original', sessionId: 'cw-im-img', title: 'cup.png',
+      filePath: '/tmp/work/cup-edit-snapshot.png', width: 640, height: 480,
+      operation: ImageEditOperation.Original, createdAt: 1,
+    };
+    await adapter.continueSession('cw-im-img', '@图片1 去背景', {
+      mediaReferences: [{
+        token: '@图片1', mediaType: MediaAttachmentKind.Image, index: 1, fileId: source.filePath,
+        fileName: source.title, mimeType: 'image/png', localPath: source.filePath,
+        imageEdit: { id: 'edit-1', source, operation: ImageEditOperation.RemoveBackground, regions: [], createdAt: 2 },
+      }],
+    });
+    expect(messages[2].metadata?.imageEdits).toEqual([
+      expect.objectContaining({ requestId: 'edit-1', source, operation: ImageEditOperation.RemoveBackground }),
+    ]);
+    expect(emitted[2].metadata?.imageEdits).toEqual(messages[2].metadata?.imageEdits);
   });
 
   test('stopSession finalizes streaming message, awaits cancelSession before next prompt, and ignores stale aborted turn/end', async () => {
@@ -2807,11 +2828,11 @@ describe('DshRuntimeAdapter', () => {
     });
   });
 
-  test('writes modelPresetId and resolvedModelId onto turnUserMessage metadata for x-lobster-model-preset attribution', async () => {
+  test.each([ModelPresetId.Balanced, undefined])('persists and broadcasts a resolved turn model with preset %s', async modelPresetId => {
     const { store, messages } = createInMemoryStore({
       id: 'cw-preset-attr',
       cwd: '/tmp/work',
-      modelOverride: 'lobsterai-server/yd-fast',
+      modelOverride: modelPresetId ? 'lobsterai-server/yd-fast' : 'lobsterai-server/deepseek-v4-flash',
     });
 
     const fakeClient = {
@@ -2836,18 +2857,22 @@ describe('DshRuntimeAdapter', () => {
       resolveModelSelection: async () => ({
         provider: 'lobsterai-server',
         model: 'deepseek-v4-flash',
-        modelPresetId: 'balanced',
+        modelPresetId,
       }),
     });
 
+    const onUpdate = vi.fn();
+    adapter.on('messageUpdate', onUpdate);
     await adapter.startSession('cw-preset-attr', 'Attribute preset');
 
     const userMsg = messages.find((m) => m.type === 'user')!;
-    expect(userMsg.metadata?.modelPresetId).toBe('balanced');
+    expect(userMsg.metadata?.modelPresetId).toBe(modelPresetId);
     expect(userMsg.metadata?.resolvedModelId).toBe('deepseek-v4-flash');
+    expect(onUpdate).toHaveBeenCalledWith('cw-preset-attr', userMsg.id, userMsg.content,
+      expect.objectContaining({ resolvedModelId: 'deepseek-v4-flash' }));
     const trace = getCoworkLlmTrace(userMsg.metadata)!;
     const headers = getLlmUsageHeaders(`00-${trace.traceId}-1111111111111111-01`, 'deepseek-v4-flash');
-    expect(headers['x-lobster-model-preset']).toBe('balanced');
+    expect(headers['x-lobster-model-preset']).toBe(modelPresetId);
   });
 
   test('honors autoApprove=true by binding danger-full-access and auto-resolving approval/request without modal', async () => {

@@ -9,7 +9,7 @@ import {
   isInternalCompactionSystemText,
   ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
-import type { CoworkTurnUsageAnchor } from '../../../shared/cowork/llmTurnUsage';
+import { type CoworkTurnUsage, type CoworkTurnUsageAnchor, CoworkTurnUsageStatus, TurnUsageModelType } from '../../../shared/cowork/llmTurnUsage';
 import { isDshSubagentSpawn, SubagentToolName } from '../../../shared/cowork/subagent';
 import { MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { parseModelPresetId, parseModelPresetModelId } from '../../../shared/modelPresets/constants';
@@ -1009,22 +1009,25 @@ export interface MessageModelLabelParts {
   detail: string | null;
 }
 
+const concreteModelId = (value: unknown): string | undefined => {
+  const id = typeof value === 'string' ? value.trim() : '';
+  return id && !parseModelPresetModelId(id) ? id : undefined;
+};
+
+const readMessageModel = (metadata?: CoworkMessageMetadata | null) => {
+  const presetId = parseModelPresetId(metadata?.modelPresetId)
+    ?? parseModelPresetModelId(metadata?.model)
+    ?? parseModelPresetModelId(metadata?.resolvedModelId);
+  const resolved = concreteModelId(metadata?.resolvedModelId);
+  const modelId = (presetId ? resolved : undefined) ?? concreteModelId(metadata?.model) ?? resolved;
+  return { presetId, modelId };
+};
+
 export const getMessageModelLabelParts = (metadata?: CoworkMessageMetadata | null): MessageModelLabelParts | null => {
-  const modelPresetId = parseModelPresetId(metadata?.modelPresetId);
-  const resolved = typeof metadata?.resolvedModelId === 'string' ? metadata.resolvedModelId.trim() : '';
-  if (modelPresetId && resolved && !parseModelPresetModelId(resolved)) {
-    return {
-      name: modelPresetName(modelPresetId),
-      detail: formatModelDisplayName(resolved.split('/').pop() || resolved),
-    };
-  }
-  const model = typeof metadata?.model === 'string' ? metadata.model.trim() : '';
-  const actualModel = model && !parseModelPresetModelId(model) ? model
-    : resolved && !parseModelPresetModelId(resolved) ? resolved : '';
-  if (!actualModel) return null;
-  const label = formatModelDisplayName(actualModel.split('/').pop() || actualModel);
-  const presetId = modelPresetId ?? parseModelPresetModelId(model);
-  return presetId ? { name: modelPresetName(presetId), detail: label } : { name: label, detail: null };
+  const { presetId, modelId } = readMessageModel(metadata);
+  const label = modelId ? formatModelDisplayName(modelId.split('/').pop() || modelId) : null;
+  if (presetId) return { name: modelPresetName(presetId), detail: label };
+  return label ? { name: label, detail: null } : null;
 };
 
 export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): string | null => {
@@ -1033,24 +1036,28 @@ export const getMessageModelLabel = (metadata?: CoworkMessageMetadata | null): s
   return parts.detail ? `${parts.name}（${parts.detail}）` : parts.name;
 };
 
-/**
- * Desktop turns stamp the selected preset on every message. IM and cron runs
- * resolve the preset inside OpenClaw, so only their user message records it.
- */
-export const withTurnModelPreset = (
+type TurnModelUsage = Pick<CoworkTurnUsage, 'status' | 'models' | 'modelUsage'>;
+
+const readSettledTextModel = (usage?: TurnModelUsage | null): string | undefined => {
+  if (usage?.status !== CoworkTurnUsageStatus.Settled) return undefined;
+  const models = usage.modelUsage?.length
+    ? usage.modelUsage.filter(row => row.type === TurnUsageModelType.Text).map(row => row.model)
+    : usage.models;
+  const concrete = [...new Set(models.map(concreteModelId).filter(id => id !== undefined))];
+  return concrete.length === 1 ? concrete[0] : undefined;
+};
+
+/** Uses the turn's recorded selection for replies that carry no model metadata. */
+export const resolveTurnModelMetadata = (
   assistant: CoworkMessageMetadata | undefined,
   user: CoworkMessageMetadata | null | undefined,
+  usage?: TurnModelUsage | null,
 ): CoworkMessageMetadata | undefined => {
-  const modelPresetId = parseModelPresetId(user?.modelPresetId);
-  if (!assistant || !modelPresetId || parseModelPresetId(assistant.modelPresetId)) return assistant;
-  const hasActualModel = [assistant.model, assistant.resolvedModelId].some(value => (
-    typeof value === 'string' && value.trim() && !parseModelPresetModelId(value)
-  ));
-  return {
-    ...assistant,
-    modelPresetId,
-    ...(hasActualModel ? {} : { resolvedModelId: user?.resolvedModelId }),
-  };
+  const reply = readMessageModel(assistant);
+  const turn = readMessageModel(user);
+  const modelPresetId = reply.presetId ?? turn.presetId ?? undefined;
+  const resolvedModelId = reply.modelId ?? turn.modelId ?? readSettledTextModel(usage);
+  return modelPresetId || resolvedModelId ? { modelPresetId, resolvedModelId } : undefined;
 };
 
 export const messageMetaClassName = (visible: boolean, align: 'left' | 'right' = 'left'): string => [

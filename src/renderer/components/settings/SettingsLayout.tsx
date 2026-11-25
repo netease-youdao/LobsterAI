@@ -110,3 +110,81 @@ export const SettingsItem: React.FC<{
 export const SettingsCardMessage: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className={`px-4 py-3 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{children}</div>
 );
+
+export const SettingsSwitch: React.FC<{
+  checked: boolean;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void | Promise<void>;
+}> = ({ checked, label, disabled, onClick }) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={checked}
+    aria-label={label}
+    onClick={() => {
+      void onClick();
+    }}
+    disabled={disabled}
+    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+      disabled ? 'opacity-50 cursor-not-allowed' : ''
+    } ${
+      checked
+        ? 'bg-primary'
+        : 'bg-gray-300 dark:bg-gray-600'
+    }`}
+  >
+    <span
+      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+        checked ? 'translate-x-6' : 'translate-x-1'
+      }`}
+    />
+  </button>
+);
+
+export const SettingsToggleRow: React.FC<{
+  title: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onToggle: () => void | Promise<void>;
+}> = ({ title, description, checked, disabled, onToggle }) => (
+  <div>
+    <div className="flex items-center justify-between gap-4">
+      <h4 className={`min-w-0 flex-1 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+        {title}
+      </h4>
+      <SettingsSwitch
+        checked={checked}
+        label={title}
+        disabled={disabled}
+        onClick={onToggle}
+      />
+    </div>
+    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+      {description}
+    </p>
+  </div>
+);
+
+/** Groups related settings rows into a labeled bordered card with row dividers. */
+export const SettingsGroup: React.FC<{
+  title: string;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}> = ({ title, children, footer }) => (
+  <section className="space-y-2.5">
+    <h4 className="px-1 text-xs font-semibold uppercase tracking-wider text-secondary">
+      {title}
+    </h4>
+    <div className="divide-y divide-border rounded-xl border border-border bg-surface">
+      {children}
+    </div>
+    {footer}
+  </section>
+);
+
+/** A single padded row inside a SettingsGroup card. */
+export const SettingsRow: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="px-4 py-3.5">{children}</div>
+);

@@ -128,7 +128,9 @@
   background-color: transparent !important;
 }
 
-[data-skin-presentation="immersive_shell"] [data-skin-sidebar] button:hover {
+[data-skin-presentation="immersive_shell"]
+  [data-skin-sidebar]
+  button:not([data-skin-button-solid="true"]):not([data-skin-button-plain="true"]):hover {
   background-color: color-mix(in srgb, var(--lobster-skin-accent) 10%, transparent) !important;
 }
 

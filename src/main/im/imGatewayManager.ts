@@ -15,6 +15,7 @@ import {
 import {
   WEIXIN_DEFAULT_BASE_URL,
   WEIXIN_QR_ACTIVATION_TIMEOUT_MS,
+  weixinCredentialErrorKey,
   WeixinQrLoginTimeout,
   WeixinQrPollStatus,
 } from '../../shared/im/weixin';
@@ -446,7 +447,7 @@ export class IMGatewayManager extends EventEmitter {
         }),
       },
       weixin: {
-        connected: Boolean(config.weixin?.enabled && config.weixin?.botToken?.trim()),
+        connected: false, // Only a live channel snapshot can confirm the login.
         accountId: config.weixin?.accountId?.trim() || null,
         startedAt: null as number | null,
         lastError: config.weixin?.enabled && !config.weixin?.botToken?.trim()
@@ -1452,7 +1453,6 @@ export class IMGatewayManager extends EventEmitter {
         code: 'missing_credentials',
         level: 'fail',
         message: t('imWeixinCredentialsMissing'),
-        suggestion: t('imWeixinRescanSuggestion'),
       });
       return { platform, testedAt, verdict: 'fail', checks };
     }
@@ -1468,6 +1468,12 @@ export class IMGatewayManager extends EventEmitter {
       try {
         const { statuses } = await channelsBridge.listStatus();
         const snapshot = statuses.find(item => item.platform === RetainedImPlatform.Weixin);
+        const credentialError = weixinCredentialErrorKey(snapshot?.error);
+        if (credentialError) {
+          return { platform, testedAt, verdict: 'fail', checks: [
+            { code: 'auth_check', level: 'fail', message: t(credentialError) },
+          ] };
+        }
         if (snapshot?.state === DshChannelState.Connected) {
           checks.push({
             code: 'gateway_running',
@@ -1479,7 +1485,6 @@ export class IMGatewayManager extends EventEmitter {
             code: 'gateway_running',
             level: 'warn',
             message: snapshot.error,
-            suggestion: t('imWeixinRescanSuggestion'),
           });
         } else {
           checks.push({

@@ -51,6 +51,7 @@ export const ShortcutAction = {
   OpenSettingsMemory: 'openSettingsMemory',
   OpenSettingsDreaming: 'openSettingsDreaming',
   OpenSettingsPlugins: 'openSettingsPlugins',
+  OpenSettingsDataPrivacy: 'openSettingsDataPrivacy',
   OpenSettingsShortcuts: 'openSettingsShortcuts',
   OpenSettingsAbout: 'openSettingsAbout',
 } as const;
@@ -81,6 +82,11 @@ export const CODE_FONT_SIZE_MIGRATION_VERSION = 1;
 // find in conversation gets its own Cmd/Ctrl+F action.
 export const SHORTCUTS_MIGRATION_VERSION = 1;
 
+// Bump to force-reset stored artifactAutoPreviewEnabled to the current default
+// one more time. hydrateStoredConfig persists the applied version, so each
+// version resets at most once and later user choices survive upgrades.
+export const ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION = 1;
+
 export const normalizeFontPreference = (
   value: unknown,
   fallback: number,
@@ -98,7 +104,7 @@ export const normalizeFontPreference = (
   return Math.min(max, Math.max(min, Math.round(numericValue)));
 };
 
-export const resolveArtifactAutoPreviewEnabled = (value: unknown): boolean => value !== false;
+export const resolveArtifactAutoPreviewEnabled = (value: unknown): boolean => value === true;
 
 // 配置类型定义
 export interface AppConfig {
@@ -143,6 +149,8 @@ export interface AppConfig {
   useSystemProxy: boolean;
   // 是否在生成可预览内容后自动打开 Artifact 预览面板
   artifactAutoPreviewEnabled?: boolean;
+  // 已应用的自动打开文件预览默认值迁移版本(见 ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION)
+  artifactAutoPreviewMigrationVersion?: number;
   // 是否启用 SQLite 自动备份与恢复
   sqliteAutoBackupEnabled?: boolean;
   // 是否允许发送基础产品使用统计
@@ -204,7 +212,8 @@ export const defaultConfig: AppConfig = {
   codeFontSizeMigrationVersion: CODE_FONT_SIZE_MIGRATION_VERSION,
   language: 'zh',
   useSystemProxy: false,
-  artifactAutoPreviewEnabled: true,
+  artifactAutoPreviewEnabled: false,
+  artifactAutoPreviewMigrationVersion: ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
   sqliteAutoBackupEnabled: false,
   usageAnalyticsEnabled: true,
   notificationSettings: defaultNotificationSettings,
@@ -261,6 +270,7 @@ export const defaultConfig: AppConfig = {
     [ShortcutAction.OpenSettingsMemory]: '',
     [ShortcutAction.OpenSettingsDreaming]: '',
     [ShortcutAction.OpenSettingsPlugins]: '',
+    [ShortcutAction.OpenSettingsDataPrivacy]: '',
     [ShortcutAction.OpenSettingsShortcuts]: '',
     [ShortcutAction.OpenSettingsAbout]: '',
   }

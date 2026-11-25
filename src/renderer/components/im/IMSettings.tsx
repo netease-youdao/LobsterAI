@@ -7,6 +7,7 @@ import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroico
 import { ArrowLeftIcon, CheckCircleIcon, EllipsisVerticalIcon, ExclamationTriangleIcon, PlusIcon, QrCodeIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
+import { weixinCredentialErrorKey } from '@shared/im/weixin';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
@@ -307,7 +308,6 @@ const reportIMGatewayToggledAction = (
 
 const WeixinRuntimeLastError = {
   Disabled: 'disabled',
-  NotConfigured: 'not configured',
 } as const;
 
 const IMSaveReminderTarget = {
@@ -987,11 +987,7 @@ const IMSettings: React.FC = () => {
   const wecomConnected = status.wecom?.instances?.some(i => i.connected) ?? false;
   const weixinConnected = Boolean(weixinOpenClawConfig.enabled && status.weixin?.connected);
   const weixinLastError = status.weixin?.lastError ?? null;
-  const isWeixinCredentialMissingError = Boolean(
-    weixinOpenClawConfig.enabled
-    && weixinAccountId
-    && weixinLastError?.trim().toLowerCase().includes(WeixinRuntimeLastError.NotConfigured)
-  );
+  const weixinCredentialError = weixinCredentialErrorKey(weixinLastError);
   const shouldShowWeixinError = Boolean(
     weixinLastError && weixinLastError.trim().toLowerCase() !== WeixinRuntimeLastError.Disabled
   );
@@ -1193,8 +1189,8 @@ const IMSettings: React.FC = () => {
 
     if (displayState === IMRuntimeDisplayState.Failed) {
       return (
-        <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-          {i18nService.t('imChannelConnectionFailed').replace('{platform}', i18nService.t(platform))}
+        <div role="alert" className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+          {weixinCredentialError ? i18nService.t(weixinCredentialError) : translateIMError(weixinLastError)}
         </div>
       );
     }
@@ -2805,15 +2801,6 @@ const IMSettings: React.FC = () => {
           return (
             <div className="space-y-5 pt-2">
               {renderPlatformRuntimeNotice('weixin')}
-
-              {/* Error display */}
-              {shouldShowWeixinError && weixinLastError && (
-                <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">
-                  {isWeixinCredentialMissingError
-                    ? i18nService.t('imWeixinCredentialsMissing')
-                    : translateIMError(weixinLastError)}
-                </div>
-              )}
 
               {/* QR login: first-time setup, or a rescan in progress */}
               {(!weixinAccountId || (weixinQrStatus !== 'idle' && weixinQrStatus !== 'success')) && (
