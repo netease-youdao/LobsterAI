@@ -75,12 +75,16 @@ test('collects each reference once and previews only images', () => {
   expect(videoConfirmationReferences({ images: [image] }, () => { throw new Error('decode failed'); })).toEqual([{ kind: 'image' }]);
 });
 
+const isWindows = process.platform === 'win32';
+const localImageDirectory = isWindows ? 'C:/Users/me' : '/Users/me';
+const localImagePreviewDirectory = isWindows ? 'localfile://local/C%3A/Users/me' : 'localfile://local/Users/me';
+
 test('builds localfile preview URLs only for servable local image files', () => {
-  expect(buildLocalFileImagePreviewUrl('/Users/me/my photo #1.png'))
-    .toBe('localfile://local/Users/me/my%20photo%20%231.png');
-  expect(buildLocalFileImagePreviewUrl('/Users/me/参考图100%.webp'))
-    .toBe('localfile://local/Users/me/%E5%8F%82%E8%80%83%E5%9B%BE100%25.webp');
-  expect(buildLocalFileImagePreviewUrl('/Users/me/clip.mp4')).toBeUndefined();
+  expect(buildLocalFileImagePreviewUrl(`${localImageDirectory}/my photo #1.png`))
+    .toBe(`${localImagePreviewDirectory}/my%20photo%20%231.png`);
+  expect(buildLocalFileImagePreviewUrl(`${localImageDirectory}/参考图100%.webp`))
+    .toBe(`${localImagePreviewDirectory}/%E5%8F%82%E8%80%83%E5%9B%BE100%25.webp`);
+  expect(buildLocalFileImagePreviewUrl(`${localImageDirectory}/clip.mp4`)).toBeUndefined();
   expect(buildLocalFileImagePreviewUrl('relative/image.png')).toBeUndefined();
 });
 
@@ -101,22 +105,22 @@ test('creates high-res preview metadata for local files, HTTP URLs, and inline d
   })).toBe('https://example.invalid/pic.png');
 
   const localPreview = createVideoReferenceImagePreview('data:image/png;base64,AAAA', {
-    localPath: '/Users/me/shot 1.png',
+    localPath: `${localImageDirectory}/shot 1.png`,
     decodeDataUrl: () => makeImage(1920, 1080),
   });
   expect(localPreview).toEqual({
     thumbnail: `data:image/jpeg;base64,${Buffer.from('jpg-1920x96-q80').toString('base64')}`,
-    previewUrl: 'localfile://local/Users/me/shot%201.png',
+    previewUrl: `${localImagePreviewDirectory}/shot%201.png`,
     name: 'shot 1.png',
   });
 
   const undecodableLocal = createVideoReferenceImagePreview('data:image/webp;base64,AAAA', {
-    localPath: '/Users/me/frame.webp',
+    localPath: `${localImageDirectory}/frame.webp`,
     decodeDataUrl: () => makeImage(0, 0, true),
   });
   expect(undecodableLocal).toEqual({
-    thumbnail: 'localfile://local/Users/me/frame.webp',
-    previewUrl: 'localfile://local/Users/me/frame.webp',
+    thumbnail: `${localImagePreviewDirectory}/frame.webp`,
+    previewUrl: `${localImagePreviewDirectory}/frame.webp`,
     name: 'frame.webp',
   });
 

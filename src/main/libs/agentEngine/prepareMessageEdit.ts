@@ -8,6 +8,7 @@ import {
   type CoworkImageAttachmentPreview,
   isBrowserAnnotationTransportImage,
   isStoredOriginalImagePreview,
+  sniffImageMimeType,
 } from '../../../shared/cowork/imageAttachments';
 import type { CoworkMessageEditRequest } from '../../../shared/cowork/messageEdit';
 import type { ImageEditRequest } from '../../../shared/imageEditing/types';
@@ -18,7 +19,6 @@ import {
   type PersistedMediaReference,
   rebuildLegacyImageEditReferences,
   restoreMediaReferences,
-  sniffImageMimeType,
 } from './messageEditMedia';
 import type { CoworkContinueOptions, CoworkMediaAttachmentRef } from './types';
 

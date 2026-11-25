@@ -47,6 +47,7 @@ const INLINE_PREVIEW_DIRECT_BYTES = 256 * 1024;
 const INLINE_UNDECODED_MAX_BYTES = 512 * 1024;
 
 export function buildLocalFileImagePreviewUrl(filePath: string): string | undefined {
+  if (!path.isAbsolute(filePath)) return undefined;
   const servable = resolveServableLocalPath(filePath);
   if (!servable) return undefined;
   const mime = getLocalFileMimeType(servable);
