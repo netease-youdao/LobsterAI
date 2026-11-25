@@ -4291,6 +4291,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinQrAccountMissing:
       '微信已连接过此 OpenClaw，但未找到本地账号 ID。请重新加载状态后再试。',
     imWeixinCredentialsMissing: '微信登录凭据缺失，请重新扫码连接。',
+    imWeixinCredentialsExpired: '微信授权已过期，请重新扫码连接。',
     imPopoCredentialHint: '从 POPO 开发者后台获取 AppKey、AppSecret 和 AES Key',
     imPopoGuideStep1: '点击「扫码绑定 POPO 机器人」或手动填写凭证',
     imPopoGuideStep2: '使用 POPO 扫描二维码完成机器人绑定',
@@ -9508,6 +9509,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'WeChat is already connected to this OpenClaw, but no local account ID was found. Refresh status and try again.',
     imWeixinCredentialsMissing:
       'WeChat login credentials are missing. Please scan the QR code again.',
+    imWeixinCredentialsExpired: 'Your WeChat authorization has expired. Please scan the QR code again.',
     imPopoCredentialHint: 'Get AppKey, AppSecret and AES Key from the POPO Developer Portal',
     imPopoGuideStep1: 'Click "Scan to Bind POPO Bot" or enter credentials manually',
     imPopoGuideStep2: 'Scan the QR code with POPO to bind the bot',

@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 
 import { AgentId } from '../../shared/agent/constants';
 import { RetainedImPlatform } from '../../shared/dshEngine/hostConstants';
+import { legacyWeixinAccountId } from '../../shared/im/weixin';
 import { ImPeerKind, PlatformRegistry } from '../../shared/platform';
 import {
   currentImBotIdentities,
@@ -21,11 +22,6 @@ export interface DirectSessionRoute {
 
 const LEGACY_DEFAULT_ACCOUNT = 'default';
 const LEGACY_DINGTALK_DEFAULT_ACCOUNT = '__default__';
-
-function legacyWeixinAccountId(id: string): string {
-  // OpenClaw normalized iLink bot IDs such as "bot@im.bot" to "bot-im-bot".
-  return id.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
-}
 
 function accountPrefixes(db: Database.Database, platform: LegacyDirectPlatform, instanceId: string, peer: string): string[] {
   const configured = currentImBotIdentities(db, platform);

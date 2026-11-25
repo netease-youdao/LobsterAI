@@ -330,4 +330,24 @@ describe('IMGatewayManager Weixin DSH QR login and status', () => {
     const liveTest = await manager.testGateway('weixin');
     expect(liveTest.verdict).toBe('pass');
   });
+
+  test.each([
+    ['Weixin session expired (errcode=-14), please re-scan QR code', 'fail'],
+    ['Weixin getupdates HTTP 503', 'warn'],
+  ])('classifies the live driver error %s', async (error, verdict) => {
+    const bridge = createMockBridge({ listStatus: async () => ({
+      supportedPlatforms: [RetainedImPlatform.Weixin],
+      statuses: [{ platform: RetainedImPlatform.Weixin, instanceId: 'default', state: DshChannelState.Error, error }],
+    }) });
+    const manager = new IMGatewayManager({} as never, { getDshChannelsBridge: () => bridge });
+    manager.setConfig({ weixin: { ...DEFAULT_WEIXIN_CONFIG, enabled: true, accountId: 'bot', botToken: 'saved' } });
+    expect(manager.getStatus().weixin.connected).toBe(false);
+    expect((await manager.getStatusWithOpenClawRuntime()).weixin.lastError).toBe(error);
+    const result = await manager.testGateway(RetainedImPlatform.Weixin);
+    expect(result.verdict).toBe(verdict);
+    if (verdict === 'fail') {
+      expect(result.checks).toEqual([expect.objectContaining({ code: 'auth_check', level: 'fail' })]);
+      expect(result.checks[0].message).not.toContain('errcode');
+    }
+  });
 });
