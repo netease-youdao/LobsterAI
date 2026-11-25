@@ -48,7 +48,6 @@ export interface OfficeWriteRequest extends OfficeCheckpoint {
 
 export interface OfficeSaveReceipt {
   version: string;
-  originalCopyPath?: string;
 }
 
 /** File access is scoped to an opaque handle owned by the main window's renderer. */

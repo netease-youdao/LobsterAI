@@ -1,20 +1,26 @@
 import {
-  CommandType, CustomCommandExecutionError, DrawingTypeEnum, extractPureTextFromCell, FOCUSING_COMMON_DRAWINGS, FOCUSING_FX_BAR_EDITOR, FOCUSING_PANEL_EDITOR,
-  FOCUSING_SHAPE_TEXT_EDITOR, FOCUSING_SHEET, type ICellData, ICommandService, IContextService, type IDisposable, InterceptorEffectEnum, IResourceManagerService, IUndoRedoService, type IWorkbookData,
+  BooleanNumber, CommandType, CustomCommandExecutionError, DOCS_NORMAL_EDITOR_UNIT_ID_KEY, type DocumentDataModel, DrawingTypeEnum, extractPureTextFromCell,
+  FOCUSING_COMMON_DRAWINGS, FOCUSING_FX_BAR_EDITOR, FOCUSING_PANEL_EDITOR, FOCUSING_SHAPE_TEXT_EDITOR, FOCUSING_SHEET, type ICellData, ICommandService,
+  IContextService, type IDisposable, InterceptorEffectEnum, IResourceManagerService, IUndoRedoService, IUniverInstanceService, type IWorkbookData,
   LocaleService, type Serializable, ThemeService, type Univer, UniverInstanceType, type Workbook,
 } from '@univerjs/core';
 import type { FUniver } from '@univerjs/core/facade';
 import { getDrawingShapeKeyByDrawingSearch, getOrCreateDrawingCopyPlan, IDrawingManagerService, SetDrawingSelectedOperation } from '@univerjs/drawing';
 import { IRenderManagerService } from '@univerjs/engine-render';
+import { OpenFindDialogOperation } from '@univerjs/find-replace';
 import {
-  AUTO_FILL_HOOK_TYPE, BEFORE_CELL_EDIT, CopySheetCommand, IAutoFillService, INTERCEPTOR_POINT, SetRangeValuesCommand, SheetInterceptorService, SheetSkeletonService,
-  SheetsSelectionsService,
+  AUTO_FILL_HOOK_TYPE, BEFORE_CELL_EDIT, CopySheetCommand, IAutoFillService, InsertSheetMutation, INTERCEPTOR_POINT, RemoveSheetMutation, SetRangeValuesCommand,
+  SetRangeValuesMutation, SetTabColorMutation, SetWorksheetActiveOperation, SetWorksheetHideMutation, SetWorksheetNameMutation, SetWorksheetOrderMutation,
+  SheetInterceptorService, SheetSkeletonService, SheetsSelectionsService, ToggleGridlinesCommand, ToggleGridlinesMutation,
 } from '@univerjs/sheets';
 import type { FWorkbook } from '@univerjs/sheets/facade';
 import { drawingPositionToTransform, InsertSheetDrawingCommand, ISheetDrawingService, RemoveSheetDrawingCommand, SetSheetDrawingCommand } from '@univerjs/sheets-drawing';
 import { DeleteDrawingsCommand } from '@univerjs/sheets-drawing-ui';
 import { SheetsFilterService } from '@univerjs/sheets-filter';
-import { AutoHeightController, FormatPainterStatus, IFormatPainterService, ISheetClipboardService, SheetCanvasPopManagerService } from '@univerjs/sheets-ui';
+import {
+  AutoHeightController, FormatPainterStatus, IEditorBridgeService, IFormatPainterService, ISheetClipboardService, IStatusBarService,
+  SetZoomRatioOperation, SheetCanvasPopManagerService,
+} from '@univerjs/sheets-ui';
 import { DISABLE_AUTO_FOCUS_KEY, IShortcutService, KeyCode } from '@univerjs/ui';
 import { BehaviorSubject } from 'rxjs';
 
@@ -58,6 +64,19 @@ const VIEW_MUTATIONS = new Set([
   'sheet.mutation.set-worksheet-row-auto-height', 'sheet.mutation.set-worksheet-row-count', 'sheet.mutation.set-worksheet-column-count',
   'sheet.mutation.set-workbook-name', 'sheet.mutation.empty', 'sheet.mutation.mark-dirty-filter-change',
   'sheet.mutation.data-validation-formula-mark-dirty',
+]);
+/** Commands and mutations whose side effects change header/tab-bar UI state. */
+const UI_REFRESH_COMMANDS = new Set<string>([
+  SetWorksheetActiveOperation.id,
+  InsertSheetMutation.id,
+  RemoveSheetMutation.id,
+  SetWorksheetNameMutation.id,
+  SetWorksheetOrderMutation.id,
+  SetWorksheetHideMutation.id,
+  SetTabColorMutation.id,
+  ToggleGridlinesMutation.id,
+  SetZoomRatioOperation.id,
+  SetRangeValuesMutation.id,
 ]);
 /** Mutations of saved content: sheets, data validation rules and the hyperlink model. */
 const EDIT_MUTATION = /^(?:sheet|sheets|data-validation)\.mutation\./;
@@ -208,6 +227,8 @@ export interface SheetSelection {
   range: string;
 }
 
+export type SheetStatusBarState = NonNullable<ReturnType<IStatusBarService['getState']>>;
+
 /** One open workbook, in a Univer instance that lives in the session's host element. */
 export class SheetEditorSession extends OfficeEditorSession<SheetPackageInfo> {
   univer?: Univer;
@@ -274,6 +295,9 @@ export class SheetEditorSession extends OfficeEditorSession<SheetPackageInfo> {
     this.univer = undefined;
     this.api = undefined;
     this.workbook = undefined;
+    this.canUndo = false;
+    this.canRedo = false;
+    this.statusBarState = null;
     this.host.replaceChildren();
   }
 
@@ -482,11 +506,89 @@ export class SheetEditorSession extends OfficeEditorSession<SheetPackageInfo> {
   chartSettingsOpen = false;
   /** Whether Univer's format painter is on (once, or kept on by a double click). */
   formatPainterActive = false;
+  /** Live undo/redo stack availability for the unified header toolbar. */
+  canUndo = false;
+  canRedo = false;
+  /** Live multi-cell selection summary computed by Univer's StatusBarController. */
+  statusBarState: SheetStatusBarState | null = null;
 
   showChartSettings(open: boolean): void {
     if (this.chartSettingsOpen === open) return;
     this.chartSettingsOpen = open;
     this.bump();
+  }
+
+  /** The active cell's formula (with Excel's `[@Col]` shorthand), or undefined when it is a plain value. */
+  activeFormula(): string | undefined {
+    const workbook = this.workbook;
+    const range = workbook?.getActiveRange();
+    const activeSheet = workbook?.getActiveSheet();
+    const sheet = activeSheet?.getSheet();
+    if (!range || !activeSheet || !sheet) return undefined;
+    const row = range.getRow();
+    const col = range.getColumn();
+    const raw = sheet.getCellRaw(row, col);
+    let formula = typeof raw?.f === 'string' && raw.f.trim() ? raw.f : undefined;
+    if (!formula && raw?.si) {
+      try {
+        const resolved = range.getFormula();
+        if (typeof resolved === 'string' && resolved.trim()) formula = resolved;
+      } catch {
+        // Ignore facade formula read failures for detached selections.
+      }
+    }
+    if (!formula) return undefined;
+    if (/#this row/i.test(formula)) {
+      return shortenThisRowReferences(formula, this.structure?.tableAt(activeSheet.getSheetId(), row, col));
+    }
+    return formula;
+  }
+
+  /** Whether the inline cell editor is currently open. */
+  isCellEditing(): boolean {
+    if (!this.univer) return false;
+    try {
+      return Boolean(this.univer.__getInjector().get(IEditorBridgeService).isVisible().visible);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Plain text currently in Univer's cell editor document (empty string if not open or empty). */
+  currentCellEditorText(): string {
+    if (!this.univer) return '';
+    try {
+      const doc = this.univer.__getInjector().get(IUniverInstanceService)
+        .getUnit<DocumentDataModel>(DOCS_NORMAL_EDITOR_UNIT_ID_KEY);
+      const stream = doc?.getBody()?.dataStream ?? '';
+      return stream.replace(/[\r\n]+$/g, '');
+    } catch {
+      return '';
+    }
+  }
+
+  /** Whether the active worksheet currently shows gridlines. */
+  gridlinesVisible(): boolean {
+    const config = this.workbook?.getActiveSheet().getSheet().getConfig();
+    return config?.showGridlines !== BooleanNumber.FALSE;
+  }
+
+  /** Toggle active worksheet gridlines (saved back to `<sheetView showGridLines>`). */
+  toggleGridlines(): void {
+    const workbook = this.workbook;
+    if (!workbook || !this.api || this.readOnly) return;
+    const sheet = workbook.getActiveSheet();
+    void this.api.executeCommand(ToggleGridlinesCommand.id, {
+      unitId: workbook.getId(),
+      subUnitId: sheet.getSheetId(),
+    }).catch(error => console.warn('[SheetEditor] Could not toggle gridlines:', error));
+  }
+
+  /** Open Univer's built-in Find & Replace dialog. */
+  openFind(): void {
+    if (!this.api) return;
+    void this.api.executeCommand(OpenFindDialogOperation.id)
+      .catch(error => console.warn('[SheetEditor] Could not open find dialog:', error));
   }
 
   /** Where "Add to chat" puts selected cells: the task chat beside the editor, when there is one. */
@@ -836,8 +938,9 @@ export class SheetEditorSession extends OfficeEditorSession<SheetPackageInfo> {
       }
     }));
     this.instanceDisposers.push(commands.onCommandExecuted((command, options) => {
-      if (command.type !== CommandType.MUTATION || !EDIT_MUTATION.test(command.id)) return;
       const flags = options as { applyFormulaCalculationResult?: boolean; onlyLocal?: boolean } | undefined;
+      if (UI_REFRESH_COMMANDS.has(command.id) && !flags?.applyFormulaCalculationResult) this.bump();
+      if (command.type !== CommandType.MUTATION || !EDIT_MUTATION.test(command.id)) return;
       // Local-only mutations recompute what is shown (formula results, rule caches, row heights);
       // user edits, undo and redo never carry the flag.
       if (flags?.applyFormulaCalculationResult || flags?.onlyLocal || VIEW_MUTATIONS.has(command.id)) return;
@@ -855,7 +958,38 @@ export class SheetEditorSession extends OfficeEditorSession<SheetPackageInfo> {
       this.formatPainterActive = status !== FormatPainterStatus.OFF;
       this.bump();
     });
-    this.instanceDisposers.push({ dispose: () => { selections.unsubscribe(); focus.unsubscribe(); updates.unsubscribe(); painter.unsubscribe(); } });
+    // Track undo/redo availability so the unified header keeps history buttons accurate.
+    const undoRedo = univer.__getInjector().get(IUndoRedoService);
+    const syncUndoRedo = () => {
+      const unitId = this.workbook?.getId();
+      const status = unitId ? undoRedo.getUndoRedoStatus(unitId) : { undos: 0, redos: 0 };
+      const nextUndo = status.undos > 0;
+      const nextRedo = status.redos > 0;
+      if (nextUndo !== this.canUndo || nextRedo !== this.canRedo) {
+        this.canUndo = nextUndo;
+        this.canRedo = nextRedo;
+        this.bump();
+      }
+    };
+    syncUndoRedo();
+    const undoRedoSub = undoRedo.undoRedoStatus$.subscribe(syncUndoRedo);
+    // Keep selection statistics in sync for the custom Excel-style SheetTabBar.
+    const statusBar = univer.__getInjector().get(IStatusBarService);
+    this.statusBarState = statusBar.getState() ?? null;
+    const statusBarSub = statusBar.state$.subscribe(nextState => {
+      this.statusBarState = nextState ?? null;
+      this.bump();
+    });
+    this.instanceDisposers.push({
+      dispose: () => {
+        selections.unsubscribe();
+        focus.unsubscribe();
+        updates.unsubscribe();
+        painter.unsubscribe();
+        undoRedoSub.unsubscribe();
+        statusBarSub.unsubscribe();
+      },
+    });
     this.themeObserver = new MutationObserver(() => {
       if (api.isDarkMode() !== prefersDark()) api.toggleDarkMode(prefersDark());
     });

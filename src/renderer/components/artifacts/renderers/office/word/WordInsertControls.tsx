@@ -40,7 +40,7 @@ type TableSize = { rows: number; cols: number };
 const tableSizeLabel = ({ rows, cols }: TableSize) => t('wordTableSize').replace('{rows}', String(rows)).replace('{cols}', String(cols));
 const keepEditorFocus = (event: React.MouseEvent) => event.preventDefault();
 
-async function insertWordImage(session: WordEditorSession, file: Blob): Promise<void> {
+export async function insertWordImage(session: WordEditorSession, file: Blob): Promise<void> {
   let error: WordImageError | null;
   try {
     error = await session.insertImage(new Uint8Array(await file.arrayBuffer()));

@@ -3,3 +3,7 @@ export {
   type ArtifactWorkspaceHandlerDeps,
   registerArtifactWorkspaceHandlers,
 } from './handlers';
+export {
+  listWorkspaceDirectoryEntries,
+  MAX_WORKSPACE_DIRECTORY_ENTRIES,
+} from './listDirectory';

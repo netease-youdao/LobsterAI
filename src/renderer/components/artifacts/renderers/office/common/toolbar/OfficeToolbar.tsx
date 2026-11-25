@@ -11,11 +11,11 @@ const t = (key: string) => i18nService.t(key);
 
 /** Office's usual family names; each editor maps them to an installed face or a stand-in. */
 export const COMMON_FONTS = [
+  '等线',
   'Noto Sans SC',
   '宋体',
   '黑体',
   '微软雅黑',
-  '等线',
   '楷体',
   '仿宋',
   'Calibri',

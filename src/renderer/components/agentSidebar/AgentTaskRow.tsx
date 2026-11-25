@@ -599,7 +599,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
                     showRowActions
                       ? isMenuOpen
                         ? 'w-0 overflow-hidden opacity-0'
-                        : 'group-hover:w-0 group-hover:overflow-hidden group-hover:opacity-0 group-focus-within:w-0 group-focus-within:overflow-hidden group-focus-within:opacity-0'
+                        : 'group-hover:w-0 group-hover:overflow-hidden group-hover:opacity-0 group-has-[:focus-visible]:w-0 group-has-[:focus-visible]:overflow-hidden group-has-[:focus-visible]:opacity-0'
                       : ''
                   }`}
                 >
@@ -645,7 +645,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
                   className={`flex items-center gap-0.5 ${
                     isMenuOpen
                       ? 'pointer-events-auto w-auto overflow-visible opacity-100'
-                      : 'pointer-events-none w-0 overflow-hidden opacity-0 group-hover:pointer-events-auto group-hover:w-auto group-hover:overflow-visible group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:w-auto group-focus-within:overflow-visible group-focus-within:opacity-100'
+                      : 'pointer-events-none w-0 overflow-hidden opacity-0 group-hover:pointer-events-auto group-hover:w-auto group-hover:overflow-visible group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:w-auto group-has-[:focus-visible]:overflow-visible group-has-[:focus-visible]:opacity-100'
                   }`}
                   onMouseEnter={() => {
                     isHoveringActionsRef.current = true;

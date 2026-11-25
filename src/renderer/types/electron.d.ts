@@ -18,11 +18,14 @@ import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeSt
 import type {
   CreateBlankDocumentRequest,
   CreateBlankDocumentResponse,
+  ListWorkspaceDirectoryRequest,
+  ListWorkspaceDirectoryResponse,
   ProbeGitWorkspaceRequest,
   ProbeGitWorkspaceResponse,
   RenameArtifactFileRequest,
   RenameArtifactFileResponse,
 } from '../../shared/artifactPreview/blankDocument';
+import type { ArtifactBrowserWindowOpenEvent } from '../../shared/artifactPreview/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
@@ -166,6 +169,7 @@ import type {
 } from '../../shared/media/defaultPolicy';
 import type { AvailableModelPreset, ModelPresetId, ModelPresetPreference } from '../../shared/modelPresets/constants';
 import type { OfficeBridges } from '../../shared/office/editors';
+import type { WordPanelBridge, WordPanelGuest } from '../../shared/office/word/constants';
 import type {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
@@ -1715,10 +1719,12 @@ interface IElectronAPI {
   artifact: {
     imageEditing: import('../../shared/imageEditing/types').ImageEditingBridge;
     office: OfficeBridges;
+    wordPanel: WordPanelBridge;
     markdown: MarkdownFileBridge;
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;
     onFileChanged: (callback: (data: { filePath: string }) => void) => () => void;
+    onBrowserWindowOpen: (callback: (data: ArtifactBrowserWindowOpenEvent) => void) => () => void;
     createPreviewSession: (
       filePath: string,
     ) => Promise<{ success: boolean; sessionId?: string; url?: string; error?: string }>;
@@ -1759,6 +1765,7 @@ interface IElectronAPI {
     createBlankDocument: (request: CreateBlankDocumentRequest) => Promise<CreateBlankDocumentResponse>;
     probeGitWorkspace: (request?: ProbeGitWorkspaceRequest) => Promise<ProbeGitWorkspaceResponse>;
     renameFile: (request: RenameArtifactFileRequest) => Promise<RenameArtifactFileResponse>;
+    listWorkspaceDirectory: (request?: ListWorkspaceDirectoryRequest) => Promise<ListWorkspaceDirectoryResponse>;
   };
   autoLaunch: {
     get: () => Promise<{ enabled: boolean }>;
@@ -3064,6 +3071,9 @@ interface IMMessage {
 }
 
 declare global {
+  interface Window {
+    wordPanelGuest?: WordPanelGuest;
+  }
   interface Window {
     electron: IElectronAPI;
   }

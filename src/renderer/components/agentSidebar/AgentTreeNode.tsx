@@ -296,9 +296,9 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   };
 
   return (
-    <div className="space-y-0.5">
-      <div className={`group sticky top-9 ${isMenuOpen ? 'z-50' : 'z-20'} -mx-2.5 h-[34px] bg-[var(--lobster-sidebar-bg)] px-2.5`}>
-        <div className="relative flex h-full items-center gap-1 rounded-[10px] pr-14 transition-colors group-hover:bg-[var(--lobster-sidebar-item-hover)]">
+    <div className="group/agent-section space-y-0.5">
+      <div className={`group/agent-header sticky top-9 ${isMenuOpen ? 'z-50' : 'z-20'} -mx-2.5 h-[34px] bg-[var(--lobster-sidebar-bg)] px-2.5`}>
+        <div className="relative flex h-full items-center gap-1 rounded-[10px] pr-14 transition-colors group-hover/agent-header:bg-[var(--lobster-sidebar-item-hover)]">
           <button
             type="button"
             ref={rowButton}
@@ -306,14 +306,14 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             className={`flex h-full min-w-0 items-center gap-2.5 rounded-[10px] pl-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors ${
               isHighlighted
                 ? 'font-medium text-foreground'
-                : 'font-normal text-foreground/90 group-hover:text-foreground'
+                : 'font-normal text-foreground/90 group-hover/agent-header:text-foreground'
             } ${agent.updateRevision ? '' : 'flex-1'}`}
             role="treeitem"
             aria-level={1}
             aria-expanded={agent.isExpanded}
           >
             <span
-              className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none transition-all group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 ${
+              className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center leading-none transition-all group-hover/agent-header:opacity-0 group-has-[:focus-visible]/agent-header:opacity-0 ${
                 isHighlighted ? 'text-foreground' : 'text-foreground/65'
               }`}
             >
@@ -329,7 +329,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
           <button
             type="button"
             onClick={handleToggleExpanded}
-            className="absolute left-[5px] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-secondary opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 group-has-[:focus-visible]:opacity-100"
+            className="absolute left-[5px] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-secondary opacity-0 transition-opacity hover:text-foreground group-hover/agent-header:opacity-100 group-has-[:focus-visible]/agent-header:opacity-100"
             aria-label={agent.isExpanded ? i18nService.t('collapse') : i18nService.t('expand')}
             aria-expanded={agent.isExpanded}
           >
@@ -343,7 +343,9 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
           <div
             className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
-              isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              isMenuOpen
+                ? 'opacity-100'
+                : 'opacity-0 group-hover/agent-section:opacity-100 group-has-[:focus-visible]/agent-header:opacity-100'
             }`}
           >
             <button

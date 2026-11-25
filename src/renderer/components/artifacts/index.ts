@@ -15,3 +15,4 @@ export {
   default as UserAttachmentPanelContent,
   type UserAttachmentPreviewPayload,
 } from './UserAttachmentPanelContent';
+export { default as WorkspaceFileBrowser } from './WorkspaceFileBrowser';

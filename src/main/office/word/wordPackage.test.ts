@@ -122,4 +122,46 @@ describe('DOCX admission', () => {
       await fs.rm(directory, { recursive: true, force: true });
     }
   });
+
+  test('collects active fonts from story parts and used styles while ignoring unused template styles', async () => {
+    const styles = '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"/></w:rPr></w:rPrDefault></w:docDefaults>'
+      + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="PingFang SC"/></w:rPr></w:style>'
+      + '<w:style w:type="paragraph" w:styleId="PlainText"><w:rPr><w:rFonts w:ascii="Courier" w:hAnsi="Courier"/></w:rPr></w:style>'
+      + '</w:styles>';
+    const theme = '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+      + '<a:themeElements><a:fontScheme name="Office">'
+      + '<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Jpan" typeface="ＭＳ ゴシック"/></a:majorFont>'
+      + '<a:minorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Jpan" typeface="ＭＳ 明朝"/></a:minorFont>'
+      + '</a:fontScheme></a:themeElements></a:theme>';
+    const bytes = await makeWordFixture('正文内容', {
+      'word/styles.xml': styles,
+      'word/theme/theme1.xml': theme,
+    });
+    const info = inspectWordPackage(bytes);
+    expect(info.activeFonts).toEqual(expect.arrayContaining(['Arial', 'PingFang SC']));
+    expect(info.activeFonts).not.toContain('Courier');
+    expect(info.activeFonts).not.toContain('ＭＳ 明朝');
+    expect(info.activeFonts).not.toContain('Cambria');
+  });
+
+  test('includes docDefaults theme fonts when Normal does not override them', async () => {
+    const styles = '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"/></w:rPr></w:rPrDefault></w:docDefaults>'
+      + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
+      + '</w:styles>';
+    const theme = '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+      + '<a:themeElements><a:fontScheme name="Office">'
+      + '<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>'
+      + '<a:minorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Hans" typeface="宋体"/></a:minorFont>'
+      + '</a:fontScheme></a:themeElements></a:theme>';
+    const settings = '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:themeFontLang w:val="en-US" w:eastAsia="zh-CN"/></w:settings>';
+    const bytes = await makeWordFixture('正文内容', {
+      'word/styles.xml': styles,
+      'word/theme/theme1.xml': theme,
+      'word/settings.xml': settings,
+    });
+    const info = inspectWordPackage(bytes);
+    expect(info.activeFonts).toEqual(expect.arrayContaining(['Cambria', '宋体']));
+  });
 });

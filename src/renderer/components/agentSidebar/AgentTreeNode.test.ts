@@ -131,6 +131,18 @@ test('only the current agent row gets elevated ink weight, even when another age
   expect(currentHtml).not.toContain('text-foreground/65');
 });
 
+test('agent header reveals trailing actions when hovering tasks in its section while keeping header hover isolated', () => {
+  const html = renderAgent(makeAgent({ isExpanded: true, tasks: [makeTask()] }));
+  expect(html).toContain('group/agent-section');
+  expect(html).toContain('group/agent-header');
+  expect(html).toContain('group-hover/agent-header:bg-[var(--lobster-sidebar-item-hover)]');
+  expect(html).toContain('group-hover/agent-header:opacity-0');
+  expect(html).toContain('group-hover/agent-header:opacity-100');
+  expect(html).toContain('group-hover/agent-section:opacity-100');
+  expect(html).toContain('group-has-[:focus-visible]/agent-header:opacity-100');
+  expect(html).not.toContain('group-focus-within:');
+});
+
 test('AgentAvatar preserves each agent icon type at filtered task-row size with unique gradient IDs', () => {
   const customDataHtml = renderToStaticMarkup(
     React.createElement(AgentAvatar, {

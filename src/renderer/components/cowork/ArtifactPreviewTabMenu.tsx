@@ -6,12 +6,20 @@ import { i18nService } from '../../services/i18n';
 interface ArtifactPreviewTabMenuProps {
   position: { x: number; y: number };
   onDismiss: () => void;
+  onRenameTab?: () => void;
   onCloseTab: () => void;
   onCloseOthers?: () => void;
   onCloseToRight?: () => void;
 }
 
-export default function ArtifactPreviewTabMenu({ position, onDismiss, onCloseTab, onCloseOthers, onCloseToRight }: ArtifactPreviewTabMenuProps) {
+export default function ArtifactPreviewTabMenu({
+  position,
+  onDismiss,
+  onRenameTab,
+  onCloseTab,
+  onCloseOthers,
+  onCloseToRight,
+}: ArtifactPreviewTabMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState(position);
   useLayoutEffect(() => {
@@ -54,6 +62,19 @@ export default function ArtifactPreviewTabMenu({ position, onDismiss, onCloseTab
         event.preventDefault(); items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
       }
     }}>
+    {onRenameTab && (
+      <>
+        <button
+          role="menuitem"
+          type="button"
+          className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-primary/10 focus:bg-primary/10 focus:outline-none"
+          onClick={() => { onDismiss(); onRenameTab(); }}
+        >
+          {i18nService.t('artifactRenameFile')}
+        </button>
+        <div className="my-1 border-t border-border/70" role="separator" />
+      </>
+    )}
     {[
       { label: 'artifactCloseTab', action: onCloseTab },
       { label: 'artifactCloseOtherTabs', action: onCloseOthers },
