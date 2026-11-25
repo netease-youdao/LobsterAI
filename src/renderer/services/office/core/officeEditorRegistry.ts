@@ -22,6 +22,8 @@ export interface OfficeEditorRegistry<TSession> {
   acquire: (filePath: string) => Promise<OfficeResult<TSession>>;
   /** Reloads an open file from disk through its session instead of replacing it; false when not open. */
   refresh: (filePath: string) => Promise<boolean>;
+  /** Flushes and closes an open file's session so the file can be safely renamed or replaced. */
+  close: (filePath: string) => Promise<boolean>;
 }
 
 interface RegistryState<TSession> {
@@ -135,11 +137,30 @@ export function createOfficeEditorRegistry<TInfo extends OfficePackageInfo, TSes
     return true;
   };
 
+  const close = async (filePath: string): Promise<boolean> => {
+    const normalized = normalizeShellFilePath(filePath);
+    const pending = paths.get(normalized);
+    if (!pending) return false;
+    const result = await pending;
+    if (!result.success) {
+      paths.delete(normalized);
+      return false;
+    }
+    const session = result.value;
+    await session.document.flush();
+    session.dispose();
+    sessions.delete(session.document.file.sessionId);
+    for (const alias of session.aliases) paths.delete(alias);
+    paths.delete(normalized);
+    reportState();
+    return true;
+  };
+
   if (options.hot) {
     options.hot.data[options.hotKey] = state;
     options.hot.dispose(() => {
       for (const session of sessions.values()) void session.document.flush();
     });
   }
-  return { acquire, refresh };
+  return { acquire, refresh, close };
 }

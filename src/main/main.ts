@@ -311,6 +311,7 @@ import type {
 import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
+import { registerArtifactWorkspaceHandlers } from './ipcHandlers/artifactWorkspace';
 import {
   createAsrRealtimeWsOriginStripper,
   createRealtimeAsrSession,
@@ -318,6 +319,7 @@ import {
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
+import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
@@ -701,7 +703,12 @@ import {
 import { SqliteStore } from './sqliteStore';
 import { StartupProfiler } from './startupProfiler';
 import { createTray, destroyTray, updateTrayMenu, updateTrayReminder } from './trayManager';
-import { videoConfirmationFailure, videoConfirmationQuestions, videoConfirmationReferences } from './videoGenerationConfirmation';
+import {
+  createVideoReferenceImagePreview,
+  videoConfirmationFailure,
+  videoConfirmationQuestions,
+  videoConfirmationReferences,
+} from './videoGenerationConfirmation';
 import {
   AppWindowStoreKey,
   MIN_APP_WINDOW_HEIGHT,
@@ -4044,6 +4051,9 @@ const getSkinRuntimeController = (): SkinRuntimeController => {
         resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey)
       ),
       resolveMediaSelection: resolveMediaSelectionForSession,
+      resolveMediaReferences: sessionId => (
+        sessionId ? mediaReferencesBySession.get(sessionId) : undefined
+      ),
       onChanged: notifySkinChanged,
     });
   }
@@ -6315,6 +6325,7 @@ if (!gotTheLock) {
       };
       const maxImageBytes = 20 * 1024 * 1024;
       const maxMediaBytes = 50 * 1024 * 1024;
+      const resolvedLocalFileBySource = new Map<string, string>();
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
@@ -6335,7 +6346,9 @@ if (!gotTheLock) {
           const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
           if (dimensions.width < minimum || dimensions.height < minimum) throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
         }
-        return `data:${mime};base64,${buf.toString('base64')}`;
+        const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+        resolvedLocalFileBySource.set(dataUrl, filePath);
+        return dataUrl;
       };
       const resolveStringParam = async (name: string) => {
         if (typeof params[name] === 'string') {
@@ -6463,12 +6476,10 @@ if (!gotTheLock) {
       }
 
       if (mediaType === 'video') {
-        const references = videoConfirmationReferences(params, source => {
-          if (/^https?:\/\//i.test(source)) return source;
-          if (!source.startsWith('data:image/')) return undefined;
-          const image = nativeImage.createFromDataURL(source);
-          return image.isEmpty() ? undefined : `data:image/jpeg;base64,${image.resize({ height: 96 }).toJPEG(80).toString('base64')}`;
-        });
+        const references = videoConfirmationReferences(params, source => createVideoReferenceImagePreview(source, {
+          localPath: resolvedLocalFileBySource.get(source),
+          decodeDataUrl: dataUrl => nativeImage.createFromDataURL(dataUrl),
+        }));
         const confirmationInput = { model: selectedModel, params, prompt, portalUrl: getPortalTasksUrl(), references };
         const confirmResponse = await getMcpRuntime().askUserInternal(
           videoConfirmationQuestions(confirmationInput, modelCapability, t), undefined, {
@@ -10992,18 +11003,22 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(
-    'cowork:session:list',
-    async (_event, options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) => {
+    CoworkIpcChannel.ListSessions,
+    async (
+      _event,
+      options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string; pinnedFirst?: boolean },
+    ) => {
       try {
         const limit = options?.limit ?? COWORK_SESSION_PAGE_SIZE;
         const offset = options?.offset ?? 0;
         const agentId = options?.agentId;
         const searchQuery = options?.searchQuery?.trim() ?? '';
+        const pinnedFirst = options?.pinnedFirst;
         const store = getCoworkStore();
         const startedAt = searchQuery ? Date.now() : 0;
         const sessions = searchQuery
           ? store.searchSessions({ query: searchQuery, limit, offset, agentId })
-          : store.listSessions(limit, offset, agentId);
+          : store.listSessions(limit, offset, agentId, { pinnedFirst });
         const total = searchQuery
           ? store.countSearchSessions({ query: searchQuery, agentId })
           : store.countSessions(agentId);
@@ -11067,6 +11082,7 @@ if (!gotTheLock) {
           statuses: Array.isArray(query?.statuses) ? query.statuses : undefined,
           sessionIds: Array.isArray(query?.sessionIds) ? query.sessionIds : undefined,
           updatedSince: typeof query?.updatedSince === 'number' ? query.updatedSince : undefined,
+          pinnedOnly: query?.pinnedOnly === true ? true : undefined,
           limit: typeof query?.limit === 'number' ? query.limit : undefined,
         });
         console.debug(
@@ -11224,6 +11240,7 @@ if (!gotTheLock) {
     cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
   });
   registerPptCreationHandlers(pptCreationStore);
+  registerCoworkPinnedHandlers({ getCoworkStore });
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },
@@ -13910,6 +13927,10 @@ if (!gotTheLock) {
   });
 
   registerMarkdownEditingHandlers(() => mainWindow);
+  registerArtifactWorkspaceHandlers({
+    getSessionCwd: sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd,
+    getDefaultCwd: () => getCoworkStore().getConfig().workingDirectory.trim() || undefined,
+  });
   officeEditing.register(() => mainWindow);
 
   // ---- artifact file watching ----
@@ -14035,10 +14056,22 @@ if (!gotTheLock) {
   ipcMain.handle(
     LocalWebServicesIpc.List,
     async (_event, options?: ListLocalWebServicesOptions) => {
+      let ownDevServerPort: number | null = null;
+      if (isDev) {
+        try {
+          const parsed = new URL(DEV_SERVER_URL);
+          if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]') {
+            const parsedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+            if (Number.isInteger(parsedPort) && parsedPort > 0) ownDevServerPort = parsedPort;
+          }
+        } catch {
+          ownDevServerPort = null;
+        }
+      }
       const preferredPorts = sanitizeLocalWebServicePorts(options?.preferredPorts);
-      const ports = Array.from(new Set([...preferredPorts, ...LOCAL_WEB_SERVICE_PORTS])).sort(
-        (a, b) => a - b,
-      );
+      const ports = Array.from(new Set([...preferredPorts, ...LOCAL_WEB_SERVICE_PORTS]))
+        .filter(port => port !== ownDevServerPort)
+        .sort((a, b) => a - b);
       const results = await Promise.all(ports.map(port => probeLocalWebService(port)));
       return results.filter((service): service is LocalWebService => service !== null);
     },

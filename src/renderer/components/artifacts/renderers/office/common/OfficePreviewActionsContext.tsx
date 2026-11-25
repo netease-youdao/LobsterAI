@@ -8,8 +8,19 @@ export interface OfficePreviewZoomControlsConfig {
   onResetZoom: () => void;
 }
 
+export interface OfficePreviewSaveStatusConfig {
+  label: string;
+  isSaved: boolean;
+  isReadOnly: boolean;
+  canSave: boolean;
+  isBusy: boolean;
+  draftSafe?: boolean;
+  onSave: () => void;
+}
+
 interface OfficePreviewActionsContextValue {
   setZoomControls: React.Dispatch<React.SetStateAction<OfficePreviewZoomControlsConfig | null>>;
+  setSaveStatus?: React.Dispatch<React.SetStateAction<OfficePreviewSaveStatusConfig | null>>;
 }
 
 export const OfficePreviewActionsContext = createContext<OfficePreviewActionsContextValue | null>(null);
@@ -31,4 +42,20 @@ export function useRegisterOfficePreviewZoomControls(
       actions.setZoomControls(current => (current === controls ? null : current));
     };
   }, [actions, controls]);
+}
+
+export function useRegisterOfficePreviewSaveStatus(
+  status: OfficePreviewSaveStatusConfig | null,
+): void {
+  const actions = useOfficePreviewActions();
+
+  useEffect(() => {
+    const setSaveStatus = actions?.setSaveStatus;
+    if (!setSaveStatus || !status) return undefined;
+
+    setSaveStatus(status);
+    return () => {
+      setSaveStatus(current => (current === status ? null : current));
+    };
+  }, [actions, status]);
 }

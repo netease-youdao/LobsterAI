@@ -1,5 +1,6 @@
 import {
   SKIN_ASSET_SLOTS,
+  SkinStoreErrorCode,
   SkinToolAction,
   SkinWorkflowKind,
 } from '../../shared/skin/constants';
@@ -7,9 +8,14 @@ import {
   MediaSelectionMode,
   type MediaSelectionState,
 } from '../mediaGenerationPolicy';
-import type { SkinStore } from './skinStore';
+import {
+  MediaAttachmentKind,
+  type MediaAttachmentRefMain,
+} from '../mediaGenerationReferences';
+import { type SkinStore, SkinStoreError } from './skinStore';
 import {
   createSkinToolHandler,
+  type ResolvedSkinAssetSource,
   type SkinToolRequest,
   type SkinToolResult,
 } from './skinToolHandler';
@@ -20,8 +26,20 @@ export interface SkinMediaBridgeOptions {
   workflowRegistry: SkinWorkflowRegistry;
   resolveSessionId: (sessionKey: string) => string | null;
   resolveMediaSelection: (sessionId: string | null) => MediaSelectionState | undefined;
+  resolveMediaReferences?: (sessionId: string | null) => MediaAttachmentRefMain[] | undefined;
   onChanged?: () => void;
 }
+
+const DATA_URL_BASE64_RE = /^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/;
+
+const decodeDataUrlBuffer = (dataUrl: string): Buffer | null => {
+  const match = DATA_URL_BASE64_RE.exec(dataUrl.trim());
+  if (!match) return null;
+  const base64 = match[2].replace(/\s+/g, '');
+  if (!base64) return null;
+  const decoded = Buffer.from(base64, 'base64');
+  return decoded.length > 0 ? decoded : null;
+};
 
 const workflowError = (message: string, code: string): SkinToolResult => ({
   content: [{ type: 'text', text: message }],
@@ -46,8 +64,39 @@ export class SkinMediaBridge {
         return options.workflowRegistry.resolve(sessionId)?.state.workflowKind
           === SkinWorkflowKind.SkinPack;
       },
+      resolveSourceReference: (sessionKey, source) => this.resolveSourceReference(sessionKey, source),
       onChanged: options.onChanged,
     });
+  }
+
+  private resolveSourceReference(sessionKey: string, source: string): ResolvedSkinAssetSource | null {
+    const token = source.trim();
+    if (!token || !this.options.resolveMediaReferences) return null;
+
+    const sessionId = this.options.resolveSessionId(sessionKey);
+    const ownerSessionId = this.options.workflowRegistry.resolve(sessionId)?.ownerSessionId ?? null;
+    const candidateRefs = [
+      ...(this.options.resolveMediaReferences(sessionId) ?? []),
+      ...(ownerSessionId && ownerSessionId !== sessionId
+        ? (this.options.resolveMediaReferences(ownerSessionId) ?? [])
+        : []),
+    ];
+    const match = candidateRefs.find(ref => (
+      ref.mediaType === MediaAttachmentKind.Image && ref.token.trim() === token
+    ));
+    if (!match) return null;
+
+    if (match.localPath?.trim()) {
+      return { kind: 'path', path: match.localPath.trim() };
+    }
+    if (match.dataUrl?.trim()) {
+      const data = decodeDataUrlBuffer(match.dataUrl);
+      if (data) return { kind: 'buffer', data };
+    }
+    throw new SkinStoreError(
+      SkinStoreErrorCode.InvalidSource,
+      `Attached image reference "${token}" does not have usable local image data.`,
+    );
   }
 
   async handleToolRequest(request: SkinToolRequest): Promise<SkinToolResult> {

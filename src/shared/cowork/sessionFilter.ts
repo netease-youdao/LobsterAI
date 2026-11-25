@@ -6,6 +6,8 @@ export interface CoworkSessionFilterQuery {
   sessionIds?: string[];
   /** Keep sessions updated at or after this epoch-millisecond timestamp. */
   updatedSince?: number;
+  /** Keep only pinned sessions, ordered newest-pinned first. */
+  pinnedOnly?: boolean;
   limit?: number;
 }
 

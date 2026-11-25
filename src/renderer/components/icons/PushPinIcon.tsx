@@ -1,25 +1,32 @@
 import React from 'react';
 
-const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean }> = ({
-  slashed,
+interface PushPinIconProps extends React.SVGProps<SVGSVGElement> {
+  filled?: boolean;
+  slashed?: boolean;
+}
+
+const PushPinIcon: React.FC<PushPinIconProps> = ({
+  filled = false,
+  slashed = false,
   ...props
 }) => (
   <svg
-    viewBox="0 0 30 30"
+    viewBox="0 0 24 24"
     fill="none"
+    stroke="currentColor"
+    strokeWidth={1.65}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
     {...props}
   >
     <path
-      d="M27.5716 9.13991C27.809 9.37732 27.937 9.7035 27.9238 10.039C27.9105 10.3745 27.7567 10.6897 27.5012 10.9077L21.9238 15.6648L20.8086 20.1263C20.7556 20.3378 20.6464 20.5314 20.4923 20.6856L18.0747 23.1032C17.6045 23.5734 16.8414 23.5727 16.3712 23.1025L12.3868 19.1181L7.38802 24.1169C6.91787 24.587 6.15544 24.5868 5.68517 24.1169C5.21492 23.6467 5.21494 22.8843 5.68517 22.414L10.6839 17.4153L6.70163 13.433C6.23164 12.9627 6.23151 12.2003 6.70163 11.7301L9.11919 9.31254C9.27344 9.15838 9.46696 9.04919 9.67852 8.99628L14.1387 7.87968L18.8965 2.30293C19.1144 2.04751 19.4303 1.89431 19.7658 1.88101C20.1011 1.86784 20.4268 1.99543 20.6642 2.2325L27.5716 9.13991ZM15.7221 9.73653C15.5595 9.92718 15.3409 10.0624 15.0978 10.1232L10.5873 11.2502L9.25592 12.5815L17.2226 20.5482L18.554 19.2169L19.6809 14.7063C19.7418 14.4635 19.8778 14.2452 20.0683 14.0827L24.9469 9.9209L19.8839 4.85791L15.7221 9.73653Z"
-      fill="currentColor"
+      d="M14 3.5L20.5 10L19.5 11L18.6 10.1L15 12.8Q15.4 15.2 13.6 17L7 10.4Q8.8 8.6 11.2 9L13.9 5.4L13 4.5Z"
+      fill={filled ? 'currentColor' : 'none'}
     />
+    <path d="M10.3 13.7L4 20" />
     {slashed && (
-      <path
-        d="M6 6L24 24"
-        stroke="currentColor"
-        strokeWidth={2.4}
-        strokeLinecap="round"
-      />
+      <path d="M4.5 4.5L19.5 19.5" strokeWidth={1.8} />
     )}
   </svg>
 );

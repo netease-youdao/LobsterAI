@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
 import { useDispatch } from 'react-redux';
 
-import { SkinAssetSlot } from '../../../shared/skin/constants';
+import {
+  SkinAssetSlot,
+  SkinBackdropVisibility,
+} from '../../../shared/skin/constants';
+import { resolveSkinBackdropVisibility } from '../../../shared/skin/presentation';
 import { useSkin } from '../../providers/SkinProvider';
 import { i18nService } from '../../services/i18n';
 import { buildSkinAssetUrl } from '../../services/skin';
@@ -17,6 +21,7 @@ import SkinDeleteConfirmDialog from './SkinDeleteConfirmDialog';
 const SkinActionErrorKind = {
   Apply: 'apply',
   Delete: 'delete',
+  Visibility: 'visibility',
 } as const;
 
 type SkinActionError = typeof SkinActionErrorKind[keyof typeof SkinActionErrorKind] | null;
@@ -24,7 +29,23 @@ type SkinActionError = typeof SkinActionErrorKind[keyof typeof SkinActionErrorKi
 const SkinActionErrorI18nKey = {
   [SkinActionErrorKind.Apply]: 'aiSkinApplyFailed',
   [SkinActionErrorKind.Delete]: 'aiSkinDeleteFailed',
+  [SkinActionErrorKind.Visibility]: 'aiSkinBackdropVisibilityFailed',
 } as const;
+
+const BACKDROP_VISIBILITY_OPTIONS = [
+  {
+    value: SkinBackdropVisibility.Subtle,
+    labelKey: 'aiSkinBackdropVisibilitySubtle',
+  },
+  {
+    value: SkinBackdropVisibility.Balanced,
+    labelKey: 'aiSkinBackdropVisibilityBalanced',
+  },
+  {
+    value: SkinBackdropVisibility.Vivid,
+    labelKey: 'aiSkinBackdropVisibilityVivid',
+  },
+] as const;
 
 interface PendingSkinDeletion {
   id: string;
@@ -46,9 +67,11 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
     isLoading,
     refreshVersion,
     savedSkins,
+    setBackdropVisibility,
   } = useSkin();
   const [applyingSkinId, setApplyingSkinId] = useState<string | null>(null);
   const [deletingSkinId, setDeletingSkinId] = useState<string | null>(null);
+  const [isUpdatingVisibility, setIsUpdatingVisibility] = useState(false);
   const [isStartingAiSkin, setIsStartingAiSkin] = useState(false);
   const [actionError, setActionError] = useState<SkinActionError>(null);
   const [startError, setStartError] = useState(false);
@@ -101,10 +124,29 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
     }
   };
 
+  const handleBackdropVisibilityChange = async (visibility: SkinBackdropVisibility) => {
+    if (!activeSkin?.presentation) return;
+    if (resolveSkinBackdropVisibility(activeSkin.presentation) === visibility) return;
+    setActionError(null);
+    setIsUpdatingVisibility(true);
+    try {
+      await setBackdropVisibility(activeSkin.id, visibility);
+    } catch (error) {
+      console.error('[Skin] Failed to update backdrop visibility', error);
+      setActionError(SkinActionErrorKind.Visibility);
+    } finally {
+      setIsUpdatingVisibility(false);
+    }
+  };
+
   const isMutating = applyingSkinId !== null
     || deletingSkinId !== null
+    || isUpdatingVisibility
     || isStartingAiSkin
     || isAppearanceChanging;
+  const activeVisibility = activeSkin?.presentation
+    ? resolveSkinBackdropVisibility(activeSkin.presentation)
+    : null;
 
   return (
     <section className="mt-5 rounded-xl border border-border bg-surface px-4 py-3.5">
@@ -137,6 +179,44 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
             ? i18nService.t(SkinActionErrorI18nKey[actionError])
             : i18nService.t('aiSkinStartFailed')}
         </p>
+      )}
+
+      {activeSkin?.presentation && activeVisibility && (
+        <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border bg-background/80 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('aiSkinBackdropVisibility')}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-4 text-secondary">
+              {i18nService.t('aiSkinBackdropVisibilityHint')}
+            </p>
+          </div>
+          <div
+            role="group"
+            aria-label={i18nService.t('aiSkinBackdropVisibility')}
+            className="inline-flex shrink-0 items-center rounded-lg border border-border bg-surface p-0.5"
+          >
+            {BACKDROP_VISIBILITY_OPTIONS.map((option) => {
+              const selected = activeVisibility === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => void handleBackdropVisibilityChange(option.value)}
+                  disabled={isLoading || isMutating}
+                  aria-pressed={selected}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    selected
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  {i18nService.t(option.labelKey)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {savedSkins.length > 0 ? (

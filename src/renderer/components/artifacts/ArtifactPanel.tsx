@@ -125,6 +125,7 @@ import {
   type ArtifactFileShareRequest as HtmlSharePendingRequest,
   ArtifactFileShareRequestSource as HtmlSharePendingSource,
 } from './artifactFileSharePolicy';
+import ArtifactInlineFileTitle from './ArtifactInlineFileTitle';
 import { ArtifactPreviewGlobeIcon } from './ArtifactPreviewIdentity';
 import ArtifactRenderer from './ArtifactRenderer';
 import {
@@ -216,6 +217,7 @@ import {
 } from './PublishingTrialStatus';
 import {
   OfficePreviewActionsContext,
+  type OfficePreviewSaveStatusConfig,
   type OfficePreviewZoomControlsConfig,
 } from './renderers/office/common/OfficePreviewActionsContext';
 import { OfficeZoomControls } from './renderers/office/common/OfficeZoomControls';
@@ -761,9 +763,13 @@ interface ArtifactPanelProps {
   onOpenHtmlFileInBrowser?: (artifact: Artifact) => void;
   onAddSelectedText?: (snippet: CoworkSelectedTextSnippet) => void;
   selectedTextEnabled?: boolean;
+  newTabPanel?: React.ReactNode;
   agentBrowserPanel?: React.ReactNode;
   subagentPanel?: React.ReactNode;
   userAttachmentPanel?: React.ReactNode;
+  onOpenLocalFilePicker?: () => void;
+  onCreateBlankDocumentFromFileList?: () => void;
+  onRevealWorkspaceFromFileList?: () => void;
   onAnnotationSend?: () => void;
 }
 
@@ -851,9 +857,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   onOpenHtmlFileInBrowser,
   onAddSelectedText,
   selectedTextEnabled = false,
+  newTabPanel,
   agentBrowserPanel,
   subagentPanel,
   userAttachmentPanel,
+  onOpenLocalFilePicker,
+  onCreateBlankDocumentFromFileList,
+  onRevealWorkspaceFromFileList,
   onAnnotationSend,
 }) => {
   const dispatch = useDispatch();
@@ -914,6 +924,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const [isArtifactActionsMenuOpen, setIsArtifactActionsMenuOpen] = useState(false);
   const [officePreviewZoomControls, setOfficePreviewZoomControls] =
     useState<OfficePreviewZoomControlsConfig | null>(null);
+  const [officePreviewSaveStatus, setOfficePreviewSaveStatus] =
+    useState<OfficePreviewSaveStatusConfig | null>(null);
   const fileListDrawerRef = useRef<HTMLDivElement>(null);
   const fileListButtonRef = useRef<HTMLButtonElement>(null);
   const artifactActionsMenuRef = useRef<HTMLDivElement>(null);
@@ -1152,6 +1164,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const officePreviewActionsContextValue = useMemo(
     () => ({
       setZoomControls: setOfficePreviewZoomControls,
+      setSaveStatus: setOfficePreviewSaveStatus,
     }),
     [],
   );
@@ -5205,11 +5218,14 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         {selectedArtifact ? (
           <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
             {/* Header: current file + actions. A workspace review owns its toolbar and file tree. */}
-            {!isWorkspaceDiffArtifact(selectedArtifact) && <div className="h-10 flex items-center gap-2 px-3 border-b border-border shrink-0">
-              <span className="text-sm font-medium truncate">
-                {selectedArtifact.fileName || selectedArtifact.title}
-              </span>
-              <span className="flex-1" />
+            {!isWorkspaceDiffArtifact(selectedArtifact) && <div className="h-9 flex items-center gap-2 px-3 border-b border-border shrink-0">
+              <div className="min-w-0 flex-1">
+                <ArtifactInlineFileTitle
+                  sessionId={sessionId}
+                  artifact={selectedArtifact}
+                  saveStatus={officePreviewSaveStatus}
+                />
+              </div>
               {artifactToolbarPublishTarget && (
                 <button
                   type="button"
@@ -5374,7 +5390,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             {showFileListDrawer && !isWorkspaceDiffArtifact(selectedArtifact) && (
               <div
                 ref={fileListDrawerRef}
-                className={`absolute top-10 right-0 bottom-0 z-20 flex w-[min(320px,86%)] flex-col border-l border-border bg-background shadow-xl transition-[transform,opacity] duration-[180ms] ease-out motion-reduce:transition-none ${
+                className={`absolute top-9 right-0 bottom-0 z-20 flex w-[min(320px,86%)] flex-col border-l border-border bg-background shadow-xl transition-[transform,opacity] duration-[180ms] ease-out motion-reduce:transition-none ${
                   isFileListDrawerVisible
                     ? 'translate-x-0 opacity-100'
                     : 'translate-x-full opacity-0 pointer-events-none'
@@ -5433,6 +5449,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
             annotationSendCount={annotationSendCount}
             onAnnotationSend={onAnnotationSend}
           />
+        ) : activeSpecialTab === ArtifactSpecialTab.NewTab && newTabPanel ? (
+          newTabPanel
         ) : activeSpecialTab === ArtifactSpecialTab.AgentBrowser && agentBrowserPanel ? (
           agentBrowserPanel
         ) : activeSpecialTab === ArtifactSpecialTab.Subagents && subagentPanel ? (
@@ -5446,6 +5464,9 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               artifacts={previewableArtifacts}
               selectedId={selectedArtifactId}
               onSelect={handleSelectArtifact}
+              onOpenLocalFile={onOpenLocalFilePicker}
+              onCreateBlankDocument={onCreateBlankDocumentFromFileList}
+              onRevealWorkspace={onRevealWorkspaceFromFileList}
             />
           </div>
         )}

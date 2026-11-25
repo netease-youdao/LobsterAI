@@ -47,7 +47,10 @@ describe('LobsterAI media generation in dsh', () => {
     expect(instruction).toContain('"chosen"');
     expect(instruction).toContain('waitForResult=true');
     expect(buildDshMediaTurnInstruction(selection, [ref])).not.toContain(SkinToolName.Manage);
-    expect(buildDshMediaTurnInstruction(undefined, [ref], SkinWorkflowKind.SkinPack)).not.toContain('create_draft');
+    expect(buildDshMediaTurnInstruction(undefined, undefined, SkinWorkflowKind.SkinPack)).not.toContain('create_draft');
+    const directOnly = buildDshMediaTurnInstruction(undefined, [ref], SkinWorkflowKind.SkinPack);
+    expect(directOnly).toContain('"@image1"');
+    expect(directOnly).toContain('Do NOT call lobsterai_image_generate');
   });
 
   test('rejects unbound and aborted submissions before invoking the account service', async () => {

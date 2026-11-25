@@ -125,18 +125,11 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   const agentName = getAgentDisplayName(agent);
   const rowButton = useRef<HTMLButtonElement>(null);
   const hasVisibleTasks = agent.tasks.length > 0;
-  const visibleItems = [
-    ...agent.tasks.map((task) => ({
-      kind: 'session' as const,
-      id: `session:${task.id}`,
-      timestamp: task.updatedAt || task.createdAt,
-      pinned: task.pinned,
-      task,
-    })),
-  ].sort((a, b) => {
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    return b.timestamp - a.timestamp;
-  });
+  const visibleItems = agent.tasks.map((task) => ({
+    kind: 'session' as const,
+    id: `session:${task.id}`,
+    task,
+  }));
   const isHighlighted = isCurrentAgent;
   const menuItemClassName =
     'flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-surface-raised';
@@ -509,6 +502,11 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                   task={item.task}
                   isBatchMode={isBatchAgent}
                   isSelected={selectedKeys.has(createSessionBatchKey(item.task.id))}
+                  hoverMeta={{
+                    agentName,
+                    agentIcon: <AgentAvatar agent={agent} className="h-3.5 w-3.5" />,
+                    agentWorkingDirectory: agent.workingDirectory,
+                  }}
                   isSelectionDisabled={isOutsideBatchAgent}
                   showBatchOption={showBatchOption && !isBatchMode}
                   onSelect={() => onSelectTask(item.task)}

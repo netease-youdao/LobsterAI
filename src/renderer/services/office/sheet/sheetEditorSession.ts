@@ -953,3 +953,4 @@ const registry = createOfficeEditorRegistry<SheetPackageInfo, SheetEditorSession
 export const acquireSheetEditor = registry.acquire;
 /** Route refreshes through the live session instead of replacing its Redux artifact bytes. */
 export const refreshOpenSheetEditor = registry.refresh;
+export const closeOpenSheetEditor = registry.close;

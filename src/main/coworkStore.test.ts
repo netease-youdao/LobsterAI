@@ -699,6 +699,61 @@ test('listFilteredSessions combines status, session ids and time across all agen
   expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
 });
 
+test('listFilteredSessions pinnedOnly returns pinned tasks across agents newest-pinned first with cwd', () => {
+  insertSession('legacy-null-pin', 'main', 'Legacy pin', 4000, 1, null);
+  insertSession('first-pin', 'main', 'First pin', 1000);
+  insertSession('second-pin', 'writer', 'Second pin', 2000);
+  insertSession('unpinned', 'main', 'Unpinned', 5000);
+  db.prepare('UPDATE cowork_sessions SET cwd = ?, fork_git_branch = ? WHERE id = ?')
+    .run('/Users/demo/Dev/lobsterai', 'feat/pinned-sidebar', 'second-pin');
+
+  const firstOrder = store.setSessionPinned('first-pin', true);
+  const secondOrder = store.setSessionPinned('second-pin', true);
+
+  expect(firstOrder).not.toBeNull();
+  expect(secondOrder).not.toBeNull();
+  expect(secondOrder!).toBeGreaterThan(firstOrder!);
+
+  const pinned = store.listFilteredSessions({ pinnedOnly: true });
+  expect(pinned.map((session) => session.id)).toEqual([
+    'second-pin',
+    'first-pin',
+    'legacy-null-pin',
+  ]);
+  expect(pinned[0]?.cwd).toBe('/Users/demo/Dev/lobsterai');
+  expect(pinned[0]?.forkGitBranch).toBe('feat/pinned-sidebar');
+
+  // Chronological preview mode keeps per-agent list ordered purely by recency.
+  const chronological = store.listSessions(10, 0, 'main', { pinnedFirst: false });
+  expect(chronological.map((session) => session.id)).toEqual([
+    'unpinned',
+    'legacy-null-pin',
+    'first-pin',
+  ]);
+});
+
+test('reorderPinnedSessions persists manual order without mutating updated_at and keeps new pins on top', () => {
+  insertSession('pin-a', 'main', 'Pin A', 1000);
+  insertSession('pin-b', 'writer', 'Pin B', 2000);
+  insertSession('pin-c', 'main', 'Pin C', 3000);
+  insertSession('pin-d', 'main', 'Pin D', 4000);
+
+  store.setSessionPinned('pin-a', true);
+  store.setSessionPinned('pin-b', true);
+  store.setSessionPinned('pin-c', true);
+
+  // Move pin-a first, pin-c second, omit pin-b (should remain appended at end).
+  const reordered = store.reorderPinnedSessions(['pin-a', 'pin-c']);
+  expect(reordered.map((session) => session.id)).toEqual(['pin-a', 'pin-c', 'pin-b']);
+  expect(reordered.find((session) => session.id === 'pin-a')?.updatedAt).toBe(1000);
+  expect(reordered.find((session) => session.id === 'pin-c')?.updatedAt).toBe(3000);
+
+  // Pinning a new session still places it above the saved manual order.
+  store.setSessionPinned('pin-d', true);
+  const afterNewPin = store.listFilteredSessions({ pinnedOnly: true });
+  expect(afterNewPin.map((session) => session.id)).toEqual(['pin-d', 'pin-a', 'pin-c', 'pin-b']);
+});
+
 test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
   insertSession('older', 'main', 'Ski poster', 1000);
   insertSession('newer', 'main', 'Jacket edit', 2000);

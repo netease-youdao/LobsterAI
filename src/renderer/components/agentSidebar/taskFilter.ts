@@ -31,9 +31,9 @@ export const DEFAULT_SIDEBAR_TASK_FILTER: SidebarTaskFilter = {
 
 export const SIDEBAR_TASK_STATUS_FILTER_OPTIONS: readonly SidebarTaskStatusFilter[] = [
   SidebarTaskStatusFilter.All,
-  SidebarTaskStatusFilter.Running,
-  SidebarTaskStatusFilter.PendingPermission,
   SidebarTaskStatusFilter.CompletedUnread,
+  SidebarTaskStatusFilter.PendingPermission,
+  SidebarTaskStatusFilter.Running,
   SidebarTaskStatusFilter.Error,
 ];
 
@@ -56,6 +56,18 @@ export interface SidebarTaskRuntimeState {
   pendingPermissionSessionIds: ReadonlySet<string>;
 }
 
+export interface SidebarTaskStatusCounts {
+  completedUnread: number;
+  pendingPermission: number;
+  running: number;
+}
+
+export const EMPTY_SIDEBAR_TASK_STATUS_COUNTS: SidebarTaskStatusCounts = {
+  completedUnread: 0,
+  pendingPermission: 0,
+  running: 0,
+};
+
 export interface AgentSidebarActivityItem {
   agent: AgentSidebarAgentNode;
   task: AgentSidebarTaskNode;
@@ -64,6 +76,45 @@ export interface AgentSidebarActivityItem {
 export const isSidebarTaskFilterActive = (filter: SidebarTaskFilter): boolean => (
   filter.status !== SidebarTaskStatusFilter.All || filter.time !== SidebarTaskTimeFilter.All
 );
+
+export const hasSidebarTaskAttention = (counts: SidebarTaskStatusCounts): boolean => (
+  counts.completedUnread > 0 || counts.pendingPermission > 0
+);
+
+/**
+ * Counts live sidebar task statuses across enabled agents' loaded previews so
+ * the filter trigger badge and dropdown status counts stay in sync.
+ */
+export const computeSidebarTaskStatusCounts = (
+  sessionsByAgent: Iterable<readonly Pick<CoworkSessionSummary, 'id' | 'status'>[]>,
+  runtime: SidebarTaskRuntimeState,
+): SidebarTaskStatusCounts => {
+  const seenSessionIds = new Set<string>();
+  let completedUnread = 0;
+  let pendingPermission = 0;
+  let running = 0;
+
+  for (const sessions of sessionsByAgent) {
+    for (const session of sessions) {
+      if (seenSessionIds.has(session.id)) continue;
+      seenSessionIds.add(session.id);
+
+      const isCompletedUnread = runtime.completedUnreadSessionIds.has(session.id);
+      if (isCompletedUnread) {
+        completedUnread += 1;
+      }
+      if (runtime.pendingPermissionSessionIds.has(session.id)) {
+        pendingPermission += 1;
+      }
+      // A background session may keep a stale "running" preview briefly after completing.
+      if (session.status === CoworkSessionStatusValue.Running && !isCompletedUnread) {
+        running += 1;
+      }
+    }
+  }
+
+  return { completedUnread, pendingPermission, running };
+};
 
 /** Start of the time range in local time, or undefined for "all time". */
 export const getSidebarTaskFilterUpdatedSince = (

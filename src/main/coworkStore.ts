@@ -667,11 +667,13 @@ export interface CoworkSessionSummary {
   status: CoworkSessionStatus;
   pinned: boolean;
   pinOrder?: number | null;
+  cwd?: string;
   agentId: string;
   imPlatform?: Platform | null;
   parentSessionId?: string | null;
   forkedAt?: number | null;
   forkMode?: CoworkForkModeType;
+  forkGitBranch?: string | null;
   goal?: CoworkGoal | null;
   createdAt: number;
   updatedAt: number;
@@ -873,11 +875,13 @@ interface CoworkSessionSummaryRow {
   status: string;
   pinned: number | null;
   pin_order: number | null;
+  cwd?: string | null;
   agent_id: string | null;
   im_platform?: string | null;
   parent_session_id?: string | null;
   forked_at?: number | null;
   fork_mode?: string | null;
+  fork_git_branch?: string | null;
   goal_json?: string | null;
   created_at: number;
   updated_at: number;
@@ -915,6 +919,7 @@ export class CoworkStore {
   readonly messageVersions: CoworkMessageVersionStore;
   private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
+  private coworkSessionColumnsCache: Set<string> | null = null;
 
   constructor(db: Database.Database) {
     this.db = db;
@@ -999,6 +1004,18 @@ export class CoworkStore {
     return !!row;
   }
 
+  private hasCoworkSessionColumn(columnName: string): boolean {
+    if (!this.coworkSessionColumnsCache) {
+      try {
+        const columns = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
+        this.coworkSessionColumnsCache = new Set(columns.map((col) => col.name.toLowerCase()));
+      } catch {
+        this.coworkSessionColumnsCache = new Set();
+      }
+    }
+    return this.coworkSessionColumnsCache.has(columnName.toLowerCase());
+  }
+
   private getSessionSummaryColumns(sessionAlias = 's'): string {
     const imPlatformColumn = this.hasIMSessionMappingsTable()
       ? `(
@@ -1009,12 +1026,15 @@ export class CoworkStore {
           LIMIT 1
         ) AS im_platform`
       : 'NULL AS im_platform';
+    const forkGitBranchColumn = this.hasCoworkSessionColumn('fork_git_branch')
+      ? `${sessionAlias}.fork_git_branch`
+      : 'NULL AS fork_git_branch';
 
     return `${sessionAlias}.id, ${sessionAlias}.title, ${sessionAlias}.scheduled_task_id,
       ${sessionAlias}.status, ${sessionAlias}.pinned, ${sessionAlias}.pin_order,
-      ${sessionAlias}.agent_id, ${imPlatformColumn},
+      ${sessionAlias}.cwd, ${sessionAlias}.agent_id, ${imPlatformColumn},
       ${sessionAlias}.parent_session_id, ${sessionAlias}.forked_at, ${sessionAlias}.fork_mode,
-      ${sessionAlias}.goal_json,
+      ${forkGitBranchColumn}, ${sessionAlias}.goal_json,
       ${sessionAlias}.created_at, ${sessionAlias}.updated_at`;
   }
 
@@ -1047,11 +1067,13 @@ export class CoworkStore {
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
       pinOrder: row.pin_order ?? null,
+      cwd: row.cwd?.trim() || '',
       agentId: row.agent_id || 'main',
       imPlatform: this.normalizeIMPlatform(row.im_platform),
       parentSessionId: row.parent_session_id ?? null,
       forkedAt: row.forked_at ?? null,
       forkMode: (row.fork_mode as CoworkForkModeType | undefined) ?? CoworkForkMode.None,
+      forkGitBranch: row.fork_git_branch?.trim() || null,
       goal: this.parseGoalJson(row.goal_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1906,27 +1928,76 @@ export class CoworkStore {
     }
 
     const session = this.db
-      .prepare('SELECT agent_id FROM cowork_sessions WHERE id = ?')
-      .get(id) as { agent_id?: string | null } | undefined;
+      .prepare('SELECT id FROM cowork_sessions WHERE id = ?')
+      .get(id) as { id?: string } | undefined;
     if (!session) {
       return null;
     }
 
-    const agentId = session.agent_id || 'main';
     const maxRow = this.db
       .prepare(
         `
         SELECT MAX(pin_order) as max_pin_order
         FROM cowork_sessions
-        WHERE pinned = 1 AND COALESCE(NULLIF(TRIM(agent_id), ''), 'main') = ?
+        WHERE pinned = 1
       `,
       )
-      .get(agentId) as { max_pin_order?: number | null } | undefined;
-    const pinOrder = (maxRow?.max_pin_order ?? 0) + 1;
+      .get() as { max_pin_order?: number | null } | undefined;
+    // Use monotonic epoch-scale ordering across all agents so newly pinned sessions
+    // always sort above earlier pins and legacy null pin_order rows.
+    const pinOrder = Math.max(Date.now(), (maxRow?.max_pin_order ?? 0) + 1);
     this.db
       .prepare('UPDATE cowork_sessions SET pinned = 1, pin_order = ? WHERE id = ?')
       .run(pinOrder, id);
     return pinOrder;
+  }
+
+  reorderPinnedSessions(sessionIds: string[]): CoworkSessionSummary[] {
+    const normalizedIds = Array.from(
+      new Set(sessionIds.map((id) => id.trim()).filter(Boolean)),
+    );
+    const existingPinned = this.listFilteredSessions({
+      pinnedOnly: true,
+      limit: COWORK_SESSION_FILTER_MAX_LIMIT,
+    });
+    if (normalizedIds.length === 0 || existingPinned.length === 0) {
+      return existingPinned;
+    }
+
+    const existingPinnedIdSet = new Set(existingPinned.map((session) => session.id));
+    const orderedIds = normalizedIds.filter((id) => existingPinnedIdSet.has(id));
+    if (orderedIds.length === 0) {
+      return existingPinned;
+    }
+
+    const orderedIdSet = new Set(orderedIds);
+    const finalIds = [
+      ...orderedIds,
+      ...existingPinned
+        .map((session) => session.id)
+        .filter((id) => !orderedIdSet.has(id)),
+    ];
+
+    const maxRow = this.db
+      .prepare('SELECT MAX(pin_order) as max_pin_order FROM cowork_sessions WHERE pinned = 1')
+      .get() as { max_pin_order?: number | null } | undefined;
+    // Assign descending epoch-scale values so index 0 sorts first in DESC order
+    // and any future newly pinned session naturally lands above the reordered list.
+    const baseOrder = Math.max(Date.now(), (maxRow?.max_pin_order ?? 0) + finalIds.length);
+    const updatePinOrder = this.db.prepare(
+      'UPDATE cowork_sessions SET pin_order = ? WHERE id = ? AND pinned = 1',
+    );
+    const reorder = this.db.transaction((ids: string[]) => {
+      ids.forEach((id, index) => {
+        updatePinOrder.run(baseOrder - index, id);
+      });
+    });
+    reorder(finalIds);
+
+    return this.listFilteredSessions({
+      pinnedOnly: true,
+      limit: COWORK_SESSION_FILTER_MAX_LIMIT,
+    });
   }
 
   countSessions(agentId?: string): number {
@@ -1942,9 +2013,21 @@ export class CoworkStore {
     return row?.count || 0;
   }
 
-  listSessions(limit = COWORK_SESSION_PAGE_SIZE, offset = 0, agentId?: string): CoworkSessionSummary[] {
+  listSessions(
+    limit = COWORK_SESSION_PAGE_SIZE,
+    offset = 0,
+    agentId?: string,
+    options?: { pinnedFirst?: boolean },
+  ): CoworkSessionSummary[] {
     let rows: CoworkSessionSummaryRow[];
     const summaryColumns = this.getSessionSummaryColumns();
+    const pinnedFirst = options?.pinnedFirst ?? true;
+    const orderByClause = pinnedFirst
+      ? `ORDER BY s.pinned DESC,
+          CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
+          CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
+          s.updated_at DESC`
+      : 'ORDER BY s.updated_at DESC, s.created_at DESC';
     if (agentId) {
       rows = this.getAll<CoworkSessionSummaryRow>(
         `
@@ -1952,10 +2035,7 @@ export class CoworkStore {
         FROM cowork_sessions s
         WHERE COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
           AND ${VISIBLE_COWORK_SESSION_SQL}
-        ORDER BY s.pinned DESC,
-          CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
-          CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
-          s.updated_at DESC
+        ${orderByClause}
         LIMIT ? OFFSET ?
       `,
         [agentId, limit, offset],
@@ -1966,10 +2046,7 @@ export class CoworkStore {
         SELECT ${summaryColumns}
         FROM cowork_sessions s
         WHERE ${VISIBLE_COWORK_SESSION_SQL}
-        ORDER BY s.pinned DESC,
-          CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
-          CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
-          s.updated_at DESC
+        ${orderByClause}
         LIMIT ? OFFSET ?
       `,
         [limit, offset],
@@ -2166,13 +2243,23 @@ export class CoworkStore {
       conditions.push('s.updated_at >= ?');
       params.push(Math.floor(query.updatedSince));
     }
+    if (query.pinnedOnly) {
+      conditions.push('s.pinned = 1');
+    }
+
+    const orderByClause = query.pinnedOnly
+      ? `ORDER BY CASE WHEN s.pin_order IS NULL THEN 1 ELSE 0 END ASC,
+        s.pin_order DESC,
+        s.updated_at DESC,
+        s.created_at DESC`
+      : 'ORDER BY s.updated_at DESC, s.created_at DESC';
 
     const rows = this.getAll<CoworkSessionSummaryRow>(
       `
       SELECT ${this.getSessionSummaryColumns()}
       FROM cowork_sessions s
       WHERE ${conditions.join('\n        AND ')}
-      ORDER BY s.updated_at DESC, s.created_at DESC
+      ${orderByClause}
       LIMIT ?
     `,
       [...params, limit],

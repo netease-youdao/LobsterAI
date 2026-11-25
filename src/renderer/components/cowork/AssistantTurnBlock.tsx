@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -31,9 +31,9 @@ import type { RootState } from '../../store';
 import type { LowCreditPurchaseOffer } from '../../store/slices/authSlice';
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
-import { revealLocalPathWithToast } from '../../utils/localFileActions';
-import { ArtifactPreviewCard } from '../artifacts';
+import { ArtifactPreviewCard, InlineVideoGallery } from '../artifacts';
 import InlineImageGallery from '../artifacts/imageEditor/InlineImageGallery';
+import { partitionTurnMediaForDisplay } from '../artifacts/inlineVideoLayout';
 import AbnormalIcon from '../icons/AbnormalIcon';
 import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
@@ -86,6 +86,7 @@ import {
   getTurnEndTimestamp,
   getTurnReplyMessageIds,
   getTurnStartTimestamp,
+  getTurnTrailingReplyMessageIds,
   getVideoPathArtifacts,
   getVisibleAssistantItems,
   hasText,
@@ -508,37 +509,6 @@ const SystemErrorTechnicalDetail: React.FC<{ detail: CoworkErrorDetail }> = ({ d
   );
 };
 
-// ── VideoArtifactPathList ────────────────────────────────────────────────────
-
-const VideoArtifactPathList: React.FC<{ artifacts: Artifact[] }> = ({ artifacts }) => {
-  if (artifacts.length === 0) return null;
-
-  const getDisplayPath = (filePath: string): string => {
-    const lastSlash = filePath.lastIndexOf('/');
-    return lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
-  };
-
-  return (
-    <div className="space-y-1">
-      {artifacts.map(artifact => (
-        <div
-          key={artifact.id}
-          className="flex items-center gap-2 text-xs text-secondary"
-        >
-          <span className="truncate">{getDisplayPath(artifact.filePath!)}</span>
-          <button
-            className="flex items-center gap-1 text-primary hover:underline flex-shrink-0"
-            onClick={() => void revealLocalPathWithToast(artifact.filePath!)}
-          >
-            <FolderIcon className="h-3.5 w-3.5" />
-            <span>{i18nService.t('showInFolder')}</span>
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 // ── AssistantTurnBlock ───────────────────────────────────────────────────────
 
 const AssistantTurnBlock: React.FC<{
@@ -566,8 +536,6 @@ const AssistantTurnBlock: React.FC<{
   enableMessageSpeech?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
-  modelSwitchNoticeMessageId?: string | null;
-  onDismissModelSwitchNotice?: () => void;
   searchTargetMessageId?: string | null;
   /** True when this turn is the one currently streaming; keeps the latest activity step visible. */
   isStreamingTurn?: boolean;
@@ -599,8 +567,6 @@ const AssistantTurnBlock: React.FC<{
   enableMessageSpeech = false,
   completedGoal,
   hiddenSystemMessageId,
-  modelSwitchNoticeMessageId,
-  onDismissModelSwitchNotice,
   searchTargetMessageId,
   isStreamingTurn = false,
   hasRunningSubagents = false,
@@ -641,6 +607,10 @@ const AssistantTurnBlock: React.FC<{
     () => getVideoPathArtifacts(artifacts),
     [artifacts],
   );
+  const trailingReplyMessageIds = useMemo(
+    () => getTurnTrailingReplyMessageIds(turn),
+    [turn],
+  );
   const artifactCards = useMemo(
     () => artifacts
       ? orderArtifactsByReplyReferences(
@@ -654,13 +624,29 @@ const AssistantTurnBlock: React.FC<{
       : [],
     [artifacts, localServiceDirectory, turn],
   );
-  // Raster images are shown in the conversation itself; the remaining artifacts keep their file cards.
+  // Raster images and videos show inline in the conversation; the remaining artifacts keep their file cards.
   const imageArtifacts = useMemo(
     () => artifactCards.filter(artifact => artifact.type === ArtifactTypeValue.Image),
     [artifactCards],
   );
+  const videoArtifacts = useMemo(
+    () => artifactCards.filter(artifact => artifact.type === ArtifactTypeValue.Video),
+    [artifactCards],
+  );
+  const mediaPartition = useMemo(
+    () => partitionTurnMediaForDisplay({
+      videoArtifacts,
+      imageArtifacts,
+      rawArtifacts: artifacts ?? [],
+      turnItems: turn.assistantItems,
+      trailingReplyMessageIds,
+    }),
+    [artifacts, imageArtifacts, trailingReplyMessageIds, turn.assistantItems, videoArtifacts],
+  );
   const fileArtifactCards = useMemo(
-    () => artifactCards.filter(artifact => artifact.type !== ArtifactTypeValue.Image),
+    () => artifactCards.filter(artifact => (
+      artifact.type !== ArtifactTypeValue.Image && artifact.type !== ArtifactTypeValue.Video
+    )),
     [artifactCards],
   );
   const visibleArtifactCards = useMemo(() => {
@@ -704,7 +690,7 @@ const AssistantTurnBlock: React.FC<{
       durationMs={processDurationMs}
     />
   ) : null;
-  const hasTurnArtifacts = videoPathArtifacts.length > 0
+  const hasTurnArtifacts = videoArtifacts.length > 0
     || imageArtifacts.length > 0
     || fileArtifactCards.length > 0;
   const isRenderedAssistantReply = (message: CoworkMessage): boolean => {
@@ -744,13 +730,7 @@ const AssistantTurnBlock: React.FC<{
 
   const renderSystemMessage = (message: CoworkMessage) => {
     if (isModelChangeMessage(message) && message.metadata?.modelChange) {
-      return (
-        <ModelChangeDivider
-          change={message.metadata.modelChange}
-          showNotice={message.id === modelSwitchNoticeMessageId}
-          onDismissNotice={onDismissModelSwitchNotice}
-        />
-      );
+      return <ModelChangeDivider change={message.metadata.modelChange} />;
     }
     if (message.id === hiddenSystemMessageId) {
       return null;
@@ -1172,8 +1152,14 @@ const AssistantTurnBlock: React.FC<{
             )}
             {hasTurnArtifacts && (
               <div className="space-y-2 pt-1">
-                <VideoArtifactPathList artifacts={videoPathArtifacts} />
-                <InlineImageGallery artifacts={imageArtifacts} editable={!onOpenArtifactPreview} />
+                <InlineVideoGallery
+                  key={turn.id}
+                  videos={mediaPartition.primaryVideos}
+                  processVideos={mediaPartition.secondaryVideos}
+                  processImages={mediaPartition.secondaryImages}
+                  editable={!onOpenArtifactPreview}
+                />
+                <InlineImageGallery artifacts={mediaPartition.primaryImages} editable={!onOpenArtifactPreview} />
                 {fileArtifactCards.length > 0 && (
                   <div className="artifact-preview-card-group w-full overflow-hidden rounded-lg border border-border">
                     <div className="divide-y divide-border">
