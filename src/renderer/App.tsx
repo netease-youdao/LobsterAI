@@ -41,6 +41,7 @@ import CoworkNativeQuestionModal from './components/cowork/CoworkNativeQuestionM
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineFailureOverlay from './components/cowork/EngineFailureOverlay';
+import { DshEmbeddedPluginView } from './components/dsh/DshEmbeddedPluginView';
 import ExpertPlazaView from './components/experts/ExpertPlazaView';
 import FeedbackDialog from './components/feedback/FeedbackDialog';
 import LaunchAdModal from './components/LaunchAdModal';
@@ -79,6 +80,12 @@ import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
+import {
+  DSH_OPEN_EMBEDDED_PLUGIN_EVENT,
+  DSH_PLUGINS_CHANGED_EVENT,
+  type DshEmbeddedPluginTarget,
+  type DshPluginsChangedDetail,
+} from './services/dshHost';
 import { openExpertDraft } from './services/expertOnboarding';
 import { i18nService } from './services/i18n';
 import type { PreparedImageExampleReference } from './services/imageCreationDraft';
@@ -194,6 +201,7 @@ const App: React.FC = () => {
   const [showFeedback, setShowFeedback] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
   const [mainView, setMainView] = useState<MainView>(MainView.Cowork);
+  const [activePluginPanel, setActivePluginPanel] = useState<DshEmbeddedPluginTarget | null>(null);
   const [expertRequest, setExpertRequest] = useState<{ presetId: string }>();
   const [libraryNavigationRequest, setLibraryNavigationRequest] = useState<{
     source: LibrarySourceFilter;
@@ -671,6 +679,42 @@ const App: React.FC = () => {
       requestId: current.requestId + 1,
     }));
     setMainView(MainView.Library);
+  }, []);
+
+  const handleSelectPluginPanel = useCallback((target: DshEmbeddedPluginTarget) => {
+    setActivePluginPanel(target);
+    setMainView(MainView.PluginPanel);
+  }, []);
+
+  useEffect(() => {
+    const handleOpenEmbeddedPlugin = (event: Event): void => {
+      const detail = (event as CustomEvent<DshEmbeddedPluginTarget>).detail;
+      if (!detail?.panelId) return;
+      setShowSettings(false);
+      setActivePluginPanel(detail);
+      setMainView(MainView.PluginPanel);
+    };
+    const handlePluginsChanged = (event: Event): void => {
+      const detail = (event as CustomEvent<DshPluginsChangedDetail>).detail;
+      if (!detail?.plugins) return;
+      setActivePluginPanel((current) => {
+        if (!current) return current;
+        const stillEnabled = detail.plugins!.some(
+          (entry) => !entry.managed && entry.enabled && !entry.isThemePlugin && entry.panelId === current.panelId,
+        );
+        if (!stillEnabled) {
+          setMainView((view) => (view === MainView.PluginPanel ? MainView.Cowork : view));
+          return null;
+        }
+        return current;
+      });
+    };
+    window.addEventListener(DSH_OPEN_EMBEDDED_PLUGIN_EVENT, handleOpenEmbeddedPlugin);
+    window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
+    return () => {
+      window.removeEventListener(DSH_OPEN_EMBEDDED_PLUGIN_EVENT, handleOpenEmbeddedPlugin);
+      window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
+    };
   }, []);
 
   useEffect(() => {
@@ -1915,6 +1959,8 @@ const App: React.FC = () => {
           onShowConnectors={handleShowMcp}
           onShowExperts={handleShowExperts}
           onShowLibrary={handleShowLibrary}
+          activePluginPanelId={activePluginPanel?.panelId ?? null}
+          onSelectPluginPanel={handleSelectPluginPanel}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -1978,6 +2024,15 @@ const App: React.FC = () => {
                 updateBadge={collapsedHeaderUpdateBadge}
                 requestedSource={libraryNavigationRequest.source}
                 navigationRequestId={libraryNavigationRequest.requestId}
+              />
+            ) : mainView === MainView.PluginPanel && activePluginPanel ? (
+              <DshEmbeddedPluginView
+                plugin={activePluginPanel}
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                onManagePlugins={() => handleShowSettings({ initialTab: SettingsTabId.Plugins })}
+                updateBadge={collapsedHeaderUpdateBadge}
               />
             ) : (
               <CoworkView

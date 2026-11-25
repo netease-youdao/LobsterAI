@@ -225,3 +225,6 @@
 
     - id: lobster-ops-rpc
       name: './plugins/ops-rpc.mjs'
+
+    - id: lobster-embed-shell
+      name: './plugins/embed-shell/host.mjs'

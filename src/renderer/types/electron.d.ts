@@ -2476,30 +2476,43 @@ interface IElectronAPI {
       ok: boolean;
       profileDir?: string;
       cliShimPath?: string | null;
-      plugins: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
+      hmrAvailable?: boolean;
+      plugins: Array<DshHostPluginEntry>;
     }>;
-    installPlugin: (packageSpec: string) => Promise<{
+    inspectPlugin: (
+      request: string | { spec: string; registry?: string | null },
+    ) => Promise<DshHostPluginInspectResult>;
+    installPlugin: (
+      request: string | {
+        spec: string;
+        registry?: string | null;
+        approvedBuilds?: string[];
+        enabled?: boolean;
+        requestId?: string;
+      },
+    ) => Promise<DshHostPluginMutationResult>;
+    cancelPluginInstall: (requestId: string) => Promise<{
       ok: boolean;
-      stdout?: string;
-      stderr?: string;
+      status?: 'cancelled' | 'too-late' | 'not-running';
       error?: string;
-      plugins?: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
     }>;
-    removePlugin: (packageName: string) => Promise<{
+    removePlugin: (packageName: string) => Promise<DshHostPluginMutationResult>;
+    setPluginEnabled: (packageName: string, enabled: boolean) => Promise<DshHostPluginMutationResult>;
+    getPluginRegistries: () => Promise<{
       ok: boolean;
-      stdout?: string;
-      stderr?: string;
+      registry?: string | null;
+      fallbackRegistries?: string[];
+      resolved?: string | null;
+      fastest?: string | null;
       error?: string;
-      plugins?: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
     }>;
-    setPluginEnabled: (packageName: string, enabled: boolean) => Promise<{
+    pickLocalPluginDir: () => Promise<{
       ok: boolean;
-      changed?: boolean;
-      enabled?: boolean;
-      error?: string;
-      plugins?: Array<{ name: string; specifier: string; managed: boolean; enabled: boolean }>;
+      canceled?: boolean;
+      path?: string | null;
     }>;
     openProfileDir: () => Promise<{ ok: boolean; profileDir?: string }>;
+    copyCliShimCommand: () => Promise<{ ok: boolean; cliShimPath?: string; error?: string }>;
     getPermissionPreset: (sessionId?: string) => Promise<{
       ok: boolean;
       preset: 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -2520,6 +2533,80 @@ interface IElectronAPI {
     dismissReport: () => Promise<{ ok: boolean }>;
     openBackupDir: () => Promise<{ ok: boolean; backupDir?: string }>;
   };
+}
+
+interface DshHostPluginLocalizedText {
+  en?: string;
+  zh?: string;
+}
+
+interface DshHostPluginIncompatibleInfo {
+  name: string;
+  version: string;
+  runtimeVersion: string;
+  requirements: Record<string, string>;
+}
+
+interface DshHostPluginEntry {
+  name: string;
+  specifier: string;
+  managed: boolean;
+  enabled: boolean;
+  version?: string;
+  title?: DshHostPluginLocalizedText;
+  description?: DshHostPluginLocalizedText;
+  icon?: string;
+  official?: boolean;
+  removable?: boolean;
+  surface?: 'native' | 'hybrid' | 'web-only';
+  isThemePlugin?: boolean;
+  panelId?: string;
+  panelLabel?: DshHostPluginLocalizedText;
+  errorCode?: string;
+  errorMessage?: string;
+  rowCount?: number;
+  activeRowCount?: number;
+}
+
+interface DshHostPluginInspectResult {
+  ok: boolean;
+  status?: 'accepted' | 'refused';
+  kind?: 'registry' | 'path' | 'git' | 'tarball';
+  name?: string;
+  version?: string;
+  description?: string;
+  bundle?: boolean | null;
+  registry?: string | null;
+  host?: string;
+  problem?: string;
+  reason?: string;
+  registries?: Array<string | null>;
+  surface?: 'native' | 'hybrid' | 'web-only';
+  isThemePlugin?: boolean;
+  heuristicOnly?: boolean;
+  error?: string;
+}
+
+interface DshHostPluginMutationResult {
+  ok: boolean;
+  application?: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
+  restartRequired?: boolean;
+  restartReason?: string;
+  changed?: boolean;
+  enabled?: boolean;
+  bundle?: string;
+  version?: string;
+  errorCode?: string;
+  failureKind?: string;
+  failedAt?: 'registry' | 'spec-host';
+  error?: string;
+  pendingBuilds?: string[];
+  incompatible?: DshHostPluginIncompatibleInfo[];
+  output?: string;
+  logPath?: string;
+  stdout?: string;
+  stderr?: string;
+  plugins?: Array<DshHostPluginEntry>;
 }
 
 // IM Gateway types

@@ -25,6 +25,7 @@ import type {
   ScheduledTaskStatusEvent,
 } from '../../../scheduledTask/types';
 import {
+  DSH_ECOSYSTEM_PARTITION,
   DSH_PERMISSION_PRESET_KV_KEY,
   DSH_PROFILE_DIR_NAME,
   DshHostPhase,
@@ -1371,7 +1372,7 @@ export class DshBootstrap {
       title: this.options.ecosystemWindowTitle ?? 'DeepSeek Harness Ecosystem',
       autoHideMenuBar: true,
       webPreferences: {
-        partition: 'persist:dsh-ecosystem',
+        partition: DSH_ECOSYSTEM_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,

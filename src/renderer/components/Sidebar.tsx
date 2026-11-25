@@ -1,4 +1,4 @@
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, PuzzlePieceIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
 import { ENABLE_EXPERT_PLAZA_UI } from '@shared/featureFlags';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -7,6 +7,13 @@ import { useSelector } from 'react-redux';
 import { ShortcutAction } from '../config';
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
+import {
+  DSH_PLUGINS_CHANGED_EVENT,
+  type DshEmbeddedPluginTarget,
+  dshHostService,
+  type DshPluginEntry,
+  type DshPluginsChangedDetail,
+} from '../services/dshHost';
 import { i18nService } from '../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { RootState } from '../store';
@@ -38,6 +45,7 @@ import {
   CoworkUiEvent,
 } from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
+import { getSidebarPluginPanels } from './dsh/pluginViewModel';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
@@ -64,6 +72,8 @@ interface SidebarProps {
   onShowConnectors: () => void;
   onShowExperts: () => void;
   onShowLibrary: () => void;
+  activePluginPanelId?: string | null;
+  onSelectPluginPanel?: (plugin: DshEmbeddedPluginTarget) => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -194,6 +204,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowConnectors,
   onShowExperts,
   onShowLibrary,
+  activePluginPanelId,
+  onSelectPluginPanel,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
@@ -226,6 +238,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [isSidebarBannerVisible, setIsSidebarBannerVisible] = useState(false);
   const [showExpertsNewBadge, setShowExpertsNewBadge] = useState(false);
   const [showLoginPromoTip, setShowLoginPromoTip] = useState(true);
+  const [installedDshPlugins, setInstalledDshPlugins] = useState<DshPluginEntry[]>([]);
   const isResizingRef = useRef(false);
   const resizeStartXRef = useRef(0);
   const resizeStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
@@ -297,6 +310,54 @@ const Sidebar: React.FC<SidebarProps> = ({
       isCurrent = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryCount = 0;
+    const MAX_STARTUP_RETRIES = 3;
+
+    const loadPlugins = async () => {
+      try {
+        const res = await dshHostService.listPlugins();
+        if (!active) return;
+        if (res?.ok) {
+          setInstalledDshPlugins(res.plugins ?? []);
+          if (!res.hmrAvailable && retryCount < MAX_STARTUP_RETRIES) {
+            retryCount += 1;
+            retryTimer = setTimeout(() => {
+              void loadPlugins();
+            }, 2500);
+          }
+        }
+      } catch {
+        // Non-fatal: sidebar continues normally if DSH plugin list is unavailable.
+      }
+    };
+
+    const handlePluginsChanged = (event: Event) => {
+      const detail = (event as CustomEvent<DshPluginsChangedDetail>).detail;
+      if (detail?.plugins) {
+        setInstalledDshPlugins(detail.plugins);
+      } else {
+        void loadPlugins();
+      }
+    };
+
+    void loadPlugins();
+    window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
+    return () => {
+      active = false;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
+    };
+  }, []);
+
+  const sidebarLanguage: 'zh' | 'en' = i18nService.getLanguage() === 'en' ? 'en' : 'zh';
+  const sidebarPluginPanels = useMemo(
+    () => getSidebarPluginPanels(installedDshPlugins, sidebarLanguage, (key) => i18nService.t(key)),
+    [installedDshPlugins, sidebarLanguage],
+  );
 
   useEffect(() => {
     if (!showLoginPromo) {
@@ -770,6 +831,42 @@ const Sidebar: React.FC<SidebarProps> = ({
             />
             <span className="min-w-0 truncate">{i18nService.t('librarySidebarTitle')}</span>
           </button>
+          {sidebarPluginPanels.map((panel) => {
+            const isPanelActive =
+              activeView === MainView.PluginPanel && activePluginPanelId === panel.panelId;
+            return (
+              <button
+                key={panel.panelId}
+                type="button"
+                title={panel.title}
+                onClick={() => {
+                  reportSidebarAction('open_plugin_panel', { activeView, isCollapsed });
+                  setIsSearchOpen(false);
+                  onSelectPluginPanel?.({
+                    name: panel.name,
+                    panelId: panel.panelId,
+                    title: panel.title,
+                    ...(panel.icon ? { icon: panel.icon } : {}),
+                  });
+                }}
+                className={isPanelActive ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+                aria-current={isPanelActive ? 'page' : undefined}
+              >
+                {panel.icon ? (
+                  <img
+                    src={panel.icon}
+                    alt=""
+                    className="h-[17px] w-[17px] shrink-0 rounded object-contain"
+                  />
+                ) : (
+                  <PuzzlePieceIcon
+                    className={isPanelActive ? activeSidebarNavIconClassName : sidebarNavIconClassName}
+                  />
+                )}
+                <span className="min-w-0 truncate">{panel.title}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
       <div className="mx-3 shrink-0 border-t border-border" role="separator" />

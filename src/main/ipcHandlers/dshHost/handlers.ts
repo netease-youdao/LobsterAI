@@ -1,16 +1,32 @@
-// IPC handlers for LobsterAI's primary DSH host status, plugin ecosystem
-// management (`dsh plugin`), and on-demand embedded DSH Ecosystem Web View.
+// IPC handlers for LobsterAI's primary DSH host status, HMR-backed plugin
+// management (`pluginManager/*` Typert RPC with CLI fallback), and on-demand
+// DSH Web View.
 
-import { ipcMain, shell } from 'electron';
+import { clipboard, dialog, ipcMain, shell } from 'electron';
 import * as fs from 'fs';
 
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
   DshHostIpc,
   DshPermissionPreset,
+  DshPluginApplicationStatus,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
 import type { DshNodeToolchain } from '../../libs/dsh/dshProfileManager';
+import type {
+  DshPluginBundleInfo,
+  DshPluginInstallBundleOptions,
+  DshTypertClient,
+} from '../../libs/dsh/dshTypertClient';
+import {
+  buildEnrichedPluginEntries,
+  classifyBundleSurface,
+  type DshEnrichedPluginEntry,
+  type DshPluginInspectResult,
+  normalizePluginChangeOutcome,
+  resolveLocalPathIfExists,
+  validateOptionalRegistryUrl,
+} from './pluginClassification';
 import {
   readInstalledProfilePlugins,
   runDshPluginCommand,
@@ -19,6 +35,19 @@ import {
   validatePluginPackageName,
 } from './pluginOperations';
 
+export {
+  buildEnrichedPluginEntries,
+  classifyBundleSurface,
+  type DshEnrichedPluginEntry,
+  type DshPluginInspectResult,
+  type DshPluginMutationOutcome,
+  type DshPluginPanelMetadata,
+  type DshPluginSurfaceClassification,
+  extractPanelMetadataFromClientSource,
+  isAllowedDshEmbedWebviewUrl,
+  normalizePluginChangeOutcome,
+  validateOptionalRegistryUrl,
+} from './pluginClassification';
 export {
   type DshProfilePluginInfo,
   isManagedDshBundle,
@@ -31,6 +60,19 @@ export {
   validatePluginInstallSpecifier,
   validatePluginPackageName,
 } from './pluginOperations';
+
+export interface InstallPluginPayload {
+  spec: string;
+  registry?: string | null;
+  approvedBuilds?: string[];
+  enabled?: boolean;
+  requestId?: string;
+}
+
+export interface InspectPluginPayload {
+  spec: string;
+  registry?: string | null;
+}
 
 export interface DshHostIpcDeps {
   getHostManager: () => DshHostManager | null;
@@ -47,6 +89,94 @@ export interface DshHostIpcDeps {
     preset: DshPermissionPreset,
     sessionId?: string,
   ) => Promise<{ preset: DshPermissionPreset; defaultPreset: DshPermissionPreset }>;
+}
+
+function getLivePluginClient(manager: DshHostManager): DshTypertClient | null {
+  if (typeof manager.isReady !== 'function' || !manager.isReady()) return null;
+  if (typeof manager.getClient !== 'function') return null;
+  try {
+    const client = manager.getClient();
+    if (client && typeof client.listPluginBundles === 'function') {
+      return client;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function listEnrichedPlugins(
+  manager: DshHostManager,
+  profileDir: string,
+  runtimeDir: string,
+): Promise<{ plugins: DshEnrichedPluginEntry[]; hmrAvailable: boolean }> {
+  const fallbackPlugins = readInstalledProfilePlugins(profileDir);
+  const client = getLivePluginClient(manager);
+  if (!client) {
+    return {
+      plugins: buildEnrichedPluginEntries({
+        fallbackPlugins,
+        profileDir,
+        runtimeDir,
+      }),
+      hmrAvailable: false,
+    };
+  }
+
+  let liveBundles: DshPluginBundleInfo[] | null = null;
+  try {
+    liveBundles = await client.listPluginBundles();
+  } catch (error) {
+    console.warn('[DSH Host] pluginManager/listBundles failed; falling back to profile manifest:', error);
+  }
+
+  return {
+    plugins: buildEnrichedPluginEntries({
+      liveBundles,
+      fallbackPlugins,
+      profileDir,
+      runtimeDir,
+    }),
+    hmrAvailable: liveBundles !== null,
+  };
+}
+
+function parseInstallRequest(raw: unknown): InstallPluginPayload | null {
+  if (typeof raw === 'string') {
+    return { spec: raw };
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    if (typeof record.spec !== 'string') return null;
+    const approvedBuilds = Array.isArray(record.approvedBuilds)
+      ? record.approvedBuilds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : undefined;
+    return {
+      spec: record.spec,
+      ...(record.registry !== undefined ? { registry: record.registry as string | null } : {}),
+      ...(approvedBuilds && approvedBuilds.length > 0 ? { approvedBuilds } : {}),
+      ...(typeof record.enabled === 'boolean' ? { enabled: record.enabled } : {}),
+      ...(typeof record.requestId === 'string' && record.requestId.trim()
+        ? { requestId: record.requestId.trim() }
+        : {}),
+    };
+  }
+  return null;
+}
+
+function parseInspectRequest(raw: unknown): InspectPluginPayload | null {
+  if (typeof raw === 'string') {
+    return { spec: raw };
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    if (typeof record.spec !== 'string') return null;
+    return {
+      spec: record.spec,
+      ...(record.registry !== undefined ? { registry: record.registry as string | null } : {}),
+    };
+  }
+  return null;
 }
 
 export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
@@ -96,26 +226,192 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
     return { ok: true };
   });
 
-  ipcMain.handle(DshHostIpc.ListPlugins, () => {
+  ipcMain.handle(DshHostIpc.ListPlugins, async () => {
     const manager = deps.getHostManager();
-    if (!manager) return { ok: false, plugins: [] };
+    if (!manager) return { ok: false, plugins: [], hmrAvailable: false };
     const status = manager.getStatus();
+    const { plugins, hmrAvailable } = await listEnrichedPlugins(
+      manager,
+      status.profileDir,
+      deps.getRuntimeDir(),
+    );
     return {
       ok: true,
       profileDir: status.profileDir,
       cliShimPath: status.cliShimPath,
-      plugins: readInstalledProfilePlugins(status.profileDir),
+      hmrAvailable,
+      plugins,
     };
   });
 
-  ipcMain.handle(DshHostIpc.InstallPlugin, async (_event, packageSpec: string) => {
+  ipcMain.handle(DshHostIpc.GetPluginRegistries, async () => {
     const manager = deps.getHostManager();
     if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
-    const spec = validatePluginInstallSpecifier(packageSpec);
-    if (!spec) {
+    const client = getLivePluginClient(manager);
+    if (!client) {
+      return {
+        ok: true,
+        registry: null,
+        fallbackRegistries: ['https://registry.npmmirror.com/'],
+        resolved: null,
+        fastest: null,
+      };
+    }
+    const [registriesOutcome, fastestOutcome] = await Promise.allSettled([
+      client.getPluginRegistries(),
+      typeof client.probeFastestPluginRegistry === 'function'
+        ? client.probeFastestPluginRegistry()
+        : Promise.resolve(null),
+    ]);
+    const registries = registriesOutcome.status === 'fulfilled'
+      ? registriesOutcome.value
+      : {
+          registry: null,
+          fallbackRegistries: ['https://registry.npmmirror.com/'],
+          resolved: null,
+        };
+    const fastest = fastestOutcome.status === 'fulfilled' ? fastestOutcome.value : null;
+    return {
+      ok: true,
+      registry: registries.registry,
+      fallbackRegistries: [...registries.fallbackRegistries],
+      resolved: registries.resolved,
+      fastest,
+    };
+  });
+
+  ipcMain.handle(
+    DshHostIpc.InspectPlugin,
+    async (_event, rawRequest: unknown): Promise<DshPluginInspectResult> => {
+      const manager = deps.getHostManager();
+      if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
+      const parsed = parseInspectRequest(rawRequest);
+      if (!parsed) return { ok: false, error: 'Invalid inspect request' };
+      const spec = validatePluginInstallSpecifier(parsed.spec);
+      if (!spec) return { ok: false, error: 'Invalid package specifier' };
+
+      const registry = validateOptionalRegistryUrl(parsed.registry);
+      if (registry === false) {
+        return { ok: false, error: 'Invalid registry URL' };
+      }
+
+      const status = manager.getStatus();
+      const localDir = resolveLocalPathIfExists(spec);
+      const client = getLivePluginClient(manager);
+      if (!client || typeof client.inspectPluginSpec !== 'function') {
+        const surfaceInfo = classifyBundleSurface({
+          name: localDir ? undefined : spec,
+          profileDir: status.profileDir,
+          runtimeDir: deps.getRuntimeDir(),
+          localDir: localDir ?? undefined,
+        });
+        return {
+          ok: true,
+          status: 'accepted',
+          kind: localDir ? 'path' : 'registry',
+          name: localDir ? undefined : spec,
+          bundle: null,
+          registry,
+          surface: surfaceInfo.surface,
+          isThemePlugin: surfaceInfo.isThemePlugin,
+          heuristicOnly: surfaceInfo.heuristicOnly,
+        };
+      }
+
+      try {
+        const inspectOptions = parsed.registry !== undefined ? { registry } : undefined;
+        const inspection = await client.inspectPluginSpec(spec, inspectOptions);
+        if (inspection.status === 'refused') {
+          return {
+            ok: true,
+            status: 'refused',
+            problem: inspection.problem,
+            reason: inspection.reason,
+            registries: inspection.registries,
+          };
+        }
+        const surfaceInfo = classifyBundleSurface({
+          name: inspection.name,
+          description: inspection.description,
+          profileDir: status.profileDir,
+          runtimeDir: deps.getRuntimeDir(),
+          localDir: inspection.kind === 'path' ? (localDir ?? undefined) : undefined,
+        });
+        return {
+          ok: true,
+          status: 'accepted',
+          kind: inspection.kind,
+          name: inspection.name,
+          version: inspection.version,
+          description: inspection.description,
+          bundle: inspection.bundle,
+          registry: inspection.registry,
+          host: inspection.host,
+          surface: surfaceInfo.surface,
+          isThemePlugin: surfaceInfo.isThemePlugin,
+          heuristicOnly: surfaceInfo.heuristicOnly,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(DshHostIpc.InstallPlugin, async (_event, rawRequest: unknown) => {
+    const manager = deps.getHostManager();
+    if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
+    const parsed = parseInstallRequest(rawRequest);
+    const spec = parsed ? validatePluginInstallSpecifier(parsed.spec) : null;
+    if (!parsed || !spec) {
       return { ok: false, error: 'Invalid package specifier' };
     }
+    const registry = validateOptionalRegistryUrl(parsed.registry);
+    if (registry === false) {
+      return { ok: false, error: 'Invalid registry URL' };
+    }
+
     const status = manager.getStatus();
+    const client = getLivePluginClient(manager);
+
+    // Primary path: live DSH pluginManager RPC with HMR hot-apply (no forced restart).
+    if (client && typeof client.installPluginBundle === 'function') {
+      try {
+        const installOptions: DshPluginInstallBundleOptions = {
+          enabled: parsed.enabled ?? true,
+          ...(parsed.registry !== undefined ? { registry } : {}),
+          ...(parsed.approvedBuilds ? { approvedBuilds: parsed.approvedBuilds } : {}),
+          ...(parsed.requestId ? { requestId: parsed.requestId } : {}),
+        };
+        const change = await client.installPluginBundle(spec, installOptions);
+        try {
+          manager.ensureProfileIntegrity?.();
+        } catch (error) {
+          console.warn('[DSH Host] Failed to re-ensure profile integrity after live plugin install:', error);
+        }
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return normalizePluginChangeOutcome(change, plugins);
+      } catch (error) {
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          plugins,
+        };
+      }
+    }
+
+    // Fallback path when DSH host is offline: run bundled CLI and restart host.
     const toolchain = deps.getNodeToolchain?.() ?? manager.getNodeToolchain?.() ?? null;
     const res = await runDshPluginCommand({
       executablePath: deps.getExecutablePath(),
@@ -125,7 +421,6 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       toolchain,
       args: ['add', spec],
     });
-    // Always restore LobsterAI managed bundles & symlinks before restarting DSH host.
     try {
       manager.ensureProfileIntegrity?.();
     } catch (error) {
@@ -134,10 +429,37 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
     if (res.ok) {
       await manager.restart().catch((): void => undefined);
     }
+    const { plugins } = await listEnrichedPlugins(
+      manager,
+      status.profileDir,
+      deps.getRuntimeDir(),
+    );
     return {
       ...res,
-      plugins: readInstalledProfilePlugins(status.profileDir),
+      application: res.ok ? DshPluginApplicationStatus.Applied : DshPluginApplicationStatus.Failed,
+      restartRequired: false,
+      plugins,
     };
+  });
+
+  ipcMain.handle(DshHostIpc.CancelPluginInstall, async (_event, requestId: string) => {
+    const manager = deps.getHostManager();
+    if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
+    const trimmed = typeof requestId === 'string' ? requestId.trim() : '';
+    if (!trimmed) return { ok: false, error: 'Invalid requestId' };
+    const client = getLivePluginClient(manager);
+    if (!client || typeof client.cancelPluginInstall !== 'function') {
+      return { ok: false, status: 'not-running' };
+    }
+    try {
+      const res = await client.cancelPluginInstall(trimmed);
+      return { ok: true, status: res.status };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   ipcMain.handle(DshHostIpc.RemovePlugin, async (_event, packageName: string) => {
@@ -148,6 +470,38 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       return { ok: false, error: 'Cannot remove managed or invalid plugin package' };
     }
     const status = manager.getStatus();
+    const client = getLivePluginClient(manager);
+
+    // Primary path: live DSH pluginManager RPC with HMR hot-unload (no forced restart).
+    if (client && typeof client.removePluginBundle === 'function') {
+      try {
+        const change = await client.removePluginBundle(name);
+        try {
+          manager.ensureProfileIntegrity?.();
+        } catch (error) {
+          console.warn('[DSH Host] Failed to re-ensure profile integrity after live plugin remove:', error);
+        }
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return normalizePluginChangeOutcome(change, plugins);
+      } catch (error) {
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          plugins,
+        };
+      }
+    }
+
+    // Fallback path when DSH host is offline.
     const toolchain = deps.getNodeToolchain?.() ?? manager.getNodeToolchain?.() ?? null;
     const res = await runDshPluginCommand({
       executablePath: deps.getExecutablePath(),
@@ -157,7 +511,6 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       toolchain,
       args: ['remove', name],
     });
-    // Always restore LobsterAI managed bundles & symlinks before restarting DSH host.
     try {
       manager.ensureProfileIntegrity?.();
     } catch (error) {
@@ -166,9 +519,16 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
     if (res.ok) {
       await manager.restart().catch((): void => undefined);
     }
+    const { plugins } = await listEnrichedPlugins(
+      manager,
+      status.profileDir,
+      deps.getRuntimeDir(),
+    );
     return {
       ...res,
-      plugins: readInstalledProfilePlugins(status.profileDir),
+      application: res.ok ? DshPluginApplicationStatus.Applied : DshPluginApplicationStatus.Failed,
+      restartRequired: false,
+      plugins,
     };
   });
 
@@ -180,8 +540,55 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       if (typeof enabled !== 'boolean') {
         return { ok: false, error: 'Invalid plugin enabled state' };
       }
+      const name = validatePluginPackageName(packageName);
+      if (!name) {
+        const status = manager.getStatus();
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          error: 'Cannot toggle managed or invalid plugin package',
+          plugins,
+        };
+      }
+
       const status = manager.getStatus();
-      const res = setProfilePluginEnabled(status.profileDir, packageName, enabled);
+      const client = getLivePluginClient(manager);
+
+      // Primary path: live DSH pluginManager RPC with HMR hot-toggle (no forced restart).
+      if (client && typeof client.setPluginBundleEnabled === 'function') {
+        try {
+          const change = await client.setPluginBundleEnabled(name, enabled);
+          try {
+            manager.ensureProfileIntegrity?.();
+          } catch (error) {
+            console.warn('[DSH Host] Failed to re-ensure profile integrity after live plugin toggle:', error);
+          }
+          const { plugins } = await listEnrichedPlugins(
+            manager,
+            status.profileDir,
+            deps.getRuntimeDir(),
+          );
+          return normalizePluginChangeOutcome(change, plugins);
+        } catch (error) {
+          const { plugins } = await listEnrichedPlugins(
+            manager,
+            status.profileDir,
+            deps.getRuntimeDir(),
+          );
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            plugins,
+          };
+        }
+      }
+
+      // Fallback path when DSH host is offline.
+      const res = setProfilePluginEnabled(status.profileDir, name, enabled);
       if (!res.ok) {
         return res;
       }
@@ -205,10 +612,26 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       }
       return {
         ...res,
-        plugins: readInstalledProfilePlugins(status.profileDir),
+        application: DshPluginApplicationStatus.Applied,
+        restartRequired: false,
+        plugins: buildEnrichedPluginEntries({
+          fallbackPlugins: res.plugins,
+          profileDir: status.profileDir,
+          runtimeDir: deps.getRuntimeDir(),
+        }),
       };
     },
   );
+
+  ipcMain.handle(DshHostIpc.PickLocalPluginDir, async () => {
+    const res = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || res.filePaths.length === 0) {
+      return { ok: true, canceled: true, path: null };
+    }
+    return { ok: true, canceled: false, path: res.filePaths[0] };
+  });
 
   ipcMain.handle(DshHostIpc.OpenProfileDir, async () => {
     const manager = deps.getHostManager();
@@ -219,6 +642,15 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
       return { ok: true, profileDir };
     }
     return { ok: false };
+  });
+
+  ipcMain.handle(DshHostIpc.CopyCliShimCommand, () => {
+    const manager = deps.getHostManager();
+    if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
+    const { cliShimPath } = manager.getStatus();
+    if (!cliShimPath) return { ok: false, error: 'CLI path unavailable' };
+    clipboard.writeText(cliShimPath);
+    return { ok: true, cliShimPath };
   });
 
   ipcMain.handle(DshHostIpc.GetPermissionPreset, (_event, sessionId?: string) => {

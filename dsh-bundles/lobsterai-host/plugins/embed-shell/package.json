@@ -1,0 +1,22 @@
+{
+  "name": "@lobsterai/dsh-embed-shell",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LobsterAI chromeless panel embed bridge for DSH web plugins",
+  "main": "./host.mjs",
+  "exports": {
+    ".": "./host.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}
