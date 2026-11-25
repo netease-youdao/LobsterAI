@@ -1,13 +1,13 @@
 import {
   BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
-  type BrowserWebAccessConfig,
+  type LegacyBrowserWebAccessConfigInput,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 
 export const APP_CONFIG_KEY = 'app_config';
 
 export type BrowserDisplayModeMigrationConfig = Record<string, unknown> & {
-  browserWebAccess?: Partial<BrowserWebAccessConfig>;
+  browserWebAccess?: LegacyBrowserWebAccessConfigInput;
   browserDisplayModeMigrationVersion?: number;
 };
 

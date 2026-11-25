@@ -63,7 +63,6 @@ import {
   type AgentBrowserHostStateEvent,
   type AgentBrowserHostZoomRequest,
   BrowserIpc,
-  type BrowserRuntimeProfile,
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
@@ -550,10 +549,6 @@ contextBridge.exposeInMainWorld('electron', {
       }) => ipcRenderer.invoke(OpenClawSessionIpc.Patch, options),
     },
     browser: {
-      getStatus: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.GetStatus, options),
-      listProfiles: () => ipcRenderer.invoke(BrowserIpc.ListProfiles),
-      test: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.Test, options),
-      resetProfile: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.ResetProfile, options),
       getHostState: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
         ipcRenderer.invoke(BrowserIpc.GetHostState, request),
       setHostView: (request: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>

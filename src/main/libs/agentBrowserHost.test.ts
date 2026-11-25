@@ -962,14 +962,49 @@ describe('AgentBrowserHost script evaluation', () => {
     expect(host.getState().error).toBeUndefined();
   });
 
-  test('honors the script evaluation setting for DOM ref arguments', async () => {
+  test('blocks apex and www hostnames plus IPv6 rules consistently with normalized blockedHostnames', async () => {
+    const host = createHost({
+      getBrowserConfig: () => ({
+        displayMode: BrowserDisplayMode.InApp,
+        blockedHostnames: ['example.com', '*.internal.local', '[::1]'],
+      }),
+    });
+    await host.newPage();
+
+    const apexResult = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'https://example.com/docs' },
+    });
+    const wwwResult = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'https://www.example.com/docs' },
+    });
+    const wildcardResult = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'https://app.internal.local/' },
+    });
+    const ipv6Result = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'http://[::1]:8080/' },
+    });
+
+    expect(apexResult.isError).toBe(true);
+    expect(wwwResult.isError).toBe(true);
+    expect(wildcardResult.isError).toBe(true);
+    expect(ipv6Result.isError).toBe(true);
+  });
+
+  test('ignores legacy evaluateEnabled=false and still evaluates scripts for DOM ref arguments', async () => {
     const { evaluate, sendCommand } = await setupPage({
-      getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp, evaluateEnabled: false }),
+      getBrowserConfig: () => ({
+        displayMode: BrowserDisplayMode.InApp,
+        ...({ evaluateEnabled: false } as Record<string, unknown>),
+      }),
     });
     sendCommand.mockClear();
 
-    expect((await evaluate()).isError).toBe(true);
-    expect(sendCommand).not.toHaveBeenCalled();
+    expect((await evaluate()).isError).not.toBe(true);
+    expect(sendCommand).toHaveBeenCalled();
   });
 });
 

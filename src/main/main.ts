@@ -77,15 +77,8 @@ import {
   type AgentBrowserHostZoomRequest,
   AgentBrowserMcpServerName,
   AgentBrowserZoom,
-  type BrowserControlGatewayRequest,
-  BrowserControlRequestMethod,
-  type BrowserDiagnosticResultStep,
-  BrowserDiagnosticStatus,
-  BrowserDiagnosticStep,
   BrowserDisplayMode,
   BrowserIpc,
-  BrowserNetworkMode,
-  BrowserRuntimeProfile,
   type BrowserWebAccessConfig,
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
@@ -2515,13 +2508,7 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
     agentBrowserHost = new AgentBrowserHost({
       getMainWindow: () => mainWindow,
       getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
-      useSystemProxy: () => {
-        const appConfig = getStore().get<AppConfigSettings>('app_config');
-        const browserConfig = normalizeBrowserWebAccessConfig(appConfig?.browserWebAccess);
-        return getUseSystemProxyFromConfig(appConfig)
-          && browserConfig.followGlobalProxy
-          && browserConfig.networkMode === BrowserNetworkMode.ProxyCompatible;
-      },
+      useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config')),
       emitState: event => {
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.isDestroyed()) {
@@ -2550,8 +2537,7 @@ const getExternalBrowserHost = (): ExternalBrowserHost => {
   externalBrowserHost ??= new ExternalBrowserHost({
     profilePath: path.join(app.getPath('userData'), 'external-browser'),
     getConfig: getBrowserWebAccessConfig,
-    useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config'))
-      && getBrowserWebAccessConfig().networkMode === BrowserNetworkMode.ProxyCompatible,
+    useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config')),
   });
   return externalBrowserHost;
 };
@@ -2567,7 +2553,6 @@ const isWebSearchSkillEnabled = (): boolean => {
 const getWebSearchHost = (): WebSearchHost => {
   if (!webSearchHost) {
     webSearchHost = new WebSearchHost({
-      getBrowserConfig: () => getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
       getPageContext: () => getAgentBrowserHost().getBackgroundPageContext(),
       isSkillEnabled: isWebSearchSkillEnabled,
     });
@@ -3088,10 +3073,6 @@ const syncOpenClawConfig = async (options: {
       ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.blockedHostnames),
       ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.blockedHostnames),
     ]));
-    const allowedHostnames = Array.from(new Set([
-      ...normalizeBrowserHostnamePolicyList(rawBrowserWebAccess?.allowedHostnames),
-      ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.allowedHostnames),
-    ]));
 
     const result = await bootstrap.syncAllConfig({
       providers,
@@ -3106,10 +3087,9 @@ const syncOpenClawConfig = async (options: {
       },
       memoryEnabled: getCoworkStore().getConfig().memoryEnabled !== false,
       webAccessPolicy: {
-        webFetchEnabled: normalizedBrowserWebAccess.webFetch.enabled,
-        browserSearchEnabled: normalizedBrowserWebAccess.displayMode === BrowserDisplayMode.InApp,
+        webFetchEnabled: true,
+        browserSearchEnabled: true,
         blockedHostnames,
-        allowedHostnames,
       },
       agents,
       imInstances,
@@ -4201,23 +4181,6 @@ const getUseSystemProxyFromConfig = (config?: { useSystemProxy?: boolean }): boo
   return config?.useSystemProxy === true;
 };
 
-const hasBrowserWebAccessConfigChanged = (
-  previousConfig?: AppConfigSettings,
-  nextConfig?: AppConfigSettings,
-): boolean => {
-  const previousBrowserConfig = normalizeBrowserWebAccessConfig(previousConfig?.browserWebAccess);
-  const nextBrowserConfig = normalizeBrowserWebAccessConfig(nextConfig?.browserWebAccess);
-  return JSON.stringify({
-    ...previousBrowserConfig,
-    credentialUseMode: undefined,
-    credentialSaveMode: undefined,
-  }) !== JSON.stringify({
-    ...nextBrowserConfig,
-    credentialUseMode: undefined,
-    credentialSaveMode: undefined,
-  });
-};
-
 const hasBrowserHostConfigChanged = (
   previousConfig?: AppConfigSettings,
   nextConfig?: AppConfigSettings,
@@ -4734,7 +4697,6 @@ if (!gotTheLock) {
           'question notifications disabled',
         );
       }
-      const browserWebAccessChanged = hasBrowserWebAccessConfigChanged(previousAppConfig, nextAppConfig);
       const browserHostConfigChanged = hasBrowserHostConfigChanged(previousAppConfig, nextAppConfig);
       if (browserHostConfigChanged || previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy) {
         agentBrowserHost?.refreshConfig();
@@ -4752,7 +4714,6 @@ if (!gotTheLock) {
       }
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
-        restartGatewayIfRunning: browserWebAccessChanged,
       });
       if (!syncResult.success) {
         console.error('[DSH] Failed to sync config after app_config update:', syncResult.error);
@@ -9234,16 +9195,6 @@ if (!gotTheLock) {
     getDshNodeToolchain: () => getDshBootstrap().resolveNodeToolchain(),
   });
 
-  const requestBrowserControl = async <T,>(
-    _request: BrowserControlGatewayRequest,
-  ): Promise<T> => {
-    throw new Error(t('agentBrowserRuntimeUnavailable'));
-  };
-
-  const buildBrowserProfileQuery = (profile?: BrowserRuntimeProfile): Record<string, string> | undefined => (
-    profile ? { profile } : undefined
-  );
-
   registerBrowserCredentialHandlers({
     ipcMain,
     getService: getBrowserCredentialService,
@@ -9432,143 +9383,6 @@ if (!gotTheLock) {
         );
       }),
   );
-
-  ipcMain.handle(BrowserIpc.GetStatus, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
-    try {
-      const status = await requestBrowserControl<Record<string, unknown>>({
-        method: BrowserControlRequestMethod.Get,
-        path: '/',
-        query: buildBrowserProfileQuery(options?.profile),
-      });
-      return { success: true, status };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get browser status',
-      };
-    }
-  });
-
-  ipcMain.handle(BrowserIpc.ListProfiles, async () => {
-    try {
-      const result = await requestBrowserControl<{ profiles?: unknown[] }>({
-        method: BrowserControlRequestMethod.Get,
-        path: '/profiles',
-      });
-      return { success: true, profiles: result.profiles ?? [] };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to list browser profiles',
-      };
-    }
-  });
-
-  ipcMain.handle(BrowserIpc.ResetProfile, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
-    try {
-      const profile = options?.profile || BrowserRuntimeProfile.Managed;
-      const result = await requestBrowserControl<Record<string, unknown>>({
-        method: BrowserControlRequestMethod.Post,
-        path: '/reset-profile',
-        query: buildBrowserProfileQuery(profile),
-        timeoutMs: 20000,
-      });
-      return { success: true, result };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to reset browser profile',
-      };
-    }
-  });
-
-  ipcMain.handle(BrowserIpc.Test, async (_event, options?: { profile?: BrowserRuntimeProfile }) => {
-    const steps: BrowserDiagnosticResultStep[] = [];
-    const addStep = (step: BrowserDiagnosticStep, status: BrowserDiagnosticStatus, message: string, details?: string) => {
-      steps.push({
-        step,
-        status,
-        message,
-        ...(details ? { details } : {}),
-      });
-    };
-    const profile = options?.profile;
-
-    try {
-      if (getBrowserWebAccessConfig().displayMode === BrowserDisplayMode.External) {
-        await getExternalBrowserHost().open();
-        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
-        return { success: true, steps };
-      }
-      const engineStatus = getDshBootstrap().getEngineStatus();
-      if (engineStatus.phase !== 'running') {
-        addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Error, 'browserDiagnosticGatewayNotRunning', engineStatus.message);
-        return { success: false, steps, error: engineStatus.message || 'DSH host is not running.' };
-      }
-      addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticGatewayReady');
-
-      try {
-        const profiles = await requestBrowserControl<{ profiles?: unknown[] }>({
-          method: BrowserControlRequestMethod.Get,
-          path: '/profiles',
-        });
-        addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Success, 'browserDiagnosticProfilesReady', `${profiles.profiles?.length ?? 0}`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.Profiles, BrowserDiagnosticStatus.Error, 'browserDiagnosticProfilesFailed', message);
-        return { success: false, steps, error: message };
-      }
-
-      try {
-        await requestBrowserControl<Record<string, unknown>>({
-          method: BrowserControlRequestMethod.Get,
-          path: '/',
-          query: buildBrowserProfileQuery(profile),
-        });
-        addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Success, 'browserDiagnosticStatusReady');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.BrowserStatus, BrowserDiagnosticStatus.Warning, 'browserDiagnosticStatusWarning', message);
-      }
-
-      try {
-        await requestBrowserControl<Record<string, unknown>>({
-          method: BrowserControlRequestMethod.Post,
-          path: '/start',
-          query: buildBrowserProfileQuery(profile),
-          timeoutMs: 20000,
-        });
-        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Error, 'browserDiagnosticStartFailed', message);
-        return { success: false, steps, error: message };
-      }
-
-      try {
-        await requestBrowserControl<Record<string, unknown>>({
-          method: BrowserControlRequestMethod.Post,
-          path: '/tabs/open',
-          query: buildBrowserProfileQuery(profile),
-          body: { url: 'https://example.com' },
-          timeoutMs: 20000,
-        });
-        addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Success, 'browserDiagnosticOpenPageReady');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addStep(BrowserDiagnosticStep.OpenTestPage, BrowserDiagnosticStatus.Error, 'browserDiagnosticOpenPageFailed', message);
-        return { success: false, steps, error: message };
-      }
-
-      return { success: true, steps };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Browser diagnostic failed';
-      if (steps.length === 0) {
-        addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Error, 'browserDiagnosticGatewayFailed', message);
-      }
-      return { success: false, steps, error: message };
-    }
-  });
 
   registerMcpHandlers({
     getMcpRuntime,
