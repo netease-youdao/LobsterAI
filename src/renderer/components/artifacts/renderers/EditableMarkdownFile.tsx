@@ -47,12 +47,12 @@ const EditableMarkdownFile: React.FC<EditableMarkdownFileProps> = ({ artifact, s
       // the preview before the final write replies.
       void document.flush().then(() => {
         const finalState = document.getSnapshot();
-        if (finalState.ready && finalState.status === MarkdownSaveState.Saved) {
+        if (document.filePath === filePath && finalState.ready && finalState.status === MarkdownSaveState.Saved) {
           syncSavedContent(finalState.content);
         }
       });
     };
-  }, [document, syncSavedContent]);
+  }, [document, filePath, syncSavedContent]);
 
   useEffect(() => { void document.refresh(); }, [document, artifact.contentVersion]);
 

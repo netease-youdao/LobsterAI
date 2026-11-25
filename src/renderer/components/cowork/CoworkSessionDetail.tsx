@@ -155,7 +155,7 @@ import {
   type UserAttachmentPreviewPayload,
 } from '../artifacts';
 import { reportArtifactPreviewAction } from '../artifacts/artifactAnalytics';
-import { commitArtifactFileRename } from '../artifacts/artifactFileRename';
+import { commitArtifactFileRename, useArtifactFileRenameSync } from '../artifacts/artifactFileRename';
 import { ArtifactFileShareProvider } from '../artifacts/ArtifactFileShareController';
 import { canRenameArtifactFile } from '../artifacts/artifactHeaderPath';
 import {
@@ -4108,6 +4108,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     });
     dispatch(activateArtifactPreviewTab({ sessionId, tabId }));
   }, [artifactTabsWithArtifacts, dispatch, sessionId]);
+
+  useArtifactFileRenameSync(sessionId, artifactTabsWithArtifacts);
 
   const handleStartArtifactTabRename = useCallback((tabId: string) => {
     if (!sessionId) return;

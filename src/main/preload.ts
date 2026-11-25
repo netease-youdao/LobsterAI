@@ -29,6 +29,7 @@ import {
 } from '../shared/artifactPreview/blankDocument';
 import {
   type ArtifactBrowserWindowOpenEvent,
+  type ArtifactFileRenamedEvent,
   ArtifactPreviewIpc,
 } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
@@ -1300,6 +1301,11 @@ contextBridge.exposeInMainWorld('electron', {
       return () => {
         ipcRenderer.removeListener(ArtifactPreviewIpc.FileChanged, handler);
       };
+    },
+    onFileRenamed: (callback: (data: ArtifactFileRenamedEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: ArtifactFileRenamedEvent) => callback(data);
+      ipcRenderer.on(ArtifactPreviewIpc.FileRenamed, handler);
+      return () => { ipcRenderer.removeListener(ArtifactPreviewIpc.FileRenamed, handler); };
     },
     onBrowserWindowOpen: (callback: (data: ArtifactBrowserWindowOpenEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: ArtifactBrowserWindowOpenEvent) =>

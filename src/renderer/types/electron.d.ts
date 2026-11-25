@@ -25,7 +25,7 @@ import type {
   RenameArtifactFileRequest,
   RenameArtifactFileResponse,
 } from '../../shared/artifactPreview/blankDocument';
-import type { ArtifactBrowserWindowOpenEvent } from '../../shared/artifactPreview/constants';
+import type { ArtifactBrowserWindowOpenEvent, ArtifactFileRenamedEvent } from '../../shared/artifactPreview/constants';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
@@ -1731,6 +1731,7 @@ interface IElectronAPI {
     watchFile: (filePath: string) => Promise<void>;
     unwatchFile: (filePath: string) => Promise<void>;
     onFileChanged: (callback: (data: { filePath: string }) => void) => () => void;
+    onFileRenamed: (callback: (data: ArtifactFileRenamedEvent) => void) => () => void;
     onBrowserWindowOpen: (callback: (data: ArtifactBrowserWindowOpenEvent) => void) => () => void;
     createPreviewSession: (
       filePath: string,

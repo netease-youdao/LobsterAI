@@ -21,6 +21,17 @@ const makeArtifact = (id: string, overrides: Partial<Artifact>): Artifact => ({
 });
 
 describe('resolveWorkspaceFileOpenTarget', () => {
+  test('creates a separate tab for a fresh note after renaming the previous untitled note', () => {
+    const original = resolveWorkspaceFileOpenTarget('untitled.md', [], context);
+    if (original?.kind !== WorkspaceFileOpenTargetKind.Load) throw new Error('Expected a new note');
+    const renamed = { ...original.artifact, filePath: context.cwd + '/renamed.md' };
+    const next = resolveWorkspaceFileOpenTarget('untitled.md', [renamed], context);
+    if (next?.kind !== WorkspaceFileOpenTargetKind.Load) throw new Error('Expected a second note');
+    expect(next.artifact.id).not.toBe(renamed.id);
+    expect(resolveWorkspaceFileOpenTarget('renamed.md', [renamed, next.artifact], context)?.kind)
+      .toBe(WorkspaceFileOpenTargetKind.Existing);
+  });
+
   test('reuses an existing session artifact when paths match', () => {
     const doc = makeArtifact('doc-1', {
       fileName: '示例文档.docx',

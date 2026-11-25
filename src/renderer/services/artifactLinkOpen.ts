@@ -20,6 +20,15 @@ export type LocalFileLinkTarget =
 
 const LINKED_FILE_ARTIFACT_ID_PREFIX = 'artifact-linked-file-';
 
+/** A renamed tab keeps its ID. Opening a new file at its old path needs a distinct tab. */
+export function getLinkedFileArtifactId(pathKey: string, artifacts: Artifact[]): string {
+  const base = LINKED_FILE_ARTIFACT_ID_PREFIX + pathKey;
+  const ids = new Set(artifacts.map(artifact => artifact.id));
+  let id = base;
+  for (let suffix = 2; ids.has(id); suffix++) id = `${base}#${suffix}`;
+  return id;
+}
+
 const getPathBaseName = (filePath: string): string => {
   const normalized = filePath.replace(/[\\/]+$/, '');
   const lastSeparator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
@@ -55,7 +64,7 @@ export function resolveLocalFileLinkTarget(
   return {
     kind: LocalFileLinkTargetKind.Load,
     artifact: {
-      id: `${LINKED_FILE_ARTIFACT_ID_PREFIX}${pathKey}`,
+      id: getLinkedFileArtifactId(pathKey, sessionArtifacts),
       messageId: '',
       sessionId: context.sessionId,
       type,

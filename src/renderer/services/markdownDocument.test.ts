@@ -144,6 +144,25 @@ describe('Markdown autosave and recovery', () => {
 });
 
 describe('Markdown document registry', () => {
+  test('moves a pending draft with its file and leaves the old path available for a new note', async () => {
+    vi.useFakeTimers();
+    const from = '/tmp/untitled.md';
+    const to = '/tmp/renamed.md';
+    const f = setup(from);
+    const registry = new MarkdownDocumentRegistry((_path, changed) => f.create(changed));
+    const document = registry.get(from);
+    await document.refresh();
+    document.setContent('pending edits');
+    registry.relocate(from, to);
+    expect(registry.get(to)).toBe(document);
+    expect(registry.get(from)).not.toBe(document);
+    expect([...f.drafts.keys()]).toEqual([expect.stringContaining(to)]);
+    expect(JSON.parse([...f.drafts.values()][0]).content).toBe('pending edits');
+    await vi.advanceTimersByTimeAsync(600);
+    expect(f.api.save).toHaveBeenCalledWith({ filePath: to, content: 'pending edits', expectedVersion: 'v1' });
+    expect(f.drafts.size).toBe(0);
+  });
+
   test('protects failed edits after their editor unmounts and clears the guard after recovery', async () => {
     vi.useFakeTimers();
     const first = setup('/tmp/first.md');

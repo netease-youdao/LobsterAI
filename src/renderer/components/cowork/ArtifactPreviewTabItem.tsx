@@ -188,7 +188,7 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
             type="button"
             onClick={onActivate}
             onDoubleClick={event => {
-              if (!active || !canRename || !onStartRename) return;
+              if (!canRename || !onStartRename) return;
               event.preventDefault();
               event.stopPropagation();
               onStartRename();

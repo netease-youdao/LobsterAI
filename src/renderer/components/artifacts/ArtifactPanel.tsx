@@ -1146,7 +1146,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const showDownloadAction = canDownloadArtifact(selectedArtifact);
   const workspaceFilesRefreshTrigger = useMemo(() => {
     const last = artifacts[artifacts.length - 1];
-    return `${artifacts.length}:${last?.id ?? ''}:${last?.filePath ?? ''}:${last?.contentVersion ?? ''}`;
+    return JSON.stringify([artifacts.map(artifact => artifact.filePath), last?.id, last?.contentVersion]);
   }, [artifacts]);
   const artifactCodeControlsContextValue = useMemo(
     () => ({

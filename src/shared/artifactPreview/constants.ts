@@ -12,9 +12,16 @@ export const ArtifactPreviewIpc = {
   WatchFile: 'artifact:watchFile',
   UnwatchFile: 'artifact:unwatchFile',
   FileChanged: 'artifact:file:changed',
+  FileRenamed: 'artifact:file:renamed',
 } as const;
 
 export type ArtifactPreviewIpc = typeof ArtifactPreviewIpc[keyof typeof ArtifactPreviewIpc];
+
+export interface ArtifactFileRenamedEvent {
+  oldFilePath: string;
+  newFilePath: string;
+  newFileName: string;
+}
 
 export const ArtifactBrowserWindowOpenDisposition = {
   Default: 'default',

@@ -1,5 +1,6 @@
 import { type FSWatcher, watch, type WatchEventType } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { lstat, opendir, realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * Watches the files that artifact previews show, so a preview follows edits on disk.
@@ -24,11 +25,14 @@ export const MISSING_FILE_POLL_MS = 1000;
 export interface FileIdentity {
   dev: bigint;
   ino: bigint;
+  /** Available for a regular file with a single link and a reliable creation time. */
+  birthtimeNs?: bigint;
 }
 
 export interface ArtifactFileWatcherOptions<TOwner> {
   /** A watched file changed on disk and still exists. */
   onChange: (filePath: string, owners: TOwner[]) => void;
+  onRename?: (oldPath: string, newPath: string, owners: TOwner[]) => void;
   settleMs?: number;
   missingPollMs?: number;
   /** File system access, replaced in tests. */
@@ -55,12 +59,35 @@ const watchWithNode = (filePath: string, listener: (eventType: WatchEventType) =
   watch(filePath, { persistent: false }, listener);
 
 const identifyWithNode = async (filePath: string): Promise<FileIdentity> => {
-  const { dev, ino } = await stat(filePath, { bigint: true });
-  return { dev, ino };
+  const entry = await lstat(filePath, { bigint: true });
+  if (entry.isSymbolicLink()) {
+    const { dev, ino } = await stat(filePath, { bigint: true });
+    return { dev, ino };
+  }
+  const birthtimeNs = entry.isFile() && entry.nlink === 1n && entry.ino !== 0n && entry.birthtimeNs > 0n
+    ? entry.birthtimeNs : undefined;
+  return { dev: entry.dev, ino: entry.ino, birthtimeNs };
 };
 
 const isSameFile = (a: FileIdentity, b: FileIdentity | undefined): boolean =>
   b !== undefined && a.dev === b.dev && a.ino === b.ino;
+
+// Only scan on disappearance. Editors often replace a file at the same path on ordinary saves.
+async function findRenamedSibling(filePath: string, previous: FileIdentity): Promise<string | undefined> {
+  const parent = path.dirname(filePath);
+  const originalName = path.basename(filePath);
+  const extension = path.extname(filePath).toLowerCase();
+  const directory = await opendir(parent);
+  for await (const entry of directory) {
+    if (entry.name === originalName || !entry.isFile() || path.extname(entry.name).toLowerCase() !== extension) continue;
+    const candidate = path.join(parent, entry.name);
+    const info = await lstat(candidate, { bigint: true }).catch((): undefined => undefined);
+    if (info?.isFile() && info.nlink === 1n && isSameFile(info, previous) && info.birthtimeNs === previous.birthtimeNs) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
 
 const isMissingFileError = (error: unknown): boolean => {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -132,14 +159,33 @@ export class ArtifactFileWatcher<TOwner> {
 
   private async runCheck(file: WatchedFile<TOwner>, report: boolean): Promise<void> {
     if (file.closed) return;
-    const identity = await this.identify(file.filePath).catch((): undefined => undefined);
+    const identity = await this.identify(file.filePath).catch((error): undefined => {
+      if (!isMissingFileError(error)) file.identity = undefined;
+      return undefined;
+    });
     if (file.closed) return;
     if (!identity) {
-      // Deleted or moved away: there is nothing new to show, and the watcher follows a file
-      // that is gone. Look for it again until it comes back.
+      const previous = file.identity;
       this.disarm(file);
+      if (previous?.birthtimeNs && this.options.onRename) {
+        const nextPath = await findRenamedSibling(file.filePath, previous).catch((): undefined => undefined);
+        if (file.closed) return;
+        if (nextPath) this.options.onRename(file.filePath, nextPath, [...file.owners.keys()]);
+      }
       this.schedule(file, this.missingPollMs);
       return;
+    }
+    // On case-insensitive volumes the old spelling still resolves after a case-only rename.
+    if (file.renamed && identity.birthtimeNs && this.options.onRename && process.platform !== 'linux') {
+      const actualPath = await realpath(file.filePath).catch((): undefined => undefined);
+      if (file.closed) return;
+      if (actualPath) {
+        const actualName = path.basename(actualPath);
+        const oldName = path.basename(file.filePath);
+        if (actualName !== oldName && actualName.toLowerCase() === oldName.toLowerCase()) {
+          this.options.onRename(file.filePath, path.join(path.dirname(file.filePath), actualName), [...file.owners.keys()]);
+        }
+      }
     }
     // A 'rename' re-arms even on the same inode number: ext4 reuses a deleted file's number at once.
     if ((!file.watcher || file.renamed || !isSameFile(identity, file.identity)) && !this.arm(file, identity)) return;

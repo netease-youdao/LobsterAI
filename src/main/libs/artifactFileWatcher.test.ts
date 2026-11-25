@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { type FSWatcher, type WatchEventType } from 'node:fs';
+import { type FSWatcher, watch, type WatchEventType } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -286,13 +286,36 @@ describe('ArtifactFileWatcher on the real file system', () => {
     }
   }
 
+  test('reports a renamed sibling by identity, even with another copy of its contents', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lobster-artifact-rename-'));
+    roots.push(root);
+    const original = path.join(root, 'untitled.md');
+    const renamed = path.join(root, 'renamed.md');
+    await fs.writeFile(original, 'note');
+    await fs.copyFile(original, path.join(root, 'copy.md'));
+    const onRename = vi.fn();
+    const watchFile = vi.fn((filePath: string, listener: (eventType: WatchEventType) => void) =>
+      watch(filePath, { persistent: false }, listener));
+    const watcher = new ArtifactFileWatcher({ onChange: vi.fn(), onRename, watchFile, settleMs: 20 });
+    try {
+      watcher.watch(original, 'panel');
+      await vi.waitFor(() => expect(watchFile).toHaveBeenCalledTimes(1));
+      await fs.rename(original, renamed);
+      await vi.waitFor(() => expect(onRename).toHaveBeenCalledWith(original, renamed, ['panel']));
+    } finally {
+      watcher.releaseOwner('panel');
+    }
+  });
+
   test('follows in-place edits, atomic replacements and a deleted file coming back', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lobster-artifact-watch-'));
     roots.push(root);
     const filePath = path.join(root, 'page.html');
     await fs.writeFile(filePath, '<p>Version 1</p>');
     const reports: string[] = [];
+    const onRename = vi.fn();
     const watcher = new ArtifactFileWatcher<number>({
+      onRename,
       onChange: changedPath => { reports.push(changedPath); },
       settleMs: 50,
       missingPollMs: 50,
@@ -319,6 +342,7 @@ describe('ArtifactFileWatcher on the real file system', () => {
     await fs.writeFile(filePath, '<p>Version 5</p>');
     await expectReports(4);
     expect(reports.every(changedPath => changedPath === filePath)).toBe(true);
+    expect(onRename).not.toHaveBeenCalled();
     watcher.unwatch(filePath, 1);
   });
 });

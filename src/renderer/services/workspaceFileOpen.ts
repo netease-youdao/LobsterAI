@@ -1,5 +1,6 @@
 import { type Artifact, type ArtifactType, ArtifactTypeValue } from '../types/artifact';
 import { loadDetectedFileArtifact } from './artifactDetection';
+import { getLinkedFileArtifactId } from './artifactLinkOpen';
 import {
   getArtifactTypeFromExtension,
   normalizeFilePathForDedup,
@@ -21,8 +22,6 @@ export type WorkspaceFileOpenTarget =
   | { kind: typeof WorkspaceFileOpenTargetKind.Load; artifact: Artifact }
   | { kind: typeof WorkspaceFileOpenTargetKind.ProbeText; artifact: Artifact }
   | { kind: typeof WorkspaceFileOpenTargetKind.System; filePath: string };
-
-const LINKED_FILE_ARTIFACT_ID_PREFIX = 'artifact-linked-file-';
 
 const EXTRA_IMAGE_EXTENSIONS = new Set(['.ico', '.tif', '.tiff']);
 
@@ -230,7 +229,7 @@ export function resolveWorkspaceFileOpenTarget(
   }
 
   const baseArtifact: Artifact = {
-    id: `${LINKED_FILE_ARTIFACT_ID_PREFIX}${pathKey}`,
+    id: getLinkedFileArtifactId(pathKey, sessionArtifacts),
     messageId: '',
     sessionId: context.sessionId,
     type: inferred === 'probe' ? ArtifactTypeValue.Code : inferred.type,

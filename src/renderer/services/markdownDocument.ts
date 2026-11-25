@@ -48,7 +48,7 @@ export class MarkdownDocument {
   private reading?: Promise<void>;
 
   constructor(
-    readonly filePath: string,
+    public filePath: string,
     private api: MarkdownFileApi,
     private storage: () => DraftStorage,
     private onStateChange?: () => void,
@@ -70,13 +70,22 @@ export class MarkdownDocument {
     return this.state.ready && !this.dirty && !this.saving && !this.reading && this.listeners.size === 0;
   }
 
+  relocate(filePath: string): void {
+    const oldPath = this.filePath;
+    this.filePath = filePath;
+    if (this.dirty) {
+      this.persistDraft(oldPath);
+      if (this.state.status !== MarkdownSaveState.Conflict) this.scheduleSave();
+    }
+  }
+
   private publish(update: Partial<MarkdownDocumentState>): void {
     this.state = { ...this.state, ...update };
     this.listeners.forEach(listener => listener());
     this.onStateChange?.();
   }
 
-  private persistDraft(): void {
+  private persistDraft(previousPath?: string): void {
     try {
       const key = DRAFT_KEY_PREFIX + this.filePath;
       if (this.dirty) {
@@ -87,6 +96,7 @@ export class MarkdownDocument {
       } else {
         this.storage().removeItem(key);
       }
+      if (previousPath) this.storage().removeItem(DRAFT_KEY_PREFIX + previousPath);
       if (!this.state.draftSafe) this.publish({ draftSafe: true });
     } catch {
       this.publish({ draftSafe: false });
@@ -119,11 +129,12 @@ export class MarkdownDocument {
 
   private async readFromDisk(): Promise<void> {
     if (this.saving) await this.saving;
+    const filePath = this.filePath;
     const versionAtRead = this.base?.version;
     try {
-      const result = await this.api.read(this.filePath);
+      const result = await this.api.read(filePath);
       // A save completed (or started) during this read. Its snapshot is newer.
-      if (this.saving || this.base?.version !== versionAtRead) return;
+      if (this.filePath !== filePath || this.saving || this.base?.version !== versionAtRead) return;
       if (!result.success) {
         this.publish({ status: MarkdownSaveState.Error, errorCode: result.code });
         return;
@@ -167,6 +178,7 @@ export class MarkdownDocument {
       this.publish({ content: file.content, ready: true, status: MarkdownSaveState.Saved, errorCode: undefined });
       this.persistDraft();
     } catch {
+      if (this.filePath !== filePath) return;
       this.publish({ status: MarkdownSaveState.Error, errorCode: MarkdownFileError.Io });
     }
   }
@@ -182,11 +194,13 @@ export class MarkdownDocument {
   private async saveChanges(): Promise<void> {
     if (!this.base || this.state.status === MarkdownSaveState.Conflict) return;
     while (this.dirty) {
+      const filePath = this.filePath;
       const content = this.state.content;
       this.writingContent = content;
       this.publish({ status: MarkdownSaveState.Saving, errorCode: undefined });
       try {
-        const result = await this.api.save({ filePath: this.filePath, content, expectedVersion: this.expectedVersion });
+        const result = await this.api.save({ filePath, content, expectedVersion: this.expectedVersion });
+        if (!result.success && filePath !== this.filePath) continue;
         if (!result.success) {
           this.publish({
             status: result.code === MarkdownFileError.Conflict ? MarkdownSaveState.Conflict : MarkdownSaveState.Error,
@@ -200,6 +214,7 @@ export class MarkdownDocument {
         // A newer edit may have arrived while the previous write was in flight.
         this.persistDraft();
       } catch {
+        if (filePath !== this.filePath) continue;
         this.publish({ status: MarkdownSaveState.Error, errorCode: MarkdownFileError.Io });
         return;
       }
@@ -276,6 +291,16 @@ export class MarkdownDocumentRegistry {
     return state?.ready ? state.content : undefined;
   }
 
+  relocate(oldFilePath: string, newFilePath: string): void {
+    const from = normalizeShellFilePath(oldFilePath);
+    const to = normalizeShellFilePath(newFilePath);
+    const document = this.documents.get(from);
+    if (!document || from === to) return;
+    document.relocate(to);
+    this.documents.delete(from);
+    this.documents.set(to, document);
+  }
+
   flush = async (): Promise<void> => {
     await Promise.all([...this.documents.values()].filter(document => document.dirty)
       .map(document => document.flush()));
@@ -298,5 +323,7 @@ export function getMarkdownDocument(filePath: string): MarkdownDocument {
 
 /** Copy the live buffer, including empty and unsaved content, without opening a document. */
 export const getMarkdownDocumentContent = (filePath: string): string | undefined => documents.getContent(filePath);
+
+export const relocateMarkdownDocument = (from: string, to: string): void => documents.relocate(from, to);
 
 if (import.meta.hot) import.meta.hot.dispose(() => disposeLifecycle?.());

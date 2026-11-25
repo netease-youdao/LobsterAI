@@ -13626,6 +13626,12 @@ if (!gotTheLock) {
 
   // ---- artifact file watching ----
   const artifactFileWatcher = new ArtifactFileWatcher<WebContents>({
+    onRename: (oldFilePath, newFilePath, owners) => {
+      const change = { oldFilePath, newFilePath, newFileName: path.basename(newFilePath) };
+      for (const owner of owners) {
+        if (!owner.isDestroyed()) owner.send(ArtifactPreviewIpc.FileRenamed, change);
+      }
+    },
     onChange: (filePath, owners) => {
       for (const owner of owners) {
         if (!owner.isDestroyed()) owner.send(ArtifactPreviewIpc.FileChanged, { filePath });
