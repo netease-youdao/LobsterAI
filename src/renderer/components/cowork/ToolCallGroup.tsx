@@ -169,11 +169,8 @@ const ToolCallGroup: React.FC<{
   // pulse and shows the latest output line instead of a line count.
   const isRunning = isSessionStreaming && !isToolGroupSettled(group);
   const liveDetail = isRunning ? getActivityLiveDetail({ type: 'tool_group', group }) : null;
-  const fileDetailLabel = isExpanded ? 'coworkActivityHideDetails'
-    : isToolError ? 'coworkActivityViewError'
-      : isToolGroupSettled(group) ? 'coworkActivityViewChanges' : 'coworkActivityViewDetails';
   const fileDetailDisclosure = isFileChange && (
-    <ActivityDetailDisclosure label={i18nService.t(fileDetailLabel)} isExpanded={isExpanded} />
+    <ActivityDetailDisclosure isExpanded={isExpanded} />
   );
   const reportToolToggle = (nextExpanded: boolean) => {
     const resultLength = toolResultDisplayRaw.length || collapsedToolResult?.text?.length || 0;
@@ -436,7 +433,12 @@ const ToolCallGroup: React.FC<{
                 {toolInputSummary}
               </code>
             )}
-            {fileDetailDisclosure}
+            {isFileChange && (
+              <ActivityDetailDisclosure
+                isExpanded={isExpanded}
+                className="text-sm text-muted group-hover:text-secondary"
+              />
+            )}
           </div>
           {toolResult && !isRunning && !isTodoWriteTool && !isFileChange && (hasToolResultText || showNoDetailError) && (
             <div className={`text-xs mt-0.5 ${

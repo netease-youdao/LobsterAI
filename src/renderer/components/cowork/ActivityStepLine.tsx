@@ -46,7 +46,7 @@ const hasStepIcon = (kind: ActivityStepKind | undefined): kind is Exclude<Activi
 /**
  * One line of agent activity (WorkBuddy style): a light gray icon and
  * phrase that darkens on hover. The whole line toggles its detail; file
- * changes also carry an explicit action so their details are discoverable.
+ * changes also carry a fold arrow so their details are discoverable.
  * Thinking lines, and lines that are not a step (the turn's duration line),
  * carry no icon.
  */
@@ -57,7 +57,7 @@ export const ActivityStepLine: React.FC<{
   hasError?: boolean;
   isExpanded: boolean;
   onToggle: () => void;
-  /** Right after the label: a detail action or fold arrow. */
+  /** Right after the label: a fold arrow. */
   trailing?: React.ReactNode;
 }> = ({ kind, label, isLive = false, hasError = false, isExpanded, onToggle, trailing }) => {
   const Icon = hasStepIcon(kind) ? STEP_ICONS[kind] : null;
@@ -95,15 +95,17 @@ export const ActivityStepLine: React.FC<{
   );
 };
 
-/** Visible affordance inside the step button, without nesting another button. */
-export const ActivityDetailDisclosure: React.FC<{ label: string; isExpanded: boolean }> = ({ label, isExpanded }) => (
-  <span className="ml-1 inline-flex flex-shrink-0 items-center gap-0.5 text-xs text-secondary">
-    {label}
-    <ChevronRightIcon
-      className={`h-[0.9em] w-[0.9em] transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
-      aria-hidden="true"
-    />
-  </span>
+/** Visible fold arrow inside the step button, without nesting another button. */
+export const ActivityDetailDisclosure: React.FC<{ isExpanded: boolean; className?: string }> = ({
+  isExpanded,
+  className = '',
+}) => (
+  <ChevronRightIcon
+    className={`h-[0.9em] w-[0.9em] flex-shrink-0 transition-transform duration-200 ${
+      isExpanded ? 'rotate-90' : ''
+    } ${className}`.trim()}
+    aria-hidden="true"
+  />
 );
 
 /**

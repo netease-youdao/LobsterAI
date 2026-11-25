@@ -4,6 +4,7 @@
 
 import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
 import type { DshChannelInstanceConfig } from '../../im/dshChannelsBridge';
+import { wecomDuplicateOwners } from '../../im/wecomConnections';
 
 const MULTI_INSTANCE_PLATFORMS: readonly RetainedImPlatform[] = [
   RetainedImPlatform.Feishu,
@@ -53,6 +54,7 @@ export function buildDshImChannelInstances(options: {
     if (!section || typeof section !== 'object') continue;
     const instances = (section as { instances?: unknown[] }).instances;
     if (!Array.isArray(instances)) continue;
+    const duplicateOwners = platform === RetainedImPlatform.WeCom ? wecomDuplicateOwners(instances) : undefined;
     for (const raw of instances) {
       if (!raw || typeof raw !== 'object') continue;
       const inst = raw as Record<string, unknown>;
@@ -63,7 +65,7 @@ export function buildDshImChannelInstances(options: {
       result.push({
         platform,
         instanceId,
-        enabled: inst.enabled === true,
+        enabled: inst.enabled === true && !duplicateOwners?.has(instanceId),
         agentId,
         cwd: getDefaultCwd?.(agentId),
         config: { ...inst },

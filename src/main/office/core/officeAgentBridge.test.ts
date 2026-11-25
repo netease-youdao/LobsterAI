@@ -20,7 +20,7 @@ function fakeWindow() {
 describe.each(OFFICE_EDITORS.map(editor => [editor.editorName, editor] as const))('%s agent bridge', (_name, editor) => {
   const [readTool, editTool] = editor.agent.tools.map(tool => tool.name);
   const bridgeFor = (getWindow: () => BrowserWindow | null) => new OfficeAgentBridge({
-    getWindow, tools: editor.agent.tools.map(tool => tool.name), requestChannel: editor.channels.AgentRequest,
+    getContents: () => getWindow()?.webContents ?? null, tools: editor.agent.tools.map(tool => tool.name), requestChannel: editor.channels.AgentRequest,
     timeoutMs: editor.agent.timeoutMs, editorName: editor.editorName, logTag: '[OfficeAgentTest]',
   });
   beforeEach(() => { vi.useFakeTimers(); });

@@ -4,6 +4,7 @@ export const ArtifactPreviewIpc = {
   DestroySession: 'artifact:destroyPreviewSession',
   ClearBrowserCookies: 'artifact:browser:clearCookies',
   ClearBrowserCache: 'artifact:browser:clearCache',
+  BrowserWindowOpen: 'artifact:browser:windowOpen',
   SaveBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:save',
   ReadBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:read',
   DeleteBrowserAnnotationAsset: 'artifact:browserAnnotation:asset:delete',
@@ -14,6 +15,24 @@ export const ArtifactPreviewIpc = {
 } as const;
 
 export type ArtifactPreviewIpc = typeof ArtifactPreviewIpc[keyof typeof ArtifactPreviewIpc];
+
+export const ArtifactBrowserWindowOpenDisposition = {
+  Default: 'default',
+  ForegroundTab: 'foreground-tab',
+  BackgroundTab: 'background-tab',
+  NewWindow: 'new-window',
+  Other: 'other',
+} as const;
+
+export type ArtifactBrowserWindowOpenDisposition =
+  typeof ArtifactBrowserWindowOpenDisposition[keyof typeof ArtifactBrowserWindowOpenDisposition];
+
+export interface ArtifactBrowserWindowOpenEvent {
+  webContentsId: number;
+  url: string;
+  disposition: ArtifactBrowserWindowOpenDisposition;
+  referrer?: string;
+}
 
 export const ArtifactPreviewProtocol = {
   LocalFile: 'localfile',

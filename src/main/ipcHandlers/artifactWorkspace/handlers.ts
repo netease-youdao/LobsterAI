@@ -7,6 +7,8 @@ import {
   BlankDocumentKind,
   type CreateBlankDocumentRequest,
   type CreateBlankDocumentResponse,
+  type ListWorkspaceDirectoryRequest,
+  type ListWorkspaceDirectoryResponse,
   type ProbeGitWorkspaceRequest,
   type ProbeGitWorkspaceResponse,
   type RenameArtifactFileRequest,
@@ -14,6 +16,7 @@ import {
 } from '../../../shared/artifactPreview/blankDocument';
 import { createBlankDocumentInDirectory } from '../../office/blankDocuments';
 import { EMPTY_GIT_PROBE, probeGitWorkspaceDirectory } from './gitProbe';
+import { listWorkspaceDirectoryEntries } from './listDirectory';
 import { renameLocalFileInPlace } from './renameFile';
 
 const VALID_KINDS = new Set<string>(Object.values(BlankDocumentKind));
@@ -75,6 +78,20 @@ export function registerArtifactWorkspaceHandlers(deps: ArtifactWorkspaceHandler
         return { success: false, error: 'Invalid rename request' };
       }
       return renameLocalFileInPlace(input.filePath, input.newBaseName);
+    },
+  );
+
+  ipcMain.handle(
+    ArtifactWorkspaceIpc.ListDirectory,
+    async (_event, input?: ListWorkspaceDirectoryRequest): Promise<ListWorkspaceDirectoryResponse> => {
+      const rootDirectory = resolveTargetDirectory(deps, input?.sessionId, input?.cwd);
+      if (!rootDirectory) {
+        return { success: false, error: 'No valid working directory available' };
+      }
+      return listWorkspaceDirectoryEntries(rootDirectory, {
+        targetPath: input?.targetPath,
+        includeHidden: input?.includeHidden,
+      });
     },
   );
 }

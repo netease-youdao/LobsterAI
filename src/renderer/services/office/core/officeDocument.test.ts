@@ -34,7 +34,7 @@ describe.each(FORMATS)('$name document revisions and recovery', format => {
       open: vi.fn(async () => success(file)),
       read: vi.fn(async (): Promise<OfficeResult<OfficeOpenResult<Info>>> => success(file)),
       checkpoint: vi.fn(async (): Promise<OfficeResult<null>> => success(null)),
-      save: vi.fn(async (): Promise<OfficeResult<{ version: string; originalCopyPath?: string }>> => success({ version: 'disk-v2' })),
+      save: vi.fn(async (): Promise<OfficeResult<{ version: string }>> => success({ version: 'disk-v2' })),
       discardDraft: vi.fn(async (): Promise<OfficeResult<null>> => success(null)),
       release: vi.fn(async () => undefined),
     } satisfies OfficeFileApi<Info>;

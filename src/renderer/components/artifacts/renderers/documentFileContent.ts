@@ -35,7 +35,7 @@ export function normalizeLocalFilePath(filePath: string): string {
 }
 
 /** The bytes of a document artifact, from its inline content or its local file. */
-export function useFileContent(artifact: Artifact): { data: ArrayBuffer | null; loading: boolean; error: string | null } {
+export function useFileContent(artifact: Pick<Artifact, 'filePath' | 'content'>): { data: ArrayBuffer | null; loading: boolean; error: string | null } {
   const [data, setData] = useState<ArrayBuffer | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

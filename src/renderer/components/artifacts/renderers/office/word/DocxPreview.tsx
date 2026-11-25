@@ -13,7 +13,7 @@ const t = (key: string) => i18nService.t(key);
 const DOCX_BASE_WIDTH = 794; // A4 width in px at 96dpi
 
 /** Read-only .docx preview (docx-preview, high-fidelity rendering with true pagination). */
-export const DocxPreview: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
+export const DocxPreview: React.FC<{ artifact: Pick<Artifact, 'filePath' | 'content'> }> = ({ artifact }) => {
   const { data, loading, error: loadError } = useFileContent(artifact);
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);

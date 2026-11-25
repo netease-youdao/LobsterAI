@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 import { PlatformRegistry } from '../../shared/platform';
+import { t } from '../i18n';
 import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
@@ -64,6 +65,7 @@ import {
   WecomOpenClawConfig,
   WeixinOpenClawConfig,
 } from './types';
+import { activeWecomBotId } from './wecomConnections';
 
 interface StoredConversationReplyRoute {
   channel: string;
@@ -937,6 +939,9 @@ export class IMStore {
   }
 
   setConfig(config: Partial<IMGatewayConfig>): void {
+    if (config.wecom) {
+      this.setWecomMultiInstanceConfig(config.wecom);
+    }
     if (config.dingtalk) {
       this.setDingTalkMultiInstanceConfig(config.dingtalk);
     }
@@ -957,9 +962,6 @@ export class IMStore {
     }
     if (config.qq) {
       this.setQQMultiInstanceConfig(config.qq);
-    }
-    if (config.wecom) {
-      this.setWecomMultiInstanceConfig(config.wecom);
     }
     if (config.popo) {
       this.setPopoMultiInstanceConfig(config.popo);
@@ -1471,7 +1473,7 @@ export class IMStore {
 
   getWecomInstances(): WecomInstanceConfig[] {
     const rows = this.db
-      .prepare('SELECT key, value FROM im_config WHERE key LIKE ?')
+      .prepare('SELECT key, value FROM im_config WHERE key LIKE ? ORDER BY rowid')
       .all('wecom:%') as Array<{ key: string; value: string }>;
     if (!rows.length) return [];
     const instances: WecomInstanceConfig[] = [];
@@ -1493,17 +1495,7 @@ export class IMStore {
   }
 
   setWecomInstanceConfig(instanceId: string, config: Partial<WecomInstanceConfig>): void {
-    const current = this.getWecomInstanceConfig(instanceId);
-    if (current) {
-      this.setConfigValue(`wecom:${instanceId}`, { ...current, ...config });
-    } else {
-      this.setConfigValue(`wecom:${instanceId}`, {
-        ...DEFAULT_WECOM_CONFIG,
-        instanceId,
-        instanceName: config.instanceName || `WeCom Bot`,
-        ...config,
-      });
-    }
+    this.saveWecomInstances([{ ...config, instanceId }]);
   }
 
   deleteWecomInstance(instanceId: string): void {
@@ -1519,10 +1511,29 @@ export class IMStore {
   }
 
   setWecomMultiInstanceConfig(config: WecomMultiInstanceConfig): void {
-    // Write each instance individually
-    for (const inst of config.instances) {
-      this.setWecomInstanceConfig(inst.instanceId, inst);
-    }
+    this.saveWecomInstances(config.instances);
+  }
+
+  private saveWecomInstances(updates: (Partial<WecomInstanceConfig> & { instanceId: string })[]): void {
+    this.db.transaction(() => {
+      const current = this.getWecomInstances();
+      const byId = new Map(current.map(instance => [instance.instanceId, instance]));
+      const previous = new Map(byId);
+      for (const update of updates) {
+        const existing = byId.get(update.instanceId) ?? { ...DEFAULT_WECOM_CONFIG, instanceName: 'WeCom Bot' };
+        byId.set(update.instanceId, { ...existing, ...update });
+      }
+      for (const { instanceId } of updates) {
+        const instance = byId.get(instanceId)!;
+        const botId = activeWecomBotId(instance);
+        // Existing duplicates may be edited or disabled without disturbing the current owner.
+        if (botId && botId !== activeWecomBotId(previous.get(instanceId))) {
+          const owner = [...byId.values()].find(other => other.instanceId !== instanceId && activeWecomBotId(other) === botId);
+          if (owner) throw new Error(t('imWecomDuplicateBot', { name: owner.instanceName || owner.instanceId }));
+        }
+        this.setConfigValue(`wecom:${instanceId}`, instance);
+      }
+    })();
   }
 
   // ==================== POPO ====================

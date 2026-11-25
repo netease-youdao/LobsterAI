@@ -159,6 +159,11 @@ export default defineConfig(({ command }) => {
         onstart() {},
       },
       {
+        entry: 'src/main/office/word/wordPanelPreload.ts',
+        vite: { build: { sourcemap: true, outDir: 'dist-electron', minify: productionMinify } },
+        onstart() {},
+      },
+      {
         // Sandboxed webview preload used only for browser annotations.
         entry: 'src/main/browserAnnotationPreload.ts',
         vite: {
@@ -196,6 +201,16 @@ export default defineConfig(({ command }) => {
       },
     ]),
     renderer(),
+    {
+      name: 'word-panel-dev-refresh',
+      apply: 'serve',
+      transformIndexHtml(html, context) {
+        if (context.path !== '/word-panel.html') return;
+        // Vite injects an inline React Refresh preamble and uses a loopback WebSocket in development.
+        return html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+          .replace("connect-src 'self'", "connect-src 'self' ws://localhost:* ws://127.0.0.1:*");
+      },
+    },
   ],
   base: process.env.NODE_ENV === 'development' ? '/' : './',
   // The syntax-highlighting worker loads grammars on demand; ES module workers allow that code splitting.
@@ -219,6 +234,7 @@ export default defineConfig(({ command }) => {
       // sandboxed thumbnail page never shares chunks with the app entry.
       input: {
         main: path.resolve(__dirname, 'index.html'),
+        wordPanel: path.resolve(__dirname, 'word-panel.html'),
         desktopCompanion: path.resolve(__dirname, 'desktop-companion.html'),
         companionComposer: path.resolve(__dirname, 'companion-composer.html'),
         companionScreenshot: path.resolve(__dirname, 'companion-screenshot.html'),

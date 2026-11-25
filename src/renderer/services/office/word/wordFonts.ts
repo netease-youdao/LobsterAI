@@ -3,13 +3,15 @@ import {
   createFontSource, defineFontResolver, type FontConfigurationFragment, type FontResolutionRequest, type MarkedFontResolver,
 } from '@docx-editor.dev/core/editor';
 import wasmUrl from '@docx-editor.dev/core/harfbuzz.wasm?url';
-import { initializeHarfBuzz, setHarfBuzzWasmUrl } from '@docx-editor.dev/core/layout';
+import { boundedStructuralFontValidator, initializeHarfBuzz, setHarfBuzzWasmUrl } from '@docx-editor.dev/core/layout';
 
 import type { WordFontApi } from '../../../../shared/office/word/wordFile';
 import {
-CjkSerifStyle, cjkSerifStyle,   classifyWordFont, computeWordLineMetrics, fontNameKey, knownWordFontMetrics,
-  type WordDocumentFontDecl, WordFontClass, type WordFontMetrics, WordFontStyle, type WordLineMetrics, type WordSystemFontFace,
+  CjkSerifStyle, cjkSerifStyle, classifyWordFont, computeWordLineMetrics, fontNameKey, knownWordFontMetrics,
+  type WordDocumentFontDecl,   wordFontAliases,
+WordFontClass, type WordFontMetrics, WordFontStyle, type WordLineMetrics, type WordSystemFontFace,
 } from '../../../../shared/office/word/wordFonts';
+import bundledFontManifest from '../../../assets/office-fonts/sources.json';
 
 const fontUrls = import.meta.glob('../../../assets/office-fonts/*.{ttf,otf}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 
@@ -17,6 +19,8 @@ const fontUrls = import.meta.glob('../../../assets/office-fonts/*.{ttf,otf}', { 
 const MAX_FACE_BYTES = 64 * 1024 * 1024;
 const DOCUMENT_FONT_BUDGET = 120 * 1024 * 1024;
 const CACHE_BUDGET = 160 * 1024 * 1024;
+/** Skip huge CJK serif bold weights (e.g. 21 MiB Songti SC Bold) and let Word-style synthetic bold apply. */
+const LARGE_CJK_SERIF_BOLD_BYTES = 15 * 1024 * 1024;
 const REGULAR = 400;
 const BOLD = 700;
 const SLOTS: readonly FontFaceRequest[] = [
@@ -25,6 +29,10 @@ const SLOTS: readonly FontFaceRequest[] = [
   { family: '', weight: REGULAR, style: WordFontStyle.Italic },
   { family: '', weight: BOLD, style: WordFontStyle.Italic },
 ];
+const HEX_BYTES = Array.from({ length: 256 }, (_, value) => value.toString(16).padStart(2, '0'));
+const BUNDLED_FONT_META = new Map(
+  bundledFontManifest.map(entry => [entry.file, { sha256: entry.sha256, bytes: entry.bytes }]),
+);
 
 export const WordFontSource = { Available: 'available', Substitute: 'substitute', Missing: 'missing' } as const;
 export type WordFontSource = typeof WordFontSource[keyof typeof WordFontSource];
@@ -42,19 +50,53 @@ interface BundledFace {
   family: string;
   weight: number;
   style: WordFontStyle;
+  bytes: number;
+  sha256?: string;
 }
 
 /** Bundled open-licensed faces: Word's metric-compatible twins plus a CJK stand-in. */
 const BUNDLED_FACES: BundledFace[] = Object.entries(fontUrls).flatMap(([filePath, url]) => {
-  const match = /\/(Carlito|Caladea|LiberationSans|LiberationSerif|LiberationMono|NotoSansSC)-(Regular|Bold|Italic|BoldItalic)\.(?:ttf|otf)$/.exec(filePath);
+  const match = /\/((Carlito|Caladea|LiberationSans|LiberationSerif|LiberationMono|NotoSansSC)-(Regular|Bold|Italic|BoldItalic)\.(?:ttf|otf))$/.exec(filePath);
   if (!match) return [];
-  const family = { LiberationSans: 'Liberation Sans', LiberationSerif: 'Liberation Serif', LiberationMono: 'Liberation Mono', NotoSansSC: 'Noto Sans SC' }[match[1]] ?? match[1];
-  return [{ url, family, weight: match[2].startsWith('Bold') ? BOLD : REGULAR, style: match[2].endsWith('Italic') ? WordFontStyle.Italic : WordFontStyle.Normal }];
+  const fileName = match[1];
+  const family = { LiberationSans: 'Liberation Sans', LiberationSerif: 'Liberation Serif', LiberationMono: 'Liberation Mono', NotoSansSC: 'Noto Sans SC' }[match[2]] ?? match[2];
+  const meta = BUNDLED_FONT_META.get(fileName);
+  return [{
+    url,
+    family,
+    weight: match[3].startsWith('Bold') ? BOLD : REGULAR,
+    style: match[3].endsWith('Italic') ? WordFontStyle.Italic : WordFontStyle.Normal,
+    bytes: meta?.bytes ?? (family === 'Noto Sans SC' ? 8.5 * 1024 * 1024 : 512 * 1024),
+    sha256: meta?.sha256,
+  }];
 });
 
 const BundledFamily = {
   Sans: 'Liberation Sans', Serif: 'Liberation Serif', Mono: 'Liberation Mono', Calibri: 'Carlito', Cambria: 'Caladea', Cjk: 'Noto Sans SC',
 } as const;
+
+/**
+ * Modern CJK sans-serif families whose bundled Noto Sans SC stand-in carries their exact Word line
+ * metrics and matching sans-serif look, so substituting them need not alarm users on macOS/Linux.
+ */
+const SEAMLESS_CJK_SANS_STAND_IN_FAMILIES = new Set(
+  ['等线', 'DengXian', '等线 Light', 'DengXian Light'].map(fontNameKey),
+);
+
+/** Substituted or missing document fonts worth surfacing in the Word editor status bar. */
+export function visibleSubstitutedWordFonts(report: readonly WordFontReportEntry[]): WordFontReportEntry[] {
+  return report.filter(entry => {
+    if (entry.source === WordFontSource.Available) return false;
+    if (
+      entry.source === WordFontSource.Substitute
+      && entry.substitute === BundledFamily.Cjk
+      && SEAMLESS_CJK_SANS_STAND_IN_FAMILIES.has(fontNameKey(entry.family))
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
 
 /** Faces whose advance widths match the Word font, so line breaks survive the swap. */
 const METRIC_TWINS: Readonly<Record<string, string>> = Object.fromEntries([
@@ -99,29 +141,75 @@ export function prepareWordLayout(): Promise<void> {
   return harfBuzz;
 }
 
-interface CachedBytes { bytes: Promise<Uint8Array>; size: number }
-const byteCache = new Map<string, CachedBytes>();
+interface CachedFontSource { source: Promise<FontSource>; size: number }
+const sourceCache = new Map<string, CachedFontSource>();
 let cachedBytes = 0;
 
-function cached(key: string, size: number, load: () => Promise<Uint8Array>): Promise<Uint8Array> {
-  const hit = byteCache.get(key);
+function cachedSource(key: string, size: number, load: () => Promise<FontSource>): Promise<FontSource> {
+  const hit = sourceCache.get(key);
   if (hit) {
-    byteCache.delete(key);
-    byteCache.set(key, hit);
-    return hit.bytes;
+    sourceCache.delete(key);
+    sourceCache.set(key, hit);
+    return hit.source;
   }
-  const entry: CachedBytes = { bytes: load(), size };
-  byteCache.set(key, entry);
+  const entry: CachedFontSource = { source: load(), size };
+  sourceCache.set(key, entry);
   cachedBytes += size;
-  entry.bytes.catch(() => {
-    if (byteCache.get(key) === entry) { byteCache.delete(key); cachedBytes -= size; }
+  entry.source.catch(() => {
+    if (sourceCache.get(key) === entry) { sourceCache.delete(key); cachedBytes -= size; }
   });
-  for (const [oldest, value] of byteCache) {
+  for (const [oldest, value] of sourceCache) {
     if (cachedBytes <= CACHE_BUDGET || oldest === key) break;
-    byteCache.delete(oldest);
+    sourceCache.delete(oldest);
     cachedBytes -= value.size;
   }
-  return entry.bytes;
+  return entry.source;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string | undefined> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return undefined;
+  const view = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? bytes
+    : bytes.slice();
+  const digest = new Uint8Array(await subtle.digest('SHA-256', view.buffer as ArrayBuffer));
+  let hex = '';
+  for (let index = 0; index < digest.length; index++) hex += HEX_BYTES[digest[index]];
+  return hex;
+}
+
+/**
+ * Build a validated FontSource without running the core's synchronous pure-JS SHA-256 on the
+ * renderer main thread: bundled faces reuse build-verified hashes from sources.json, and system
+ * faces hash asynchronously via native WebCrypto.
+ */
+async function buildFontSource(
+  bytes: Uint8Array,
+  request: FontFaceRequest,
+  id: string,
+  knownSha256?: string,
+): Promise<FontSource> {
+  if (bytes.byteLength === 0) throw new Error('Font face is empty');
+  if (bytes.byteLength > MAX_FACE_BYTES) throw new Error('Font face exceeds size limit');
+  const hashHex = knownSha256 ?? await sha256Hex(bytes);
+  if (hashHex) {
+    const validation = boundedStructuralFontValidator(bytes, 0);
+    if (!validation.valid) {
+      throw new Error(validation.diagnostic ?? 'Malformed font face');
+    }
+    return {
+      request: Object.freeze({ family: request.family, weight: request.weight, style: request.style }),
+      id,
+      bytes,
+      hash: `sha256:${hashHex}`,
+      faceIndex: 0,
+    };
+  }
+  const created = createFontSource(bytes, request, { id, maxFontBytes: MAX_FACE_BYTES });
+  if ('failure' in created) {
+    throw new Error(created.failure.reason);
+  }
+  return created.source;
 }
 
 async function fetchBundled(url: string): Promise<Uint8Array> {
@@ -135,7 +223,7 @@ interface PlannedFace {
   request: FontFaceRequest;
   size: number;
   lineMetrics?: WordLineMetrics;
-  load: () => Promise<Uint8Array>;
+  load: () => Promise<FontSource>;
 }
 
 interface FamilyPlan {
@@ -166,6 +254,8 @@ function nearest(faces: PlannedFace[], slot: FontFaceRequest): PlannedFace | und
 export interface WordFontResolverOptions {
   api: WordFontApi;
   declarations: () => readonly WordDocumentFontDecl[];
+  /** Optional list of font families referenced by actual story content or active styles. */
+  activeFonts?: () => readonly string[] | undefined;
   onReport: (entries: WordFontReportEntry[]) => void;
 }
 
@@ -176,7 +266,23 @@ export interface WordFontResolverOptions {
  */
 export function createWordFontResolver(options: WordFontResolverOptions): MarkedFontResolver {
   return defineFontResolver(async (request: FontResolutionRequest): Promise<FontConfigurationFragment | undefined> => {
+    const startedAt = performance.now();
     const declarations = new Map(options.declarations().map(decl => [fontNameKey(decl.name), decl]));
+    const activeList = options.activeFonts?.();
+    const activeFamilyKeys = activeList && activeList.length > 0
+      ? new Set(activeList.map(fontNameKey))
+      : undefined;
+    const isActiveFamily = (family: string, decl?: WordDocumentFontDecl): boolean => {
+      if (!activeFamilyKeys) return true;
+      if (wordFontAliases(family).some(alias => activeFamilyKeys.has(fontNameKey(alias)))) return true;
+      if (decl?.altName && wordFontAliases(decl.altName).some(alias => activeFamilyKeys.has(fontNameKey(alias)))) return true;
+      return false;
+    };
+    const documentFamilyKeys = new Set(request.families.map(fontNameKey));
+    const isLightweightOnly = (family: string, decl?: WordDocumentFontDecl): boolean => {
+      const isFallbackDefaultOnly = documentFamilyKeys.size > 0 && !documentFamilyKeys.has(fontNameKey(family));
+      return isFallbackDefaultOnly || !isActiveFamily(family, decl);
+    };
     const wanted: string[] = [];
     for (const family of [...request.families, request.defaultFamily]) {
       if (family && !wanted.some(name => fontNameKey(name) === fontNameKey(family))) wanted.push(family);
@@ -188,54 +294,91 @@ export function createWordFontResolver(options: WordFontResolverOptions): Marked
     }
     for (const family of wanted) {
       const decl = declarations.get(fontNameKey(family));
-      if (classifyWordFont(family, decl) !== WordFontClass.CjkSerif) continue;
+      if (isLightweightOnly(family, decl) || classifyWordFont(family, decl) !== WordFontClass.CjkSerif) continue;
       for (const name of INSTALLED_CJK_SERIF[cjkSerifStyle(family, decl)]) lookups.add(name);
     }
     let installed: WordSystemFontFace[] = [];
+    const resolveStartedAt = performance.now();
     const resolved = await options.api.resolveFonts([...lookups]);
+    const resolveMs = Math.round(performance.now() - resolveStartedAt);
     if (resolved.success) installed = resolved.value.faces;
     else console.warn('[WordFonts] Installed fonts unavailable:', resolved.code);
     const installedFor = (name: string | undefined) => installed.filter(face => name && fontNameKey(face.requested) === fontNameKey(name));
 
-    const systemFaces = (faces: WordSystemFontFace[], metricsFor: (face: WordSystemFontFace) => WordFontMetrics): PlannedFace[] =>
-      faces.filter(face => face.byteLength <= MAX_FACE_BYTES).map(face => ({
-        key: `installed:${face.id}`,
-        request: { family: privateFamily(`installed:${face.id}`), weight: slotWeight(face.weight), style: face.style },
-        size: face.byteLength,
-        lineMetrics: computeWordLineMetrics(metricsFor(face)),
-        load: () => cached(`installed:${face.id}`, face.byteLength, async () => {
-          const bytes = await options.api.readFont(face.id);
-          if (!bytes.success) throw new Error(`Installed font unavailable: ${bytes.code}`);
-          return bytes.value;
-        }),
-      }));
-    const bundledFaces = (family: string, lineMetrics?: WordLineMetrics): PlannedFace[] =>
-      BUNDLED_FACES.filter(face => face.family === family).map(face => ({
-        key: `bundled:${face.url}`,
-        request: { family: privateFamily(`bundled:${face.url}`), weight: face.weight, style: face.style },
-        // Bundled faces are small except the CJK stand-in; estimate until fetched.
-        size: family === BundledFamily.Cjk ? 8.5 * 1024 * 1024 : 512 * 1024,
-        lineMetrics,
-        load: () => cached(`bundled:${face.url}`, 0, () => fetchBundled(face.url)),
-      }));
+    const systemFaces = (faces: WordSystemFontFace[], metricsFor: (face: WordSystemFontFace) => WordFontMetrics, regularOnly = false): PlannedFace[] => {
+      const eligible = faces.filter(face => face.byteLength <= MAX_FACE_BYTES);
+      const selected = regularOnly
+        ? (eligible.filter(face => face.weight < 600 && face.style === WordFontStyle.Normal).slice(0, 1))
+        : eligible;
+      const finalFaces = selected.length ? selected : eligible.slice(0, 1);
+      return finalFaces.map(face => {
+        const key = `installed:${face.id}`;
+        const faceRequest: FontFaceRequest = { family: privateFamily(key), weight: slotWeight(face.weight), style: face.style };
+        const cacheKey = `${key}:${faceRequest.weight}:${faceRequest.style}`;
+        return {
+          key,
+          request: faceRequest,
+          size: face.byteLength,
+          lineMetrics: computeWordLineMetrics(metricsFor(face)),
+          load: () => cachedSource(cacheKey, face.byteLength, async () => {
+            const bytes = await options.api.readFont(face.id);
+            if (!bytes.success) throw new Error(`Installed font unavailable: ${bytes.code}`);
+            return buildFontSource(bytes.value, faceRequest, key);
+          }),
+        };
+      });
+    };
+    const bundledFaces = (family: string, lineMetrics?: WordLineMetrics, regularOnly = false): PlannedFace[] => {
+      const candidates = BUNDLED_FACES.filter(face => face.family === family);
+      const selected = regularOnly
+        ? candidates.filter(face => face.weight === REGULAR && face.style === WordFontStyle.Normal)
+        : candidates;
+      const finalFaces = selected.length ? selected : candidates.slice(0, 1);
+      return finalFaces.map(face => {
+        const key = `bundled:${face.url}`;
+        const faceRequest: FontFaceRequest = { family: privateFamily(key), weight: face.weight, style: face.style };
+        const cacheKey = `${key}:${faceRequest.weight}:${faceRequest.style}`;
+        return {
+          key,
+          request: faceRequest,
+          size: face.bytes,
+          lineMetrics,
+          load: () => cachedSource(cacheKey, face.bytes, async () => {
+            const bytes = await fetchBundled(face.url);
+            return buildFontSource(bytes, faceRequest, key, face.sha256);
+          }),
+        };
+      });
+    };
 
     const plans: FamilyPlan[] = wanted.map(family => {
       const decl = declarations.get(fontNameKey(family));
+      // Unused fallback defaultFamily and unused template-style fonts only need a single lightweight regular face.
+      const lightweightOnly = isLightweightOnly(family, decl);
+      const fontClass = classifyWordFont(family, decl);
       const own = installedFor(family).length ? installedFor(family) : installedFor(decl?.altName);
       if (own.length) {
-        return { family, faces: systemFaces(own, face => face.metrics), report: { family, source: WordFontSource.Available } };
+        const regularOwn = own.filter(face => face.weight < 600);
+        const dropHugeCjkSerifBold = fontClass === WordFontClass.CjkSerif
+          && regularOwn.length > 0
+          && own.some(face => face.weight >= 600 && face.byteLength > LARGE_CJK_SERIF_BOLD_BYTES);
+        const pickedOwn = dropHugeCjkSerifBold ? regularOwn : own;
+        return {
+          family,
+          faces: systemFaces(pickedOwn, face => face.metrics, lightweightOnly),
+          report: { family, source: WordFontSource.Available },
+        };
       }
       const original = knownWordFontMetrics(family) ?? (decl?.altName ? knownWordFontMetrics(decl.altName) : undefined);
-      const fontClass = classifyWordFont(family, decl);
       const cjk = fontClass === WordFontClass.CjkSans || fontClass === WordFontClass.CjkSerif;
       const twin = METRIC_TWINS[fontNameKey(family)];
-      if (!twin && fontClass === WordFontClass.CjkSerif) {
+      if (!lightweightOnly && !twin && fontClass === WordFontClass.CjkSerif) {
         const serif = INSTALLED_CJK_SERIF[cjkSerifStyle(family, decl)].find(name => installedFor(name).length);
         if (serif) {
           // 宋体, 楷体 and 仿宋 have no bold face in Windows: Word emboldens the regular one.
           // Doing the same keeps their look and skips a second 20 MB face.
           const regular = installedFor(serif).filter(face => face.weight < 600);
-          const faces = systemFaces(regular.length ? regular : installedFor(serif), face => original ?? face.metrics);
+          const faces = systemFaces(regular.length ? regular : installedFor(serif), face => original ?? face.metrics, false);
           return { family, faces, report: { family, source: WordFontSource.Substitute, substitute: installedFor(serif)[0].family } };
         }
       }
@@ -245,7 +388,7 @@ export function createWordFontResolver(options: WordFontResolverOptions): Marked
       const same = fontNameKey(standIn) === fontNameKey(family);
       return {
         family,
-        faces: bundledFaces(standIn, lineMetrics),
+        faces: bundledFaces(standIn, lineMetrics, lightweightOnly),
         report: same ? { family, source: WordFontSource.Available } : { family, source: WordFontSource.Substitute, substitute: standIn },
       };
     });
@@ -261,28 +404,34 @@ export function createWordFontResolver(options: WordFontResolverOptions): Marked
       chosen.set(face.key, face);
       budget -= face.size;
     }
+    const loadStartedAt = performance.now();
     const loaded = new Map<string, FontSource>();
     await Promise.all([...chosen.values()].map(async face => {
       try {
-        const bytes = await face.load();
-        const source = createFontSource(bytes, face.request, { id: face.key, maxFontBytes: MAX_FACE_BYTES });
-        if ('failure' in source) console.warn('[WordFonts] Font face refused:', face.request.family, source.failure.reason);
-        else loaded.set(face.key, source.source);
+        const source = await face.load();
+        loaded.set(face.key, source);
       } catch (error) {
         console.warn('[WordFonts] Could not load font face:', face.request.family, error);
       }
     }));
+    const loadMs = Math.round(performance.now() - loadStartedAt);
+    const totalBytes = [...loaded.values()].reduce((sum, source) => sum + source.bytes.byteLength, 0);
+    console.debug(
+      `[WordTiming] fonts resolved (${wanted.length} families, ${loaded.size} faces, ${(totalBytes / (1024 * 1024)).toFixed(1)} MB): `
+      + `resolveIpc=${resolveMs}ms, loadAndHash=${loadMs}ms, total=${Math.round(performance.now() - startedAt)}ms`,
+    );
 
     const sources = [...loaded.values()];
     const substitutions: FontSourceSubstitution[] = [];
     const report: WordFontReportEntry[] = [];
     for (const plan of plans) {
+      const reportFamily = documentFamilyKeys.size === 0 || documentFamilyKeys.has(fontNameKey(plan.family));
       const available = plan.faces.filter(face => loaded.has(face.key));
       if (!available.length) {
-        report.push({ family: plan.family, source: WordFontSource.Missing });
+        if (reportFamily) report.push({ family: plan.family, source: WordFontSource.Missing });
         continue;
       }
-      report.push(plan.report);
+      if (reportFamily) report.push(plan.report);
       for (const slot of SLOTS) {
         const target = nearest(available, slot)!;
         substitutions.push({

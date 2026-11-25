@@ -3901,14 +3901,15 @@ export class CoworkStore {
     }
 
     let removedOrphanSessionCount = 0;
+    const collaborationAllowlist = JSON.stringify(normalizeStringIdList(request.subagentAllowAgentIds));
     this.runSessionTransaction(() => {
       removedOrphanSessionCount = this.deleteSessionsForAgent(id).length;
 
       this.db
         .prepare(
           `
-        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_collaboration_mode, subagent_allow_agent_ids, enabled, is_default, source, preset_id, preset_revision, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?)
+        INSERT INTO agents (id, name, description, system_prompt, identity, model, model_selection_mode, thinking_level, working_directory, icon, icon_customized, skill_ids, subagent_collaboration_mode, subagent_allow_agent_ids, subagent_allow_agent_ids_snapshot, enabled, is_default, source, preset_id, preset_revision, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -3925,7 +3926,8 @@ export class CoworkStore {
           usesManagedPresetAvatar({ id, source: request.source, iconCustomized: false }) ? 0 : 1,
           JSON.stringify(normalizeStringIdList(request.skillIds)),
           normalizeSubagentCollaborationMode(request.subagentCollaborationMode),
-          JSON.stringify(normalizeStringIdList(request.subagentAllowAgentIds)),
+          collaborationAllowlist,
+          collaborationAllowlist,
           request.source || 'custom',
           request.presetId || '',
           request.presetRevision ?? null,
@@ -4006,8 +4008,9 @@ export class CoworkStore {
       values.push(normalizeSubagentCollaborationMode(updates.subagentCollaborationMode));
     }
     if (updates.subagentAllowAgentIds !== undefined) {
-      setClauses.push('subagent_allow_agent_ids = ?');
-      values.push(JSON.stringify(normalizeStringIdList(updates.subagentAllowAgentIds)));
+      const collaborationAllowlist = JSON.stringify(normalizeStringIdList(updates.subagentAllowAgentIds));
+      setClauses.push('subagent_allow_agent_ids = ?', 'subagent_allow_agent_ids_snapshot = ?');
+      values.push(collaborationAllowlist, collaborationAllowlist);
     }
     if (updates.enabled !== undefined) {
       setClauses.push('enabled = ?');

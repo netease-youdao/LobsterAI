@@ -98,6 +98,14 @@ test('selected task rows reuse the sidebar hover fill without an elevated pill r
   expect(html).not.toContain('ring-1');
 });
 
+test('selected task rows hide pin and menu actions until hovered or keyboard focused', () => {
+  const html = renderTask(false, { isSelected: true });
+  expect(html).toContain('pointer-events-none w-0 overflow-hidden opacity-0 group-hover:pointer-events-auto group-hover:w-auto group-hover:overflow-visible group-hover:opacity-100');
+  expect(html).toContain('group-has-[:focus-visible]:opacity-100');
+  expect(html).toContain('group-has-[:focus-visible]:opacity-0');
+  expect(html).not.toContain('group-focus-within:');
+});
+
 test('filtered activity rows render the agent avatar inside the context icon slot', () => {
   const agent = { id: 'data-query', icon: 'agent-avatar-svg:data' };
   const expectedAvatarHtml = renderToStaticMarkup(
