@@ -225,3 +225,6 @@
 
     - id: lobster-ops-rpc
       name: './plugins/ops-rpc.mjs'
+
+    - id: lobster-agent-roster
+      name: './plugins/agent-roster/index.mjs'
