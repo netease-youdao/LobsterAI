@@ -1166,7 +1166,10 @@ export class DshBootstrap {
         coreSyncTasks.push(this.bridgeWiring.syncDynamicHostTools());
       }
       if (input.agents) {
-        coreSyncTasks.push(this.hostManager.syncAgents(input.agents));
+        const workspaceDirectories = [...new Set(input.agents.map(
+          agent => agent.workingDirectory || this.options.getDefaultCwd(agent.id),
+        ))];
+        coreSyncTasks.push(this.hostManager.syncAgents(input.agents, workspaceDirectories));
       }
 
       let needsReauthIds: string[] = [];
