@@ -51,6 +51,7 @@ import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_CRON_BACKFILL_KV_KEY,
   MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+  MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
   MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY,
   MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
@@ -79,10 +80,10 @@ import {
   MCP_OAUTH_TOKEN_KV_PREFIX,
   type McpOAuthTokenRecord,
 } from '../mcp/mcpOAuthManager';
-import { findLegacyDreamDiaryFile } from '../memory/legacyDreamDiaryReader';
 import {
   LobsterMemoryService,
   sanitizeAgentId,
+  stripLegacyDreamingPromotions,
   stripManagedAgentsSection,
   WorkspaceFileName,
 } from '../memory/lobsterMemoryService';
@@ -1201,6 +1202,47 @@ export interface LegacyDreamDiaryBackfillResult {
   error?: string;
 }
 
+function findLegacyDreamDiaryFile(dirPath: string): string | null {
+  if (!dirPath || !fs.existsSync(dirPath)) return null;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  let lowerMatch: string | null = null;
+  let caseInsensitiveMatch: string | null = null;
+
+  for (const entry of entries) {
+    if (entry.name.toLowerCase() !== LEGACY_DREAM_DIARY_LOWERCASE_FILENAME) {
+      continue;
+    }
+    const candidatePath = path.join(dirPath, entry.name);
+    let isFile = entry.isFile();
+    if (!isFile && entry.isSymbolicLink()) {
+      try {
+        isFile = fs.statSync(candidatePath).isFile();
+      } catch {
+        isFile = false;
+      }
+    }
+    if (!isFile) continue;
+
+    if (entry.name === LEGACY_DREAM_DIARY_FILENAME) {
+      return candidatePath;
+    }
+    if (entry.name === LEGACY_DREAM_DIARY_LOWERCASE_FILENAME && !lowerMatch) {
+      lowerMatch = candidatePath;
+    } else if (!caseInsensitiveMatch) {
+      caseInsensitiveMatch = candidatePath;
+    }
+  }
+
+  return lowerMatch ?? caseInsensitiveMatch;
+}
+
 function copyLegacyDreamDiaryFile(srcFile: string, dstDir: string): boolean {
   if (!fs.existsSync(srcFile)) return false;
   const content = fs.readFileSync(srcFile, 'utf8');
@@ -2113,6 +2155,8 @@ function migrateLegacyWorkspaces(
         let content = fs.readFileSync(srcFile, 'utf8');
         if (fileName === WorkspaceFileName.Agents) {
           content = stripManagedAgentsSection(content);
+        } else if (fileName === WorkspaceFileName.Memory) {
+          content = stripLegacyDreamingPromotions(content).content;
         }
         if (fileName === WorkspaceFileName.Soul || fileName === WorkspaceFileName.Identity || content.trim()) {
           const dstFile = path.join(dstDir, fileName);
@@ -2606,6 +2650,84 @@ export function migrateLegacySqliteUserMemories(params: {
   }
 }
 
+export interface LegacyDreamingPromotionsCleanupResult {
+  status: 'skipped' | 'completed';
+  filesCleaned: number;
+  entriesRemoved: number;
+}
+
+/**
+ * One-shot idempotent cleanup for already-migrated workspaces: removes legacy
+ * OpenClaw Dreaming `## Promoted From Short-Term Memory (...)` promotion blocks
+ * and machine-generated reflection entries from every agent's `MEMORY.md` while
+ * preserving all user-authored memories intact.
+ */
+export function cleanupLegacyDreamingPromotions(options: {
+  userDataDir: string;
+  db: Database.Database;
+  memoryService?: LobsterMemoryService;
+  now?: () => Date;
+}): LegacyDreamingPromotionsCleanupResult {
+  const { userDataDir, db, memoryService } = options;
+  const now = options.now ?? (() => new Date());
+
+  if (getKv(db, MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY)) {
+    return { status: 'skipped', filesCleaned: 0, entriesRemoved: 0 };
+  }
+
+  const workspacesDir = path.join(userDataDir, WORKSPACES_DIR_NAME);
+  if (!fs.existsSync(workspacesDir)) {
+    setKv(
+      db,
+      MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), filesCleaned: 0, entriesRemoved: 0 }),
+    );
+    return { status: 'completed', filesCleaned: 0, entriesRemoved: 0 };
+  }
+
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(workspacesDir, { withFileTypes: true });
+  } catch {
+    return { status: 'skipped', filesCleaned: 0, entriesRemoved: 0 };
+  }
+
+  const ownsService = !memoryService;
+  const svc = memoryService ?? new LobsterMemoryService(workspacesDir);
+  let filesCleaned = 0;
+  let entriesRemoved = 0;
+
+  try {
+    for (const dirent of dirents) {
+      if (!dirent.isDirectory() || dirent.name.startsWith('.')) continue;
+      let agentId: string;
+      try {
+        agentId = sanitizeAgentId(dirent.name);
+      } catch {
+        continue;
+      }
+      const existing = svc.readWorkspaceFile(agentId, WorkspaceFileName.Memory);
+      if (!existing.trim()) continue;
+      const cleaned = stripLegacyDreamingPromotions(existing);
+      if (!cleaned.changed) continue;
+      svc.writeWorkspaceFile(agentId, WorkspaceFileName.Memory, cleaned.content);
+      filesCleaned += 1;
+      entriesRemoved += cleaned.removedEntries;
+    }
+
+    setKv(
+      db,
+      MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
+      JSON.stringify({ completedAt: now().toISOString(), filesCleaned, entriesRemoved }),
+    );
+    return { status: 'completed', filesCleaned, entriesRemoved };
+  } finally {
+    if (ownsService) {
+      svc.close();
+    }
+  }
+}
+
 /**
  * One-shot idempotent backfill for already-migrated v2 DBs (or upgraded DBs
  * that previously only ran the capped 200-row lazy migration) so all active
@@ -2959,6 +3081,7 @@ export function runLegacyOpenClawMigration(
       backfillAgentPersonaFiles(db, workspacesDir);
       clearLegacyPendingMessageEditsOnce(db);
       backfillLegacyUserMemories({ userDataDir, db, now });
+      cleanupLegacyDreamingPromotions({ userDataDir, db, now });
       let isFreshInstall = false;
       try {
         isFreshInstall = Boolean((JSON.parse(completedRaw) as { freshInstall?: boolean })?.freshInstall);
@@ -2998,6 +3121,11 @@ export function runLegacyOpenClawMigration(
       const migratedAt = now().toISOString();
       setKv(db, MIGRATION_V2_COMPLETED_KV_KEY, JSON.stringify({ migratedAt, freshInstall: true }));
       setKv(db, MIGRATION_V2_CRON_BACKFILL_KV_KEY, JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }));
+      setKv(
+        db,
+        MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
+        JSON.stringify({ completedAt: migratedAt, skipped: 'freshInstall' }),
+      );
       setKv(db, PENDING_MESSAGE_EDITS_CLEARED_KV_KEY, '1');
       setKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY, '1');
       setKv(
@@ -3361,6 +3489,14 @@ export function runLegacyOpenClawMigration(
           JSON.stringify({
             completedAt: report.migratedAt,
             diariesRestored: dreamDiariesMigrated,
+          }),
+        );
+        setKv(
+          db,
+          MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
+          JSON.stringify({
+            completedAt: report.migratedAt,
+            migratedInline: true,
           }),
         );
         setKv(

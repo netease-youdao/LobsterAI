@@ -149,13 +149,12 @@ export const CoworkIpcChannel = {
   MemoryCreateEntry: 'cowork:memory:createEntry',
   MemoryUpdateEntry: 'cowork:memory:updateEntry',
   MemoryDeleteEntry: 'cowork:memory:deleteEntry',
+  MemoryDeleteEntries: 'cowork:memory:deleteEntries',
   MemoryGetStats: 'cowork:memory:getStats',
   MemoryReadRaw: 'cowork:memory:readRaw',
   MemoryWriteRaw: 'cowork:memory:writeRaw',
   BootstrapRead: 'cowork:bootstrap:read',
   BootstrapWrite: 'cowork:bootstrap:write',
-  DreamingStatus: 'cowork:dreaming:status',
-  DreamingDiary: 'cowork:dreaming:diary',
   TempStorageUsage: 'cowork:tempStorage:usage',
   TempStorageClean: 'cowork:tempStorage:clean',
 } as const;
@@ -234,6 +233,7 @@ export interface CoworkUserMemoryEntry {
   id: string;
   text: string;
   section?: string;
+  projectKeys?: string[];
   agentId?: string;
   status?: CoworkMemoryStatus;
   confidence?: number;

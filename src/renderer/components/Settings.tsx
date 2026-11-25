@@ -2,7 +2,6 @@ import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLe
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { AgentId } from '../../shared/agent/constants';
 import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
@@ -13,12 +12,7 @@ import {
   normalizeBrowserCdpUrl,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
-import {
-  CoworkMemoryStatus,
-  CoworkMemoryStatusFilter,
-  type CoworkMemoryStatusFilter as CoworkMemoryStatusFilterValue,
-  CoworkTempDirKind,
-} from '../../shared/cowork/constants';
+import { CoworkTempDirKind } from '../../shared/cowork/constants';
 import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
 import {
@@ -64,18 +58,13 @@ import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
   CoworkAgentEngine,
-  CoworkMemoryStats,
   CoworkTempDirPreview,
-  CoworkUserMemoryEntry,
-  DreamDiaryData,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
   OpenClawSessionKeepAlive,
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
-import { getVisibleLegacyDreamDiaries } from './cowork/dreamDiaryParser';
-import LegacyDreamDiaryViewer from './cowork/LegacyDreamDiaryViewer';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
@@ -87,7 +76,6 @@ import BrainIcon from './icons/BrainIcon';
 import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
-import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
@@ -97,6 +85,7 @@ import DataPrivacySettingsSection from './settings/DataPrivacySettingsSection';
 import GeneralSettingsSection from './settings/GeneralSettingsSection';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
 import ManualDataMigrationAction from './settings/ManualDataMigrationAction';
+import MemorySettings from './settings/MemorySettings';
 import {
   buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
@@ -149,12 +138,6 @@ import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
 
 type TabType = SettingsTab;
-
-const MemorySubTab = {
-  Entries: 'entries',
-  LegacyDreamDiary: 'legacyDreamDiary',
-} as const;
-type MemorySubTab = typeof MemorySubTab[keyof typeof MemorySubTab];
 
 const getAutoLaunchErrorMessage = (errorCode?: string): string => {
   if (errorCode === AppSettingsAutoLaunchErrorCode.RequiresApproval) {
@@ -243,7 +226,6 @@ const SettingsAnalyticsSource = {
   AgentEngine: 'settings_agent_engine',
   Appearance: 'settings_appearance',
   Browser: 'settings_browser',
-  Dreaming: 'settings_dreaming',
   General: 'settings_general',
   Memory: 'settings_memory',
   Model: 'settings_model',
@@ -267,26 +249,12 @@ type MemorySettingAnalyticsSummary = {
   memoryLlmJudgeEnabled: boolean;
 };
 
-type DreamingSettingAnalyticsSummary = {
-  changedKeys: string;
-  dreamingEnabled: boolean;
-  frequencyType: 'preset' | 'custom';
-};
-
 type ShortcutSettingAnalyticsSummary = {
   changedCount: number;
   configuredCount: number;
   disabledCount: number;
   resetToDefault: boolean;
 };
-
-const DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS = new Set([
-  '0 3 * * *',
-  '0 0 * * *',
-  '0 0,12 * * *',
-  '0 */6 * * *',
-  '0 3 * * 0',
-]);
 
 type CustomModelSettingsAnalyticsSummary = {
   changedKeys: string;
@@ -540,39 +508,6 @@ const buildMemorySettingAnalyticsSummary = (
   };
 };
 
-const resolveDreamingFrequencyType = (frequency: string): 'preset' | 'custom' => (
-  DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS.has(frequency) ? 'preset' : 'custom'
-);
-
-const buildDreamingSettingAnalyticsSummary = (
-  previousConfig: {
-    dreamingEnabled: boolean;
-    dreamingFrequency: string;
-  },
-  nextConfig: {
-    dreamingEnabled: boolean;
-    dreamingFrequency: string;
-  },
-): DreamingSettingAnalyticsSummary | null => {
-  const changedKeys = new Set<string>();
-  if (previousConfig.dreamingEnabled !== nextConfig.dreamingEnabled) {
-    changedKeys.add('dreaming_enabled');
-  }
-  if (previousConfig.dreamingFrequency !== nextConfig.dreamingFrequency) {
-    changedKeys.add('dreaming_frequency');
-  }
-
-  if (changedKeys.size === 0) {
-    return null;
-  }
-
-  return {
-    changedKeys: Array.from(changedKeys).sort().join(','),
-    dreamingEnabled: nextConfig.dreamingEnabled,
-    frequencyType: resolveDreamingFrequencyType(nextConfig.dreamingFrequency),
-  };
-};
-
 const countConfiguredShortcuts = (shortcutConfig: ShortcutConfig): number => (
   Object.values(shortcutConfig).filter(value => String(value || '').trim().length > 0).length
 );
@@ -674,17 +609,6 @@ const reportMemoryEntryChanged = (
     source: SettingsAnalyticsSource.Memory,
     operation,
     entryCount,
-  });
-};
-
-const reportDreamingSettingChanged = (
-  summary: DreamingSettingAnalyticsSummary,
-): void => {
-  console.debug('[Settings] reporting dreaming setting analytics');
-  void reportYdAnalyzer({
-    action: LogReporterAction.DreamingSettingChanged,
-    source: SettingsAnalyticsSource.Dreaming,
-    ...summary,
   });
 };
 
@@ -927,6 +851,7 @@ const FloatingOrbTabIcon: React.FC<{ className?: string }> = ({ className }) => 
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
+  initialMemoryAgentId?: string;
   notice?: string;
   noticeI18nKey?: string;
   noticeExtra?: string;
@@ -1292,6 +1217,7 @@ const Settings: React.FC<SettingsProps> = ({
   onClose,
   onStartAiSkin,
   initialTab,
+  initialMemoryAgentId,
   initialTabRequestId,
   notice,
   noticeI18nKey,
@@ -1671,7 +1597,6 @@ const Settings: React.FC<SettingsProps> = ({
   }, [isExportingLogs]);
 
   const coworkConfig = useSelector(selectCoworkConfig);
-  const agents = useSelector((state: RootState) => state.agent.agents);
 
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'dsh');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
@@ -1694,34 +1619,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [embeddingVectorWeight, setEmbeddingVectorWeight] = useState<number>(coworkConfig.embeddingVectorWeight ?? 0.7);
   const [embeddingRemoteBaseUrl, setEmbeddingRemoteBaseUrl] = useState<string>(coworkConfig.embeddingRemoteBaseUrl ?? '');
   const [embeddingRemoteApiKey, setEmbeddingRemoteApiKey] = useState<string>(coworkConfig.embeddingRemoteApiKey ?? '');
-  const [dreamingEnabled, setDreamingEnabled] = useState<boolean>(coworkConfig.dreamingEnabled ?? false);
-  const [dreamingFrequency, setDreamingFrequency] = useState<string>(coworkConfig.dreamingFrequency ?? '0 3 * * *');
-  const [dreamingModel, setDreamingModel] = useState<string>(coworkConfig.dreamingModel ?? '');
-  const [dreamingTimezone, setDreamingTimezone] = useState<string>(coworkConfig.dreamingTimezone ?? '');
-  const [memoryTab, setMemoryTab] = useState<MemorySubTab>(MemorySubTab.Entries);
-  const [legacyDreamDiary, setLegacyDreamDiary] = useState<DreamDiaryData | null>(null);
-  const [legacyDreamDiaryLoading, setLegacyDreamDiaryLoading] = useState<boolean>(false);
-  const [legacyDreamDiaryError, setLegacyDreamDiaryError] = useState<string | null>(null);
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
     coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
-  const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
-  const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
-  const [coworkMemoryListLoading, setCoworkMemoryListLoading] = useState<boolean>(false);
-  const [coworkMemoryQuery, setCoworkMemoryQuery] = useState<string>('');
-  const [coworkMemoryAgentId, setCoworkMemoryAgentId] = useState<string>(AgentId.Main);
-  const [coworkMemoryStatusFilter, setCoworkMemoryStatusFilter] = useState<CoworkMemoryStatusFilterValue>(
-    CoworkMemoryStatusFilter.Created,
-  );
-  const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
-  const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
-  const [coworkMemoryModalError, setCoworkMemoryModalError] = useState<string | null>(null);
-  const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
-  const [coworkMemoryRawMode, setCoworkMemoryRawMode] = useState<boolean>(false);
-  const [coworkMemoryRawText, setCoworkMemoryRawText] = useState<string>('');
-  const [coworkMemoryRawError, setCoworkMemoryRawError] = useState<string | null>(null);
-  const [coworkMemoryRawSaving, setCoworkMemoryRawSaving] = useState<boolean>(false);
-  const [coworkMemoryExpandedIds, setCoworkMemoryExpandedIds] = useState<Set<string>>(new Set());
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
   const [showOpenClawRepairConfirm, setShowOpenClawRepairConfirm] = useState<boolean>(false);
   const [isRepairingOpenClaw, setIsRepairingOpenClaw] = useState<boolean>(false);
@@ -1742,10 +1642,6 @@ const Settings: React.FC<SettingsProps> = ({
     setEmbeddingVectorWeight(coworkConfig.embeddingVectorWeight ?? 0.7);
     setEmbeddingRemoteBaseUrl(coworkConfig.embeddingRemoteBaseUrl ?? '');
     setEmbeddingRemoteApiKey(coworkConfig.embeddingRemoteApiKey ?? '');
-    setDreamingEnabled(coworkConfig.dreamingEnabled ?? false);
-    setDreamingFrequency(coworkConfig.dreamingFrequency ?? '0 3 * * *');
-    setDreamingModel(coworkConfig.dreamingModel ?? '');
-    setDreamingTimezone(coworkConfig.dreamingTimezone ?? '');
     setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
@@ -1762,10 +1658,6 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.embeddingVectorWeight,
     coworkConfig.embeddingRemoteBaseUrl,
     coworkConfig.embeddingRemoteApiKey,
-    coworkConfig.dreamingEnabled,
-    coworkConfig.dreamingFrequency,
-    coworkConfig.dreamingModel,
-    coworkConfig.dreamingTimezone,
   ]);
 
   const refreshTempStorageUsage = useCallback(async () => {
@@ -2773,9 +2665,7 @@ const Settings: React.FC<SettingsProps> = ({
     || embeddingLocalModelPath !== (coworkConfig.embeddingLocalModelPath ?? '')
     || embeddingVectorWeight !== (coworkConfig.embeddingVectorWeight ?? 0.7)
     || embeddingRemoteBaseUrl !== (coworkConfig.embeddingRemoteBaseUrl ?? '')
-    || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '')
-    || dreamingEnabled !== (coworkConfig.dreamingEnabled ?? false)
-    || dreamingFrequency !== (coworkConfig.dreamingFrequency ?? '0 3 * * *');
+    || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '');
   const isOpenClawAgentEngine = coworkAgentEngine === 'dsh';
 
   const openClawProgressPercent = useMemo(() => {
@@ -2958,250 +2848,51 @@ const Settings: React.FC<SettingsProps> = ({
     onReportAction: reportAgentEngineMaintenanceAction,
   });
 
-  const memoryAgentOptions = useMemo(() => {
-    const mainAgent = agents.find((agent) => agent.id === AgentId.Main);
-    const others = agents.filter((agent) => agent.id !== AgentId.Main);
-    return [
-      {
-        id: AgentId.Main,
-        name: mainAgent?.name?.trim() || i18nService.t('coworkMemoryMainAgentLabel'),
-      },
-      ...others.map((agent) => ({
-        id: agent.id,
-        name: agent.name?.trim() || agent.id,
-      })),
-    ];
-  }, [agents]);
-
-  const loadCoworkMemoryData = useCallback(async () => {
-    setCoworkMemoryListLoading(true);
+  const handleToggleCoworkMemoryEnabled = useCallback(async (nextEnabled: boolean): Promise<boolean> => {
+    const previousEnabled = coworkMemoryEnabled;
+    setCoworkMemoryEnabled(nextEnabled);
+    setError(null);
     try {
-      const effectiveStatus =
-        coworkMemoryAgentId === AgentId.Main
-          ? coworkMemoryStatusFilter
-          : CoworkMemoryStatusFilter.Created;
-      const includeDeleted =
-        coworkMemoryAgentId === AgentId.Main
-        && (effectiveStatus === CoworkMemoryStatusFilter.All
-          || effectiveStatus === CoworkMemoryStatusFilter.Deleted);
-      const [entries, stats] = await Promise.all([
-        coworkService.listMemoryEntries({
-          agentId: coworkMemoryAgentId,
-          query: coworkMemoryQuery.trim() || undefined,
-          status: effectiveStatus,
-          includeDeleted,
-        }),
-        coworkService.getMemoryStats({ agentId: coworkMemoryAgentId }),
-      ]);
-      setCoworkMemoryEntries(entries);
-      setCoworkMemoryStats(stats);
-    } catch (loadError) {
-      console.error('Failed to load cowork memory data:', loadError);
-      setCoworkMemoryEntries([]);
-      setCoworkMemoryStats(null);
+      const updated = await coworkService.updateConfig({ memoryEnabled: nextEnabled });
+      if (!updated) {
+        setCoworkMemoryEnabled(previousEnabled);
+        setError(i18nService.t('coworkConfigSaveFailed'));
+        return false;
+      }
+      if (usageAnalyticsEnabled && previousEnabled !== nextEnabled) {
+        reportMemorySettingChanged({
+          changedKeys: 'memory_enabled',
+          embeddingEnabled,
+          embeddingProvider,
+          embeddingVectorWeight,
+          hasEmbeddingApiKey: embeddingRemoteApiKey.trim().length > 0,
+          hasEmbeddingBaseUrl: embeddingRemoteBaseUrl.trim().length > 0,
+          hasEmbeddingModel: embeddingModel.trim().length > 0,
+          memoryEnabled: nextEnabled,
+          memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
+        });
+      }
+      return true;
+    } catch (toggleError) {
+      setCoworkMemoryEnabled(previousEnabled);
       setError(
-        loadError instanceof Error && loadError.message
-          ? loadError.message
-          : i18nService.t('coworkMemoryLoadFailed'),
+        toggleError instanceof Error && toggleError.message
+          ? toggleError.message
+          : i18nService.t('coworkConfigSaveFailed'),
       );
-    } finally {
-      setCoworkMemoryListLoading(false);
+      return false;
     }
   }, [
-    coworkMemoryAgentId,
-    coworkMemoryQuery,
-    coworkMemoryStatusFilter,
+    coworkMemoryEnabled,
+    coworkMemoryLlmJudgeEnabled,
+    embeddingEnabled,
+    embeddingModel,
+    embeddingProvider,
+    embeddingRemoteApiKey,
+    embeddingRemoteBaseUrl,
+    embeddingVectorWeight,
+    usageAnalyticsEnabled,
   ]);
-
-  useEffect(() => {
-    if (activeTab !== 'coworkMemory') return;
-    void loadCoworkMemoryData();
-  }, [activeTab, loadCoworkMemoryData]);
-
-  const visibleLegacyDreamDiaries = useMemo(
-    () => getVisibleLegacyDreamDiaries(legacyDreamDiary),
-    [legacyDreamDiary],
-  );
-
-  const loadLegacyDreamDiary = useCallback(async () => {
-    setLegacyDreamDiaryLoading(true);
-    setLegacyDreamDiaryError(null);
-    try {
-      const diary = await coworkService.getDreamingDiary();
-      setLegacyDreamDiary(diary);
-    } catch (loadError) {
-      console.error('Failed to load historical dream diary:', loadError);
-      setLegacyDreamDiaryError(
-        loadError instanceof Error ? loadError.message : i18nService.t('coworkDreamingDiaryLoadError'),
-      );
-    } finally {
-      setLegacyDreamDiaryLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeTab !== 'coworkMemory') return;
-    void loadLegacyDreamDiary();
-  }, [activeTab, loadLegacyDreamDiary]);
-
-  useEffect(() => {
-    if (memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length === 0) {
-      setMemoryTab(MemorySubTab.Entries);
-    }
-  }, [memoryTab, visibleLegacyDreamDiaries.length]);
-
-  const resetCoworkMemoryEditor = () => {
-    setCoworkMemoryEditingId(null);
-    setCoworkMemoryDraftText('');
-    setCoworkMemoryModalError(null);
-    setShowMemoryModal(false);
-  };
-
-  const handleSelectCoworkMemoryAgent = (nextAgentId: string) => {
-    setCoworkMemoryAgentId(nextAgentId);
-    setCoworkMemoryExpandedIds(new Set());
-    setCoworkMemoryRawError(null);
-    setCoworkMemoryRawMode(false);
-    if (nextAgentId !== AgentId.Main) {
-      setCoworkMemoryStatusFilter(CoworkMemoryStatusFilter.Created);
-    }
-  };
-
-  const handleSaveCoworkMemoryEntry = async () => {
-    const text = coworkMemoryDraftText.trim();
-    if (!text) return;
-
-    setError(null);
-    setCoworkMemoryModalError(null);
-    setCoworkMemoryListLoading(true);
-    try {
-      const operation = coworkMemoryEditingId ? 'updated' : 'created';
-      if (coworkMemoryEditingId) {
-        await coworkService.updateMemoryEntry({
-          agentId: coworkMemoryAgentId,
-          id: coworkMemoryEditingId,
-          text,
-        });
-      } else {
-        await coworkService.createMemoryEntry({
-          agentId: coworkMemoryAgentId,
-          text,
-        });
-      }
-      resetCoworkMemoryEditor();
-      if (
-        operation === 'created'
-        && (coworkMemoryStatusFilter === CoworkMemoryStatusFilter.Deleted
-          || coworkMemoryStatusFilter === CoworkMemoryStatusFilter.Stale)
-      ) {
-        setCoworkMemoryStatusFilter(CoworkMemoryStatusFilter.Created);
-      } else {
-        await loadCoworkMemoryData();
-      }
-      reportMemoryEntryChanged(
-        operation,
-        operation === 'created'
-          ? (coworkMemoryStats?.created ?? coworkMemoryEntries.length) + 1
-          : coworkMemoryStats?.created,
-      );
-    } catch (saveError) {
-      const message =
-        saveError instanceof Error && saveError.message
-          ? saveError.message
-          : i18nService.t('coworkMemoryCrudSaveFailed');
-      setCoworkMemoryModalError(message);
-      setError(message);
-    } finally {
-      setCoworkMemoryListLoading(false);
-    }
-  };
-
-  const handleEditCoworkMemoryEntry = (entry: CoworkUserMemoryEntry) => {
-    if (entry.isLegacyReadOnly) return;
-    setCoworkMemoryModalError(null);
-    setCoworkMemoryEditingId(entry.id);
-    setCoworkMemoryDraftText(entry.text);
-    setShowMemoryModal(true);
-  };
-
-  const handleDeleteCoworkMemoryEntry = async (entry: CoworkUserMemoryEntry) => {
-    if (entry.isLegacyReadOnly) return;
-    setError(null);
-    setCoworkMemoryListLoading(true);
-    try {
-      await coworkService.deleteMemoryEntry({
-        agentId: coworkMemoryAgentId,
-        id: entry.id,
-      });
-      if (coworkMemoryEditingId === entry.id) {
-        resetCoworkMemoryEditor();
-      }
-      await loadCoworkMemoryData();
-      reportMemoryEntryChanged(
-        'deleted',
-        Math.max(0, (coworkMemoryStats?.created ?? coworkMemoryEntries.length) - 1),
-      );
-    } catch (deleteError) {
-      setError(
-        deleteError instanceof Error && deleteError.message
-          ? deleteError.message
-          : i18nService.t('coworkMemoryCrudDeleteFailed'),
-      );
-    } finally {
-      setCoworkMemoryListLoading(false);
-    }
-  };
-
-  const handleOpenCoworkMemoryModal = () => {
-    resetCoworkMemoryEditor();
-    setShowMemoryModal(true);
-  };
-
-  const handleEnterCoworkMemoryRawMode = async () => {
-    setError(null);
-    setCoworkMemoryRawError(null);
-    const content = await coworkService.readMemoryFileRaw({ agentId: coworkMemoryAgentId });
-    if (content === null) {
-      setError(i18nService.t('coworkMemoryRawLoadFailed'));
-      return;
-    }
-    setCoworkMemoryRawText(content);
-    setCoworkMemoryRawMode(true);
-  };
-
-  const handleSaveCoworkMemoryRaw = async () => {
-    if (coworkMemoryRawSaving) return;
-    setError(null);
-    setCoworkMemoryRawError(null);
-    setCoworkMemoryRawSaving(true);
-    try {
-      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText, {
-        agentId: coworkMemoryAgentId,
-      });
-      if (!result.success) {
-        const message = result.error || i18nService.t('coworkMemoryRawSaveFailed');
-        setCoworkMemoryRawError(message);
-        setError(message);
-        return;
-      }
-      setCoworkMemoryRawMode(false);
-      await loadCoworkMemoryData();
-    } finally {
-      setCoworkMemoryRawSaving(false);
-    }
-  };
-
-  const toggleCoworkMemoryExpandedId = (id: string) => {
-    setCoworkMemoryExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
 
   // Toggle provider enabled status
   const toggleProviderEnabled = (provider: ProviderType) => {
@@ -3378,14 +3069,6 @@ const Settings: React.FC<SettingsProps> = ({
         memoryEnabled: coworkMemoryEnabled,
         memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
       };
-      const previousDreamingSettings = {
-        dreamingEnabled: coworkConfig.dreamingEnabled ?? false,
-        dreamingFrequency: coworkConfig.dreamingFrequency ?? '0 3 * * *',
-      };
-      const nextDreamingSettings = {
-        dreamingEnabled,
-        dreamingFrequency,
-      };
       const previousNotificationSettings = normalizeNotificationSettings(
         previousConfig.notificationSettings,
       );
@@ -3514,10 +3197,6 @@ const Settings: React.FC<SettingsProps> = ({
           embeddingVectorWeight,
           embeddingRemoteBaseUrl,
           embeddingRemoteApiKey,
-          dreamingEnabled,
-          dreamingFrequency,
-          dreamingModel,
-          dreamingTimezone,
         });
         if (!updated) {
           throw new Error(i18nService.t('coworkConfigSaveFailed'));
@@ -3636,13 +3315,6 @@ const Settings: React.FC<SettingsProps> = ({
         );
         if (memorySettingsSummary) {
           reportMemorySettingChanged(memorySettingsSummary);
-        }
-        const dreamingSettingsSummary = buildDreamingSettingAnalyticsSummary(
-          previousDreamingSettings,
-          nextDreamingSettings,
-        );
-        if (dreamingSettingsSummary) {
-          reportDreamingSettingChanged(dreamingSettingsSummary);
         }
         const shortcutSettingsSummary = buildShortcutSettingAnalyticsSummary(
           previousShortcuts,
@@ -4039,7 +3711,6 @@ const Settings: React.FC<SettingsProps> = ({
           isOpen: dataMigration.hasOpenModal,
           dismiss: () => dataMigration.dismissTopModal(),
         },
-        { isOpen: showMemoryModal, dismiss: resetCoworkMemoryEditor },
       ],
     });
 
@@ -4697,7 +4368,7 @@ const Settings: React.FC<SettingsProps> = ({
       case 'desktopCompanion':
         return <DesktopCompanionSettings />;
 
-      case 'email':
+      case SettingsTabId.Email:
         return <EmailSkillConfig />;
 
       case 'coworkAgentEngine':
@@ -5030,363 +4701,17 @@ const Settings: React.FC<SettingsProps> = ({
           </div>
         );
 
-      case 'coworkMemory': {
-        const memoryTabs: Array<{ key: MemorySubTab; titleKey: string }> = [
-          { key: MemorySubTab.Entries, titleKey: 'coworkMemoryTabEntries' },
-          ...(visibleLegacyDreamDiaries.length > 0
-            ? [{ key: MemorySubTab.LegacyDreamDiary, titleKey: 'coworkMemoryTabLegacyDreamDiary' }]
-            : []),
-        ];
-        const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
-        for (const entry of coworkMemoryEntries) {
-          const lastGroup = coworkMemoryGroups[coworkMemoryGroups.length - 1];
-          if (lastGroup && (lastGroup.section ?? '') === (entry.section ?? '')) {
-            lastGroup.entries.push(entry);
-          } else {
-            coworkMemoryGroups.push({ section: entry.section, entries: [entry] });
-          }
-        }
+      case 'coworkMemory':
         return (
-          <div className="flex flex-col h-full space-y-4">
-            <div
-              className="flex gap-6 border-b border-border shrink-0"
-              role="tablist"
-              aria-label={i18nService.t('coworkMemoryTitle')}
-            >
-              {memoryTabs.map((tab) => (
-                <button
-                  type="button"
-                  key={tab.key}
-                  role="tab"
-                  aria-selected={memoryTab === tab.key}
-                  onClick={() => setMemoryTab(tab.key)}
-                  className={`-mb-px border-b-2 px-0.5 pb-2.5 text-sm font-medium transition-colors ${
-                    memoryTab === tab.key
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {i18nService.t(tab.titleKey)}
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              {memoryTab === MemorySubTab.Entries && (
-                <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                        {i18nService.t('coworkMemoryCrudTitle')}
-                      </div>
-                      <div className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                        {i18nService.t('coworkMemoryManageHint')}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => { void handleEnterCoworkMemoryRawMode(); }}
-                          disabled={coworkMemoryListLoading}
-                          className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-surface-raised disabled:opacity-60 transition-colors"
-                        >
-                          {i18nService.t('coworkMemoryRawButton')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleOpenCoworkMemoryModal}
-                          className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-medium transition-colors active:scale-[0.98]"
-                        >
-                          <PlusCircleIcon className="h-4 w-4 mr-1.5" />
-                          {i18nService.t('coworkMemoryCrudCreate')}
-                        </button>
-                    </div>
-                  </div>
-
-                    <>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        {coworkMemoryStats && (
-                          <div className="flex flex-wrap items-center gap-3 text-xs text-secondary">
-                            <span>{`${i18nService.t('coworkMemoryActiveLabel')}: ${coworkMemoryStats.created}`}</span>
-                            {coworkMemoryAgentId === AgentId.Main && coworkMemoryStats.stale > 0 && (
-                              <span>{`${i18nService.t('coworkMemoryStatusInactive')}: ${coworkMemoryStats.stale}`}</span>
-                            )}
-                            {coworkMemoryAgentId === AgentId.Main && coworkMemoryStats.deleted > 0 && (
-                              <span>{`${i18nService.t('coworkMemoryStatusDeleted')}: ${coworkMemoryStats.deleted}`}</span>
-                            )}
-                            <span>{`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}</span>
-                          </div>
-                        )}
-                        {memoryAgentOptions.length > 1 && (
-                          <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
-                            <span>{i18nService.t('coworkMemoryAgentSelectorLabel')}</span>
-                            <select
-                              value={coworkMemoryAgentId}
-                              onChange={(event) => handleSelectCoworkMemoryAgent(event.target.value)}
-                              className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary"
-                            >
-                              {memoryAgentOptions.map((agent) => (
-                                <option key={agent.id} value={agent.id}>
-                                  {agent.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          type="text"
-                          value={coworkMemoryQuery}
-                          onChange={(event) => setCoworkMemoryQuery(event.target.value)}
-                          placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
-                          className="min-w-[200px] flex-1 rounded-lg border px-3 py-2 text-sm border-border bg-surface"
-                        />
-                        {coworkMemoryAgentId === AgentId.Main && (
-                          <div className="inline-flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs">
-                            {(
-                              [
-                                {
-                                  key: CoworkMemoryStatusFilter.Created,
-                                  label: i18nService.t('coworkMemoryStatusActive'),
-                                  count: coworkMemoryStats?.created,
-                                },
-                                {
-                                  key: CoworkMemoryStatusFilter.Stale,
-                                  label: i18nService.t('coworkMemoryStatusInactive'),
-                                  count: coworkMemoryStats?.stale,
-                                },
-                                {
-                                  key: CoworkMemoryStatusFilter.Deleted,
-                                  label: i18nService.t('coworkMemoryStatusDeleted'),
-                                  count: coworkMemoryStats?.deleted,
-                                },
-                                {
-                                  key: CoworkMemoryStatusFilter.All,
-                                  label: i18nService.t('coworkMemoryStatusAll'),
-                                  count: coworkMemoryStats?.total,
-                                },
-                              ] as const
-                            ).map((chip) => {
-                              const active = coworkMemoryStatusFilter === chip.key;
-                              return (
-                                <button
-                                  key={chip.key}
-                                  type="button"
-                                  onClick={() => setCoworkMemoryStatusFilter(chip.key)}
-                                  className={`rounded-md px-2.5 py-1 transition-colors ${
-                                    active
-                                      ? 'bg-primary text-white font-medium'
-                                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
-                                  }`}
-                                >
-                                  {chip.label}
-                                  {typeof chip.count === 'number' && chip.count > 0 ? ` (${chip.count})` : ''}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-lg border border-border">
-                        {coworkMemoryListLoading ? (
-                          <div className="px-3 py-3 text-xs text-secondary">
-                            {i18nService.t('loading')}
-                          </div>
-                        ) : coworkMemoryEntries.length === 0 ? (
-                          <div className="px-3 py-3 text-xs text-secondary">
-                            {i18nService.t('coworkMemoryEmpty')}
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-border">
-                            {coworkMemoryGroups.map((group, groupIndex) => (
-                              <React.Fragment key={group.section ?? `ungrouped-${groupIndex}`}>
-                                {group.section && (
-                                  <div className={`flex items-baseline gap-1.5 px-3 pb-1.5 pt-3 ${SETTINGS_META_TEXT} font-medium text-secondary`}>
-                                    <span className="truncate">{group.section}</span>
-                                    <span className="font-normal opacity-70">{group.entries.length}</span>
-                                  </div>
-                                )}
-                                {group.entries.map((entry) => {
-                                  const isLongMemoryText =
-                                    entry.text.split('\n').length > 3 || entry.text.length > 240;
-                                  const isMemoryTextExpanded = coworkMemoryExpandedIds.has(entry.id);
-                                  const isDeleted = entry.status === CoworkMemoryStatus.Deleted;
-                                  const isStale = entry.status === CoworkMemoryStatus.Stale;
-                                  const hasSourceBadge = Boolean(
-                                    entry.sourceLabel || (entry.sourceCount && entry.sourceCount > 0),
-                                  );
-                                  const hasMetaRow = isDeleted || isStale || hasSourceBadge || entry.isLegacyReadOnly;
-                                  return (
-                                    <div key={entry.id} className="group px-3 py-3 text-xs transition-colors hover:bg-surface-raised/60">
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div className="flex-1 min-w-0">
-                                          <div
-                                            className={`break-words whitespace-pre-wrap leading-relaxed ${
-                                              isDeleted || entry.isLegacyReadOnly
-                                                ? 'text-secondary'
-                                                : 'text-foreground'
-                                            } ${
-                                              isLongMemoryText && !isMemoryTextExpanded ? 'line-clamp-3' : ''
-                                            }`}
-                                          >
-                                            {entry.text}
-                                          </div>
-                                          {hasMetaRow && (
-                                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                                              {isDeleted && (
-                                                <span className="inline-flex items-center rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
-                                                  {i18nService.t('coworkMemoryStatusDeleted')}
-                                                </span>
-                                              )}
-                                              {isStale && (
-                                                <span className="inline-flex items-center rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
-                                                  {i18nService.t('coworkMemoryStatusInactive')}
-                                                </span>
-                                              )}
-                                              {hasSourceBadge && (
-                                                <span className="inline-flex items-center rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] text-secondary">
-                                                  {`${i18nService.t('coworkMemorySourcePrefix')}: ${
-                                                    entry.sourceLabel || entry.sources?.latestRole || ''
-                                                  }${
-                                                    entry.sourceCount && entry.sourceCount > 1
-                                                      ? ` (${entry.sourceCount} ${i18nService.t('coworkMemorySourceCountSuffix')})`
-                                                      : ''
-                                                  }`}
-                                                </span>
-                                              )}
-                                              {entry.isLegacyReadOnly && (
-                                                <span className="inline-flex items-center rounded-md border border-border px-1.5 py-0.5 text-[10px] text-secondary">
-                                                  {i18nService.t('coworkMemoryLegacyReadOnlyBadge')}
-                                                </span>
-                                              )}
-                                            </div>
-                                          )}
-                                          {isLongMemoryText && (
-                                            <button
-                                              type="button"
-                                              onClick={() => toggleCoworkMemoryExpandedId(entry.id)}
-                                              className={`mt-1.5 ${SETTINGS_META_TEXT} text-primary hover:underline`}
-                                            >
-                                              {i18nService.t(isMemoryTextExpanded ? 'coworkMemoryCollapse' : 'coworkMemoryExpand')}
-                                            </button>
-                                          )}
-                                        </div>
-                                        {!entry.isLegacyReadOnly && (
-                                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                                            <button
-                                              type="button"
-                                              onClick={() => handleEditCoworkMemoryEntry(entry)}
-                                              title={i18nService.t('edit')}
-                                              aria-label={i18nService.t('edit')}
-                                              className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
-                                            >
-                                              <EditIcon className="h-4 w-4" />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
-                                              title={i18nService.t('delete')}
-                                              aria-label={i18nService.t('delete')}
-                                              className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
-                                              disabled={coworkMemoryListLoading}
-                                            >
-                                              <TrashIcon className="h-4 w-4" />
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </React.Fragment>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </>
-
-                  {coworkMemoryRawMode && (
-                    <Modal
-                      isOpen
-                      onClose={() => setCoworkMemoryRawMode(false)}
-                      onEscape={() => setCoworkMemoryRawMode(false)}
-                      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 dark:bg-black/50 p-6"
-                      className="flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
-                    >
-                      <div className="flex shrink-0 items-start justify-between gap-3 px-5 py-4">
-                        <div className="min-w-0">
-                          <h2 className="text-lg font-semibold text-foreground">
-                            {i18nService.t('coworkMemoryRawButton')}
-                          </h2>
-                          <p className="mt-0.5 text-sm text-secondary">
-                            {i18nService.t('coworkMemoryRawHint')}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setCoworkMemoryRawMode(false)}
-                          title={i18nService.t('close')}
-                          aria-label={i18nService.t('close')}
-                          className="p-2 rounded-lg hover:bg-surface-raised transition-colors"
-                        >
-                          <XMarkIcon className="h-5 w-5 text-secondary" />
-                        </button>
-                      </div>
-                      <textarea
-                        value={coworkMemoryRawText}
-                        onChange={(event) => setCoworkMemoryRawText(event.target.value)}
-                        spellCheck={false}
-                        autoFocus
-                        className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 pt-1 pb-4 text-xs font-mono leading-relaxed text-foreground focus:outline-none"
-                      />
-                      {coworkMemoryRawError && (
-                        <div className="px-5 pb-2">
-                          <ErrorMessage
-                            message={coworkMemoryRawError}
-                            onClose={() => setCoworkMemoryRawError(null)}
-                          />
-                        </div>
-                      )}
-                      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setCoworkMemoryRawMode(false)}
-                          className="px-3.5 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-lg border border-border transition-colors"
-                        >
-                          {i18nService.t('cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { void handleSaveCoworkMemoryRaw(); }}
-                          disabled={coworkMemoryRawSaving}
-                          className="px-3.5 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                        >
-                          {i18nService.t('save')}
-                        </button>
-                      </div>
-                    </Modal>
-                  )}
-                </div>
-              )}
-
-              {memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length > 0 && (
-                <LegacyDreamDiaryViewer
-                  diaries={visibleLegacyDreamDiaries}
-                  loading={legacyDreamDiaryLoading}
-                  error={legacyDreamDiaryError}
-                  onRefresh={() => { void loadLegacyDreamDiary(); }}
-                />
-              )}
-
-            </div>
-          </div>
+          <MemorySettings
+            initialAgentId={initialMemoryAgentId}
+            initialAgentRequestId={initialTabRequestId}
+            memoryEnabled={coworkMemoryEnabled}
+            onMemoryEnabledChange={handleToggleCoworkMemoryEnabled}
+            onError={setError}
+            onEntryChanged={reportMemoryEntryChanged}
+          />
         );
-      }
-
-      case 'coworkDreaming':
-        return null;
 
       case 'browserWebAccess':
         return (
@@ -5776,41 +5101,47 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+          <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
             {/* Tab content */}
             <div
               ref={contentRef}
-              className="px-6 py-4 flex-1 overflow-y-auto"
+              className={`px-6 flex-1 min-h-0 ${
+                activeTab === SettingsTabId.CoworkMemory
+                  ? 'pt-2 pb-5 overflow-hidden'
+                  : 'py-4 overflow-y-auto'
+              }`}
               style={{ scrollbarGutter: 'stable' }}
             >
               {renderTabContent()}
             </div>
 
             {/* Footer buttons */}
-            <div className="relative shrink-0">
-              <div
-                aria-hidden="true"
-                className={`pointer-events-none absolute inset-x-0 bottom-full h-10 bg-gradient-to-t from-background to-transparent transition-opacity duration-200 ${
-                  footerFadeVisible ? 'opacity-100' : 'opacity-0'
-                }`}
-              />
-              <div className="flex justify-end space-x-4 px-6 pb-5 pt-3 bg-background">
-                <button
-                  type="button"
-                  onClick={guardedClose}
-                  className={`px-4 py-2 rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]`}
-                >
-                  {i18nService.t('cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving || isAppearanceChanging}
-                  className={`px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]`}
-                >
-                  {isSaving ? i18nService.t('saving') : i18nService.t('save')}
-                </button>
+            {activeTab !== SettingsTabId.CoworkMemory && activeTab !== SettingsTabId.Email && (
+              <div className="relative shrink-0">
+                <div
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute inset-x-0 bottom-full h-10 bg-gradient-to-t from-background to-transparent transition-opacity duration-200 ${
+                    footerFadeVisible ? 'opacity-100' : 'opacity-0'
+                  }`}
+                />
+                <div className="flex justify-end space-x-4 px-6 pb-5 pt-3 bg-background">
+                  <button
+                    type="button"
+                    onClick={guardedClose}
+                    className={`px-4 py-2 rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]`}
+                  >
+                    {i18nService.t('cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving || isAppearanceChanging}
+                    className={`px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]`}
+                  >
+                    {isSaving ? i18nService.t('saving') : i18nService.t('save')}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </form>
 
         </div>
@@ -6032,72 +5363,6 @@ const Settings: React.FC<SettingsProps> = ({
             progress={dataMigration.progress}
             formatSize={formatBackupSize}
           />
-
-          {/* Memory Modal */}
-          {showMemoryModal && (
-            <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
-              onClick={resetCoworkMemoryEditor}
-            >
-              <div
-                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-lg"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center gap-2.5 px-5 pt-5 pb-3">
-                  <h3 className="text-base font-semibold text-foreground">
-                    {coworkMemoryEditingId ? i18nService.t('coworkMemoryCrudUpdate') : i18nService.t('coworkMemoryCrudCreate')}
-                  </h3>
-                  {coworkMemoryEditingId && (
-                    <span className="inline-flex items-center rounded-md bg-primary-muted px-2 py-0.5 text-[11px] text-primary">
-                      {i18nService.t('coworkMemoryEditingTag')}
-                    </span>
-                  )}
-                </div>
-
-                <div className="px-5 pb-1">
-                  <label className="block text-xs font-medium text-secondary mb-1.5">
-                    {i18nService.t('coworkMemoryCrudContentLabel')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
-                  </label>
-                  <textarea
-                    value={coworkMemoryDraftText}
-                    onChange={(event) => setCoworkMemoryDraftText(event.target.value)}
-                    placeholder={i18nService.t('coworkMemoryCrudTextPlaceholder')}
-                    autoFocus
-                    className="min-h-[220px] w-full resize-y rounded-lg border px-3.5 py-3 text-sm leading-relaxed border-border bg-surface text-foreground focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
-                  />
-                  <div className="mt-1.5 text-[11px] leading-relaxed text-secondary">
-                    {i18nService.t('coworkMemoryCrudMultilineHint')}
-                  </div>
-                  {coworkMemoryModalError && (
-                    <div className="mt-2">
-                      <ErrorMessage
-                        message={coworkMemoryModalError}
-                        onClose={() => setCoworkMemoryModalError(null)}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex justify-end space-x-2 px-5 py-4">
-                  <button
-                    type="button"
-                    onClick={resetCoworkMemoryEditor}
-                    className="px-3.5 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-lg border border-border transition-colors"
-                  >
-                    {i18nService.t('cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleSaveCoworkMemoryEntry(); }}
-                    disabled={!coworkMemoryDraftText.trim() || coworkMemoryListLoading}
-                    className="px-3.5 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                  >
-                    {coworkMemoryEditingId ? i18nService.t('save') : i18nService.t('coworkMemoryCrudCreate')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
       </SkinPresentationScope>

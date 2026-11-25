@@ -9,6 +9,7 @@ export const MIGRATION_V2_CRON_BACKFILL_KV_KEY = 'engine.migration.v2.cronBackfi
 export const MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY = 'engine.migration.v2.permissionPresetBackfill';
 export const MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY = 'engine.migration.v2.userMemoriesMigrated';
 export const MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY = 'engine.migration.v2.dreamDiaryBackfilled';
+export const MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY = 'engine.migration.v2.dreamingPromotionsCleaned';
 export const MIGRATION_V2_TAVILY_BACKFILL_KV_KEY = 'engine.migration.v2.tavilyBackfillCompleted';
 export const MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY = 'engine.migration.v2.mcpOAuthBackfillCompleted';
 

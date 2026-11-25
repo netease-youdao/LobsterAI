@@ -29,8 +29,7 @@ entry point and keep new feature logic in domain modules.
 - `migration/legacyOpenClawMigrator.ts`: offline 6-step atomic pre-startup
   migration of legacy OpenClaw data, rollback handling, and backup reporting.
 - `memory/lobsterMemoryService.ts`: local Markdown workspace memory files,
-  metadata, and host memory tools (`legacyDreamDiaryReader.ts` reads legacy
-  Dreaming diaries).
+  metadata, and host memory tools.
 - `coworkStore.ts`: Cowork sessions, messages, config, agents, memory metadata,
   and related CRUD over SQLite.
 - `sqliteStore.ts`: database initialization and migrations.
