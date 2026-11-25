@@ -59,8 +59,6 @@ import type {
   AgentBrowserHostSetViewRequest,
   AgentBrowserHostStateEvent,
   AgentBrowserHostZoomRequest,
-  BrowserDiagnosticResult,
-  BrowserRuntimeProfile,
 } from '../../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
 import type {
@@ -993,10 +991,6 @@ interface IElectronAPI {
       }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     };
     browser: {
-      getStatus: (options?: { profile?: BrowserRuntimeProfile }) => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
-      listProfiles: () => Promise<{ success: boolean; profiles?: unknown[]; error?: string }>;
-      test: (options?: { profile?: BrowserRuntimeProfile }) => Promise<BrowserDiagnosticResult>;
-      resetProfile: (options?: { profile?: BrowserRuntimeProfile }) => Promise<{ success: boolean; result?: Record<string, unknown>; error?: string }>;
       getHostState: (request?: AgentBrowserHostRequest) => Promise<AgentBrowserHostResponse>;
       setHostView: (request: AgentBrowserHostSetViewRequest) => Promise<AgentBrowserHostResponse>;
       navigateHost: (request: AgentBrowserHostNavigateRequest) => Promise<AgentBrowserHostResponse>;

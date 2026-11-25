@@ -26,7 +26,6 @@ const ACTION_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_SNAPSHOT_LENGTH = 90_000;
 const HTTP_ROUTE = /^https?:\/\//i;
-const RESERVED_ARGUMENTS = /^--(?:user-data-dir|remote-debugging-(?:pipe|port|address)|no-sandbox)(?:=|$)/;
 const DEFAULT_URL = AgentBrowserPageUrl.Blank;
 
 const timeout = (value: unknown): number => typeof value === 'number' && Number.isFinite(value)
@@ -56,7 +55,7 @@ export class ExternalBrowserHost {
   private async launch(config: BrowserWebAccessConfig, useSystemProxy: boolean): Promise<BrowserConnection> {
     if (config.cdpUrl) {
       const browser = await chromium.connectOverCDP(config.cdpUrl, {
-        timeout: timeout(config.remoteCdpHandshakeTimeoutMs ?? config.remoteCdpTimeoutMs ?? START_TIMEOUT_MS),
+        timeout: START_TIMEOUT_MS,
       });
       const context = browser.contexts()[0];
       if (!context) {
@@ -65,7 +64,6 @@ export class ExternalBrowserHost {
       }
       return { context, close: () => browser.close() };
     }
-    if (config.attachOnly) throw new Error('Enter the CDP URL of the already running browser.');
 
     const customExecutable = config.executablePath;
     const launchOptions: NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]> = {
@@ -74,10 +72,7 @@ export class ExternalBrowserHost {
       viewport: null,
       serviceWorkers: 'block',
       timeout: START_TIMEOUT_MS,
-      args: [
-        ...(!useSystemProxy ? ['--no-proxy-server'] : []),
-        ...(config.extraArgs ?? []).filter(arg => !RESERVED_ARGUMENTS.test(arg)),
-      ],
+      args: useSystemProxy ? [] : ['--no-proxy-server'],
     };
     let context: BrowserContext;
     if (customExecutable) {
@@ -98,8 +93,8 @@ export class ExternalBrowserHost {
 
   private async getContext(): Promise<BrowserContext> {
     const config = this.deps.getConfig();
-    const useSystemProxy = config.followGlobalProxy && this.deps.useSystemProxy();
-    const key = JSON.stringify([config.executablePath, config.cdpUrl, config.attachOnly, config.extraArgs, useSystemProxy]);
+    const useSystemProxy = this.deps.useSystemProxy();
+    const key = JSON.stringify([config.executablePath, config.cdpUrl, useSystemProxy]);
     if (this.connection && this.connectionKey !== key) await this.dispose();
     if (!this.connection) {
       this.connectionKey = key;
@@ -140,14 +135,6 @@ export class ExternalBrowserHost {
     });
     return id;
   };
-
-  async open(): Promise<void> {
-    const context = await this.getContext();
-    const page = context.pages().find(candidate => !isBlockedAgentBrowserUrl(candidate.url(), this.deps.getConfig()))
-      ?? await context.newPage();
-    this.selected = page;
-    await page.bringToFront();
-  }
 
   async dispose(): Promise<void> {
     const connection = this.connection;
@@ -302,7 +289,6 @@ export class ExternalBrowserHost {
         break;
       }
       case BrowserMcpTool.EvaluateScript: {
-        if (!this.deps.getConfig().evaluateEnabled) throw new Error('Browser script evaluation is disabled in LobsterAI settings.');
         const source = text(args.function);
         if (!source) throw new Error('A browser function is required.');
         const values = Array.isArray(args.args) ? args.args : [];

@@ -3,7 +3,6 @@ import { describe, expect, test, vi } from 'vitest';
 
 vi.mock('electron', () => ({ WebContentsView: class {} }));
 
-import { BrowserDisplayMode } from '../../shared/browserWebAccess/constants';
 import {
   createDetachedPage,
   decodeBingClickUrl,
@@ -58,7 +57,6 @@ const createFakePage = (options: {
 const createHost = (
   page: WebSearchPage,
   overrides: {
-    displayMode?: BrowserDisplayMode;
     isAllowedUrl?: (url: string) => boolean;
     isSkillEnabled?: () => boolean;
     googleCooldownMs?: number;
@@ -72,7 +70,6 @@ const createHost = (
     isAllowedUrl: overrides.isAllowedUrl ?? (() => true),
   } as unknown as WebSearchPageContext;
   const host = new WebSearchHost({
-    getBrowserConfig: () => ({ displayMode: overrides.displayMode ?? BrowserDisplayMode.InApp }),
     getPageContext: () => context,
     isSkillEnabled: overrides.isSkillEnabled,
     createPage,
@@ -121,14 +118,6 @@ describe('decodeBingClickUrl & normalizeSearchSources', () => {
 });
 
 describe('WebSearchHost', () => {
-  test('refuses searches while the external browser mode is selected', async () => {
-    const { page } = createFakePage();
-    const { host, createPage } = createHost(page, { displayMode: BrowserDisplayMode.External });
-
-    await expect(host.search({ query: 'lobster' })).rejects.toThrow('in-app browser mode is not enabled');
-    expect(createPage).not.toHaveBeenCalled();
-  });
-
   test('searches in the hidden page and returns normalized results', async () => {
     const { page, navigations } = createFakePage({
       results: [{ title: 'T3 Code', url: 'https://example.com/', snippet: 'Overview', source: 'bing', position: 1 }],
@@ -336,7 +325,6 @@ describe('WebSearchHost', () => {
       isAllowedUrl: () => true,
     } as unknown as WebSearchPageContext;
     const host = new WebSearchHost({
-      getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp }),
       getPageContext: () => context,
       createPage: ctx => createDetachedPage(ctx, () => views[index++].view),
     });

@@ -6,8 +6,6 @@ import {
 } from '../browserCredentials/constants';
 import {
   BrowserDisplayMode,
-  BrowserNetworkMode,
-  BrowserProfileMode,
   buildBrowserSearchUrl,
   normalizeBrowserCdpUrl,
   normalizeBrowserHostnameList,
@@ -52,36 +50,39 @@ describe('browser web access constants', () => {
     expect(normalizeBrowserCdpUrl('127.0.0.1:9222')).toBeUndefined();
   });
 
-  test('normalizes browser web access config values', () => {
+  test('normalizes browser web access config values and strips legacy fields', () => {
     const config = normalizeBrowserWebAccessConfig({
-      browserEnabled: false,
-      profileMode: BrowserProfileMode.User,
-      networkMode: BrowserNetworkMode.Strict,
-      allowedHostnames: ['https://Localhost:8443/a'],
+      displayMode: BrowserDisplayMode.External,
       blockedHostnames: ['tracking.example/path'],
+      executablePath: ' /Applications/Google Chrome.app/Contents/MacOS/Google Chrome ',
       cdpUrl: 'ftp://browser.example.com',
-      remoteCdpTimeoutMs: -1,
-      webFetch: {
-        enabled: false,
+      ...({
+        browserEnabled: false,
+        profileMode: 'user',
+        networkMode: 'strict',
         followGlobalProxy: false,
-        timeoutSeconds: 30,
-        readability: false,
-      },
+        allowedHostnames: ['https://Localhost:8443/a'],
+        snapshotMode: 'default',
+        evaluateEnabled: false,
+        attachOnly: true,
+        remoteCdpTimeoutMs: 15000,
+        remoteCdpHandshakeTimeoutMs: 5000,
+        extraArgs: ['--disable-gpu'],
+        webFetch: {
+          enabled: false,
+          followGlobalProxy: false,
+          timeoutSeconds: 30,
+          readability: false,
+        },
+      } as Record<string, unknown>),
     });
 
-    expect(config.browserEnabled).toBe(false);
-    expect(config.profileMode).toBe(BrowserProfileMode.User);
-    expect(config.displayMode).toBe(BrowserDisplayMode.InApp);
-    expect(config.networkMode).toBe(BrowserNetworkMode.Strict);
-    expect(config.allowedHostnames).toEqual(['https://localhost:8443']);
-    expect(config.blockedHostnames).toEqual(['https://tracking.example']);
-    expect(config.cdpUrl).toBeUndefined();
-    expect(config.remoteCdpTimeoutMs).toBeUndefined();
-    expect(config.webFetch).toMatchObject({
-      enabled: false,
-      followGlobalProxy: false,
-      timeoutSeconds: 30,
-      readability: false,
+    expect(config).toEqual({
+      displayMode: BrowserDisplayMode.External,
+      blockedHostnames: ['https://tracking.example'],
+      credentialUseMode: BrowserCredentialUseMode.AlwaysAsk,
+      credentialSaveMode: BrowserCredentialSaveMode.Ask,
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     });
   });
 

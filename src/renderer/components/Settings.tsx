@@ -7,8 +7,10 @@ import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
+  BrowserDisplayMode,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
+  normalizeBrowserCdpUrl,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 import {
@@ -438,15 +440,27 @@ const buildBrowserSettingAnalyticsParams = (
 ): {
   blockedHostnameCount: number;
   changedKeys: string;
-  networkMode: string;
+  displayMode: string;
   previousBlockedHostnameCount?: number;
 } | null => {
   const changedKeys = new Set<string>();
-  if (previousConfig.networkMode !== nextConfig.networkMode) {
-    changedKeys.add('network_mode');
+  if (previousConfig.displayMode !== nextConfig.displayMode) {
+    changedKeys.add('display_mode');
   }
-  if (previousConfig.blockedHostnames.length !== nextConfig.blockedHostnames.length) {
+  if (previousConfig.credentialUseMode !== nextConfig.credentialUseMode) {
+    changedKeys.add('credential_use_mode');
+  }
+  if (previousConfig.credentialSaveMode !== nextConfig.credentialSaveMode) {
+    changedKeys.add('credential_save_mode');
+  }
+  if (JSON.stringify(previousConfig.blockedHostnames) !== JSON.stringify(nextConfig.blockedHostnames)) {
     changedKeys.add('blocked_hostnames');
+  }
+  if (previousConfig.executablePath !== nextConfig.executablePath) {
+    changedKeys.add('executable_path');
+  }
+  if (previousConfig.cdpUrl !== nextConfig.cdpUrl) {
+    changedKeys.add('cdp_url');
   }
 
   if (changedKeys.size === 0) {
@@ -456,7 +470,7 @@ const buildBrowserSettingAnalyticsParams = (
   return {
     blockedHostnameCount: nextConfig.blockedHostnames.length,
     changedKeys: Array.from(changedKeys).sort().join(','),
-    networkMode: nextConfig.networkMode,
+    displayMode: nextConfig.displayMode,
     previousBlockedHostnameCount: previousConfig.blockedHostnames.length,
   };
 };
@@ -628,7 +642,7 @@ const reportBrowserSettingChanged = (
   params: {
     blockedHostnameCount: number;
     changedKeys: string;
-    networkMode: string;
+    displayMode: string;
     previousBlockedHostnameCount?: number;
   },
 ): void => {
@@ -1310,7 +1324,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [questionNotificationsEnabled, setQuestionNotificationsEnabled] = useState(true);
   const [browserWebAccess, setBrowserWebAccess] = useState<BrowserWebAccessConfig>(() => ({
     ...defaultBrowserWebAccessConfig,
-    webFetch: { ...defaultBrowserWebAccessConfig.webFetch },
+    blockedHostnames: [...defaultBrowserWebAccessConfig.blockedHostnames],
   }));
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
@@ -3321,10 +3335,14 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       const normalizedProviders = normalizeProvidersForSettingsSave(providers);
       const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
-      const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig({
-        ...browserWebAccess,
-        browserEnabled: true,
-      });
+      if (
+        browserWebAccess.displayMode === BrowserDisplayMode.External
+        && browserWebAccess.cdpUrl?.trim()
+        && !normalizeBrowserCdpUrl(browserWebAccess.cdpUrl)
+      ) {
+        throw new Error(i18nService.t('browserCdpUrlInvalid'));
+      }
+      const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig(browserWebAccess);
       const previousConfig = configService.getConfig();
       const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
       const previousShortcuts: ShortcutConfig = {
