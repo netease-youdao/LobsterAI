@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { createAgentWorkspaceSync } from './agent-workspace-sync.mjs';
 import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
@@ -109,6 +110,7 @@ async function removeSessionDirectories(sessionId) {
 
 export function apply(ctx) {
   const state = getHostState(ctx);
+  const syncAgentWorkspaces = createAgentWorkspaceSync(ctx, dshHomePath('lobsterai-agent-workspaces.json'));
   /** @type {Map<string, { fingerprint: string, dispose: () => unknown }>} */
   const managedMcpEntries = new Map();
   const sseBridge = createMcpSseBridge(ctx);
@@ -499,6 +501,11 @@ export function apply(ctx) {
             state.agents = nextAgents;
             state.agentOrder = nextOrder;
             state.invalidateSkills?.();
+            if (Array.isArray(p.workspaceDirectories)) {
+              void syncAgentWorkspaces(p.workspaceDirectories).catch(error => {
+                ctx.logger.warn('[LobsterAgentWorkspaces] Failed to sync Agent workspaces:', error);
+              });
+            }
             return jsonResponse({
               ok: true,
               result: {

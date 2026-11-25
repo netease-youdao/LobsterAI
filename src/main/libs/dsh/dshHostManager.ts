@@ -585,7 +585,7 @@ export class DshHostManager extends EventEmitter {
   private lastMemoryPolicy: DshHostMemoryPolicy | null = null;
   private lastWebAccessPolicy: DshHostWebAccessPolicy | null = null;
   private lastHostTools: DshHostToolDescriptor[] | null = null;
-  private lastAgents: DshHostAgentSpec[] | null = null;
+  private lastAgentSync: { agents: DshHostAgentSpec[]; workspaceDirectories?: string[] } | null = null;
   private readonly lastSubagentBindings = new Map<string, DshSubagentAgentBinding>();
   private lastPermissionPreset: DshPermissionPreset = DEFAULT_DSH_PERMISSION_PRESET;
   private readonly lastSessionPermissionPresets = new Map<string, DshPermissionPreset>();
@@ -758,10 +758,11 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.SyncHostTools, { tools });
   }
 
-  async syncAgents(agents: DshHostAgentSpec[]): Promise<Record<string, unknown>> {
-    this.lastAgents = agents;
+  async syncAgents(agents: DshHostAgentSpec[], workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
+    const payload = { agents, workspaceDirectories };
+    this.lastAgentSync = payload;
     if (!this.isReady()) return { deferred: true };
-    return this.getClient().callOps(DshOpsAction.SyncAgents, { agents });
+    return this.getClient().callOps(DshOpsAction.SyncAgents, payload);
   }
 
   async syncSubagentBindings(
@@ -926,8 +927,8 @@ export class DshHostManager extends EventEmitter {
         }
       }
     }
-    if (this.lastAgents) {
-      await client.callOps(DshOpsAction.SyncAgents, { agents: this.lastAgents });
+    if (this.lastAgentSync) {
+      await client.callOps(DshOpsAction.SyncAgents, this.lastAgentSync);
     }
     if (this.lastSubagentBindings.size > 0) {
       await client.callOps(DshOpsAction.SyncSubagentBindings, {
