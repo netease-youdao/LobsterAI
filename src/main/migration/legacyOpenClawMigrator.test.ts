@@ -124,6 +124,7 @@ describe('runLegacyOpenClawMigration', () => {
     db.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?)').run('m1', 'Linear', '{"oauth":{"enabled":true}}');
     db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('nim', '{"appKey":"x"}', 1);
     db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('feishu', '{"appId":"cli_1"}', 1);
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('weixin', '{"enabled":true,"accountId":"bot@im.bot"}', 1);
     db.prepare('INSERT INTO cowork_message_versions VALUES (?, ?, ?)').run('v1', 'cw-1', 'old version');
     db.close();
 

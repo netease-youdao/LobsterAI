@@ -8,6 +8,18 @@ export const WeixinPlugin = {
 
 export const WEIXIN_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 
+/** OpenClaw's account key for an iLink bot ID, also used in its filenames and DM keys. */
+export function legacyWeixinAccountId(id: string): string {
+  return id.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+}
+
+/** Only authentication failures from the channel driver require a new QR login. */
+export function weixinCredentialErrorKey(error?: string | null) {
+  if (error?.startsWith('Weixin not configured: iLink token is required')) return 'imWeixinCredentialsMissing';
+  if (error?.startsWith('Weixin session expired (errcode=-14)')) return 'imWeixinCredentialsExpired';
+  return null;
+}
+
 export const WeixinQrPollStatus = {
   Wait: 'wait',
   Scanned: 'scaned',
