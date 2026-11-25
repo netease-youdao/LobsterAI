@@ -2,6 +2,7 @@
 
 export const DSH_PROFILE_DIR_NAME = 'dsh-profile';
 export const DSH_PROFILE_NAME = 'lobsterai';
+export const DSH_ECOSYSTEM_PARTITION = 'persist:dsh-ecosystem';
 export const DSH_HOST_BUNDLE_NAME = '@lobsterai/dsh-bundle';
 export const DSH_CHANNELS_BUNDLE_NAME = '@lobsterai/dsh-channels';
 export const DSH_BASE_BUNDLE_NAME = '@deepseek-ai/dsh-base';
@@ -212,6 +213,31 @@ export const DshProgressiveCapability = {
 export type DshProgressiveCapability =
   typeof DshProgressiveCapability[keyof typeof DshProgressiveCapability];
 
+export const DshPluginSurface = {
+  Native: 'native',
+  Hybrid: 'hybrid',
+  WebOnly: 'web-only',
+} as const;
+export type DshPluginSurface = typeof DshPluginSurface[keyof typeof DshPluginSurface];
+
+export const DshPluginApplicationStatus = {
+  Applied: 'applied',
+  RestartRequired: 'restart-required',
+  Overridden: 'overridden',
+  Failed: 'failed',
+  Cancelled: 'cancelled',
+} as const;
+export type DshPluginApplicationStatus =
+  typeof DshPluginApplicationStatus[keyof typeof DshPluginApplicationStatus];
+
+export const DshPluginInstallSource = {
+  Registry: 'registry',
+  Git: 'git',
+  Local: 'local',
+} as const;
+export type DshPluginInstallSource =
+  typeof DshPluginInstallSource[keyof typeof DshPluginInstallSource];
+
 export const DshHostIpc = {
   GetStatus: 'dshHost:getStatus',
   Restart: 'dshHost:restart',
@@ -219,9 +245,13 @@ export const DshHostIpc = {
   OpenEcosystemView: 'dshHost:openEcosystemView',
   CloseEcosystemView: 'dshHost:closeEcosystemView',
   ListPlugins: 'dshHost:listPlugins',
+  InspectPlugin: 'dshHost:inspectPlugin',
   InstallPlugin: 'dshHost:installPlugin',
+  CancelPluginInstall: 'dshHost:cancelPluginInstall',
   RemovePlugin: 'dshHost:removePlugin',
   SetPluginEnabled: 'dshHost:setPluginEnabled',
+  GetPluginRegistries: 'dshHost:getPluginRegistries',
+  PickLocalPluginDir: 'dshHost:pickLocalPluginDir',
   OpenProfileDir: 'dshHost:openProfileDir',
   CopyCliShimCommand: 'dshHost:copyCliShimCommand',
   GetPermissionPreset: 'dshHost:getPermissionPreset',

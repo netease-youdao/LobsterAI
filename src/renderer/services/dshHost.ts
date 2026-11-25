@@ -1,12 +1,42 @@
 // Renderer service for LobsterAI's primary DeepSeek Harness (DSH) host,
-// plugin management (`dsh plugin`), and on-demand DSH Ecosystem Web View.
+// HMR-backed plugin management, and on-demand DSH Web View.
 
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
   type DshPermissionPreset,
+  type DshPluginApplicationStatus,
+  type DshPluginSurface,
 } from '../../shared/dshEngine/hostConstants';
 
 export const DSH_PERMISSION_PRESET_CHANGED_EVENT = 'dsh:permissionPresetChanged';
+export const DSH_PLUGINS_CHANGED_EVENT = 'dsh:pluginsChanged';
+export const DSH_OPEN_EMBEDDED_PLUGIN_EVENT = 'dsh:openEmbeddedPlugin';
+
+export interface DshEmbeddedPluginTarget {
+  name: string;
+  panelId: string;
+  title: string;
+  icon?: string;
+}
+
+export interface DshPluginsChangedDetail {
+  plugins?: DshPluginEntry[];
+}
+
+export function dispatchDshPluginsChanged(plugins?: DshPluginEntry[]): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+    return;
+  }
+  const detail: DshPluginsChangedDetail = plugins ? { plugins } : {};
+  window.dispatchEvent(new CustomEvent(DSH_PLUGINS_CHANGED_EVENT, { detail }));
+}
+
+export function dispatchOpenEmbeddedPlugin(target: DshEmbeddedPluginTarget): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(DSH_OPEN_EMBEDDED_PLUGIN_EVENT, { detail: target }));
+}
 
 export interface DshPermissionPresetChangedDetail {
   preset: DshPermissionPreset;
@@ -65,11 +95,100 @@ export interface DshHostStatusSnapshot {
   restartCount: number;
 }
 
+export interface DshPluginLocalizedText {
+  en?: string;
+  zh?: string;
+}
+
+export interface DshPluginIncompatibleInfo {
+  name: string;
+  version: string;
+  runtimeVersion: string;
+  requirements: Record<string, string>;
+}
+
 export interface DshPluginEntry {
   name: string;
   specifier: string;
   managed: boolean;
   enabled: boolean;
+  version?: string;
+  title?: DshPluginLocalizedText;
+  description?: DshPluginLocalizedText;
+  icon?: string;
+  official?: boolean;
+  removable?: boolean;
+  surface?: DshPluginSurface;
+  isThemePlugin?: boolean;
+  panelId?: string;
+  panelLabel?: DshPluginLocalizedText;
+  errorCode?: string;
+  errorMessage?: string;
+  rowCount?: number;
+  activeRowCount?: number;
+}
+
+export interface DshPluginInspectRequest {
+  spec: string;
+  registry?: string | null;
+}
+
+export interface DshPluginInspectResult {
+  ok: boolean;
+  status?: 'accepted' | 'refused';
+  kind?: 'registry' | 'path' | 'git' | 'tarball';
+  name?: string;
+  version?: string;
+  description?: string;
+  bundle?: boolean | null;
+  registry?: string | null;
+  host?: string;
+  problem?: string;
+  reason?: string;
+  registries?: Array<string | null>;
+  surface?: DshPluginSurface;
+  isThemePlugin?: boolean;
+  heuristicOnly?: boolean;
+  error?: string;
+}
+
+export interface DshPluginInstallRequest {
+  spec: string;
+  registry?: string | null;
+  approvedBuilds?: string[];
+  enabled?: boolean;
+  requestId?: string;
+}
+
+export interface DshPluginMutationResult {
+  ok: boolean;
+  application?: DshPluginApplicationStatus;
+  restartRequired?: boolean;
+  restartReason?: string;
+  changed?: boolean;
+  enabled?: boolean;
+  bundle?: string;
+  version?: string;
+  errorCode?: string;
+  failureKind?: string;
+  failedAt?: 'registry' | 'spec-host';
+  error?: string;
+  pendingBuilds?: string[];
+  incompatible?: DshPluginIncompatibleInfo[];
+  output?: string;
+  logPath?: string;
+  stdout?: string;
+  stderr?: string;
+  plugins?: DshPluginEntry[];
+}
+
+export interface DshPluginRegistriesResult {
+  ok: boolean;
+  registry?: string | null;
+  fallbackRegistries?: string[];
+  resolved?: string | null;
+  fastest?: string | null;
+  error?: string;
 }
 
 export const dshHostService = {
@@ -77,8 +196,16 @@ export const dshHostService = {
     return window.electron.dshHost.getStatus();
   },
 
-  restart(): Promise<{ ok: boolean; error?: string }> {
-    return window.electron.dshHost.restart();
+  async restart(): Promise<{ ok: boolean; error?: string }> {
+    const res = await window.electron.dshHost.restart();
+    if (res?.ok) {
+      dispatchDshPluginsChanged();
+    }
+    return res;
+  },
+
+  getWebUrl(): Promise<{ ok: boolean; url?: string | null; error?: string }> {
+    return window.electron.dshHost.getWebUrl();
   },
 
   openEcosystemView(routeHash?: string): Promise<{ ok: boolean; url?: string; error?: string }> {
@@ -93,43 +220,62 @@ export const dshHostService = {
     ok: boolean;
     profileDir?: string;
     cliShimPath?: string | null;
+    hmrAvailable?: boolean;
     plugins: DshPluginEntry[];
   }> {
     return window.electron.dshHost.listPlugins();
   },
 
-  installPlugin(packageSpec: string): Promise<{
-    ok: boolean;
-    stdout?: string;
-    stderr?: string;
-    error?: string;
-    plugins?: DshPluginEntry[];
-  }> {
-    return window.electron.dshHost.installPlugin(packageSpec);
+  inspectPlugin(request: string | DshPluginInspectRequest): Promise<DshPluginInspectResult> {
+    return window.electron.dshHost.inspectPlugin(request);
   },
 
-  removePlugin(packageName: string): Promise<{
-    ok: boolean;
-    stdout?: string;
-    stderr?: string;
-    error?: string;
-    plugins?: DshPluginEntry[];
-  }> {
-    return window.electron.dshHost.removePlugin(packageName);
+  async installPlugin(request: string | DshPluginInstallRequest): Promise<DshPluginMutationResult> {
+    const res = await window.electron.dshHost.installPlugin(request);
+    if (res?.ok) {
+      dispatchDshPluginsChanged(res.plugins);
+    }
+    return res;
   },
 
-  setPluginEnabled(packageName: string, enabled: boolean): Promise<{
+  cancelPluginInstall(requestId: string): Promise<{
     ok: boolean;
-    changed?: boolean;
-    enabled?: boolean;
+    status?: 'cancelled' | 'too-late' | 'not-running';
     error?: string;
-    plugins?: DshPluginEntry[];
   }> {
-    return window.electron.dshHost.setPluginEnabled(packageName, enabled);
+    return window.electron.dshHost.cancelPluginInstall(requestId);
+  },
+
+  async removePlugin(packageName: string): Promise<DshPluginMutationResult> {
+    const res = await window.electron.dshHost.removePlugin(packageName);
+    if (res?.ok) {
+      dispatchDshPluginsChanged(res.plugins);
+    }
+    return res;
+  },
+
+  async setPluginEnabled(packageName: string, enabled: boolean): Promise<DshPluginMutationResult> {
+    const res = await window.electron.dshHost.setPluginEnabled(packageName, enabled);
+    if (res?.ok) {
+      dispatchDshPluginsChanged(res.plugins);
+    }
+    return res;
+  },
+
+  getPluginRegistries(): Promise<DshPluginRegistriesResult> {
+    return window.electron.dshHost.getPluginRegistries();
+  },
+
+  pickLocalPluginDir(): Promise<{ ok: boolean; canceled?: boolean; path?: string | null }> {
+    return window.electron.dshHost.pickLocalPluginDir();
   },
 
   openProfileDir(): Promise<{ ok: boolean; profileDir?: string }> {
     return window.electron.dshHost.openProfileDir();
+  },
+
+  copyCliShimCommand(): Promise<{ ok: boolean; cliShimPath?: string; error?: string }> {
+    return window.electron.dshHost.copyCliShimCommand();
   },
 
   async getPermissionPreset(sessionId?: string): Promise<{

@@ -144,6 +144,7 @@ import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
 import {
   DSH_APPROVAL_REQUEST_ID_PREFIX,
+  DSH_ECOSYSTEM_PARTITION,
   DSH_POPO_PAIRING_EVENT,
   DSH_PROFILE_DIR_NAME,
   DSH_QUESTION_REQUEST_ID_PREFIX,
@@ -324,7 +325,10 @@ import {
   registerDataMigrationHandlers,
 } from './ipcHandlers/dataMigration';
 import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
-import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
+import {
+  isAllowedDshEmbedWebviewUrl,
+  registerDshHostHandlers,
+} from './ipcHandlers/dshHost/handlers';
 import { registerEnterpriseAccountHandlers } from './ipcHandlers/enterpriseAccount';
 import { registerImageCreationHandlers } from './ipcHandlers/imageCreation';
 import { registerImageEditingHandlers } from './ipcHandlers/imageEditing';
@@ -14261,6 +14265,12 @@ if (!gotTheLock) {
     });
 
     mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+      const rawSrc = (params.src ?? '').trim();
+      const dshOrigin = dshBootstrap?.hostManager?.getStatus().origin ?? null;
+      const isDshEmbedWebview =
+        params.partition === DSH_ECOSYSTEM_PARTITION
+        && isAllowedDshEmbedWebviewUrl(rawSrc, dshOrigin);
+
       webPreferences.nodeIntegration = false;
       webPreferences.nodeIntegrationInSubFrames = false;
       webPreferences.contextIsolation = true;
@@ -14268,23 +14278,47 @@ if (!gotTheLock) {
       webPreferences.webSecurity = true;
       webPreferences.plugins = false;
       webPreferences.devTools = isDev;
-      webPreferences.partition = ArtifactBrowserPartition.Default;
       delete webPreferences.preload;
-      webPreferences.preload = BROWSER_ANNOTATION_PRELOAD_PATH;
 
-      params.partition = ArtifactBrowserPartition.Default;
-      // Keep allowpopups enabled so target="_blank" and window.open() reach
-      // guestWebContents.setWindowOpenHandler below, which always denies native
-      // windows and forwards valid http(s) URLs to open as a new browser tab.
-      params.allowpopups = 'true';
+      if (isDshEmbedWebview) {
+        webPreferences.partition = DSH_ECOSYSTEM_PARTITION;
+        params.partition = DSH_ECOSYSTEM_PARTITION;
+        params.allowpopups = 'true';
+      } else {
+        webPreferences.partition = ArtifactBrowserPartition.Default;
+        webPreferences.preload = BROWSER_ANNOTATION_PRELOAD_PATH;
+        params.partition = ArtifactBrowserPartition.Default;
+        // Keep allowpopups enabled so target="_blank" and window.open() reach
+        // guestWebContents.setWindowOpenHandler below, which always denies native
+        // windows and forwards valid http(s) URLs to open as a new browser tab.
+        params.allowpopups = 'true';
+      }
 
-      const src = (params.src ?? '').trim().toLowerCase();
+      const src = rawSrc.toLowerCase();
       if (src.startsWith('javascript:') || src.startsWith('data:') || src.startsWith('vbscript:')) {
         event.preventDefault();
       }
     });
 
     mainWindow.webContents.on('did-attach-webview', (_event, guestWebContents) => {
+      if (guestWebContents.session === session.fromPartition(DSH_ECOSYSTEM_PARTITION)) {
+        guestWebContents.setWindowOpenHandler(({ url }) => {
+          if (/^https?:\/\//i.test(url)) {
+            void shell.openExternal(url);
+          }
+          return { action: 'deny' };
+        });
+        guestWebContents.on('will-navigate', (navEvent, navUrl) => {
+          const dshOrigin = dshBootstrap?.hostManager?.getStatus().origin ?? null;
+          if (!isAllowedDshEmbedWebviewUrl(navUrl, dshOrigin)) {
+            navEvent.preventDefault();
+            if (/^https?:\/\//i.test(navUrl)) {
+              void shell.openExternal(navUrl);
+            }
+          }
+        });
+        return;
+      }
       attachArtifactBrowserWindowOpenHandler(mainWindow.webContents, guestWebContents);
     });
 

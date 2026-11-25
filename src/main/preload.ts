@@ -1852,11 +1852,26 @@ contextBridge.exposeInMainWorld('electron', {
     openEcosystemView: (routeHash?: string) => ipcRenderer.invoke(DshHostIpc.OpenEcosystemView, routeHash),
     closeEcosystemView: () => ipcRenderer.invoke(DshHostIpc.CloseEcosystemView),
     listPlugins: () => ipcRenderer.invoke(DshHostIpc.ListPlugins),
-    installPlugin: (packageSpec: string) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, packageSpec),
+    inspectPlugin: (request: string | { spec: string; registry?: string | null }) =>
+      ipcRenderer.invoke(DshHostIpc.InspectPlugin, request),
+    installPlugin: (
+      request: string | {
+        spec: string;
+        registry?: string | null;
+        approvedBuilds?: string[];
+        enabled?: boolean;
+        requestId?: string;
+      },
+    ) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, request),
+    cancelPluginInstall: (requestId: string) =>
+      ipcRenderer.invoke(DshHostIpc.CancelPluginInstall, requestId),
     removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
     setPluginEnabled: (packageName: string, enabled: boolean) =>
       ipcRenderer.invoke(DshHostIpc.SetPluginEnabled, packageName, enabled),
+    getPluginRegistries: () => ipcRenderer.invoke(DshHostIpc.GetPluginRegistries),
+    pickLocalPluginDir: () => ipcRenderer.invoke(DshHostIpc.PickLocalPluginDir),
     openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),
+    copyCliShimCommand: () => ipcRenderer.invoke(DshHostIpc.CopyCliShimCommand),
     getPermissionPreset: (sessionId?: string) => ipcRenderer.invoke(DshHostIpc.GetPermissionPreset, sessionId),
     setPermissionPreset: (preset: string, sessionId?: string) =>
       ipcRenderer.invoke(DshHostIpc.SetPermissionPreset, { preset, ...(sessionId ? { sessionId } : {}) }),

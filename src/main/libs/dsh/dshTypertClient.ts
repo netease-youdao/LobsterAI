@@ -311,6 +311,117 @@ export interface DshCommandExecution {
   result: DshCommandResult;
 }
 
+export type DshLocalizedText = string | { readonly en: string; readonly [locale: string]: string };
+
+export interface DshPluginLocalizedMeta {
+  readonly title?: DshLocalizedText;
+  readonly description?: DshLocalizedText;
+  readonly icon?: string;
+  readonly error?: string;
+}
+
+export interface DshPluginIncompatibleInfo {
+  name: string;
+  version: string;
+  runtimeVersion: string;
+  requirements: Record<string, string>;
+}
+
+export interface DshPluginManagementError {
+  code: string;
+  diagnostic?: string;
+  incompatible?: DshPluginIncompatibleInfo[];
+}
+
+export interface DshPluginBundleRowInfo {
+  rowId: string;
+  moduleName: string;
+  meta?: DshPluginLocalizedMeta;
+  entryId?: string;
+}
+
+export interface DshPluginBundleInfo {
+  name: string;
+  official: boolean;
+  availability: 'installation' | 'profile' | 'missing';
+  installTarget?: { spec: string; version: string };
+  version?: string;
+  meta?: DshPluginLocalizedMeta;
+  description?: string;
+  listedByDefault?: boolean;
+  enabled: boolean;
+  installed: boolean;
+  source?: string;
+  optional: boolean;
+  removable: boolean;
+  update?: 'registry' | 'git';
+  readOnlyReason?: string;
+  error?: DshPluginManagementError;
+  rows: DshPluginBundleRowInfo[];
+  overrides: string[];
+}
+
+export interface DshPluginPackageResult {
+  exitCode: number;
+  output: string;
+  truncated: boolean;
+  logPath: string;
+  kind?: string;
+  timedOut?: boolean;
+  incompatible?: DshPluginIncompatibleInfo[];
+  unmet?: 'unexpected-package' | 'not-bundle';
+}
+
+export interface DshPluginChangeResult {
+  changed: boolean;
+  application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
+  restartReason?: string;
+  stage: 'install' | 'enable' | 'remove';
+  target: string;
+  enabled?: boolean;
+  error?: DshPluginManagementError;
+  warnings?: string[];
+  packageResult?: DshPluginPackageResult;
+  bundle?: string;
+  version?: string;
+  pendingBuilds?: string[];
+  approvedBuilds?: string[];
+  registries?: Array<string | null>;
+  failedAt?: 'registry' | 'spec-host';
+}
+
+export type DshPluginSpecInspection =
+  | {
+    readonly status: 'accepted';
+    readonly kind: 'registry' | 'path' | 'git' | 'tarball';
+    readonly name?: string;
+    readonly version?: string;
+    readonly description?: string;
+    readonly bundle: boolean | null;
+    readonly registry: string | null;
+    readonly host?: string;
+  }
+  | {
+    readonly status: 'refused';
+    readonly problem: string;
+    readonly reason: string;
+    readonly registries?: Array<string | null>;
+  };
+
+export interface DshPluginRegistriesInfo {
+  readonly registry: string | null;
+  readonly fallbackRegistries: readonly string[];
+  readonly resolved: string | null;
+}
+
+export interface DshPluginInstallBundleOptions {
+  enabled?: boolean;
+  saveExact?: boolean;
+  requestId?: string;
+  approvedBuilds?: string[];
+  registry?: string | null;
+}
+
 export class DshTypertClient extends EventEmitter {
   private readonly runtimePid?: number;
   private readonly requester: DshHttpRequester;
@@ -639,6 +750,59 @@ export class DshTypertClient extends EventEmitter {
 
   listSessions(): Promise<{ items: Array<Record<string, unknown>> }> {
     return this.call('session/list', {});
+  }
+
+  // ── Plugin Manager RPCs (HMR-backed live profile management) ───────────────
+
+  listPluginBundles(): Promise<DshPluginBundleInfo[]> {
+    return this.call<DshPluginBundleInfo[]>('pluginManager/listBundles', {});
+  }
+
+  inspectPluginSpec(
+    spec: string,
+    options?: { registry?: string | null },
+    signal?: AbortSignal,
+  ): Promise<DshPluginSpecInspection> {
+    return this.call<DshPluginSpecInspection>(
+      'pluginManager/inspect',
+      { spec, ...(options !== undefined ? { options } : {}) },
+      signal,
+    );
+  }
+
+  installPluginBundle(
+    spec: string,
+    options?: DshPluginInstallBundleOptions,
+  ): Promise<DshPluginChangeResult> {
+    return this.call<DshPluginChangeResult>('pluginManager/installBundle', {
+      spec,
+      ...(options !== undefined ? { options } : {}),
+    });
+  }
+
+  cancelPluginInstall(
+    requestId: string,
+  ): Promise<{ status: 'cancelled' | 'too-late' | 'not-running' }> {
+    return this.call<{ status: 'cancelled' | 'too-late' | 'not-running' }>(
+      'pluginManager/cancelInstall',
+      { requestId },
+    );
+  }
+
+  removePluginBundle(name: string): Promise<DshPluginChangeResult> {
+    return this.call<DshPluginChangeResult>('pluginManager/removeBundle', { name });
+  }
+
+  setPluginBundleEnabled(name: string, enabled: boolean): Promise<DshPluginChangeResult> {
+    return this.call<DshPluginChangeResult>('pluginManager/setBundleEnabled', { name, enabled });
+  }
+
+  getPluginRegistries(): Promise<DshPluginRegistriesInfo> {
+    return this.call<DshPluginRegistriesInfo>('pluginManager/registries', {});
+  }
+
+  probeFastestPluginRegistry(): Promise<string | null> {
+    return this.call<string | null>('pluginRegistryProbe/fastest', {});
   }
 
   async close(): Promise<void> {

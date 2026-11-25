@@ -10,21 +10,37 @@ import {
   DSH_PROFILE_NAME,
   DSH_WEB_APP_BUNDLE_NAME,
   DshHostIpc,
+  DshPluginApplicationStatus,
+  DshPluginSurface,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
+import type { DshPluginBundleInfo, DshPluginChangeResult } from '../../libs/dsh/dshTypertClient';
 import {
+  buildEnrichedPluginEntries,
+  classifyBundleSurface,
+  extractPanelMetadataFromClientSource,
+  isAllowedDshEmbedWebviewUrl,
   readInstalledProfilePlugins,
   registerDshHostHandlers,
   runDshPluginCommand,
   setProfilePluginEnabled,
+  validateOptionalRegistryUrl,
   validatePluginInstallSpecifier,
   validatePluginPackageName,
 } from './handlers';
 
-const { registeredHandlers, openExternalMock, openPathMock } = vi.hoisted(() => ({
+const {
+  registeredHandlers,
+  openExternalMock,
+  openPathMock,
+  writeTextMock,
+  showOpenDialogMock,
+} = vi.hoisted(() => ({
   registeredHandlers: new Map<string, (...args: unknown[]) => unknown>(),
   openExternalMock: vi.fn(),
   openPathMock: vi.fn(),
+  writeTextMock: vi.fn(),
+  showOpenDialogMock: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -36,6 +52,12 @@ vi.mock('electron', () => ({
   shell: {
     openExternal: openExternalMock,
     openPath: openPathMock,
+  },
+  clipboard: {
+    writeText: writeTextMock,
+  },
+  dialog: {
+    showOpenDialog: showOpenDialogMock,
   },
 }));
 
@@ -495,5 +517,516 @@ describe('registerDshHostHandlers plugin IPC', () => {
     };
     expect(parsed.packageManager?.command).toBe(process.execPath);
     expect(parsed.packageManager?.args.map((p) => fs.realpathSync(p))).toEqual([fs.realpathSync(pnpmEntry)]);
+  });
+});
+
+describe('classifyBundleSurface & buildEnrichedPluginEntries', () => {
+  test('classifies native host, hybrid host+web, and web-only theme bundles accurately', () => {
+    const profileDir = createTempDir();
+    const nm = path.join(profileDir, 'node_modules');
+
+    fs.mkdirSync(path.join(nm, '@acme', 'host-tool'), { recursive: true });
+    fs.writeFileSync(
+      path.join(nm, '@acme', 'host-tool', 'package.json'),
+      JSON.stringify({ name: '@acme/host-tool', version: '1.0.0' }),
+    );
+
+    fs.mkdirSync(path.join(nm, '@acme', 'web-panel'), { recursive: true });
+    fs.writeFileSync(
+      path.join(nm, '@acme', 'web-panel', 'package.json'),
+      JSON.stringify({
+        name: '@acme/web-panel',
+        version: '1.0.0',
+        dsh: { client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-layout'] } },
+      }),
+    );
+
+    fs.mkdirSync(path.join(nm, '@acme', 'dark-skin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(nm, '@acme', 'dark-skin', 'package.json'),
+      JSON.stringify({
+        name: '@acme/dark-skin',
+        version: '1.0.0',
+        dsh: { client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-theme'] } },
+      }),
+    );
+
+    expect(
+      classifyBundleSurface({
+        name: '@acme/tool-bundle',
+        rows: [{ moduleName: '@acme/host-tool' }],
+        profileDir,
+      }),
+    ).toMatchObject({
+      surface: DshPluginSurface.Native,
+      hasHostCapability: true,
+      hasWebClient: false,
+      isThemePlugin: false,
+    });
+
+    expect(
+      classifyBundleSurface({
+        name: '@acme/hybrid-bundle',
+        rows: [{ moduleName: '@acme/host-tool' }, { moduleName: '@acme/web-panel' }],
+        profileDir,
+      }),
+    ).toMatchObject({
+      surface: DshPluginSurface.Hybrid,
+      hasHostCapability: true,
+      hasWebClient: true,
+      isThemePlugin: false,
+    });
+
+    expect(
+      classifyBundleSurface({
+        name: '@acme/skin-bundle',
+        rows: [{ moduleName: '@acme/dark-skin' }],
+        profileDir,
+      }),
+    ).toMatchObject({
+      surface: DshPluginSurface.WebOnly,
+      hasHostCapability: false,
+      hasWebClient: true,
+      isThemePlugin: true,
+    });
+
+    // Dual-face single-package bundle (like dsh-media-desk: host entry registers tools + dsh.client web UI).
+    fs.mkdirSync(path.join(nm, 'dsh-media-desk', 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(nm, 'dsh-media-desk', 'package.json'),
+      JSON.stringify({
+        name: 'dsh-media-desk',
+        version: '2.7.2',
+        main: 'src/host.js',
+        dsh: {
+          bundle: { patch: './cordis.patch.yml' },
+          client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-runtime'] },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(nm, 'dsh-media-desk', 'src', 'host.js'),
+      'export function apply(ctx) { ctx.tools.register({ name: "media_desk" }); }\n',
+    );
+    expect(
+      classifyBundleSurface({
+        name: 'dsh-media-desk',
+        rows: [{ moduleName: 'dsh-media-desk' }],
+        profileDir,
+      }),
+    ).toMatchObject({
+      surface: DshPluginSurface.Hybrid,
+      hasHostCapability: true,
+      hasWebClient: true,
+      isThemePlugin: false,
+    });
+
+    // Heuristic pre-install detection when manifest is not on disk yet.
+    expect(
+      classifyBundleSurface({
+        name: 'dsh-nord-theme-bundle',
+        description: 'Nord dark theme skin for DSH',
+      }),
+    ).toMatchObject({
+      surface: DshPluginSurface.WebOnly,
+      isThemePlugin: true,
+      heuristicOnly: true,
+    });
+  });
+
+  test('filters out uninstalled DSH optional/catalog bundles while keeping installed user and core bundles', () => {
+    const profileDir = createTempDir();
+    const liveBundles: DshPluginBundleInfo[] = [
+      {
+        name: DSH_BASE_BUNDLE_NAME,
+        official: false,
+        availability: 'installation',
+        version: '0.2.2-rc.5',
+        enabled: true,
+        installed: false,
+        optional: false,
+        removable: false,
+        rows: [],
+        overrides: [],
+      },
+      {
+        name: '@deepseek-ai/dsh-experimental-voice-input-bundle',
+        official: true,
+        availability: 'installation',
+        version: '0.2.2-rc.5',
+        enabled: false,
+        installed: false,
+        optional: true,
+        removable: false,
+        rows: [],
+        overrides: [],
+      },
+      {
+        name: '@deepseek-ai/dsh-subagent-claude-code',
+        official: true,
+        availability: 'missing',
+        enabled: false,
+        installed: false,
+        optional: false,
+        removable: false,
+        rows: [],
+        overrides: [],
+      },
+      {
+        name: '@acme/my-plugin',
+        official: false,
+        availability: 'profile',
+        version: '1.2.3',
+        meta: {
+          title: { en: 'My Plugin', zh: '我的插件' },
+          description: { en: 'Adds tools', zh: '添加实用工具' },
+          icon: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+        },
+        enabled: true,
+        installed: true,
+        source: '^1.2.3',
+        optional: false,
+        removable: true,
+        rows: [{ rowId: 'tool', moduleName: '@acme/my-plugin', entryId: 'e1' }],
+        overrides: [],
+      },
+    ];
+
+    const entries = buildEnrichedPluginEntries({
+      liveBundles,
+      fallbackPlugins: [
+        { name: DSH_BASE_BUNDLE_NAME, specifier: 'bundled', managed: true, enabled: true },
+        { name: '@acme/my-plugin', specifier: '^1.2.3', managed: false, enabled: true },
+      ],
+      profileDir,
+    });
+
+    expect(entries.map((e) => e.name)).toEqual([DSH_BASE_BUNDLE_NAME, '@acme/my-plugin']);
+    const userEntry = entries.find((e) => e.name === '@acme/my-plugin');
+    expect(userEntry).toMatchObject({
+      name: '@acme/my-plugin',
+      version: '1.2.3',
+      title: { en: 'My Plugin', zh: '我的插件' },
+      description: { en: 'Adds tools', zh: '添加实用工具' },
+      icon: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+      managed: false,
+      enabled: true,
+      removable: true,
+      surface: DshPluginSurface.Native,
+      isThemePlugin: false,
+      rowCount: 1,
+      activeRowCount: 1,
+    });
+  });
+
+  test('validates optional registry URLs safely', () => {
+    expect(validateOptionalRegistryUrl(undefined)).toBeNull();
+    expect(validateOptionalRegistryUrl(null)).toBeNull();
+    expect(validateOptionalRegistryUrl('https://registry.npmmirror.com/')).toBe('https://registry.npmmirror.com/');
+    expect(validateOptionalRegistryUrl('ftp://bad.example/')).toBe(false);
+    expect(validateOptionalRegistryUrl('https://user:pass@evil.example/')).toBe(false);
+    expect(validateOptionalRegistryUrl('not a url')).toBe(false);
+  });
+
+  test('extracts panelId and localized panelLabel from dsh-media-desk style client bundles', () => {
+    const mediaDeskClient = `
+      var Pt = "media-desk";
+      e.slots.register({name:"main",key:Pt},Gn);
+      e.slots.register({name:"sidebar.panellist",id:Pt,order:5,label:()=>n("\\u81EA\\u5A92\\u4F53\\u5DE5\\u4F5C\\u53F0")},Wn);
+    `;
+    expect(extractPanelMetadataFromClientSource(mediaDeskClient)).toEqual({
+      panelId: 'media-desk',
+      panelLabel: { en: '自媒体工作台', zh: '自媒体工作台' },
+    });
+
+    // Literal main key + i18n dotted key in label wrapper skips raw i18n key.
+    const i18nClient = `
+      ctx.slots.register({ name: 'main', key: 'forge-board' }, Board);
+      ctx.slots.register({ name: 'sidebar.panellist', id: 'forge-board', label: () => t('sidebar.forge') }, Icon);
+    `;
+    expect(extractPanelMetadataFromClientSource(i18nClient)).toEqual({
+      panelId: 'forge-board',
+    });
+
+    // tsdown / rolldown / oxc minified bundle using backtick template literals (e.g. dsh-context).
+    const tsdownBacktickClient =
+      'let Xd=`dsh-context`;function Zd(e,t,n,r,i){return[e.slots.inject(`main`,()=>e.slots.register({name:`main`,key:Xd,locale:i},n)),e.slots.inject(`sidebar.panellist`,()=>e.slots.register({name:`sidebar.panellist`,id:Xd,order:20,label:()=>r(`ov.title`),locale:i},w))]}';
+    expect(extractPanelMetadataFromClientSource(tsdownBacktickClient)).toEqual({
+      panelId: 'dsh-context',
+    });
+
+    // Non-panel client plugin (no main or sidebar.panellist slot) yields empty metadata.
+    const widgetOnly = `ctx.slots.register({ name: 'sidebar.footer.action', id: 'badge' }, Badge);`;
+    expect(extractPanelMetadataFromClientSource(widgetOnly, 'widget-row')).toEqual({});
+  });
+
+  test('classifies webServer dual-face plugin as Hybrid with extracted panel metadata', () => {
+    const profileDir = createTempDir();
+    const pkgDir = path.join(profileDir, 'node_modules', 'dsh-media-desk');
+    fs.mkdirSync(path.join(pkgDir, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(pkgDir, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, 'package.json'),
+      JSON.stringify({
+        name: 'dsh-media-desk',
+        main: 'src/host.js',
+        exports: {
+          '.': './src/host.js',
+          './client': './dist/client.js',
+        },
+        dsh: {
+          bundle: { patch: './cordis.patch.yml' },
+          client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-runtime'] },
+        },
+      }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, 'cordis.patch.yml'),
+      '- insert:\n    - id: media-desk\n      name: dsh-media-desk\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, 'src', 'host.js'),
+      'export const inject = ["webServer", "connection"]; export function apply(ctx) { ctx.webServer.register({ path: "/media-desk" }); }',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, 'dist', 'client.js'),
+      'var Pt="media-desk";e.slots.register({name:"main",key:Pt},G);e.slots.register({name:"sidebar.panellist",id:Pt,label:()=>n("\\u81EA\\u5A92\\u4F53\\u5DE5\\u4F5C\\u53F0")},W);',
+      'utf8',
+    );
+
+    expect(
+      classifyBundleSurface({
+        name: 'dsh-media-desk',
+        rows: [{ rowId: 'media-desk', moduleName: 'dsh-media-desk' }],
+        profileDir,
+      }),
+    ).toEqual({
+      surface: DshPluginSurface.Hybrid,
+      hasHostCapability: true,
+      hasWebClient: true,
+      isThemePlugin: false,
+      panelId: 'media-desk',
+      panelLabel: { en: '自媒体工作台', zh: '自媒体工作台' },
+    });
+  });
+
+  test('validates embedded plugin webview URLs strictly against live DSH host origin', () => {
+    const origin = 'http://127.0.0.1:4321';
+    expect(
+      isAllowedDshEmbedWebviewUrl('http://127.0.0.1:4321/?token=abc#lobster-embed=1&panel=media-desk', origin),
+    ).toBe(true);
+    expect(isAllowedDshEmbedWebviewUrl('http://127.0.0.1:4321/', origin)).toBe(true);
+    expect(isAllowedDshEmbedWebviewUrl('http://127.0.0.1:9999/', origin)).toBe(false);
+    expect(isAllowedDshEmbedWebviewUrl('https://evil.example/?token=abc', origin)).toBe(false);
+    expect(isAllowedDshEmbedWebviewUrl('about:blank', origin)).toBe(false);
+    expect(isAllowedDshEmbedWebviewUrl('javascript:alert(1)', origin)).toBe(false);
+    expect(isAllowedDshEmbedWebviewUrl('http://127.0.0.1:4321/', null)).toBe(false);
+  });
+});
+
+describe('registerDshHostHandlers live HMR Typert RPC path', () => {
+  test('installs, toggles, and removes plugins via Typert pluginManager without forcing host restart', async () => {
+    const temp = createTempDir();
+    const dshHomeDir = path.join(temp, 'dsh-profile');
+    const profileDir = path.join(dshHomeDir, 'profiles', DSH_PROFILE_NAME);
+    writeProfileManifest(profileDir, {
+      name: 'lobsterai-dsh-profile',
+      private: true,
+      dependencies: {
+        [DSH_HOST_BUNDLE_NAME]: 'file:/app/dsh-bundles/lobsterai-host',
+      },
+      dsh: {
+        profile: {
+          bundles: [DSH_BASE_BUNDLE_NAME, DSH_WEB_APP_BUNDLE_NAME, DSH_HOST_BUNDLE_NAME],
+        },
+      },
+    });
+
+    let installedBundles: DshPluginBundleInfo[] = [
+      {
+        name: DSH_BASE_BUNDLE_NAME,
+        official: false,
+        availability: 'installation',
+        version: '0.2.2-rc.5',
+        enabled: true,
+        installed: false,
+        optional: false,
+        removable: false,
+        rows: [],
+        overrides: [],
+      },
+    ];
+
+    const mockClient = {
+      listPluginBundles: vi.fn(async () => installedBundles),
+      inspectPluginSpec: vi.fn(async (spec: string) => ({
+        status: 'accepted' as const,
+        kind: 'registry' as const,
+        name: spec,
+        version: '1.0.0',
+        description: 'A cool Nord theme skin',
+        bundle: true,
+        registry: 'https://registry.npmmirror.com/',
+      })),
+      installPluginBundle: vi.fn(async (spec: string): Promise<DshPluginChangeResult> => {
+        installedBundles = [
+          ...installedBundles,
+          {
+            name: spec,
+            official: false,
+            availability: 'profile',
+            version: '1.0.0',
+            enabled: true,
+            installed: true,
+            optional: false,
+            removable: true,
+            rows: [],
+            overrides: [],
+          },
+        ];
+        return {
+          changed: true,
+          application: 'applied',
+          stage: 'install',
+          target: spec,
+          enabled: true,
+          bundle: spec,
+          version: '1.0.0',
+        };
+      }),
+      setPluginBundleEnabled: vi.fn(async (name: string, enabled: boolean): Promise<DshPluginChangeResult> => {
+        installedBundles = installedBundles.map((b) => (b.name === name ? { ...b, enabled } : b));
+        return {
+          changed: true,
+          application: 'restart-required',
+          restartReason: 'host-module',
+          stage: 'enable',
+          target: name,
+          enabled,
+        };
+      }),
+      removePluginBundle: vi.fn(async (name: string): Promise<DshPluginChangeResult> => {
+        installedBundles = installedBundles.filter((b) => b.name !== name);
+        return {
+          changed: true,
+          application: 'applied',
+          stage: 'remove',
+          target: name,
+        };
+      }),
+      cancelPluginInstall: vi.fn(async () => ({ status: 'cancelled' as const })),
+      getPluginRegistries: vi.fn(async () => ({
+        registry: null,
+        fallbackRegistries: ['https://registry.npmmirror.com/'],
+        resolved: 'https://registry.npmjs.org/',
+      })),
+      probeFastestPluginRegistry: vi.fn(async () => 'https://registry.npmmirror.com/'),
+    };
+
+    const restartMock = vi.fn(async () => undefined);
+    const ensureIntegrityMock = vi.fn();
+    const mockManager = {
+      isReady: () => true,
+      getClient: () => mockClient,
+      getStatus: () => ({
+        phase: 'ready',
+        origin: 'http://127.0.0.1:4321',
+        authenticatedWebUrl: 'http://127.0.0.1:4321/?token=abc',
+        pid: 999,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir,
+        dshHomeDir,
+        cliShimPath: path.join(dshHomeDir, 'bin', 'dsh'),
+        lastError: null,
+        startedAt: Date.now(),
+        restartCount: 0,
+      }),
+      ensureProfileIntegrity: ensureIntegrityMock,
+      restart: restartMock,
+    } as unknown as DshHostManager;
+
+    registerDshHostHandlers({
+      getHostManager: () => mockManager,
+      getRuntimeDir: () => path.join(temp, 'runtime'),
+      getExecutablePath: () => process.execPath,
+    });
+
+    // 1. Inspect detects theme warning hint before install.
+    const inspectRes = (await registeredHandlers.get(DshHostIpc.InspectPlugin)!({}, {
+      spec: '@acme/nord-theme',
+      registry: 'https://registry.npmmirror.com/',
+    })) as { ok: boolean; status?: string; surface?: string; isThemePlugin?: boolean };
+    expect(inspectRes).toMatchObject({
+      ok: true,
+      status: 'accepted',
+      surface: DshPluginSurface.WebOnly,
+      isThemePlugin: true,
+    });
+
+    // 2. Install applies via HMR without restarting host.
+    const installRes = (await registeredHandlers.get(DshHostIpc.InstallPlugin)!({}, {
+      spec: '@acme/demo-tools',
+      registry: 'https://registry.npmmirror.com/',
+      requestId: 'req-1',
+    })) as { ok: boolean; application?: string; restartRequired?: boolean; plugins: Array<{ name: string }> };
+    expect(installRes.ok).toBe(true);
+    expect(installRes.application).toBe(DshPluginApplicationStatus.Applied);
+    expect(installRes.restartRequired).toBe(false);
+    expect(installRes.plugins.some((p) => p.name === '@acme/demo-tools')).toBe(true);
+    expect(restartMock).not.toHaveBeenCalled();
+    expect(ensureIntegrityMock).toHaveBeenCalledTimes(1);
+
+    // 3. Toggle surfaces restartRequired when DSH reports restart-required without auto-restarting.
+    const toggleRes = (await registeredHandlers.get(DshHostIpc.SetPluginEnabled)!({}, '@acme/demo-tools', false)) as {
+      ok: boolean;
+      application?: string;
+      restartRequired?: boolean;
+      restartReason?: string;
+    };
+    expect(toggleRes.ok).toBe(true);
+    expect(toggleRes.application).toBe(DshPluginApplicationStatus.RestartRequired);
+    expect(toggleRes.restartRequired).toBe(true);
+    expect(toggleRes.restartReason).toBe('host-module');
+    expect(restartMock).not.toHaveBeenCalled();
+
+    // 4. Remove unloads via HMR without restarting host.
+    const removeRes = (await registeredHandlers.get(DshHostIpc.RemovePlugin)!({}, '@acme/demo-tools')) as {
+      ok: boolean;
+      restartRequired?: boolean;
+      plugins: Array<{ name: string }>;
+    };
+    expect(removeRes.ok).toBe(true);
+    expect(removeRes.restartRequired).toBe(false);
+    expect(removeRes.plugins.some((p) => p.name === '@acme/demo-tools')).toBe(false);
+    expect(restartMock).not.toHaveBeenCalled();
+
+    // 5. Registries, cancel, copy CLI, and local dir picker handlers work cleanly.
+    const regRes = (await registeredHandlers.get(DshHostIpc.GetPluginRegistries)!({})) as {
+      ok: boolean;
+      fastest?: string | null;
+    };
+    expect(regRes.ok).toBe(true);
+    expect(regRes.fastest).toBe('https://registry.npmmirror.com/');
+
+    const cancelRes = (await registeredHandlers.get(DshHostIpc.CancelPluginInstall)!({}, 'req-1')) as {
+      ok: boolean;
+      status?: string;
+    };
+    expect(cancelRes).toEqual({ ok: true, status: 'cancelled' });
+
+    const copyRes = (await registeredHandlers.get(DshHostIpc.CopyCliShimCommand)!({})) as { ok: boolean };
+    expect(copyRes.ok).toBe(true);
+    expect(writeTextMock).toHaveBeenCalledWith(path.join(dshHomeDir, 'bin', 'dsh'));
+
+    showOpenDialogMock.mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/my-local-plugin'] });
+    const pickRes = (await registeredHandlers.get(DshHostIpc.PickLocalPluginDir)!({})) as {
+      ok: boolean;
+      canceled?: boolean;
+      path?: string | null;
+    };
+    expect(pickRes).toEqual({ ok: true, canceled: false, path: '/tmp/my-local-plugin' });
   });
 });

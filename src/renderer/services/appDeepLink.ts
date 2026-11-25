@@ -13,7 +13,9 @@ export const AppDeepLinkEvent = {
 
 const SETTINGS_TABS: readonly SettingsTab[] = Object.values(SettingsTabId);
 
-const MAIN_VIEWS: readonly MainView[] = Object.values(MainView);
+const MAIN_VIEWS: readonly MainView[] = Object.values(MainView).filter(
+  (view) => view !== MainView.PluginPanel,
+);
 
 export type AppDeepLinkTarget =
   | { kind: 'settings'; tab: SettingsTab }
@@ -47,6 +49,7 @@ const MAIN_VIEW_LABEL_KEYS: Record<MainView, string> = {
   [MainView.Connectors]: 'connectors',
   [MainView.ScheduledTasks]: 'scheduledTasks',
   [MainView.Library]: 'librarySidebarTitle',
+  [MainView.PluginPanel]: 'pluginsTab',
 };
 
 /**
