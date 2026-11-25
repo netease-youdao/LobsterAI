@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 
+import { i18nService } from '../../services/i18n';
 import {
   getIMSessionDisplayTitle,
   getIMSessionPlatformIconClassName,
@@ -55,6 +56,41 @@ describe('getIMSessionDisplayTitle', () => {
     expect(getIMSessionPlatformIconClassName('wecom')).toBe('h-4 w-4 rounded-sm object-contain scale-110');
     expect(getIMSessionPlatformIconClassName('popo')).toBe('h-4 w-4 rounded-sm object-contain scale-110');
     expect(getIMSessionPlatformIconClassName('qq')).toBe('h-4 w-4 rounded-sm object-contain');
+  });
+
+  test('maps legacy opaque WeChat iLink IDs to a friendly owner title while preserving custom names', () => {
+    const tSpy = vi.spyOn(i18nService, 't');
+    try {
+      tSpy.mockImplementation((key: string) => (key === 'imWeixinOwnerSessionTitle' ? '我的微信' : key));
+      expect(
+        getIMSessionDisplayTitle('[微信] o9cq809ZEC25-4jLkdw3AHTKPE9c@im.', 'weixin'),
+      ).toEqual({
+        title: '我的微信',
+        strippedPrefix: true,
+      });
+      expect(
+        getIMSessionDisplayTitle('[微信] o9cq809ZEC25-4jLkdw3AHTKPE9c@im.wechat', 'weixin'),
+      ).toEqual({
+        title: '我的微信',
+        strippedPrefix: true,
+      });
+      expect(
+        getIMSessionDisplayTitle('老板的微信', 'weixin'),
+      ).toEqual({
+        title: '老板的微信',
+        strippedPrefix: false,
+      });
+
+      tSpy.mockImplementation((key: string) => (key === 'imWeixinOwnerSessionTitle' ? 'My WeChat' : key));
+      expect(
+        getIMSessionDisplayTitle('[WeChat] o9cq809ZEC25-4jLkdw3AHTKPE9c@im.', 'weixin'),
+      ).toEqual({
+        title: 'My WeChat',
+        strippedPrefix: true,
+      });
+    } finally {
+      tSpy.mockRestore();
+    }
   });
 
   test('ignores and logs unknown platforms without throwing', () => {

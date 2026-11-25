@@ -1,6 +1,6 @@
-import { type AvailableModelPreset, isChatPresetSession, type ModelPresetId, ModelPresetIpc, modelPresetModelId, modelPresetPreferenceKey, parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
+import { type AvailableModelPreset, type ModelPresetId, ModelPresetIpc, modelPresetModelId, modelPresetPreferenceKey, parseModelPresetId, parseModelPresetPreference } from '../../shared/modelPresets/constants';
 import { type ModelThinkingLevel, OpenClawProviderId, parseModelThinkingConfig, parseModelThinkingLevel } from '../../shared/providers';
-import { selectableContextWindows } from '../../shared/providers/modelContextWindow';
+import { isManualContextWindowSession, selectableContextWindows } from '../../shared/providers/modelContextWindow';
 import { getServerModelMetadata, type ServerModelMetadataInput } from './claudeSettings';
 import { rememberedContextWindow,sessionContextWindowSelection } from './modelContextWindows';
 import { recordSessionModelChange } from './sessionModelChange';
@@ -99,7 +99,7 @@ export function registerModelPresetIpc(dependencies: {
     const revision = (selectionRevision.get(sessionId) ?? 0) + 1;
     selectionRevision.set(sessionId, revision);
     const session = getSessions().getSession(sessionId);
-    if (!session || !isChatPresetSession(session)) throw new Error(t('modelPresetInvalidSession'));
+    if (!session) throw new Error(t('modelPresetInvalidSession'));
     if (initial && session.modelPresetId === presetId && session.modelOverride) return session;
     if (!initial && (session.status === 'running' || dependencies.getRuntime().isSessionActive(sessionId))) throw new Error(t('modelPresetSessionBusy'));
     await dependencies.ensureModelsReady();
@@ -116,8 +116,10 @@ export function registerModelPresetIpc(dependencies: {
           : config.defaultLevel)
       : (requestedThinkingLevel ?? '');
     const contextOwner = dependencies.contextWindowOwnerKey?.() ?? null;
-    const contextWindowOverride = rememberedContextWindow(dependencies.getStore(), contextOwner, model.modelId, presetId,
-      selectableContextWindows(contextModel, presetId));
+    const contextWindowOverride = isManualContextWindowSession(session)
+      ? rememberedContextWindow(dependencies.getStore(), contextOwner, model.modelId, presetId,
+        selectableContextWindows(contextModel, presetId))
+      : null;
     if (!initial) {
       const patched = await dependencies.getRuntime().patchSession?.(sessionId, {
         model: modelRef,

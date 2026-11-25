@@ -1,3 +1,4 @@
+import { isOpaqueWeixinPeerId } from '../../../shared/im/sessionNaming';
 import {
   type Platform,
   PlatformRegistry,
@@ -61,6 +62,12 @@ export function getIMSessionDisplayTitle(
     if (!title.startsWith(prefix)) continue;
     const stripped = title.slice(prefix.length).trimStart();
     if (!stripped) break;
+    if (normalizedPlatform === 'weixin' && isOpaqueWeixinPeerId(stripped)) {
+      return {
+        title: i18nService.t('imWeixinOwnerSessionTitle'),
+        strippedPrefix: true,
+      };
+    }
     return { title: stripped, strippedPrefix: true };
   }
 

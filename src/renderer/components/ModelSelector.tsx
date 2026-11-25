@@ -1442,14 +1442,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(hoveredModel);
     const thinkingConfigurable = thinkingSelectionEnabled && canConfigureModelThinking(hoveredModel);
     const showThinkingBadge = !!hoveredModel.presetId || hoveredModel.supportsThinking;
-    const cardLeft = typeof hoverCardStyle.left === 'number' ? hoverCardStyle.left : 0;
-    const opensLeft = (width: number) => resolveNestedCascadePlacement({
-      anchorLeft: cardLeft,
-      anchorRight: cardLeft + HOVER_CARD_WIDTH,
-      width,
-      viewportWidth: window.innerWidth,
-      preferredSide: hoverCardSide,
-    }).side === CascadeSide.Left;
     const card = (
       <div
         ref={hoverCardRef}
@@ -1532,7 +1524,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="flex items-center gap-1 font-medium">
               {thinkingLabelForModel(hoveredModel)}
               {thinkingConfigurable
-                ? <ChevronRightIcon className={`h-3.5 w-3.5 text-secondary ${opensLeft(THINKING_MENU_WIDTH) ? 'rotate-180' : ''}`} />
+                ? <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
                 : <LockClosedIcon className="h-3.5 w-3.5 text-secondary" />}
             </span>
           </button>
@@ -1542,7 +1534,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             sessionId={contextWindowSessionId} isSelected={isSelected(hoveredModel)}
             disabled={disabled || contextWindowDisabled || hoveredModel.accessible === false || hoveredModel.busy === true}
             isOpen={isContextWindowMenuOpen} menuStyle={contextWindowMenuStyle} menuRef={contextWindowMenuRef}
-            opensLeft={opensLeft(CONTEXT_WINDOW_MENU_WIDTH)}
             onOpen={openContextWindowMenu} onInteract={cancelHoverClose} onSelectModel={() => handleModelSelect(hoveredModel)} />
         )}
         {!thinkingSelectionEnabled && hasThinkingProtocol && hoveredModel.thinkingConfig && (

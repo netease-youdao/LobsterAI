@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { DSH_SESSION_ID_PREFIX } from '../../shared/dshEngine/hostConstants';
 import { ModelPresetId, ModelPresetIpc, modelPresetModelId } from '../../shared/modelPresets/constants';
 import { ApiFormat, ModelThinkingLevel, OpenClawThinkingLevel } from '../../shared/providers';
+import { getServerModelMetadata } from './claudeSettings';
 import { createModelPresetClient, registerModelPresetIpc } from './modelPresets';
 
 vi.mock('./claudeSettings', () => ({ getServerModelMetadata: vi.fn(), resolveRawApiConfig: vi.fn() }));
@@ -150,13 +151,81 @@ describe('registerModelPresetIpc thinkingLevel forwarding', () => {
     expect(dshRes.success).toBe(true);
     expect(dshRes.data?.modelPresetId).toBe(ModelPresetId.Ultimate);
 
-    // 5. DSH IM session is rejected
-    sessionState.imPlatform = 'feishu';
-    const imRes = await selectHandler({}, 'sess-1', ModelPresetId.Balanced, undefined) as {
+    // 5. DSH IM session can switch presets without inheriting desktop context window preferences
+    vi.mocked(getServerModelMetadata).mockReturnValue({
+      contextWindow: 400_000,
+      contextWindowOptions: [400_000, 1_000_000],
+      presetContextWindows: { [ModelPresetId.Balanced]: 400_000 },
+      presetContextWindowOptions: { [ModelPresetId.Balanced]: [400_000, 1_000_000] },
+    });
+    const kvStore = new Map<string, unknown>([
+      ['model_context_windows:owner-1', { [modelPresetModelId(ModelPresetId.Balanced)]: 1_000_000 }],
+    ]);
+    const imHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const imPatchSession = vi.fn(async (_sid: string, patch: { model?: string; thinkingLevel?: string | null; contextWindow?: string | null }) => ({
+      modelOverride: patch.model,
+      resolvedModelRef: patch.model,
+      thinkingLevel: patch.thinkingLevel ?? undefined,
+    }));
+    registerModelPresetIpc({
+      ipcMain: {
+        handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+          imHandlers.set(channel, handler);
+        }),
+      } as unknown as import('electron').IpcMain,
+      client: client as unknown as ReturnType<typeof createModelPresetClient>,
+      getStore: () => ({ get: (key: string) => kvStore.get(key), set: vi.fn() }) as unknown as import('../sqliteStore').SqliteStore,
+      getSessions: () => ({
+        getSession: () => sessionState,
+        getLatestUserMessage: () => null,
+        updateSession,
+        addMessage: vi.fn(),
+      }) as unknown as import('../coworkStore').CoworkStore,
+      getRuntime: () => ({
+        isSessionActive: () => false,
+        patchSession: imPatchSession,
+      }) as unknown as import('./agentEngine/types').CoworkRuntime,
+      ownerAccountKey: () => 'acct-1',
+      contextWindowOwnerKey: () => 'owner-1',
+      ensureModelsReady: async () => undefined,
+      isAccountCurrent: () => () => true,
+      t: (k) => k,
+    });
+    const imSelectHandler = imHandlers.get(ModelPresetIpc.SelectSession)!;
+
+    // Desktop session inherits the remembered desktop 1M context window preference.
+    sessionState.imPlatform = null;
+    sessionState.modelPresetId = null;
+    sessionState.contextWindowOverride = null;
+    sessionState.contextWindowOwnerKey = null;
+    const desktopCtxRes = await imSelectHandler({}, 'sess-1', ModelPresetId.Balanced, undefined) as {
       success: boolean;
-      error?: string;
+      data?: { modelPresetId?: string | null; contextWindowOverride?: number | null };
     };
-    expect(imRes.success).toBe(false);
-    expect(imRes.error).toBe('modelPresetInvalidSession');
+    expect(desktopCtxRes.success).toBe(true);
+    expect(desktopCtxRes.data?.modelPresetId).toBe(ModelPresetId.Balanced);
+    expect(desktopCtxRes.data?.contextWindowOverride).toBe(1_000_000);
+    expect(imPatchSession).toHaveBeenLastCalledWith('sess-1', expect.objectContaining({
+      model: 'lobsterai-server/glm-5.3',
+      contextWindow: 'user-context:yd-fast:1000000',
+    }));
+
+    // IM session switches to the preset, using only the preset default context window.
+    sessionState.imPlatform = 'feishu';
+    sessionState.modelPresetId = null;
+    sessionState.contextWindowOverride = 1_000_000;
+    sessionState.contextWindowOwnerKey = 'owner-1';
+    const imRes = await imSelectHandler({}, 'sess-1', ModelPresetId.Balanced, undefined) as {
+      success: boolean;
+      data?: { modelPresetId?: string | null; contextWindowOverride?: number | null; contextWindowOwnerKey?: string | null };
+    };
+    expect(imRes.success).toBe(true);
+    expect(imRes.data?.modelPresetId).toBe(ModelPresetId.Balanced);
+    expect(imRes.data?.contextWindowOverride).toBeNull();
+    expect(imRes.data?.contextWindowOwnerKey).toBeNull();
+    expect(imPatchSession).toHaveBeenLastCalledWith('sess-1', expect.objectContaining({
+      model: 'lobsterai-server/glm-5.3',
+      contextWindow: modelPresetModelId(ModelPresetId.Balanced),
+    }));
   });
 });

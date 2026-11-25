@@ -1,9 +1,10 @@
 import { type IpcMain } from 'electron';
 
 import { CoworkSessionStatusValue } from '../../shared/cowork/constants';
-import { isChatPresetSession, type ModelPresetId, parseModelPresetId } from '../../shared/modelPresets/constants';
+import { type ModelPresetId, parseModelPresetId } from '../../shared/modelPresets/constants';
 import {
   contextWindowPreferenceModelKey,
+  isManualContextWindowSession,
   ModelContextWindowIpc,
   type ModelContextWindowMetadata,
   type ModelContextWindowRequest,
@@ -71,7 +72,7 @@ export function registerModelContextWindowIpc(dependencies: {
       throw new Error(t('modelContextWindowUnavailable'));
     }
     const session = request.sessionId ? getSessions().getSession(request.sessionId) : null;
-    if (request.sessionId && (!session || !isChatPresetSession(session))) throw new Error(t('modelContextWindowUnavailable'));
+    if (request.sessionId && (!session || !isManualContextWindowSession(session))) throw new Error(t('modelContextWindowUnavailable'));
     const sameModel = session && contextWindowPreferenceModelKey(modelIdForSession(session), session.modelPresetId ?? undefined)
       === contextWindowPreferenceModelKey(request.modelId, presetId);
     const model = getServerModelMetadata(sameModel ? modelIdForSession(session) : request.modelId);
@@ -92,7 +93,7 @@ export function registerModelContextWindowIpc(dependencies: {
   };
   const restoreForSession = (sessionId: string) => {
     const session = getSessions().getSession(sessionId);
-    if (!session || !isChatPresetSession(session)) return;
+    if (!session || !isManualContextWindowSession(session)) return;
     const modelId = modelIdForSession(session);
     const override = rememberedContextWindow(getStore(), ownerKey(), modelId, session.modelPresetId ?? undefined,
       selectableContextWindows(getServerModelMetadata(modelId), session.modelPresetId ?? undefined));
