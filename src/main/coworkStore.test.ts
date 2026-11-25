@@ -151,6 +151,7 @@ function setupDb(): void {
       skill_ids TEXT NOT NULL DEFAULT '[]',
       subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}',
       subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
+      subagent_allow_agent_ids_snapshot TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
       pinned INTEGER NOT NULL DEFAULT 0,
       pin_order INTEGER,

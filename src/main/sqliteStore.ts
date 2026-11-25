@@ -25,6 +25,7 @@ import {
   openSqliteDatabaseWithRecovery,
   SqliteBackupManager,
 } from './libs/sqliteBackup/sqliteBackupManager';
+import { migrateAgentCollaboration } from './migration/agentCollaborationMigration';
 
 type ChangePayload<T = unknown> = {
   key: string;
@@ -241,6 +242,7 @@ export class SqliteStore {
         skill_ids TEXT NOT NULL DEFAULT '[]',
         subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}',
         subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]',
+        subagent_allow_agent_ids_snapshot TEXT NOT NULL DEFAULT '[]',
         enabled INTEGER NOT NULL DEFAULT 1,
         pinned INTEGER NOT NULL DEFAULT 0,
         pin_order INTEGER,
@@ -723,41 +725,12 @@ export class SqliteStore {
         this.db.exec('ALTER TABLE agents ADD COLUMN sort_order INTEGER;');
         this.didRunMigration = true;
       }
-      if (!agentColNames.includes('subagent_allow_agent_ids')) {
-        this.db.exec("ALTER TABLE agents ADD COLUMN subagent_allow_agent_ids TEXT NOT NULL DEFAULT '[]';");
-        this.didRunMigration = true;
-      }
-      if (!agentColNames.includes('subagent_collaboration_mode')) {
-        this.db.exec(
-          `ALTER TABLE agents ADD COLUMN subagent_collaboration_mode TEXT NOT NULL DEFAULT '${SubagentCollaborationMode.All}';`,
-        );
-        // Preserve explicitly curated legacy allowlists while upgrading unconfigured agents to `all`.
-        const legacyRows = this.db
-          .prepare('SELECT id, subagent_allow_agent_ids FROM agents')
-          .all() as Array<{ id: string; subagent_allow_agent_ids?: string | null }>;
-        const markAllowlist = this.db.prepare(
-          'UPDATE agents SET subagent_collaboration_mode = ? WHERE id = ?',
-        );
-        for (const row of legacyRows) {
-          if (!row.subagent_allow_agent_ids) continue;
-          try {
-            const parsed = JSON.parse(row.subagent_allow_agent_ids) as unknown;
-            if (!Array.isArray(parsed)) continue;
-            const selfId = row.id.trim();
-            const hasExplicitTarget = parsed.some(
-              item => typeof item === 'string' && item.trim().length > 0 && item.trim() !== selfId,
-            );
-            if (hasExplicitTarget) {
-              markAllowlist.run(SubagentCollaborationMode.Allowlist, row.id);
-            }
-          } catch {
-            // Malformed legacy JSON falls back to default `all`.
-          }
-        }
-        this.didRunMigration = true;
-      }
     } catch {
       // Column already exists or migration not needed.
+    }
+
+    if (migrateAgentCollaboration(this.db)) {
+      this.didRunMigration = true;
     }
 
     try {
