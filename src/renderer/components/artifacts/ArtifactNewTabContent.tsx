@@ -41,7 +41,11 @@ import {
   resolveNewTabOverflowItems,
   resolveNewTabPrimaryCards,
 } from './artifactNewTabModel';
-import { ArtifactPreviewGlobeIcon } from './ArtifactPreviewIdentity';
+import {
+  ArtifactBrowserIcon,
+  ArtifactPreviewGlobeIcon,
+  WorkspaceFilesIcon,
+} from './ArtifactPreviewIdentity';
 import { getPreviewCardDescriptor, PreviewCardIconKind } from './previewCardPolicy';
 
 const t = (key: string) => i18nService.t(key);
@@ -458,44 +462,46 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   );
 
   const getCardMeta = (cardId: ArtifactNewTabCardId): {
-    icon: React.ReactNode;
+    renderIcon: (className: string) => React.ReactNode;
+    iconColorClassName: string;
     label: string;
     badge?: React.ReactNode;
   } => {
     switch (cardId) {
       case ArtifactNewTabCardId.NewDocument:
         return {
-          icon: <DocumentPlusIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <DocumentPlusIcon className={className} strokeWidth={1.75} />,
+          iconColorClassName: 'text-[#2B579A] dark:text-[#60A5FA]',
           label: t('artifactNewTabNewDocument'),
         };
       case ArtifactNewTabCardId.NewPresentation:
         return {
-          icon: <PresentationChartBarIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <PresentationChartBarIcon className={className} strokeWidth={1.75} />,
+          iconColorClassName: 'text-[#D24726] dark:text-[#FB923C]',
           label: t('artifactNewTabNewPresentation'),
         };
       case ArtifactNewTabCardId.NewSpreadsheet:
         return {
-          icon: <TableCellsIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <TableCellsIcon className={className} strokeWidth={1.75} />,
+          iconColorClassName: 'text-[#217346] dark:text-[#34D399]',
           label: t('artifactNewTabNewSpreadsheet'),
         };
       case ArtifactNewTabCardId.NewMarkdown:
         return {
-          icon: <DocumentTextIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <DocumentTextIcon className={className} strokeWidth={1.75} />,
+          iconColorClassName: 'text-indigo-500 dark:text-indigo-400',
           label: t('artifactNewTabNewMarkdown'),
         };
       case ArtifactNewTabCardId.Files:
         return {
-          icon: <FolderIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <WorkspaceFilesIcon className={className} />,
+          iconColorClassName: '',
           label: t('artifactNewTabFiles'),
-          badge: artifacts.length > 0 ? (
-            <span className="rounded-full bg-background/80 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
-              {artifacts.length}
-            </span>
-          ) : undefined,
         };
       case ArtifactNewTabCardId.Browser:
         return {
-          icon: <GlobeAltIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <ArtifactBrowserIcon className={className} />,
+          iconColorClassName: 'text-[#0EA5E9] dark:text-[#38BDF8]',
           label: t('artifactBrowserTab'),
           badge: (hasAgentBrowserActivity || localServices.length > 0) ? (
             <span
@@ -506,7 +512,8 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         };
       case ArtifactNewTabCardId.WorkspaceChanges:
         return {
-          icon: <WorkspaceDiffIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <WorkspaceDiffIcon className={className} />,
+          iconColorClassName: 'text-emerald-600 dark:text-emerald-400',
           label: t('artifactNewTabWorkspaceChanges'),
           badge: gitProbe.changedFileCount > 0 ? (
             <span className="rounded-full bg-background/80 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
@@ -516,7 +523,8 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         };
       case ArtifactNewTabCardId.Subagents:
         return {
-          icon: <SubagentMiniIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <SubagentMiniIcon className={className} />,
+          iconColorClassName: 'text-violet-500 dark:text-violet-400',
           label: t('subagentPanelTitle'),
           badge: runningSubagentCount > 0 ? (
             <span className="h-2 w-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
@@ -526,12 +534,14 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         };
       case ArtifactNewTabCardId.OpenLocalFile:
         return {
-          icon: <FolderOpenIcon className="h-[18px] w-[18px]" />,
+          renderIcon: className => <FolderOpenIcon className={className} strokeWidth={1.6} />,
+          iconColorClassName: 'text-secondary group-hover:text-foreground',
           label: t('artifactNewTabOpenLocalFile'),
         };
       case ArtifactNewTabCardId.RevealWorkspace:
         return {
-          icon: <ArrowUpRightIcon className="h-[16px] w-[16px]" />,
+          renderIcon: className => <ArrowUpRightIcon className={className} strokeWidth={1.6} />,
+          iconColorClassName: 'text-secondary group-hover:text-foreground',
           label: t('artifactNewTabRevealWorkspace'),
         };
     }
@@ -698,9 +708,11 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                       type="button"
                       disabled={busyCardId !== null}
                       onClick={() => void runCardAction(cardId)}
-                      className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-surface"
+                      className="group flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-surface"
                     >
-                      <span className="flex shrink-0 items-center text-secondary">{meta.icon}</span>
+                      <span className={`flex shrink-0 items-center transition-colors ${meta.iconColorClassName}`}>
+                        {meta.renderIcon('h-4 w-4')}
+                      </span>
                       <span className="min-w-0 flex-1 truncate">{meta.label}</span>
                       {meta.badge}
                     </button>
@@ -725,11 +737,11 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                 className="group flex min-h-[92px] flex-col justify-between rounded-2xl border border-border/60 bg-surface-raised/80 px-4 py-3.5 text-left transition-all hover:border-foreground/15 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="flex w-full items-center justify-between gap-2">
-                  <span className="inline-flex text-secondary transition-colors group-hover:text-foreground">
+                  <span className={`inline-flex transition-colors ${meta.iconColorClassName}`}>
                     {isBusy ? (
-                      <span className="h-[18px] w-[18px] animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+                      <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
                     ) : (
-                      meta.icon
+                      meta.renderIcon('h-5 w-5')
                     )}
                   </span>
                   {meta.badge}

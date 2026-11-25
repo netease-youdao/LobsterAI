@@ -11,9 +11,47 @@ export const ArtifactWorkspaceIpc = {
   CreateBlankDocument: 'artifact:createBlankDocument',
   ProbeGitWorkspace: 'artifact:probeGitWorkspace',
   RenameFile: 'artifact:renameFile',
+  ListDirectory: 'artifact:listWorkspaceDirectory',
 } as const;
 
 export type ArtifactWorkspaceIpc = typeof ArtifactWorkspaceIpc[keyof typeof ArtifactWorkspaceIpc];
+
+export const WorkspaceDirectoryEntryKind = {
+  Directory: 'directory',
+  File: 'file',
+} as const;
+
+export type WorkspaceDirectoryEntryKind =
+  typeof WorkspaceDirectoryEntryKind[keyof typeof WorkspaceDirectoryEntryKind];
+
+export interface WorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+  kind: WorkspaceDirectoryEntryKind;
+}
+
+export interface ListWorkspaceDirectoryRequest {
+  sessionId?: string;
+  cwd?: string;
+  targetPath?: string;
+  includeHidden?: boolean;
+}
+
+export type ListWorkspaceDirectoryResponse =
+  | {
+      success: true;
+      rootPath: string;
+      directoryPath: string;
+      entries: WorkspaceDirectoryEntry[];
+      truncated: boolean;
+      totalCount: number;
+    }
+  | {
+      success: false;
+      rootPath?: string;
+      directoryPath?: string;
+      error: string;
+    };
 
 export interface CreateBlankDocumentRequest {
   sessionId?: string;

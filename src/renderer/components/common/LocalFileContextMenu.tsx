@@ -289,7 +289,7 @@ const LocalFileContextMenu: React.FC<LocalFileContextMenuProps> = ({
       : t('showInFolder');
 
   return createPortal(
-    <div ref={rootRef} className="pointer-events-none fixed inset-0 z-[10000]">
+    <div ref={rootRef} data-local-file-context-menu="true" className="pointer-events-none fixed inset-0 z-[10000]">
       <div
         ref={menuRef}
         className={MENU_CONTAINER_CLASS}

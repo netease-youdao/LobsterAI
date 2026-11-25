@@ -182,22 +182,6 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white text-[#383a42]">
-      <div className="flex shrink-0 items-center gap-2 border-b border-[#e0e0e0] px-2 py-1">
-        <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-          {sheets.map((sheet, i) => (
-            <button
-              key={sheet.name}
-              onClick={() => setActiveSheet(i)}
-              className={`whitespace-nowrap rounded px-2 py-0.5 text-xs transition-colors ${
-                i === activeSheet ? 'bg-[#217346]/10 font-medium text-[#217346]' : 'text-[#666] hover:bg-[#f0f2f5] hover:text-[#383a42]'
-              }`}
-            >
-              {sheet.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div ref={parentRef} className="flex-1 overflow-auto" onWheel={handleWheelZoom}>
         <div style={{ width: totalWidth, minWidth: '100%' }}>
           <ColumnHeaders
@@ -221,8 +205,32 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-[#e0e0e0] px-3 py-1 text-xs text-[#777]">
-        {currentSheet.rows.length.toLocaleString()} {t('artifactRowCount')}
+      {/* Excel-native bottom sheet bar shared with the fallback preview */}
+      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-t border-[#e0e0e0] bg-[#f5f6f8] px-2">
+        <div className="flex h-full min-w-0 flex-1 items-end gap-0.5 overflow-x-auto" role="tablist" aria-label={t('sheetTabsRegion')}>
+          {sheets.map((sheet, i) => {
+            const isActive = i === activeSheet;
+            return (
+              <button
+                key={sheet.name}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveSheet(i)}
+                className={`h-7 shrink-0 whitespace-nowrap rounded-t px-2.5 text-xs transition-colors ${
+                  isActive
+                    ? 'border-x border-b-2 border-x-[#e0e0e0] border-b-[#217346] bg-white font-semibold text-[#217346]'
+                    : 'text-[#666] hover:bg-black/5 hover:text-[#383a42]'
+                }`}
+              >
+                {sheet.name}
+              </button>
+            );
+          })}
+        </div>
+        <div className="shrink-0 border-l border-[#e0e0e0] pl-2 text-[11px] tabular-nums text-[#777]">
+          {currentSheet.rows.length.toLocaleString()} {t('artifactRowCount')}
+        </div>
       </div>
     </div>
   );

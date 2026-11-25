@@ -11,8 +11,8 @@ import { OfficePackageException } from './officeZip';
 
 /**
  * Same file protocol as the Word editor's WordFileStore, for any Office format: opaque handles
- * per owner, one serialized writer per canonical path, durable recovery drafts, a copy of the
- * file before a session first overwrites it, and version-checked atomic replacement.
+ * per owner, one serialized writer per canonical path, durable recovery drafts, and
+ * version-checked atomic replacement.
  */
 
 const hash = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
@@ -50,7 +50,6 @@ interface FileSession {
   latestRevision: number;
   /** Read-only content is shown but never written back. */
   editable: boolean;
-  originalCopyPath?: string;
 }
 
 interface DraftHeader {
@@ -258,13 +257,6 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
         }
         if (current.version !== version) {
           if (current.version !== request.baseVersion) throw new OfficePackageException(OfficeFileError.Conflict, 'File changed on disk');
-          if (!session.originalCopyPath) {
-            const originalDirectory = path.join(this.draftDirectory, 'originals');
-            await fs.mkdir(originalDirectory, { recursive: true, mode: 0o700 });
-            const originalCopyPath = path.join(originalDirectory, `${hash(session.filePath)}${this.format.extension}`);
-            await replaceFile(originalCopyPath, current.bytes, 0o600);
-            session.originalCopyPath = originalCopyPath;
-          }
           const stat = await fs.stat(session.filePath);
           await fs.access(session.filePath, fsConstants.W_OK);
           if (await isHeldOpen(session.filePath)) {
@@ -283,7 +275,7 @@ export class OfficeFileStore<TInfo extends OfficePackageInfo> {
         await fs.unlink(this.draftPath(session.filePath)).catch(error => {
           console.warn(`${this.format.logTag} Saved file but could not remove recovery checkpoint:`, error);
         });
-        return { version, originalCopyPath: session.originalCopyPath };
+        return { version };
       });
     });
   }

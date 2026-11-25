@@ -1,5 +1,4 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useDispatch } from 'react-redux';
 
 import { i18nService } from '@/services/i18n';
@@ -13,12 +12,8 @@ import { MarkdownFileError } from '../../../../shared/artifactPreview/markdownEd
 const MarkdownEditor = lazy(() => import('./MarkdownEditor'));
 const t = (key: string) => i18nService.t(key);
 
-/** Only a slow save is worth announcing; fast autosaves stay silent. */
+/** Only an abnormally slow save is announced; normal autosave stays completely silent. */
 const SLOW_SAVE_NOTICE_MS = 800;
-const SAVED_NOTICE_MS = 1600;
-
-const SaveNotice = { None: 'none', Hint: 'hint', Saving: 'saving', Saved: 'saved' } as const;
-type SaveNotice = typeof SaveNotice[keyof typeof SaveNotice];
 
 interface EditableMarkdownFileProps {
   artifact: Artifact;
@@ -33,8 +28,7 @@ const EditableMarkdownFile: React.FC<EditableMarkdownFileProps> = ({ artifact, s
   const document = useMemo(() => getMarkdownDocument(filePath), [filePath]);
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   const [conflictChoice, setConflictChoice] = useState<boolean | null>(null);
-  const [engaged, setEngaged] = useState(false);
-  const [notice, setNotice] = useState<SaveNotice>(SaveNotice.None);
+  const [showSlowSaving, setShowSlowSaving] = useState(false);
   const syncSavedContent = useCallback((content: string) => {
     dispatch(syncMarkdownFileContent({ sessionId: artifact.sessionId, filePath, content, contentVersion: Date.now() }));
   }, [dispatch, artifact.sessionId, filePath]);
@@ -68,37 +62,14 @@ const EditableMarkdownFile: React.FC<EditableMarkdownFileProps> = ({ artifact, s
     }
   }, [artifact.content, syncSavedContent, state.content, state.ready, state.status]);
 
-  // Autosave stays quiet: a hint until the reader first clicks into the text,
-  // a notice only for a slow save, and a brief confirmation after an edit lands.
-  const previousStatus = useRef(state.status);
   useEffect(() => {
-    const previous = previousStatus.current;
-    previousStatus.current = state.status;
-    if (!state.ready) {
-      setNotice(SaveNotice.None);
+    if (!state.ready || state.status !== MarkdownSaveState.Saving) {
+      setShowSlowSaving(false);
       return undefined;
     }
-    if (!engaged) {
-      setNotice(state.status === MarkdownSaveState.Saved ? SaveNotice.Hint : SaveNotice.None);
-      return undefined;
-    }
-    if (state.status === MarkdownSaveState.Saving) {
-      const timer = window.setTimeout(() => setNotice(SaveNotice.Saving), SLOW_SAVE_NOTICE_MS);
-      return () => window.clearTimeout(timer);
-    }
-    if (state.status === MarkdownSaveState.Saved
-      && (previous === MarkdownSaveState.Saving || previous === MarkdownSaveState.Pending)) {
-      setNotice(SaveNotice.Saved);
-      const timer = window.setTimeout(() => setNotice(SaveNotice.None), SAVED_NOTICE_MS);
-      return () => window.clearTimeout(timer);
-    }
-    setNotice(SaveNotice.None);
-    return undefined;
-  }, [engaged, state.ready, state.status]);
-
-  // Keep the last message while the notice fades out, so it does not collapse first.
-  const shownNotice = useRef<SaveNotice>(SaveNotice.None);
-  if (notice !== SaveNotice.None) shownNotice.current = notice;
+    const timer = window.setTimeout(() => setShowSlowSaving(true), SLOW_SAVE_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [state.ready, state.status]);
 
   const conflict = state.status === MarkdownSaveState.Conflict;
   const failed = state.status === MarkdownSaveState.Error;
@@ -159,22 +130,20 @@ const EditableMarkdownFile: React.FC<EditableMarkdownFileProps> = ({ artifact, s
               readOnly={!state.ready}
               sourceView={sourceView}
               onChange={document.setContent}
-              onFocus={() => setEngaged(true)}
               onBlur={() => { void document.flush(); }}
               resolveLocalFilePath={resolveLocalFilePath}
             />
           </Suspense>
         )}
-        <div
-          role="status"
-          aria-live="polite"
-          className={`pointer-events-none absolute right-4 top-2 flex items-center gap-1 rounded-full bg-background/90 px-2.5 py-0.5 text-xs text-muted shadow-sm ring-1 ring-border transition-opacity duration-300 ${notice === SaveNotice.None ? 'opacity-0' : 'opacity-100'}`}
-        >
-          {shownNotice.current === SaveNotice.Saved && <CheckIcon className="h-3.5 w-3.5" />}
-          {shownNotice.current === SaveNotice.Hint && t('markdownEditorHint')}
-          {shownNotice.current === SaveNotice.Saving && t('markdownFileSaving')}
-          {shownNotice.current === SaveNotice.Saved && t('markdownFileSaved')}
-        </div>
+        {showSlowSaving && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none absolute right-4 top-2 flex items-center gap-1 rounded-full bg-background/90 px-2.5 py-0.5 text-xs text-muted shadow-sm ring-1 ring-border"
+          >
+            {t('markdownFileSaving')}
+          </div>
+        )}
       </div>
     </div>
   );

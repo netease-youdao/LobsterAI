@@ -1,12 +1,11 @@
 import './officeEditor.css';
 
-import { CheckIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { i18nService } from '@/services/i18n';
 import { type OfficeDocument, type OfficeDocumentState, OfficeSaveState } from '@/services/office/core/officeDocument';
 import type { OfficeEditorSession } from '@/services/office/core/officeEditorSession';
-import { openLocalPathWithToast, revealLocalPathWithToast } from '@/utils/localFileActions';
+import { openLocalPathWithToast } from '@/utils/localFileActions';
 
 import { OfficeFileError, type OfficePackageInfo, type OfficeResult } from '../../../../../../shared/office/core/officeFile';
 import {
@@ -15,6 +14,8 @@ import {
 } from './OfficePreviewActionsContext';
 
 const t = (key: string) => i18nService.t(key);
+/** Only an abnormally slow save is announced; normal autosave stays completely silent. */
+const SLOW_SAVE_NOTICE_MS = 800;
 
 /** The i18n keys of what differs between editors: their names, limits and read-only reasons. */
 export interface OfficeEditorLabels<TReason extends string = string> {
@@ -31,13 +32,6 @@ export interface OfficeEditorLabels<TReason extends string = string> {
   readOnlyReasons: Record<TReason, string>;
 }
 
-const SAVE_LABEL: Record<Exclude<OfficeSaveState, typeof OfficeSaveState.Loading>, string> = {
-  [OfficeSaveState.Saved]: 'officeSaved',
-  [OfficeSaveState.Pending]: 'officePending',
-  [OfficeSaveState.Saving]: 'officeSaving',
-  [OfficeSaveState.Conflict]: 'officeConflict',
-  [OfficeSaveState.Error]: 'officeSaveFailed',
-};
 const ConflictChoice = { Mine: 'mine', Disk: 'disk' } as const;
 type ConflictChoice = typeof ConflictChoice[keyof typeof ConflictChoice];
 
@@ -64,8 +58,9 @@ export function useOfficeEditorMount(session: OfficeEditorSession<OfficePackageI
   const { document } = session;
   useEffect(() => {
     if (!host.current) return undefined;
+    const shouldRefresh = session.shouldRefreshOnMount();
     const unmount = session.mount(host.current);
-    void document.refresh();
+    if (shouldRefresh) void document.refresh();
     return unmount;
   }, [session, document, host]);
   useEffect(() => {
@@ -118,7 +113,7 @@ export function OfficeEditorLoader<TSession extends OfficeEditorSession<OfficePa
  * read-only notice around the format's toolbar and content.
  */
 export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
-  document, state, labels, className, issueLabel, onKeyDown, toolbar, notices, footerStart, footerEnd, children,
+  document, state, labels, className, issueLabel, onKeyDown, toolbar, keepToolbarWhenReadOnly = false, hideFooter = false, notices, footerStart, footerEnd, children,
 }: {
   document: OfficeDocument<TInfo>;
   state: OfficeDocumentState<TInfo['readOnly'][number]>;
@@ -129,8 +124,10 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
   issueLabel?: (issue: string) => string;
   /** Format shortcuts; Cmd/Ctrl+S saves in every editor. */
   onKeyDown?: (event: React.KeyboardEvent) => void;
-  /** Shown only while the file can be edited. */
+  /** Shown while the file can be edited, or always when `keepToolbarWhenReadOnly` is set. */
   toolbar?: React.ReactNode;
+  keepToolbarWhenReadOnly?: boolean;
+  hideFooter?: boolean;
   notices?: React.ReactNode;
   footerStart?: React.ReactNode;
   footerEnd?: React.ReactNode;
@@ -138,25 +135,47 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
 }): React.ReactElement {
   const [choice, setChoice] = useState<ConflictChoice | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [showSlowSaving, setShowSlowSaving] = useState(false);
   const readOnly = state.readOnlyReasons.length > 0;
   const resolve = async (next: ConflictChoice) => {
     if (choice !== next) { setChoice(next); return; }
     setResolving(true);
     try { await document.resolveConflict(next === ConflictChoice.Mine); } finally { setResolving(false); setChoice(null); }
   };
-  const saveLabel = state.status === OfficeSaveState.Loading ? labels.loading : SAVE_LABEL[state.status];
+  useEffect(() => {
+    if (readOnly || state.status !== OfficeSaveState.Saving) {
+      setShowSlowSaving(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setShowSlowSaving(true), SLOW_SAVE_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [readOnly, state.status]);
   const previewActions = useOfficePreviewActions();
   const hasHostHeaderStatus = Boolean(previewActions?.setSaveStatus);
-  const isDirty = document.dirty;
-  const saveStatusConfig = useMemo(() => ({
-    label: readOnly ? t('officeReadOnlyStatus') : t(saveLabel),
-    isSaved: !readOnly && state.status === OfficeSaveState.Saved,
-    isReadOnly: readOnly,
-    canSave: !readOnly && isDirty && !resolving && state.status !== OfficeSaveState.Saving,
-    isBusy: resolving || state.status === OfficeSaveState.Saving,
-    draftSafe: !readOnly && state.status !== OfficeSaveState.Saved && state.draftSafe,
-    onSave: () => { void document.flush(); },
-  }), [document, isDirty, readOnly, resolving, saveLabel, state.draftSafe, state.status]);
+  const saveStatusConfig = useMemo(() => {
+    if (readOnly) {
+      return {
+        label: t('officeReadOnlyStatus'),
+        isSaved: false,
+        isReadOnly: true,
+        canSave: false,
+        isBusy: false,
+        onSave: () => { void document.flush(); },
+      };
+    }
+    if (showSlowSaving) {
+      return {
+        label: t('officeSaving'),
+        isSaved: false,
+        isReadOnly: false,
+        canSave: false,
+        isBusy: true,
+        draftSafe: state.draftSafe,
+        onSave: () => { void document.flush(); },
+      };
+    }
+    return null;
+  }, [document, readOnly, showSlowSaving, state.draftSafe]);
   useRegisterOfficePreviewSaveStatus(saveStatusConfig);
 
   return (
@@ -168,20 +187,14 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
         }
         onKeyDown?.(event);
       }}>
-      {!hasHostHeaderStatus && (
+      {!hasHostHeaderStatus && (readOnly || showSlowSaving) && (
         <div className="lobster-office-statusbar">
           {readOnly ? (
             <span className="text-xs" role="status">{t('officeReadOnlyStatus')}</span>
           ) : (
             <span className="flex items-center gap-1.5 text-xs" role="status" aria-live="polite">
-              {state.status === OfficeSaveState.Saved && <CheckIcon className="h-3.5 w-3.5 text-emerald-600" />}
-              {t(saveLabel)}
-              {state.status !== OfficeSaveState.Saved && state.draftSafe && <span className="opacity-60">· {t('officeDraftSafe')}</span>}
+              {t('officeSaving')}
             </span>
-          )}
-          {!readOnly && (
-            <button type="button" disabled={resolving || state.status === OfficeSaveState.Saving || !document.dirty}
-              onClick={() => { void document.flush(); }}>{t('save')}</button>
           )}
         </div>
       )}
@@ -218,15 +231,14 @@ export function OfficeEditorShell<TInfo extends OfficePackageInfo>({
         </div>
       )}
       {notices}
-      {!readOnly && toolbar}
+      {(keepToolbarWhenReadOnly || !readOnly) && toolbar}
       {children}
-      <div className="lobster-office-footer">
-        {footerStart ?? <span />}
-        {state.originalCopyPath && (
-          <button type="button" onClick={() => { void revealLocalPathWithToast(state.originalCopyPath!); }}>{t('officeOriginalCopy')}</button>
-        )}
-        {footerEnd}
-      </div>
+      {!hideFooter && (
+        <div className="lobster-office-footer">
+          {footerStart ?? <span />}
+          {footerEnd}
+        </div>
+      )}
     </section>
   );
 }

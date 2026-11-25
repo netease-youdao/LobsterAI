@@ -169,10 +169,10 @@ const SidebarCapabilitiesMenu: React.FC<SidebarCapabilitiesMenuProps> = ({
         <span className="min-w-0 flex-1 truncate">{i18nService.t('skillsAndConnectors')}</span>
         <ChevronRightIcon
           aria-hidden="true"
-          className={`h-3.5 w-3.5 shrink-0 transition-all duration-150 ${
-            isActive || isOpen
-              ? 'text-secondary'
-              : 'text-secondary/65 group-hover:translate-x-0.5 group-hover:text-secondary'
+          className={`h-3.5 w-3.5 shrink-0 text-secondary transition-all duration-150 ${
+            isOpen
+              ? 'translate-x-0.5 opacity-100'
+              : 'opacity-0 group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:translate-x-0.5 group-focus-visible:opacity-100'
           }`}
         />
       </button>

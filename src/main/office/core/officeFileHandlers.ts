@@ -1,7 +1,7 @@
 import { watch } from 'node:fs';
 import path from 'node:path';
 
-import { type BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 
 import { type OfficeFileChannels, OfficeFileError, type OfficePackageInfo, type OfficeWriteRequest } from '../../../shared/office/core/officeFile';
 import type { OfficeAgentBridge } from './officeAgentBridge';
@@ -11,7 +11,7 @@ export interface OfficeFileHandlerOptions<TInfo extends OfficePackageInfo> {
   channels: OfficeFileChannels;
   store: OfficeFileStore<TInfo>;
   agent: OfficeAgentBridge;
-  getMainWindow: () => BrowserWindow | null;
+  getContents: () => WebContents | null;
   /** Shown to the agent when the window reloads mid-call, e.g. `Excel`. */
   editorName: string;
   logTag: string;
@@ -29,7 +29,7 @@ export function isLockFileOf(name: string, base: string): boolean {
   return rest.length >= base.length - 2 && base.endsWith(rest);
 }
 
-/** Whether an IPC call comes from the main window's top frame, the only caller the editors accept. */
+/** Whether an IPC call comes from this format's owner and its top frame. */
 export type OfficeCallerCheck = (event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>) => boolean;
 
 export interface OfficeFileHandlers {
@@ -39,12 +39,12 @@ export interface OfficeFileHandlers {
 }
 
 /**
- * Registers one Office format's file channels: only the main window's top frame may call them,
+ * Registers one Office format's file channels: only its owner's top frame may call them,
  * handles die with the window, and a directory watch reports external replacements of an open
  * file.
  */
 export function registerOfficeFileHandlers<TInfo extends OfficePackageInfo>(options: OfficeFileHandlerOptions<TInfo>): OfficeFileHandlers {
-  const { channels, store, agent, getMainWindow } = options;
+  const { channels, store, agent, getContents } = options;
   const unsafeEditors = new Set<WebContents>();
   const observed = new WeakSet<WebContents>();
   const ownerEpoch = new WeakMap<WebContents, number>();
@@ -77,7 +77,7 @@ export function registerOfficeFileHandlers<TInfo extends OfficePackageInfo>(opti
     }
   };
   const allowed: OfficeCallerCheck = event => {
-    const owner = getMainWindow()?.webContents;
+    const owner = getContents();
     if (!owner || owner.isDestroyed() || event.sender !== owner || event.senderFrame !== owner.mainFrame) return false;
     if (!observed.has(owner)) {
       observed.add(owner);

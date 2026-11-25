@@ -343,6 +343,7 @@ import { registerSessionDiagnosticsHandlers } from './ipcHandlers/sessionDiagnos
 import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscriptionTrial';
+import { registerWordPanelHandlers } from './ipcHandlers/wordPanel';
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
@@ -365,6 +366,7 @@ import { focusAppQuitDialog } from './libs/appQuitDialog';
 import { hideAppWindowsForQuit } from './libs/appQuitWindows';
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
+import { attachArtifactBrowserWindowOpenHandler } from './libs/artifactBrowserWindowOpen';
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
 import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
@@ -13943,7 +13945,11 @@ if (!gotTheLock) {
     getSessionCwd: sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd,
     getDefaultCwd: () => getCoworkStore().getConfig().workingDirectory.trim() || undefined,
   });
-  officeEditing.register(() => mainWindow);
+  const wordPanel = registerWordPanelHandlers({
+    getWindow: () => mainWindow, preload: path.join(__dirname, 'wordPanelPreload.js'),
+    pageUrl: isDev ? new URL('word-panel.html', DEV_SERVER_URL).href : pathToFileURL(path.join(__dirname, '../dist/word-panel.html')).href,
+  });
+  officeEditing.register(() => mainWindow, wordPanel);
 
   // ---- artifact file watching ----
   const artifactFileWatcher = new ArtifactFileWatcher<WebContents>({
@@ -14425,10 +14431,8 @@ if (!gotTheLock) {
       }
 
       const devPort = process.env.ELECTRON_START_URL?.match(/:(\d+)/)?.[1] || '5175';
-      const appDocumentUrl = isDev ? new URL(DEV_SERVER_URL).href
-        : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
       // Local Word shaping needs WASM compilation, without enabling JavaScript eval.
-      const wordWasmSource = details.url === appDocumentUrl && details.webContentsId === mainWindow?.webContents.id
+      const wordWasmSource = wordPanel.isDocument(details.url, details.webContentsId)
         ? " 'wasm-unsafe-eval'" : '';
       const cspDirectives = [
         "default-src 'self'",
@@ -14565,12 +14569,19 @@ if (!gotTheLock) {
       webPreferences.preload = BROWSER_ANNOTATION_PRELOAD_PATH;
 
       params.partition = ArtifactBrowserPartition.Default;
-      params.allowpopups = 'false';
+      // Keep allowpopups enabled so target="_blank" and window.open() reach
+      // guestWebContents.setWindowOpenHandler below, which always denies native
+      // windows and forwards valid http(s) URLs to open as a new browser tab.
+      params.allowpopups = 'true';
 
       const src = (params.src ?? '').trim().toLowerCase();
       if (src.startsWith('javascript:') || src.startsWith('data:') || src.startsWith('vbscript:')) {
         event.preventDefault();
       }
+    });
+
+    mainWindow.webContents.on('did-attach-webview', (_event, guestWebContents) => {
+      attachArtifactBrowserWindowOpenHandler(mainWindow.webContents, guestWebContents);
     });
 
     // 监听子窗口创建事件（企微授权弹窗安全限制）

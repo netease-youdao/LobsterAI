@@ -22,7 +22,6 @@ export interface OfficeDocumentState<TReason extends string = string> {
   draftSafe: boolean;
   restored: boolean;
   needsResolution: boolean;
-  originalCopyPath?: string;
   readOnlyReasons: TReason[];
   /** Another program, such as Excel or WPS, holds the file open; edits wait here until it closes it. */
   inUse: boolean;
@@ -211,7 +210,7 @@ export class OfficeDocument<TInfo extends OfficePackageInfo> {
         this.baseVersion = result.value.version;
         this.savedRevision = checkpoint.revision;
         this.publish({ status: this.dirty ? OfficeSaveState.Pending : OfficeSaveState.Saved, errorCode: undefined, inUse: false,
-          restored: false, originalCopyPath: result.value.originalCopyPath ?? this.state.originalCopyPath });
+          restored: false });
       }
     } catch (error) {
       if (error instanceof OfficeExportRefusal) {

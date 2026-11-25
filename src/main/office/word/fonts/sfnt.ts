@@ -205,10 +205,22 @@ function tableChecksum(bytes: Buffer): number {
 }
 
 /**
- * Copy one face out of a font file into a standalone font. For a plain font this rebuilds the
- * same tables; for a collection it drops the sibling faces so only the needed bytes travel.
+ * Copy one face out of a font file into a standalone font. Plain single-face fonts are returned
+ * directly after directory validation; collections extract the requested face's tables in parallel
+ * and derive `head.checkSumAdjustment` from the table checksums in O(tables) time.
  */
 export async function extractFace(source: ByteSource, faceIndex: number): Promise<Buffer> {
+  const fileHeader = await readExact(source, 0, 12);
+  const fileTag = fileHeader.readUInt32BE(0);
+  if (fileTag !== COLLECTION) {
+    if (fileTag !== TRUETYPE && fileTag !== OPENTYPE_CFF && fileTag !== APPLE_TRUE) fail('Not an OpenType font');
+    if (faceIndex !== 0) fail('Unknown face index');
+    const { tables } = await readTableDirectory(source, 0);
+    const maxStandaloneSize = 12 + tables.length * 16 + tables.reduce((sum, record) => sum + pad4(record.length), 0);
+    if (source.size <= maxStandaloneSize) {
+      return readExact(source, 0, source.size);
+    }
+  }
   const offsets = await readFaceOffsets(source);
   const faceOffset = offsets[faceIndex];
   if (faceOffset === undefined) fail('Unknown face index');
@@ -216,6 +228,7 @@ export async function extractFace(source: ByteSource, faceIndex: number): Promis
   const sorted = [...tables].sort((a, b) => (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
   const headerLength = 12 + sorted.length * 16;
   const total = headerLength + sorted.reduce((sum, record) => sum + pad4(record.length), 0);
+  const tableData = await Promise.all(sorted.map(record => readExact(source, record.offset, record.length)));
   const output = Buffer.alloc(total);
   output.writeUInt32BE(version, 0);
   output.writeUInt16BE(sorted.length, 4);
@@ -227,22 +240,27 @@ export async function extractFace(source: ByteSource, faceIndex: number): Promis
   output.writeUInt16BE(sorted.length * 16 - power * 16, 10);
   let dataOffset = headerLength;
   let headOffset = -1;
+  let tablesChecksumSum = 0;
   for (const [index, record] of sorted.entries()) {
-    const bytes = await readExact(source, record.offset, record.length);
+    const bytes = tableData[index];
     bytes.copy(output, dataOffset);
+    let checksum = record.checksum;
     if (record.tag === 'head' && record.length >= 12) {
       headOffset = dataOffset;
       output.writeUInt32BE(0, dataOffset + 8);
+      checksum = tableChecksum(output.subarray(dataOffset, dataOffset + record.length));
     }
+    tablesChecksumSum = (tablesChecksumSum + checksum) >>> 0;
     const at = 12 + index * 16;
     output.write(record.tag, at, 4, 'latin1');
-    output.writeUInt32BE(record.tag === 'head' ? tableChecksum(output.subarray(dataOffset, dataOffset + record.length)) : record.checksum, at + 4);
+    output.writeUInt32BE(checksum, at + 4);
     output.writeUInt32BE(dataOffset, at + 8);
     output.writeUInt32BE(record.length, at + 12);
     dataOffset += pad4(record.length);
   }
   if (headOffset >= 0) {
-    output.writeUInt32BE((0xb1b0afba - tableChecksum(output)) >>> 0, headOffset + 8);
+    const fileChecksum = (tableChecksum(output.subarray(0, headerLength)) + tablesChecksumSum) >>> 0;
+    output.writeUInt32BE((0xb1b0afba - fileChecksum) >>> 0, headOffset + 8);
   }
   return output;
 }

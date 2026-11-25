@@ -172,10 +172,24 @@ test('a running step line carries no timer of its own; the status line owns the 
   ], true);
   expect(writing).toContain('正在写入文件');
   expect(writing).not.toContain('data-diff-stats');
-  expect(writing).toContain('查看详情');
+  expect(writing).toMatch(/正在写入文件<\/span><svg[^>]*aria-hidden="true"/);
+  expect(writing).not.toContain('查看详情');
+  expect(writing).not.toContain('查看修改');
   expect(writing).not.toMatch(/ · \d+s/);
   // The write line leads with the app's compose icon (34×34 artboard).
   expect(writing).toMatch(/data-activity-step-kind="edit"[^]*?viewBox="0 0 34 34"/);
+
+  const written = renderTurn([
+    ...process,
+    {
+      id: 'write-done', type: 'tool_use', content: '', timestamp: startedAt,
+      metadata: { toolName: 'write', toolInput: { path: '/tmp/slide4.html', content: '<div />' }, toolUseId: 'write-done' },
+    },
+    { id: 'write-done-result', type: 'tool_result', content: 'ok', timestamp: startedAt + 500, metadata: { toolUseId: 'write-done' } },
+  ], true);
+  expect(written).toMatch(/已写入 slide4\.html<\/span><svg[^>]*aria-hidden="true"/);
+  expect(written).not.toContain('查看修改');
+  expect(written).not.toContain('查看详情');
 
   const commanding = renderTurn([
     ...process,

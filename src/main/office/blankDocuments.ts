@@ -8,6 +8,7 @@ import { BlankDocumentKind } from '../../shared/artifactPreview/blankDocument';
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 const REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const OFFICE_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const CORE_PROPS_REL = 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties';
 const WORD_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const SHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const SLIDES_NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
@@ -52,13 +53,34 @@ function zipParts(parts: Record<string, string>): Uint8Array {
 
 function buildRels(entries: Array<[string, string, string]>): string {
   const items = entries
-    .map(([id, type, target]) => `<Relationship Id="${id}" Type="${OFFICE_REL_NS}/${type}" Target="${target}"/>`)
+    .map(([id, type, target]) => {
+      const fullType = type.startsWith('http://') || type.startsWith('https://') ? type : `${OFFICE_REL_NS}/${type}`;
+      return `<Relationship Id="${id}" Type="${fullType}" Target="${target}"/>`;
+    })
     .join('');
   return `${XML_DECL}<Relationships xmlns="${REL_NS}">${items}</Relationships>`;
 }
 
-/** Minimal valid OOXML Word (.docx) document with Chinese-friendly defaults (Noto Sans SC, 12pt 小四, 1.5x line height). */
+/**
+ * Standard OOXML Word (.docx) document with Chinese Office defaults:
+ * DengXian (等线) 12pt (小四), 1.15x line spacing, 8pt paragraph after,
+ * full heading/body/table/list style set with Enter-to-Normal flow, and Word 2013+ settings.
+ */
 export function buildBlankWordBytes(): Uint8Array {
+  const headingStyle = (
+    level: number,
+    halfPoints: number,
+    before: number,
+    after: number,
+  ): string => (
+    `<w:style w:type="paragraph" w:styleId="Heading${level}">`
+    + `<w:name w:val="heading ${level}"/>`
+    + '<w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>'
+    + `<w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="${before}" w:after="${after}" w:line="240" w:lineRule="auto"/><w:outlineLvl w:val="${level - 1}"/></w:pPr>`
+    + `<w:rPr><w:b/><w:bCs/><w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/></w:rPr>`
+    + '</w:style>'
+  );
+
   return zipParts({
     '[Content_Types].xml': `${XML_DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -66,35 +88,58 @@ export function buildBlankWordBytes(): Uint8Array {
       + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
       + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
       + '<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>'
+      + '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
+      + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+      + '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
       + '</Types>',
-    '_rels/.rels': buildRels([['rId1', 'officeDocument', 'word/document.xml']]),
+    '_rels/.rels': buildRels([
+      ['rId1', 'officeDocument', 'word/document.xml'],
+      ['rId2', CORE_PROPS_REL, 'docProps/core.xml'],
+      ['rId3', 'extended-properties', 'docProps/app.xml'],
+    ]),
+    'docProps/core.xml': `${XML_DECL}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"/>`,
+    'docProps/app.xml': `${XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>LobsterAI</Application></Properties>`,
     'word/_rels/document.xml.rels': buildRels([
       ['rId1', 'styles', 'styles.xml'],
       ['rId2', 'fontTable', 'fontTable.xml'],
+      ['rId3', 'settings', 'settings.xml'],
     ]),
+    'word/settings.xml': `${XML_DECL}<w:settings xmlns:w="${WORD_NS}">`
+      + '<w:defaultTabStop w:val="420"/>'
+      + '<w:characterSpacingControl w:val="compressPunctuation"/>'
+      + '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>'
+      + '<w:themeFontLang w:val="en-US" w:eastAsia="zh-CN"/>'
+      + '</w:settings>',
     'word/fontTable.xml': `${XML_DECL}<w:fonts xmlns:w="${WORD_NS}">`
-      + '<w:font w:name="Noto Sans SC"><w:charset w:val="86"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>'
+      + '<w:font w:name="等线"><w:altName w:val="DengXian"/><w:charset w:val="86"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>'
       + '</w:fonts>',
     'word/styles.xml': `${XML_DECL}<w:styles xmlns:w="${WORD_NS}">`
       + '<w:docDefaults>'
       + '<w:rPrDefault><w:rPr>'
-      + '<w:rFonts w:ascii="Noto Sans SC" w:hAnsi="Noto Sans SC" w:eastAsia="Noto Sans SC" w:cs="Noto Sans SC"/>'
-      + '<w:color w:val="1F2329"/>'
+      + '<w:rFonts w:ascii="等线" w:hAnsi="等线" w:eastAsia="等线" w:cs="等线"/>'
       + '<w:sz w:val="24"/><w:szCs w:val="24"/>'
       + '<w:lang w:val="en-US" w:eastAsia="zh-CN"/>'
       + '</w:rPr></w:rPrDefault>'
-      + '<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
+      + '<w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
       + '</w:docDefaults>'
-      + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
-      + '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="120" w:after="200"/></w:pPr><w:rPr><w:b/><w:sz w:val="52"/><w:szCs w:val="52"/></w:rPr></w:style>'
-      + '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="44"/><w:szCs w:val="44"/></w:rPr></w:style>'
-      + '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>'
-      + '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="80"/><w:outlineLvl w:val="2"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:style>'
+      + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>'
+      + '<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>'
+      + '<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>'
+      + '<w:style w:type="numbering" w:default="1" w:styleId="NoList"><w:name w:val="No List"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/></w:style>'
+      + '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="80" w:after="200" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:b/><w:bCs/><w:sz w:val="48"/><w:szCs w:val="48"/></w:rPr></w:style>'
+      + '<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="160" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:color w:val="595959"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:style>'
+      + headingStyle(1, 36, 280, 120)
+      + headingStyle(2, 30, 200, 80)
+      + headingStyle(3, 26, 160, 60)
+      + headingStyle(4, 24, 120, 40)
+      + '<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="120" w:after="120"/><w:ind w:left="480"/></w:pPr><w:rPr><w:i/><w:iCs/><w:color w:val="595959"/></w:rPr></w:style>'
+      + '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="420"/><w:contextualSpacing/></w:pPr></w:style>'
+      + '<w:style w:type="paragraph" w:styleId="NoSpacing"><w:name w:val="No Spacing"/><w:qFormat/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:style>'
       + '</w:styles>',
     'word/document.xml': `${XML_DECL}<w:document xmlns:w="${WORD_NS}" xmlns:r="${OFFICE_REL_NS}">`
       + '<w:body>'
       + '<w:p/>'
-      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1080" w:right="1134" w:bottom="1080" w:left="1134" w:header="720" w:footer="720"/></w:sectPr>'
+      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
       + '</w:body></w:document>',
   });
 }

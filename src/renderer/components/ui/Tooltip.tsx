@@ -1,19 +1,21 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+
+import {
+  computePortalTooltipPosition,
+  type PortalTooltipPosition,
+  TooltipAlign,
+  TooltipPosition,
+} from './tooltipPosition';
+
+export { TooltipAlign, TooltipPosition };
 
 const TOOLTIP_SHOW_EVENT = 'lobster:tooltip-show';
 
-export const TooltipPosition = {
-  Top: 'top',
-  Bottom: 'bottom',
-} as const;
-export type TooltipPosition = typeof TooltipPosition[keyof typeof TooltipPosition];
+export const TOOLTIP_DARK_BUBBLE_CLASS_NAME =
+  'bg-[#262626] text-white dark:border dark:border-white/10 dark:bg-[#3a3a3a]';
 
-export const TooltipAlign = {
-  Start: 'start',
-  Center: 'center',
-  End: 'end',
-} as const;
-export type TooltipAlign = typeof TooltipAlign[keyof typeof TooltipAlign];
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 interface TooltipProps {
   content: React.ReactNode;
@@ -25,6 +27,7 @@ interface TooltipProps {
   maxWidth?: string;
   disabled?: boolean;
   multiline?: boolean;
+  portal?: boolean;
   // Replaces the default border, background and text colour of the bubble.
   bubbleClassName?: string;
 }
@@ -39,10 +42,14 @@ const Tooltip: React.FC<TooltipProps> = ({
   maxWidth = '18rem',
   disabled = false,
   multiline = false,
+  portal = false,
   bubbleClassName = 'border border-border bg-surface-overlay text-foreground',
 }) => {
   const [isVisible, setIsVisible] = useState(false);
+  const [portalPosition, setPortalPosition] = useState<PortalTooltipPosition | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
   const tooltipId = useId();
   const showContent = isVisible && !disabled && Boolean(content);
 
@@ -87,14 +94,70 @@ const Tooltip: React.FC<TooltipProps> = ({
     return () => window.removeEventListener(TOOLTIP_SHOW_EVENT, onTooltipShow);
   }, [hideTooltip, tooltipId]);
 
+  useEffect(() => {
+    if (!isVisible) return undefined;
+    window.addEventListener('blur', hideTooltip);
+    return () => window.removeEventListener('blur', hideTooltip);
+  }, [hideTooltip, isVisible]);
+
   useEffect(() => () => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
   }, []);
 
+  useIsomorphicLayoutEffect(() => {
+    if (!portal || !showContent) {
+      setPortalPosition(null);
+      return undefined;
+    }
+
+    const updatePosition = () => {
+      const triggerEl = triggerRef.current;
+      const bubbleEl = bubbleRef.current;
+      if (!triggerEl || !bubbleEl) return;
+
+      const anchorRect = triggerEl.getBoundingClientRect();
+      if (anchorRect.width === 0 && anchorRect.height === 0) {
+        hideTooltip();
+        return;
+      }
+
+      const bubbleRect = bubbleEl.getBoundingClientRect();
+      const next = computePortalTooltipPosition({
+        anchorRect,
+        bubbleSize: { width: bubbleRect.width, height: bubbleRect.height },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        position,
+        align,
+      });
+      setPortalPosition((prev) => (
+        prev
+          && prev.left === next.left
+          && prev.top === next.top
+          && prev.placement === next.placement
+          ? prev
+          : next
+      ));
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [align, content, hideTooltip, maxWidth, multiline, portal, position, showContent]);
+
+  const bubbleCommonClassName = `pointer-events-none rounded-md ${bubbleClassName}
+    px-2 py-1 text-[11px] leading-4 shadow-lg
+    ${multiline ? 'w-max whitespace-pre-wrap break-words text-left' : 'whitespace-nowrap'}
+    backdrop-blur-sm`;
+
   return (
     <div
+      ref={triggerRef}
       className={`relative ${className}`}
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
@@ -116,17 +179,31 @@ const Tooltip: React.FC<TooltipProps> = ({
         })
         : children}
       {showContent && (
-        <div
-          id={tooltipId}
-          role="tooltip"
-          style={{ maxWidth }}
-          className={`absolute z-[100] pointer-events-none rounded-md ${bubbleClassName}
-            px-2 py-1 text-[11px] leading-4 shadow-lg
-            ${multiline ? 'w-max whitespace-pre-wrap break-words text-left' : 'whitespace-nowrap'}
-            backdrop-blur-sm ${positionClassName} ${alignClassName}`}
-        >
-          {content}
-        </div>
+        portal && typeof document !== 'undefined'
+          ? createPortal(
+              <div
+                ref={bubbleRef}
+                id={tooltipId}
+                role="tooltip"
+                style={portalPosition
+                  ? { left: portalPosition.left, top: portalPosition.top, maxWidth }
+                  : { left: 0, top: 0, maxWidth, visibility: 'hidden' }}
+                className={`fixed z-[9999] ${bubbleCommonClassName}`}
+              >
+                {content}
+              </div>,
+              document.body,
+            )
+          : (
+              <div
+                id={tooltipId}
+                role="tooltip"
+                style={{ maxWidth }}
+                className={`absolute z-[100] ${bubbleCommonClassName} ${positionClassName} ${alignClassName}`}
+              >
+                {content}
+              </div>
+            )
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createServerAutomationHost } from '@docx-editor.dev/core/automation';
+import { strFromU8, unzipSync } from 'fflate';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { nodeXmlCodec } from '../../../tests/fixtures/slides';
@@ -32,12 +33,38 @@ afterEach(async () => {
 });
 
 describe('blank OOXML document builders', () => {
-  test('blank Word package passes admission and opens in the docx editor engine', () => {
+  test('blank Word package passes admission, includes complete OOXML parts/styles, and opens in the docx editor engine', () => {
     const bytes = buildBlankWordBytes();
     const info = inspectWordPackage(bytes);
     expect(info.readOnly).toEqual([]);
-    expect(info.fonts.map(font => font.name)).toContain('Noto Sans SC');
+    expect(info.fonts).toEqual([
+      expect.objectContaining({ name: '等线', altName: 'DengXian' }),
+    ]);
     expect(info.fonts.map(font => font.name)).not.toContain('Calibri');
+
+    const parts = unzipSync(bytes);
+    expect(parts['word/settings.xml']).toBeDefined();
+    expect(parts['docProps/core.xml']).toBeDefined();
+    expect(parts['docProps/app.xml']).toBeDefined();
+
+    const settingsXml = strFromU8(parts['word/settings.xml']);
+    expect(settingsXml).toContain('compatibilityMode');
+    expect(settingsXml).toContain('compressPunctuation');
+
+    const stylesXml = strFromU8(parts['word/styles.xml']);
+    expect(stylesXml).toContain('w:after="160" w:line="276" w:lineRule="auto"');
+    expect(stylesXml).toContain('w:styleId="DefaultParagraphFont"');
+    expect(stylesXml).toContain('w:styleId="TableNormal"');
+    expect(stylesXml).toContain('w:styleId="NoList"');
+    expect(stylesXml).toContain('w:styleId="Subtitle"');
+    expect(stylesXml).toContain('w:styleId="Heading4"');
+    expect(stylesXml).toContain('w:styleId="Quote"');
+    expect(stylesXml).toContain('w:styleId="ListParagraph"');
+    expect(stylesXml).toContain('w:styleId="NoSpacing"');
+    // Headings and titles return to Normal on Enter and do not inherit body 1.15x line spacing.
+    expect(stylesXml).toContain('w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>');
+    expect(stylesXml).toContain('w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>');
+
     const opened = createServerAutomationHost(bytes);
     expect(opened.ok).toBe(true);
   });

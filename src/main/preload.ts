@@ -20,12 +20,17 @@ import {
   ArtifactWorkspaceIpc,
   type CreateBlankDocumentRequest,
   type CreateBlankDocumentResponse,
+  type ListWorkspaceDirectoryRequest,
+  type ListWorkspaceDirectoryResponse,
   type ProbeGitWorkspaceRequest,
   type ProbeGitWorkspaceResponse,
   type RenameArtifactFileRequest,
   type RenameArtifactFileResponse,
 } from '../shared/artifactPreview/blankDocument';
-import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
+import {
+  type ArtifactBrowserWindowOpenEvent,
+  ArtifactPreviewIpc,
+} from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
@@ -188,6 +193,7 @@ import { createLanguageToolsBridge } from './desktopCompanion/languageToolsPrelo
 import { createImageEditingBridge } from './imageEditingPreload';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { createOfficeBridges } from './office/officePreloadBridges';
+import { createWordPanelBridge } from './office/word/wordPanelPreloadBridge';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
@@ -1260,6 +1266,7 @@ contextBridge.exposeInMainWorld('electron', {
   artifact: {
     imageEditing: createImageEditingBridge(ipcRenderer),
     office: createOfficeBridges(ipcRenderer),
+    wordPanel: createWordPanelBridge(ipcRenderer),
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),
@@ -1273,6 +1280,14 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(ArtifactPreviewIpc.FileChanged, handler);
       return () => {
         ipcRenderer.removeListener(ArtifactPreviewIpc.FileChanged, handler);
+      };
+    },
+    onBrowserWindowOpen: (callback: (data: ArtifactBrowserWindowOpenEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: ArtifactBrowserWindowOpenEvent) =>
+        callback(data);
+      ipcRenderer.on(ArtifactPreviewIpc.BrowserWindowOpen, handler);
+      return () => {
+        ipcRenderer.removeListener(ArtifactPreviewIpc.BrowserWindowOpen, handler);
       };
     },
     createPreviewSession: (filePath: string) =>
@@ -1311,6 +1326,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(ArtifactWorkspaceIpc.ProbeGitWorkspace, request ?? {}) as Promise<ProbeGitWorkspaceResponse>,
     renameFile: (request: RenameArtifactFileRequest) =>
       ipcRenderer.invoke(ArtifactWorkspaceIpc.RenameFile, request) as Promise<RenameArtifactFileResponse>,
+    listWorkspaceDirectory: (request?: ListWorkspaceDirectoryRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.ListDirectory, request ?? {}) as Promise<ListWorkspaceDirectoryResponse>,
   },
   autoLaunch: {
     get: () => ipcRenderer.invoke(AppSettingsIpc.GetAutoLaunch),

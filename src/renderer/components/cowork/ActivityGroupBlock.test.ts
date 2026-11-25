@@ -57,6 +57,37 @@ test('a finished run folds into one collapsed summary line without an arrow', ()
   expect(renderedSteps(html)).toEqual([]);
 });
 
+test('a finished run with file changes shows a fold arrow without redundant action text', () => {
+  const writeEntry = (index: number, path: string): ActivityChunkEntry => ({
+    index,
+    item: {
+      type: 'tool_group',
+      group: {
+        type: 'tool_group',
+        toolUse: {
+          id: `tool-${index}`,
+          type: 'tool_use',
+          content: '',
+          timestamp: 0,
+          metadata: { toolName: 'write', toolInput: { path } },
+        },
+        toolResult: { id: `tool-${index}-result`, type: 'tool_result', content: 'ok', timestamp: 0 },
+      },
+    } satisfies ConsolidatedItem,
+  });
+  const html = renderRun([
+    toolEntry(0, 'exec'),
+    writeEntry(1, '/notes/slide1.html'),
+    writeEntry(2, '/notes/slide2.html'),
+  ]);
+  expect(html).toContain('运行了 1 个命令、已修改 2 个文件');
+  expect(html).toMatch(/运行了 1 个命令、已修改 2 个文件<\/span><svg[^>]*aria-hidden="true"/);
+  expect(html).not.toContain('查看修改');
+  expect(html).not.toContain('查看详情');
+  expect(html).not.toContain('查看原因');
+  expect(html).not.toContain('收起详情');
+});
+
 test('a finished lone step keeps its own line instead of a summary', () => {
   const html = renderRun([toolEntry(4, 'exec')]);
   expect(html).not.toContain('data-activity-run-summary');

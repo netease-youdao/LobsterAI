@@ -191,7 +191,7 @@ export function createSheetUniver(options: SheetUniverOptions): { univer: Univer
     container: options.container,
     header: true,
     toolbar: false,
-    footer: true,
+    footer: false,
     contextMenu: true,
     headerMenu: false,
     disableAutoFocus: true,
@@ -207,7 +207,8 @@ export function createSheetUniver(options: SheetUniverOptions): { univer: Univer
     clipboardConfig: { hidePasteOptions: true },
     // Excel flags text only when it would convert to a number; Univer also flags date-like text.
     disableForceStringMark: true,
-    footer: { sheetBar: true, statisticBar: true, menus: true, zoomSlider: true, addSheetButtonConfig: { show: true, defaultColumnCount: 26 } },
+    // LobsterAI renders its own Excel-native SheetTabBar so tabs stay visible in narrow split panes.
+    footer: false,
   });
   univer.registerPlugin(UniverSheetsFormulaPlugin, { ...FORMULA_CONFIG, notExecuteFormula: remote });
   univer.registerPlugin(UniverSheetsFormulaUIPlugin);

@@ -9,6 +9,9 @@ import type { MainOfficeFormat } from '../officeEditing';
 import { defaultWordFontDirectories, WordFontCatalog } from './fonts/fontCatalog';
 import { inspectWordPackage } from './wordPackage';
 
+/** Delay background font catalog indexing until after initial app startup settles. */
+const FONT_CATALOG_PREWARM_DELAY_MS = 2500;
+
 export const WORD_FORMAT: MainOfficeFormat<WordPackageInfo> = {
   spec: WORD_EDITOR,
   limits: WORD_PACKAGE_LIMITS,
@@ -21,6 +24,8 @@ export const WORD_FORMAT: MainOfficeFormat<WordPackageInfo> = {
       directories: defaultWordFontDirectories(),
       cachePath: path.join(userDataPath, 'word-fonts', 'catalog.json'),
     });
+    const prewarmTimer = setTimeout(() => { void fonts.ensureScanned(); }, FONT_CATALOG_PREWARM_DELAY_MS);
+    prewarmTimer.unref?.();
     const forbidden = { success: false, code: OfficeFileError.Forbidden } as const;
     ipcMain.handle(WordFileIpc.ResolveFonts, async (event, families: unknown) => {
       if (!allowed(event)) return forbidden;

@@ -15,7 +15,7 @@ import { PptxPreview } from './slides/PptxPreview';
 import { DocxPreview } from './word/DocxPreview';
 
 const t = (key: string) => i18nService.t(key);
-const WordFileEditor = lazy(() => import('./word/WordFileEditor'));
+const WordPanel = lazy(() => import('./word/WordPanel'));
 const SheetFileEditor = lazy(() => import('./sheet/SheetFileEditor'));
 const SlidesFileEditor = lazy(() => import('./slides/SlidesFileEditor'));
 
@@ -46,8 +46,8 @@ const OFFICE_EDITOR_VIEWS: Record<OfficeEditorId, OfficeEditorView> = {
   [OfficeEditorId.Word]: {
     loading: 'wordLoading',
     preview: artifact => <DocxPreview artifact={artifact} />,
-    editor: ({ artifact, filePath, preview, selectedTextContext }) => (
-      <WordFileEditor key={filePath} filePath={filePath} preview={preview}
+    editor: ({ artifact, filePath, selectedTextContext }) => (
+      <WordPanel key={filePath} filePath={filePath}
         onAddToChat={selectedTextContext?.enabled
           ? text => selectedTextContext.onAddSelectedText(artifactSnippet(artifact, CoworkSelectedTextSource.ArtifactWord, text))
           : undefined} />
@@ -83,7 +83,8 @@ export function officeDocumentView(artifact: Artifact, selectedTextContext?: Art
   const editor = officeEditorForPath(artifact.fileName || artifact.filePath || '');
   if (!editor) return null;
   const view = OFFICE_EDITOR_VIEWS[editor.id];
-  if (!artifact.filePath || !officeBridge(editor.id)) return view.preview(artifact);
+  if (!artifact.filePath || !officeBridge(editor.id)
+    || (editor.id === OfficeEditorId.Word && !window.electron?.artifact?.wordPanel)) return view.preview(artifact);
   return (
     <Suspense fallback={<div className="p-6 text-sm opacity-60">{t(view.loading)}</div>}>
       {view.editor({
