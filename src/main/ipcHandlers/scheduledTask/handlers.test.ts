@@ -45,6 +45,7 @@ type TestMapping = {
 function makeDeps(options: {
   mappings?: TestMapping[];
   platformAgentBindings?: Record<string, string>;
+  replyRoutes?: Record<string, { to: string; accountId: string }>;
   sendProactiveImMessage?: ScheduledTaskHandlerDeps['sendProactiveImMessage'];
 } = {}) {
   const cronJobService = {
@@ -73,6 +74,7 @@ function makeDeps(options: {
     getIMGatewayManager: () => ({
       getIMStore: () => ({
         getSessionMapping: () => undefined,
+        getConversationReplyRoute: (_platform, conversationId) => options.replyRoutes?.[conversationId] ?? null,
         getIMSettings: () => ({
           platformAgentBindings: options.platformAgentBindings ?? {},
         }),
@@ -460,6 +462,31 @@ describe('registerScheduledTaskHandlers', () => {
       agentId: 'agent-feishu-bot-1',
     });
     expect(cronJobService.runJob).toHaveBeenCalledWith('job-1');
+  });
+
+  test('lists each Feishu topic once with its native thread, saved anchor and case intact', async () => {
+    const native = 'group:oc_G:thread:omt_A';
+    const alias = 'group:oc_G:thread:om_R';
+    const other = 'group:oc_G:thread:omt_a';
+    const targets = ['oc_G#__feishu_reply_to=om_R&__feishu_thread_id=omt_A', 'oc_G#__feishu_reply_to=om_S&__feishu_thread_id=omt_a'];
+    const row = { platform: 'feishu', agentId: 'main', lastActiveAt: '10' };
+    const { deps } = makeDeps({
+      mappings: [
+        { ...row, imConversationId: alias, coworkSessionId: 'A' },
+        { ...row, imConversationId: native, coworkSessionId: 'A' },
+        { ...row, imConversationId: other, coworkSessionId: 'B' },
+      ],
+      replyRoutes: {
+        [alias]: { accountId: '12345678-bot', to: targets[0] },
+        [native]: { accountId: '12345678-bot', to: targets[0] },
+        [other]: { accountId: '12345678-bot', to: targets[1] },
+      },
+    });
+    registerScheduledTaskHandlers(deps);
+    const result = await registeredHandlers.get(ScheduledTaskIpc.ListChannelConversations)?.(null, 'feishu', '12345678') as {
+      conversations: Array<{ conversationId: string }>;
+    };
+    expect(result.conversations.map(option => option.conversationId)).toEqual(targets);
   });
 
   test('filters account-less group conversation options by the selected bot agent binding', async () => {

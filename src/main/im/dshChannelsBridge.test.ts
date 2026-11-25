@@ -101,6 +101,17 @@ describe('dshChannelsBridge', () => {
     await bridge.sendProactiveMessage({ platform: 'moltbot-popo', chatId: 'user:qa', text: 'hello' });
     expect(sentPayloads.map((p) => p.platform)).toEqual(['weixin', 'dingtalk', 'popo']);
 
+    const legacyTarget = 'chat:oc_Group#__feishu_reply_to=om_Root&__feishu_thread_id=omt_Topic';
+    await bridge.sendProactiveMessage({ platform: RetainedImPlatform.Feishu, instanceId: 'accountA', chatId: legacyTarget, text: 'topic' });
+    expect(sentPayloads.at(-1)).toMatchObject({
+      instanceId: 'accountA', chatId: 'oc_Group', replyContext: { replyToMessageId: 'om_Root', replyInThread: true },
+    });
+    const count = sentPayloads.length;
+    await expect(bridge.sendProactiveMessage({
+      platform: RetainedImPlatform.Feishu, chatId: 'group:oc_Group:thread:omt_Topic', text: 'no anchor',
+    })).rejects.toThrow(/target topic/);
+    expect(sentPayloads).toHaveLength(count);
+
     await expect(
       bridge.sendProactiveMessage({
         platform: RetiredImPlatform.Nim,

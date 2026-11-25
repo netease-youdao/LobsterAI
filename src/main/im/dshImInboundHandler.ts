@@ -11,11 +11,13 @@ import {
   RetainedImPlatform,
   type RetainedImPlatform as RetainedImPlatformType,
 } from '../../shared/dshEngine/hostConstants';
+import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../shared/im/feishuTopicRoute';
 import { ImPeerKind } from '../../shared/platform';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkLocalMediaAttachment, CoworkRuntime } from '../libs/agentEngine/types';
 import { isRetainedImPlatform } from './dshChannelsBridge';
+import type { FeishuTopicSessionRoute } from './feishuTopicSessionMapping';
 import { stripThinkingBlocks } from './imReplyGuard';
 import type { DirectSessionRoute } from './legacyDirectSessionMapping';
 import { findLegacyPopoMapping } from './popoSessionMapping';
@@ -76,6 +78,13 @@ export interface DshImInboundCoworkStorePort {
 
 export interface DshImInboundIMStorePort {
   findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null;
+  findLegacyFeishuTopicSessionMapping(route: FeishuTopicSessionRoute): IMSessionMapping | null;
+  getConversationReplyRoute(platform: Platform, imConversationId: string): { to: string } | null;
+  setConversationReplyRoute(platform: Platform, imConversationId: string, route: {
+    channel: string;
+    to: string;
+    accountId?: string;
+  }): void;
   getPopoInstances?(): Array<{ instanceId: string }>;
   getSessionMapping(
     imConversationId: string,
@@ -179,6 +188,18 @@ function buildMappingPlatform(platform: RetainedImPlatformType, instanceId: stri
     return platform as Platform;
   }
   return `${platform}:${instanceId}` as Platform;
+}
+
+function readFeishuThread(event: DshImInboundEvent) {
+  const context = event.replyContext;
+  if (event.platform.trim().toLowerCase() !== RetainedImPlatform.Feishu
+    || event.chatType !== ImPeerKind.Group || typeof context?.threadId !== 'string') return null;
+  const threadId = context.threadId.trim();
+  if (!threadId) return null;
+  const rootMessageId = typeof context.rootMessageId === 'string' ? context.rootMessageId.trim() : '';
+  const replyToMessageId = rootMessageId
+    || (typeof context.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '');
+  return { threadId, rootMessageId, replyToMessageId };
 }
 
 function extractTurnReplyText(
@@ -299,7 +320,11 @@ export class DshImInboundHandler {
       }
     }
 
-    const queueKey = `${platform}:${instanceId}:${event.chatId}:${agentId}`;
+    const thread = readFeishuThread(event);
+    const conversationId = thread
+      ? buildFeishuTopicConversationId(event.chatId, thread.rootMessageId || thread.threadId)
+      : event.chatId;
+    const queueKey = `${platform}:${instanceId}:${conversationId}:${agentId}`;
     let state = this.conversations.get(queueKey);
     if (!state) {
       state = {
@@ -560,6 +585,15 @@ export class DshImInboundHandler {
     const mappingPlatform = buildMappingPlatform(platform, instanceId);
     const resolvedCwd = eventCwd || this.deps.getDefaultCwd(agentId);
 
+    const topic = readFeishuThread(latestEvent);
+    const conversationId = topic ? buildFeishuTopicConversationId(chatId, topic.threadId) : chatId;
+    const topicAlias = topic?.rootMessageId && topic.rootMessageId !== topic.threadId
+      ? buildFeishuTopicConversationId(chatId, topic.rootMessageId)
+      : null;
+    const legacyTopic = topic ? this.deps.imStore.findLegacyFeishuTopicSessionMapping({
+      instanceId, agentId, chatId, conversationIds: topicAlias ? [conversationId, topicAlias] : [conversationId],
+    }) : null;
+
     // Prefer the verified original even if an earlier DSH build already split
     // the conversation. Its separate transcript remains available on desktop.
     const legacyDirect = (latestEvent.chatType ?? ImPeerKind.Direct) === ImPeerKind.Direct
@@ -567,11 +601,13 @@ export class DshImInboundHandler {
           platform, instanceId, agentId, chatId, senderId: latestEvent.senderId,
         })
       : null;
-    const existingMapping = legacyDirect ?? this.deps.imStore.getSessionMapping(chatId, mappingPlatform, agentId)
+    const existingMapping = legacyTopic ?? legacyDirect
+      ?? this.deps.imStore.getSessionMapping(conversationId, mappingPlatform, agentId)
+      ?? (topicAlias ? this.deps.imStore.getSessionMapping(topicAlias, mappingPlatform, agentId) : null)
       ?? (platform === RetainedImPlatform.Popo
         ? findLegacyPopoMapping(this.deps.imStore, instanceId, latestEvent.chatType ?? 'direct', chatId, agentId)
         : null);
-    const storedChatId = existingMapping?.imConversationId ?? chatId;
+    const storedChatId = existingMapping?.imConversationId ?? conversationId;
     const storedPlatform = existingMapping?.platform ?? mappingPlatform;
     let session = existingMapping
       ? this.deps.coworkStore.getSession(existingMapping.coworkSessionId)
@@ -582,7 +618,7 @@ export class DshImInboundHandler {
       const prefix = getPlatformTitlePrefix(platform);
       const label = (senderName || chatId).slice(0, 32);
       session = this.deps.coworkStore.createSession(
-        `[${prefix}] ${label}`,
+        `[${prefix}] ${label}${topic ? ` · ${topic.threadId}` : ''}`,
         resolvedCwd,
         '',
         'auto',
@@ -599,11 +635,36 @@ export class DshImInboundHandler {
           existingMapping.agentId,
         );
       } else {
-        this.deps.imStore.createSessionMapping(chatId, mappingPlatform, session.id, agentId);
+        this.deps.imStore.createSessionMapping(conversationId, mappingPlatform, session.id, agentId);
       }
       this.deps.notifySessionsChanged?.(session.id);
     } else {
       this.deps.imStore.updateSessionLastActive(storedChatId, storedPlatform, agentId);
+    }
+
+    if (topic) {
+      const previous = topic.threadId === topic.rootMessageId
+        ? this.deps.imStore.getConversationReplyRoute(storedPlatform, storedChatId)
+        : null;
+      const priorTopic = previous ? parseFeishuReplyRoute(previous.to) : null;
+      const threadId = priorTopic?.chatId === chatId && priorTopic.replyToMessageId === topic.rootMessageId
+        ? priorTopic.threadId || topic.threadId
+        : topic.threadId;
+      const route = topic.replyToMessageId ? {
+        channel: platform,
+        to: formatFeishuReplyRoute({ chatId, threadId, replyToMessageId: topic.replyToMessageId }),
+        accountId: instanceId,
+      } : null;
+      if (route) this.deps.imStore.setConversationReplyRoute(storedPlatform, storedChatId, route);
+      // Feishu may omit either the native thread ID or the root on subsequent
+      // events. Remember both keys when the service supplies them together.
+      for (const key of [conversationId, topicAlias]) {
+        if (!key || (key === storedChatId && mappingPlatform === storedPlatform)) continue;
+        const alias = this.deps.imStore.getSessionMapping(key, mappingPlatform, agentId);
+        if (alias && alias.coworkSessionId !== session.id) continue;
+        if (!alias) this.deps.imStore.createSessionMapping(key, mappingPlatform, session.id, agentId);
+        if (route) this.deps.imStore.setConversationReplyRoute(mappingPlatform, key, route);
+      }
     }
 
     const sessionId = session.id;

@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 
 import { PlatformRegistry } from '../../shared/platform';
 import { t } from '../i18n';
+import { type FeishuTopicSessionRoute, findLegacyFeishuTopicSession } from './feishuTopicSessionMapping';
 import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
@@ -1819,6 +1820,11 @@ export class IMStore {
     return row ? mapSessionMappingRow(row) : null;
   }
 
+  findLegacyFeishuTopicSessionMapping(route: FeishuTopicSessionRoute): IMSessionMapping | null {
+    const row = findLegacyFeishuTopicSession(this.db, route, this.getIMSettings().platformAgentBindings);
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
   /**
    * Find the IM mapping that owns a real OpenClaw channel session key.
    */
@@ -2013,11 +2019,8 @@ export class IMStore {
   /**
    * List all session mappings for a platform, optionally filtered by IM bot accountId.
    *
-   * The accountId is encoded as the first segment of im_conversation_id before
-   * the peer subtype suffix (for example "c9c41984:direct:ou_xxx" or the legacy
-   * NIM form "appKey-account:direct:peer"). Filtering by accountId therefore
-   * requires no schema migration. NIM additionally accepts the current stable
-   * instance key and matches legacy runtime-derived prefixes for compatibility.
+   * OpenClaw stored the account in the conversation ID. DSH stores it in the
+   * platform column as `platform:instanceId`. Both formats can coexist.
    */
   listSessionMappings(platform?: Platform, accountId?: string): IMSessionMapping[] {
     let query: string;
@@ -2025,6 +2028,27 @@ export class IMStore {
 
     if (platform && accountId) {
       const directPrefixes = new Set<string>([accountId]);
+      const platformPrefix = `${platform}:`;
+      const requestedScope = platformPrefix + accountId;
+      const scopes = this.db.prepare('SELECT key FROM im_config WHERE key GLOB ?')
+        .all(`${platformPrefix}*`) as Array<{ key: string }>;
+      const matchingScopes = scopes.filter(({ key }) => key.startsWith(requestedScope));
+      const exactScope = matchingScopes.find(({ key }) => key === requestedScope);
+      const accountScope = exactScope ?? (matchingScopes.length === 1 ? matchingScopes[0] : undefined);
+      const scopedPlatforms = new Set<string>();
+      if (accountScope) {
+        const shortScope = accountScope.key.slice(0, platformPrefix.length + 8);
+        scopedPlatforms.add(accountScope.key);
+        directPrefixes.add(accountScope.key.slice(platformPrefix.length));
+        if (scopes.filter(({ key }) => key.startsWith(shortScope)).length === 1) {
+          scopedPlatforms.add(shortScope);
+          directPrefixes.add(shortScope.slice(platformPrefix.length));
+        }
+      } else if (matchingScopes.length === 0) {
+        scopedPlatforms.add(requestedScope);
+      } else {
+        return [];
+      }
       if (platform === 'nim') {
         for (const inst of this.getNimInstances()) {
           const instanceKey = inst.instanceId?.slice(0, 8);
@@ -2036,21 +2060,20 @@ export class IMStore {
         }
       }
 
-      // Include direct conversations owned by this bot instance (prefix matches accountId)
-      // and all group conversations for the platform, since group membership per-bot
-      // is not yet stored — group: prefix is a temporary heuristic until im_account_id
-      // column is introduced.
-      const directClauses = Array.from(directPrefixes).map(() => 'im_conversation_id LIKE ?');
+      // Legacy account-less groups are filtered by the caller using the agent
+      // binding. DSH rows already identify their bot in the platform column.
+      const directClauses = Array.from(directPrefixes).map(() => 'instr(lower(im_conversation_id), lower(?)) = 1');
+      const scopePlaceholders = Array.from(scopedPlatforms).map(() => '?');
       query = `SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at
         FROM im_session_mappings
-        WHERE platform = ?
-          AND (${directClauses.join(' OR ')} OR im_conversation_id LIKE 'group:%')
+        WHERE (platform = ? AND (${directClauses.join(' OR ')} OR im_conversation_id LIKE 'group:%'))
+          OR platform IN (${scopePlaceholders.join(', ')})
         ORDER BY last_active_at DESC`;
-      params = [platform, ...Array.from(directPrefixes).map((prefix) => `${prefix}:%`)];
+      params = [platform, ...Array.from(directPrefixes).map((prefix) => `${prefix}:`), ...scopedPlatforms];
     } else if (platform) {
       query =
-        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE platform = ? ORDER BY last_active_at DESC';
-      params = [platform];
+        'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings WHERE platform = ? OR platform GLOB ? ORDER BY last_active_at DESC';
+      params = [platform, `${platform}:*`];
     } else {
       query =
         'SELECT im_conversation_id, platform, cowork_session_id, agent_id, openclaw_session_key, created_at, last_active_at FROM im_session_mappings ORDER BY last_active_at DESC';

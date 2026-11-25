@@ -91,6 +91,7 @@ import {
   type DshBridgeWebSearchHandler,
   type DshChildEnvAdditions,
   type DshHostAgentSpec,
+  DshHostBootTimeoutError,
   DshHostManager,
   type DshHostStatus,
   type DshHostWebAccessPolicy,
@@ -983,7 +984,15 @@ export class DshBootstrap {
       if (typeof clearDshCleanShutdownMarker === 'function') {
         clearDshCleanShutdownMarker(this.cleanShutdownMarkerPath);
       }
-      await this.hostManager.start();
+      try {
+        await this.hostManager.start();
+      } catch (error) {
+        if (!(error instanceof DshHostBootTimeoutError) || !this.startingInProgress) throw error;
+        // A later host-only start cannot restore initial IM configuration or
+        // activate the scheduler. Keep the retry inside this bootstrap.
+        console.warn('[DshBootstrap] Host launch timed out, retrying startup with the saved configuration');
+        await this.hostManager.start();
+      }
       await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
         console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
       });

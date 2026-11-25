@@ -57,6 +57,7 @@ import {
   type DshCompatEngineStatus,
 } from './dshBootstrap';
 import { createDshDecisionToolProvider } from './dshDecisionTool';
+import { DshHostBootTimeoutError } from './dshHostManager';
 
 const tempDirs: string[] = [];
 const openDbs: Database.Database[] = [];
@@ -222,6 +223,50 @@ describe('DshBootstrap startup deduplication and initial config sync gate', () =
       expect(s4.phase).toBe(OpenClawEnginePhase.Running);
       expect(hostStartSpy).toHaveBeenCalledTimes(1);
       expect(syncInitialConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+
+  test('restores initial config and starts the scheduler once after a host launch timeout', async () => {
+    const { bootstrap, db } = createTestBootstrap();
+    try {
+      let hostReady = false;
+      const start = vi.spyOn(bootstrap.hostManager, 'start')
+        .mockRejectedValueOnce(new DshHostBootTimeoutError(90_000, ''))
+        .mockImplementation(async () => { hostReady = true; });
+      vi.spyOn(bootstrap.hostManager, 'isReady').mockImplementation(() => hostReady);
+      vi.spyOn(bootstrap['bridgeWiring'], 'syncDynamicHostTools').mockResolvedValue({ ok: true });
+      const syncInitialConfig = vi.fn(async () => ({ success: true }));
+      const schedulerStart = vi.spyOn(bootstrap.scheduler, 'start').mockImplementation(() => undefined);
+
+      await Promise.all([bootstrap.start({ syncInitialConfig }), bootstrap.start({ syncInitialConfig })]);
+
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(syncInitialConfig).toHaveBeenCalledTimes(1);
+      expect(schedulerStart).toHaveBeenCalledTimes(1);
+      expect(syncInitialConfig).toHaveBeenCalledBefore(schedulerStart);
+      expect(bootstrap.isReadyForTurns()).toBe(true);
+    } finally {
+      await bootstrap.stop();
+      db.close();
+    }
+  });
+
+  test('returns the second host timeout without starting the scheduler or resyncing', async () => {
+    const { bootstrap, db } = createTestBootstrap();
+    try {
+      const timeout = new DshHostBootTimeoutError(90_000, '');
+      const start = vi.spyOn(bootstrap.hostManager, 'start').mockRejectedValue(timeout);
+      const schedulerStart = vi.spyOn(bootstrap.scheduler, 'start');
+      const syncInitialConfig = vi.fn(async () => ({ success: true }));
+
+      await expect(bootstrap.start({ syncInitialConfig })).rejects.toBe(timeout);
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(syncInitialConfig).not.toHaveBeenCalled();
+      expect(schedulerStart).not.toHaveBeenCalled();
+      expect(bootstrap.isReadyForTurns()).toBe(false);
     } finally {
       await bootstrap.stop();
       db.close();

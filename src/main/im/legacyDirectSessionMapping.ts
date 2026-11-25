@@ -23,7 +23,7 @@ export interface DirectSessionRoute {
 const LEGACY_DEFAULT_ACCOUNT = 'default';
 const LEGACY_DINGTALK_DEFAULT_ACCOUNT = '__default__';
 
-function accountPrefixes(db: Database.Database, platform: LegacyDirectPlatform, instanceId: string, peer: string): string[] {
+export function resolveLegacyImAccountIds(db: Database.Database, platform: LegacyDirectPlatform, instanceId: string, peer: string): string[] {
   const configured = currentImBotIdentities(db, platform);
   const legacy = legacyImBotIdentities(db);
   if (platform === RetainedImPlatform.Weixin) {
@@ -99,7 +99,7 @@ export function findLegacyDirectSession(db: Database.Database, route: DirectSess
     route.platform === RetainedImPlatform.QQ || route.platform === RetainedImPlatform.Weixin ? route.chatId : ''
   );
   if (!peer) return null;
-  const accounts = accountPrefixes(db, route.platform, route.instanceId, peer);
+  const accounts = resolveLegacyImAccountIds(db, route.platform, route.instanceId, peer);
   if (!accounts.length) return null;
   const keys = directPeerKeys(accounts, peer);
   const scopedPlatform = `${route.platform}:${route.instanceId}`;
