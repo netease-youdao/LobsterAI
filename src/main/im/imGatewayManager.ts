@@ -47,6 +47,7 @@ import {
   IMGatewayStatus,
   Platform,
 } from './types';
+import { wecomDuplicateOwners } from './wecomConnections';
 
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
 const WEIXIN_NOT_CONFIGURED_ERROR =
@@ -340,6 +341,7 @@ export class IMGatewayManager extends EventEmitter {
   // ==================== Status ====================
   getStatus(wecomSnapshots?: ReadonlyMap<string, DshChannelStatusItem>): IMGatewayStatus {
     const config = this.getConfig();
+    const duplicateOwners = wecomDuplicateOwners(config.wecom?.instances || []);
     // Telegram runs via OpenClaw; reflect enabled+configured state per instance
     const telegramStatus = {
       instances: (config.telegram?.instances || []).map(inst => ({
@@ -433,13 +435,15 @@ export class IMGatewayManager extends EventEmitter {
       })(),
       wecom: {
         instances: (config.wecom?.instances || []).map(inst => {
-          const snapshot = inst.enabled ? wecomSnapshots?.get(inst.instanceId) : undefined;
+          const owner = duplicateOwners.get(inst.instanceId);
+          const snapshot = inst.enabled && !owner ? wecomSnapshots?.get(inst.instanceId) : undefined;
+          const error = readString(snapshot?.error);
           return {
             instanceId: inst.instanceId,
             instanceName: inst.instanceName,
             connected: snapshot?.state === DshChannelState.Connected,
             startedAt: readNumber(snapshot?.startedAt),
-            lastError: readString(snapshot?.error),
+            lastError: owner ? t('imWecomDuplicateBot', { name: owner }) : error && t(error),
             botId: inst.botId || null,
             lastInboundAt: readNumber(snapshot?.lastInboundAt),
             lastOutboundAt: readNumber(snapshot?.lastOutboundAt),

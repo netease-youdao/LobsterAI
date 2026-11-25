@@ -1325,7 +1325,7 @@ const IMSettings: React.FC = () => {
     // For WeCom, persist wecom config and test (OpenClaw mode)
     if (platform === 'wecom') {
       const wecomMultiConfig = config.wecom;
-      await imService.persistConfig({ wecom: wecomMultiConfig });
+      if (!await imService.persistConfig({ wecom: wecomMultiConfig })) return;
       const result = await runConnectivityTest(platform, {
         wecom: wecomMultiConfig,
       } as Partial<IMGatewayConfig>);
@@ -1335,9 +1335,9 @@ const IMSettings: React.FC = () => {
         if (inst && !inst.enabled) {
           const authCheck = result.checks.find((c) => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId, config: { enabled: true } }));
-            await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true });
-            setSaveReminderTarget('wecom', activeWecomInstanceId, true);
+            if (await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true })) {
+              setSaveReminderTarget('wecom', activeWecomInstanceId, true);
+            }
           }
         }
       }
@@ -1943,7 +1943,7 @@ const IMSettings: React.FC = () => {
                       </span>
                     </div>
                     {lastError && (
-                      <p className="mt-1 line-clamp-1 text-xs text-red-500">
+                      <p className={`mt-1 text-xs text-red-500 ${platform === 'wecom' ? '' : 'line-clamp-1'}`}>
                         {translateIMError(lastError)}
                       </p>
                     )}
@@ -2985,7 +2985,8 @@ const IMSettings: React.FC = () => {
                       ? { ...activeWecomInstance, ...override }
                       : activeWecomInstance;
                     const success = await imService.persistWecomInstanceConfig(activeWecomInstanceId!, configToSave);
-                    if (success) reportIMSettingsSaved('wecom', config);
+                    if (!success) return;
+                    reportIMSettingsSaved('wecom', config);
                     if (typeof override?.enabled === 'boolean') {
                       setSaveReminderTarget('wecom', activeWecomInstanceId!, override.enabled);
                     }
@@ -3001,16 +3002,18 @@ const IMSettings: React.FC = () => {
                     try {
                       const bot = await WecomAIBotSDK.openBotInfoAuthWindow({ source: 'lobster-ai' });
                       if (!isMountedRef.current) return;
-                      dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: { botId: bot.botid, secret: bot.secret, enabled: true } }));
                       dispatch(clearError());
                       const quickSetupSaved = await imService.updateWecomInstanceConfig(
                         activeWecomInstanceId!,
                         { botId: bot.botid, secret: bot.secret, enabled: true },
                         IM_AUTH_RESTART_ON_SAVE_OPTIONS,
                       );
-                      if (quickSetupSaved) {
-                        reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
+                      if (!isMountedRef.current) return;
+                      if (!quickSetupSaved) {
+                        setWecomQuickSetupStatus('idle');
+                        return;
                       }
+                      reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
                       setSaveReminderTarget('wecom', activeWecomInstanceId!, true);
                       if (!isMountedRef.current) return;
                       await imService.loadStatus();

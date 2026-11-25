@@ -349,6 +349,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // WeCom
     imWecomFillBotIdSecret: '请补全 Bot ID 和 Secret 后重新测试连通性。',
+    imWecomConnectionReplaced: '另一客户端已接管此机器人。如需在本机接管，请关闭并保存，再启用并保存。',
+    imWecomInvalidCredentials: '企微拒绝了 Bot ID 或 Secret。请更新凭据并保存。',
+    imWecomReconnecting: '暂时无法连接企微，正在自动重试。',
+    imWecomDuplicateBot: '本机的「{name}」已启用同一 Bot ID。如需切换，请先关闭该机器人。',
     imWecomConfigReady: '企业微信配置已就绪（Bot ID: {botId}）。',
     imWecomOpenClawHint:
       '企业微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
@@ -837,6 +841,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // WeCom
     imWecomFillBotIdSecret: 'Please provide the Bot ID and Secret and test connectivity again.',
+    imWecomConnectionReplaced: 'Another client took over this bot. To reconnect here, turn it off and save, then turn it on and save again.',
+    imWecomInvalidCredentials: 'WeCom rejected the Bot ID or Secret. Update the credentials and save.',
+    imWecomReconnecting: 'Unable to connect to WeCom. Retrying automatically.',
+    imWecomDuplicateBot: '“{name}” already uses this Bot ID on this device. Turn it off before switching.',
     imWecomConfigReady: 'WeCom configuration is ready (Bot ID: {botId}).',
     imWecomOpenClawHint:
       'WeCom runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
