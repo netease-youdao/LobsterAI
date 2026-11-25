@@ -54,6 +54,11 @@ export interface DeleteMemoryEntryOptions {
   id: string;
 }
 
+export interface DeleteMemoryEntriesOptions {
+  agentId?: string;
+  ids: string[];
+}
+
 interface SqliteMemoryRow {
   id: string;
   text: string;
@@ -279,11 +284,15 @@ function enrichActiveEntry(
 ): CoworkUserMemoryEntry {
   const baseFp = getMemoryBaseFingerprint(entry.id);
   const meta = activeByFingerprint.get(baseFp) ?? activeByFingerprint.get(memoryFingerprint(entry.text));
+  const projectKeyPart = entry.projectKeys && entry.projectKeys.length > 0
+    ? { projectKeys: entry.projectKeys }
+    : {};
   if (!meta) {
     return {
       id: entry.id,
       text: entry.text,
       ...(entry.section ? { section: entry.section } : {}),
+      ...projectKeyPart,
       agentId,
       status: CoworkMemoryStatus.Created,
       isExplicit: true,
@@ -294,6 +303,7 @@ function enrichActiveEntry(
     id: entry.id,
     text: entry.text,
     ...(entry.section ? { section: entry.section } : {}),
+    ...projectKeyPart,
     agentId,
     status: CoworkMemoryStatus.Created,
     confidence: meta.confidence,
@@ -329,6 +339,7 @@ export function matchesMemoryQuery(entry: CoworkUserMemoryEntry, normalizedQuery
   if (!normalizedQuery) return true;
   if (entry.text.toLowerCase().includes(normalizedQuery)) return true;
   if (entry.section && entry.section.toLowerCase().includes(normalizedQuery)) return true;
+  if (entry.projectKeys?.some((key) => key.toLowerCase().includes(normalizedQuery))) return true;
   if (entry.sourceLabel && entry.sourceLabel.toLowerCase().includes(normalizedQuery)) return true;
   if (entry.status && entry.status.toLowerCase().includes(normalizedQuery)) return true;
   if (entry.sources) {
@@ -506,6 +517,7 @@ export function createManagedMemoryEntry(
     id: entry.id,
     text: entry.text,
     ...(entry.section ? { section: entry.section } : {}),
+    ...(entry.projectKeys && entry.projectKeys.length > 0 ? { projectKeys: entry.projectKeys } : {}),
     agentId,
     status: CoworkMemoryStatus.Created,
     isExplicit: input.isExplicit ?? true,
@@ -570,6 +582,7 @@ export function updateManagedMemoryEntry(
     id: updated.id,
     text: updated.text,
     ...(updated.section ? { section: updated.section } : {}),
+    ...(updated.projectKeys && updated.projectKeys.length > 0 ? { projectKeys: updated.projectKeys } : {}),
     agentId,
     status: CoworkMemoryStatus.Created,
     isExplicit: true,
@@ -581,35 +594,56 @@ export function deleteManagedMemoryEntry(
   db: Database.Database | null,
   input: DeleteMemoryEntryOptions,
 ): boolean {
-  if (input.id.startsWith(LEGACY_MEMORY_ID_PREFIX)) {
+  return deleteManagedMemoryEntries(memoryService, db, {
+    agentId: input.agentId,
+    ids: [input.id],
+  }) > 0;
+}
+
+export function deleteManagedMemoryEntries(
+  memoryService: LobsterMemoryService,
+  db: Database.Database | null,
+  input: DeleteMemoryEntriesOptions,
+): number {
+  const normalizedIds = Array.from(
+    new Set((input.ids ?? []).map((id) => id.trim()).filter(Boolean)),
+  );
+  if (normalizedIds.length === 0) return 0;
+  if (normalizedIds.some((id) => id.startsWith(LEGACY_MEMORY_ID_PREFIX))) {
     throw new Error('Legacy read-only memory entries cannot be deleted');
   }
 
   const agentId = resolveAgentId(input.agentId);
   const beforeEntries = memoryService.listMemories(agentId);
-  const target = beforeEntries.find((e) => e.id === input.id);
-  if (!target) return false;
+  const idSet = new Set(normalizedIds);
+  const targetEntries = beforeEntries.filter((entry) => idSet.has(entry.id));
+  if (targetEntries.length === 0) return 0;
 
-  const targetBaseFp = getMemoryBaseFingerprint(target.id);
-  const deleted = memoryService.deleteMemory(agentId, input.id);
-  if (!deleted) return false;
+  const targetBaseFps = new Set(targetEntries.map((entry) => getMemoryBaseFingerprint(entry.id)));
+  const deletedCount = memoryService.deleteMemories(agentId, normalizedIds);
+  if (deletedCount === 0) return 0;
 
   // Sync delete status into SQLite `user_memories` / `user_memory_sources` if no duplicate remains.
   if (agentId === AgentId.Main && db && tableExists(db, 'user_memories')) {
-    const remainingEntries = memoryService.listMemories(agentId);
-    const stillExistsInFile = remainingEntries.some(
-      (e) => getMemoryBaseFingerprint(e.id) === targetBaseFp,
+    const remainingBaseFps = new Set(
+      memoryService.listMemories(agentId).map((entry) => getMemoryBaseFingerprint(entry.id)),
     );
-    if (!stillExistsInFile) {
-      const matchedIds = findMatchingSqliteMemoryIds(db, targetBaseFp, [
-        CoworkMemoryStatus.Created,
-        CoworkMemoryStatus.Stale,
-      ]);
-      if (matchedIds.length > 0) {
+    const removedFps = [...targetBaseFps].filter((fp) => !remainingBaseFps.has(fp));
+    if (removedFps.length > 0) {
+      const matchedIds = new Set<string>();
+      for (const fp of removedFps) {
+        for (const rowId of findMatchingSqliteMemoryIds(db, fp, [
+          CoworkMemoryStatus.Created,
+          CoworkMemoryStatus.Stale,
+        ])) {
+          matchedIds.add(rowId);
+        }
+      }
+      if (matchedIds.size > 0) {
         const now = Date.now();
         const hasSources = tableExists(db, 'user_memory_sources');
         const updateMemoryStmt = db.prepare(
-          `UPDATE user_memories SET status = ?, updated_at = ? WHERE id = ?`,
+          'UPDATE user_memories SET status = ?, updated_at = ? WHERE id = ?',
         );
         const deactivateSourceStmt = hasSources
           ? db.prepare('UPDATE user_memory_sources SET is_active = 0 WHERE memory_id = ?')
@@ -625,7 +659,7 @@ export function deleteManagedMemoryEntry(
     }
   }
 
-  return true;
+  return deletedCount;
 }
 
 export function readManagedMemoryRaw(

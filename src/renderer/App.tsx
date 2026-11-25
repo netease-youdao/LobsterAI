@@ -640,6 +640,7 @@ const App: React.FC = () => {
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
     setSettingsOptions((current) => ({
       initialTab: options?.initialTab,
+      initialMemoryAgentId: options?.initialMemoryAgentId,
       notice: options?.notice,
       noticeI18nKey: options?.noticeI18nKey,
       noticeExtra: options?.noticeExtra,
@@ -1528,11 +1529,20 @@ const App: React.FC = () => {
   useEffect(() => {
     const openBrowserSettings = () => handleShowSettings({ initialTab: 'browserWebAccess' });
     const openImSettings = () => handleShowSettings({ initialTab: SettingsTabId.Im });
+    const openMemorySettings = (event: Event) => {
+      const detail = (event as CustomEvent<{ agentId?: string }>).detail;
+      handleShowSettings({
+        initialTab: SettingsTabId.CoworkMemory,
+        initialMemoryAgentId: detail?.agentId,
+      });
+    };
     window.addEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
     window.addEventListener(AgentUiEvent.OpenImSettings, openImSettings);
+    window.addEventListener(AgentUiEvent.OpenMemorySettings, openMemorySettings);
     return () => {
       window.removeEventListener(BrowserPasskeyUiEvent.OpenBrowserSettings, openBrowserSettings);
       window.removeEventListener(AgentUiEvent.OpenImSettings, openImSettings);
+      window.removeEventListener(AgentUiEvent.OpenMemorySettings, openMemorySettings);
     };
   }, [handleShowSettings]);
 
@@ -1848,6 +1858,7 @@ const App: React.FC = () => {
               <Settings
                 onClose={handleCloseSettings}
                 initialTab={settingsOptions.initialTab}
+                initialMemoryAgentId={settingsOptions.initialMemoryAgentId}
                 initialTabRequestId={settingsOptions.requestId}
                 notice={settingsOptions.notice}
                 onUpdateFound={handleUpdateFound}
@@ -2007,6 +2018,7 @@ const App: React.FC = () => {
           onClose={handleCloseSettings}
           onStartAiSkin={handleStartAiSkinFromSettings}
           initialTab={settingsOptions.initialTab}
+          initialMemoryAgentId={settingsOptions.initialMemoryAgentId}
           initialTabRequestId={settingsOptions.requestId}
           notice={settingsOptions.notice}
           onUpdateFound={handleUpdateFound}

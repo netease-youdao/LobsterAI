@@ -8,6 +8,7 @@ import {
   LobsterMemoryService,
   MEMORY_FTS_DB_NAME,
   parseMemoryMarkdown,
+  stripLegacyDreamingPromotions,
   stripManagedAgentsSection,
   WorkspaceFileName,
 } from './lobsterMemoryService';
@@ -637,5 +638,146 @@ describe('stripManagedAgentsSection', () => {
   test('preserves non-OpenClaw custom AGENTS.md manuals intact', () => {
     const custom = '# AGENTS.md — 抖音带货官工作手册\n\n- 选品先看佣金率与复购率';
     expect(stripManagedAgentsSection(custom)).toBe(custom);
+  });
+});
+
+describe('LobsterMemoryService projectKeys metadata and batch deletion', () => {
+  test('exposes inline and heading-inherited projectKeys while stripping tags from section titles', () => {
+    const service = createService();
+    const md = [
+      '# User Memories',
+      '',
+      '- Global user preference',
+      '- Inline repo rule <!-- project: github.com/acme/lobsterai -->',
+      '',
+      '## Repo Notes <!-- project: path:/Users/dev/demo -->',
+      '',
+      '- Inherited project note',
+      '',
+    ].join('\n');
+
+    service.writeWorkspaceFile('main', WorkspaceFileName.Memory, md);
+    const entries = service.listMemories('main');
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toMatchObject({ text: 'Global user preference' });
+    expect(entries[0].projectKeys).toBeUndefined();
+    expect(entries[1]).toMatchObject({
+      text: 'Inline repo rule',
+      projectKeys: ['github.com/acme/lobsterai'],
+    });
+    expect(entries[2]).toMatchObject({
+      text: 'Inherited project note',
+      section: 'Repo Notes',
+      projectKeys: ['path:/Users/dev/demo'],
+    });
+  });
+
+  test('deleteMemories removes multiple entries atomically and prunes emptied section headings', () => {
+    const service = createService();
+    const md = [
+      '# User Memories',
+      '',
+      '- Likes cats',
+      '',
+      '## Promoted From Short-Term Memory (2026-06-28)',
+      '',
+      '- Noisy promoted entry 1',
+      '- Noisy promoted entry 2',
+      '',
+      '## Unrelated Empty Heading',
+      '',
+      '## Work',
+      '',
+      '- Keep this rule',
+      '',
+    ].join('\n');
+
+    service.writeWorkspaceFile('main', WorkspaceFileName.Memory, md);
+    const entries = service.listMemories('main');
+    const promotedIds = entries
+      .filter((entry) => entry.section?.startsWith('Promoted From Short-Term Memory'))
+      .map((entry) => entry.id);
+    expect(promotedIds).toHaveLength(2);
+
+    expect(service.deleteMemories('main', promotedIds)).toBe(2);
+
+    const remaining = service.listMemories('main');
+    expect(remaining.map((entry) => entry.text)).toEqual(['Likes cats', 'Keep this rule']);
+
+    const rawAfter = service.readWorkspaceFile('main', WorkspaceFileName.Memory);
+    expect(rawAfter).not.toContain('Promoted From Short-Term Memory');
+    expect(rawAfter).toContain('## Unrelated Empty Heading');
+    expect(rawAfter).toContain('## Work');
+    expect(service.search('main', 'Noisy promoted')).toHaveLength(0);
+  });
+});
+
+describe('stripLegacyDreamingPromotions', () => {
+  test('strips OpenClaw Dreaming short-term promotion sections and reflection noise while keeping user memories', () => {
+    const raw = [
+      '# User Memories',
+      '',
+      '- wn 的公司是 NetEase（网易）',
+      '- 我喜欢小猫咪',
+      '- 我喜欢和白开水',
+      '',
+      '## Promoted From Short-Term Memory (2026-06-28)',
+      '',
+      '<!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:74:74 -->',
+      '- istant` kept surfacing across 35 memories.; confidence: 0.79; evidence: memory/.dreams/session-corpus/2026-06-12.txt:2-2, memory/.dreams/session-corpus/2026-06-12.txt:4-4; note: reflection [score=0.857 recalls=0 avg=0.620 source=memory/2026-06-23.md:74-74]',
+      '',
+    ].join('\n');
+
+    const result = stripLegacyDreamingPromotions(raw);
+    expect(result.changed).toBe(true);
+    expect(result.removedEntries).toBe(1);
+    expect(result.content).toBe([
+      '# User Memories',
+      '',
+      '- wn 的公司是 NetEase（网易）',
+      '- 我喜欢小猫咪',
+      '- 我喜欢和白开水',
+      '',
+    ].join('\n'));
+  });
+
+  test('preserves genuine user memory appended after a legacy promoted block and drops the bogus heading', () => {
+    const raw = [
+      '# User Memories',
+      '',
+      '- 我喜欢小猫咪',
+      '',
+      '## Promoted From Short-Term Memory (2026-06-28)',
+      '',
+      '<!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:74:74 -->',
+      '- promoted fact; confidence: 0.79',
+      '- 我喜欢喝美式咖啡',
+      '',
+    ].join('\n');
+
+    const result = stripLegacyDreamingPromotions(raw);
+    expect(result.changed).toBe(true);
+    expect(result.removedEntries).toBe(1);
+    expect(result.content).not.toContain('Promoted From Short-Term Memory');
+    expect(result.content).not.toContain('promoted fact');
+    expect(result.content).toContain('- 我喜欢小猫咪');
+    expect(result.content).toContain('- 我喜欢喝美式咖啡');
+  });
+
+  test('returns empty string when MEMORY.md contained only legacy promoted blocks and leaves normal files untouched', () => {
+    const onlyNoise = [
+      '# User Memories',
+      '',
+      '## Promoted From Short-Term Memory (2026-06-28)',
+      '',
+      '- fragment; confidence: 0.80; evidence: memory/.dreams/session-corpus/2026-06-12.txt:1-2',
+      '',
+    ].join('\n');
+    const cleaned = stripLegacyDreamingPromotions(onlyNoise);
+    expect(cleaned).toEqual({ content: '', changed: true, removedEntries: 1 });
+
+    const cleanUserFile = '# User Memories\n\n- Prefers TypeScript\n- Always run vitest\n';
+    const untouched = stripLegacyDreamingPromotions(cleanUserFile);
+    expect(untouched).toEqual({ content: cleanUserFile, changed: false, removedEntries: 0 });
   });
 });

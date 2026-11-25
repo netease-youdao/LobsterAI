@@ -968,16 +968,14 @@ contextBridge.exposeInMainWorld('electron', {
     }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryUpdateEntry, input),
     deleteMemoryEntry: (input: { agentId?: string; id: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryDeleteEntry, input),
+    deleteMemoryEntries: (input: { agentId?: string; ids: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryDeleteEntries, input),
     getMemoryStats: (options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryGetStats, options),
     readMemoryFileRaw: (options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw, options),
     writeMemoryFileRaw: (input: { agentId?: string; content: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
-    getDreamingStatus: (options?: { agentId?: string }) =>
-      ipcRenderer.invoke(CoworkIpcChannel.DreamingStatus, options),
-    getDreamDiary: (options?: { agentId?: string }) =>
-      ipcRenderer.invoke(CoworkIpcChannel.DreamingDiary, options),
     readBootstrapFile: (filename: string, options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.BootstrapRead, filename, options),
     writeBootstrapFile: (filename: string, content: string, options?: { agentId?: string }) =>

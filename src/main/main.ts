@@ -284,7 +284,6 @@ import { registerFeedbackIpc } from './feedback/feedbackIpc';
 import { getLanguage, setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import { DshImInboundHandler, parseDshImInboundEvent } from './im/dshImInboundHandler';
-import { lookupSessionImChannelPermissionPreset } from './im/imChannelPermissionLookup';
 import {
   approvePairingCode,
   listPairingRequests,
@@ -669,11 +668,12 @@ import {
   summarizeMediaGenerationParamsForLog,
 } from './mediaGenerationReferences';
 import { MediaRunAccountScopes, MediaRunLifecycle } from './mediaRunAccountScopes';
-import { readLegacyDreamDiaries } from './memory/legacyDreamDiaryReader';
 import {
   createManagedMemoryEntry,
   type CreateMemoryEntryOptions,
+  deleteManagedMemoryEntries,
   deleteManagedMemoryEntry,
+  type DeleteMemoryEntriesOptions,
   type DeleteMemoryEntryOptions,
   getManagedMemoryStats,
   listManagedMemoryEntries,
@@ -2388,9 +2388,6 @@ const getDshBootstrap = (): DshBootstrap => {
       },
       getDefaultCwd: (agentId?: string) => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       getMemoryEnabled: () => storeInstance.getConfig().memoryEnabled !== false,
-      resolveSessionDefaultPermissionPreset: (coworkSessionId: string) => (
-        lookupSessionImChannelPermissionPreset(getStore().getDatabase(), coworkSessionId)
-      ),
       resolveModelSelection: async (sessionId, override, thinkingLevelOverride) => {
         const session = storeInstance.getSession(sessionId, 0);
         const agent = session?.agentId ? storeInstance.getAgent(session.agentId) : undefined;
@@ -11460,6 +11457,24 @@ if (!gotTheLock) {
     },
   );
   ipcMain.handle(
+    CoworkIpcChannel.MemoryDeleteEntries,
+    async (_event, input: DeleteMemoryEntriesOptions) => {
+      try {
+        const deletedCount = deleteManagedMemoryEntries(
+          getDshBootstrap().memoryService,
+          store ? store.getDatabase() : null,
+          input,
+        );
+        return { success: true, deletedCount };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to delete memory entries',
+        };
+      }
+    },
+  );
+  ipcMain.handle(
     CoworkIpcChannel.MemoryReadRaw,
     async (_event, options?: { agentId?: string }) => {
       try {
@@ -11508,35 +11523,6 @@ if (!gotTheLock) {
       }
     },
   );
-  // Dreaming generation is retired in LobsterAI v2 (DSH cutover);
-  // historical OpenClaw DREAMS.md diaries remain readable in read-only mode.
-  ipcMain.handle(CoworkIpcChannel.DreamingStatus, async () => ({ success: true, data: null }));
-  ipcMain.handle(CoworkIpcChannel.DreamingDiary, async (
-    _event,
-    options?: { agentId?: string },
-  ) => {
-    try {
-      const bootstrap = getDshBootstrap();
-      await bootstrap.ensureDreamDiaryBackfilled();
-      const data = readLegacyDreamDiaries(bootstrap.workspacesDir, {
-        agentId: options?.agentId,
-        resolveAgentName: (agentId) => {
-          if (agentId === AgentId.Main) return undefined;
-          try {
-            return getAgentManager().getAgent(agentId)?.name?.trim() || undefined;
-          } catch {
-            return undefined;
-          }
-        },
-      });
-      return { success: true, data };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to read historical dream diary',
-      };
-    }
-  });
 
   ipcMain.handle(CoworkIpcChannel.BootstrapRead, async (
     _event,

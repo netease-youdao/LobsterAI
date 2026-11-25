@@ -3,7 +3,6 @@
  * Types for DingTalk, Feishu and Telegram IM bot integration
  */
 
-import type { DshPermissionPreset } from '../../shared/dshEngine/hostConstants';
 import type { Platform } from '../../shared/platform';
 export type { Platform } from '../../shared/platform';
 
@@ -605,8 +604,6 @@ export interface IMGatewayConfig {
 export interface IMSettings {
   /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
   platformAgentBindings?: Record<string, string>;
-  /** Per-platform/instance default DSH permission preset. Absent = follow global default. */
-  platformPermissionPresets?: Record<string, DshPermissionPreset>;
 }
 
 export interface IMGatewayStatus {

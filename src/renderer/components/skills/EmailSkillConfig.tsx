@@ -15,28 +15,53 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { i18nService } from '../../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../../services/logReporter';
-import { type EmailSkillAccountConfig, type EmailSkillAccountsConfig, skillService } from '../../services/skill';
+import {
+  type EmailSkillAccountConfig,
+  type EmailSkillAccountsConfig,
+  skillService,
+} from '../../services/skill';
 import Modal from '../common/Modal';
+import {
+  SETTINGS_ACTION_BUTTON_CLASS,
+  SETTINGS_ICON_BUTTON_CLASS,
+  SettingsCard,
+  SettingsItem,
+  SettingsSwitch,
+} from '../settings/SettingsLayout';
 import {
   SETTINGS_DESCRIPTION_TEXT,
   SETTINGS_ITEM_TITLE_TEXT,
   SETTINGS_META_TEXT,
   SETTINGS_SECTION_TITLE_TEXT,
 } from '../settings/settingsTypography';
+import ThemedSelect from '../ui/ThemedSelect';
+import {
+  applyProviderPresetToDraft,
+  commitEmailAccountDraft,
+  createDraftEmailAccount,
+  detectKnownEmailDomainPreset,
+  EMAIL_PROVIDER_ORDER,
+  EMAIL_PROVIDER_PRESETS,
+  EmailProviderId,
+  extractEmailDomain,
+  getEmailProviderPreset,
+  isEmailAccountConfigured,
+  isLikelyValidEmailDomain,
+  nextEmailAccountId,
+  normalizeEmailAccountsConfig,
+  removeEmailAccount,
+  toggleEmailAccountEnabled,
+} from './emailSkillConfigHelpers';
 
 const SKILL_ID = 'imap-smtp-email';
 const EMAIL_ANALYTICS_SOURCE = 'settings_email';
 
-interface ProviderPreset {
-  label: string;
-  imapHost: string;
-  imapPort: number;
-  smtpHost: string;
-  smtpPort: number;
-  smtpSecure: boolean;
-  hint?: string;
-  helpUrl?: string;
-}
+const EditMode = {
+  Create: 'create',
+  Edit: 'edit',
+} as const;
+
+type EditMode = typeof EditMode[keyof typeof EditMode];
 
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
@@ -51,109 +76,12 @@ type EmailConnectivityTestResult = {
   checks: EmailConnectivityCheck[];
 };
 
-const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
-  gmail: {
-    label: 'Gmail',
-    imapHost: 'imap.gmail.com',
-    imapPort: 993,
-    smtpHost: 'smtp.gmail.com',
-    smtpPort: 587,
-    smtpSecure: false,
-    hint: 'emailHintGmail',
-    helpUrl: 'https://support.google.com/accounts/answer/185833',
-  },
-  outlook: {
-    label: 'Outlook',
-    imapHost: 'outlook.office365.com',
-    imapPort: 993,
-    smtpHost: 'smtp.office365.com',
-    smtpPort: 587,
-    smtpSecure: false,
-    helpUrl: 'https://support.microsoft.com/office/pop-imap-and-smtp-settings-8361e398-8af4-4e97-b147-6c6c4ac95353',
-  },
-  '163': {
-    label: '163.com',
-    imapHost: 'imap.163.com',
-    imapPort: 993,
-    smtpHost: 'smtp.163.com',
-    smtpPort: 465,
-    smtpSecure: true,
-    hint: 'emailHint163',
-    helpUrl: 'https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac286624f309a1a7089',
-  },
-  '126': {
-    label: '126.com',
-    imapHost: 'imap.126.com',
-    imapPort: 993,
-    smtpHost: 'smtp.126.com',
-    smtpPort: 465,
-    smtpSecure: true,
-    hint: 'emailHint163',
-    helpUrl: 'https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac286624f309a1a7089',
-  },
-  qq: {
-    label: 'QQ Mail',
-    imapHost: 'imap.qq.com',
-    imapPort: 993,
-    smtpHost: 'smtp.qq.com',
-    smtpPort: 587,
-    smtpSecure: false,
-    hint: 'emailHintQQ',
-    helpUrl: 'https://help.mail.qq.com/detail/106/985',
-  },
-  custom: {
-    label: '',
-    imapHost: '',
-    imapPort: 993,
-    smtpHost: '',
-    smtpPort: 587,
-    smtpSecure: false,
-  },
-};
-
-const createEmptyAccount = (index: number): EmailSkillAccountConfig => ({
-  id: `account-${index}`,
-  name: `${i18nService.t('emailAccount')} ${index}`,
-  enabled: false,
-  provider: '',
-  email: '',
-  password: '',
-  imapHost: '',
-  imapPort: 993,
-  imapTls: true,
-  imapRejectUnauthorized: true,
-  smtpHost: '',
-  smtpPort: 587,
-  smtpSecure: false,
-  smtpRejectUnauthorized: true,
-  smtpFrom: '',
-  mailbox: 'INBOX',
-  requireSendConfirmation: true,
-});
-
-const normalizeConfig = (config: EmailSkillAccountsConfig): EmailSkillAccountsConfig => {
-  const accounts = config.accounts.map((account, index) => ({
-    ...createEmptyAccount(index + 1),
-    ...account,
-    id: account.id || `account-${index + 1}`,
-    name: account.name || account.email?.split('@')[0] || `account-${index + 1}`,
-  }));
-  const defaultAccount = accounts.find(account => account.id === config.defaultAccountId && account.enabled)
-    ?? accounts.find(account => account.enabled)
-    ?? accounts[0];
-  return {
-    version: 1,
-    defaultAccountId: defaultAccount?.id ?? '',
-    accounts,
-  };
-};
-
-const nextAccountId = (accounts: EmailSkillAccountConfig[]): string => {
-  let index = accounts.length + 1;
-  const used = new Set(accounts.map(account => account.id));
-  while (used.has(`account-${index}`)) index += 1;
-  return `account-${index}`;
-};
+interface EditingAccountState {
+  mode: EditMode;
+  draft: EmailSkillAccountConfig;
+  makeDefault: boolean;
+  previousEmail?: string;
+}
 
 const getAccountDisplayName = (account: EmailSkillAccountConfig): string => {
   if (account.id === 'default' && (account.name === 'Default' || account.name === 'default')) {
@@ -162,11 +90,11 @@ const getAccountDisplayName = (account: EmailSkillAccountConfig): string => {
   return account.name || account.email || account.id;
 };
 
-const getAccountSubtitle = (account: EmailSkillAccountConfig): string => (
-  account.email || (account.provider ? (PROVIDER_PRESETS[account.provider]?.label || account.provider) : '')
-);
-
-const getChangedAccountKeys = (patch: Partial<EmailSkillAccountConfig>): string => {
+const getChangedAccountKeys = (
+  previous: EmailSkillAccountConfig | null,
+  next: EmailSkillAccountConfig,
+): string => {
+  if (!previous) return 'account_added';
   const fieldMappings: Array<[keyof EmailSkillAccountConfig, string]> = [
     ['provider', 'provider'],
     ['email', 'email'],
@@ -186,11 +114,11 @@ const getChangedAccountKeys = (patch: Partial<EmailSkillAccountConfig>): string 
   ];
   const changedKeys = new Set<string>();
   fieldMappings.forEach(([field, key]) => {
-    if (Object.prototype.hasOwnProperty.call(patch, field)) {
+    if (previous[field] !== next[field]) {
       changedKeys.add(key);
     }
   });
-  return Array.from(changedKeys).join(',');
+  return Array.from(changedKeys).join(',') || 'account';
 };
 
 const buildEmailSkillAnalyticsParams = (
@@ -208,7 +136,8 @@ const buildEmailSkillAnalyticsParams = (
   hasSmtpHost: Boolean(account?.smtpHost?.trim()),
   imapTlsEnabled: account?.imapTls !== false,
   smtpSslEnabled: account?.smtpSecure === true,
-  allowInsecureCert: account?.imapRejectUnauthorized === false || account?.smtpRejectUnauthorized === false,
+  allowInsecureCert:
+    account?.imapRejectUnauthorized === false || account?.smtpRejectUnauthorized === false,
   mailboxCustomized: Boolean(account?.mailbox && account.mailbox !== 'INBOX'),
 });
 
@@ -218,26 +147,27 @@ const EmailSkillConfig: React.FC = () => {
     defaultAccountId: '',
     accounts: [],
   });
-  const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditingAccountState | null>(null);
+  const [autoMatchedLabel, setAutoMatchedLabel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [persistError, setPersistError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
-  const [connectivityResults, setConnectivityResults] = useState<Record<string, EmailConnectivityTestResult>>({});
+  const [connectivityResult, setConnectivityResult] = useState<EmailConnectivityTestResult | null>(null);
   const [connectivityError, setConnectivityError] = useState<string | null>(null);
   const [pendingDeleteAccountId, setPendingDeleteAccountId] = useState<string | null>(null);
   const isMountedRef = useRef(true);
   const persistQueueRef = useRef(Promise.resolve());
-  const persistPendingCountRef = useRef(0);
 
   useEffect(() => {
     isMountedRef.current = true;
     const loadConfig = async () => {
       try {
         console.debug('[EmailSkillConfig] loading email accounts config');
-        const loaded = normalizeConfig(await skillService.getEmailAccountsConfig(SKILL_ID));
+        const loaded = normalizeEmailAccountsConfig(await skillService.getEmailAccountsConfig(SKILL_ID));
         if (!isMountedRef.current) return;
         setConfig(loaded);
         setLoadError(null);
@@ -262,20 +192,15 @@ const EmailSkillConfig: React.FC = () => {
     };
   }, []);
 
-  const activeAccount = useMemo(
-    () => config.accounts.find(account => account.id === activeAccountId) ?? null,
-    [activeAccountId, config.accounts],
-  );
-
   const persistConfig = useCallback(async (
     nextConfig: EmailSkillAccountsConfig,
     analyticsChangedKeys = '',
-  ) => {
-    const normalized = normalizeConfig(nextConfig);
+    analyticsAccountId?: string,
+  ): Promise<boolean> => {
+    const normalized = normalizeEmailAccountsConfig(nextConfig);
     if (isMountedRef.current) {
       setConfig(normalized);
     }
-    persistPendingCountRef.current += 1;
     console.debug('[EmailSkillConfig] persisting email accounts config', {
       accountCount: normalized.accounts.length,
       enabledAccountCount: normalized.accounts.filter(account => account.enabled).length,
@@ -287,7 +212,6 @@ const EmailSkillConfig: React.FC = () => {
       .then(() => skillService.setEmailAccountsConfig(SKILL_ID, normalized));
     persistQueueRef.current = persistTask.then(() => undefined, () => undefined);
     const success = await persistTask;
-    persistPendingCountRef.current = Math.max(0, persistPendingCountRef.current - 1);
     if (isMountedRef.current) {
       setPersistError(success ? null : i18nService.t('emailConfigError'));
     }
@@ -304,7 +228,9 @@ const EmailSkillConfig: React.FC = () => {
       });
     }
     if (success && analyticsChangedKeys) {
-      const analyticsAccount = normalized.accounts.find(account => account.id === activeAccountId)
+      const analyticsAccount = (analyticsAccountId
+        ? normalized.accounts.find(account => account.id === analyticsAccountId)
+        : null)
         ?? normalized.accounts.find(account => account.id === normalized.defaultAccountId)
         ?? null;
       void reportYdAnalyzer({
@@ -314,154 +240,200 @@ const EmailSkillConfig: React.FC = () => {
       });
     }
     return success;
-  }, [activeAccountId]);
+  }, []);
 
-  const updateActiveAccount = useCallback((patch: Partial<EmailSkillAccountConfig>) => {
-    if (!activeAccount) return;
-    setConfig(prev => ({
-      ...prev,
-      accounts: prev.accounts.map(account =>
-        account.id === activeAccount.id ? { ...account, ...patch } : account,
-      ),
-    }));
-  }, [activeAccount]);
-
-  const persistAccountPatch = useCallback(async (
-    accountId: string,
-    patch: Partial<EmailSkillAccountConfig> = {},
-  ) => {
-    if (!config.accounts.some(account => account.id === accountId)) return;
-    const nextAccounts = config.accounts.map(account =>
-      account.id === accountId ? { ...account, ...patch } : account,
-    );
-    await persistConfig({ ...config, accounts: nextAccounts }, getChangedAccountKeys(patch) || 'account');
-  }, [config, persistConfig]);
-
-  const persistActiveAccount = useCallback(async (patch: Partial<EmailSkillAccountConfig> = {}) => {
-    if (!activeAccount) return;
-    await persistAccountPatch(activeAccount.id, patch);
-  }, [activeAccount, persistAccountPatch]);
-
-  const openAccountDetail = (account: EmailSkillAccountConfig) => {
-    setActiveAccountId(account.id);
+  const resetFormTransientState = () => {
     setShowPassword(false);
-    setShowAdvanced(account.provider === 'custom');
+    setAutoMatchedLabel(null);
+    setConnectivityResult(null);
     setConnectivityError(null);
+    setPersistError(null);
   };
 
-  const backToOverview = () => {
-    setActiveAccountId(null);
-    setConnectivityError(null);
-  };
-
-  const handleAddAccount = async () => {
-    const id = nextAccountId(config.accounts);
-    const account = { ...createEmptyAccount(config.accounts.length + 1), id };
-    const nextConfig = normalizeConfig({
-      ...config,
-      defaultAccountId: config.defaultAccountId || id,
-      accounts: [...config.accounts, account],
+  const openCreateForm = () => {
+    const id = nextEmailAccountId(config.accounts);
+    const hasEnabledAccount = config.accounts.some(account => account.enabled);
+    resetFormTransientState();
+    setShowAdvanced(false);
+    setEditing({
+      mode: EditMode.Create,
+      draft: createDraftEmailAccount(id),
+      makeDefault: !hasEnabledAccount,
     });
-    openAccountDetail(account);
-    await persistConfig(nextConfig, 'account_added');
   };
 
-  const handleRequestDeleteAccount = (accountId: string) => {
-    setPendingDeleteAccountId(accountId);
+  const openEditForm = (account: EmailSkillAccountConfig) => {
+    resetFormTransientState();
+    setShowAdvanced(account.provider === EmailProviderId.Custom);
+    setEditing({
+      mode: EditMode.Edit,
+      draft: { ...account },
+      makeDefault: account.id === config.defaultAccountId,
+      previousEmail: account.email,
+    });
+  };
+
+  const closeForm = () => {
+    setEditing(null);
+    resetFormTransientState();
+  };
+
+  const updateDraft = useCallback((patch: Partial<EmailSkillAccountConfig>) => {
+    setEditing(prev => (prev ? { ...prev, draft: { ...prev.draft, ...patch } } : prev));
+  }, []);
+
+  const handleEmailChange = (rawEmail: string) => {
+    const detected = detectKnownEmailDomainPreset(rawEmail);
+    setEditing(prev => {
+      if (!prev) return prev;
+      const nextDraft: EmailSkillAccountConfig = {
+        ...prev.draft,
+        email: rawEmail,
+      };
+      if (detected) {
+        nextDraft.provider = detected.provider;
+        nextDraft.imapHost = detected.imapHost;
+        nextDraft.imapPort = detected.imapPort;
+        nextDraft.imapTls = detected.imapTls;
+        nextDraft.smtpHost = detected.smtpHost;
+        nextDraft.smtpPort = detected.smtpPort;
+        nextDraft.smtpSecure = detected.smtpSecure;
+      }
+      return { ...prev, draft: nextDraft };
+    });
+
+    if (detected) {
+      const label = detected.labelKey ? i18nService.t(detected.labelKey) : detected.matchedLabel ?? '';
+      setAutoMatchedLabel(label || null);
+      if (detected.provider !== EmailProviderId.Custom) {
+        setShowAdvanced(false);
+      }
+    } else {
+      setAutoMatchedLabel(null);
+    }
+  };
+
+  const handleEmailBlur = () => {
+    if (!editing) return;
+    const email = editing.draft.email.trim();
+    if (!email) return;
+    const detected = detectKnownEmailDomainPreset(email);
+    if (detected) return;
+
+    const domain = extractEmailDomain(email);
+    if (
+      isLikelyValidEmailDomain(domain)
+      && !editing.draft.provider
+      && !editing.draft.imapHost?.trim()
+    ) {
+      setEditing(prev => (prev
+        ? { ...prev, draft: { ...prev.draft, provider: EmailProviderId.Custom } }
+        : prev));
+      setShowAdvanced(true);
+    }
+  };
+
+  const handleProviderChange = (provider: string) => {
+    setAutoMatchedLabel(null);
+    if (provider === EmailProviderId.Custom) {
+      setShowAdvanced(true);
+    } else if (provider) {
+      setShowAdvanced(false);
+    }
+    setEditing(prev => (prev
+      ? { ...prev, draft: applyProviderPresetToDraft(prev.draft, provider) }
+      : prev));
+  };
+
+  const handleSaveForm = async () => {
+    if (!editing || saving) return;
+    if (!isEmailAccountConfigured(editing.draft)) return;
+
+    const preset = getEmailProviderPreset(editing.draft.provider);
+    const fallbackName = preset && preset.id !== EmailProviderId.Custom
+      ? i18nService.t(preset.labelKey)
+      : undefined;
+    const previousAccount = editing.mode === EditMode.Edit
+      ? (config.accounts.find(account => account.id === editing.draft.id) ?? null)
+      : null;
+
+    const nextConfig = commitEmailAccountDraft(config, editing.draft, {
+      isNew: editing.mode === EditMode.Create,
+      makeDefault: editing.makeDefault,
+      fallbackName,
+      previousEmail: editing.previousEmail,
+    });
+    const savedAccount = nextConfig.accounts.find(account => account.id === editing.draft.id) ?? editing.draft;
+    const changedKeys = getChangedAccountKeys(previousAccount, savedAccount);
+
+    setSaving(true);
+    const success = await persistConfig(nextConfig, changedKeys, savedAccount.id);
+    if (!isMountedRef.current) return;
+    setSaving(false);
+    if (success) {
+      closeForm();
+    }
+  };
+
+  const handleToggleAccountInList = async (accountId: string) => {
+    const nextConfig = toggleEmailAccountEnabled(config, accountId);
+    if (!nextConfig) return;
+    await persistConfig(nextConfig, 'enabled', accountId);
   };
 
   const handleConfirmDeleteAccount = async () => {
     if (!pendingDeleteAccountId) return;
     const accountId = pendingDeleteAccountId;
     setPendingDeleteAccountId(null);
-    const accounts = config.accounts.filter(account => account.id !== accountId);
-    const defaultAccountId = config.defaultAccountId === accountId
-      ? (accounts.find(account => account.enabled)?.id ?? accounts[0]?.id ?? '')
-      : config.defaultAccountId;
-    const nextConfig = normalizeConfig({ ...config, accounts, defaultAccountId });
-    if (activeAccountId === accountId) {
-      backToOverview();
+    const nextConfig = removeEmailAccount(config, accountId);
+    if (editing?.draft.id === accountId) {
+      closeForm();
     }
     await persistConfig(nextConfig, 'account_deleted');
   };
 
-  const handleProviderChange = (provider: string) => {
-    const preset = PROVIDER_PRESETS[provider];
-    if (provider === 'custom') {
-      setShowAdvanced(true);
-    }
-    updateActiveAccount({
-      provider,
-      ...(preset && provider !== 'custom'
-        ? {
-            imapHost: preset.imapHost,
-            imapPort: preset.imapPort,
-            imapTls: true,
-            smtpHost: preset.smtpHost,
-            smtpPort: preset.smtpPort,
-            smtpSecure: preset.smtpSecure,
-          }
-        : {}),
-    });
-  };
-
-  const handleEmailBlur = async () => {
-    if (!activeAccount) return;
-    const email = activeAccount.email.trim();
-    await persistActiveAccount({
-      email,
-      smtpFrom: activeAccount.smtpFrom || email,
-      name: activeAccount.name || email.split('@')[0] || activeAccount.id,
-    });
-  };
-
-  const canTest = Boolean(
-    activeAccount?.email
-      && activeAccount.password
-      && activeAccount.imapHost
-      && activeAccount.smtpHost,
-  );
-
   const handleConnectivityTest = async () => {
-    if (!activeAccount) return;
+    if (!editing || !isEmailAccountConfigured(editing.draft)) return;
+    const draft = editing.draft;
     setConnectivityError(null);
-    setTestingAccountId(activeAccount.id);
+    setConnectivityResult(null);
+    setTestingAccountId(draft.id);
     console.debug('[EmailSkillConfig] testing email account connectivity', {
-      accountId: activeAccount.id,
-      hasEmail: Boolean(activeAccount.email),
-      hasPassword: Boolean(activeAccount.password),
-      hasImapHost: Boolean(activeAccount.imapHost),
-      hasSmtpHost: Boolean(activeAccount.smtpHost),
+      accountId: draft.id,
+      hasEmail: Boolean(draft.email),
+      hasPassword: Boolean(draft.password),
+      hasImapHost: Boolean(draft.imapHost),
+      hasSmtpHost: Boolean(draft.smtpHost),
     });
     try {
-      const result = await skillService.testEmailAccountConnectivity(SKILL_ID, activeAccount);
+      const result = await skillService.testEmailAccountConnectivity(SKILL_ID, draft);
       if (!isMountedRef.current) return;
       if (result) {
-        setConnectivityResults(prev => ({ ...prev, [activeAccount.id]: result }));
+        setConnectivityResult(result);
         const imapCheck = result.checks.find(check => check.code === 'imap_connection');
         const smtpCheck = result.checks.find(check => check.code === 'smtp_connection');
         void reportYdAnalyzer({
           action: LogReporterAction.EmailSkillConnectionTested,
-          ...buildEmailSkillAnalyticsParams(config, activeAccount),
+          ...buildEmailSkillAnalyticsParams(config, draft),
           result: result.verdict,
           imapResult: imapCheck?.level ?? '',
           smtpResult: smtpCheck?.level ?? '',
         });
         console.debug('[EmailSkillConfig] email account connectivity test completed', {
-          accountId: activeAccount.id,
+          accountId: draft.id,
           verdict: result.verdict,
         });
       } else {
         setConnectivityError(i18nService.t('connectionFailed'));
         void reportYdAnalyzer({
           action: LogReporterAction.EmailSkillConnectionTested,
-          ...buildEmailSkillAnalyticsParams(config, activeAccount),
+          ...buildEmailSkillAnalyticsParams(config, draft),
           result: 'fail',
           imapResult: '',
           smtpResult: '',
         });
         console.warn('[EmailSkillConfig] email account connectivity test returned no result', {
-          accountId: activeAccount.id,
+          accountId: draft.id,
         });
       }
     } catch (error) {
@@ -470,7 +442,7 @@ const EmailSkillConfig: React.FC = () => {
       setConnectivityError(i18nService.t('connectionFailed'));
       void reportYdAnalyzer({
         action: LogReporterAction.EmailSkillConnectionTested,
-        ...buildEmailSkillAnalyticsParams(config, activeAccount),
+        ...buildEmailSkillAnalyticsParams(config, draft),
         result: 'fail',
         imapResult: '',
         smtpResult: '',
@@ -483,7 +455,7 @@ const EmailSkillConfig: React.FC = () => {
   };
 
   const buildAskAIPrompt = useCallback((result: EmailConnectivityTestResult | null): string => {
-    const account = activeAccount;
+    const account = editing?.draft;
     const lines: string[] = [];
     lines.push('我在配置邮件的 IMAP/SMTP 连接时遇到了问题，请帮我排查并给出解决方案。');
     if (account) {
@@ -503,7 +475,7 @@ const EmailSkillConfig: React.FC = () => {
       lines.push(`- ${connectivityError}`);
     }
     return lines.join('\n');
-  }, [activeAccount, connectivityError]);
+  }, [connectivityError, editing?.draft]);
 
   const handleAskAI = (result: EmailConnectivityTestResult | null) => {
     window.dispatchEvent(new CustomEvent('app:ask-ai', { detail: buildAskAIPrompt(result) }));
@@ -515,41 +487,26 @@ const EmailSkillConfig: React.FC = () => {
     });
   };
 
-  const inputClassName =
-    'block w-full rounded-lg bg-surface border border-border-subtle focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors';
-  const labelClassName = 'block text-xs font-medium text-secondary mb-1';
-  const checkboxLabelClassName = 'flex items-center gap-2 py-1 text-sm text-foreground cursor-pointer select-none';
-  const checkboxClassName = 'h-4 w-4 rounded border-border text-primary focus:ring-primary/30';
-
-  const renderEnableToggle = (account: EmailSkillAccountConfig) => (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        void persistAccountPatch(account.id, { enabled: !account.enabled });
-      }}
-      className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-        account.enabled ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
-      }`}
-      aria-label={account.enabled ? i18nService.t('disable') : i18nService.t('enable')}
-      title={account.enabled ? i18nService.t('disable') : i18nService.t('enable')}
-    >
-      <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-        account.enabled ? 'translate-x-4' : 'translate-x-0'
-      }`} />
-    </button>
+  const providerOptions = useMemo(
+    () => [
+      { value: '', label: i18nService.t('emailSelectProviderAuto') },
+      ...EMAIL_PROVIDER_ORDER.map(providerId => ({
+        value: providerId,
+        label: i18nService.t(EMAIL_PROVIDER_PRESETS[providerId].labelKey),
+      })),
+    ],
+    [],
   );
 
-  if (loading) {
-    return <div className="p-4 text-xs text-secondary">{i18nService.t('loading')}...</div>;
-  }
-
-  const activeResult = activeAccount ? connectivityResults[activeAccount.id] : null;
-  const connectivityPassed = activeResult?.verdict === 'pass';
-  const currentPreset = activeAccount?.provider ? PROVIDER_PRESETS[activeAccount.provider] : null;
-  const providerHint = currentPreset?.hint;
-  const providerHelpUrl = currentPreset?.helpUrl;
   const pendingDeleteAccount = config.accounts.find(account => account.id === pendingDeleteAccountId) ?? null;
+
+  const inputClassName =
+    'block h-9 w-full rounded-lg bg-background border border-border focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 text-foreground placeholder:text-secondary/60 px-3 text-sm transition-colors';
+  const compactInputClassName =
+    'block h-8 w-full rounded-lg bg-background border border-border focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 text-foreground placeholder:text-secondary/60 px-2.5 text-xs transition-colors';
+  const labelClassName = `block ${SETTINGS_META_TEXT} font-medium text-foreground mb-1`;
+  const checkboxLabelClassName = 'inline-flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none';
+  const checkboxClassName = 'h-3.5 w-3.5 rounded border-border accent-primary';
 
   const renderErrorBanner = () => {
     const message = loadError || persistError;
@@ -561,294 +518,403 @@ const EmailSkillConfig: React.FC = () => {
     );
   };
 
-  const renderAccountOverview = () => (
-    <div className="space-y-4">
-      {renderErrorBanner()}
+  if (loading) {
+    return <div className="py-4 text-xs text-secondary">{i18nService.t('loading')}...</div>;
+  }
 
-      {config.accounts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-10 text-center">
-          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-            <EnvelopeIcon className="h-6 w-6 text-primary" />
-          </span>
-          <p className={`mt-3 ${SETTINGS_ITEM_TITLE_TEXT} text-foreground`}>{i18nService.t('emailNoAccounts')}</p>
-          <button
-            type="button"
-            onClick={() => void handleAddAccount()}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
-          >
-            <PlusIcon className="h-4 w-4" />
-            {i18nService.t('emailAddAccount')}
-          </button>
+  const renderAccountOverview = () => {
+    if (config.accounts.length === 0) {
+      return (
+        <div className="space-y-4">
+          {renderErrorBanner()}
+
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface/50 px-6 py-12 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <EnvelopeIcon className="h-5 w-5" />
+            </span>
+            <h4 className={`mt-3.5 ${SETTINGS_ITEM_TITLE_TEXT} font-semibold text-foreground`}>
+              {i18nService.t('emailEmptyTitle')}
+            </h4>
+            <p className={`mt-1.5 max-w-md ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+              {i18nService.t('emailEmptyDescription')}
+            </p>
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="mt-5 inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              {i18nService.t('emailAddButton')}
+            </button>
+            <p className={`mt-4 ${SETTINGS_META_TEXT} text-secondary/80`}>
+              {i18nService.t('emailEmptyFootnote')}
+            </p>
+          </div>
         </div>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-          {config.accounts.map(account => {
-            const subtitle = getAccountSubtitle(account);
-            return (
-              <div
-                key={account.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => openAccountDetail(account)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    openAccountDetail(account);
-                  }
-                }}
-                className="group relative flex min-h-[86px] flex-col rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-              >
-                <div className="flex items-start gap-2.5">
-                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                    <EnvelopeIcon className="h-5 w-5 text-primary" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className={`truncate ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                      {getAccountDisplayName(account)}
+      );
+    }
+
+    return (
+      <div className="space-y-5">
+        {renderErrorBanner()}
+
+        <p className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+          {i18nService.t('emailAccountsHint')}
+        </p>
+
+        <section className="space-y-2.5">
+          <div className="flex items-center justify-between gap-3 px-0.5">
+            <h4 className={`${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}>
+              {i18nService.t('emailAddedAccountsTitle')}
+            </h4>
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              {i18nService.t('emailAddButton')}
+            </button>
+          </div>
+
+          <SettingsCard>
+            {config.accounts.map(account => {
+              const configured = isEmailAccountConfigured(account);
+              const isDefault =
+                config.accounts.length > 1
+                && account.enabled
+                && account.id === config.defaultAccountId;
+              const displayName = getAccountDisplayName(account);
+              const subtitle = account.email.trim() || i18nService.t('emailIncompleteSubtitle');
+
+              return (
+                <div
+                  key={account.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openEditForm(account)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openEditForm(account);
+                    }
+                  }}
+                  className="group flex items-center justify-between gap-4 px-4 py-3.5 text-left transition-colors hover:bg-surface-raised/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 cursor-pointer"
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <EnvelopeIcon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`truncate ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                          {displayName}
+                        </span>
+                        {isDefault && (
+                          <span className="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-xs font-medium text-primary">
+                            {i18nService.t('emailDefaultBadge')}
+                          </span>
+                        )}
+                        {!configured && (
+                          <span className="shrink-0 rounded-full bg-amber-400/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                            {i18nService.t('emailIncompleteBadge')}
+                          </span>
+                        )}
+                      </div>
+                      <div className={`mt-0.5 truncate ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                        {subtitle}
+                      </div>
                     </div>
-                    {subtitle && (
-                      <div className={`mt-0.5 truncate ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{subtitle}</div>
-                    )}
-                    <div className={`mt-0.5 flex items-center gap-1 text-xs ${
-                      account.enabled ? 'text-green-600 dark:text-green-400' : 'text-secondary'
-                    }`}>
-                      <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
-                        account.enabled ? 'bg-green-500' : 'bg-gray-400'
-                      }`} />
-                      <span className="truncate">
-                        {account.enabled ? i18nService.t('enabled') : i18nService.t('disabled')}
-                      </span>
-                    </div>
                   </div>
-                  <div className="flex flex-shrink-0 items-center gap-1 pl-1">
-                    {renderEnableToggle(account)}
+
+                  <div
+                    className="flex shrink-0 items-center gap-2"
+                    onClick={event => event.stopPropagation()}
+                    onKeyDown={event => event.stopPropagation()}
+                  >
+                    <span
+                      title={!configured ? i18nService.t('emailIncompleteToggleHint') : undefined}
+                      className="inline-flex items-center"
+                    >
+                      <SettingsSwitch
+                        checked={account.enabled}
+                        label={account.enabled ? i18nService.t('disable') : i18nService.t('enable')}
+                        disabled={!configured && !account.enabled}
+                        onClick={() => handleToggleAccountInList(account.id)}
+                      />
+                    </span>
+
                     <button
                       type="button"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleRequestDeleteAccount(account.id);
-                      }}
-                      className="rounded-md p-1 text-secondary opacity-70 transition-colors hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+                      onClick={() => setPendingDeleteAccountId(account.id)}
+                      className={`${SETTINGS_ICON_BUTTON_CLASS} opacity-65 group-hover:opacity-100`}
                       aria-label={i18nService.t('delete')}
                       title={i18nService.t('delete')}
                     >
-                      <TrashIcon className="h-3.5 w-3.5" />
+                      <TrashIcon className="h-4 w-4" />
                     </button>
+
+                    <ChevronRightIcon className="h-4 w-4 text-secondary opacity-45 transition-opacity group-hover:opacity-100" />
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </SettingsCard>
+        </section>
+      </div>
+    );
+  };
 
-          <button
-            type="button"
-            onClick={() => void handleAddAccount()}
-            className="flex min-h-[86px] flex-col items-center justify-center rounded-lg border border-dashed border-border-subtle bg-surface text-secondary transition-colors hover:border-primary/50 hover:bg-surface-raised hover:text-primary"
-          >
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-raised">
-              <PlusIcon className="h-4 w-4" />
-            </span>
-            <span className={`mt-2 ${SETTINGS_ITEM_TITLE_TEXT} font-medium`}>
-              {i18nService.t('emailAddAccount')}
-            </span>
-          </button>
-        </div>
-      )}
-    </div>
-  );
+  const renderAccountForm = (current: EditingAccountState) => {
+    const { draft, mode, makeDefault } = current;
+    const isCreate = mode === EditMode.Create;
+    const preset = getEmailProviderPreset(draft.provider);
+    const configured = isEmailAccountConfigured(draft);
+    const isTesting = testingAccountId === draft.id;
+    const connectivityPassed = connectivityResult?.verdict === 'pass';
+    const showDefaultToggle =
+      config.accounts.length >= 2 || (isCreate && config.accounts.length >= 1);
+    const helpLinkLabel = preset?.helpLinkKey
+      ? i18nService.t(preset.helpLinkKey)
+      : i18nService.t('emailProviderGuideLink');
+    const passwordHint = preset?.hintKey
+      ? i18nService.t(preset.hintKey)
+      : i18nService.t('emailPasswordHelp');
 
-  const renderAccountDetail = (account: EmailSkillAccountConfig) => {
     return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 border-b border-border-subtle pb-3">
-          <button
-            type="button"
-            onClick={backToOverview}
-            className="-ml-1 inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/25"
-            aria-label={i18nService.t('back')}
-          >
-            <ArrowLeftIcon className="h-3.5 w-3.5 flex-shrink-0" />
-            <span>{i18nService.t('back')}</span>
-          </button>
-          <h3
-            className={`min-w-0 flex-1 truncate ${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}
-            title={getAccountDisplayName(account)}
-          >
-            {getAccountDisplayName(account)}
-          </h3>
-
-          <div className={`flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-            account.enabled
-              ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-              : 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
-          }`}>
-            {account.enabled ? i18nService.t('enabled') : i18nService.t('disabled')}
+      <div
+        className="space-y-4"
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.target as HTMLElement)?.tagName === 'INPUT') {
+            event.preventDefault();
+          }
+        }}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-border-subtle pb-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={closeForm}
+              className="-ml-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/25"
+              aria-label={i18nService.t('back')}
+            >
+              <ArrowLeftIcon className="h-3.5 w-3.5 shrink-0" />
+              <span>{i18nService.t('back')}</span>
+            </button>
+            <h3
+              className={`min-w-0 truncate ${SETTINGS_SECTION_TITLE_TEXT} font-semibold text-foreground`}
+              title={isCreate ? i18nService.t('emailAddButton') : getAccountDisplayName(draft)}
+            >
+              {isCreate
+                ? i18nService.t('emailAddButton')
+                : (draft.name.trim() || i18nService.t('emailEditAccountTitle'))}
+            </h3>
           </div>
 
-          {renderEnableToggle(account)}
+          {!isCreate && (
+            <div className="flex shrink-0 items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-secondary">
+                  {draft.enabled ? i18nService.t('enabled') : i18nService.t('disabled')}
+                </span>
+                <SettingsSwitch
+                  checked={draft.enabled}
+                  label={draft.enabled ? i18nService.t('disable') : i18nService.t('enable')}
+                  disabled={!configured && !draft.enabled}
+                  onClick={() => updateDraft({ enabled: !draft.enabled })}
+                />
+              </div>
 
-          <button
-            type="button"
-            onClick={() => handleRequestDeleteAccount(account.id)}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
-            title={i18nService.t('delete')}
-          >
-            <TrashIcon className="h-4 w-4" />
-            {i18nService.t('delete')}
-          </button>
+              <button
+                type="button"
+                onClick={() => setPendingDeleteAccountId(draft.id)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
+                title={i18nService.t('delete')}
+              >
+                <TrashIcon className="h-4 w-4" />
+                {i18nService.t('delete')}
+              </button>
+            </div>
+          )}
         </div>
 
         {renderErrorBanner()}
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 max-md:grid-cols-1">
-          <div>
-            <label className={labelClassName}>{i18nService.t('emailAccountName')}</label>
-            <input
-              type="text"
-              value={account.name}
-              onChange={e => updateActiveAccount({ name: e.target.value })}
-              onBlur={() => void persistActiveAccount()}
-              className={inputClassName}
-            />
+        <div className="rounded-xl border border-border bg-surface p-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3.5 max-md:grid-cols-1">
+            <div>
+              <label className={labelClassName}>
+                {i18nService.t('emailAddress')}<span className="ml-0.5 text-red-500">*</span>
+              </label>
+              <input
+                type="email"
+                value={draft.email}
+                onChange={event => handleEmailChange(event.target.value)}
+                onBlur={handleEmailBlur}
+                className={inputClassName}
+                placeholder={i18nService.t('emailAddressPlaceholderExample')}
+              />
+              {autoMatchedLabel && (
+                <p className={`mt-1 ${SETTINGS_META_TEXT} text-emerald-600 dark:text-emerald-400`}>
+                  {i18nService.t('emailAutoMatchedProvider').replace('{provider}', autoMatchedLabel)}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className={labelClassName} htmlFor="email-provider-select">
+                {i18nService.t('emailProvider')}
+              </label>
+              <ThemedSelect
+                id="email-provider-select"
+                value={draft.provider ?? ''}
+                onChange={handleProviderChange}
+                options={providerOptions}
+                className="!h-9 !bg-background !px-3 !py-0 text-sm"
+              />
+            </div>
           </div>
+
           <div>
-            <label className={labelClassName}>{i18nService.t('emailProvider')}</label>
-            <select
-              value={account.provider ?? ''}
-              onChange={e => handleProviderChange(e.target.value)}
-              onBlur={() => void persistActiveAccount()}
-              className={inputClassName}
-            >
-              <option value="">{i18nService.t('emailSelectProvider')}</option>
-              {Object.entries(PROVIDER_PRESETS).map(([key, preset]) => (
-                <option key={key} value={key}>
-                  {key === 'custom' ? i18nService.t('emailCustomProvider') : preset.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={labelClassName}>
-              {i18nService.t('emailAddress')}<span className="text-red-500 ml-0.5">*</span>
-            </label>
-            <input
-              type="email"
-              value={account.email}
-              onChange={e => updateActiveAccount({ email: e.target.value })}
-              onBlur={() => void handleEmailBlur()}
-              className={inputClassName}
-              placeholder={i18nService.t('emailAddressPlaceholder')}
-            />
-          </div>
-          <div>
-            <label className={labelClassName}>
-              {i18nService.t('emailPassword')}<span className="text-red-500 ml-0.5">*</span>
-            </label>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className={`${SETTINGS_META_TEXT} font-medium text-foreground`}>
+                {i18nService.t('emailPassword')}<span className="ml-0.5 text-red-500">*</span>
+              </label>
+              {preset?.helpUrl && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenProviderHelp(preset.helpUrl!)}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                >
+                  {helpLinkLabel}
+                  <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+                </button>
+              )}
+            </div>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
-                value={account.password ?? ''}
-                onChange={e => updateActiveAccount({ password: e.target.value })}
-                onBlur={() => void persistActiveAccount()}
+                value={draft.password ?? ''}
+                onChange={event => updateDraft({ password: event.target.value })}
                 className={`${inputClassName} pr-16`}
                 placeholder={i18nService.t('emailPasswordPlaceholder')}
               />
               <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
-                {account.password && (
+                {draft.password && (
                   <button
                     type="button"
-                    onClick={() => {
-                      updateActiveAccount({ password: '' });
-                      void persistActiveAccount({ password: '' });
-                    }}
+                    onClick={() => updateDraft({ password: '' })}
                     className="rounded p-0.5 text-secondary transition-colors hover:text-primary"
+                    aria-label={i18nService.t('clear')}
                   >
                     <XCircleIconSolid className="h-4 w-4" />
                   </button>
                 )}
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
+                  onClick={() => setShowPassword(prev => !prev)}
                   className="rounded p-0.5 text-secondary transition-colors hover:text-primary"
+                  aria-label={showPassword ? i18nService.t('hide') : i18nService.t('show')}
                 >
                   {showPassword ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                 </button>
               </div>
             </div>
-            <p className="mt-1 text-xs leading-4 text-secondary">{i18nService.t('emailPasswordHelp')}</p>
+            <p className={`mt-1 ${SETTINGS_META_TEXT} text-secondary`}>{passwordHint}</p>
+          </div>
+
+          <div>
+            <label className={labelClassName}>
+              {i18nService.t('emailAccountNameOptional')}
+              <span className="ml-1 font-normal text-secondary">{i18nService.t('emailOptionalHint')}</span>
+            </label>
+            <input
+              type="text"
+              value={draft.name}
+              onChange={event => updateDraft({ name: event.target.value })}
+              className={inputClassName}
+              placeholder={i18nService.t('emailAccountNamePlaceholder')}
+            />
           </div>
         </div>
 
-        {(providerHint || providerHelpUrl) && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 dark:border-blue-800 dark:bg-blue-900/20">
-            {providerHint && (
-              <p className="text-xs leading-5 text-secondary">{i18nService.t(providerHint)}</p>
+        <SettingsCard>
+          <SettingsItem
+            title={i18nService.t('emailRequireSendConfirmation')}
+            description={i18nService.t('emailRequireSendConfirmationDesc')}
+            control={(
+              <SettingsSwitch
+                checked={draft.requireSendConfirmation !== false}
+                label={i18nService.t('emailRequireSendConfirmation')}
+                onClick={() => updateDraft({ requireSendConfirmation: draft.requireSendConfirmation === false })}
+              />
             )}
-            {providerHelpUrl && (
-              <button
-                type="button"
-                onClick={() => handleOpenProviderHelp(providerHelpUrl)}
-                className={`inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline ${providerHint ? 'mt-1' : ''}`}
-              >
-                {i18nService.t('emailProviderGuideLink')}
-                <ArrowTopRightOnSquareIcon className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-        )}
+          />
+          {showDefaultToggle && (
+            <SettingsItem
+              title={i18nService.t('emailSetDefault')}
+              description={i18nService.t('emailSetDefaultDesc')}
+              control={(
+                <SettingsSwitch
+                  checked={makeDefault}
+                  label={i18nService.t('emailSetDefault')}
+                  disabled={!isCreate && !draft.enabled}
+                  onClick={() => setEditing(prev => (prev ? { ...prev, makeDefault: !prev.makeDefault } : prev))}
+                />
+              )}
+            />
+          )}
+        </SettingsCard>
 
         <div>
           <button
             type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="inline-flex items-center gap-1 text-xs font-medium text-secondary transition-colors hover:text-primary"
+            onClick={() => setShowAdvanced(prev => !prev)}
+            className="inline-flex items-center gap-1 px-0.5 text-xs font-medium text-secondary transition-colors hover:text-foreground"
           >
             <ChevronRightIcon className={`h-3.5 w-3.5 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} />
-            {i18nService.t('emailAdvancedSettings')}
+            {i18nService.t('emailAdvancedSettingsWithHint')}
           </button>
 
           {showAdvanced && (
-            <div className="mt-3 space-y-3 border-l-2 border-border-subtle pl-3">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3 max-md:grid-cols-1">
+            <div className="mt-2.5 rounded-xl border border-border bg-surface p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
                 <div>
                   <label className={labelClassName}>{i18nService.t('emailImapHost')}</label>
                   <input
                     type="text"
-                    value={account.imapHost ?? ''}
-                    onChange={e => updateActiveAccount({ imapHost: e.target.value })}
-                    onBlur={() => void persistActiveAccount()}
-                    className={inputClassName}
+                    value={draft.imapHost ?? ''}
+                    onChange={event => updateDraft({ imapHost: event.target.value })}
+                    className={compactInputClassName}
+                    placeholder="imap.example.com"
                   />
                 </div>
                 <div>
                   <label className={labelClassName}>{i18nService.t('emailImapPort')}</label>
                   <input
                     type="number"
-                    value={account.imapPort ?? 993}
-                    onChange={e => updateActiveAccount({ imapPort: parseInt(e.target.value, 10) || 993 })}
-                    onBlur={() => void persistActiveAccount()}
-                    className={inputClassName}
+                    value={draft.imapPort ?? 993}
+                    onChange={event => updateDraft({ imapPort: parseInt(event.target.value, 10) || 993 })}
+                    className={compactInputClassName}
                   />
                 </div>
                 <div>
                   <label className={labelClassName}>{i18nService.t('emailSmtpHost')}</label>
                   <input
                     type="text"
-                    value={account.smtpHost ?? ''}
-                    onChange={e => updateActiveAccount({ smtpHost: e.target.value })}
-                    onBlur={() => void persistActiveAccount()}
-                    className={inputClassName}
+                    value={draft.smtpHost ?? ''}
+                    onChange={event => updateDraft({ smtpHost: event.target.value })}
+                    className={compactInputClassName}
+                    placeholder="smtp.example.com"
                   />
                 </div>
                 <div>
                   <label className={labelClassName}>{i18nService.t('emailSmtpPort')}</label>
                   <input
                     type="number"
-                    value={account.smtpPort ?? 587}
-                    onChange={e => updateActiveAccount({ smtpPort: parseInt(e.target.value, 10) || 587 })}
-                    onBlur={() => void persistActiveAccount()}
-                    className={inputClassName}
+                    value={draft.smtpPort ?? 587}
+                    onChange={event => updateDraft({ smtpPort: parseInt(event.target.value, 10) || 587 })}
+                    className={compactInputClassName}
                   />
                 </div>
               </div>
@@ -857,23 +923,18 @@ const EmailSkillConfig: React.FC = () => {
                 <label className={labelClassName}>{i18nService.t('emailMailbox')}</label>
                 <input
                   type="text"
-                  value={account.mailbox ?? 'INBOX'}
-                  onChange={e => updateActiveAccount({ mailbox: e.target.value })}
-                  onBlur={() => void persistActiveAccount()}
-                  className={inputClassName}
+                  value={draft.mailbox ?? 'INBOX'}
+                  onChange={event => updateDraft({ mailbox: event.target.value })}
+                  className={compactInputClassName}
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-x-4 max-md:grid-cols-1">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-0.5">
                 <label className={checkboxLabelClassName}>
                   <input
                     type="checkbox"
-                    checked={account.imapTls !== false}
-                    onChange={e => {
-                      const imapTls = e.target.checked;
-                      updateActiveAccount({ imapTls });
-                      void persistActiveAccount({ imapTls });
-                    }}
+                    checked={draft.imapTls !== false}
+                    onChange={event => updateDraft({ imapTls: event.target.checked })}
                     className={checkboxClassName}
                   />
                   IMAP TLS
@@ -881,27 +942,22 @@ const EmailSkillConfig: React.FC = () => {
                 <label className={checkboxLabelClassName}>
                   <input
                     type="checkbox"
-                    checked={account.smtpSecure === true}
-                    onChange={e => {
-                      const smtpSecure = e.target.checked;
-                      updateActiveAccount({ smtpSecure });
-                      void persistActiveAccount({ smtpSecure });
-                    }}
+                    checked={draft.smtpSecure === true}
+                    onChange={event => updateDraft({ smtpSecure: event.target.checked })}
                     className={checkboxClassName}
                   />
                   SMTP SSL
                 </label>
-                <label className={checkboxLabelClassName} title={i18nService.t('emailAllowInsecureCertHint')}>
+                <label
+                  className={checkboxLabelClassName}
+                  title={i18nService.t('emailAllowInsecureCertHint')}
+                >
                   <input
                     type="checkbox"
-                    checked={account.imapRejectUnauthorized === false || account.smtpRejectUnauthorized === false}
-                    onChange={e => {
-                      const rejectUnauthorized = !e.target.checked;
-                      updateActiveAccount({
-                        imapRejectUnauthorized: rejectUnauthorized,
-                        smtpRejectUnauthorized: rejectUnauthorized,
-                      });
-                      void persistActiveAccount({
+                    checked={draft.imapRejectUnauthorized === false || draft.smtpRejectUnauthorized === false}
+                    onChange={event => {
+                      const rejectUnauthorized = !event.target.checked;
+                      updateDraft({
                         imapRejectUnauthorized: rejectUnauthorized,
                         smtpRejectUnauthorized: rejectUnauthorized,
                       });
@@ -910,71 +966,69 @@ const EmailSkillConfig: React.FC = () => {
                   />
                   {i18nService.t('emailAllowInsecureCert')}
                 </label>
-                <label className={checkboxLabelClassName}>
-                  <input
-                    type="checkbox"
-                    checked={account.requireSendConfirmation !== false}
-                    onChange={e => {
-                      const requireSendConfirmation = e.target.checked;
-                      updateActiveAccount({ requireSendConfirmation });
-                      void persistActiveAccount({ requireSendConfirmation });
-                    }}
-                    className={checkboxClassName}
-                  />
-                  {i18nService.t('emailRequireSendConfirmation')}
-                </label>
               </div>
             </div>
           )}
         </div>
 
-        <div className="space-y-3 border-t border-border-subtle pt-4">
-          <div className="flex flex-wrap items-center gap-3">
+        {connectivityError && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+            <span>{connectivityError}</span>
             <button
               type="button"
-              onClick={() => void handleConnectivityTest()}
-              disabled={testingAccountId === account.id || !canTest}
-              className="inline-flex h-8 items-center rounded-lg border border-border px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
+              onClick={() => handleAskAI(null)}
+              className="inline-flex items-center gap-1 font-medium text-claude-accent hover:underline"
             >
-              <SignalIcon className="mr-1.5 h-3.5 w-3.5" />
-              {testingAccountId === account.id ? i18nService.t('imConnectivityTesting') : i18nService.t('imConnectivityTest')}
+              <SparklesIcon className="h-3.5 w-3.5" />
+              {i18nService.t('emailConnectivityAskAI')}
             </button>
-            {activeResult && (
-              <div className={`flex items-center gap-1 text-xs ${connectivityPassed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                {connectivityPassed ? <CheckCircleIcon className="h-4 w-4" /> : <XCircleIcon className="h-4 w-4" />}
-                <span>{connectivityPassed ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}</span>
-                <span className={`${SETTINGS_META_TEXT} text-secondary`}>{new Date(activeResult.testedAt).toLocaleString()}</span>
-              </div>
-            )}
           </div>
+        )}
 
-          {connectivityError && (
-            <div className="space-y-2">
-              <div className="text-xs text-red-600 dark:text-red-400">{connectivityError}</div>
-              <button
-                type="button"
-                onClick={() => handleAskAI(null)}
-                className="inline-flex items-center gap-1 rounded-lg border border-claude-accent/50 px-2.5 py-1 text-xs font-medium text-claude-accent transition-colors hover:bg-claude-accent/10 active:scale-[0.98]"
-              >
-                <SparklesIcon className="h-3 w-3" />
-                {i18nService.t('emailConnectivityAskAI')}
-              </button>
+        {connectivityResult && (
+          connectivityPassed ? (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+              <div className="flex items-center gap-1.5 font-medium">
+                <CheckCircleIcon className="h-4 w-4 shrink-0" />
+                <span>{i18nService.t('emailConnectivityTestPassedSummary')}</span>
+              </div>
+              <span className={`${SETTINGS_META_TEXT} text-secondary`}>
+                {new Date(connectivityResult.testedAt).toLocaleTimeString()}
+              </span>
             </div>
-          )}
-
-          {activeResult && (
-            <div className="space-y-2">
+          ) : (
+            <div className="space-y-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400">
+                  <XCircleIcon className="h-4 w-4 shrink-0" />
+                  <span>{i18nService.t('connectionFailed')}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleAskAI(connectivityResult)}
+                  className="inline-flex items-center gap-1 rounded-md border border-claude-accent/50 px-2 py-0.5 text-xs font-medium text-claude-accent transition-colors hover:bg-claude-accent/10"
+                >
+                  <SparklesIcon className="h-3 w-3" />
+                  {i18nService.t('emailConnectivityAskAI')}
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1">
-                {activeResult.checks.map(check => {
+                {connectivityResult.checks.map(check => {
                   const checkPassed = check.level === 'pass';
-                  const checkLabel = check.code === 'imap_connection' ? 'IMAP' : 'SMTP';
+                  const checkLabel = check.code === 'imap_connection'
+                    ? i18nService.t('emailConnectivityImapLabel')
+                    : i18nService.t('emailConnectivitySmtpLabel');
                   return (
                     <div key={check.code} className="rounded-lg border border-border-subtle bg-surface px-2.5 py-2">
                       <div className="flex items-center justify-between gap-2">
-                        <div className={`flex items-center gap-1 text-xs font-medium ${checkPassed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                        <span className={`flex items-center gap-1 text-xs font-medium ${
+                          checkPassed
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-red-600 dark:text-red-400'
+                        }`}>
                           {checkPassed ? <CheckCircleIcon className="h-3.5 w-3.5" /> : <XCircleIcon className="h-3.5 w-3.5" />}
-                          <span>{checkLabel}</span>
-                        </div>
+                          {checkLabel}
+                        </span>
                         <span className={`${SETTINGS_META_TEXT} text-secondary`}>{`${check.durationMs}ms`}</span>
                       </div>
                       <div className="mt-1 break-words text-xs text-secondary">{check.message}</div>
@@ -982,18 +1036,43 @@ const EmailSkillConfig: React.FC = () => {
                   );
                 })}
               </div>
-              {!connectivityPassed && (
-                <button
-                  type="button"
-                  onClick={() => handleAskAI(activeResult)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-claude-accent/50 px-2.5 py-1 text-xs font-medium text-claude-accent transition-colors hover:bg-claude-accent/10 active:scale-[0.98]"
-                >
-                  <SparklesIcon className="h-3 w-3" />
-                  {i18nService.t('emailConnectivityAskAI')}
-                </button>
-              )}
             </div>
-          )}
+          )
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
+          <button
+            type="button"
+            onClick={() => void handleConnectivityTest()}
+            disabled={isTesting || !configured}
+            className={SETTINGS_ACTION_BUTTON_CLASS}
+          >
+            <SignalIcon className="h-3.5 w-3.5" />
+            {isTesting ? i18nService.t('imConnectivityTesting') : i18nService.t('imConnectivityTest')}
+          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={closeForm}
+              disabled={saving}
+              className={SETTINGS_ACTION_BUTTON_CLASS}
+            >
+              {i18nService.t('cancel')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveForm()}
+              disabled={!configured || saving}
+              className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
+            >
+              {saving
+                ? i18nService.t('saving')
+                : isCreate
+                  ? i18nService.t('emailSaveAndEnable')
+                  : i18nService.t('save')}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1001,7 +1080,7 @@ const EmailSkillConfig: React.FC = () => {
 
   return (
     <div>
-      {activeAccount ? renderAccountDetail(activeAccount) : renderAccountOverview()}
+      {editing ? renderAccountForm(editing) : renderAccountOverview()}
 
       {pendingDeleteAccount && (
         <Modal

@@ -24,6 +24,7 @@ import {
 import {
   MIGRATION_V2_COMPLETED_KV_KEY,
   MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY,
+  MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY,
   MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY,
   MIGRATION_V2_REPORT_KV_KEY,
   MIGRATION_V2_USER_MEMORIES_BACKFILL_KV_KEY,
@@ -41,6 +42,7 @@ import {
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
+  cleanupLegacyDreamingPromotions,
   cleanupLegacyOpenClawDisposableCaches,
   computeLegacyMcpOAuthStoreKey,
   dismissMigrationV2Report,
@@ -3001,5 +3003,104 @@ describe('runLegacyOpenClawMigration', () => {
     expect(fs.existsSync(oldDshRuntimeFile)).toBe(false);
     expect(fs.existsSync(mediaFile)).toBe(true);
     expect(fs.existsSync(extFile)).toBe(true);
+  });
+
+  test('strips legacy OpenClaw Dreaming promotion blocks during migration and one-shot v2 cleanup', () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.close();
+
+    const wsMain = path.join(userDataDir, 'openclaw', 'state', 'workspace-main');
+    fs.mkdirSync(wsMain, { recursive: true });
+    fs.writeFileSync(
+      path.join(wsMain, 'MEMORY.md'),
+      [
+        '# User Memories',
+        '',
+        '- 我喜欢小猫咪',
+        '',
+        '## Promoted From Short-Term Memory (2026-06-28)',
+        '',
+        '<!-- openclaw-memory-promotion:memory:memory/2026-06-23.md:74:74 -->',
+        '- istant` kept surfacing across 35 memories.; confidence: 0.79; evidence: memory/.dreams/session-corpus/2026-06-12.txt:2-2; note: reflection [score=0.857 recalls=0 avg=0.620]',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const migResult = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      now: () => new Date('2026-11-26T00:00:00.000Z'),
+    });
+    expect(migResult.status).toBe(MigrationV2Status.Completed);
+
+    const migratedMemory = fs.readFileSync(
+      path.join(userDataDir, WORKSPACES_DIR_NAME, 'main', 'MEMORY.md'),
+      'utf8',
+    );
+    expect(migratedMemory).toContain('- 我喜欢小猫咪');
+    expect(migratedMemory).not.toContain('Promoted From Short-Term Memory');
+    expect(migratedMemory).not.toContain('memory/.dreams/');
+
+    // Simulate an already-migrated v2 workspace that still has dreaming promotion noise
+    const v2Dir = createTempDir();
+    const v2Db = new Database(path.join(v2Dir, 'lobsterai.sqlite'));
+    v2Db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER);');
+    const workspacesDir = path.join(v2Dir, WORKSPACES_DIR_NAME);
+    const svc = new LobsterMemoryService(workspacesDir);
+    svc.writeWorkspaceFile(
+      'main',
+      'MEMORY.md',
+      [
+        '# User Memories',
+        '',
+        '- wn 的公司是 NetEase（网易）',
+        '',
+        '## Promoted From Short-Term Memory (2026-06-28)',
+        '',
+        '- fragment; confidence: 0.79; evidence: memory/.dreams/session-corpus/2026-06-12.txt:2-2; note: reflection [score=0.857 recalls=0]',
+        '',
+      ].join('\n'),
+    );
+    svc.writeWorkspaceFile('analyst', 'MEMORY.md', '# User Memories\n\n- Keep analyst note\n');
+
+    const firstCleanup = cleanupLegacyDreamingPromotions({
+      userDataDir: v2Dir,
+      db: v2Db,
+      memoryService: svc,
+      now: () => new Date('2026-11-26T00:00:00.000Z'),
+    });
+    expect(firstCleanup).toEqual({
+      status: 'completed',
+      filesCleaned: 1,
+      entriesRemoved: 1,
+    });
+    expect(svc.listMemories('main').map((e) => e.text)).toEqual(['wn 的公司是 NetEase（网易）']);
+    expect(svc.search('main', 'session-corpus')).toHaveLength(0);
+    expect(svc.listMemories('analyst').map((e) => e.text)).toEqual(['Keep analyst note']);
+
+    const kvRow = v2Db
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get(MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY) as { value: string } | undefined;
+    expect(kvRow).toBeDefined();
+
+    // Second call is idempotent and skips cleanly
+    const secondCleanup = cleanupLegacyDreamingPromotions({
+      userDataDir: v2Dir,
+      db: v2Db,
+      memoryService: svc,
+    });
+    expect(secondCleanup).toEqual({
+      status: 'skipped',
+      filesCleaned: 0,
+      entriesRemoved: 0,
+    });
+
+    svc.close();
+    v2Db.close();
   });
 });

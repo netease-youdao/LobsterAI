@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
+  extractProjectKeys,
   filterMarkdownLinesPreservingLineNumbers,
   INVALID_PROJECT_KEY_SENTINEL,
   parseScopedMarkdownBlocks,
@@ -47,6 +48,7 @@ export interface MemoryEntry {
   id: string;
   text: string;
   section?: string;
+  projectKeys?: string[];
 }
 
 export interface MemorySearchHit {
@@ -83,6 +85,8 @@ interface MemorySegment {
   lines: string[];
   entry?: MemoryEntry;
   metadataComments?: string[];
+  headingLevel?: number;
+  owningHeadingSegment?: MemorySegment;
 }
 
 export interface ParsedMemoryFile {
@@ -205,8 +209,21 @@ export function parseMemoryMarkdown(content: string): ParsedMemoryFile {
   let block: string[] | null = null;
   let currentSection: string | undefined;
   let blockSection: string | undefined;
+  let currentHeadingSegment: MemorySegment | undefined;
+  let blockHeadingSegment: MemorySegment | undefined;
+  const headingScopeStack: Array<{ level: number; annotated: boolean; keys: string[] }> = [];
+  let blockInheritedScope: { annotated: boolean; keys: string[] } = { annotated: false, keys: [] };
   let fence: 'verbatim' | 'block' | null = null;
   let inComment: 'verbatim' | 'block' | null = null;
+
+  const getInheritedProjectScope = () => {
+    for (let i = headingScopeStack.length - 1; i >= 0; i -= 1) {
+      if (headingScopeStack[i].annotated) {
+        return { annotated: true, keys: headingScopeStack[i].keys };
+      }
+    }
+    return { annotated: false, keys: [] };
+  };
 
   const flushVerbatim = () => {
     if (verbatim.length > 0) {
@@ -224,14 +241,18 @@ export function parseMemoryMarkdown(content: string): ParsedMemoryFile {
       segments.push({ kind: 'verbatim', lines });
       return;
     }
+    const ownScope = extractProjectKeys(lines.join('\n'));
+    const effectiveKeys = ownScope.annotated ? ownScope.keys : blockInheritedScope.keys;
     segments.push({
       kind: 'entry',
       lines,
       metadataComments,
+      ...(blockHeadingSegment ? { owningHeadingSegment: blockHeadingSegment } : {}),
       entry: {
         id: memoryFingerprint(text),
         text,
         ...(blockSection ? { section: blockSection } : {}),
+        ...(effectiveKeys.length > 0 ? { projectKeys: effectiveKeys } : {}),
       },
     });
   };
@@ -240,6 +261,8 @@ export function parseMemoryMarkdown(content: string): ParsedMemoryFile {
     closeBlock();
     flushVerbatim();
     blockSection = currentSection;
+    blockHeadingSegment = currentHeadingSegment;
+    blockInheritedScope = getInheritedProjectScope();
     block = [line];
   };
 
@@ -295,8 +318,27 @@ export function parseMemoryMarkdown(content: string): ParsedMemoryFile {
     const heading = line.match(HEADING_RE);
     if (heading) {
       closeBlock();
-      currentSection = heading[1].length >= 2 ? heading[2].trim() : undefined;
-      verbatim.push(line);
+      flushVerbatim();
+      const level = heading[1].length;
+      while (
+        headingScopeStack.length > 0
+        && headingScopeStack[headingScopeStack.length - 1].level >= level
+      ) {
+        headingScopeStack.pop();
+      }
+      const ownScope = extractProjectKeys(line);
+      const effectiveScope = ownScope.annotated ? ownScope : getInheritedProjectScope();
+      headingScopeStack.push({ level, annotated: effectiveScope.annotated, keys: effectiveScope.keys });
+
+      const cleanHeading = stripProjectTags(heading[2]).trim();
+      currentSection = level >= 2 ? (cleanHeading || undefined) : undefined;
+      const headingSegment: MemorySegment = {
+        kind: 'verbatim',
+        lines: [line],
+        headingLevel: level,
+      };
+      segments.push(headingSegment);
+      currentHeadingSegment = level >= 2 ? headingSegment : undefined;
       continue;
     }
 
@@ -347,6 +389,163 @@ function collectExistingFingerprints(segments: MemorySegment[]): Set<string> {
 const MANAGED_BLOCK_RE = /<!--\s*LOBSTERAI_MANAGED_START\s*-->[\s\S]*?<!--\s*LOBSTERAI_MANAGED_END\s*-->\s*/g;
 const OPENCLAW_STOCK_AGENTS_RE = /^#\s+AGENTS\.md\s*-\s*Your Workspace\s*\n+This folder is home\.\s*Treat it that way\.[\s\S]*?^##\s+Make It Yours\s*\n+This is a starting point\.\s*Add your own conventions, style, and rules as you figure out what works\.(?:\s*\n+##\s+Related\s*\n+(?:-\s+\[[^\]]+\]\(\/(?:reference|concepts|automation|gateway)\/[^)]+\)\s*\n?)+)?\s*/m;
 const OPENCLAW_STOCK_TOOLS_RE = /^#\s+TOOLS\.md\s*-\s*Local Notes\s*\n+Skills define _how_ tools work\.[\s\S]*?Add whatever helps you do your job\.\s*This is your cheat sheet\.\s*/m;
+
+const LEGACY_DREAMING_PROMOTION_HEADING_RE = /^#{2,6}\s+Promoted\s+From\s+Short-Term\s+Memory(?:\s*\([^)]*\))?\s*$/i;
+const LEGACY_DREAMING_PROMOTION_COMMENT_RE = /<!--\s*openclaw-memory-promotion:[\s\S]*?-->/i;
+const LEGACY_DREAMING_EVIDENCE_RE = /(?:memory\/\.dreams\/|note:\s*reflection\s*\[score=\d|;\s*confidence:\s*\d+(?:\.\d+)?\b[\s\S]*?;\s*evidence:\s*memory\/)/i;
+const LEGACY_DREAMING_SECTION_CONFIDENCE_RE = /(?:^|;\s*)confidence:\s*\d+(?:\.\d+)?(?:\s*;|\s*$)/i;
+
+export interface StripLegacyDreamingPromotionsResult {
+  content: string;
+  changed: boolean;
+  removedEntries: number;
+}
+
+function isLegacyDreamingPromotionCommentBlock(lines: readonly string[]): boolean {
+  const joined = lines.join('\n').trim();
+  if (!joined) return false;
+  return joined.replace(/<!--\s*openclaw-memory-promotion:[\s\S]*?-->/gi, '').trim() === '';
+}
+
+function isLegacyDreamingPromotedEntry(
+  segment: MemorySegment,
+  precededByPromotionComment: boolean,
+  inPromotedSection: boolean,
+): boolean {
+  const raw = segment.lines.join('\n');
+  if (precededByPromotionComment) return true;
+  if (LEGACY_DREAMING_PROMOTION_COMMENT_RE.test(raw)) return true;
+  if (LEGACY_DREAMING_EVIDENCE_RE.test(raw)) return true;
+  if (inPromotedSection && LEGACY_DREAMING_SECTION_CONFIDENCE_RE.test(raw)) return true;
+  return false;
+}
+
+/**
+ * Strip legacy OpenClaw Dreaming short-term memory promotion blocks
+ * (`## Promoted From Short-Term Memory (...)`, `<!-- openclaw-memory-promotion:... -->`,
+ * and machine-generated Dreaming reflection entries) from `MEMORY.md` while
+ * preserving all user-authored memories intact.
+ */
+export function stripLegacyDreamingPromotions(content: string): StripLegacyDreamingPromotionsResult {
+  if (typeof content !== 'string' || !content.trim()) {
+    return { content: content || '', changed: false, removedEntries: 0 };
+  }
+
+  const parsed = parseMemoryMarkdown(content);
+  const removedIndices = new Set<number>();
+  const promotedHeadingIndices = new Set<number>();
+  let removedEntries = 0;
+
+  let currentHeadingIndex = -1;
+  let inPromotedSection = false;
+  let lastNonBlankIndex = -1;
+
+  for (let i = 0; i < parsed.segments.length; i += 1) {
+    const segment = parsed.segments[i];
+
+    if (segment.headingLevel) {
+      const headingLine = segment.lines[0]?.trim() ?? '';
+      if (segment.headingLevel >= 2 && LEGACY_DREAMING_PROMOTION_HEADING_RE.test(headingLine)) {
+        promotedHeadingIndices.add(i);
+        inPromotedSection = true;
+      } else {
+        inPromotedSection = false;
+      }
+      currentHeadingIndex = i;
+      lastNonBlankIndex = i;
+      continue;
+    }
+
+    if (segment.kind === 'verbatim') {
+      const isBlankOnly = segment.lines.every((line) => line.trim() === '');
+      if (isBlankOnly) continue;
+
+      if (isLegacyDreamingPromotionCommentBlock(segment.lines)) {
+        removedIndices.add(i);
+        lastNonBlankIndex = i;
+        continue;
+      }
+
+      lastNonBlankIndex = i;
+      continue;
+    }
+
+    // Entry segment
+    const prevSegment = lastNonBlankIndex >= 0 ? parsed.segments[lastNonBlankIndex] : undefined;
+    const precededByPromotionComment = Boolean(
+      prevSegment
+      && prevSegment.kind === 'verbatim'
+      && isLegacyDreamingPromotionCommentBlock(prevSegment.lines),
+    );
+
+    if (isLegacyDreamingPromotedEntry(segment, precededByPromotionComment, inPromotedSection)) {
+      removedIndices.add(i);
+      removedEntries += 1;
+    } else if (inPromotedSection && currentHeadingIndex >= 0) {
+      // A genuine user memory appended below a legacy promoted section survives;
+      // its bogus heading will still be stripped if no prior >=2 heading existed above it.
+      void currentHeadingIndex;
+    }
+    lastNonBlankIndex = i;
+  }
+
+  // Decide which `## Promoted From Short-Term Memory (...)` headings to remove.
+  for (const headingIdx of promotedHeadingIndices) {
+    const headingLevel = parsed.segments[headingIdx].headingLevel ?? 2;
+    let hasSurvivingContent = false;
+    for (let j = headingIdx + 1; j < parsed.segments.length; j += 1) {
+      const candidate = parsed.segments[j];
+      if (candidate.headingLevel && candidate.headingLevel <= headingLevel) break;
+      if (removedIndices.has(j)) continue;
+      if (candidate.kind === 'entry' || candidate.lines.some((line) => line.trim() !== '')) {
+        hasSurvivingContent = true;
+        break;
+      }
+    }
+
+    if (!hasSurvivingContent) {
+      removedIndices.add(headingIdx);
+      continue;
+    }
+
+    // Even when a user-authored entry was later appended under the trailing promoted heading,
+    // remove the bogus heading if there is no earlier non-promoted section heading above it
+    // (so surviving memories cleanly belong to the top-level `# User Memories` list).
+    let hasEarlierCustomSection = false;
+    for (let j = headingIdx - 1; j >= 0; j -= 1) {
+      const prev = parsed.segments[j];
+      if (!prev.headingLevel) continue;
+      if (prev.headingLevel === 1) break;
+      if (!promotedHeadingIndices.has(j) && !removedIndices.has(j)) {
+        hasEarlierCustomSection = true;
+        break;
+      }
+    }
+    if (!hasEarlierCustomSection) {
+      removedIndices.add(headingIdx);
+    }
+  }
+
+  if (removedIndices.size === 0) {
+    return { content, changed: false, removedEntries: 0 };
+  }
+
+  const remainingSegments = parsed.segments.filter((_seg, idx) => !removedIndices.has(idx));
+  const serialized = serializeMemorySegments(remainingSegments)
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\n+/, '')
+    .replace(/\s+$/, '\n');
+
+  // If nothing remains except the stock `# User Memories` title, return empty string.
+  const trimmed = serialized.trim();
+  const finalContent = !trimmed || trimmed === MEMORY_HEADER ? '' : serialized;
+
+  return {
+    content: finalContent,
+    changed: finalContent !== content,
+    removedEntries,
+  };
+}
 
 /**
  * Strips legacy OpenClaw managed sections (`<!-- LOBSTERAI_MANAGED_START -->...`
@@ -482,7 +681,11 @@ export class LobsterMemoryService {
     }
 
     this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, nextContent);
-    return {
+    const parsedAfter = parseMemoryMarkdown(nextContent);
+    const createdEntry = parsedAfter.segments
+      .map((segment) => segment.entry)
+      .find((entry): entry is MemoryEntry => Boolean(entry && getMemoryBaseFingerprint(entry.id) === baseId));
+    return createdEntry ?? {
       id: baseId,
       text: displayText,
       ...(resolvedSection ? { section: resolvedSection } : {}),
@@ -568,12 +771,18 @@ export class LobsterMemoryService {
       return target.entry;
     }
 
+    const ownProjectScope = extractProjectKeys(bulletLines.join('\n'));
+    const nextProjectKeys = ownProjectScope.annotated
+      ? ownProjectScope.keys
+      : (target.entry.projectKeys ?? []);
+
     target.lines = bulletLines;
     target.metadataComments = metadataComments;
     target.entry = {
       id: memoryFingerprint(displayText),
       text: displayText,
       ...(target.entry.section ? { section: target.entry.section } : {}),
+      ...(nextProjectKeys.length > 0 ? { projectKeys: nextProjectKeys } : {}),
     };
     assignUniqueEntryIds(parsed.segments);
 
@@ -582,32 +791,86 @@ export class LobsterMemoryService {
   }
 
   deleteMemory(agentId: string, id: string): boolean {
+    return this.deleteMemories(agentId, [id]) > 0;
+  }
+
+  deleteMemories(agentId: string, ids: readonly string[]): number {
+    const targetIds = new Set(ids.map((id) => id.trim()).filter(Boolean));
+    if (targetIds.size === 0) return 0;
+
     const safeId = sanitizeAgentId(agentId);
     const existing = this.readWorkspaceFile(safeId, WorkspaceFileName.Memory);
-    if (!existing.trim()) return false;
+    if (!existing.trim()) return 0;
 
     const parsed = parseMemoryMarkdown(existing);
-    const index = parsed.segments.findIndex(
-      (segment) => segment.kind === 'entry' && segment.entry?.id === id,
-    );
-    if (index === -1) return false;
+    const touchedHeadings = new Set<MemorySegment>();
+    let deletedCount = 0;
 
-    parsed.segments.splice(index, 1);
+    for (let index = parsed.segments.length - 1; index >= 0; index -= 1) {
+      const segment = parsed.segments[index];
+      if (segment.kind !== 'entry' || !segment.entry || !targetIds.has(segment.entry.id)) {
+        continue;
+      }
+      if (segment.owningHeadingSegment) {
+        touchedHeadings.add(segment.owningHeadingSegment);
+      }
+      parsed.segments.splice(index, 1);
+      deletedCount += 1;
 
-    // Collapse doubled blank separators around the removed block.
-    const prev = index > 0 ? parsed.segments[index - 1] : undefined;
-    const next = index < parsed.segments.length ? parsed.segments[index] : undefined;
-    if (
-      prev?.kind === 'verbatim'
-      && next?.kind === 'verbatim'
-      && prev.lines[prev.lines.length - 1]?.trim() === ''
-      && next.lines[0]?.trim() === ''
-    ) {
-      prev.lines.pop();
+      const prev = index > 0 ? parsed.segments[index - 1] : undefined;
+      const next = index < parsed.segments.length ? parsed.segments[index] : undefined;
+      if (
+        prev?.kind === 'verbatim'
+        && next?.kind === 'verbatim'
+        && prev.lines[prev.lines.length - 1]?.trim() === ''
+        && next.lines[0]?.trim() === ''
+      ) {
+        prev.lines.pop();
+      }
     }
 
-    this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, serializeMemorySegments(parsed.segments));
-    return true;
+    if (deletedCount === 0) return 0;
+
+    // Remove section headings (level >= 2) whose entries were all deleted in this operation.
+    if (touchedHeadings.size > 0) {
+      for (let index = parsed.segments.length - 1; index >= 0; index -= 1) {
+        const segment = parsed.segments[index];
+        if (!touchedHeadings.has(segment) || !segment.headingLevel || segment.headingLevel < 2) {
+          continue;
+        }
+        let hasRemainingContent = false;
+        for (let lookahead = index + 1; lookahead < parsed.segments.length; lookahead += 1) {
+          const candidate = parsed.segments[lookahead];
+          if (candidate.headingLevel && candidate.headingLevel <= segment.headingLevel) {
+            break;
+          }
+          if (candidate.kind === 'entry' || candidate.lines.some((line) => line.trim() !== '')) {
+            hasRemainingContent = true;
+            break;
+          }
+        }
+        if (!hasRemainingContent) {
+          parsed.segments.splice(index, 1);
+          const prev = index > 0 ? parsed.segments[index - 1] : undefined;
+          const next = index < parsed.segments.length ? parsed.segments[index] : undefined;
+          if (
+            prev?.kind === 'verbatim'
+            && next?.kind === 'verbatim'
+            && prev.lines[prev.lines.length - 1]?.trim() === ''
+            && next.lines[0]?.trim() === ''
+          ) {
+            prev.lines.pop();
+          }
+        }
+      }
+    }
+
+    const serialized = serializeMemorySegments(parsed.segments)
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\s+$/, '\n');
+    const finalContent = serialized.trim() ? serialized : '';
+    this.writeWorkspaceFile(safeId, WorkspaceFileName.Memory, finalContent);
+    return deletedCount;
   }
 
   appendDailyNote(agentId: string, text: string, date: Date = new Date()): string {

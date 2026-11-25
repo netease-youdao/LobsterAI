@@ -195,7 +195,7 @@ export interface DshRuntimeAdapterDeps {
     optionSkillIds?: string[],
   ) => string[] | null;
   waitForMcpConnections?: (signal: AbortSignal) => Promise<void>;
-  resolveDefaultPermissionPreset?: (coworkSessionId?: string) => DshPermissionPreset;
+  resolveDefaultPermissionPreset?: () => DshPermissionPreset;
   onPermissionPresetChanged?: (
     preset: DshPermissionPreset,
     coworkSessionId?: string,
@@ -872,7 +872,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   getEffectivePermissionPreset(coworkSessionId?: string): DshPermissionPreset {
     const explicit = this.getExplicitPermissionPreset(coworkSessionId);
     if (explicit) return explicit;
-    return this.resolveDefaultPermissionPreset?.(coworkSessionId) ?? DEFAULT_DSH_PERMISSION_PRESET;
+    return this.resolveDefaultPermissionPreset?.() ?? DEFAULT_DSH_PERMISSION_PRESET;
   }
 
   async setSessionPermissionPreset(

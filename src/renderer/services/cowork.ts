@@ -22,7 +22,6 @@ import {
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
-import type { DreamDiaryData } from '../../shared/cowork/dreamDiary';
 import { CoworkGoalStatus, normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
@@ -2585,6 +2584,18 @@ class CoworkService {
     return true;
   }
 
+  async deleteMemoryEntries(input: { agentId?: string; ids: string[] }): Promise<number> {
+    const api = window.electron?.cowork?.deleteMemoryEntries;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
+    const result = await api(input);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to delete memory entries');
+    }
+    return result.deletedCount ?? 0;
+  }
+
   async getMemoryStats(options?: { agentId?: string }): Promise<CoworkMemoryStats | null> {
     const api = window.electron?.cowork?.getMemoryStats;
     if (!api) return null;
@@ -2609,14 +2620,6 @@ class CoworkService {
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
     const result = await api({ content, agentId: options?.agentId });
     return result ?? { success: false };
-  }
-
-  async getDreamingDiary(options?: { agentId?: string }): Promise<DreamDiaryData | null> {
-    const api = window.electron?.cowork?.getDreamDiary;
-    if (!api) return null;
-    const result = await api(options);
-    if (!result?.success || !result.data) return null;
-    return result.data;
   }
 
   async readBootstrapFile(filename: string, options?: { agentId?: string }): Promise<string> {

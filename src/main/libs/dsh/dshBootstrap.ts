@@ -51,13 +51,12 @@ import {
 } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
-  backfillLegacyDreamDiariesFromBackup,
   backfillLegacyMcpOAuthTokensFromBackup,
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
+  cleanupLegacyDreamingPromotions,
   cleanupLegacyOpenClawDisposableCaches,
-  type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
@@ -202,7 +201,6 @@ export interface DshBootstrapOptions {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
-  resolveSessionDefaultPermissionPreset?: (coworkSessionId: string) => DshPermissionPreset | null;
   allowRules?: ApprovalAllowRulePort;
   toolProviders?: HostToolProvider[];
   webSearchHandler?: DshBridgeWebSearchHandler;
@@ -509,7 +507,6 @@ export class DshBootstrap {
   private initialSyncPromise: Promise<boolean> | null = null;
   private lastInitialConfigSyncFn: DshInitialConfigSyncFn | null = null;
   private startupBlockStatus: DshCompatEngineStatus | null = null;
-  private dreamDiaryBackfillPromise: Promise<LegacyDreamDiaryBackfillResult> | null = null;
   private lastMcpServerRecords: LobsterMcpServerRecord[] = [];
   private lastNeedsReauthMcpKey = '';
   private readonly mcpOAuthRefreshScheduler: McpOAuthRefreshScheduler;
@@ -637,13 +634,7 @@ export class DshBootstrap {
       resolveModelSelection: options.resolveModelSelection,
       resolveAllowedSkillIds: options.resolveAllowedSkillIds,
       waitForMcpConnections: options.waitForMcpConnections,
-      resolveDefaultPermissionPreset: (coworkSessionId?: string) => {
-        if (coworkSessionId) {
-          const channelPreset = options.resolveSessionDefaultPermissionPreset?.(coworkSessionId);
-          if (channelPreset) return channelPreset;
-        }
-        return this.defaultPermissionPreset;
-      },
+      resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
       onPermissionPresetChanged: async (preset, coworkSessionId) => {
         if (!coworkSessionId) {
           this.defaultPermissionPreset = preset;
@@ -865,35 +856,6 @@ export class DshBootstrap {
     }
   }
 
-  /**
-   * Ensure one-shot idempotent backfill of legacy `DREAMS.md` files from
-   * `legacy-openclaw-state.tar.gz` has completed before reading diaries.
-   */
-  ensureDreamDiaryBackfilled(): Promise<LegacyDreamDiaryBackfillResult> {
-    if (!this.dreamDiaryBackfillPromise) {
-      this.dreamDiaryBackfillPromise = backfillLegacyDreamDiariesFromBackup({
-        userDataDir: this.options.userDataDir,
-        db: this.options.db,
-      })
-        .then((result) => {
-          if (result.status === 'failed') {
-            this.dreamDiaryBackfillPromise = null;
-          }
-          return result;
-        })
-        .catch((error) => {
-          console.warn('[MigrationV2] dream diary backup backfill failed:', error);
-          this.dreamDiaryBackfillPromise = null;
-          return {
-            status: 'failed' as const,
-            diariesRestored: 0,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        });
-    }
-    return this.dreamDiaryBackfillPromise;
-  }
-
   private broadcastMcpChanged(): void {
     if (typeof BrowserWindow?.getAllWindows !== 'function') return;
     for (const win of BrowserWindow.getAllWindows()) {
@@ -1001,7 +963,7 @@ export class DshBootstrap {
       }
 
       // One-shot idempotent backfills for users who completed v2 migration before
-      // `cron_jobs`, `DREAMS.md`, Tavily, or `mcp_oauth_stores` extraction landed.
+      // `cron_jobs`, Tavily, or `mcp_oauth_stores` extraction landed.
       // All run concurrently with DSH boot and return instantaneously once completed.
       const cronBackfillPromise = backfillLegacyScheduledTasksFromBackup({
         userDataDir: this.options.userDataDir,
@@ -1010,7 +972,6 @@ export class DshBootstrap {
         console.warn('[MigrationV2] scheduled task backup backfill failed:', error);
         return { status: 'failed' as const, tasksImported: 0, runsImported: 0 };
       });
-      const dreamDiaryBackfillPromise = this.ensureDreamDiaryBackfilled();
       const tavilyBackfillPromise = backfillLegacyTavilyFromBackup({
         userDataDir: this.options.userDataDir,
         db: this.options.db,
@@ -1043,6 +1004,24 @@ export class DshBootstrap {
         console.warn('[MigrationV2] legacy user_memories backfill failed:', error);
       }
 
+      // One-shot idempotent cleanup removing legacy OpenClaw Dreaming promotion
+      // noise (`## Promoted From Short-Term Memory (...)` / `memory/.dreams/...`)
+      // from migrated agent `MEMORY.md` files without touching user memories.
+      try {
+        const dreamingCleanup = cleanupLegacyDreamingPromotions({
+          userDataDir: this.options.userDataDir,
+          db: this.options.db,
+          memoryService: this.memoryService,
+        });
+        if (dreamingCleanup.filesCleaned > 0) {
+          console.log(
+            `[MigrationV2] stripped ${dreamingCleanup.entriesRemoved} legacy dreaming promotion entry(s) across ${dreamingCleanup.filesCleaned} MEMORY.md file(s)`,
+          );
+        }
+      } catch (error) {
+        console.warn('[MigrationV2] legacy dreaming promotions cleanup failed:', error);
+      }
+
       await Promise.all([
         reapOrphanedDshRuntimes({
           executablePath: this.executablePath,
@@ -1071,20 +1050,14 @@ export class DshBootstrap {
       // process their results in the background so startup and turns are never blocked.
       void Promise.all([
         cronBackfillPromise,
-        dreamDiaryBackfillPromise,
         tavilyBackfillPromise,
         mcpOAuthBackfillPromise,
-      ]).then(async ([backfill, dreamDiaryBackfill, tavilyBackfill, oauthBackfill]) => {
+      ]).then(async ([backfill, tavilyBackfill, oauthBackfill]) => {
         if (backfill.tasksImported > 0 || backfill.runsImported > 0) {
           console.log(
             `[MigrationV2] backfilled ${backfill.tasksImported} scheduled tasks and ${backfill.runsImported} run records from legacy backup`,
           );
           this.broadcastScheduledTaskEvent(ScheduledTaskIpc.Refresh);
-        }
-        if (dreamDiaryBackfill.diariesRestored > 0) {
-          console.log(
-            `[MigrationV2] backfilled ${dreamDiaryBackfill.diariesRestored} legacy dream diary file(s) from backup`,
-          );
         }
         if (tavilyBackfill.migrated) {
           console.log('[MigrationV2] backfilled legacy Tavily plugin config into SQLite mcp_servers');

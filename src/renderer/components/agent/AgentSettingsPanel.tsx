@@ -1,4 +1,5 @@
 import {
+  ArrowTopRightOnSquareIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   XMarkIcon,
@@ -11,6 +12,7 @@ import {
   AgentModelSelectionMode,
   AgentRulePolishDirective,
   AgentSource,
+  AgentUiEvent,
   normalizeSubagentCollaborationMode,
   SubagentCollaborationMode,
 } from '@shared/agent';
@@ -154,6 +156,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [pendingStarterPrompts, setPendingStarterPrompts] = useState<string[] | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showUnsavedConfirm, setShowUnsavedConfirm] = useState(false);
+  const [pendingOpenMemoryAfterDiscard, setPendingOpenMemoryAfterDiscard] = useState(false);
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
 
   // Collapsible advanced sections
   const [showImSection, setShowImSection] = useState(false);
@@ -353,6 +357,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     polishSnapshotRef.current = null;
     setShowDeleteConfirm(false);
     setShowUnsavedConfirm(false);
+    setPendingOpenMemoryAfterDiscard(false);
+    setMemoryCount(null);
     setNameTouched(false);
     setPolishing(false);
     setPolishStreaming(false);
@@ -369,12 +375,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       const a = await window.electron?.agents?.get(agentId);
       if (!a || cancelled) return;
 
-      const [nextIdentity, nextSystemPrompt, nextUserInfo] = await Promise.all([
+      const [nextIdentity, nextSystemPrompt, nextUserInfo, memoryStats] = await Promise.all([
         coworkService.readBootstrapFile('IDENTITY.md', { agentId }),
         coworkService.readBootstrapFile('SOUL.md', { agentId }),
         coworkService.readBootstrapFile('USER.md', { agentId }),
+        coworkService.getMemoryStats({ agentId }).catch(() => null),
       ]);
       if (cancelled) return;
+      setMemoryCount(memoryStats?.created ?? 0);
 
       const unified = deriveUnifiedInstructions({
         identity: nextIdentity,
@@ -453,9 +461,29 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
   if (!agentId) return null;
 
+  const openAgentMemorySettings = () => {
+    onClose();
+    window.dispatchEvent(
+      new CustomEvent(AgentUiEvent.OpenMemorySettings, { detail: { agentId } }),
+    );
+  };
+
+  const handleOpenMemorySettings = () => {
+    const changedFields = getChangedFields();
+    if (changedFields.length > 0) {
+      setPendingOpenMemoryAfterDiscard(true);
+      reportAgentSettingsAction('discard_confirm_open', { changedFields, isDirty: true });
+      setShowUnsavedConfirm(true);
+      return;
+    }
+    reportAgentSettingsAction('close', { isDirty: false });
+    openAgentMemorySettings();
+  };
+
   const handleClose = () => {
     const changedFields = getChangedFields();
     if (changedFields.length > 0) {
+      setPendingOpenMemoryAfterDiscard(false);
       reportAgentSettingsAction('discard_confirm_open', { changedFields, isDirty: true });
       setShowUnsavedConfirm(true);
     } else {
@@ -469,8 +497,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       changedFields: getChangedFields(),
       isDirty: true,
     });
+    const shouldOpenMemory = pendingOpenMemoryAfterDiscard;
+    setPendingOpenMemoryAfterDiscard(false);
     setShowUnsavedConfirm(false);
-    onClose();
+    if (shouldOpenMemory) {
+      openAgentMemorySettings();
+    } else {
+      onClose();
+    }
   };
 
   const handleCancelDiscard = () => {
@@ -478,6 +512,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       changedFields: getChangedFields(),
       isDirty: true,
     });
+    setPendingOpenMemoryAfterDiscard(false);
     setShowUnsavedConfirm(false);
   };
 
@@ -886,6 +921,16 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       ? globalCapabilitiesSubtitle
       : i18nService.t('agentSettingsSkillScopeMainHint');
 
+  const memoryDescription = memoryCount === null
+    ? i18nService.t('loading')
+    : isMainAgent
+      ? memoryCount > 0
+        ? i18nService.t('agentSettingsMemoryMainCount').replace('{count}', String(memoryCount))
+        : i18nService.t('agentSettingsMemoryMainEmpty')
+      : memoryCount > 0
+        ? i18nService.t('agentSettingsMemoryExpertCount').replace('{count}', String(memoryCount))
+        : i18nService.t('agentSettingsMemoryExpertEmpty');
+
   const hasRules = unifiedText.trim().length > 0;
 
   return (
@@ -1147,6 +1192,26 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Long-Term Memory */}
+              <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
+                    {i18nService.t('agentSettingsMemorySection')}
+                  </div>
+                  <p className={`mt-0.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                    {memoryDescription}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenMemorySettings}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
+                >
+                  <span>{i18nService.t('agentSettingsMemoryManageButton')}</span>
+                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 text-secondary" />
+                </button>
               </div>
             </div>
           </section>

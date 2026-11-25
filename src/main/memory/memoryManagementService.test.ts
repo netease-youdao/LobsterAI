@@ -16,6 +16,7 @@ import {
 } from './lobsterMemoryService';
 import {
   createManagedMemoryEntry,
+  deleteManagedMemoryEntries,
   deleteManagedMemoryEntry,
   getManagedMemoryStats,
   LEGACY_MEMORY_ID_PREFIX,
@@ -377,5 +378,59 @@ describe('memoryManagementService', () => {
     );
     expect(memoryService.search('analyst', 'raw analyst rule')).toHaveLength(1);
     expect(memoryService.listMemories(AgentId.Main)).toHaveLength(0);
+  });
+
+  test('deleteManagedMemoryEntries batch-deletes entries, syncs SQLite status, and exposes projectKeys in search', () => {
+    const { memoryService, db } = setupEnv();
+
+    memoryService.writeWorkspaceFile(
+      AgentId.Main,
+      WorkspaceFileName.Memory,
+      [
+        '# User Memories',
+        '',
+        '- Keep global fact',
+        '- Repo build command <!-- project: github.com/acme/lobsterai -->',
+        '- Temp promoted note',
+        '',
+      ].join('\n'),
+    );
+
+    db.prepare('INSERT INTO user_memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(
+      'um-temp',
+      'Temp promoted note',
+      memoryFingerprint('Temp promoted note'),
+      0.8,
+      0,
+      CoworkMemoryStatus.Created,
+      100,
+      100,
+    );
+
+    const entries = listManagedMemoryEntries(memoryService, db, {
+      status: CoworkMemoryStatusFilter.Created,
+    });
+    expect(entries).toHaveLength(3);
+    expect(entries[1].projectKeys).toEqual(['github.com/acme/lobsterai']);
+
+    // Search matches projectKeys as well
+    expect(
+      listManagedMemoryEntries(memoryService, db, {
+        status: CoworkMemoryStatusFilter.Created,
+        query: 'acme/lobsterai',
+      }).map((e) => e.text),
+    ).toEqual(['Repo build command']);
+
+    const deletedCount = deleteManagedMemoryEntries(memoryService, db, {
+      agentId: AgentId.Main,
+      ids: [entries[1].id, entries[2].id],
+    });
+    expect(deletedCount).toBe(2);
+    expect(memoryService.listMemories(AgentId.Main).map((e) => e.text)).toEqual(['Keep global fact']);
+
+    const row = db
+      .prepare('SELECT status FROM user_memories WHERE id = ?')
+      .get('um-temp') as { status: string };
+    expect(row.status).toBe(CoworkMemoryStatus.Deleted);
   });
 });
