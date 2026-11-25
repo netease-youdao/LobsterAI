@@ -3530,9 +3530,7 @@ const Settings: React.FC<SettingsProps> = ({
         }
       }
 
-      // Ask main to sync IM/OpenClaw config. The main process skips this when
-      // the IM fingerprint has not changed, so unrelated settings saves do not
-      // restart the gateway.
+      // Apply pending IM channel changes to the running DSH host.
       const syncSucceeded = await imService.saveAndSyncConfig();
       if (!syncSucceeded) {
         throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
