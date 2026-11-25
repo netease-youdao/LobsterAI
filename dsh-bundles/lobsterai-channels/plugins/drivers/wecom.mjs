@@ -7,6 +7,15 @@ import { detectImageMime, fetchBinaryWithLimit, isImageAttachment } from './medi
 const WECOM_API_BASE = 'https://qyapi.weixin.qq.com';
 const DEFAULT_WECOM_WS_URL = 'wss://openws.work.weixin.qq.com';
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const SUBSCRIBE_TIMEOUT_MS = 15_000;
+const INITIAL_RETRY_MS = 3_000;
+const MAX_RETRY_MS = 60_000;
+const INVALID_BOT_CREDENTIALS = 853000;
+const WeComError = {
+  Replaced: 'imWecomConnectionReplaced',
+  InvalidCredentials: 'imWecomInvalidCredentials',
+  Reconnecting: 'imWecomReconnecting',
+};
 const MAX_CACHED_REQ_IDS = 512;
 
 function generateReqId(prefix) {
@@ -232,63 +241,27 @@ export class WeComChannelDriver extends BaseChannelDriver {
     this.setState('connected', null, { corpId: this.corpId || this.botId });
   }
 
-  async connectAiBotWs(signal) {
-    // Establish initial authenticated WebSocket before marking connected, then maintain loop
-    await this.openSingleAiBotWs(signal, true);
-    if (!signal.aborted) {
-      void this.maintainAiBotWs(signal);
-    }
-  }
-
-  async maintainAiBotWs(signal) {
-    while (!signal.aborted) {
-      // Wait while current ws is open
-      if (this.ws) {
-        const activeWs = this.ws;
-        await new Promise((resolve) => {
-          const onClose = () => resolve();
-          activeWs.addEventListener('close', onClose, { once: true });
-          signal.addEventListener('abort', onClose, { once: true });
-        });
-      }
-      if (signal.aborted) return;
-      this.setState('reconnecting', 'WeCom AI Bot WebSocket disconnected');
-      await sleepAbortable(3_000, signal);
-      if (signal.aborted) return;
-      try {
-        await this.openSingleAiBotWs(signal, false);
-      } catch (err) {
-        if (signal.aborted) return;
-        this.setState('reconnecting', err instanceof Error ? err.message : String(err));
-        await sleepAbortable(5_000, signal);
-      }
-    }
-  }
-
-  async openSingleAiBotWs(signal, failHardOnAuth) {
-    await new Promise((resolve, reject) => {
+  async connectAiBotWs(signal, retryDelay = INITIAL_RETRY_MS) {
+    return new Promise((resolve, reject) => {
       // The WeCom gateway rejects the lowercase sec-websocket-key sent by Node's built-in client.
       const ws = new WebSocket(this.wsUrl);
       this.ws = ws;
       let authenticated = false;
+      let terminalError = null;
       let heartbeatTimer = null;
+      let pendingPing = null;
       const authReqId = generateReqId('aibot_subscribe');
-
-      const cleanupTimers = () => {
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer);
-          heartbeatTimer = null;
-        }
-      };
+      const subscribeTimer = setTimeout(() => ws.terminate(), SUBSCRIBE_TIMEOUT_MS);
+      subscribeTimer.unref?.();
 
       const onAbort = () => {
-        cleanupTimers();
-        try { ws.close(1000, 'stopped'); } catch {}
+        ws.terminate();
         resolve();
       };
       signal.addEventListener('abort', onAbort, { once: true });
 
       ws.addEventListener('open', () => {
+        if (signal.aborted) return;
         ws.send(JSON.stringify({
           cmd: 'aibot_subscribe',
           headers: { req_id: authReqId },
@@ -300,28 +273,33 @@ export class WeComChannelDriver extends BaseChannelDriver {
       });
 
       ws.addEventListener('message', (event) => {
+        if (signal.aborted || terminalError || ws.readyState !== WebSocket.OPEN) return;
         let frame;
         try { frame = JSON.parse(String(event.data)); } catch { return; }
         const reqId = String(frame?.headers?.req_id || '');
 
-        if (!frame.cmd && reqId === authReqId) {
+        if (!frame.cmd && reqId === authReqId && !authenticated) {
           if (frame.errcode !== 0) {
-            const err = new Error(`WeCom AI Bot auth failed: ${frame.errmsg || frame.errcode}`);
-            cleanupTimers();
-            try { ws.close(1000, 'auth_failed'); } catch {}
-            if (failHardOnAuth) reject(err);
-            else resolve();
+            if (frame.errcode === INVALID_BOT_CREDENTIALS) terminalError = WeComError.InvalidCredentials;
+            ws.terminate();
             return;
           }
+          clearTimeout(subscribeTimer);
           authenticated = true;
           this.setState('connected', null, { botId: this.botId, mode: 'websocket' });
           heartbeatTimer = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ cmd: 'ping', headers: { req_id: generateReqId('ping') } }));
-            }
+            if (ws.readyState !== WebSocket.OPEN) return;
+            if (pendingPing) return ws.terminate();
+            pendingPing = generateReqId('ping');
+            ws.send(JSON.stringify({ cmd: 'ping', headers: { req_id: pendingPing } }));
           }, HEARTBEAT_INTERVAL_MS);
           heartbeatTimer.unref?.();
           resolve();
+          return;
+        }
+
+        if (!frame.cmd && reqId === pendingPing && frame.errcode === 0) {
+          pendingPing = null;
           return;
         }
 
@@ -335,8 +313,9 @@ export class WeComChannelDriver extends BaseChannelDriver {
         }
 
         if (frame.cmd === 'aibot_event_callback' && frame.body?.event?.eventtype === 'disconnected_event') {
-          cleanupTimers();
-          try { ws.close(1000, 'replaced'); } catch {}
+          // WeCom grants the new subscriber ownership. Retrying here would evict it.
+          terminalError = WeComError.Replaced;
+          ws.terminate();
           return;
         }
 
@@ -370,27 +349,42 @@ export class WeComChannelDriver extends BaseChannelDriver {
 
       ws.addEventListener('close', () => {
         signal.removeEventListener('abort', onAbort);
-        cleanupTimers();
-        if (this.ws === ws) this.ws = null;
-        if (!authenticated) {
-          if (failHardOnAuth) reject(new Error('WeCom AI Bot WebSocket closed before authentication'));
-          else resolve();
+        clearTimeout(subscribeTimer);
+        clearInterval(heartbeatTimer);
+        if (signal.aborted || this.ws !== ws) return;
+        this.ws = null;
+        this.clearPendingAcks();
+        this.chatReqIds.clear();
+        if (terminalError) {
+          if (authenticated) this.setState('error', terminalError);
+          else reject(new Error(terminalError));
+          return;
         }
+        this.setState('reconnecting', WeComError.Reconnecting);
+        // A retrying driver is running. Release the initial sync even if its first attempt failed.
+        resolve();
+        const delay = authenticated ? INITIAL_RETRY_MS : retryDelay;
+        void this.retryAiBotWs(signal, delay);
       });
 
-      ws.addEventListener('error', () => {
-        if (!authenticated) {
-          cleanupTimers();
-          if (failHardOnAuth) reject(new Error('WeCom AI Bot WebSocket connection failed'));
-          else resolve();
-        }
-      });
+      // ws always emits close after a transport error. That handler owns the only retry.
+      ws.addEventListener('error', () => {});
     });
+  }
+
+  async retryAiBotWs(signal, delay) {
+    await sleepAbortable(delay, signal);
+    if (signal.aborted) return;
+    try {
+      await this.connectAiBotWs(signal, Math.min(delay * 2, MAX_RETRY_MS));
+    } catch (error) {
+      if (!signal.aborted) this.setState('error', error.message);
+    }
   }
 
   sendWsFrameWithAck(cmd, reqId, body) {
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.state !== 'connected') {
       return Promise.reject(new Error('WeCom AI Bot WebSocket is not connected'));
     }
     return new Promise((resolve, reject) => {
@@ -410,13 +404,17 @@ export class WeComChannelDriver extends BaseChannelDriver {
     });
   }
 
-  async disconnect() {
+  clearPendingAcks() {
     for (const waiter of this.pendingAcks.values()) {
       clearTimeout(waiter.timer);
-      waiter.reject(new Error('WeCom driver stopped'));
+      waiter.reject(new Error('WeCom AI Bot WebSocket disconnected'));
     }
     this.pendingAcks.clear();
-    try { this.ws?.close(1000, 'stopped'); } catch {}
+  }
+
+  async disconnect() {
+    this.clearPendingAcks();
+    this.chatReqIds.clear();
     this.ws = null;
   }
 
