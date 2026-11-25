@@ -11,6 +11,7 @@ import type {
   ActivitySlotResponse,
 } from '../../shared/activity/constants';
 import type { AgentModelSelectionMode, SubagentCollaborationMode } from '../../shared/agent/constants';
+import type { AgentDraftStreamChunk, GenerateAgentDraftRequest, GenerateAgentDraftResult } from '../../shared/agent/draft';
 import type { AgentModelSelection } from '../../shared/agent/modelSelection';
 import type { ExpertCatalog, ExpertUpgradeStatus } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
@@ -896,6 +897,9 @@ interface IElectronAPI {
     reorder: (agentIds: string[]) => Promise<Agent[] | null>;
     cleanupLegacyIdentityBlock: (id: string) => Promise<AgentLegacyIdentityCleanupResult>;
     delete: (id: string) => Promise<boolean>;
+    generateDraft: (request: GenerateAgentDraftRequest) => Promise<GenerateAgentDraftResult>;
+    cancelDraft?: (requestId: string) => Promise<boolean>;
+    onDraftChunk?: (callback: (chunk: AgentDraftStreamChunk) => void) => () => void;
     presets: () => Promise<PresetAgent[]>;
     presetTemplates: () => Promise<PresetAgent[]>;
     expertCatalog: () => Promise<ExpertCatalog>;

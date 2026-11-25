@@ -19,7 +19,7 @@ import {
   supportsGeminiApiFormatSelection,
   usesCustomGeminiApiFormat,
 } from '../../../shared/providers';
-import { type AppConfig, defaultConfig, isCustomProvider } from '../../config';
+import { type AppConfig, defaultConfig, getVisibleProviders, isCustomProvider } from '../../config';
 import { i18nService } from '../../services/i18n';
 
 export const CUSTOM_PROVIDER_KEYS = [
@@ -289,10 +289,11 @@ export const getDefaultProviders = (): ProvidersConfig => {
   ) as ProvidersConfig;
 };
 
-export const getDefaultActiveProvider = (): ProviderType => {
+export const getDefaultActiveProvider = (language: 'zh' | 'en' = i18nService.getLanguage()): ProviderType => {
   const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
-  const firstEnabledProvider = providerKeys.find(providerKey => providers[providerKey]?.enabled);
-  return firstEnabledProvider ?? providerKeys[0];
+  const orderedKeys = [...getVisibleProviders(language), ...CUSTOM_PROVIDER_KEYS] as ProviderType[];
+  const firstEnabledProvider = orderedKeys.find(providerKey => providers[providerKey]?.enabled);
+  return firstEnabledProvider ?? orderedKeys[0] ?? providerKeys[0];
 };
 
 export const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provider: string): string => {

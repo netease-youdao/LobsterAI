@@ -7,6 +7,7 @@ import {
   buildOpenAIConnectionTestRequestBody,
   getApiFormatOption,
   getApiFormatOptions,
+  getDefaultActiveProvider,
   getOpenClawProviderIdForConfig,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
@@ -223,4 +224,9 @@ test('max output tokens rejects ambiguous or out-of-range input', () => {
   for (const input of ['64k', '1.5', '-1', 'auto', String(MAX_OUTPUT_TOKENS_MIN - 1), String(MAX_OUTPUT_TOKENS_MAX + 1)]) {
     expect(parseMaxOutputTokensInput(input), input).toBeNull();
   }
+});
+
+test('getDefaultActiveProvider picks the first visible provider for the active locale', () => {
+  expect(getDefaultActiveProvider('zh')).toBe(ProviderName.DeepSeek);
+  expect(getDefaultActiveProvider('en')).toBe(ProviderName.OpenAI);
 });

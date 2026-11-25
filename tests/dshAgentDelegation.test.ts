@@ -130,6 +130,35 @@ describe('dsh agent-delegation helpers', () => {
     expect(capped).not.toContain('`video-uuid`');
     expect(capped).toContain('list_collaborator_agents');
   });
+
+  test('resolveCollaboratorDescription falls back to systemPrompt and workingDirectory when description is blank', async () => {
+    const { formatCollaboratorRosterPrompt, resolveCollaboratorDescription } = await import(helpersUrl);
+
+    expect(resolveCollaboratorDescription({
+      id: 'weekly',
+      name: '周报助手',
+      description: '',
+      systemPrompt: '## 角色与规则\n- 定位：把工作记录整理为结论先行的结构化周报。',
+    })).toBe('把工作记录整理为结论先行的结构化周报。');
+
+    expect(resolveCollaboratorDescription({
+      id: 'repo-agent',
+      name: '项目专家',
+      description: '',
+      workingDirectory: '/Users/dev/my-app/',
+    })).toBe('workspace: my-app');
+
+    const prompt = formatCollaboratorRosterPrompt([
+      {
+        id: 'weekly',
+        name: '周报助手',
+        description: '',
+        systemPrompt: '把工作记录整理为结论先行的结构化周报。',
+        skillSummaries: [],
+      },
+    ]);
+    expect(prompt).toContain('`weekly` (周报助手): 把工作记录整理为结论先行的结构化周报。');
+  });
 });
 
 describe('resolveSessionContext delegated specialist & cold resume support', () => {

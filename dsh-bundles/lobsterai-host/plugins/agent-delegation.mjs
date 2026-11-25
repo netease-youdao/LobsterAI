@@ -24,6 +24,7 @@ import {
   formatCollaboratorRosterPrompt,
   LIST_COLLABORATORS_TOOL_NAME,
   MAX_INLINE_COLLABORATORS,
+  resolveCollaboratorDescription,
   resolveCollaborators,
   resolveTargetAgentInput,
 } from './agent-delegation-helpers.mjs';
@@ -384,14 +385,17 @@ export function apply(ctx) {
     },
     async execute(_args, exec) {
       const collaborators = getAvailableCollaboratorsForAgent(exec.agent);
-      return collaborators.map((agent) => ({
-        agent_id: agent.id,
-        name: agent.name,
-        ...(agent.description ? { description: agent.description } : {}),
-        ...(Array.isArray(agent.skillSummaries) && agent.skillSummaries.length > 0
-          ? { skills: agent.skillSummaries.map((s) => s.name || s.id) }
-          : {}),
-      }));
+      return collaborators.map((agent) => {
+        const desc = resolveCollaboratorDescription(agent);
+        return {
+          agent_id: agent.id,
+          name: agent.name,
+          ...(desc ? { description: desc } : {}),
+          ...(Array.isArray(agent.skillSummaries) && agent.skillSummaries.length > 0
+            ? { skills: agent.skillSummaries.map((s) => s.name || s.id) }
+            : {}),
+        };
+      });
     },
   });
 

@@ -40,7 +40,6 @@ import type {
 import {
   type CoworkSelectedTextSnippet,
   CoworkSelectedTextSource,
-  type CoworkSelectedTextValidationError,
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
 import { classifyWaitingNotificationKind, WaitingNotificationKind } from '../../../shared/notifications/constants';
@@ -196,6 +195,21 @@ import Tooltip, {
 } from '../ui/Tooltip';
 import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
+import {
+  ARTIFACT_HEADER_TRANSITION_MIN_WIDTH,
+  ARTIFACT_PANEL_MIN_WIDTH_RATIO,
+  ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH,
+  ARTIFACT_PANEL_TRANSITION_MS,
+  ArtifactPanelErrorBoundary,
+  ArtifactPanelIcon,
+  ArtifactTabPlusIcon,
+  COWORK_DETAIL_MIN_WIDTH,
+  PanelExpandIcon,
+  PanelRestoreIcon,
+  PromptInputCollapseIcon,
+  PromptInputExpandIcon,
+  SELECTED_TEXT_ERROR_I18N_KEYS,
+} from './artifactPanelChrome';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
 import { type ArtifactTabActionTarget, artifactTabMenuActions } from './artifactTabActions';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
@@ -386,12 +400,6 @@ type AutoScrollDetachSource = typeof AutoScrollDetachSource[keyof typeof AutoScr
 const AUTO_PREVIEW_ARTIFACT_SETTLE_MS = 600;
 const MAX_AUTO_PREVIEW_HANDLED_TURNS = 128;
 const LOCAL_SERVICE_PROCESS_DIRECTORY_RETRY_DELAY_MS = 900;
-const ARTIFACT_PANEL_TRANSITION_MS = 200;
-/** Width of the right-side panel controls (expand + toggle + right gutter) while transitioning. */
-const ARTIFACT_HEADER_TRANSITION_MIN_WIDTH = 88;
-const ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH = 4;
-const COWORK_DETAIL_MIN_WIDTH = 480;
-const ARTIFACT_PANEL_MIN_WIDTH_RATIO = 1 / 6;
 const SUBAGENT_PANEL_POLL_INTERVAL_MS = 5_000;
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 const SELECTED_TEXT_ACTION_HALF_WIDTH = 150;
@@ -842,15 +850,6 @@ type SelectedAssistantTextRange = {
   sourceMessageId: string;
   rect: DOMRect;
 };
-const SELECTED_TEXT_ERROR_I18N_KEYS: Record<CoworkSelectedTextValidationError, string> = {
-  empty: 'coworkSelectedTextInvalid',
-  invalid: 'coworkSelectedTextInvalid',
-  too_long: 'coworkSelectedTextTooLong',
-  too_many: 'coworkSelectedTextTooMany',
-  total_too_long: 'coworkSelectedTextTotalTooLong',
-  duplicate: 'coworkSelectedTextDuplicate',
-};
-
 
 const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
@@ -1302,87 +1301,6 @@ const composeExportCanvas = async (
 
   return final;
 };
-
-const ArtifactPanelIcon: React.FC<React.SVGProps<SVGSVGElement> & { open?: boolean }> = ({ open, ...props }) => {
-  const dividerX = open ? 10.5 : 12.5;
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <rect x="1.5" y="2" width="13" height="12" rx="2" />
-      <line x1={dividerX} y1="2" x2={dividerX} y2="14" />
-    </svg>
-  );
-};
-
-const PanelExpandIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <path d="M10 3h3v3" />
-    <path d="M6 13H3v-3" />
-    <path d="M9 7l4-4" />
-    <path d="M7 9l-4 4" />
-  </svg>
-);
-
-const PanelRestoreIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <path d="M13.25 2.75l-4 4" />
-    <path d="M9.25 3.75v3h3" />
-    <path d="M2.75 13.25l4-4" />
-    <path d="M3.75 9.25h3v3" />
-  </svg>
-);
-
-const PromptInputCollapseIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <path d="M4.5 6.25L8 9.75l3.5-3.5" />
-  </svg>
-);
-
-const PromptInputExpandIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <path d="M4.5 9.75L8 6.25l3.5 3.5" />
-  </svg>
-);
-
-const ArtifactTabPlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}>
-    <path d="M8 3.5v9M3.5 8h9" />
-  </svg>
-);
-
-class ArtifactPanelErrorBoundary extends React.Component<
-  { children: React.ReactNode; onClose: () => void },
-  { hasError: boolean; error: Error | null }
-> {
-  constructor(props: { children: React.ReactNode; onClose: () => void }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error: Error) {
-    console.error('[ArtifactPanel] render error:', error);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <aside className="w-[420px] shrink-0 border-l border-border bg-background flex flex-col h-full items-center justify-center p-4">
-          <p className="text-sm text-red-500 mb-2">Artifact panel error</p>
-          <pre className="text-xs text-muted whitespace-pre-wrap max-w-full overflow-auto mb-3">
-            {this.state.error?.message}
-          </pre>
-          <button
-            onClick={() => { this.setState({ hasError: false, error: null }); this.props.onClose(); }}
-            className="px-3 py-1.5 text-xs rounded-lg bg-surface hover:bg-surface-hover text-foreground"
-          >
-            Close
-          </button>
-        </aside>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 // ── Path resolution utilities (used by resolveLocalFilePath) ─────────────────
 

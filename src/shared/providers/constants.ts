@@ -200,7 +200,7 @@ interface ProviderDefInput {
     readonly anthropic: string;
     readonly openai: string;
   };
-  /** Region grouping for UI visibility */
+  /** Region grouping for locale display ordering */
   readonly region: 'china' | 'global';
   /** Priority ordering for English locale display (lower = higher priority, 0 = no special priority) */
   readonly enPriority: number;
@@ -690,7 +690,7 @@ export interface ProviderDef {
     readonly anthropic: string;
     readonly openai: string;
   };
-  /** Region grouping for UI visibility */
+  /** Region grouping for locale display ordering */
   readonly region: 'china' | 'global';
   /** Priority ordering for English locale display (lower = higher priority, 0 = no special priority) */
   readonly enPriority: number;
@@ -971,21 +971,15 @@ class ProviderRegistryImpl {
     return this.defs.filter(d => d.region === region).map(d => d.id);
   }
 
-  /**
-   * Provider IDs for English locale display:
-   * EN_PRIORITY providers first (sorted by enPriority), then CHINA, then remaining GLOBAL.
-   * ollama and custom are always pushed to the end, with custom last.
-   */
-  idsForEnLocale(): readonly string[] {
-    const priority = this.defs
+  private enPriorityIds(): readonly string[] {
+    return this.defs
       .filter(d => d.enPriority > 0)
       .sort((a, b) => a.enPriority - b.enPriority)
       .map(d => d.id);
-    const china = this.idsByRegion('china');
-    const global = this.idsByRegion('global');
+  }
 
-    const orderedProviders = [...priority, ...china, ...global];
-    const unique = [...new Set(orderedProviders)];
+  private orderLocalProvidersLast(ids: readonly string[]): readonly string[] {
+    const unique = [...new Set(ids)];
 
     // Move local providers (ollama, lm-studio) to the end
     const ollamaIdx = unique.indexOf(ProviderName.Ollama);
@@ -999,6 +993,31 @@ class ProviderRegistryImpl {
     unique.push(ProviderName.Ollama);
     unique.push(ProviderName.LmStudio);
     return unique;
+  }
+
+  /**
+   * Provider IDs for Chinese locale display:
+   * CHINA providers first, then GLOBAL providers (priority global providers in
+   * enPriority order first, followed by remaining global providers).
+   * Local providers (ollama, lm-studio) are always pushed to the end.
+   */
+  idsForZhLocale(): readonly string[] {
+    const china = this.idsByRegion('china');
+    const priority = this.enPriorityIds();
+    const global = this.idsByRegion('global');
+    return this.orderLocalProvidersLast([...china, ...priority, ...global]);
+  }
+
+  /**
+   * Provider IDs for English locale display:
+   * EN_PRIORITY providers first (sorted by enPriority), then CHINA, then remaining GLOBAL.
+   * Local providers (ollama, lm-studio) are always pushed to the end.
+   */
+  idsForEnLocale(): readonly string[] {
+    const priority = this.enPriorityIds();
+    const china = this.idsByRegion('china');
+    const global = this.idsByRegion('global');
+    return this.orderLocalProvidersLast([...priority, ...china, ...global]);
   }
 }
 

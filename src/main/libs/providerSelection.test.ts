@@ -59,8 +59,20 @@ describe('resolveProxyBackedBaseUrl', () => {
       .toBe('http://127.0.0.1:45555/v1/github-copilot');
   });
 
+  test('rewrites OpenAI Codex OAuth and xAI OAuth onto provider-scoped loopback proxy routes', () => {
+    expect(resolveProxyBackedBaseUrl(ProviderName.OpenAI, 'http://127.0.0.1:45555', 'oauth'))
+      .toBe('http://127.0.0.1:45555/v1/openai-codex');
+    expect(resolveProxyBackedBaseUrl('openai-codex', 'http://127.0.0.1:45555'))
+      .toBe('http://127.0.0.1:45555/v1/openai-codex');
+    expect(resolveProxyBackedBaseUrl(ProviderName.Xai, 'http://127.0.0.1:45555', 'oauth'))
+      .toBe('http://127.0.0.1:45555/v1/xai-oauth');
+    expect(resolveProxyBackedBaseUrl('xai-oauth', 'http://127.0.0.1:45555'))
+      .toBe('http://127.0.0.1:45555/v1/xai-oauth');
+  });
+
   test('returns null for non-proxy providers or missing proxy origin', () => {
     expect(resolveProxyBackedBaseUrl(ProviderName.OpenAI, 'http://127.0.0.1:45555')).toBeNull();
+    expect(resolveProxyBackedBaseUrl(ProviderName.Xai, 'http://127.0.0.1:45555')).toBeNull();
     expect(resolveProxyBackedBaseUrl(ProviderName.LobsteraiServer, null)).toBeNull();
     expect(resolveProxyBackedBaseUrl(ProviderName.Copilot, '')).toBeNull();
   });
@@ -169,8 +181,24 @@ describe('buildProviderSelection', () => {
     });
   });
 
-  test('leaves external OAuth providers without an apiKey', () => {
-    const result = buildProviderSelection({
+  test('rewrites OpenAI OAuth and xAI OAuth to the local loopback proxy when proxyBaseUrl is provided', () => {
+    const codex = buildProviderSelection({
+      apiKey: '',
+      baseURL: 'https://api.openai.com/v1',
+      modelId: 'gpt-6-astra',
+      apiType: 'openai',
+      providerName: ProviderName.OpenAI,
+      authType: 'oauth',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(codex.providerConfig).toMatchObject({
+      baseUrl: 'http://127.0.0.1:45555/v1/openai-codex',
+      api: OpenClawApi.OpenAIResponses,
+      apiKey: PROXY_TOKEN_PLACEHOLDER,
+      auth: 'api-key',
+    });
+
+    const xai = buildProviderSelection({
       apiKey: '',
       baseURL: 'https://api.x.ai/v1',
       modelId: 'grok-4.5',
@@ -180,9 +208,42 @@ describe('buildProviderSelection', () => {
       authType: 'oauth',
       proxyBaseUrl: 'http://127.0.0.1:45555',
     });
+    expect(xai.providerConfig).toMatchObject({
+      baseUrl: 'http://127.0.0.1:45555/v1/xai-oauth',
+      api: OpenClawApi.OpenAIResponses,
+      apiKey: PROXY_TOKEN_PLACEHOLDER,
+      auth: 'api-key',
+    });
+  });
 
-    expect(result.providerConfig.apiKey).toBeUndefined();
-    expect(result.providerConfig.auth).toBe('oauth');
-    expect(result.providerConfig.baseUrl).toBe('https://api.x.ai/v1');
+  test('preserves direct OAuth credentials such as MiniMax OAuth and leaves unproxied keyless OAuth without an apiKey', () => {
+    const minimax = buildProviderSelection({
+      apiKey: 'mm-oauth-access-token',
+      baseURL: 'https://api.minimaxi.com/anthropic',
+      modelId: 'MiniMax-M3',
+      apiType: 'anthropic',
+      providerName: ProviderName.Minimax,
+      authType: 'oauth',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(minimax.providerConfig).toMatchObject({
+      baseUrl: 'https://api.minimaxi.com/anthropic',
+      api: OpenClawApi.AnthropicMessages,
+      apiKey: 'mm-oauth-access-token',
+      auth: 'api-key',
+    });
+
+    const unproxied = buildProviderSelection({
+      apiKey: '',
+      baseURL: 'https://custom-oauth.example.com/v1',
+      modelId: 'model-a',
+      apiType: 'openai',
+      providerName: 'custom_oauth',
+      authType: 'oauth',
+      proxyBaseUrl: 'http://127.0.0.1:45555',
+    });
+    expect(unproxied.providerConfig.apiKey).toBeUndefined();
+    expect(unproxied.providerConfig.auth).toBe('oauth');
+    expect(unproxied.providerConfig.baseUrl).toBe('https://custom-oauth.example.com/v1');
   });
 });

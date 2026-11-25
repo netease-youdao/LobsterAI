@@ -5,6 +5,7 @@ import {
   defaultConfig,
   getCustomProviderDefaultName,
   getProviderDisplayName,
+  getVisibleProviders,
   isCustomProvider,
   ShortcutAction,
 } from './config';
@@ -136,4 +137,31 @@ test('defaultConfig leaves agent shortcuts unset', () => {
   expect(defaultConfig.shortcuts?.[ShortcutAction.OpenAgentTask7]).toBe('');
   expect(defaultConfig.shortcuts?.[ShortcutAction.OpenAgentTask8]).toBe('');
   expect(defaultConfig.shortcuts?.[ShortcutAction.OpenAgentTask9]).toBe('');
+});
+
+test('getVisibleProviders exposes the same providers in zh and en, with global providers after xiaomi in zh', () => {
+  const zh = getVisibleProviders('zh');
+  const en = getVisibleProviders('en');
+
+  expect(new Set(zh)).toEqual(new Set(en));
+  expect(zh.length).toBe(en.length);
+
+  const xiaomiIdx = zh.indexOf(ProviderName.Xiaomi);
+  expect(zh.slice(xiaomiIdx + 1)).toEqual([
+    ProviderName.OpenAI,
+    ProviderName.Anthropic,
+    ProviderName.Gemini,
+    ProviderName.Xai,
+    ProviderName.Copilot,
+    ProviderName.OpenRouter,
+    ProviderName.Ollama,
+    ProviderName.LmStudio,
+  ]);
+
+  expect(en.slice(0, 4)).toEqual([
+    ProviderName.OpenAI,
+    ProviderName.Anthropic,
+    ProviderName.Gemini,
+    ProviderName.Xai,
+  ]);
 });

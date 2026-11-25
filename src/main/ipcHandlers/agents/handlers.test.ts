@@ -6,6 +6,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { AgentId, AgentIpcChannel } from '../../../shared/agent/constants';
+import { AgentDraftErrorCode, AgentDraftMode } from '../../../shared/agent/draft';
 import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
 import { ModelThinkingLevel } from '../../../shared/providers/modelThinking';
 import { type AgentHandlerDeps, registerAgentHandlers } from './handlers';
@@ -304,4 +305,184 @@ test.each([AgentId.Main, 'missing-agent'])('deleting %s does not change the gate
   expect(deleteAgent).not.toHaveBeenCalled();
   expect(syncOpenClawConfig).not.toHaveBeenCalled();
   expect(stopSession).not.toHaveBeenCalled();
+});
+
+test('generateDraft delegates to deps.generateAgentDraft and returns structured errors when unavailable', async () => {
+  const generateAgentDraft = vi.fn().mockResolvedValue({
+    success: true,
+    draft: {
+      name: 'Notes Helper',
+      description: 'Organize markdown notes',
+      instructions: '- Keep notes concise',
+      recommendedSkillIds: [],
+      starterPrompts: ['Summarize today notes'],
+    },
+  });
+  registerAgentHandlers({
+    generateAgentDraft,
+    resolveAgentWorkspacePath,
+    syncOpenClawConfig: vi.fn().mockResolvedValue({ success: true, changed: false }),
+  } as unknown as AgentHandlerDeps);
+
+  const handler = vi.mocked(ipcMain.handle).mock.calls
+    .filter(([channel]) => channel === AgentIpcChannel.GenerateDraft)
+    .at(-1)![1];
+
+  const ok = await handler({} as Electron.IpcMainInvokeEvent, {
+    mode: AgentDraftMode.Create,
+    goal: 'Organize notes',
+  });
+  expect(generateAgentDraft).toHaveBeenCalledOnce();
+  expect(ok).toMatchObject({ success: true, draft: { name: 'Notes Helper' } });
+
+  registerAgentHandlers({
+    resolveAgentWorkspacePath,
+    syncOpenClawConfig: vi.fn().mockResolvedValue({ success: true, changed: false }),
+  } as unknown as AgentHandlerDeps);
+  const unavailableHandler = vi.mocked(ipcMain.handle).mock.calls
+    .filter(([channel]) => channel === AgentIpcChannel.GenerateDraft)
+    .at(-1)![1];
+  const unavailable = await unavailableHandler({} as Electron.IpcMainInvokeEvent, {
+    mode: AgentDraftMode.Create,
+    goal: 'Organize notes',
+  });
+  expect(unavailable).toMatchObject({
+    success: false,
+    errorCode: AgentDraftErrorCode.RequestFailed,
+  });
+});
+
+test('generateDraft streams progress chunks to sender and supports cancellation via cancelDraft', async () => {
+  let capturedSignal: AbortSignal | undefined;
+  let releaseDraft!: () => void;
+  const gate = new Promise<void>(resolve => { releaseDraft = resolve; });
+
+  const generateAgentDraft = vi.fn(async (_req, options?: { signal?: AbortSignal; onProgress?: (p: { instructions?: string }) => void }) => {
+    capturedSignal = options?.signal;
+    options?.onProgress?.({ instructions: '- 流式第一段' });
+    await gate;
+    return options?.signal?.aborted
+      ? { success: false as const, errorCode: AgentDraftErrorCode.Cancelled, error: 'Cancelled.' }
+      : {
+          success: true as const,
+          draft: {
+            name: 'Helper',
+            description: '',
+            instructions: '- 流式第一段\n- 流式第二段',
+            recommendedSkillIds: [],
+            starterPrompts: [],
+          },
+        };
+  });
+
+  registerAgentHandlers({
+    generateAgentDraft,
+    resolveAgentWorkspacePath,
+    syncOpenClawConfig: vi.fn().mockResolvedValue({ success: true, changed: false }),
+  } as unknown as AgentHandlerDeps);
+
+  const generateHandler = vi.mocked(ipcMain.handle).mock.calls
+    .filter(([channel]) => channel === AgentIpcChannel.GenerateDraft)
+    .at(-1)![1];
+  const cancelHandler = vi.mocked(ipcMain.handle).mock.calls
+    .filter(([channel]) => channel === AgentIpcChannel.CancelDraft)
+    .at(-1)![1];
+
+  const sender = {
+    id: 77,
+    isDestroyed: () => false,
+    send: vi.fn(),
+    once: vi.fn(),
+    removeListener: vi.fn(),
+  };
+
+  const pending = generateHandler({ sender } as unknown as Electron.IpcMainInvokeEvent, {
+    requestId: 'req-stream-1',
+    mode: AgentDraftMode.Polish,
+    goal: 'Polish',
+  });
+
+  expect(sender.send).toHaveBeenCalledWith(AgentIpcChannel.GenerateDraftChunk, {
+    requestId: 'req-stream-1',
+    instructions: '- 流式第一段',
+  });
+  expect(capturedSignal?.aborted).toBe(false);
+
+  const cancelled = await cancelHandler({ sender } as unknown as Electron.IpcMainInvokeEvent, 'req-stream-1');
+  expect(cancelled).toBe(true);
+  expect(capturedSignal?.aborted).toBe(true);
+
+  releaseDraft();
+  const result = await pending;
+  expect(result).toMatchObject({ success: false, errorCode: AgentDraftErrorCode.Cancelled });
+});
+
+test('updating an agent with rules and blank description asynchronously backfills description and notifies all windows', async () => {
+  const sender = { id: 1, send: vi.fn() };
+  const otherWindowSend = vi.fn();
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+    { isDestroyed: () => false, webContents: sender },
+    { isDestroyed: () => false, webContents: { id: 2, send: otherWindowSend } },
+  ] as unknown as BrowserWindow[]);
+
+  let storedAgent = {
+    id: 'report-agent',
+    name: '周报助手',
+    description: '',
+    systemPrompt: '',
+    identity: '',
+    workingDirectory: '',
+    updatedAt: 100,
+  };
+  const updateAgent = vi.fn((_id: string, updates: Partial<typeof storedAgent>) => {
+    storedAgent = { ...storedAgent, ...updates, updatedAt: storedAgent.updatedAt + 1 };
+    return storedAgent;
+  });
+  const syncOpenClawConfig = vi.fn().mockResolvedValue({ success: true, changed: true });
+  const generateAgentDraft = vi.fn().mockResolvedValue({
+    success: true as const,
+    draft: {
+      name: '周报助手',
+      description: '将零散资料整理为结论先行的周报',
+      instructions: '帮我整理周报',
+      recommendedSkillIds: [],
+      starterPrompts: [],
+    },
+  });
+
+  registerAgentHandlers({
+    getAgentManager: () => ({
+      getAgent: () => storedAgent,
+      updateAgent,
+    }),
+    refreshImSessionWorkingDirectoriesForAgent: vi.fn(),
+    syncOpenClawConfig,
+    generateAgentDraft,
+  } as unknown as AgentHandlerDeps);
+
+  const updateHandler = vi.mocked(ipcMain.handle).mock.calls
+    .filter(([channel]) => channel === AgentIpcChannel.Update)
+    .at(-1)![1];
+
+  const response = await updateHandler(
+    { sender } as unknown as Electron.IpcMainInvokeEvent,
+    'report-agent',
+    { description: '', systemPrompt: '帮我整理周报' },
+  );
+  expect(response).toMatchObject({ success: true });
+
+  await vi.waitFor(() => {
+    expect(sender.send).toHaveBeenCalledWith(AgentIpcChannel.Changed);
+  });
+
+  expect(generateAgentDraft).toHaveBeenCalledWith(
+    expect.objectContaining({
+      mode: AgentDraftMode.Summary,
+      existingInstructions: '帮我整理周报',
+    }),
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
+  expect(storedAgent.description).toBe('将零散资料整理为结论先行的周报');
+  expect(syncOpenClawConfig).toHaveBeenCalledWith({ reason: 'agent-description-backfilled' });
+  expect(otherWindowSend).toHaveBeenCalledTimes(2);
 });

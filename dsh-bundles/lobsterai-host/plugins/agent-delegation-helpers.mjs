@@ -14,6 +14,11 @@ const UUID_PREFIX_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 const ROOT_RESERVED_NAME = 'lead';
 const MAX_DESC_CHARS = 120;
 const MAX_SKILLS_PER_LINE = 6;
+const MIN_PRIMARY_LINE_CHARS = 18;
+const MIN_SENTENCE_BOUNDARY_CHARS = 24;
+const GENERIC_HEADING_RE = /^(?:角色|角色定位|角色与规则|角色设定|人设|定位|职责|规则|工作原则|输出风格|输出规范|行为准则|工作指南|指南|说明|系统提示词?|role|role\s*(?:&|and)\s*rules|identity|persona|purpose|responsibilities|instructions|guidelines|rules|system\s*prompt|overview)\s*[:：]?$/i;
+const LEADING_ROLE_LABEL_RE = /^(?:角色定位|角色设定|角色|定位|职责|目标|核心职责|主要职责|简介|描述|role|identity|persona|purpose|summary|description)\s*[:：]\s*/i;
+const CJK_CHAR_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
 export function isValidDshAgentName(value) {
   return typeof value === 'string' && DSH_AGENT_NAME_RE.test(value) && value !== ROOT_RESERVED_NAME;
@@ -162,9 +167,84 @@ function truncateLine(text, maxChars) {
   return `${compact.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
+function clampAtSentenceOrLimit(text, maxChars) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return '';
+  if (compact.length <= maxChars) return compact;
+  const windowText = compact.slice(0, maxChars);
+  const bestBoundary = Math.max(
+    windowText.lastIndexOf('。'),
+    windowText.lastIndexOf('！'),
+    windowText.lastIndexOf('？'),
+    windowText.lastIndexOf('. '),
+    windowText.lastIndexOf('! '),
+    windowText.lastIndexOf('? '),
+  );
+  if (bestBoundary >= MIN_SENTENCE_BOUNDARY_CHARS) {
+    return windowText.slice(0, bestBoundary + 1).trim();
+  }
+  return `${compact.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+function extractFallbackExcerpt(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return '';
+  let text = raw.replace(/\r\n?/g, '\n');
+  if (text.startsWith('---\n')) {
+    const endIdx = text.indexOf('\n---', 4);
+    if (endIdx !== -1) text = text.slice(endIdx + 4);
+  }
+  text = text.replace(/```[\s\S]*?```/g, '\n');
+
+  const meaningful = [];
+  for (const rawLine of text.split('\n')) {
+    let line = rawLine.trim();
+    if (!line || /^[-*_=\s]{3,}$/.test(line)) continue;
+    line = line
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/^>\s*/, '')
+      .replace(/^(?:[-*+•]\s+|\d+[.)]\s+)/, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!line || GENERIC_HEADING_RE.test(line)) continue;
+    line = line.replace(LEADING_ROLE_LABEL_RE, '').trim();
+    if (!line) continue;
+    meaningful.push(line);
+    if (meaningful.length >= 2) break;
+  }
+
+  if (meaningful.length === 0) return '';
+  if (meaningful.length === 1 || meaningful[0].length >= MIN_PRIMARY_LINE_CHARS) {
+    return clampAtSentenceOrLimit(meaningful[0], MAX_DESC_CHARS);
+  }
+  const sep = CJK_CHAR_RE.test(meaningful[0]) ? '；' : '; ';
+  return clampAtSentenceOrLimit(`${meaningful[0]}${sep}${meaningful[1]}`, MAX_DESC_CHARS);
+}
+
+/**
+ * Resolve a compact collaborator summary for roster and tool listing.
+ * Falls back cleanly to a stripped excerpt of `systemPrompt` or the bound
+ * working folder basename when `description` is blank.
+ */
+export function resolveCollaboratorDescription(agent) {
+  if (!agent || typeof agent !== 'object') return '';
+  const explicit = truncateLine(agent.description || '', MAX_DESC_CHARS);
+  if (explicit) return explicit;
+  const fromPrompt = extractFallbackExcerpt(agent.systemPrompt);
+  if (fromPrompt) return fromPrompt;
+  if (typeof agent.workingDirectory === 'string' && agent.workingDirectory.trim()) {
+    const folder = agent.workingDirectory.trim().replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1);
+    if (folder) return truncateLine(`workspace: ${folder}`, MAX_DESC_CHARS);
+  }
+  return '';
+}
+
 function formatAgentRow(agent) {
   const parts = [`- \`${agent.id}\` (${agent.name})`];
-  const desc = truncateLine(agent.description || '', MAX_DESC_CHARS);
+  const desc = resolveCollaboratorDescription(agent);
   if (desc) parts.push(`: ${desc}`);
   const skills = Array.isArray(agent.skillSummaries) ? agent.skillSummaries : [];
   if (skills.length > 0) {

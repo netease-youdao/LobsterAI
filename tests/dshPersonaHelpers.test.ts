@@ -11,6 +11,7 @@ const HELPERS_URL = pathToFileURL(
 type PersonaHelpers = {
   MAX_INLINE_MEMORY_CHARS: number;
   MEMORY_WRITE_POLICY_PROMPT: string;
+  AGENT_RULES_POLICY_PROMPT: string;
   stripLegacyOpenClawAgentsBoilerplate: (content: string) => string;
   sanitizeMemoryMarkdownForPrompt: (content: string, maxChars?: number) => string;
   parseSkillFrontmatter: (markdown: string) => { meta: Record<string, string>; body: string };
@@ -264,6 +265,22 @@ describe('persona-helpers', () => {
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('lobster_memory_save');
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "project"');
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "global"');
+
+    // Agent rules policy directs updates to lobster_agent_rules and prohibits writing shared cwd AGENTS.md / CLAUDE.md.
+    const { AGENT_RULES_POLICY_PROMPT } = await loadHelpers();
+    expect(AGENT_RULES_POLICY_PROMPT).toContain('lobster_agent_rules');
+    expect(AGENT_RULES_POLICY_PROMPT).toContain('AGENTS.md');
+    expect(AGENT_RULES_POLICY_PROMPT).toContain('CLAUDE.md');
+
+    // Atomic SOUL.md replacement refreshes cached persona even when size and mtime match.
+    const soulPath = path.join(wsRoot, 'expert-a', 'SOUL.md');
+    const tmpSoulPath = `${soulPath}.tmp-test`;
+    const beforeStat = fs.statSync(soulPath);
+    fs.writeFileSync(tmpSoulPath, 'You are Expert Z.', 'utf8');
+    fs.utimesSync(tmpSoulPath, beforeStat.atime, beforeStat.mtime);
+    fs.renameSync(tmpSoulPath, soulPath);
+    const refreshedPrompt = assembleWorkspacePersona(wsRoot, 'expert-a', '', { workspaceDir: projA });
+    expect(refreshedPrompt).toContain('You are Expert Z.');
   });
 
   test('resolves non-ASCII frontmatter names and remotion ID mismatches without dropping custom skills', async () => {

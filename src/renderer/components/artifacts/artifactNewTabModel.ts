@@ -106,21 +106,22 @@ export function resolveNewTabPrimaryCards(mode: ArtifactNewTabMode): ArtifactNew
 
 export function resolveNewTabOverflowItems(
   mode: ArtifactNewTabMode,
-  options: { isGitRepository: boolean; hasWorkingDirectory: boolean },
+  options: { isGitRepository: boolean; hasWorkingDirectory: boolean; includeSubagents?: boolean },
 ): ArtifactNewTabCardId[] {
+  const includeSubagents = options.includeSubagents ?? true;
   const items: ArtifactNewTabCardId[] = mode === ArtifactNewTabMode.Code
     ? [
         ArtifactNewTabCardId.NewDocument,
         ArtifactNewTabCardId.NewPresentation,
         ArtifactNewTabCardId.NewSpreadsheet,
         ArtifactNewTabCardId.OpenLocalFile,
-        ArtifactNewTabCardId.Subagents,
+        ...(includeSubagents ? [ArtifactNewTabCardId.Subagents] : []),
       ]
     : [
         ArtifactNewTabCardId.NewSpreadsheet,
         ArtifactNewTabCardId.NewMarkdown,
         ArtifactNewTabCardId.OpenLocalFile,
-        ArtifactNewTabCardId.Subagents,
+        ...(includeSubagents ? [ArtifactNewTabCardId.Subagents] : []),
         ...(options.isGitRepository ? [ArtifactNewTabCardId.WorkspaceChanges] : []),
       ];
 

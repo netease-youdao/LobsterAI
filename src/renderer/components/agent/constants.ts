@@ -9,6 +9,14 @@ export const AgentDetailTab = {
 
 export type AgentDetailTab = typeof AgentDetailTab[keyof typeof AgentDetailTab];
 
+export const AgentPersonaFileTab = {
+  Identity: 'IDENTITY.md',
+  Soul: 'SOUL.md',
+  User: 'USER.md',
+} as const;
+
+export type AgentPersonaFileTab = typeof AgentPersonaFileTab[keyof typeof AgentPersonaFileTab];
+
 export const AgentConfirmDialogVariant = {
   Unsaved: 'unsaved',
   Delete: 'delete',

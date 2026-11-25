@@ -11,6 +11,12 @@ import {
 } from '../shared/activity/constants';
 import type { AgentModelSelectionMode, SubagentCollaborationMode } from '../shared/agent/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
+import {
+  AgentDraftErrorCode,
+  type AgentDraftStreamChunk,
+  type GenerateAgentDraftRequest,
+  type GenerateAgentDraftResult,
+} from '../shared/agent/draft';
 import type { AgentModelSelection } from '../shared/agent/modelSelection';
 import type { UsageContext } from '../shared/analytics/usage';
 import { AppIpcChannel, WindowIpcChannel, type WindowZoomChangedPayload } from '../shared/app/constants';
@@ -697,6 +703,31 @@ contextBridge.exposeInMainWorld('electron', {
     delete: async (id: string) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.Delete, id);
       return result?.success ? result.deleted : false;
+    },
+    generateDraft: async (request: GenerateAgentDraftRequest): Promise<GenerateAgentDraftResult> => {
+      const result = await ipcRenderer.invoke(AgentIpcChannel.GenerateDraft, request);
+      if (result && typeof result === 'object' && 'success' in result) {
+        return result as GenerateAgentDraftResult;
+      }
+      return {
+        success: false,
+        errorCode: AgentDraftErrorCode.RequestFailed,
+        error: 'Failed to generate agent draft',
+      };
+    },
+    cancelDraft: async (requestId: string): Promise<boolean> => {
+      return Boolean(await ipcRenderer.invoke(AgentIpcChannel.CancelDraft, requestId));
+    },
+    onDraftChunk: (callback: (chunk: AgentDraftStreamChunk) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, chunk: AgentDraftStreamChunk) => {
+        if (chunk && typeof chunk.requestId === 'string') {
+          callback(chunk);
+        }
+      };
+      ipcRenderer.on(AgentIpcChannel.GenerateDraftChunk, listener);
+      return () => {
+        ipcRenderer.removeListener(AgentIpcChannel.GenerateDraftChunk, listener);
+      };
     },
     presets: async () => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.Presets);

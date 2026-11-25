@@ -381,10 +381,6 @@ const ContextLabelMaxLength = {
 
 const READ_ONLY_CONTEXT_COMPACT_WIDTH = 168;
 const LARGE_TOOLBAR_COMPACT_WIDTH = 520;
-// Fixed textarea height while it holds quick-action template text (~7 lines
-// at 22px line-height plus padding). Shorter than maxHeight so the shortest
-// templates don't leave a large blank area; longer templates scroll inside.
-const TEMPLATE_LOCKED_TEXTAREA_HEIGHT = 170;
 type GoalInputMode = 'start' | 'set';
 
 const truncateDisplayText = (value: string, maxLength: number): string => {
@@ -616,9 +612,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [showVoiceLoginPrompt, setShowVoiceLoginPrompt] = useState(false);
     const [showVoiceQuotaPrompt, setShowVoiceQuotaPrompt] = useState(false);
     const [isLargeToolbarCompact, setIsLargeToolbarCompact] = useState(false);
-    // While the input holds quick-action template text, pin the textarea to
-    // maxHeight so switching templates doesn't bounce the layout around it.
-    const [isTemplateHeightLocked, setIsTemplateHeightLocked] = useState(false);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const draftKeyRef = useRef(draftKey);
@@ -654,7 +647,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       } else if (!newValue.trim()) {
         inputSourceOverrideRef.current = null;
       }
-      setIsTemplateHeightLocked(inputSource === 'template' && newValue.trim().length > 0);
       // Height sync happens in the auto-resize effect after re-render.
       if (inputSource === 'template') {
         // Anchor the filled template at its start so it reads top-down — the
@@ -1079,17 +1071,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     };
   }, [dispatch]);
 
-  // Release the template height lock once the input no longer holds template
-  // text (submitted, cleared, or manually deleted).
-  useEffect(() => {
-    if (isTemplateHeightLocked && !value.trim()) {
-      setIsTemplateHeightLocked(false);
-    }
-  }, [isTemplateHeightLocked, value]);
-
-  // Auto-resize textarea. Template-filled content is pinned to a fixed height
-  // so picking a different template keeps the input (and the panel below it)
-  // stable; height changes animate to avoid layout jumps.
+  // Auto-resize textarea with an animated height transition to avoid layout jumps.
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -1098,10 +1080,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // 'auto' forces a reflow, which would otherwise shift the animation start.
     textarea.style.transition = 'none';
     textarea.style.height = 'auto';
-    const contentHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
-    const targetHeight = isTemplateHeightLocked
-      ? Math.min(TEMPLATE_LOCKED_TEXTAREA_HEIGHT, maxHeight)
-      : contentHeight;
+    const targetHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
     if (Math.abs(targetHeight - previousHeight) < 1) {
       textarea.style.height = `${targetHeight}px`;
       textarea.style.transition = '';
@@ -1111,7 +1090,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     void textarea.offsetHeight;
     textarea.style.transition = 'height 180ms ease-out';
     textarea.style.height = `${targetHeight}px`;
-  }, [minHeight, maxHeight, isTemplateHeightLocked]);
+  }, [minHeight, maxHeight]);
 
   useEffect(() => {
     resizeTextarea();
@@ -1126,7 +1105,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       }
       if (detail?.text !== undefined) {
         setValue(detail.text);
-        setIsTemplateHeightLocked(false);
         dispatch(clearDraftAttachments(draftKey));
         dispatch(clearDraftSelectedTextSnippets(draftKey));
         setImageVisionHint(false);
@@ -1261,7 +1239,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setValue(draftPrompt);
     setSteerValue(steerDraft);
     setSteerInputActive(false);
-    setIsTemplateHeightLocked(false);
     // Re-derive imageVisionHint from the new session's draft attachments
     const hasImageWithoutVision = !modelSupportsImage && attachments.some(a => a.isImage || isImagePath(a.path));
     setImageVisionHint(hasImageWithoutVision);

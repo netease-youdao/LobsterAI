@@ -140,7 +140,12 @@ export function readOpenAICodexAuthFile(): CodexOAuthTokens | null {
     const refresh = trimNonEmpty(parsed.tokens?.refresh_token);
     if (!access || !refresh) return null;
     const idToken = trimNonEmpty(parsed.tokens?.id_token);
-    const accountId = trimNonEmpty(parsed.tokens?.account_id);
+    const accessClaims = decodeJwtPayload(access);
+    const accessAuthClaim = (accessClaims?.['https://api.openai.com/auth'] ?? {}) as Record<string, unknown>;
+    const accountId =
+      trimNonEmpty(parsed.tokens?.account_id)
+      ?? trimNonEmpty(accessAuthClaim?.chatgpt_account_id)
+      ?? trimNonEmpty(accessAuthClaim?.chatgpt_account_user_id);
     const claims = idToken ? decodeJwtPayload(idToken) : null;
     const email = trimNonEmpty(claims?.email);
     const exp = typeof claims?.exp === 'number' ? (claims.exp as number) * 1000 : 0;

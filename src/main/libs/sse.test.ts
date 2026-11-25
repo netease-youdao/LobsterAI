@@ -69,6 +69,7 @@ describe('openai responses stream', () => {
 
   test('reports the end and errors', () => {
     expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.completed"}' })).toEqual({ done: true });
+    expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.done"}' })).toEqual({ done: true });
     expect(readOpenAIResponsesStreamEvent({ data: '{"type":"response.failed","response":{"error":{"message":"bad model"}}}' }))
       .toEqual({ error: 'bad model' });
     expect(readOpenAIResponsesStreamEvent({ data: '{"type":"error","message":"overloaded"}' })).toEqual({ error: 'overloaded' });

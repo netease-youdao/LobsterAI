@@ -20,7 +20,10 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../i18n', () => ({ t: (key: string) => key, getLanguage: () => 'zh' }));
+vi.mock('../libs/xaiAuth', () => ({ hasXaiOAuthCredential: () => true }));
 
+import { AgentDraftLanguage, AgentDraftMode } from '../../shared/agent/draft';
+import { generateAgentDraft } from '../libs/agentDraftGenerator';
 import {
   clearServerModelMetadata,
   setAuthTokensGetter,
@@ -604,5 +607,236 @@ describe('CompanionQuickAnswerService real local loopback proxy E2E', () => {
     expect(sender.send).toHaveBeenCalledTimes(1);
     expect(upstreamHits).toHaveLength(1);
     expect(upstreamHits[0].headers.authorization).toBe('Bearer real-user-jwt');
+  });
+
+  test('routes OpenAI Codex OAuth and xAI OAuth through local loopback modelAuthProxy without leaking proxy secret', async () => {
+    const loopbackSecret = 'oauth-loopback-secret-0123456789abcdef0123456789';
+    const codexCalls: RecordedRequest[] = [];
+    const xaiCalls: RecordedRequest[] = [];
+
+    const codexUpstream = await startLocalServer(async (req, res) => {
+      const body = await readBody(req);
+      codexCalls.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
+      if (
+        req.headers.authorization !== 'Bearer codex-oauth-access'
+        || req.headers['chatgpt-account-id'] !== 'acct-codex-1'
+      ) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Invalid Codex OAuth headers' } }));
+        return;
+      }
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      if (
+        !parsed.instructions
+        || parsed.store !== false
+        || parsed.stream !== true
+        || 'max_output_tokens' in parsed
+      ) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'Invalid Codex payload contract' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (String(parsed.instructions).includes('Agent')) {
+        res.write(`event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', delta: '- 定位：个人助理\n' })}\n\n`);
+        res.write(`event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', delta: '- 风格：简洁直接' })}\n\n`);
+      } else {
+        res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Codex "}\n\n');
+        res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"OAuth ok"}\n\n');
+      }
+      res.write('event: response.done\ndata: {"type":"response.done"}\n\n');
+      res.end();
+    });
+    serversToClose.push(codexUpstream.server);
+
+    const xaiUpstream = await startLocalServer(async (req, res) => {
+      const body = await readBody(req);
+      xaiCalls.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
+      if (req.headers.authorization !== 'Bearer xai-oauth-access') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Invalid xAI OAuth header' } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write('data: {"choices":[{"delta":{"content":"xAI OAuth ok"}}]}\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+    serversToClose.push(xaiUpstream.server);
+
+    await startModelAuthProxy({
+      getAuthTokens: () => null,
+      refreshToken: vi.fn(),
+      getServerBaseUrl: () => 'http://127.0.0.1:9',
+      getClientVersion: () => '1.0.0-e2e',
+      getInboundAuthToken: () => loopbackSecret,
+      resolveOAuthProviderUpstream: (providerId) => {
+        if (providerId === 'openai-codex') {
+          return {
+            baseUrl: `${codexUpstream.baseUrl}/backend-api/codex`,
+            headers: {
+              authorization: 'Bearer codex-oauth-access',
+              'chatgpt-account-id': 'acct-codex-1',
+            },
+          };
+        }
+        if (providerId === 'xai-oauth') {
+          return {
+            baseUrl: `${xaiUpstream.baseUrl}/v1`,
+            headers: {
+              authorization: 'Bearer xai-oauth-access',
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    const proxyBaseUrl = getModelAuthProxyUrl();
+    expect(proxyBaseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+
+    setStoreGetter(() => createFakeStore({
+      model: {
+        defaultModel: 'gpt-6-astra',
+        defaultModelProvider: ProviderName.OpenAI,
+      },
+      providers: {
+        [ProviderName.OpenAI]: {
+          enabled: true,
+          authType: 'oauth',
+          apiKey: '',
+          baseUrl: 'https://api.openai.com/v1',
+          apiFormat: 'openai',
+          models: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra' }],
+        },
+      },
+    }));
+
+    const seenUrls: string[] = [];
+    const service = new CompanionQuickAnswerService({
+      getSessionKey: () => 'signed-in-user',
+      getProxyToken: () => loopbackSecret,
+      getProxyBaseUrl: getModelAuthProxyUrl,
+      fetch: (input, init) => {
+        seenUrls.push(String(input));
+        return globalThis.fetch(input, init);
+      },
+    });
+    servicesToDispose.push(service);
+
+    const sender = { id: 105, isDestroyed: () => false, send: vi.fn() };
+    expect(service.start(sender as unknown as WebContents, {
+      requestId: 'codex-oauth-1',
+      action: CompanionSelectionAction.Explain,
+      text: 'Codex OAuth test',
+    })).toEqual({ success: true });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledWith(DesktopCompanionIpc.QuickAnswerEvent, {
+        requestId: 'codex-oauth-1',
+        type: CompanionQuickAnswerEventType.Done,
+      });
+    });
+
+    expect(seenUrls[0]).toBe(`${proxyBaseUrl}/v1/openai-codex/responses`);
+    expect(codexCalls).toHaveLength(1);
+    expect(codexCalls[0]).toMatchObject({
+      url: '/backend-api/codex/responses',
+      headers: expect.objectContaining({
+        authorization: 'Bearer codex-oauth-access',
+        'chatgpt-account-id': 'acct-codex-1',
+        'openai-beta': 'responses=experimental',
+        originator: 'pi',
+      }),
+    });
+    const codexDeltas = sender.send.mock.calls
+      .map(([, event]) => event)
+      .filter(event => event.type === CompanionQuickAnswerEventType.Delta)
+      .map(event => event.text);
+    expect(codexDeltas.join('')).toBe('Codex OAuth ok');
+
+    // Also verify Agent AI polish (`generateAgentDraft`) streams live chunks and succeeds end-to-end with OpenAI Codex OAuth.
+    const streamedPolishChunks: string[] = [];
+    const draftResult = await generateAgentDraft(
+      {
+        mode: AgentDraftMode.Polish,
+        name: '主 Agent',
+        goal: '主 Agent',
+        existingInstructions: '你的名字是 LobsterAI',
+        language: AgentDraftLanguage.Zh,
+      },
+      {
+        getProxyToken: () => loopbackSecret,
+        getProxyBaseUrl: getModelAuthProxyUrl,
+        onProgress: (preview) => {
+          if (preview.instructions) streamedPolishChunks.push(preview.instructions);
+        },
+      },
+    );
+    expect(streamedPolishChunks).toEqual([
+      '- 定位：个人助理\n',
+      '- 定位：个人助理\n- 风格：简洁直接',
+    ]);
+    expect(draftResult).toEqual({
+      success: true,
+      draft: {
+        name: '主 Agent',
+        description: '',
+        instructions: '- 定位：个人助理\n- 风格：简洁直接',
+        recommendedSkillIds: [],
+        starterPrompts: [],
+      },
+    });
+    expect(codexCalls).toHaveLength(2);
+    expect(JSON.parse(codexCalls[1].body)).toMatchObject({
+      reasoning: { effort: 'low' },
+      text: { verbosity: 'low' },
+    });
+
+    // Also verify xAI OAuth routes through /v1/xai-oauth/chat/completions cleanly.
+    setStoreGetter(() => createFakeStore({
+      model: {
+        defaultModel: 'grok-4.5',
+        defaultModelProvider: ProviderName.Xai,
+      },
+      providers: {
+        [ProviderName.Xai]: {
+          enabled: true,
+          authType: 'oauth',
+          apiKey: '',
+          baseUrl: 'https://api.x.ai/v1',
+          apiFormat: 'openai',
+          models: [{ id: 'grok-4.5', name: 'Grok 4.5' }],
+        },
+      },
+    }));
+    sender.send.mockClear();
+
+    expect(service.start(sender as unknown as WebContents, {
+      requestId: 'xai-oauth-1',
+      action: CompanionSelectionAction.Explain,
+      text: 'xAI OAuth test',
+    })).toEqual({ success: true });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledWith(DesktopCompanionIpc.QuickAnswerEvent, {
+        requestId: 'xai-oauth-1',
+        type: CompanionQuickAnswerEventType.Done,
+      });
+    });
+
+    expect(seenUrls[1]).toBe(`${proxyBaseUrl}/v1/xai-oauth/chat/completions`);
+    expect(xaiCalls).toHaveLength(1);
+    expect(xaiCalls[0]).toMatchObject({
+      url: '/v1/chat/completions',
+      headers: expect.objectContaining({
+        authorization: 'Bearer xai-oauth-access',
+      }),
+    });
+    expect(sender.send).toHaveBeenCalledWith(DesktopCompanionIpc.QuickAnswerEvent, {
+      requestId: 'xai-oauth-1',
+      type: CompanionQuickAnswerEventType.Delta,
+      text: 'xAI OAuth ok',
+    });
   });
 });

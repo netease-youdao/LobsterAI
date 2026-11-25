@@ -4,6 +4,7 @@
 
 import { isDeleteCommand } from '../../../common/deleteCommand';
 import {
+  DSH_AGENT_RULES_TOOL,
   DshApprovalPermissionAction,
   DshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
@@ -147,6 +148,18 @@ function buildSanitizedTechnicalDetails(input: Record<string, unknown>): string 
   }
 }
 
+const MAX_RULES_PREVIEW_CHARS = 800;
+
+function formatAgentRulesPreview(input: Record<string, unknown>): string {
+  const rules = readString(input, 'rules');
+  const description = readString(input, 'description');
+  const preview = rules.length > MAX_RULES_PREVIEW_CHARS
+    ? `${rules.slice(0, MAX_RULES_PREVIEW_CHARS).trimEnd()}…`
+    : rules;
+  if (description && preview) return `${description}\n\n${preview}`;
+  return preview || description;
+}
+
 export function buildPermissionModalPresentation(
   toolName: string,
   rawToolInput: Record<string, unknown>,
@@ -154,6 +167,7 @@ export function buildPermissionModalPresentation(
 ): PermissionModalPresentation {
   const input = rawToolInput && typeof rawToolInput === 'object' ? rawToolInput : {};
   const normalizedTool = toolName.trim().toLowerCase();
+  const isAgentRulesTool = normalizedTool === DSH_AGENT_RULES_TOOL;
   const isShellTool = SHELL_TOOL_NAMES.has(normalizedTool);
   const isFileTool = FILE_MUTATION_TOOL_NAMES.has(normalizedTool);
 
@@ -161,7 +175,9 @@ export function buildPermissionModalPresentation(
   const command = readString(input, 'command', 'cmd', 'script')
     || (rawReason ? extractCommandFromReason(rawReason) : '');
 
-  const modelNote = readString(input, 'justification', 'description');
+  const modelNote = isAgentRulesTool
+    ? formatAgentRulesPreview(input)
+    : readString(input, 'justification', 'description');
   const filePath = readString(input, 'filePath', 'file_path', 'path', 'target_path');
   const workdir = readString(input, 'workdir', 'cwd')
     || (command ? extractCdDirectoryFromCommand(command) : '');
@@ -188,7 +204,10 @@ export function buildPermissionModalPresentation(
   let title: string;
   let summary: string;
 
-  if (dangerReason && TITLE_KEY_BY_DANGER_REASON[dangerReason]) {
+  if (isAgentRulesTool) {
+    title = t('coworkApprovalTitleAgentRules');
+    summary = t('coworkApprovalSummaryAgentRules');
+  } else if (dangerReason && TITLE_KEY_BY_DANGER_REASON[dangerReason]) {
     title = t(TITLE_KEY_BY_DANGER_REASON[dangerReason]);
     summary = t(SUMMARY_KEY_BY_DANGER_REASON[dangerReason]);
   } else if (isSandboxEscalation) {
@@ -222,7 +241,7 @@ export function buildPermissionModalPresentation(
 
   const currentPreset = readString(input, 'permissionPreset');
   const canAllowForSession = dangerLevel !== 'destructive' && !isSandboxEscalation && approvalScopeKey.length > 0;
-  const canSwitchFullAccess = currentPreset !== DshPermissionPreset.FullAccess;
+  const canSwitchFullAccess = !isAgentRulesTool && currentPreset !== DshPermissionPreset.FullAccess;
 
   return {
     title,

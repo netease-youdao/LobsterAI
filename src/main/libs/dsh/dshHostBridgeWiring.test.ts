@@ -6,7 +6,13 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { PayloadKind } from '../../../scheduledTask/constants';
 import { DECISION_EVALUATE_TOOL_NAME, DecisionModelProvider } from '../../../shared/decisionModel/constants';
-import { DSH_SKILL_INSTALL_TOOL, DshPermissionPreset, DshSkillInstallAction } from '../../../shared/dshEngine/hostConstants';
+import {
+  DSH_AGENT_RULES_TOOL,
+  DSH_SKILL_INSTALL_TOOL,
+  DshAgentRulesAction,
+  DshPermissionPreset,
+  DshSkillInstallAction,
+} from '../../../shared/dshEngine/hostConstants';
 import { LobsterMemoryService, WorkspaceFileName } from '../../memory/lobsterMemoryService';
 import { MemoryScope } from '../../memory/projectMemoryScope';
 import { LobsterScheduler } from '../../scheduledTask/lobsterScheduler';
@@ -45,6 +51,27 @@ test('skill installation respects the desktop permission preset, allow-session r
   expect(evaluateDshToolApproval({ ...req, permissionPreset: DshPermissionPreset.FullAccess }).kind).toBe('allow');
   expect(evaluateDshToolApproval({
     ...req, args: { action: DshSkillInstallAction.Inspect }, permissionPreset: DshPermissionPreset.ReadOnly,
+  }).kind).toBe('passthrough');
+});
+
+test('agent rules tool requires approval on save under workspace-write, denies in read-only, and passes through on read', () => {
+  const saveReq = {
+    toolName: DSH_AGENT_RULES_TOOL,
+    args: { action: DshAgentRulesAction.Save, rules: '- Always concise' },
+    agentId: 'agent-weekly',
+  };
+  const allowRules = {
+    isToolAllowedAlways: (p: { scopeKey?: string }) => p.scopeKey === `tool:${DSH_AGENT_RULES_TOOL}`,
+  };
+  expect(evaluateDshToolApproval({ ...saveReq, permissionPreset: DshPermissionPreset.ReadOnly }).kind).toBe('deny');
+  expect(evaluateDshToolApproval({ ...saveReq, permissionPreset: DshPermissionPreset.ReadOnly }, allowRules).kind).toBe('deny');
+  expect(evaluateDshToolApproval({ ...saveReq, permissionPreset: DshPermissionPreset.WorkspaceWrite }).kind).toBe('ask');
+  expect(evaluateDshToolApproval({ ...saveReq, permissionPreset: DshPermissionPreset.WorkspaceWrite }, allowRules).kind).toBe('allow');
+  expect(evaluateDshToolApproval({ ...saveReq, permissionPreset: DshPermissionPreset.FullAccess }).kind).toBe('allow');
+  expect(evaluateDshToolApproval({
+    ...saveReq,
+    args: { action: DshAgentRulesAction.Read },
+    permissionPreset: DshPermissionPreset.ReadOnly,
   }).kind).toBe('passthrough');
 });
 

@@ -235,6 +235,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillChatInstall: '安装并启用',
     skillChatInstallPermission: '将选中的本地技能安装到当前实例的「我的技能」。',
     skillChatReadOnly: '只读会话无法安装技能。',
+    agentRulesChatSavePermission: '将对话中确认的角色与规则保存到当前智能体专属的 SOUL.md，不会影响工作目录或其他智能体。',
+    agentRulesChatReadOnly: '只读会话无法修改当前智能体的角色与规则。',
     skillErrInvalidSource:
       '无效的技能来源。支持 owner/repo、仓库链接、npm 包名、ClawHub 链接或 GitHub tree/blob 链接。',
     skillErrClawhubNotFound: '在 ClawHub 上未找到该技能，请检查链接是否正确。',
@@ -727,6 +729,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillChatInstall: 'Install and enable',
     skillChatInstallPermission: 'Install the selected local skill into My Skills for this instance.',
     skillChatReadOnly: 'Skill installation requires a writable session.',
+    agentRulesChatSavePermission: 'Save the confirmed role and rules to this agent\'s private SOUL.md without touching the working folder or other agents.',
+    agentRulesChatReadOnly: 'Updating this agent\'s role and rules requires a writable session.',
     skillErrInvalidSource:
       'Invalid skill source. Use owner/repo, repo URL, npm package spec, ClawHub URL, or a GitHub tree/blob URL.',
     skillErrClawhubNotFound: 'Skill not found on ClawHub. Please check the URL.',
