@@ -702,7 +702,8 @@ export class FeishuChannelDriver extends BaseChannelDriver {
 
   async sendMessage({ chatId, text, replyContext }) {
     const token = await this.getTenantAccessToken();
-    const receiveIdType = String(replyContext?.receiveIdType || 'chat_id');
+    const recipient = String(chatId).trim().replace(/^(?:[^:]+:)?direct:/i, '').replace(/^user:(?=ou_)/i, '');
+    const receiveIdType = String(replyContext?.receiveIdType || (recipient.startsWith('ou_') ? 'open_id' : 'chat_id'));
     const useReply = typeof replyContext?.replyInThread === 'boolean';
     const replyTo = String(replyContext?.replyToMessageId || '').trim();
     if (useReply && !replyTo) throw new Error('Feishu reply target is missing its message ID');
@@ -717,7 +718,7 @@ export class FeishuChannelDriver extends BaseChannelDriver {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        ...(useReply ? { reply_in_thread: replyContext.replyInThread } : { receive_id: chatId }),
+        ...(useReply ? { reply_in_thread: replyContext.replyInThread } : { receive_id: recipient }),
         msg_type: 'text',
         content: JSON.stringify({ text: String(text || '') }),
       }),

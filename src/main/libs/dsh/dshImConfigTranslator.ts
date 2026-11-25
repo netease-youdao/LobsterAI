@@ -2,7 +2,10 @@
 // retained channel instance configs consumed by `@lobsterai/dsh-channels`.
 // Retired platforms (`nim`, `netease-bee`, `email`) are excluded.
 
+import path from 'node:path';
+
 import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { legacyWeixinAccountId, WeixinPlugin } from '../../../shared/im/weixin';
 import type { DshChannelInstanceConfig } from '../../im/dshChannelsBridge';
 import { wecomDuplicateOwners } from '../../im/wecomConnections';
 
@@ -40,6 +43,7 @@ function resolveBindingAgentId(
 
 export function buildDshImChannelInstances(options: {
   imConfig: Record<string, unknown>;
+  userDataDir?: string;
   getDefaultCwd?: (agentId?: string) => string;
 }): DshChannelInstanceConfig[] {
   const { imConfig, getDefaultCwd } = options;
@@ -78,13 +82,17 @@ export function buildDshImChannelInstances(options: {
   if (weixin && typeof weixin === 'object') {
     const rec = weixin as Record<string, unknown>;
     const agentId = resolveBindingAgentId(bindings, RetainedImPlatform.Weixin, 'default');
+    const account = typeof rec.accountId === 'string' ? legacyWeixinAccountId(rec.accountId) : '';
+    const legacyContextFile = options.userDataDir && account
+      ? path.join(options.userDataDir, 'openclaw', 'state', WeixinPlugin.Id, 'accounts', account + '.context-tokens.json')
+      : undefined;
     result.push({
       platform: RetainedImPlatform.Weixin,
       instanceId: 'default',
       enabled: rec.enabled === true,
       agentId,
       cwd: getDefaultCwd?.(agentId),
-      config: { ...rec },
+      config: { ...rec, legacyContextFile },
     });
   }
 

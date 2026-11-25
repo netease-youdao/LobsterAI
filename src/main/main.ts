@@ -3061,6 +3061,7 @@ const syncOpenClawConfig = async (options: {
       const imConfig = getIMGatewayManager().getConfig() as unknown as Record<string, unknown>;
       imInstances = buildDshImChannelInstances({
         imConfig,
+        userDataDir: app.getPath('userData'),
         getDefaultCwd: agentId => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
       });
     } catch {
