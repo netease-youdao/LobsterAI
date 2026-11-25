@@ -7,7 +7,6 @@ import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
-  BrowserDisplayMode,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
   normalizeBrowserWebAccessConfig,
@@ -90,7 +89,9 @@ import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
+import DefaultPermissionModeSettingRow from './settings/DefaultPermissionModeSettingRow';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
+import ManualDataMigrationAction from './settings/ManualDataMigrationAction';
 import {
   buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
@@ -3500,18 +3501,6 @@ const Settings: React.FC<SettingsProps> = ({
       const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig({
         ...browserWebAccess,
         browserEnabled: true,
-        displayMode: BrowserDisplayMode.InApp,
-        profileMode: defaultBrowserWebAccessConfig.profileMode,
-        followGlobalProxy: defaultBrowserWebAccessConfig.followGlobalProxy,
-        snapshotMode: defaultBrowserWebAccessConfig.snapshotMode,
-        executablePath: undefined,
-        cdpUrl: undefined,
-        headless: undefined,
-        attachOnly: undefined,
-        remoteCdpTimeoutMs: undefined,
-        remoteCdpHandshakeTimeoutMs: undefined,
-        extraArgs: [],
-        webFetch: defaultBrowserWebAccessConfig.webFetch,
       });
       const previousConfig = configService.getConfig();
       const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
@@ -4760,6 +4749,10 @@ const Settings: React.FC<SettingsProps> = ({
               </SettingsRow>
 
               <SettingsRow>
+                <DefaultPermissionModeSettingRow />
+              </SettingsRow>
+
+              <SettingsRow>
                 <SettingsToggleRow
                   title={i18nService.t('artifactAutoPreviewEnabled')}
                   description={i18nService.t('artifactAutoPreviewEnabledDescription')}
@@ -5066,19 +5059,14 @@ const Settings: React.FC<SettingsProps> = ({
                       </div>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => { void handleOpenClawDataBackup(); }}
-                    disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                    className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
-                  >
+                  <ManualDataMigrationAction onClick={() => { void handleOpenClawDataBackup(); }}>
                     {isBackingUpOpenClawData && (
                       <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                     )}
                     {isBackingUpOpenClawData
                       ? i18nService.t('openClawDataBackupRunning')
                       : i18nService.t('openClawDataBackupAction')}
-                  </button>
+                  </ManualDataMigrationAction>
                 </div>
               </SettingsRow>
 
@@ -5097,19 +5085,14 @@ const Settings: React.FC<SettingsProps> = ({
                       </div>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowOpenClawDataRestoreConfirm(true)}
-                    disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                    className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
-                  >
+                  <ManualDataMigrationAction onClick={() => setShowOpenClawDataRestoreConfirm(true)}>
                     {isRestoringOpenClawData && (
                       <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                     )}
                     {isRestoringOpenClawData
                       ? i18nService.t('openClawDataMigrationRunning')
                       : i18nService.t('openClawDataMigrationAction')}
-                  </button>
+                  </ManualDataMigrationAction>
                 </div>
               </SettingsRow>
             </SettingsGroup>
@@ -5372,19 +5355,14 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => { void handleOpenClawDataBackup(); }}
-                        disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
-                      >
+                      <ManualDataMigrationAction onClick={() => { void handleOpenClawDataBackup(); }}>
                         {isBackingUpOpenClawData && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
                         {isBackingUpOpenClawData
                           ? i18nService.t('openClawDataBackupRunning')
                           : i18nService.t('openClawDataBackupAction')}
-                      </button>
+                      </ManualDataMigrationAction>
                     </div>
 
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -5401,19 +5379,14 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowOpenClawDataRestoreConfirm(true)}
-                        disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
-                      >
+                      <ManualDataMigrationAction onClick={() => setShowOpenClawDataRestoreConfirm(true)}>
                         {isRestoringOpenClawData && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
                         {isRestoringOpenClawData
                           ? i18nService.t('openClawDataMigrationRunning')
                           : i18nService.t('openClawDataMigrationAction')}
-                      </button>
+                      </ManualDataMigrationAction>
                     </div>
                   </div>
                 </section>

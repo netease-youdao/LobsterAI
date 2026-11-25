@@ -32,6 +32,7 @@ import {
   CoworkImageAttachmentRole,
   stripDataUrlPrefix,
 } from '../../../shared/cowork/imageAttachments';
+import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import {
   buildSelectedTextPromptSection,
   CoworkSelectedTextSource,
@@ -48,6 +49,7 @@ import {
   DshProgressiveCapability,
   parseDshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
+import { imageEditMessageMetadata } from '../../../shared/imageEditing/messageSnapshot';
 import {
   modelPresetModelId,
   parseModelPresetId,
@@ -66,6 +68,8 @@ import {
 import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/modelContextWindow';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
+import type { CoworkMessageEditStore } from '../coworkMessageEditStore';
+import type { CoworkMessageVersionStore } from '../coworkMessageVersionStore';
 import {
   buildApprovalScopeKey,
   extractShellCommandFromArgs,
@@ -91,6 +95,7 @@ import {
   type CoworkContinuityCapsule,
   formatCoworkContinuityCapsuleBridge,
 } from './coworkContinuityCapsule';
+import { DshMessageEditCoordinator } from './dshMessageEdit';
 import type {
   CoworkContextUsage,
   CoworkContinueOptions,
@@ -106,6 +111,7 @@ import type {
 export interface DshAdapterSessionRecord {
   id: string;
   cwd: string;
+  status?: CoworkSessionStatus;
   title?: string;
   agentId?: string;
   claudeSessionId?: string | null;
@@ -122,6 +128,8 @@ export interface DshAdapterSessionRecord {
 }
 
 export interface DshCoworkStorePort {
+  messageEdits?: CoworkMessageEditStore;
+  messageVersions?: CoworkMessageVersionStore;
   getSession(sessionId: string, messageLimit?: number): DshAdapterSessionRecord | null | undefined;
   getLatestUserMessage?(sessionId: string): CoworkMessage | null;
   addMessage(
@@ -186,6 +194,7 @@ export interface DshRuntimeAdapterDeps {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
+  waitForMcpConnections?: (signal: AbortSignal) => Promise<void>;
   resolveDefaultPermissionPreset?: () => DshPermissionPreset;
   onPermissionPresetChanged?: (
     preset: DshPermissionPreset,
@@ -801,9 +810,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly store: DshCoworkStorePort;
   private readonly resolveModelSelection?: DshRuntimeAdapterDeps['resolveModelSelection'];
   private readonly resolveAllowedSkillIds?: DshRuntimeAdapterDeps['resolveAllowedSkillIds'];
+  private readonly waitForMcpConnections?: DshRuntimeAdapterDeps['waitForMcpConnections'];
   private readonly resolveDefaultPermissionPreset?: DshRuntimeAdapterDeps['resolveDefaultPermissionPreset'];
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
   private readonly readBrowserAnnotationAsset?: DshReadBrowserAnnotationAsset;
+  private readonly messageEditing?: DshMessageEditCoordinator;
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
   private readonly startingAbortControllers = new Map<string, AbortController>();
@@ -828,9 +839,22 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.store = deps.store;
     this.resolveModelSelection = deps.resolveModelSelection;
     this.resolveAllowedSkillIds = deps.resolveAllowedSkillIds;
+    this.waitForMcpConnections = deps.waitForMcpConnections;
     this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
     this.readBrowserAnnotationAsset = deps.readBrowserAnnotationAsset;
+    if (deps.store.messageEdits && deps.store.messageVersions) {
+      this.messageEditing = new DshMessageEditCoordinator({
+        edits: deps.store.messageEdits,
+        versions: deps.store.messageVersions,
+        getSession: id => this.store.getSession(id, 0),
+        latestUser: id => this.store.getLatestUserMessage?.(id) ?? null,
+        isRunning: id => this.isSessionActive(id) || this.startingAbortControllers.has(id) || this.pendingCancels.has(id),
+        fork: async (id, atSeq) => (await this.forkDshSession(id, atSeq)).storedSessionId,
+        send: (id, prompt, options) => this.continueSession(id, prompt, options),
+        bindingChanged: id => this.refreshMessageVersionBinding(id),
+      });
+    }
   }
 
   private getExplicitPermissionPreset(coworkSessionId?: string): DshPermissionPreset | null {
@@ -918,6 +942,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       autoApprove: options.autoApprove,
       imageAttachments: options.imageAttachments,
       mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
+      mediaReferences: options.mediaReferences,
       localMediaAttachments: options.localMediaAttachments,
       agentId: options.agentId,
       workspaceRoot: options.workspaceRoot,
@@ -943,8 +968,37 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       confirmationMode: 'modal',
       imageAttachments: options.imageAttachments,
       mediaInstruction: buildDshMediaTurnInstruction(options.mediaSelection, options.mediaReferences, options.workflowKind),
+      mediaReferences: options.mediaReferences,
       localMediaAttachments: options.localMediaAttachments,
     });
+  }
+
+  async editMessage(request: CoworkMessageEditRequest, options: CoworkContinueOptions): Promise<void> {
+    if (!this.messageEditing) throw new Error('Message editing is unavailable.');
+    await this.messageEditing.edit(request, options);
+  }
+
+  async recoverMessageEdit(sessionId: string, operationId: string): Promise<void> {
+    if (!this.messageEditing) throw new Error('Message edit recovery is unavailable.');
+    this.messageEditing.recover(sessionId, operationId);
+  }
+
+  async switchMessageVersion(request: CoworkMessageVersionSwitchRequest): Promise<string> {
+    if (!this.messageEditing) throw new Error('Message versions are unavailable.');
+    return this.messageEditing.switchVersion(request);
+  }
+
+  hasPendingMessageEdit(sessionId: string): boolean {
+    return this.messageEditing?.pending(sessionId) ?? false;
+  }
+
+  private refreshMessageVersionBinding(sessionId: string): void {
+    for (const [nativeId, ownerId] of this.dshToCoworkSession) {
+      if (ownerId === sessionId) this.dshToCoworkSession.delete(nativeId);
+    }
+    const nativeId = this.resolveExistingDshSessionId(sessionId);
+    if (nativeId) this.dshToCoworkSession.set(nativeId, sessionId);
+    this.sessionResolvedContextTokens.delete(sessionId);
   }
 
   async submitSteer(
@@ -1995,11 +2049,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       autoApprove?: boolean;
       imageAttachments?: CoworkStartOptions['imageAttachments'];
       mediaInstruction?: string;
+      mediaReferences?: CoworkStartOptions['mediaReferences'];
       localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
       agentId?: string;
       workspaceRoot?: string;
     },
   ): Promise<void> {
+    this.messageEditing?.assertCanSend(sessionId, params.requestId);
     const session = this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Cowork session "${sessionId}" not found`);
@@ -2057,15 +2113,18 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const imageAttachmentPreviews = !localMediaAttachments && params.imageAttachments?.length
         ? buildCoworkImageAttachmentPreviews(params.imageAttachments)
         : undefined;
+      const editMetadata = imageEditMessageMetadata(params.mediaReferences);
       const hasPersistableUserMessage = persistedContent.trim().length > 0
         || Boolean(localMediaAttachments?.length)
         || Boolean(imageAttachmentPreviews?.length)
+        || Boolean(editMetadata.imageEdits?.length)
         || Boolean(selectedTextSnippets?.length)
         || Boolean(browserAnnotations?.length);
 
       if (!params.skipInitialUserMessage && hasPersistableUserMessage) {
         const userMetadata: Record<string, unknown> = {
           llmTrace,
+          ...editMetadata,
           ...(localMediaAttachments ? { localMediaAttachments } : {}),
           ...(imageAttachmentPreviews ? { imageAttachmentPreviews } : {}),
           ...(selectedTextSnippets ? { selectedTextSnippets } : {}),
@@ -2112,8 +2171,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           : undefined)
         ?? modelSelection?.model;
 
-      // Persist resolved preset attribution onto the turn's user message so
-      // `llmUsageContext` recovery and `x-lobster-model-preset` stay aligned.
+      // Keep model attribution in sync across persisted usage and the live turn footer.
       if (
         turnUserMessage
         && (
@@ -2121,13 +2179,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           || (effectiveResolvedModelId && !turnUserMessage.metadata?.resolvedModelId)
         )
       ) {
-        const attributedMetadata: Record<string, unknown> = {
-          ...(turnUserMessage.metadata ?? {}),
+        const modelMetadata = {
           ...(effectiveModelPresetId ? { modelPresetId: effectiveModelPresetId } : {}),
           ...(effectiveResolvedModelId ? { resolvedModelId: effectiveResolvedModelId } : {}),
         };
+        const attributedMetadata: Record<string, unknown> = { ...turnUserMessage.metadata, ...modelMetadata };
         this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, attributedMetadata);
         turnUserMessage = { ...turnUserMessage, metadata: attributedMetadata };
+        this.emit('messageUpdate', sessionId, turnUserMessage.id, turnUserMessage.content, modelMetadata);
       }
 
       registerLlmUsageContext(llmTrace.traceId, sessionId, prompt, {
@@ -2380,6 +2439,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         return;
       }
 
+      // A managed MCP package may have finished installing while we prepared
+      // the session. Let DSH register its tools before the model samples them.
+      await this.waitForMcpConnections?.(abortController.signal);
+      if (abortController.signal.aborted) return;
+
       const requestId = params.requestId || randomUUID();
       const turn = this.createActiveTurnState({
         coworkSessionId: sessionId,
@@ -2430,13 +2494,14 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       const clientTimeZone = resolveLocalTimeZone();
       try {
-        await client.promptSession({
+        const admission = await client.promptSession({
           sessionId: dshSessionId,
           requestId,
           content: contentParts,
           mode: 'queue',
           ...(clientTimeZone ? { clientTimeZone } : {}),
         });
+        if (params.onAccepted && admission.accepted !== true) throw new Error('The DSH host did not accept the replacement message.');
         params.onAccepted?.();
       } catch (error) {
         abortController.abort(error);

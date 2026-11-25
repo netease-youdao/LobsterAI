@@ -19,6 +19,16 @@ const EDITOR_MODE = { Edit: 'edit', View: 'view' } as const;
 /** How `getEditingMode()` names the viewing mode set through `EDITOR_MODE.View`. */
 const ENGINE_VIEWING_MODE = 'viewing';
 const ZOOM_MODE = { Fit: 'fit', Fixed: 'fixed' } as const;
+/**
+ * Fit page width on resize, stopping at 85% in narrow side panels so Chinese body text
+ * stays comfortably readable without crushing down to ~60%, and capping at 100% when wide.
+ */
+export const WORD_DEFAULT_ZOOM_MODE = {
+  type: ZOOM_MODE.Fit,
+  fit: 'pageWidth',
+  minZoom: 0.85,
+  maxZoom: 1,
+} as const;
 const SHAPED_MEASURER = 'shaped';
 const CARET_SELECTOR = '.docx-editor-one-surface__caret';
 const SCROLL_CONTAINER_SELECTOR = '.docx-editor__scroll-container';
@@ -120,7 +130,7 @@ export class WordEditorSession extends OfficeEditorSession<WordPackageInfo> {
     await prepareWordLayout();
     if (!this.editor) {
       this.editor = createDocxEditor({
-        container: this.host, mode: EDITOR_MODE.View, zoomMode: 'auto',
+        container: this.host, mode: EDITOR_MODE.View, zoomMode: WORD_DEFAULT_ZOOM_MODE,
         // Resolved per load from the families the parsed document names; see wordFonts.ts.
         fonts: createWordFontResolver({
           api: wordBridge(),
@@ -340,3 +350,4 @@ const registry = createOfficeEditorRegistry<WordPackageInfo, WordEditorSession>(
 export const acquireWordEditor = registry.acquire;
 /** Route refreshes through the live session instead of replacing its Redux artifact bytes. */
 export const refreshOpenWordEditor = registry.refresh;
+export const closeOpenWordEditor = registry.close;

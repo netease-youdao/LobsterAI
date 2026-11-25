@@ -1325,10 +1325,11 @@ test('legacy v1 OpenClaw backup restores into v2 userData and runs runLegacyOpen
   expect(readSqliteString(targetDbPath, 'SELECT value FROM kv WHERE key = ?', ['cowork.agent_engine'])).toBe('dsh');
   expect(readSqliteString(targetDbPath, 'SELECT value FROM kv WHERE key = ?', [MIGRATION_V2_COMPLETED_KV_KEY])).toBeTruthy();
 
-  // Workspaces migrated from openclaw/state/workspace-main -> workspaces/main
+  // Workspaces migrated from openclaw/state/workspace-main -> workspaces/main;
+  // legacy openclaw/state stays in place so historical media/artifacts remain intact.
   expect(fs.readFileSync(path.join(targetUserData, 'workspaces', 'main', 'MEMORY.md'), 'utf8'))
     .toContain('NEPTUNE-V1-MIGRATED');
-  expect(fs.existsSync(path.join(targetUserData, 'openclaw'))).toBe(false);
+  expect(fs.existsSync(path.join(targetUserData, 'openclaw', 'state'))).toBe(true);
   expect(fs.existsSync(path.join(targetUserData, 'legacy-openclaw-backup'))).toBe(true);
 
   // Scheduled task migrated into lobster_scheduled_tasks

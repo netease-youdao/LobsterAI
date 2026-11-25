@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 import { PlatformRegistry } from '../../shared/platform';
+import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
   DEFAULT_DINGTALK_OPENCLAW_CONFIG,
@@ -70,7 +71,7 @@ interface StoredConversationReplyRoute {
   accountId?: string;
 }
 
-interface SessionMappingRow {
+export interface SessionMappingRow {
   im_conversation_id: string;
   platform: string;
   cowork_session_id: string;
@@ -1799,6 +1800,11 @@ export class IMStore {
            LIMIT 1`,
         )
         .get(imConversationId, platform) as SessionMappingRow | undefined;
+    return row ? mapSessionMappingRow(row) : null;
+  }
+
+  findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null {
+    const row = findLegacyDirectSession(this.db, route);
     return row ? mapSessionMappingRow(row) : null;
   }
 

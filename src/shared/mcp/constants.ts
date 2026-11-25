@@ -18,6 +18,12 @@ export const McpIpcChannel = {
 } as const;
 export type McpIpcChannel = typeof McpIpcChannel[keyof typeof McpIpcChannel];
 
+export const McpManagedConnection = {
+  Connecting: 'connecting',
+  Connected: 'connected',
+} as const;
+export type McpManagedConnection = typeof McpManagedConnection[keyof typeof McpManagedConnection];
+
 export const MCP_PACKAGES_DIR_NAME = 'mcp-packages';
 
 /** Node.js env names that matter when launching stdio MCP servers. */

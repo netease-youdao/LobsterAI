@@ -74,11 +74,10 @@ export const BrowserDisplayMode = {
 export type BrowserDisplayMode = typeof BrowserDisplayMode[keyof typeof BrowserDisplayMode];
 
 /**
- * Migration version for switching persisted installs to the in-app browser.
- * - v1: one-time default switch on OpenClaw (a later explicit choice could still select external).
- * - v2: mandatory switch to the in-app browser on DSH, where external browser control is unavailable.
+ * Migration version for the persisted browser display setting.
+ * v3 keeps the chosen mode and external connection settings on DSH upgrades.
  */
-export const BROWSER_DISPLAY_MODE_MIGRATION_VERSION = 2;
+export const BROWSER_DISPLAY_MODE_MIGRATION_VERSION = 3;
 
 const BrowserSearchUrlPrefix = {
   Baidu: 'https://www.baidu.com/s?wd=',

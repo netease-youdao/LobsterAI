@@ -42,6 +42,7 @@ import {
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
+  cleanupLegacyOpenClawDisposableCaches,
   computeLegacyMcpOAuthStoreKey,
   dismissMigrationV2Report,
   extractLegacyTavilyConfig,
@@ -121,7 +122,7 @@ describe('runLegacyOpenClawMigration', () => {
       '["/tmp/openclaw/mcp-packages/foo/bin.js"]',
     );
     db.prepare('INSERT INTO mcp_servers VALUES (?, ?, ?)').run('m1', 'Linear', '{"oauth":{"enabled":true}}');
-    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('popo', '{"appKey":"x"}', 1);
+    db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('nim', '{"appKey":"x"}', 1);
     db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('feishu', '{"appId":"cli_1"}', 1);
     db.prepare('INSERT INTO cowork_message_versions VALUES (?, ?, ?)').run('v1', 'cw-1', 'old version');
     db.close();
@@ -179,11 +180,13 @@ describe('runLegacyOpenClawMigration', () => {
     expect(result.report).toBeDefined();
     const report = result.report!;
 
-    // Verify Step 1 snapshot + Step 3 archives exist & are non-empty.
+    // Verify Step 1 snapshot + Step 3 incompatible manifest archive exist & are non-empty.
+    // `openclaw/state` is preserved in place (no full tar.gz archive) to avoid blocking boot
+    // and to keep historical `openclaw/state/media` artifact paths intact.
     expect(fs.existsSync(report.sqliteSnapshotPath)).toBe(true);
     expect(fs.existsSync(report.incompatibleArchivePath)).toBe(true);
     expect(fs.statSync(report.incompatibleArchivePath).size).toBeGreaterThan(0);
-    expect(report.legacyStateArchivePath && fs.existsSync(report.legacyStateArchivePath)).toBe(true);
+    expect(report.legacyStateArchivePath).toBeNull();
     expect(fs.existsSync(path.join(report.backupDir, 'migration-report.json'))).toBe(true);
 
     // Verify Step 2 workspaces migrated & managed AGENTS.md stripped & .dreams omitted.
@@ -214,10 +217,12 @@ describe('runLegacyOpenClawMigration', () => {
       expect.arrayContaining(['im_weixin', 'mcp_oauth']),
     );
 
-    // Verify Step 5 cleaned up old OpenClaw & experimental dsh-runtime caches.
-    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+    // Verify Step 5 cleaned up pure disposable caches while preserving `openclaw/state`
+    // and `third-party-extensions` in place on disk.
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'logs'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'state'))).toBe(true);
     expect(fs.existsSync(path.join(userDataDir, 'dsh-runtime'))).toBe(false);
-    expect(fs.existsSync(path.join(userDataDir, 'third-party-extensions'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'third-party-extensions'))).toBe(true);
 
     // Verify scheduled task landed in LobsterScheduler SQLite table & pending report readable.
     const verifyDb = new Database(sqlitePath);
@@ -422,7 +427,7 @@ describe('runLegacyOpenClawMigration', () => {
         sessionTarget: 'isolated',
         wakeMode: 'now',
         payload: { kind: 'agentTurn', message: '工作收尾摘要' },
-        delivery: { mode: 'announce', channel: 'moltbot-popo', to: 'retired-user' },
+        delivery: { mode: 'announce', channel: 'moltbot-popo', to: 'user:legacy-user' },
       }),
       JSON.stringify({ lastRunAtMs: 1_785_837_600_026, lastStatus: 'ok' }),
       1_785_837_600_026,
@@ -543,10 +548,10 @@ describe('runLegacyOpenClawMigration', () => {
     });
     expect(starsTask.state.nextRunAtMs).toBeGreaterThan(Date.parse('2026-11-20T03:00:00.000Z'));
 
-    // Retired POPO delivery downgraded cleanly to mode='none'.
+    // Preserve POPO delivery even when the migrated task itself is disabled.
     const wrapupTask = scheduler.getTask('job-wrapup')!;
     expect(wrapupTask.enabled).toBe(false);
-    expect(wrapupTask.delivery).toEqual({ mode: DeliveryMode.None });
+    expect(wrapupTask.delivery).toMatchObject({ mode: DeliveryMode.Announce, channel: 'moltbot-popo', to: 'user:legacy-user' });
 
     // Verify runs: 3 for job-news (tr-1 deduped against rcpt-1, tr-running downgraded to error, rcpt-old linked to cw-news-1)
     // + 1 synthesized from cowork_sessions for job-wrapup.
@@ -1875,8 +1880,8 @@ describe('runLegacyOpenClawMigration', () => {
     expect(result.status).toBe(MigrationV2Status.Completed);
     expect(result.report?.summary.skillsMigrated).toBe(3);
 
-    // OpenClaw dir is cleaned up after migration.
-    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+    // Legacy OpenClaw state is preserved in place after migration.
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'state'))).toBe(true);
 
     // All three legacy skills + nested scripts landed in <userData>/SKILLs/.
     expect(fs.readFileSync(path.join(userSkillsDir, 'legacy-shared', 'SKILL.md'), 'utf8')).toContain('共享旧技能');
@@ -2270,7 +2275,8 @@ describe('runLegacyOpenClawMigration', () => {
     const expectedPkgDir = path.join(userDataDir, 'mcp-packages', 'srv-valid-demo-mcp');
     const expectedBinPath = path.join(expectedPkgDir, 'node_modules', 'demo-mcp', 'bin.js');
     expect(fs.existsSync(expectedBinPath)).toBe(true);
-    expect(fs.existsSync(path.join(userDataDir, 'openclaw'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'mcp-packages'))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, 'openclaw', 'state'))).toBe(true);
 
     const verifyDb = new Database(sqlitePath);
     const rows = verifyDb
@@ -2669,9 +2675,23 @@ describe('runLegacyOpenClawMigration', () => {
     db.close();
   });
 
-  test('migrates external browser config (version 1) to in-app during offline v2 migration, archiving legacy fields and preserving reusable settings', async () => {
+  test('preserves external browser mode and connection settings during offline v2 migration', async () => {
     const userDataDir = createTempDir();
     const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const browserWebAccess = {
+      displayMode: BrowserDisplayMode.External,
+      networkMode: BrowserNetworkMode.Strict,
+      credentialUseMode: BrowserCredentialUseMode.OncePerTask,
+      credentialSaveMode: BrowserCredentialSaveMode.Never,
+      blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      cdpUrl: 'http://127.0.0.1:9222',
+      headless: false,
+      attachOnly: true,
+      remoteCdpTimeoutMs: 15000,
+      remoteCdpHandshakeTimeoutMs: 5000,
+      extraArgs: ['--remote-debugging-port=9222'],
+    };
 
     const db = new Database(sqlitePath);
     db.exec(`
@@ -2684,20 +2704,7 @@ describe('runLegacyOpenClawMigration', () => {
       JSON.stringify({
         theme: 'dark',
         browserDisplayModeMigrationVersion: 1,
-        browserWebAccess: {
-          displayMode: BrowserDisplayMode.External,
-          networkMode: BrowserNetworkMode.Strict,
-          credentialUseMode: BrowserCredentialUseMode.OncePerTask,
-          credentialSaveMode: BrowserCredentialSaveMode.Never,
-          blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
-          executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-          cdpUrl: 'http://127.0.0.1:9222',
-          headless: false,
-          attachOnly: true,
-          remoteCdpTimeoutMs: 15000,
-          remoteCdpHandshakeTimeoutMs: 5000,
-          extraArgs: ['--remote-debugging-port=9222'],
-        },
+        browserWebAccess,
       }),
       1,
     );
@@ -2716,15 +2723,7 @@ describe('runLegacyOpenClawMigration', () => {
 
     expect(result.status).toBe(MigrationV2Status.Completed);
     const report = result.report!;
-    expect(report.summary.externalBrowserConfigsMigrated).toBe(1);
-    expect(report.archivedModules).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          category: 'external_chrome',
-          count: 1,
-        }),
-      ]),
-    );
+    expect(report.archivedModules.map((item) => item.category)).not.toContain('external_chrome');
 
     const verifyDb = new Database(sqlitePath);
     const rawAppConfig = verifyDb
@@ -2734,13 +2733,7 @@ describe('runLegacyOpenClawMigration', () => {
     expect(migratedAppConfig).toEqual({
       theme: 'dark',
       browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
-      browserWebAccess: {
-        displayMode: BrowserDisplayMode.InApp,
-        networkMode: BrowserNetworkMode.Strict,
-        credentialUseMode: BrowserCredentialUseMode.OncePerTask,
-        credentialSaveMode: BrowserCredentialSaveMode.Never,
-        blockedHostnames: ['https://blocked.example.com', 'https://ads.example.com'],
-      },
+      browserWebAccess,
     });
 
     // Saved browser credentials table must remain untouched.
@@ -2750,29 +2743,16 @@ describe('runLegacyOpenClawMigration', () => {
     expect(savedCred).toEqual({ id: 'cred-1', origin: 'https://example.com', username: 'alice' });
     verifyDb.close();
 
-    // Verify legacy external browser fields were safely archived in incompatible-modules-backup.tar.gz.
     const extractDir = createTempDir();
-    await extractMatchingEntriesFromTarGz(
+    const archivedEntries = await extractMatchingEntriesFromTarGz(
       report.incompatibleArchivePath,
       extractDir,
       (entryPath) => entryPath === 'sqlite/external_browser_config.json',
     );
-    const archivedExternal = JSON.parse(
-      fs.readFileSync(path.join(extractDir, 'sqlite', 'external_browser_config.json'), 'utf8'),
-    ) as Record<string, unknown>;
-    expect(archivedExternal).toEqual({
-      displayMode: BrowserDisplayMode.External,
-      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      cdpUrl: 'http://127.0.0.1:9222',
-      headless: false,
-      attachOnly: true,
-      remoteCdpTimeoutMs: 15000,
-      remoteCdpHandshakeTimeoutMs: 5000,
-      extraArgs: ['--remote-debugging-port=9222'],
-    });
+    expect(archivedEntries).toEqual([]);
   });
 
-  test('does not archive external_chrome when legacy DB was already using in-app browser', () => {
+  test('preserves in-app browser mode during offline v2 migration', () => {
     const userDataDir = createTempDir();
     const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
 
@@ -2800,8 +2780,7 @@ describe('runLegacyOpenClawMigration', () => {
     });
 
     expect(result.status).toBe(MigrationV2Status.Completed);
-    expect(result.report?.summary.externalBrowserConfigsMigrated).toBe(0);
-    expect(result.report?.archivedModules.map((m) => m.category)).not.toContain('external_chrome');
+    expect(result.report?.archivedModules.map((item) => item.category)).not.toContain('external_chrome');
 
     const verifyDb = new Database(sqlitePath);
     const rawAppConfig = verifyDb
@@ -2818,7 +2797,7 @@ describe('runLegacyOpenClawMigration', () => {
     verifyDb.close();
   });
 
-  test('repairs stuck external displayMode even when v2 migration was previously marked completed', () => {
+  test('preserves external browser mode when backfilling a completed v2 migration', () => {
     const userDataDir = createTempDir();
     const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
 
@@ -2832,7 +2811,7 @@ describe('runLegacyOpenClawMigration', () => {
     db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run(
       APP_CONFIG_KEY,
       JSON.stringify({
-        browserDisplayModeMigrationVersion: 1,
+        browserDisplayModeMigrationVersion: 2,
         browserWebAccess: {
           displayMode: BrowserDisplayMode.External,
           credentialUseMode: BrowserCredentialUseMode.Disabled,
@@ -2855,10 +2834,11 @@ describe('runLegacyOpenClawMigration', () => {
     expect(JSON.parse(rawAppConfig.value)).toEqual({
       browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
       browserWebAccess: {
-        displayMode: BrowserDisplayMode.InApp,
+        displayMode: BrowserDisplayMode.External,
         credentialUseMode: BrowserCredentialUseMode.Disabled,
         credentialSaveMode: BrowserCredentialSaveMode.Never,
         blockedHostnames: ['https://blocked.example.com'],
+        cdpUrl: 'http://127.0.0.1:9222',
       },
     });
     verifyDb.close();
@@ -2900,7 +2880,7 @@ describe('runLegacyOpenClawMigration', () => {
     });
 
     expect(result.status).toBe(MigrationV2Status.Completed);
-    expect(fs.existsSync(path.join(tmp, 'openclaw'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'openclaw', 'state'))).toBe(true);
 
     const migratedPath = path.join(tmp, 'auth', 'xai-oauth.json');
     expect(fs.existsSync(migratedPath)).toBe(true);
@@ -2972,5 +2952,54 @@ describe('runLegacyOpenClawMigration', () => {
         expect.objectContaining({ kind: 'xai_oauth', id: 'xai' }),
       ]),
     );
+  });
+
+  test('deferDisposableCacheCleanup skips sync cache deletion, preserves openclaw/state/media, and cleans pure caches asynchronously', async () => {
+    const userDataDir = createTempDir();
+    const sqlitePath = path.join(userDataDir, 'lobsterai.sqlite');
+    const stateDir = path.join(userDataDir, 'openclaw', 'state');
+    const mediaFile = path.join(stateDir, 'media', 'outbound', 'clip.mp4');
+    const compileCacheFile = path.join(stateDir, '.compile-cache', 'chunk.bin');
+    const stateCacheFile = path.join(stateDir, 'cache', 'index.bin');
+    const tmpFile = path.join(stateDir, 'tmp', 'scratch.tmp');
+    const logsFile = path.join(userDataDir, 'openclaw', 'logs', 'gateway.log');
+    const oldDshRuntimeFile = path.join(userDataDir, 'dsh-runtime', 'stale.bin');
+    const extFile = path.join(userDataDir, 'third-party-extensions', 'demo', 'index.js');
+
+    for (const file of [mediaFile, compileCacheFile, stateCacheFile, tmpFile, logsFile, oldDshRuntimeFile, extFile]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'payload', 'utf8');
+    }
+
+    const db = new Database(sqlitePath);
+    db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)');
+    db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('cowork.agent_engine', 'openclaw', 1);
+    db.close();
+
+    const result = runLegacyOpenClawMigration({
+      userDataDir,
+      sqlitePath,
+      deferDisposableCacheCleanup: true,
+      now: () => new Date('2026-11-24T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe(MigrationV2Status.Completed);
+    expect(result.report?.legacyStateArchivePath).toBeNull();
+    // Deferred mode does not synchronously delete disposable caches during pre-boot.
+    expect(fs.existsSync(compileCacheFile)).toBe(true);
+    expect(fs.existsSync(stateCacheFile)).toBe(true);
+    expect(fs.existsSync(mediaFile)).toBe(true);
+    expect(fs.existsSync(extFile)).toBe(true);
+
+    // Async post-window cleanup removes only pure caches, preserving media & extensions.
+    const cleanup = await cleanupLegacyOpenClawDisposableCaches(userDataDir);
+    expect(cleanup.dirsRemoved).toBeGreaterThanOrEqual(5);
+    expect(fs.existsSync(compileCacheFile)).toBe(false);
+    expect(fs.existsSync(stateCacheFile)).toBe(false);
+    expect(fs.existsSync(tmpFile)).toBe(false);
+    expect(fs.existsSync(logsFile)).toBe(false);
+    expect(fs.existsSync(oldDshRuntimeFile)).toBe(false);
+    expect(fs.existsSync(mediaFile)).toBe(true);
+    expect(fs.existsSync(extFile)).toBe(true);
   });
 });

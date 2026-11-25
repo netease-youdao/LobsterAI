@@ -7,6 +7,7 @@ export const DSH_CHANNELS_BUNDLE_NAME = '@lobsterai/dsh-channels';
 export const DSH_BASE_BUNDLE_NAME = '@deepseek-ai/dsh-base';
 export const DSH_WEB_APP_BUNDLE_NAME = '@deepseek-ai/dsh-web-app';
 export const DSH_OPS_ROUTE_PATH = '/api/lobsterai/ops';
+export const DSH_POPO_PAIRING_EVENT = 'popoPairing';
 export const DSH_CHANNELS_ROUTE_PATH = '/api/lobsterai/channels';
 export const DSH_SESSION_ID_PREFIX = 'dsh:';
 export const DSH_QUESTION_REQUEST_ID_PREFIX = 'dsh-question:';
@@ -42,6 +43,7 @@ export const RetainedImPlatform = {
   QQ: 'qq',
   Telegram: 'telegram',
   Discord: 'discord',
+  Popo: 'popo',
 } as const;
 export type RetainedImPlatform = typeof RetainedImPlatform[keyof typeof RetainedImPlatform];
 
@@ -53,10 +55,10 @@ export const RETAINED_IM_PLATFORM_LIST: readonly RetainedImPlatform[] = [
   RetainedImPlatform.QQ,
   RetainedImPlatform.Telegram,
   RetainedImPlatform.Discord,
+  RetainedImPlatform.Popo,
 ];
 
 export const RetiredImPlatform = {
-  Popo: 'popo',
   Nim: 'nim',
   NeteaseBee: 'netease-bee',
   Email: 'email',

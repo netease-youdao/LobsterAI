@@ -1,9 +1,7 @@
 import React, { useCallback, useEffect } from 'react';
 
 import { SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME } from '../agentSidebar/sidebarHeaderTooltip';
-import SidebarTaskFilterButton from '../agentSidebar/SidebarTaskFilterButton';
 import SidebarTaskSearchButton from '../agentSidebar/SidebarTaskSearchButton';
-import type { SidebarTaskFilter } from '../agentSidebar/taskFilter';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from './WindowTitleBar';
@@ -20,11 +18,6 @@ interface WindowsAppTitleBarProps {
   onNewChat?: () => void;
   sidebarToggleLabel?: string;
   searchLabel: string;
-  showFilterIcon?: boolean;
-  filterLabel?: string;
-  taskFilter?: SidebarTaskFilter;
-  hasFilterNotice?: boolean;
-  onTaskFilterChange?: (filter: SidebarTaskFilter) => void;
   newChatLabel?: string;
   updateBadge?: React.ReactNode;
 }
@@ -39,11 +32,6 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   onNewChat,
   sidebarToggleLabel,
   searchLabel,
-  showFilterIcon = false,
-  filterLabel,
-  taskFilter,
-  hasFilterNotice = false,
-  onTaskFilterChange,
   newChatLabel,
   updateBadge,
 }) => {
@@ -79,7 +67,7 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
       data-skin-app-titlebar="true"
       className="draggable flex h-9 shrink-0 items-center justify-between bg-background pl-3"
       style={sidebarColumnVisible
-        ? { backgroundImage: `linear-gradient(to right, var(--lobster-surface-raised) ${sidebarWidth}px, transparent ${sidebarWidth}px)` }
+        ? { backgroundImage: `linear-gradient(to right, var(--lobster-sidebar-bg) ${sidebarWidth}px, transparent ${sidebarWidth}px)` }
         : undefined}
     >
       <div
@@ -97,13 +85,13 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
             LobsterAI
           </span>
         </div>
-        {(onToggleSidebar || onSearch || showFilterIcon || onNewChat || updateBadge) && (
+        {(onToggleSidebar || onSearch || onNewChat || updateBadge) && (
           <div className="non-draggable flex shrink-0 items-center gap-1">
             {onToggleSidebar && (
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={sidebarToggleLabel}
                 title={sidebarToggleLabel}
               >
@@ -116,19 +104,11 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
                 label={searchLabel}
               />
             )}
-            {showFilterIcon && taskFilter && onTaskFilterChange && (
-              <SidebarTaskFilterButton
-                filter={taskFilter}
-                onChange={onTaskFilterChange}
-                hasUnreadCompletedTasks={hasFilterNotice}
-                label={filterLabel ?? ''}
-              />
-            )}
             {onNewChat && (
               <button
                 type="button"
                 onClick={handleNewChatClick}
-                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-foreground/80 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
+                className={`h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground transition-colors ${SIDEBAR_HEADER_BUTTON_FOCUS_CLASS_NAME}`}
                 aria-label={newChatLabel}
                 title={newChatLabel}
               >

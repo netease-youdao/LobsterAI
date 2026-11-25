@@ -1,7 +1,7 @@
 /**
  * IM Gateway Manager
  * Unified manager for DingTalk, Feishu, NIM, Telegram, Discord, QQ, WeCom,
- * Weixin, POPO and NeteaseBee, all of which run via OpenClaw
+ * Weixin, POPO and NeteaseBee. Active channels run inside the DSH channels bundle.
  */
 
 import Database from 'better-sqlite3';
@@ -21,7 +21,7 @@ import {
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
-import type { DshChannelsBridge } from './dshChannelsBridge';
+import type { DshChannelsBridge, DshChannelStatusItem } from './dshChannelsBridge';
 import {
   FeishuAuth,
   FeishuPollError,
@@ -178,6 +178,7 @@ export class IMGatewayManager extends EventEmitter {
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
   private ensureOpenClawGatewayReady: (() => Promise<void>) | null = null;
   private getOpenClawSessionKeysForCoworkSession: ((sessionId: string) => string[]) | null = null;
+  private popoSnapshots = new Map<string, DshChannelStatusItem>();
   private getDshChannelsBridge: (() => DshChannelsBridgePort | null) | null = null;
 
   // Cowork dependencies
@@ -228,7 +229,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // Weixin runs via OpenClaw; no direct gateway events to forward
 
-    // POPO runs via OpenClaw; no direct gateway events to forward
+    // DSH forwards POPO events over the channel bridge.
   }
 
   /**
@@ -250,7 +251,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // Weixin runs via OpenClaw; no direct reconnection needed
 
-    // POPO runs via OpenClaw; no direct reconnection needed
+    // The DSH POPO driver owns its reconnection loop.
   }
 
   /**
@@ -324,7 +325,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // Weixin runs via OpenClaw; config changes are synced via OpenClawConfigSync
 
-    // POPO runs via OpenClaw; config changes are synced via OpenClawConfigSync
+    // The desktop sync reconciles POPO instances in the DSH channels bundle.
 
   }
 
@@ -336,7 +337,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   // ==================== Status ====================
-  getStatus(): IMGatewayStatus {
+  getStatus(wecomSnapshots?: ReadonlyMap<string, DshChannelStatusItem>): IMGatewayStatus {
     const config = this.getConfig();
     // Telegram runs via OpenClaw; reflect enabled+configured state per instance
     const telegramStatus = {
@@ -430,16 +431,19 @@ export class IMGatewayManager extends EventEmitter {
         };
       })(),
       wecom: {
-        instances: (config.wecom?.instances || []).map(inst => ({
-          instanceId: inst.instanceId,
-          instanceName: inst.instanceName,
-          connected: Boolean(inst.enabled && inst.botId && inst.secret),
-          startedAt: null as number | null,
-          lastError: null as string | null,
-          botId: inst.botId || null,
-          lastInboundAt: null as number | null,
-          lastOutboundAt: null as number | null,
-        })),
+        instances: (config.wecom?.instances || []).map(inst => {
+          const snapshot = inst.enabled ? wecomSnapshots?.get(inst.instanceId) : undefined;
+          return {
+            instanceId: inst.instanceId,
+            instanceName: inst.instanceName,
+            connected: snapshot?.state === DshChannelState.Connected,
+            startedAt: readNumber(snapshot?.startedAt),
+            lastError: readString(snapshot?.error),
+            botId: inst.botId || null,
+            lastInboundAt: readNumber(snapshot?.lastInboundAt),
+            lastOutboundAt: readNumber(snapshot?.lastOutboundAt),
+          };
+        }),
       },
       weixin: {
         connected: Boolean(config.weixin?.enabled && config.weixin?.botToken?.trim()),
@@ -452,15 +456,19 @@ export class IMGatewayManager extends EventEmitter {
         lastOutboundAt: null as number | null,
       },
       popo: {
-        instances: (config.popo?.instances || []).map(inst => ({
-          instanceId: inst.instanceId,
-          instanceName: inst.instanceName,
-          connected: Boolean(inst.enabled && inst.appKey && inst.appSecret && inst.aesKey && (inst.connectionMode === 'websocket' || inst.token)),
-          startedAt: null as number | null,
-          lastError: null as string | null,
-          lastInboundAt: null as number | null,
-          lastOutboundAt: null as number | null,
-        })),
+        instances: (config.popo?.instances || []).map(inst => {
+          const snapshot = inst.enabled && this.getDshChannelsBridge?.()?.isReady()
+            ? this.popoSnapshots.get(inst.instanceId) : undefined;
+          return {
+            instanceId: inst.instanceId,
+            instanceName: inst.instanceName,
+            connected: snapshot?.state === DshChannelState.Connected,
+            startedAt: readNumber(snapshot?.startedAt),
+            lastError: readString(snapshot?.error),
+            lastInboundAt: readNumber(snapshot?.lastInboundAt),
+            lastOutboundAt: readNumber(snapshot?.lastOutboundAt),
+          };
+        }),
       },
       email: {
         instances: (config.email?.instances || []).map(inst => ({
@@ -479,12 +487,19 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   async getStatusWithOpenClawRuntime(): Promise<IMGatewayStatus> {
-    const status = this.getStatus();
     const channelsBridge = this.getDshChannelsBridge?.();
-    if (!channelsBridge || !channelsBridge.isReady()) return status;
+    if (!channelsBridge?.isReady()) {
+      this.popoSnapshots.clear();
+      return this.getStatus();
+    }
 
     try {
       const { statuses } = await channelsBridge.listStatus();
+      this.popoSnapshots = new Map(statuses.filter(item => item.platform === RetainedImPlatform.Popo)
+        .map(item => [item.instanceId, item]));
+      const wecomSnapshots = new Map(statuses.filter(item => item.platform === RetainedImPlatform.WeCom)
+        .map(item => [item.instanceId, item]));
+      const status = this.getStatus(wecomSnapshots);
       const weixinSnapshot = statuses.find(item => item.platform === RetainedImPlatform.Weixin);
       if (!weixinSnapshot) return status;
 
@@ -501,11 +516,12 @@ export class IMGatewayManager extends EventEmitter {
         lastInboundAt: readNumber(weixinSnapshot.lastInboundAt),
         lastOutboundAt: readNumber(weixinSnapshot.lastOutboundAt),
       };
+      return status;
     } catch (error) {
-      console.debug('[IMGatewayManager] failed to enrich Weixin status from DSH channels:', error);
+      this.popoSnapshots.clear();
+      console.debug('[IMGatewayManager] failed to read DSH channel status:', error);
+      return this.getStatus();
     }
-
-    return status;
   }
 
   async testGateway(
@@ -546,9 +562,9 @@ export class IMGatewayManager extends EventEmitter {
       return this.testWeixinOpenClawConnectivity(configOverride);
     }
 
-    // POPO always uses OpenClaw mode
+    // POPO connection state comes from its DSH driver.
     if (platform === 'popo') {
-      return this.testPopoOpenClawConnectivity(configOverride);
+      return this.testPopoConnectivity(configOverride);
     }
 
     // QQ always uses OpenClaw mode
@@ -798,8 +814,7 @@ export class IMGatewayManager extends EventEmitter {
       await this.ensureOpenClawGatewayConnected?.();
       return;
     } else if (platform === 'popo') {
-      // POPO runs via OpenClaw gateway (moltbot-popo plugin)
-      console.log('[IMGatewayManager] POPO in OpenClaw mode, syncing config instead of starting direct gateway');
+      console.log('[IMGatewayManager] Syncing enabled POPO instances to DSH');
       await this.syncOpenClawConfig?.('im-gateway-start:popo');
       await this.ensureOpenClawGatewayConnected?.();
       return;
@@ -853,8 +868,7 @@ export class IMGatewayManager extends EventEmitter {
       await this.syncOpenClawConfig?.('im-gateway-stop:weixin');
       return;
     } else if (platform === 'popo') {
-      // POPO runs via OpenClaw gateway
-      console.log('[IMGatewayManager] POPO in OpenClaw mode, syncing disabled config');
+      console.log('[IMGatewayManager] Syncing disabled POPO instances to DSH');
       await this.syncOpenClawConfig?.('im-gateway-stop:popo');
       return;
     }
@@ -980,10 +994,7 @@ export class IMGatewayManager extends EventEmitter {
       return Boolean(config.weixin?.enabled && config.weixin?.botToken?.trim());
     }
     if (platform === 'popo') {
-      // POPO runs via OpenClaw; consider it connected when any instance is enabled and configured
-      const config = this.getConfig();
-      const popoInsts = config.popo?.instances || [];
-      return popoInsts.some(i => i.enabled && i.appKey && i.appSecret && i.aesKey && (i.connectionMode === 'websocket' || i.token));
+      return this.getStatus().popo.instances.some(instance => instance.connected);
     }
     return false;
   }
@@ -1008,8 +1019,7 @@ export class IMGatewayManager extends EventEmitter {
         // Weixin runs via OpenClaw; notifications are handled by the weixin-openclaw-plugin
         console.debug('[IMGatewayManager] Weixin notification via OpenClaw not yet supported');
       } else if (platform === 'popo') {
-        // POPO runs via OpenClaw; notifications are handled by the moltbot-popo plugin
-        console.log('[IMGatewayManager] POPO notification via OpenClaw not yet supported');
+        console.log('[IMGatewayManager] POPO notifications require a recipient');
       } else if (platform === 'netease-bee') {
         // netease-bee runs via OpenClaw; notifications not yet supported
         console.log('[IMGatewayManager] netease-bee notification via OpenClaw not yet supported');
@@ -1041,8 +1051,7 @@ export class IMGatewayManager extends EventEmitter {
         // Weixin runs via OpenClaw; notifications are handled by the weixin-openclaw-plugin
         console.debug('[IMGatewayManager] Weixin notification with media via OpenClaw not yet supported');
       } else if (platform === 'popo') {
-        // POPO runs via OpenClaw; notifications are handled by the moltbot-popo plugin
-        console.log('[IMGatewayManager] POPO notification with media via OpenClaw not yet supported');
+        console.log('[IMGatewayManager] POPO media notifications require a recipient and attachment transport');
       } else if (platform === 'netease-bee') {
         // netease-bee runs via OpenClaw; notifications not yet supported
         console.log('[IMGatewayManager] netease-bee notification via OpenClaw not yet supported');
@@ -1765,7 +1774,7 @@ export class IMGatewayManager extends EventEmitter {
     const taskToken = randomUUID();
     const timeout = Date.now() + IMGatewayManager.POPO_POLLING_TIMEOUT_MS;
     const qrUrl = `${IMGatewayManager.POPO_QRCODE_BASE_URL}${taskToken}&timeout=${timeout}`;
-    console.log('[IMGatewayManager] POPO QR login started, taskToken:', taskToken);
+    console.log('[IMGatewayManager] POPO QR login started');
     return { qrUrl, taskToken, timeoutMs: IMGatewayManager.POPO_POLLING_TIMEOUT_MS };
   }
 
@@ -1884,10 +1893,9 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   /**
-   * Test POPO connectivity when running via OpenClaw runtime.
-   * Validates config completeness; actual connection is handled by OpenClaw.
+   * Check the selected instance against its live DSH transport.
    */
-  private async testPopoOpenClawConnectivity(
+  private async testPopoConnectivity(
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
@@ -1917,27 +1925,20 @@ export class IMGatewayManager extends EventEmitter {
       return { platform, testedAt, verdict: 'fail', checks };
     }
 
-    // Check 2: Config completeness passes
-    checks.push({
-      code: 'auth_check',
-      level: 'pass',
-      message: t('imPopoConfigReady'),
-    });
-
-    // Check 3: OpenClaw Gateway running info
+    const live = (await this.getStatusWithOpenClawRuntime()).popo.instances
+      .find(instance => instance.instanceId === popoConfig?.instanceId);
+    const saved = this.imStore.getPopoInstances().find(instance => instance.instanceId === popoConfig?.instanceId);
+    const matches = saved && popoConfig && saved.enabled && saved.appKey === popoConfig.appKey
+      && saved.appSecret === popoConfig.appSecret && saved.aesKey === popoConfig.aesKey
+      && saved.connectionMode === popoConfig.connectionMode && (!isWebhookMode
+        || (saved.token === popoConfig.token && saved.webhookPort === popoConfig.webhookPort && saved.webhookPath === popoConfig.webhookPath));
+    const connected = matches && live?.connected === true;
     checks.push({
       code: 'gateway_running',
-      level: 'info',
-      message: t('imPopoOpenClawHint'),
+      level: connected ? 'pass' : 'fail',
+      message: connected ? t('imPopoConnected') : live?.lastError || t(saved?.enabled ? 'imChannelEnabledNotConnected' : 'imChannelNotEnabled'),
     });
-
-    const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
-      ? 'fail'
-      : checks.some(c => c.level === 'warn')
-        ? 'warn'
-        : 'pass';
-
-    return { platform, testedAt, verdict, checks };
+    return { platform, testedAt, verdict: connected ? 'pass' : 'fail', checks };
   }
 
   private async testQQOpenClawConnectivity(
@@ -2208,7 +2209,7 @@ export class IMGatewayManager extends EventEmitter {
       if (!appKey || !appSecret || !aesKey || (isWebhook && !token)) {
         throw new Error(t('imConfigIncomplete'));
       }
-      return t('imPopoConfigReadyOpenClaw');
+      return t('imPopoConfigReady');
     }
 
     if (platform === 'qq') {

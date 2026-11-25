@@ -27,7 +27,9 @@
   &nbsp;·&nbsp;
   <a href="#功能">功能</a>
   &nbsp;·&nbsp;
-  <a href="#从源码构建">从源码构建</a>
+  <a href="#工作原理">工作原理</a>
+  &nbsp;·&nbsp;
+  <a href="#构建与打包">构建与打包</a>
   &nbsp;·&nbsp;
   <a href="#社区">社区</a>
 </h3>
@@ -40,10 +42,10 @@
 
 大多数 AI 助手只给你一个回答，LobsterAI 的目标是把事情做完。
 
-- **直接在你的工作环境里干活。** 指定一个文件夹，它就能按你设置的权限读表格、写文档、跑脚本、查网页。
-- **给你看得见的成果，而不只是一段回复。** 网页、图表、图片、视频、PDF 以及 Word、Excel、PPT 文件都会在侧边栏打开，可以直接修改或分享。
-- **你离开时，它也在继续工作。** 设置定时任务，或者通过微信、飞书、钉钉等聊天应用给桌面上的 Agent 派活。
-- **完全属于你。** MIT 开源协议，会话数据保存在本地。登录即可使用内置模型，也可以填入自己的 API Key。
+- **直接在你的工作环境里干活。** 指定一个文件夹，它就能按你设置的权限预设和审批规则读表格、写文档、跑脚本、查网页。
+- **给你看得见的成果，而不只是一段回复。** 网页、图表、图片、视频、PDF 以及 Word、Excel、PPT 文件都会在侧边栏打开，支持与 Agent 同步实时编辑或一键生成分享链接。
+- **你离开时，它也在继续工作。** 通过内置 SQLite 调度器运行定时任务，或者通过微信、企业微信、飞书/Lark、钉钉、QQ、Telegram、Discord 给桌面上的 Agent 远程派活。
+- **开源、可扩展且数据归你所有。** MIT 开源协议，内置 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 运行时，数据本地隔离存储且默认禁用上游遥测。登录即可使用内置模型，也可填入自己的 API Key，并通过套件、技能、MCP 连接器与 DSH 插件持续扩展。
 
 LobsterAI 由[网易有道](https://www.youdao.com/)出品，是国内大厂首个开源的桌面级 Agent。
 
@@ -53,20 +55,24 @@ LobsterAI 由[网易有道](https://www.youdao.com/)出品，是国内大厂首�
   <tr>
     <td width="50%" valign="top">
       <img src="docs/res/screenshots/office-zh.png" alt="在 LobsterAI 中编辑 Excel 表格" />
-      <p><b>Office 原生编辑</b><br/>Word、Excel、PPT 直接在应用内打开。可以自己动手改，也可以让 Agent 和你同步实时编辑。</p>
+      <p><b>Office 原生实时编辑</b><br/>Word（<code>.docx</code>）、Excel（<code>.xlsx</code>）、PPT（<code>.pptx</code>）直接在应用内打开。可以自己动手改，也可以让 Agent 和你同步实时协作编辑。</p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/res/screenshots/kits-zh.png" alt="套件市场" />
-      <p><b>套件、技能与连接器</b><br/>按岗位安装工程、设计、财务、销售等套件，按需挑选单个技能，或接入 MCP 服务。</p>
+      <p><b>套件、技能、连接器与 DSH 插件</b><br/>按岗位安装工程、设计、财务、销售等套件，按需挑选单个技能，接入支持 OAuth 的 MCP 服务，或安装 DeepSeek Harness 生态插件。</p>
     </td>
   </tr>
+</table>
+
+<table>
   <tr>
-    <td width="50%" valign="top">
+    <td width="55%" valign="top">
       <img src="docs/res/screenshots/scheduled-tasks-zh.png" alt="定时任务模板" />
-      <p><b>定时任务</b><br/>任何指令都能变成周期任务：科技早报、每日工作收尾、周报草稿、项目巡检。</p>
     </td>
-    <td width="50%" valign="top">
-      <p><b>随时随地派活</b><br/>绑定一次聊天应用，之后就能用手机给桌面上的 Agent 发任务。</p>
+    <td width="45%" valign="middle">
+      <p><b>定时任务与多端 IM 远程派活</b></p>
+      <p>任何指令都能变成周期任务——科技早报、每日工作收尾、周报草稿、项目巡检——保留完整运行记录，并可将结果自动投递到聊天应用。</p>
+      <p>绑定一次微信、企业微信、钉钉、飞书/Lark、QQ、Telegram 或 Discord，出门在外也能用手机直接给桌面 Agent 派活。</p>
     </td>
   </tr>
 </table>
@@ -75,18 +81,21 @@ LobsterAI 由[网易有道](https://www.youdao.com/)出品，是国内大厂首�
 
 | 能力 | 说明 |
 | --- | --- |
-| **Cowork 会话** | 围绕本地项目执行长任务，实时展示进度和工具调用过程，支持会话分叉，并按会话权限设置请求工具审批。 |
-| **产物预览与分享** | 实时预览 HTML、SVG、Mermaid、图片、视频、Markdown、代码、PDF 和 Office 文件；支持直接编辑图片，并把成果以链接形式分享出去。 |
-| **内置浏览器** | Agent 可以直接操作的应用内浏览器，支持多标签页、保存登录信息和通行密钥（Passkey），适合网页调研和自动化流程。 |
-| **电脑操控** | 让 Agent 操作桌面应用，支持 Windows x64 和 macOS 13 及以上版本。 |
-| **多 Agent** | 创建拥有独立身份、模型、技能和工作目录的 Agent，从专家广场添加现成的专家，并把 Agent 绑定到不同的聊天渠道。 |
-| **技能** | 内置文档、表格、幻灯片、PDF、联网搜索、浏览器自动化、图片和视频生成、股票研究、写作、邮件等技能，详见 [`SKILLs/`](SKILLs)。 |
-| **MCP 连接器** | 从市场添加本地或远程 MCP 服务，支持 OAuth 登录，并可为每个服务单独选择开放的工具。 |
-| **IM 渠道** | 微信、企业微信、钉钉、飞书/Lark、QQ、Telegram 和 Discord。支持多实例的平台可以把不同机器人路由给不同 Agent。Telegram 和 Discord 在英文界面下显示。 |
-| **桌面悬浮球** | 桌面上的悬浮入口，可以快速发起任务、截图提问，或对选中的文字执行翻译、朗读等操作。 |
-| **记忆** | Agent 通过本地记忆文件在不同会话中沿用偏好。有历史梦境日记的用户可在记忆设置中查阅。 |
-| **模型** | 登录后可使用 DeepSeek、GLM、Kimi、通义千问、MiniMax 等内置模型；也可以填入 OpenAI、Anthropic、Gemini、xAI、OpenRouter、Ollama、LM Studio 或任意 OpenAI 兼容接口的 Key。 |
-| **我的文件** | 所有 Agent 生成的文件按会话汇总在一处，本地文件和已分享的文件都能统一管理。 |
+| **Cowork 会话** | 围绕本地项目执行长任务，实时展示进度和工具调用过程，支持会话分叉、上下文自动压缩，以及可配置的会话权限预设（`read-only`、`workspace-write`、完全访问）与交互审批。 |
+| **Office 与内容创作** | 原生实时编辑 `.docx`、`.xlsx`、`.pptx` 并支持 Agent 同步修改；同时提供向导式 PPT 创作、图片生成与原地编辑、Remotion 视频创作流程。 |
+| **产物预览与分享** | 侧边栏实时预览 HTML、SVG、Mermaid、图片、视频、Markdown、代码、PDF、Office 文档与本地 Web 服务，支持一键生成分享链接。 |
+| **内置浏览器与联网搜索** | Agent 可直接操控的应用内浏览器，支持多标签页、保存登录状态、通行密钥（Passkey / WebAuthn）、页面批注，并内置联网搜索能力。 |
+| **电脑操控** | 桌面 GUI 自动化，让 Agent 操作原生桌面应用，支持 Windows x64 和 macOS 13 及以上版本。 |
+| **多 Agent 与子 Agent 委派** | 创建拥有独立人设、模型、技能和工作目录的 Agent；从专家广场添加现成专家；支持派生子 Agent 与跨 Agent 委派（侧边栏可查看子 Agent 会话）；支持按渠道绑定不同 Agent。 |
+| **技能与套件** | 提供岗位套件以及 Word、Excel、PPT、PDF、联网搜索、Remotion 视频、前端设计、股票研究、写作、IMAP/SMTP 邮件、有道云笔记等内置技能，详见 [`SKILLs/`](SKILLs)。 |
+| **DSH 插件与生态中心** | 在 **设置 → 插件** 中直接安装、启停或卸载 DeepSeek Harness 插件（由内置 `pnpm` 驱动），打开 DSH 生态视图，兼容官方实验能力（AgentTeam、Worktree、LiveShare、DeepSeek 对话导入）与内置 `dsh` CLI。 |
+| **MCP 连接器** | 从市场添加本地（`stdio`）或远程（`Streamable HTTP` / `SSE`）MCP 服务，支持 OAuth 登录，并可为每个服务单独筛选开放的工具。 |
+| **IM 渠道** | 通过 LobsterAI 内置的 DSH 渠道包支持微信、企业微信、钉钉、飞书/Lark、QQ、Telegram 和 Discord；多实例平台可将不同机器人路由给不同 Agent（Telegram 和 Discord 在英文界面下显示）。 |
+| **定时任务** | 内置 SQLite 调度器（`LobsterScheduler`），提供开箱即用的任务模板、执行历史、独立工作目录，并支持将执行结果推送到 IM 渠道。 |
+| **桌面悬浮球与语音输入** | 桌面常驻悬浮球，支持快速发起任务、截图提问以及划词翻译/朗读等快捷操作，同时内置语音输入（ASR）。 |
+| **记忆** | Agent 通过本地 Markdown 工作区文件（`AGENTS.md`、`MEMORY.md`、`SOUL.md`、`USER.md` 及每日笔记）跨会话延续偏好；历史梦境日记可在记忆设置中查阅。 |
+| **模型** | 登录后可使用 DeepSeek、Kimi、通义千问、GLM、MiniMax 等内置模型；也可填入 OpenAI、Anthropic、Gemini、xAI、OpenRouter、豆包、千帆、阶跃星辰、MiMo、Ollama、LM Studio 或任意 OpenAI 兼容接口的 API Key。 |
+| **我的文件** | 跨会话汇总所有 Agent 生成的本地产物与已分享文件，在一处统一检索与管理。 |
 
 ## 试试这些任务
 
@@ -106,8 +115,11 @@ LobsterAI 由[网易有道](https://www.youdao.com/)出品，是国内大厂首�
    [macOS（Intel 芯片）](https://github.com/netease-youdao/LobsterAI/releases/latest/download/LobsterAI--mac-x64.dmg) ·
    [Windows x64](https://github.com/netease-youdao/LobsterAI/releases/latest/download/LobsterAI--win-x64.exe)
 2. **选择模型。** 登录后即可使用内置模型，也可以在 **设置 → 自定义模型** 中填入自己的 API Key。
-3. **布置任务。** 选择工作目录，描述你想要的结果，并在执行过程中审批相关操作。生成的文件会在侧边栏打开。
-4. **更进一步。** 在 **套件·技能·连接器** 中安装套件，在 **定时任务** 中设置周期任务，或在 **设置 → IM 机器人** 中绑定聊天应用。
+3. **布置任务。** 选择工作目录与权限预设，描述你想要的结果，并在执行过程中审批关键操作。生成的文件会在侧边栏打开。
+4. **更进一步。** 在 **套件·技能·连接器** 中安装套件，在 **设置 → 插件** 中管理 DSH 插件，在 **定时任务** 中设置周期任务，或在 **设置 → IM 机器人** 中绑定聊天应用。
+
+> [!NOTE]
+> **从旧版 OpenClaw 升级：** 升级后首次启动时，LobsterAI 会在 DSH 启动前自动执行纯离线原子迁移：先对 `lobsterai.sqlite` 做快照备份，迁移原有 Agent 工作区、记忆、会话、定时任务、权限配置与 MCP OAuth 凭证，将已下线或不兼容模块安全归档到 `userData/legacy-openclaw-backup/`，异常时自动回滚，并在启动后展示迁移报告。
 
 ## 工作原理
 
@@ -115,48 +127,96 @@ LobsterAI 由[网易有道](https://www.youdao.com/)出品，是国内大厂首�
 flowchart LR
   subgraph App["LobsterAI 桌面应用（Electron）"]
     UI["渲染进程<br/>React · Redux · Tailwind<br/>会话 · 产物 · Office 编辑器"]
-    Main["主进程<br/>Cowork · SQLite · 定时任务"]
+    Main["主进程<br/>Cowork · SQLite · LobsterScheduler<br/>MCP/OAuth · 内置浏览器"]
     subgraph DshHost["内置 DeepSeek Harness"]
-      DSH["Agent 运行时"]
-      Channels["IM 渠道包"]
+      DSH["DSH Agent 运行时"]
+      HostBundle["@lobsterai/dsh-bundle<br/>宿主工具 · 权限守卫 · 桥接"]
+      Channels["@lobsterai/dsh-channels<br/>IM 渠道驱动"]
     end
     UI <-->|"preload IPC"| Main
     Main <-->|"会话控制 · 配置 · 事件"| DSH
+    DSH <--> HostBundle
     Main <-->|"收件 · 回复"| Channels
-    Main --> Browser["内置浏览器"]
   end
   DSH --> Models["大模型服务"]
-  DSH --> Tools["文件 · 终端 · MCP 工具<br/>含电脑操控"]
-  Chat["聊天应用<br/>微信 · 飞书 · 钉钉 …"] <--> Channels
+  HostBundle --> Tools["文件 · 终端 · MCP · 浏览器<br/>Office · 电脑操控 · DSH 插件"]
+  Chat["聊天应用<br/>微信 · 企微 · 飞书 · 钉钉 …"] <--> Channels
 ```
 
-- **Cowork** 是 LobsterAI 的产品层，负责会话、消息、权限、产物、Agent 和 IM 绑定。
-- **[DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)** 负责运行 Agent。LobsterAI 将应用设置同步给 DSH 宿主，并把 DSH 事件转换成 Cowork 消息流。
+- **Cowork** 是 LobsterAI 的桌面产品层，负责会话、消息、权限预设、产物预览、Office 编辑器桥接、SQLite 定时调度（`LobsterScheduler`）、MCP OAuth 和 IM 绑定。
+- **[DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)** 以离线完整的内置运行时运行 Agent（`@deepseek-ai/dsh`，版本锁定在 [`package.json`](package.json)）。LobsterAI 在 [`dsh-bundles/`](dsh-bundles) 下叠加了两个自研 Cordis Bundle：
+  - `lobsterai-host`（`@lobsterai/dsh-bundle`）：模型 / 联网搜索 / MCP 桥接、人设与记忆作用域隔离、渐进式工具披露、权限审批守卫、多 Agent 委派、运维 RPC 以及遥测禁用保护。
+  - `lobsterai-channels`（`@lobsterai/dsh-channels`）：微信、企业微信、钉钉、飞书/Lark、QQ、Telegram、Discord 渠道驱动。
 - 渲染进程启用了上下文隔离和沙箱，只能通过 preload IPC 桥与主进程通信。
 
-## 从源码构建
+## 构建与打包
 
-构建需要 Node.js `>=24.15.0 <25`、npm `>=11.17.0 <12`、Git 和 `tar`。
+### 环境要求
+
+- Node.js `>=24.15.0 <25`
+- npm `>=11.17.0 <12`
+- Git 和 `tar`
+- `better-sqlite3@13.0.3` 已自带预编译 N-API 二进制文件，Windows 下安装与打包不需要 Visual Studio C++ Build Tools。
+
+### 本地源码运行
 
 ```bash
 git clone https://github.com/netease-youdao/LobsterAI.git
 cd LobsterAI
 npm install
 
-# 为当前平台构建锁定版本的 DSH 运行时并启动应用
+# 首次运行：为当前平台构建锁定版本的 DSH 运行时并启动 Electron
 npm run electron:dev:dsh
 
-# 运行时构建好之后，日常开发使用
+# vendor/dsh-runtime/current 准备好后，日常开发直接使用
 npm run electron:dev
 ```
 
-测试、Lint、运行时选项、安装包打包和项目结构，请参阅 [CONTRIBUTING_zh.md](CONTRIBUTING_zh.md)。
+常用运行时变量与检查：
+
+- 可用 `DSH_NPM_REGISTRY=<地址>` 覆盖拉取 `@deepseek-ai/dsh` 的 npm registry，用 `DSH_FORCE_BUILD=1` 强制重建运行时。
+- 调整运行时或补丁后，可依次执行验证：
+  `npm run dsh:runtime:verify` · `npm run dsh:upgrade-check` · `npm run dsh:e2e`。
+
+### 打包安装程序
+
+请在与目标操作系统和架构一致的机器上打包，确保原生依赖匹配；构建产物输出到 `release/`。
+
+```bash
+# 按 lock 文件干净安装依赖，并清理可能残留的主进程旧编译产物
+npm ci
+npx rimraf dist dist-electron
+
+# 按目标平台选择打包命令
+npm run dist:mac:arm64   # macOS Apple 芯片（.dmg）
+npm run dist:mac:x64     # macOS Intel 芯片（.dmg）
+npm run dist:win         # Windows x64 完整离线 NSIS 安装包（.exe）
+```
+
+Windows 渠道包与在线安装器（基于同一条 `dist:win` 链路）：
+
+```bash
+# 指定渠道的完整离线安装包
+npm run dist:win:channel -- --keyfrom <渠道> [--silent]
+
+# 轻量在线安装器（stub，安装时从 CDN 下载 .nsis.7z 主包）
+npm run dist:win:web -- --keyfrom <渠道> [--silent] [--pkg-base-url <CDN 目录> | --pkg-url <主包地址>]
+```
+
+### 打包方案说明
+
+- **自包含 DSH 运行时：** `scripts/build-dsh-runtime.cjs` 直接拉取 `package.json` 锁定的 `@deepseek-ai/dsh` npm 包（无需再维护同级源码仓库），按目标平台和架构安装生产依赖及锁定版本的 `pnpm`（`package-manager/pnpm`，供用户安装 DSH 插件），应用 `scripts/dsh-patches/<dsh.version>/` 下的版本化补丁，裁剪 LobsterAI 已原生替代的重型依赖（`libreoffice-kit-*`、`sherpa-onnx-*`），并缓存在 `vendor/dsh-runtime/<target>`（目标、版本与补丁哈希一致时自动复用）。
+- **macOS（`.dmg`）：** 将 `dsh-runtime/`、`dsh-bundles/`、`SKILLs/` 及可选的 `computer-use/` 打入 `Contents/Resources/`；`afterPack` 会清理运行时目录中的 `node_modules/.bin` 软链接以兼容代码签名，`dist:mac:arm64` 打包前还会自动执行 `dsh:upgrade-check`。
+- **Windows（NSIS `.exe` 与 `nsis-web`）：** 先经 `predist:win` 构建 `win-x64` 运行时，执行 `verify:installer-patches` 门禁（校验 `patches/app-builder-lib+*.patch`），构建 `selection-hook` 与便携版 Windows Python 3.11 运行时（`setup:python-runtime`），再将 `dsh-runtime/`、`dsh-bundles/`、`SKILLs/`、`python-win/` 合并打包为单个 `win-resources.tar`，安装阶段由 `unpack-dsh-resources.cjs` 高速解压。如需在无系统 Git 的环境下支持 Git 源 DSH 插件安装，可额外准备便携 Git（`npm run setup:mingit`）。
+- **独立运行时分发包：** 可通过 `npm run dsh:runtime:pack`、`npm run dsh:runtime:url` 和 `npm run dsh:runtime:verify-urls` 生成并登记 `package.json` 中的 `dsh.runtimes` CDN 分发包。
+
+更多细节（离线/私有源环境变量、升级 DSH 版本、测试与 Lint、完整项目目录地图）请参阅 [CONTRIBUTING_zh.md](CONTRIBUTING_zh.md)。
 
 ## 安全与隐私
 
-- 桌面会话、消息和设置保存在应用数据目录中的 `lobsterai.sqlite`。同目录下的 `dsh-profile/` 保存 LobsterAI 的 DSH 状态，`workspaces/<agentId>/` 保存 Agent 指令和记忆。这些数据与独立安装的 DSH 隔离。
-- 工具操作遵循会话的权限设置，需要审批时会向你确认。
-- 渲染进程窗口启用上下文隔离和沙箱，并禁用 Node.js 集成。
+- **本地优先、数据隔离：** 桌面会话、消息、定时任务与配置保存在应用数据目录的 `lobsterai.sqlite` 中；同目录下的 `dsh-profile/` 保存 LobsterAI 专用的 DSH 状态，`workspaces/<agentId>/` 保存 Agent 指令与记忆，与用户独立安装的 DSH 完全隔离。
+- **默认禁用上游遥测：** [`dsh-bundles/lobsterai-host/cordis.patch.yml`](dsh-bundles/lobsterai-host/cordis.patch.yml) 显式禁用了所有上游 DSH 遥测与 DeepSeek 账号插件，并由 `npm run dsh:upgrade-check` 自动门禁校验。
+- **权限控制与沙箱隔离：** 工具调用遵循会话权限预设（`read-only`、`workspace-write`、完全访问）及审批确认；渲染进程窗口启用上下文隔离和沙箱，并禁用 Node.js 集成。
 
 ## 社区
 

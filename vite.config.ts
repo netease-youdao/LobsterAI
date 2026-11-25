@@ -122,7 +122,7 @@ export default defineConfig(({ command }) => {
             minify: productionMinify,
             rollupOptions: {
               external: (id) => {
-                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate'];
+                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'playwright-core'];
                 return staticExternals.includes(id);
               },
               output: {

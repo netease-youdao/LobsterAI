@@ -270,7 +270,7 @@ export class McpLaunchResolverManager {
   constructor(
     private readonly store: McpStore,
     private readonly onChanged: () => void,
-    private readonly onResolutionReady: (reason: string) => void,
+    private readonly onResolutionFinished: (reason: string, readyServerId?: string) => void,
   ) {}
 
   canOptimize(server: McpServerRecord): boolean {
@@ -345,6 +345,8 @@ export class McpLaunchResolverManager {
       && existing.args?.length
     ) {
       log('INFO', `server "${server.name}" already has a ready launch resolution`);
+      this.onResolutionFinished(`mcp-launch-ready:${server.name}`, server.id);
+      this.onChanged();
       return;
     }
 
@@ -463,8 +465,8 @@ export class McpLaunchResolverManager {
         'INFO',
         `MCP server "${server.name}" launch path is ready in ${Date.now() - startedAt}ms; version=${resolvedVersion}`,
       );
+      this.onResolutionFinished(`mcp-launch-ready:${server.name}`, server.id);
       this.onChanged();
-      this.onResolutionReady(`mcp-launch-ready:${server.name}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.store.upsertLaunchResolution({
@@ -483,7 +485,7 @@ export class McpLaunchResolverManager {
         `failed to resolve MCP server "${server.name}" after ${Date.now() - startedAt}ms: ${message}`,
       );
       this.onChanged();
-      this.onResolutionReady(`mcp-launch-failed:${server.name}`);
+      this.onResolutionFinished(`mcp-launch-failed:${server.name}`);
     }
   }
 }

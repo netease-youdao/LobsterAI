@@ -3,7 +3,7 @@ import './wordEditor.css';
 import React, { useMemo, useRef, useSyncExternalStore } from 'react';
 
 import { i18nService } from '@/services/i18n';
-import { acquireWordEditor, type WordEditorSession } from '@/services/office/word/wordEditorSession';
+import { acquireWordEditor, WORD_DEFAULT_ZOOM_MODE, type WordEditorSession } from '@/services/office/word/wordEditorSession';
 import { WordFontSource } from '@/services/office/word/wordFonts';
 
 import { WordReadOnlyReason } from '../../../../../../shared/office/word/wordFile';
@@ -12,7 +12,7 @@ import {
 type OfficeEditorLabels,   OfficeEditorLoader, OfficeEditorShell, useOfficeDocumentState, useOfficeEditorMount,
 } from '../common/OfficeEditorShell';
 import { useRegisterOfficePreviewZoomControls } from '../common/OfficePreviewActionsContext';
-import { clampOfficeZoom, OfficeZoom } from '../common/OfficeZoomControls';
+import { clampOfficeZoom, OfficeZoom, OfficeZoomControls } from '../common/OfficeZoomControls';
 import { WordImageOverlay } from './WordImageOverlay';
 import { wordImageTransferHandlers } from './WordInsertControls';
 import { WordToolbar } from './WordToolbar';
@@ -59,7 +59,7 @@ function ActiveWordEditor({ session, onAddToChat }: { session: WordEditorSession
       zoomFactor: editorState?.zoom ?? 1,
       onZoomOut: () => zoomBy(-OfficeZoom.Step),
       onZoomIn: () => zoomBy(OfficeZoom.Step),
-      onResetZoom: () => session.editor?.setZoomMode('auto'),
+      onResetZoom: () => session.editor?.setZoomMode(WORD_DEFAULT_ZOOM_MODE),
     };
   }, [session, editorState?.zoom]);
   useRegisterOfficePreviewZoomControls(zoomControls);
@@ -79,9 +79,21 @@ function ActiveWordEditor({ session, onAddToChat }: { session: WordEditorSession
       toolbar={<WordToolbar session={session} />}
       footerStart={<span>{t('wordPage')} {editorState?.page.current ?? 1} / {editorState?.page.total ?? 1}</span>}
       footerEnd={(
-        <span title={fontDetails || t('wordFontsOriginalHelp')}>
-          {substitutedFonts.length ? t('wordFontsSubstituted').replace('{count}', String(substitutedFonts.length)) : t('wordFontsOriginal')}
-        </span>
+        <div className="lobster-word-footer-end">
+          {substitutedFonts.length > 0 && (
+            <span className="lobster-word-font-badge" title={fontDetails}>
+              {t('wordFontsSubstituted').replace('{count}', String(substitutedFonts.length))}
+            </span>
+          )}
+          <div className="lobster-word-footer-zoom">
+            <OfficeZoomControls
+              zoomFactor={zoomControls.zoomFactor}
+              onZoomOut={zoomControls.onZoomOut}
+              onZoomIn={zoomControls.onZoomIn}
+              onResetZoom={zoomControls.onResetZoom}
+            />
+          </div>
+        </div>
       )}>
       <div className="lobster-word-frame" ref={frame} onPointerUp={chat.handlePointerUp} {...imageTransfer}>
         <div className="lobster-word-mount docx-editor__scroll-container" ref={host} />

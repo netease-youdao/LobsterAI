@@ -123,7 +123,7 @@ const tools = toolDefinitions
   .filter(([name]) => !credentialOnly || name === '${BrowserCredentialLoginTool.Name}')
   .map(([name, properties, description]) => ({
   name,
-  description: description || 'Operate the LobsterAI in-app browser.',
+  description: description || 'Operate the LobsterAI managed browser.',
   inputSchema: { type: 'object', properties, additionalProperties: true },
   }));
 

@@ -96,7 +96,7 @@ const SidebarExperienceSlot: React.FC<SidebarExperienceSlotProps> = ({
   return (
     <div
       aria-hidden={hidden || undefined}
-      className={`pointer-events-none absolute inset-x-0 bottom-0 z-40 pl-[18px] pr-3.5 transition-[opacity,transform] motion-reduce:transition-none ${
+      className={`pointer-events-none absolute inset-x-0 bottom-0 z-40 px-2.5 pb-1 transition-[opacity,transform] motion-reduce:transition-none ${
         hidden
           ? 'translate-y-2 opacity-0 duration-0'
           : 'translate-y-0 opacity-100 duration-200 ease-out'

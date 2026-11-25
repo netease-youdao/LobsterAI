@@ -699,6 +699,61 @@ test('listFilteredSessions combines status, session ids and time across all agen
   expect(store.listFilteredSessions({ sessionIds: [] })).toEqual([]);
 });
 
+test('listFilteredSessions pinnedOnly returns pinned tasks across agents newest-pinned first with cwd', () => {
+  insertSession('legacy-null-pin', 'main', 'Legacy pin', 4000, 1, null);
+  insertSession('first-pin', 'main', 'First pin', 1000);
+  insertSession('second-pin', 'writer', 'Second pin', 2000);
+  insertSession('unpinned', 'main', 'Unpinned', 5000);
+  db.prepare('UPDATE cowork_sessions SET cwd = ?, fork_git_branch = ? WHERE id = ?')
+    .run('/Users/demo/Dev/lobsterai', 'feat/pinned-sidebar', 'second-pin');
+
+  const firstOrder = store.setSessionPinned('first-pin', true);
+  const secondOrder = store.setSessionPinned('second-pin', true);
+
+  expect(firstOrder).not.toBeNull();
+  expect(secondOrder).not.toBeNull();
+  expect(secondOrder!).toBeGreaterThan(firstOrder!);
+
+  const pinned = store.listFilteredSessions({ pinnedOnly: true });
+  expect(pinned.map((session) => session.id)).toEqual([
+    'second-pin',
+    'first-pin',
+    'legacy-null-pin',
+  ]);
+  expect(pinned[0]?.cwd).toBe('/Users/demo/Dev/lobsterai');
+  expect(pinned[0]?.forkGitBranch).toBe('feat/pinned-sidebar');
+
+  // Chronological preview mode keeps per-agent list ordered purely by recency.
+  const chronological = store.listSessions(10, 0, 'main', { pinnedFirst: false });
+  expect(chronological.map((session) => session.id)).toEqual([
+    'unpinned',
+    'legacy-null-pin',
+    'first-pin',
+  ]);
+});
+
+test('reorderPinnedSessions persists manual order without mutating updated_at and keeps new pins on top', () => {
+  insertSession('pin-a', 'main', 'Pin A', 1000);
+  insertSession('pin-b', 'writer', 'Pin B', 2000);
+  insertSession('pin-c', 'main', 'Pin C', 3000);
+  insertSession('pin-d', 'main', 'Pin D', 4000);
+
+  store.setSessionPinned('pin-a', true);
+  store.setSessionPinned('pin-b', true);
+  store.setSessionPinned('pin-c', true);
+
+  // Move pin-a first, pin-c second, omit pin-b (should remain appended at end).
+  const reordered = store.reorderPinnedSessions(['pin-a', 'pin-c']);
+  expect(reordered.map((session) => session.id)).toEqual(['pin-a', 'pin-c', 'pin-b']);
+  expect(reordered.find((session) => session.id === 'pin-a')?.updatedAt).toBe(1000);
+  expect(reordered.find((session) => session.id === 'pin-c')?.updatedAt).toBe(3000);
+
+  // Pinning a new session still places it above the saved manual order.
+  store.setSessionPinned('pin-d', true);
+  const afterNewPin = store.listFilteredSessions({ pinnedOnly: true });
+  expect(afterNewPin.map((session) => session.id)).toEqual(['pin-d', 'pin-a', 'pin-c', 'pin-b']);
+});
+
 test('searchSessionContent returns one hit per session from user and visible assistant messages', () => {
   insertSession('older', 'main', 'Ski poster', 1000);
   insertSession('newer', 'main', 'Jacket edit', 2000);
@@ -2206,4 +2261,27 @@ test('persists per-session permissionPreset independently, copies on fork, and s
   reloaded.updateSession(sessionA.id, { permissionPreset: null });
   expect(reloaded.getSession(sessionA.id)?.permissionPreset).toBeNull();
   expect(reloaded.getSession(sessionB.id)?.permissionPreset).toBe(DshPermissionPreset.ReadOnly);
+});
+
+test('getSession populates imPlatform from im_session_mappings and returns null for desktop chats', () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS im_session_mappings (
+      im_conversation_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      cowork_session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL DEFAULT 'main',
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      PRIMARY KEY (im_conversation_id, platform, agent_id)
+    )
+  `);
+  const desktop = store.createSession('Desktop chat', '/tmp/desktop', '', 'local', [], 'main');
+  const imSession = store.createSession('[飞书] Alice', '/tmp/im', '', 'local', [], 'main');
+  db.prepare(
+    'INSERT INTO im_session_mappings (im_conversation_id, platform, cowork_session_id, agent_id, created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run('feishu:dm:ou_1', 'feishu', imSession.id, 'main', 1000, 2000);
+
+  expect(desktop.imPlatform).toBeNull();
+  expect(store.getSession(desktop.id)?.imPlatform).toBeNull();
+  expect(store.getSession(imSession.id)?.imPlatform).toBe('feishu');
 });

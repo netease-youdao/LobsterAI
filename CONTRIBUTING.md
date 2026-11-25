@@ -81,10 +81,12 @@ CI lints only the TypeScript files a pull request changes. Leave every file you 
 ## DeepSeek Harness runtime
 
 `package.json` pins the `@deepseek-ai/dsh` and pnpm versions in `dsh`.
-The build fetches the npm package, installs the target's dependencies, applies
-`scripts/dsh-patches/<dsh.version>/`, and prepares `vendor/dsh-runtime/current`
-for development. Set `DSH_NPM_REGISTRY` to use a different npm registry or
-`DSH_FORCE_BUILD=1` to force a rebuild.
+The build fetches the published npm package (no sibling source checkout required),
+installs the target's production dependencies, bundles the pinned pnpm, applies
+`scripts/dsh-patches/<dsh.version>/`, prunes heavy redundant native packages
+(`libreoffice-kit-*`, `sherpa-onnx-*`) that LobsterAI replaces natively, and
+prepares `vendor/dsh-runtime/current` for development. Set `DSH_NPM_REGISTRY`
+to use a different npm registry or `DSH_FORCE_BUILD=1` to force a rebuild.
 
 The runtime includes the pinned pnpm at `package-manager/pnpm`. The app
 launcher passes this copy to `runCli({ packageManager })` for DSH plugin
@@ -102,7 +104,7 @@ npm run dsh:runtime:host
 # Boot the runtime and verify its web and RPC interfaces
 npm run dsh:runtime:verify
 
-# Check the runtime contents and the LobsterAI profile and bundle configuration
+# Check pruned packages, disabled telemetry guards, bundle mounting, and live RPC
 npm run dsh:upgrade-check
 
 # Check embedded Electron hosts, authenticated RPC, and profile isolation
@@ -172,10 +174,14 @@ npm run dist:win            # Windows x64
 
 Each command builds the matching DSH runtime and ships it with the
 LobsterAI host and IM channel bundles. On macOS the runtime is under
-`Contents/Resources/dsh-runtime/`, alongside `dsh-bundles/`. The Windows
-installer extracts `dsh-runtime/`, `dsh-bundles/`, `SKILLs/`, and
-`python-win/` from `win-resources.tar` into the installed resources.
-`setup:python-runtime` prepares the portable Python runtime.
+`Contents/Resources/dsh-runtime/`, alongside `dsh-bundles/`, `SKILLs/`, and
+optional `computer-use/`; `afterPack` removes `node_modules/.bin` symlinks
+inside packaged DSH trees for codesign compatibility, and `dist:mac:arm64` runs
+`dsh:upgrade-check` before packaging. On Windows, `dist:win` runs `predist:win`
+(`dsh:runtime:win-x64`), `verify:installer-patches`, `build:selection-hook`,
+and `setup:python-runtime`, then packs `dsh-runtime/`, `dsh-bundles/`,
+`SKILLs/`, and `python-win/` into `win-resources.tar` so
+`unpack-dsh-resources.cjs` extracts them during installation.
 
 The build reuses `vendor/dsh-runtime/<target>` when the target, pinned
 versions, and patch hashes match. Use `DSH_FORCE_BUILD=1` to rebuild it
@@ -203,6 +209,7 @@ Offline or private-source packaging can use:
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION`
 - `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL`
 - `LOBSTERAI_WINDOWS_GET_PIP_URL`
+- `LOBSTERAI_WINDOWS_PIP_PYZ_URL`
 - `LOBSTERAI_PORTABLE_GIT_ARCHIVE`
 - `LOBSTERAI_PORTABLE_GIT_URL`
 
@@ -226,6 +233,7 @@ Offline or private-source packaging can use:
 | `src/renderer/components/skills/` | Skill management UI |
 | `src/renderer/components/mcp/` | MCP server management UI |
 | `src/renderer/components/scheduledTasks/` | Scheduled task list, form, detail, run history, and templates |
+| `src/renderer/components/dsh/` | DSH plugin & ecosystem management UI |
 | `src/renderer/services/i18n.ts` | Renderer i18n dictionary and `t()` helper |
 | `src/shared/` | Constants and types shared by the main and renderer processes |
 | `src/common/` | Small pure helpers compiled into both processes |

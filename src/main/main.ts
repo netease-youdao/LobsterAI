@@ -127,6 +127,7 @@ import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPreview,
   formatCoworkImageAttachmentLimit,
+  sniffImageMimeType,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
 import type { CoworkMessageEditRequest } from '../shared/cowork/messageEdit';
@@ -151,7 +152,7 @@ import {
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
-import { DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
+import { DSH_POPO_PAIRING_EVENT, DSH_PROFILE_DIR_NAME } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   EnterpriseAccountMode,
@@ -290,6 +291,7 @@ import {
   listPairingRequests,
   readAllowFromStore,
   rejectPairingRequest,
+  requestPopoPairing,
 } from './im/imPairingStore';
 import {
   buildBrowserWebAudioDecodeScript,
@@ -309,12 +311,15 @@ import type {
 import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
 import { registerAgentHandlers } from './ipcHandlers/agents';
+import { registerArtifactWorkspaceHandlers } from './ipcHandlers/artifactWorkspace';
 import {
   createAsrRealtimeWsOriginStripper,
   createRealtimeAsrSession,
   registerAsrIpcHandlers,
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
+import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
+import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import { readDecisionModelConfig, registerDecisionModelHandlers } from './ipcHandlers/decisionModel/handlers';
 import { registerDshHostHandlers } from './ipcHandlers/dshHost/handlers';
@@ -371,7 +376,7 @@ import {
 } from './libs/authSessionManager';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
 import { BrowserAnnotationAssetStore } from './libs/browserAnnotationAssetStore';
-import { migrateBrowserDisplayModeToInApp } from './libs/browserDisplayModeMigration';
+import { migrateBrowserDisplayMode } from './libs/browserDisplayModeMigration';
 import { getResourceAnalyticsSalt } from './libs/capabilityUsage';
 import {
   clearServerModelMetadata,
@@ -443,6 +448,7 @@ import {
 } from './libs/developmentProtocolContext';
 import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
 import {
+  cleanupLegacyOpenClawDisposableCaches,
   createSingleFlightAsyncTracker,
   DshBootstrap,
   type DshCompatEngineStatus,
@@ -455,7 +461,6 @@ import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationT
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
 import { createDshSkillInstallProvider } from './libs/dsh/dshSkillInstallTool';
-import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
   getExpertStoreUrl,
@@ -473,7 +478,10 @@ import {
   syncEnterpriseConfig,
 } from './libs/enterpriseConfigSync';
 import { ExpertStore } from './libs/expertStore';
+import { ExternalBrowserHost } from './libs/externalBrowserHost';
 import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
+import { fitImageBytesForModel } from './libs/fitImageForModel';
+import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import {
   createOfficePreviewSession,
   createPreviewSession,
@@ -618,6 +626,7 @@ import {
   applySystemProxyEnv,
   resolveSystemProxyUrlForTargets,
   restoreOriginalProxyEnv,
+  setSessionProxyModeWithTimeout,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
 import { startUninstallAnalytics } from './libs/uninstallAnalytics';
@@ -696,7 +705,12 @@ import {
 import { SqliteStore } from './sqliteStore';
 import { StartupProfiler } from './startupProfiler';
 import { createTray, destroyTray, updateTrayMenu, updateTrayReminder } from './trayManager';
-import { videoConfirmationFailure, videoConfirmationQuestions, videoConfirmationReferences } from './videoGenerationConfirmation';
+import {
+  createVideoReferenceImagePreview,
+  videoConfirmationFailure,
+  videoConfirmationQuestions,
+  videoConfirmationReferences,
+} from './videoGenerationConfirmation';
 import {
   AppWindowStoreKey,
   MIN_APP_WINDOW_HEIGHT,
@@ -2215,6 +2229,7 @@ let createRealtimeAsrSessionForIm:
 let dshBootstrap: DshBootstrap | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let agentBrowserHost: AgentBrowserHost | null = null;
+let externalBrowserHost: ExternalBrowserHost | null = null;
 let webSearchHost: WebSearchHost | null = null;
 let browserCredentialService: BrowserCredentialService | null = null;
 let browserCredentialApprovalService: BrowserCredentialApprovalService | null = null;
@@ -2325,7 +2340,9 @@ const getDshBootstrap = (): DshBootstrap => {
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
       coworkStore: {
-        getSession: sessionId => storeInstance.getSession(sessionId),
+        messageEdits: storeInstance.messageEdits,
+        messageVersions: storeInstance.messageVersions,
+        getSession: (sessionId, messageLimit) => storeInstance.getSession(sessionId, messageLimit),
         getLatestUserMessage: sessionId => storeInstance.getLatestUserMessage(sessionId),
         addMessage: (sessionId, message) => storeInstance.addMessage(sessionId, message),
         updateMessageContent: (sessionId, messageId, content, metadata) => {
@@ -2452,6 +2469,7 @@ const getDshBootstrap = (): DshBootstrap => {
           optionSkillIds,
         });
       },
+      waitForMcpConnections: signal => getMcpRuntime().waitForPendingLaunchConnections(signal),
       instanceId: getStore().get<string>('installation_uuid') ?? undefined,
       ecosystemWindowTitle: t('dshEcosystemTitle'),
       mcpOAuthFetcher: (url, init) => session.defaultSession.fetch(url, init),
@@ -2530,6 +2548,20 @@ const getAgentBrowserHost = (): AgentBrowserHost => {
     });
   }
   return agentBrowserHost;
+};
+
+const getBrowserWebAccessConfig = () => normalizeBrowserWebAccessConfig(
+  getStore().get<AppConfigSettings>('app_config')?.browserWebAccess,
+);
+
+const getExternalBrowserHost = (): ExternalBrowserHost => {
+  externalBrowserHost ??= new ExternalBrowserHost({
+    profilePath: path.join(app.getPath('userData'), 'external-browser'),
+    getConfig: getBrowserWebAccessConfig,
+    useSystemProxy: () => getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config'))
+      && getBrowserWebAccessConfig().networkMode === BrowserNetworkMode.ProxyCompatible,
+  });
+  return externalBrowserHost;
 };
 
 const isWebSearchSkillEnabled = (): boolean => {
@@ -2742,6 +2774,14 @@ const isLobsteraiServerModelRef = (modelRef: string): boolean => {
   return getAllServerModelMetadata().some(model => model.modelId === normalized);
 };
 
+const broadcastAuthCreditsActivity = (): void => {
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(AuthIpcChannel.CreditsActivity);
+    }
+  });
+};
+
 const shouldRefreshServerQuotaForSession = (sessionId: string): boolean => {
   const session = getCoworkStore().getSession(sessionId);
   const sessionModelRef = session?.modelOverride?.trim();
@@ -2779,10 +2819,12 @@ const syncOpenClawConfig = async (options: {
   skillChangeBatch?: unknown;
   deferExternalSync?: boolean;
   skipHostToolsSync?: boolean;
+  waitForMcpServerId?: string;
 }): Promise<{
   success: boolean;
   changed: boolean;
   needsReauthMcpIds?: string[];
+  mcpServerConnected?: boolean;
   status?: DshCompatEngineStatus;
   error?: string;
 }> => {
@@ -3079,6 +3121,7 @@ const syncOpenClawConfig = async (options: {
     }, {
       deferExternalSync: options.deferExternalSync,
       skipHostToolsSync: options.skipHostToolsSync,
+      waitForMcpServerId: options.waitForMcpServerId,
     });
 
     if (result.needsReauthMcpIds.length > 0) {
@@ -3095,6 +3138,7 @@ const syncOpenClawConfig = async (options: {
       success: result.success,
       changed: result.changed,
       needsReauthMcpIds: result.needsReauthMcpIds,
+      mcpServerConnected: result.mcpServerConnected,
       status: bootstrap.getEngineStatus(),
       error: result.error,
     };
@@ -3273,6 +3317,13 @@ const bindCoworkRuntimeForwarder = (): void => {
     void coworkTurnUsageService?.settleStoppedTurn(sessionId, turn).catch((error) => {
       console.warn(`[TurnUsage] settlement failed for stopped session ${sessionId}.`, error);
     });
+    try {
+      if (shouldRefreshServerQuotaForSession(sessionId)) {
+        broadcastAuthCreditsActivity();
+      }
+    } catch {
+      // Credits refresh is best-effort after stopping a session.
+    }
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
@@ -3323,7 +3374,7 @@ const bindCoworkRuntimeForwarder = (): void => {
       if (shouldRefreshServerQuotaForSession(sessionId)) {
         windows.forEach(win => {
           if (!win.isDestroyed()) {
-            win.webContents.send('auth:quotaChanged');
+            win.webContents.send(AuthIpcChannel.QuotaChanged);
           }
         });
       }
@@ -3453,7 +3504,11 @@ const getMcpRuntime = (): McpRuntime => {
 const startAskUserServer = async (): Promise<void> => {
   const runtime = getMcpRuntime();
   await runtime.startAskUserServer();
-  runtime.setBrowserToolHandler(request => getAgentBrowserHost().handleToolRequest(request));
+  runtime.setBrowserToolHandler(request => (
+    getBrowserWebAccessConfig().displayMode === BrowserDisplayMode.External
+      ? getExternalBrowserHost()
+      : getAgentBrowserHost()
+  ).handleToolRequest(request));
   // Clean up any stale legacy web-search bridge file left behind by older installs.
   try {
     fs.rmSync(path.join(app.getPath('userData'), 'web-search-bridge.json'), { force: true });
@@ -3564,6 +3619,15 @@ const getIMGatewayManager = () => {
 
     let channelStatusBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
     getDshBootstrap().hostManager.setChannelEventHandler(async (payload) => {
+      if (payload?.type === DSH_POPO_PAIRING_EVENT) {
+        const { instanceId, senderId } = payload;
+        if (typeof instanceId !== 'string' || typeof senderId !== 'string' || !senderId
+          || !imGatewayManager?.getConfig().popo.instances.some(i => i.instanceId === instanceId && i.enabled && i.dmPolicy === 'pairing')) {
+          return { approved: false };
+        }
+        const result = requestPopoPairing(instanceId, senderId, path.join(app.getPath('userData'), DSH_PROFILE_DIR_NAME));
+        return { approved: result.approved, message: result.code ? t('imPopoPairingPrompt', { code: result.code }) : undefined };
+      }
       if (payload?.type === 'inbound') {
         const event = parseDshImInboundEvent(payload);
         if (event) {
@@ -3999,6 +4063,9 @@ const getSkinRuntimeController = (): SkinRuntimeController => {
         resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey)
       ),
       resolveMediaSelection: resolveMediaSelectionForSession,
+      resolveMediaReferences: sessionId => (
+        sessionId ? mediaReferencesBySession.get(sessionId) : undefined
+      ),
       onChanged: notifySkinChanged,
     });
   }
@@ -4302,14 +4369,15 @@ const updateTitleBarOverlay = () => {
 
 const applyProxyPreference = async (useSystemProxy: boolean): Promise<void> => {
   setSystemProxyEnabled(useSystemProxy);
-  // TUN-mode proxies capture traffic whatever this preference says.
-  await refreshFakeIpNetworkState();
-
-  try {
-    await session.defaultSession.setProxy({ mode: useSystemProxy ? 'system' : 'direct' });
-  } catch (error) {
-    console.error('[Main] Failed to apply session proxy mode:', error);
-  }
+  // TUN-mode proxies capture traffic whatever this preference says. Run DNS
+  // fake-IP probing and session proxy mode application concurrently with
+  // bounded timeouts so a wedged NetworkService or slow WPAD never hangs boot.
+  await Promise.all([
+    refreshFakeIpNetworkState().catch(error => {
+      console.warn('[Main] Failed to refresh fake-IP network state:', error);
+    }),
+    setSessionProxyModeWithTimeout(useSystemProxy ? 'system' : 'direct'),
+  ]);
 
   if (!useSystemProxy) {
     restoreOriginalProxyEnv();
@@ -4681,6 +4749,11 @@ if (!gotTheLock) {
       const browserHostConfigChanged = hasBrowserHostConfigChanged(previousAppConfig, nextAppConfig);
       if (browserHostConfigChanged || previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy) {
         agentBrowserHost?.refreshConfig();
+        if (externalBrowserHost && getBrowserWebAccessConfig().displayMode !== BrowserDisplayMode.External) {
+          await externalBrowserHost.dispose().catch(error => {
+            console.warn('[ExternalBrowserHost] Could not close after changing browser mode:', error);
+          });
+        }
       }
       refreshEndpointsTestMode(getStore());
       const proxyChanged = previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy;
@@ -6262,22 +6335,32 @@ if (!gotTheLock) {
         '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
         '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
       };
+      const maxImageBytes = 20 * 1024 * 1024;
+      const maxMediaBytes = 50 * 1024 * 1024;
+      const resolvedLocalFileBySource = new Map<string, string>();
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
-        const mime = MEDIA_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-        if (selectedModel.toLowerCase().includes('seedance') && mime.startsWith('video/')) {
+        const extensionMime = MEDIA_MIME[path.extname(filePath).toLowerCase()];
+        if (selectedModel.toLowerCase().includes('seedance') && extensionMime?.startsWith('video/')) {
           throw new Error(t('mediaTaskVideoUrlRequired'));
         }
         const stat = await fs.promises.stat(filePath);
-        if (stat.size > (mime.startsWith('image/') ? 20 : 50) * 1024 * 1024) throw new Error(t('mediaTaskInputTooLarge'));
+        if (stat.size > (extensionMime?.startsWith('image/') ? maxImageBytes : maxMediaBytes)) {
+          throw new Error(t('mediaTaskInputTooLarge'));
+        }
         const buf = await fs.promises.readFile(filePath);
+        // DSH stores attached images at content-addressed paths without extensions.
+        const mime = extensionMime ?? sniffImageMimeType(buf) ?? 'application/octet-stream';
         if (mime.startsWith('image/')) {
+          if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
           const dimensions = nativeImage.createFromBuffer(buf).getSize();
           const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
           if (dimensions.width < minimum || dimensions.height < minimum) throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
         }
-        return `data:${mime};base64,${buf.toString('base64')}`;
+        const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+        resolvedLocalFileBySource.set(dataUrl, filePath);
+        return dataUrl;
       };
       const resolveStringParam = async (name: string) => {
         if (typeof params[name] === 'string') {
@@ -6405,12 +6488,10 @@ if (!gotTheLock) {
       }
 
       if (mediaType === 'video') {
-        const references = videoConfirmationReferences(params, source => {
-          if (/^https?:\/\//i.test(source)) return source;
-          if (!source.startsWith('data:image/')) return undefined;
-          const image = nativeImage.createFromDataURL(source);
-          return image.isEmpty() ? undefined : `data:image/jpeg;base64,${image.resize({ height: 96 }).toJPEG(80).toString('base64')}`;
-        });
+        const references = videoConfirmationReferences(params, source => createVideoReferenceImagePreview(source, {
+          localPath: resolvedLocalFileBySource.get(source),
+          decodeDataUrl: dataUrl => nativeImage.createFromDataURL(dataUrl),
+        }));
         const confirmationInput = { model: selectedModel, params, prompt, portalUrl: getPortalTasksUrl(), references };
         const confirmResponse = await getMcpRuntime().askUserInternal(
           videoConfirmationQuestions(confirmationInput, modelCapability, t), undefined, {
@@ -9556,6 +9637,11 @@ if (!gotTheLock) {
     const profile = options?.profile;
 
     try {
+      if (getBrowserWebAccessConfig().displayMode === BrowserDisplayMode.External) {
+        await getExternalBrowserHost().open();
+        addStep(BrowserDiagnosticStep.BrowserStart, BrowserDiagnosticStatus.Success, 'browserDiagnosticStartReady');
+        return { success: true, steps };
+      }
       const engineStatus = getDshBootstrap().getEngineStatus();
       if (engineStatus.phase !== 'running') {
         addStep(BrowserDiagnosticStep.GatewayStatus, BrowserDiagnosticStatus.Error, 'browserDiagnosticGatewayNotRunning', engineStatus.message);
@@ -9991,6 +10077,7 @@ if (!gotTheLock) {
       _event: Electron.IpcMainInvokeEvent,
       options: {
         editRequest?: CoworkMessageEditRequest;
+        localMediaAttachments?: CoworkMessage['metadata']['localMediaAttachments'];
         analytics?: UsageContext;
         sessionId: string;
         prompt: string;
@@ -10009,8 +10096,6 @@ if (!gotTheLock) {
       },
     ) => {
       try {
-        // In-place message editing and recovery are retired in DSH v2 (replaced by Fork),
-        // so leftover `cowork_message_edits` rows must never block follow-up messages.
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -10050,6 +10135,9 @@ if (!gotTheLock) {
         }
 
         const runtime = getCoworkEngineRouter();
+        if (runtime.hasPendingMessageEdit(options.sessionId)) {
+          return { success: false, error: t('coworkEditRecoveryNeeded') };
+        }
         // A version switch interrupted by a restart must land before the next message does.
         await runtime.reconcileMessageVersionSwitch(options.sessionId);
         const coworkStoreInstance = getCoworkStore();
@@ -10155,6 +10243,7 @@ if (!gotTheLock) {
             kitReferences: options.kitReferences,
             resolvedKitCapabilities: options.resolvedKitCapabilities,
             imageAttachments,
+            localMediaAttachments: options.localMediaAttachments,
             mediaSelection: normalizedMediaSelection,
             workflowKind,
             mediaReferences: options.mediaReferences,
@@ -10218,32 +10307,28 @@ if (!gotTheLock) {
   ipcMain.handle(CoworkIpcChannel.SessionContinue, (event, options) =>
     continueCoworkSession(event, { ...options, editRequest: undefined }));
 
-  // Option B simplification: in-place historical message editing and `< 1 / 2 >`
-  // version switching are retired in favor of Fork-from-any-message (`ForkSession`).
-  ipcMain.handle(CoworkIpcChannel.CheckMessageEdit, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.EditMessage, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.SwitchMessageVersion, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.GetMessageEdit, () => ({
-    success: true,
-    pending: undefined,
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.RecoverMessageEdit, () => ({
-    success: false,
-    error: t('coworkEditUnsupported'),
-  }));
+  registerCoworkMessageEditHandlers(ipcMain, {
+    getStore: getCoworkStore,
+    getRuntime: getCoworkEngineRouter,
+    isRemoteManaged: sessionId => Boolean(getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId)),
+    hasPendingMedia: sessionId => [...pendingMediaTasks.values()].some(task => task.sessionId === sessionId),
+    resolveImageEdit: (sessionId, requestId) => {
+      try {
+        return imageEditing.resolve(sessionId, requestId);
+      } catch {
+        return undefined;
+      }
+    },
+    fitImage: fitImageBytesForModel,
+    resend: (event, request, prepared) => continueCoworkSession(event, {
+      ...prepared,
+      sessionId: request.sessionId,
+      prompt: request.prompt,
+      activeSkillIds: prepared.messageSkillIds,
+      runtimeSkillIds: prepared.skillIds,
+      editRequest: request,
+    }),
+  });
 
   ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
     _event,
@@ -10930,18 +11015,22 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(
-    'cowork:session:list',
-    async (_event, options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) => {
+    CoworkIpcChannel.ListSessions,
+    async (
+      _event,
+      options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string; pinnedFirst?: boolean },
+    ) => {
       try {
         const limit = options?.limit ?? COWORK_SESSION_PAGE_SIZE;
         const offset = options?.offset ?? 0;
         const agentId = options?.agentId;
         const searchQuery = options?.searchQuery?.trim() ?? '';
+        const pinnedFirst = options?.pinnedFirst;
         const store = getCoworkStore();
         const startedAt = searchQuery ? Date.now() : 0;
         const sessions = searchQuery
           ? store.searchSessions({ query: searchQuery, limit, offset, agentId })
-          : store.listSessions(limit, offset, agentId);
+          : store.listSessions(limit, offset, agentId, { pinnedFirst });
         const total = searchQuery
           ? store.countSearchSessions({ query: searchQuery, agentId })
           : store.countSessions(agentId);
@@ -11005,6 +11094,7 @@ if (!gotTheLock) {
           statuses: Array.isArray(query?.statuses) ? query.statuses : undefined,
           sessionIds: Array.isArray(query?.sessionIds) ? query.sessionIds : undefined,
           updatedSince: typeof query?.updatedSince === 'number' ? query.updatedSince : undefined,
+          pinnedOnly: query?.pinnedOnly === true ? true : undefined,
           limit: typeof query?.limit === 'number' ? query.limit : undefined,
         });
         console.debug(
@@ -11162,6 +11252,7 @@ if (!gotTheLock) {
     cacheDirectory: path.join(app.getPath('userData'), 'ppt-creation'),
   });
   registerPptCreationHandlers(pptCreationStore);
+  registerCoworkPinnedHandlers({ getCoworkStore });
   registerAgentHandlers({
     reportPresetPreparation: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
       schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.Prepare, ...fields }); },
@@ -13848,6 +13939,10 @@ if (!gotTheLock) {
   });
 
   registerMarkdownEditingHandlers(() => mainWindow);
+  registerArtifactWorkspaceHandlers({
+    getSessionCwd: sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd,
+    getDefaultCwd: () => getCoworkStore().getConfig().workingDirectory.trim() || undefined,
+  });
   officeEditing.register(() => mainWindow);
 
   // ---- artifact file watching ----
@@ -13973,10 +14068,22 @@ if (!gotTheLock) {
   ipcMain.handle(
     LocalWebServicesIpc.List,
     async (_event, options?: ListLocalWebServicesOptions) => {
+      let ownDevServerPort: number | null = null;
+      if (isDev) {
+        try {
+          const parsed = new URL(DEV_SERVER_URL);
+          if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]') {
+            const parsedPort = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+            if (Number.isInteger(parsedPort) && parsedPort > 0) ownDevServerPort = parsedPort;
+          }
+        } catch {
+          ownDevServerPort = null;
+        }
+      }
       const preferredPorts = sanitizeLocalWebServicePorts(options?.preferredPorts);
-      const ports = Array.from(new Set([...preferredPorts, ...LOCAL_WEB_SERVICE_PORTS])).sort(
-        (a, b) => a - b,
-      );
+      const ports = Array.from(new Set([...preferredPorts, ...LOCAL_WEB_SERVICE_PORTS]))
+        .filter(port => port !== ownDevServerPort)
+        .sort((a, b) => a - b);
       const results = await Promise.all(ports.map(port => probeLocalWebService(port)));
       return results.filter((service): service is LocalWebService => service !== null);
     },
@@ -14952,6 +15059,13 @@ if (!gotTheLock) {
         console.error('[AgentBrowserHost] Failed to flush persistent browser storage on quit:', error);
       });
     }
+    if (externalBrowserHost) {
+      currentAppCleanupStep = 'external-browser';
+      await externalBrowserHost.dispose().catch(error => {
+        console.warn('[ExternalBrowserHost] Could not close on quit:', error);
+      });
+      externalBrowserHost = null;
+    }
 
     // Stop Cowork sessions without blocking shutdown.
     if (coworkEngineRouter) {
@@ -15366,6 +15480,9 @@ if (!gotTheLock) {
             console.warn('[TurnUsage] failed to refresh completed background request usage.', error);
           });
         },
+        onServerRequestFinished: () => {
+          broadcastAuthCreditsActivity();
+        },
         getClientVersion: () => app.getVersion(),
         getEnterpriseAuthSessionSnapshot: captureEnterpriseAuthSessionSnapshot,
         onEnterpriseMembershipRevoked: event => {
@@ -15497,12 +15614,13 @@ if (!gotTheLock) {
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
 
-    // Start proxy BEFORE DSH spawn so DSH inherits proxy env vars and
-    // proxy-dependent providers (e.g. copilot) get the right baseURL.
-    profiler.mark('applyProxyPreference');
+    // Resolve system proxy asynchronously so it never blocks createWindow();
+    // DSH bootstrap chains onto `proxyPreferenceReady` so the child still
+    // inherits resolved proxy env vars without delaying first paint.
     const appConfig = getStore().get<AppConfigSettings>('app_config');
-    await applyProxyPreference(getUseSystemProxyFromConfig(appConfig));
-    profiler.measure('applyProxyPreference');
+    const proxyPreferenceReady = applyProxyPreference(getUseSystemProxyFromConfig(appConfig)).catch(error => {
+      console.warn('[Main] Startup proxy preference resolution failed (falling back to DIRECT):', error);
+    });
 
     profiler.mark('copilotLoopbackProxy');
     // A stable port keeps the Copilot baseUrl rendered into provider sync consistent.
@@ -15538,11 +15656,11 @@ if (!gotTheLock) {
     runAgentModelMigration();
     profiler.measure('agentModelMigration');
 
-    // One-time migration: existing installs switch to the in-app browser.
+    // Preserve existing installs' browser mode and connection configuration.
     profiler.mark('browserDisplayModeMigration');
     try {
-      if (migrateBrowserDisplayModeToInApp(getStore())) {
-        console.log('[Browser] switched the browser display mode to in-app for an existing install.');
+      if (migrateBrowserDisplayMode(getStore())) {
+        console.log('[Browser] updated the persisted browser display settings.');
       }
     } catch (err) {
       console.warn('[Browser] browser display mode migration failed (non-fatal):', err);
@@ -15555,7 +15673,8 @@ if (!gotTheLock) {
     });
     profiler.measure('startAskUserServer');
 
-    void bootstrapOpenClawEngine({ reason: 'startup' })
+    void proxyPreferenceReady
+      .then(() => bootstrapOpenClawEngine({ reason: 'startup' }))
       .then(() => {
         try {
           getCronJobService().startPolling();
@@ -15631,6 +15750,18 @@ if (!gotTheLock) {
       },
     });
     console.log('[Main] initApp: window created');
+
+    // Clean up legacy OpenClaw pure disposable caches asynchronously after the
+    // main window is created so removing thousands of NTFS files never blocks boot.
+    void cleanupLegacyOpenClawDisposableCaches(app.getPath('userData'))
+      .then(({ dirsRemoved }) => {
+        if (dirsRemoved > 0) {
+          console.log(`[MigrationV2] deferred disposable cache cleanup removed ${dirsRemoved} dir(s)`);
+        }
+      })
+      .catch(error => {
+        console.warn('[MigrationV2] deferred disposable cache cleanup failed (non-fatal):', error);
+      });
 
     // Refresh quota & model caches in background (SWR) without delaying window or DSH spawn.
     if (getAuthTokens()) {
@@ -15919,7 +16050,13 @@ if (!gotTheLock) {
   };
 
   // 启动应用
-  initApp().catch(console.error);
+  initApp().catch((error) => {
+    console.error('[Main] initApp failed:', error);
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      console.error('[Main] Fatal startup error before main window was created; exiting to release single-instance lock.');
+      app.exit(1);
+    }
+  });
 
   // 当所有窗口关闭时退出应用
   app.on('window-all-closed', () => {

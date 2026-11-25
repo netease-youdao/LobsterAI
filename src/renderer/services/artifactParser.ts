@@ -134,7 +134,7 @@ interface DedupeArtifactsOptions {
   defaultProjectDirectory?: string;
 }
 
-const getArtifactIdentityKeys = (artifact: Artifact): string[] => {
+export const getArtifactIdentityKeys = (artifact: Artifact): string[] => {
   const keys: string[] = [];
   if (artifact.filePath) {
     keys.push(`file:${artifact.type}:${normalizeFilePathForDedup(artifact.filePath)}`);
@@ -887,10 +887,8 @@ const REMOTE_MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 /**
  * Resolve a markdown link href to a local file path, or null when the href
  * is not a local path (web URL, anchor, mail link, ...). Accepts file://
- * URLs, absolute POSIX/Windows paths, ~-prefixed paths, and relative paths
- * that contain a separator. Bare names without any separator are rejected
- * as too ambiguous. Mirrors the href forms the message renderer treats as
- * local file links.
+ * URLs and local paths, including explicit relative links to a filename in
+ * the session working directory. The caller checks for supported file types.
  */
 function resolveLocalHrefPath(rawHref: string): string | null {
   let href = rawHref.trim();
@@ -911,15 +909,7 @@ function resolveLocalHrefPath(rawHref: string): string | null {
   // Any other scheme (http:, https:, mailto:, tel:, ...) is not a local path.
   if (!isWindowsAbsolute && /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
 
-  const candidate = normalizeArtifactFilePath(href);
-  if (!candidate) return null;
-  const isPosixAbsolute = candidate.startsWith('/');
-  const isHomePath = candidate === '~' || candidate.startsWith('~/') || candidate.startsWith('~\\');
-  const hasSeparator = candidate.includes('/') || candidate.includes('\\');
-  if (isPosixAbsolute || isWindowsAbsolute || isHomePath || hasSeparator) {
-    return candidate;
-  }
-  return null;
+  return normalizeArtifactFilePath(href) || null;
 }
 const REMOTE_IMAGE_URL_RE = /(?:^|[\s<("'`])(https?:\/\/[^\s<>"'`)]*\.(?:png|jpe?g|gif|webp|bmp|avif)(?:\?[^\s<>"'`)]*)?)(?:[\s>)"'`]|$)/gi;
 

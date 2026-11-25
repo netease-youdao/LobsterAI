@@ -6,6 +6,8 @@ import {
   CoworkSystemMessageKind,
   ModelReconnectStatus,
 } from '../../../common/coworkSystemMessages';
+import { CoworkTurnUsageStatus, TurnUsageModelType } from '../../../shared/cowork/llmTurnUsage';
+import { ModelPresetId, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import type { CoworkMessage } from '../../types/cowork';
 import { ActivityStepKind } from './constants';
 import { computeDiffStats } from './DiffView';
@@ -55,10 +57,10 @@ import {
   isToolGroupSettled,
   isTransientActivityItem,
   parseActivityPlan,
+  resolveTurnModelMetadata,
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
   TOOL_RESULT_COLLAPSED_FULL_DISPLAY_MAX_CHARS,
   turnHasSelfIndicatingActivity,
-  withTurnModelPreset,
 } from './messageDisplayUtils';
 
 const createToolResultMessage = (content: string): CoworkMessage => ({
@@ -1210,17 +1212,39 @@ test('IM/cron replies take the preset recorded on their user message', () => {
   const desktopLabel = getMessageModelLabel({ modelPresetId: 'balanced', resolvedModelId: 'deepseek-flash-YoudaoInner' });
   const user = { modelPresetId: 'balanced' as const, resolvedModelId: 'deepseek-flash-YoudaoInner' };
 
-  expect(getMessageModelLabel(withTurnModelPreset({ model: 'deepseek-flash-YoudaoInner' }, user))).toBe(desktopLabel);
-  expect(getMessageModelLabel(withTurnModelPreset({}, user))).toBe(desktopLabel);
+  expect(getMessageModelLabel(resolveTurnModelMetadata({ model: 'deepseek-flash-YoudaoInner' }, user))).toBe(desktopLabel);
+  expect(getMessageModelLabel(resolveTurnModelMetadata({}, user))).toBe(desktopLabel);
   expect(desktopLabel).not.toBe(getMessageModelLabel({ model: 'deepseek-flash-YoudaoInner' }));
 });
 
-test('a reply keeps its own preset and gets none without one on the user message', () => {
-  const assistant = { modelPresetId: 'ultimate' as const, resolvedModelId: 'glm-5' };
+test('a reply prefers its own model and can inherit the named model from the turn', () => {
+  const assistant = { modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'glm-5' };
 
-  expect(withTurnModelPreset(assistant, { modelPresetId: 'balanced' })).toBe(assistant);
-  expect(withTurnModelPreset({ model: 'glm-5' }, {})).toEqual({ model: 'glm-5' });
-  expect(withTurnModelPreset(undefined, { modelPresetId: 'balanced' })).toBeUndefined();
+  expect(resolveTurnModelMetadata(assistant, { modelPresetId: ModelPresetId.Balanced })).toEqual(assistant);
+  expect(getMessageModelLabel(resolveTurnModelMetadata({ model: 'glm-5' }, { resolvedModelId: 'qwen4-max' }))).toBe('glm-5');
+  expect(getMessageModelLabel(resolveTurnModelMetadata({}, { resolvedModelId: 'lobsterai-server/glm-5' }))).toBe('glm-5');
+  expect(resolveTurnModelMetadata(undefined, {})).toBeUndefined();
+});
+
+test('an unresolved preset uses the sole settled text model beside credits', () => {
+  const presetId = ModelPresetId.Ultimate;
+  const assistant = { modelPresetId: presetId, resolvedModelId: modelPresetModelId(presetId) };
+  const billedModel = 'qwen4-max';
+  const counts = { count: 1, creditsUsed: 10, uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
+  const usage = {
+    status: CoworkTurnUsageStatus.Settled,
+    models: [billedModel, 'image-model'],
+    modelUsage: [
+      { type: TurnUsageModelType.Image, model: 'image-model', ...counts },
+      { type: TurnUsageModelType.Text, model: billedModel, ...counts },
+    ],
+  };
+  expect(resolveTurnModelMetadata(assistant, undefined, usage)).toEqual({ modelPresetId: presetId, resolvedModelId: billedModel });
+  expect(resolveTurnModelMetadata(assistant, undefined, {
+    ...usage, modelUsage: [...usage.modelUsage, { type: TurnUsageModelType.Text, model: 'glm-5', ...counts }],
+  })).toEqual({ modelPresetId: presetId, resolvedModelId: undefined });
+  expect(resolveTurnModelMetadata(undefined, undefined, { status: usage.status, models: [billedModel] }))
+    .toEqual({ modelPresetId: undefined, resolvedModelId: billedModel });
 });
 
 test('recognizes pwsh as a bash-like command tool with PowerShell display name and command card semantics', () => {

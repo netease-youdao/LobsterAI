@@ -8,7 +8,7 @@
 // - `LobsterMemoryService` (`<userData>/workspaces/<agentId>/` + FTS5)
 // - `LobsterScheduler` (SQLite-backed scheduled tasks -> DSH turns + IM delivery)
 // - `McpOAuthManager` (encrypted Remote MCP OAuth 2.1 PKCE token manager)
-// - `DshChannelsBridge` (7 retained mainstream IM platforms via `@lobsterai/dsh-channels`)
+// - `DshChannelsBridge` (retained IM platforms via `@lobsterai/dsh-channels`)
 // - Isolated Dual-Track DSH Ecosystem Web View (`BrowserWindow`)
 
 import type Database from 'better-sqlite3';
@@ -52,6 +52,7 @@ import {
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
   backfillLegacyUserMemories,
+  cleanupLegacyOpenClawDisposableCaches,
   type LegacyDreamDiaryBackfillResult,
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
@@ -149,6 +150,7 @@ export interface DshBootstrapSyncOptions {
   deferExternalSync?: boolean;
   /** Skip `syncDynamicHostTools()` when the caller just ran it immediately prior. */
   skipHostToolsSync?: boolean;
+  waitForMcpServerId?: string;
 }
 
 export interface DshBootstrapStartOptions {
@@ -177,6 +179,7 @@ export interface DshBootstrapOptions {
   };
   getDefaultCwd: (agentId?: string) => string;
   getMemoryEnabled?: () => boolean;
+  waitForMcpConnections?: (signal: AbortSignal) => Promise<void>;
   resolveModelSelection?: (
     sessionId: string,
     override?: string | null,
@@ -252,6 +255,8 @@ export function createSingleFlightAsyncTracker<T>(): SingleFlightAsyncTracker<T>
  * Run the pure-offline 6-step OpenClaw -> DSH v2 migrator before SQLite is
  * opened by the app store, ensuring clean snapshot, archival, and rollback.
  */
+export { cleanupLegacyOpenClawDisposableCaches };
+
 export function runPreBootLegacyOpenClawMigration(options: {
   userDataDir: string;
   sqlitePath: string;
@@ -260,6 +265,7 @@ export function runPreBootLegacyOpenClawMigration(options: {
     const result = runLegacyOpenClawMigration({
       userDataDir: options.userDataDir,
       sqlitePath: options.sqlitePath,
+      deferDisposableCacheCleanup: true,
     });
     console.log(`[MigrationV2] startup check completed: status=${result.status}`);
     if (result.error) {
@@ -611,6 +617,7 @@ export class DshBootstrap {
       store: options.coworkStore,
       resolveModelSelection: options.resolveModelSelection,
       resolveAllowedSkillIds: options.resolveAllowedSkillIds,
+      waitForMcpConnections: options.waitForMcpConnections,
       resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
       onPermissionPresetChanged: async (preset, coworkSessionId) => {
         if (!coworkSessionId) {
@@ -679,7 +686,9 @@ export class DshBootstrap {
       const trimmed = entry.text.trim();
       if (!trimmed) return;
       if (entry.stream === 'stderr') {
-        console.warn(`[DSH:stderr] ${trimmed}`);
+        const level = /^\[dsh-logger\]\[(info|warn|error)\]\[/.exec(trimmed)?.[1] as 'info' | 'warn' | 'error' | undefined;
+        if (level) console[level](trimmed);
+        else console.warn(`[DSH:stderr] ${trimmed}`);
       } else {
         console.debug(`[DSH:stdout] ${trimmed}`);
       }
@@ -1120,6 +1129,7 @@ export class DshBootstrap {
     success: boolean;
     changed: boolean;
     needsReauthMcpIds: string[];
+    mcpServerConnected?: boolean;
     error?: string;
   }> {
     try {
@@ -1207,9 +1217,17 @@ export class DshBootstrap {
         this.mcpOAuthManager,
       );
       needsReauthIds = mcpSpecResult.needsReauthIds;
+      const waitForServerName = options.waitForMcpServerId !== undefined
+        ? mcpSpecResult.namesById.get(options.waitForMcpServerId)
+        : undefined;
+      let mcpServerConnected = false;
       coreSyncTasks.push(
-        this.hostManager.syncMcpServers(mcpSpecResult.servers).then((mcpSyncResult) => {
+        this.hostManager.syncMcpServers(
+          mcpSpecResult.servers,
+          waitForServerName ? { waitForServerName } : undefined,
+        ).then((mcpSyncResult) => {
           if (mcpSyncResult && typeof mcpSyncResult === 'object') {
+            mcpServerConnected = mcpSyncResult.serverConnected === true;
             if (mcpSyncResult.available === false) {
               console.warn('[DshBootstrap] syncMcpServers reported mcpManager unavailable');
             }
@@ -1249,7 +1267,12 @@ export class DshBootstrap {
         this.initialConfigSynced = true;
       }
 
-      return { success: true, changed: true, needsReauthMcpIds: needsReauthIds };
+      return {
+        success: true,
+        changed: true,
+        needsReauthMcpIds: needsReauthIds,
+        ...(options.waitForMcpServerId !== undefined ? { mcpServerConnected } : {}),
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[DshBootstrap] syncAllConfig failed:', message);

@@ -5,7 +5,7 @@ const RETAINED_IM_SET = new Set<string>(RETAINED_IM_PLATFORM_LIST);
 
 /**
  * Return visible IM platforms for the active locale, restricted to the
- * 7 retained mainstream platforms (`@lobsterai/dsh-channels`).
+ * retained platforms (`@lobsterai/dsh-channels`).
  */
 export const getVisibleIMPlatforms = (language: 'zh' | 'en'): readonly string[] => {
   const candidates = language === 'zh'

@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 
+import { DSH_SESSION_ID_PREFIX } from '../../shared/dshEngine/hostConstants';
 import { ModelPresetId, ModelPresetIpc, modelPresetModelId } from '../../shared/modelPresets/constants';
 import { ApiFormat, ModelThinkingLevel, OpenClawThinkingLevel } from '../../shared/providers';
 import { createModelPresetClient, registerModelPresetIpc } from './modelPresets';
@@ -137,5 +138,25 @@ describe('registerModelPresetIpc thinkingLevel forwarding', () => {
     expect(patchSession).toHaveBeenLastCalledWith('sess-1', expect.objectContaining({
       thinkingLevel: ModelThinkingLevel.Medium,
     }));
+
+    // 4. DSH native desktop chat session allows switching to a preset
+    sessionState.claudeSessionId = `${DSH_SESSION_ID_PREFIX}session-123`;
+    sessionState.modelPresetId = null;
+    sessionState.imPlatform = null;
+    const dshRes = await selectHandler({}, 'sess-1', ModelPresetId.Ultimate, undefined) as {
+      success: boolean;
+      data?: { modelPresetId?: string | null };
+    };
+    expect(dshRes.success).toBe(true);
+    expect(dshRes.data?.modelPresetId).toBe(ModelPresetId.Ultimate);
+
+    // 5. DSH IM session is rejected
+    sessionState.imPlatform = 'feishu';
+    const imRes = await selectHandler({}, 'sess-1', ModelPresetId.Balanced, undefined) as {
+      success: boolean;
+      error?: string;
+    };
+    expect(imRes.success).toBe(false);
+    expect(imRes.error).toBe('modelPresetInvalidSession');
   });
 });

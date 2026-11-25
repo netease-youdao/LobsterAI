@@ -1,3 +1,4 @@
+import { DocumentPlusIcon, FolderIcon, FolderOpenIcon } from '@heroicons/react/24/outline';
 import React, { useMemo, useState } from 'react';
 
 import { dedupeArtifactsForDisplay } from '@/services/artifactParser';
@@ -51,9 +52,20 @@ interface FileDirectoryViewProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   compact?: boolean;
+  onOpenLocalFile?: () => void;
+  onCreateBlankDocument?: () => void;
+  onRevealWorkspace?: () => void;
 }
 
-const FileDirectoryView: React.FC<FileDirectoryViewProps> = ({ artifacts, selectedId, onSelect, compact }) => {
+const FileDirectoryView: React.FC<FileDirectoryViewProps> = ({
+  artifacts,
+  selectedId,
+  onSelect,
+  compact,
+  onOpenLocalFile,
+  onCreateBlankDocument,
+  onRevealWorkspace,
+}) => {
   const [search, setSearch] = useState('');
 
   const sortedAndFiltered = useMemo(() => {
@@ -78,23 +90,76 @@ const FileDirectoryView: React.FC<FileDirectoryViewProps> = ({ artifacts, select
   }, [artifacts, search]);
 
   if (artifacts.length === 0) {
+    const hasActions = !compact && Boolean(onOpenLocalFile || onCreateBlankDocument || onRevealWorkspace);
     return (
-      <div className="flex-1 flex items-center justify-center text-muted text-sm p-4">
-        {t('artifactEmptyFiles')}
+      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+        <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-surface-raised text-muted">
+          <FolderIcon className="h-5 w-5" />
+        </div>
+        <p className="text-sm font-medium text-foreground">{t('artifactEmptyFiles')}</p>
+        {hasActions && (
+          <>
+            <p className="mt-1 max-w-[260px] text-xs leading-5 text-muted">
+              {t('artifactEmptyFilesHint')}
+            </p>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {onOpenLocalFile && (
+                <button
+                  type="button"
+                  onClick={onOpenLocalFile}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface-raised px-3 text-xs font-medium text-foreground transition-colors hover:border-foreground/15"
+                >
+                  <FolderOpenIcon className="h-3.5 w-3.5 text-secondary" />
+                  <span>{t('artifactNewTabOpenLocalFile')}</span>
+                </button>
+              )}
+              {onCreateBlankDocument && (
+                <button
+                  type="button"
+                  onClick={onCreateBlankDocument}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised"
+                >
+                  <DocumentPlusIcon className="h-3.5 w-3.5 text-secondary" />
+                  <span>{t('artifactNewTabNewDocument')}</span>
+                </button>
+              )}
+              {onRevealWorkspace && (
+                <button
+                  type="button"
+                  onClick={onRevealWorkspace}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+                >
+                  <span>{t('artifactNewTabRevealWorkspace')}</span>
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
     );
   }
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-3 py-2 shrink-0">
+      <div className="px-3 py-2 shrink-0 flex items-center gap-1.5">
         <input
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder={t('artifactSearchPlaceholder')}
-          className="w-full px-2 py-1 text-xs rounded border border-border bg-surface text-foreground placeholder:text-muted outline-none focus:border-primary transition-colors"
+          className="min-w-0 flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-border bg-surface-raised/60 text-foreground placeholder:text-muted outline-none focus:border-primary transition-colors"
         />
+        {!compact && onOpenLocalFile && (
+          <button
+            type="button"
+            onClick={onOpenLocalFile}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+            title={t('artifactNewTabOpenLocalFile')}
+            aria-label={t('artifactNewTabOpenLocalFile')}
+          >
+            <FolderOpenIcon className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         {sortedAndFiltered.length === 0 ? (

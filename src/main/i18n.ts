@@ -44,8 +44,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     xaiAuthStoreFailed: '无法访问 xAI 认证存储，请检查 AI 引擎状态后重试。',
     openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
     openClawPluginVerificationFailed: 'AI 引擎插件校验失败，已停止自动重启。请处理以下插件错误后重试：\n{error}',
-    openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重新启动网关：\n{error}',
-    openClawStartupCompatibilityRepairing: '正在备份并修复旧版网关状态…',
+    openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重启 AI 引擎：\n{error}',
+    openClawStartupCompatibilityRepairing: '正在备份并修复旧版引擎状态…',
     openClawRepairCommandTimeout: '修复命令 {command} 等待 {seconds} 秒后超时，修复已停止。诊断记录：{path}',
     openClawRepairCommandFailed: '修复命令 {command} 未完成。诊断记录：{path}',
     openClawDreamingStateRepairing: '正在备份并处理旧版记忆状态…',
@@ -177,7 +177,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '所选模型的最新设置还没生效，会在正在运行的任务结束后应用。可以先停止正在运行的任务，或稍后重新发送。',
     openClawConfigApplyOverdue:
       'OpenClaw 正在等待活动任务结束后应用配置。请完成或停止活动任务，然后重试。',
-    openClawConfigApplyStalled: '最新配置在重启网关后仍无法应用到 OpenClaw（{detail}）。',
+    openClawConfigApplyStalled: '最新配置在重启 AI 引擎后仍无法应用（{detail}）。',
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorNetworkErrorViaSystemProxy:
@@ -394,8 +394,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoFillWebhookCredentials: '请补全 appKey、appSecret、token 和 aesKey 后重新测试连通性。',
     imPopoFillWsCredentials: '请补全 appKey、appSecret 和 aesKey 后重新测试连通性。',
     imPopoConfigReady: 'POPO 配置已就绪。',
-    imPopoOpenClawHint: 'POPO 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
-    imPopoConfigReadyOpenClaw: 'POPO 配置已就绪，通过 OpenClaw 运行。',
+    imPopoConnected: 'POPO 机器人已连接到 DSH 渠道。',
+    imPopoPairingPrompt: '请在 LobsterAI 的此机器人设置中批准配对码 {code}，然后重新发送消息。',
 
     // Email Channel
     emailSettings: '邮件设置',
@@ -492,8 +492,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     xaiAuthStoreFailed: 'Unable to access the xAI credential store. Check the AI engine status and retry.',
     openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
     openClawPluginVerificationFailed: 'AI engine plugin verification failed. Automatic restarts stopped. Fix the plugin error and retry:\n{error}',
-    openClawStartupMigrationRefused: 'AI engine startup migrations did not complete. Automatic restarts stopped. Handle the legacy data below, then restart the gateway:\n{error}',
-    openClawStartupCompatibilityRepairing: 'Backing up and repairing legacy gateway state…',
+    openClawStartupMigrationRefused: 'AI engine startup migrations did not complete. Automatic restarts stopped. Handle the legacy data below, then restart the AI engine:\n{error}',
+    openClawStartupCompatibilityRepairing: 'Backing up and repairing legacy engine state…',
     openClawDreamingStateRepairing: 'Backing up and handling legacy memory state…',
     openClawRuntimeFilesMissing: 'AI engine runtime files are missing or unreadable. Startup has stopped. Quit the app and reinstall using the latest installer containing the fix, then try again.',
     openClawLoopbackBlocked: 'Local connection self-test failed ({code}). AI engine startup is paused.',
@@ -634,7 +634,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       "The latest settings for the selected model haven't taken effect yet; they apply once the running tasks finish. Stop the running tasks, or send again later.",
     openClawConfigApplyOverdue:
       'OpenClaw is waiting for active tasks to finish before applying configuration. Complete or stop the active tasks, then try again.',
-    openClawConfigApplyStalled: 'The latest configuration still could not be applied to OpenClaw after restarting the gateway ({detail}).',
+    openClawConfigApplyStalled: 'The latest configuration still could not be applied after restarting the AI engine ({detail}).',
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorNetworkErrorViaSystemProxy:
@@ -887,9 +887,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoFillWsCredentials:
       'Please provide the appKey, appSecret, and aesKey and test connectivity again.',
     imPopoConfigReady: 'POPO configuration is ready.',
-    imPopoOpenClawHint:
-      'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
+    imPopoConnected: 'The POPO bot is connected to the DSH channel.',
+    imPopoPairingPrompt: 'Approve pairing code {code} in this bot’s LobsterAI settings, then send your message again.',
 
     // Email Channel
     emailSettings: 'Email Settings',

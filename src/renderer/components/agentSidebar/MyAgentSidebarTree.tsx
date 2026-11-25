@@ -39,16 +39,17 @@ import {
   type CoworkSwitchAgentEventDetail,
   CoworkUiEvent,
 } from '../cowork/constants';
-import UserGroupIcon from '../icons/UserGroupIcon';
 import AgentSidebarFilteredView from './AgentSidebarFilteredView';
 import AgentTaskRow from './AgentTaskRow';
-import AgentTreeNode from './AgentTreeNode';
+import AgentTreeNode, { AgentAvatar } from './AgentTreeNode';
 import {
   type AgentSidebarBatchItem,
   createSessionBatchItem,
   createSessionBatchKey,
 } from './batchSelection';
+import { AgentTaskRowVariant } from './constants';
 import MyAgentSidebarHeader from './MyAgentSidebarHeader';
+import PinnedTasksSection from './PinnedTasksSection';
 import {
   type AgentSidebarActivityItem,
   isSidebarTaskFilterActive,
@@ -64,9 +65,9 @@ interface MyAgentSidebarTreeProps {
   deletedSessionIds: string[];
   selectedKeys: Set<string>;
   taskFilter: SidebarTaskFilter;
+  onTaskFilterChange: (filter: SidebarTaskFilter) => void;
   onClearTaskFilter: () => void;
   onShowCowork: () => void;
-  onTaskFilterSummaryChange: (hasUnreadCompletedTasks: boolean) => void;
   onTaskSelected?: (params: {
     agentType: 'main' | 'custom';
     isCurrentSession: boolean;
@@ -149,9 +150,9 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   deletedSessionIds,
   selectedKeys,
   taskFilter,
+  onTaskFilterChange,
   onClearTaskFilter,
   onShowCowork,
-  onTaskFilterSummaryChange,
   onTaskSelected,
   onSidebarAction,
   onToggleSelection,
@@ -177,10 +178,14 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
   );
   const {
     agentNodes,
-    hasUnreadCompletedTasks,
+    pinnedTaskItems,
+    isPinnedSectionCollapsed,
+    pinnedTaskSortMode,
+    taskStatusCounts,
     patchTaskPreview,
     removeTaskPreview,
     removeTaskPreviews,
+    reorderPinnedTasks,
     removeAgentTaskPreviews,
     retryLoadTasks,
     loadMoreTasks,
@@ -189,6 +194,9 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     expandTasks,
     collapseTasks,
     toggleAgentExpanded,
+    togglePinnedSectionCollapsed,
+    expandPinnedSection,
+    setPinnedTaskSortMode,
   } = useAgentSidebarState();
   const isTaskFilterActive = isSidebarTaskFilterActive(taskFilter);
   const filterResults = useSidebarTaskFilterResults(taskFilter);
@@ -221,10 +229,6 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     isTaskFilterActive,
     pendingPermissionSessionIds,
   ]);
-
-  useEffect(() => {
-    onTaskFilterSummaryChange(hasUnreadCompletedTasks);
-  }, [hasUnreadCompletedTasks, onTaskFilterSummaryChange]);
 
   const getAgentType = useCallback((agentId: string): 'main' | 'custom' => (
     isDefaultAgentId(agentId) ? 'main' : 'custom'
@@ -393,9 +397,29 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       targetPinned: pinned,
     });
     if (result.success) {
-      patchTaskPreview(task.id, { pinned, pinOrder: result.pinOrder }, { preserveUpdatedAt: true });
+      patchTaskPreview(
+        task.id,
+        { pinned, pinOrder: result.pinOrder },
+        { preserveUpdatedAt: true, fallbackTask: task },
+      );
+      if (pinned) {
+        expandPinnedSection();
+      }
     }
   };
+
+  const handleReorderPinnedTasks = useCallback(async (orderedSessionIds: string[]) => {
+    const updated = await reorderPinnedTasks(orderedSessionIds);
+    onSidebarAction?.('task_pin_reorder', {
+      result: updated ? 'success' : 'failed',
+      visibleTaskCount: orderedSessionIds.length,
+    });
+    if (!updated) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('myAgentSidebarPinnedReorderFailed'),
+      }));
+    }
+  }, [onSidebarAction, reorderPinnedTasks]);
 
   const handleRenameTask = async (task: AgentSidebarTaskNode, title: string) => {
     const renamed = await coworkService.renameSession(task.id, title);
@@ -518,6 +542,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     >
       <AgentTreeNode
         agent={agent}
+        isCurrentAgent={agent.id === currentAgentId}
         isBatchMode={isBatchMode}
         batchAgentId={batchAgentId}
         selectedKeys={selectedKeys}
@@ -571,8 +596,40 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
     </SortableAgentNode>
   );
 
+  const renderPinnedTask = (item: AgentSidebarActivityItem) => {
+    const { agent, task } = item;
+    const agentName = getAgentDisplayName(agent);
+
+    return (
+      <AgentTaskRow
+        key={`pinned:${task.id}`}
+        task={task}
+        variant={AgentTaskRowVariant.Pinned}
+        isBatchMode={false}
+        isSelected={false}
+        hoverMeta={{
+          agentName,
+          agentIcon: <AgentAvatar agent={agent} className="h-3.5 w-3.5" />,
+          agentWorkingDirectory: agent.workingDirectory,
+        }}
+        isSelectionDisabled={isBatchMode}
+        showBatchOption={false}
+        onSelect={() => void handleSelectTask(task)}
+        onDelete={() => handleDeleteTask(task)}
+        onShare={() => handleShareTask(task)}
+        onTogglePin={(pinned) => handleToggleTaskPin(task, pinned)}
+        onRename={(title) => handleRenameTask(task, title)}
+        onToggleSelection={() => onToggleSelection(createSessionBatchKey(task.id), task.agentId)}
+        onEnterBatchMode={() => handleEnterBatchMode(task)}
+        onSidebarAction={onSidebarAction}
+        analyticsParams={getTaskActionParams(task)}
+      />
+    );
+  };
+
   const renderActivityTask = (item: AgentSidebarActivityItem) => {
     const { agent, task } = item;
+    const agentName = getAgentDisplayName(agent);
     const isBatchAgent = isBatchMode && batchAgentId === agent.id;
     const isOutsideBatchAgent = isBatchMode && batchAgentId !== null && batchAgentId !== agent.id;
 
@@ -580,10 +637,16 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       <AgentTaskRow
         key={task.id}
         task={task}
+        variant={AgentTaskRowVariant.Activity}
         isBatchMode={isBatchAgent}
         isSelected={selectedKeys.has(createSessionBatchKey(task.id))}
-        contextLabel={getAgentDisplayName(agent)}
-        contextIcon={<UserGroupIcon className="h-3 w-3" />}
+        contextLabel={agentName}
+        contextIcon={<AgentAvatar agent={agent} className="h-3.5 w-3.5" />}
+        hoverMeta={{
+          agentName,
+          agentIcon: <AgentAvatar agent={agent} className="h-3.5 w-3.5" />,
+          agentWorkingDirectory: agent.workingDirectory,
+        }}
         isSelectionDisabled={isOutsideBatchAgent}
         showBatchOption={!isBatchMode}
         onSelect={() => void handleSelectTask(task)}
@@ -642,6 +705,29 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
 
   return (
     <div className="pb-3">
+      {!isTaskFilterActive && pinnedTaskItems.length > 0 && (
+        <PinnedTasksSection
+          items={pinnedTaskItems}
+          isCollapsed={isPinnedSectionCollapsed}
+          sortMode={pinnedTaskSortMode}
+          isBatchMode={isBatchMode}
+          onToggleCollapsed={togglePinnedSectionCollapsed}
+          onSortModeChange={setPinnedTaskSortMode}
+          onReorder={handleReorderPinnedTasks}
+          renderTask={renderPinnedTask}
+        />
+      )}
+
+      <MyAgentSidebarHeader
+        taskFilter={taskFilter}
+        taskStatusCounts={taskStatusCounts}
+        onTaskFilterChange={onTaskFilterChange}
+        onCreateAgent={() => {
+          setCreateAgentSource('home_agent_sidebar');
+          setIsCreateOpen(true);
+        }}
+      />
+
       {isTaskFilterActive ? (
         <AgentSidebarFilteredView
           filter={taskFilter}
@@ -654,22 +740,13 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
       ) : (
         <div role="tree" aria-label={i18nService.t('myAgents')}>
           {hasPinnedAgents && (
-            <div className="space-y-0.5">
-              <div className="sticky top-0 z-30 -ml-[6px] flex h-10 w-[calc(100%+12px)] items-center bg-surface-raised pl-2 pr-1">
-                <h2 className="min-w-0 truncate text-xs font-normal text-secondary/80">
-                  {i18nService.t('myAgentSidebarPinned')}
-                </h2>
-              </div>
+            <div className="mb-1.5 space-y-0.5">
               {renderSortableAgentGroup(pinnedAgentNodes)}
+              {projectAgentNodes.length > 0 && (
+                <div className="mx-2.5 !mt-1.5 border-t border-border/60" role="separator" />
+              )}
             </div>
           )}
-
-          <MyAgentSidebarHeader
-            onCreateAgent={() => {
-              setCreateAgentSource('home_agent_sidebar');
-              setIsCreateOpen(true);
-            }}
-          />
 
           {agentNodes.length === 0 ? (
             <div className="px-3 py-6 text-center">

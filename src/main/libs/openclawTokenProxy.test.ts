@@ -1312,3 +1312,90 @@ test('normalizes /v1/lobsterai-server/v1/messages without duplicating /v1 and re
     stopOpenClawTokenProxy();
   }
 });
+
+test('notifies onServerRequestFinished for active-account 2xx responses only', async () => {
+  const token = 'd'.repeat(48);
+  let owner = 'account-a:1';
+  const onServerRequestFinished = vi.fn();
+
+  let switchedStreamController!: ReadableStreamDefaultController<Uint8Array>;
+  const switchedBody = new ReadableStream<Uint8Array>({
+    start: controller => { switchedStreamController = controller; },
+  });
+
+  vi.mocked(net.fetch)
+    .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'ok' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'boom' } }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(switchedBody, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+
+  const { port } = await startOpenClawTokenProxy({
+    getAuthTokens: () => ({ accessToken: 'access', refreshToken: 'refresh' }),
+    refreshToken: vi.fn(),
+    getServerBaseUrl: () => 'https://server.example',
+    getClientVersion: () => 'test',
+    getInboundAuthToken: () => token,
+    getSessionKey: () => owner,
+    onServerRequestFinished,
+  });
+
+  try {
+    const okRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-flash', messages: [] }),
+    });
+    expect(okRes.status).toBe(200);
+    await okRes.text();
+    expect(onServerRequestFinished).toHaveBeenCalledTimes(1);
+    expect(onServerRequestFinished).toHaveBeenLastCalledWith({
+      owner: 'account-a:1',
+      completed: true,
+      status: 200,
+    });
+
+    const errRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-flash', messages: [] }),
+    });
+    expect(errRes.status).toBe(500);
+    await errRes.text();
+    expect(onServerRequestFinished).toHaveBeenCalledTimes(1);
+
+    switchedStreamController.enqueue(Buffer.from('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+    await new Promise<void>((resolve, reject) => {
+      let flipped = false;
+      const req = http.request({
+        host: '127.0.0.1',
+        port,
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      }, res => {
+        res.on('data', () => {
+          if (flipped) return;
+          flipped = true;
+          owner = 'account-b:2';
+          switchedStreamController.enqueue(Buffer.from('data: [DONE]\n\n'));
+          switchedStreamController.close();
+        });
+        res.on('end', resolve);
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ model: 'deepseek-flash', messages: [] }));
+    });
+    expect(onServerRequestFinished).toHaveBeenCalledTimes(1);
+  } finally {
+    stopOpenClawTokenProxy();
+  }
+});

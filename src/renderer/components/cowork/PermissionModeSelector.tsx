@@ -1,9 +1,9 @@
 import {
-  BoltIcon,
   CheckIcon,
   ChevronDownIcon,
   EyeIcon,
   ShieldCheckIcon,
+  ShieldExclamationIcon,
 } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -19,6 +19,12 @@ import {
   shouldApplyPermissionPresetEvent,
 } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
+import FullAccessConfirmDialog from './FullAccessConfirmDialog';
+import {
+  getPermissionPresetOption,
+  PERMISSION_PRESET_OPTIONS,
+  requiresPermissionPresetConfirmation,
+} from './permissionPresetOptions';
 
 interface PermissionModeSelectorProps {
   sessionId?: string | null;
@@ -26,37 +32,11 @@ interface PermissionModeSelectorProps {
   disabled?: boolean;
 }
 
-interface PresetOptionMeta {
-  value: DshPermissionPreset;
-  labelKey: string;
-  descKey: string;
-  Icon: React.ComponentType<{ className?: string }>;
-  accentClass: string;
-}
-
-const PRESET_OPTIONS: readonly PresetOptionMeta[] = [
-  {
-    value: DshPermissionPreset.ReadOnly,
-    labelKey: 'coworkPermissionModeReadOnly',
-    descKey: 'coworkPermissionModeReadOnlyDesc',
-    Icon: EyeIcon,
-    accentClass: 'text-secondary',
-  },
-  {
-    value: DshPermissionPreset.WorkspaceWrite,
-    labelKey: 'coworkPermissionModeWorkspaceWrite',
-    descKey: 'coworkPermissionModeWorkspaceWriteDesc',
-    Icon: ShieldCheckIcon,
-    accentClass: 'text-secondary',
-  },
-  {
-    value: DshPermissionPreset.FullAccess,
-    labelKey: 'coworkPermissionModeFullAccess',
-    descKey: 'coworkPermissionModeFullAccessDesc',
-    Icon: BoltIcon,
-    accentClass: 'text-amber-600 dark:text-amber-400',
-  },
-];
+const PRESET_ICONS: Record<DshPermissionPreset, React.ComponentType<{ className?: string }>> = {
+  [DshPermissionPreset.ReadOnly]: EyeIcon,
+  [DshPermissionPreset.WorkspaceWrite]: ShieldCheckIcon,
+  [DshPermissionPreset.FullAccess]: ShieldExclamationIcon,
+};
 
 const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   sessionId,
@@ -66,6 +46,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const [preset, setPreset] = useState<DshPermissionPreset>(DEFAULT_DSH_PERMISSION_PRESET);
   const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [confirmFullAccessOpen, setConfirmFullAccessOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -75,6 +56,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     : undefined;
 
   useEffect(() => {
+    setConfirmFullAccessOpen(false);
     let active = true;
     void dshHostService.getPermissionPreset(normalizedSessionId).then((res) => {
       if (active) setPreset(res.preset);
@@ -144,11 +126,10 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     };
   }, [open]);
 
-  const currentOption = PRESET_OPTIONS.find((opt) => opt.value === preset) ?? PRESET_OPTIONS[1];
-  const CurrentIcon = currentOption.Icon;
+  const currentOption = getPermissionPresetOption(preset);
+  const CurrentIcon = PRESET_ICONS[currentOption.value];
 
-  const handleSelect = async (nextPreset: DshPermissionPreset) => {
-    setOpen(false);
+  const applyPreset = async (nextPreset: DshPermissionPreset) => {
     if (nextPreset === preset || updating) return;
     setUpdating(true);
     try {
@@ -157,18 +138,25 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       const res = await dshHostService.setPermissionPreset(nextPreset, normalizedSessionId);
       if (res.ok) {
         setPreset(res.preset ?? nextPreset);
-        const nextMeta = PRESET_OPTIONS.find((opt) => opt.value === nextPreset);
-        if (nextMeta) {
-          window.dispatchEvent(new CustomEvent('app:showToast', {
-            detail: i18nService
-              .t('coworkPermissionModeSwitchedToast')
-              .replace('{mode}', i18nService.t(nextMeta.labelKey)),
-          }));
-        }
       }
     } finally {
       setUpdating(false);
     }
+  };
+
+  const handleSelect = (nextPreset: DshPermissionPreset) => {
+    setOpen(false);
+    if (nextPreset === preset || updating) return;
+    if (requiresPermissionPresetConfirmation(preset, nextPreset)) {
+      setConfirmFullAccessOpen(true);
+      return;
+    }
+    void applyPreset(nextPreset);
+  };
+
+  const handleConfirmFullAccess = async () => {
+    await applyPreset(DshPermissionPreset.FullAccess);
+    setConfirmFullAccessOpen(false);
   };
 
   return (
@@ -178,12 +166,12 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         type="button"
         disabled={disabled || updating}
         onClick={() => setOpen((prev) => !prev)}
-        className={`flex items-center gap-1.5 rounded-lg transition-colors ${
+        className={`flex items-center gap-1 rounded-lg transition-colors ${
           compact
-            ? 'h-8 px-1.5 hover:bg-surface-raised'
-            : 'h-7 px-2 hover:bg-background/80'
+            ? 'h-8 w-8 justify-center hover:bg-surface-raised'
+            : 'h-8 px-2 hover:bg-surface-raised'
         } text-[13px] ${currentOption.accentClass} hover:text-foreground disabled:opacity-50 ${
-          open ? (compact ? 'bg-surface-raised text-foreground' : 'bg-background/80 text-foreground') : ''
+          open ? 'bg-surface-raised text-foreground' : ''
         }`}
         aria-label={`${i18nService.t('coworkPermissionModeLabel')}: ${i18nService.t(currentOption.labelKey)}`}
         aria-expanded={open}
@@ -192,8 +180,8 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         <CurrentIcon className="h-4 w-4 shrink-0" />
         {!compact && (
           <>
-            <span className="max-w-[110px] truncate text-xs">
-              {i18nService.t(currentOption.labelKey)}
+            <span className="max-w-[96px] truncate text-xs">
+              {i18nService.t(currentOption.shortLabelKey)}
             </span>
             <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" />
           </>
@@ -210,8 +198,8 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
           <div className="px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-wider text-secondary">
             {i18nService.t('coworkPermissionModeLabel')}
           </div>
-          {PRESET_OPTIONS.map((option) => {
-            const OptionIcon = option.Icon;
+          {PERMISSION_PRESET_OPTIONS.map((option) => {
+            const OptionIcon = PRESET_ICONS[option.value];
             const selected = option.value === preset;
             return (
               <button
@@ -219,7 +207,7 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
-                onClick={() => void handleSelect(option.value)}
+                onClick={() => handleSelect(option.value)}
                 className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
                   selected
                     ? 'bg-primary/10 text-foreground'
@@ -244,6 +232,12 @@ const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         </div>,
         document.body,
       )}
+      <FullAccessConfirmDialog
+        isOpen={confirmFullAccessOpen}
+        confirming={updating}
+        onCancel={() => setConfirmFullAccessOpen(false)}
+        onConfirm={() => { void handleConfirmFullAccess(); }}
+      />
     </div>
   );
 };

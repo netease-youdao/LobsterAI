@@ -91,6 +91,7 @@ import {
   LobsterScheduler,
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
+import { preserveLegacyImBotIdentities } from './legacyImBotIdentities';
 import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
@@ -121,6 +122,14 @@ export interface RunLegacyOpenClawMigrationOptions {
   sqlitePath: string;
   /** Optional clock override for deterministic backup folder timestamps. */
   now?: () => Date;
+  /**
+   * When true (default for app startup), skip synchronous deletion of
+   * disposable cache directories so window creation is never blocked by
+   * removing tens of thousands of NTFS files; callers run
+   * `cleanupLegacyOpenClawDisposableCaches(userDataDir)` asynchronously after
+   * the main window is shown.
+   */
+  deferDisposableCacheCleanup?: boolean;
 }
 
 export interface LegacyOpenClawMigrationResult {
@@ -131,7 +140,6 @@ export interface LegacyOpenClawMigrationResult {
 }
 
 const RETIRED_IM_PLATFORMS: readonly string[] = [
-  RetiredImPlatform.Popo,
   RetiredImPlatform.Nim,
   RetiredImPlatform.NeteaseBee,
   RetiredImPlatform.Email,
@@ -2658,48 +2666,17 @@ export function backfillLegacyUserMemories(options: {
   }
 }
 
-/**
- * Resets any persisted `app_config.browserWebAccess` external browser mode to
- * `in-app`, strips dead external-only fields, and preserves all reusable
- * browser settings (`networkMode`, `credentialUseMode`, `credentialSaveMode`,
- * `blockedHostnames`, etc.).
- *
- * When `incompatibleEntries` / `archivedModules` are supplied during the full
- * v2 migration and an external browser configuration was active, archives the
- * removed external browser fields and records an `external_chrome` notice.
- */
-function migrateLegacyBrowserDisplayModeConfig(
-  db: Database.Database,
-  incompatibleEntries?: TarEntryInput[],
-  archivedModules?: MigrationV2ArchivedItem[],
-): number {
+function migrateLegacyBrowserDisplayModeConfig(db: Database.Database): void {
   const rawAppConfig = getKv(db, APP_CONFIG_KEY);
-  if (!rawAppConfig) return 0;
+  if (!rawAppConfig) return;
 
   const parsedAppConfig = safeParseJsonObject(rawAppConfig);
-  if (!parsedAppConfig) return 0;
+  if (!parsedAppConfig) return;
 
-  const result = migrateBrowserDisplayModeConfig(parsedAppConfig);
-  if (!result.changed) return 0;
-
-  setKv(db, APP_CONFIG_KEY, JSON.stringify(result.nextConfig));
-
-  if (!result.migratedExternalConfig) return 0;
-
-  if (incompatibleEntries) {
-    incompatibleEntries.push({
-      archivePath: 'sqlite/external_browser_config.json',
-      content: Buffer.from(JSON.stringify(result.archivedExternalConfig ?? {}, null, 2), 'utf8'),
-    });
+  const migrated = migrateBrowserDisplayModeConfig(parsedAppConfig);
+  if (migrated !== parsedAppConfig) {
+    setKv(db, APP_CONFIG_KEY, JSON.stringify(migrated));
   }
-  if (archivedModules) {
-    archivedModules.push({
-      category: 'external_chrome',
-      label: 'External browser configuration (migrated to in-app browser)',
-      count: 1,
-    });
-  }
-  return 1;
 }
 
 /**
@@ -2892,6 +2869,68 @@ function migrateLegacyMcpLaunchResolutions(db: Database.Database): {
 }
 
 /**
+ * Pure disposable cache directories from legacy OpenClaw / experimental DSH
+ * builds. Never includes `openclaw/state/media`, workspaces, agents, or user
+ * extensions so historical conversation artifacts stay intact at their
+ * original paths.
+ */
+export function getLegacyOpenClawDisposableCacheDirs(userDataDir: string): string[] {
+  const openclawRootDir = path.join(userDataDir, 'openclaw');
+  const openclawStateDir = path.join(openclawRootDir, 'state');
+  return [
+    path.join(openclawRootDir, 'logs'),
+    path.join(openclawRootDir, '.compile-cache'),
+    path.join(openclawRootDir, 'repair-backups'),
+    path.join(openclawStateDir, '.compile-cache'),
+    path.join(openclawStateDir, 'cache'),
+    path.join(openclawStateDir, 'tmp'),
+    path.join(openclawStateDir, 'worktrees'),
+    path.join(userDataDir, 'dsh-runtime'), // Old experimental 160MB runtime cache
+  ];
+}
+
+/**
+ * Asynchronously remove legacy OpenClaw disposable caches without blocking the
+ * Electron main thread. Safe to call on every startup after window creation.
+ */
+export async function cleanupLegacyOpenClawDisposableCaches(
+  userDataDir: string,
+): Promise<{ dirsRemoved: number }> {
+  let dirsRemoved = 0;
+  for (const dir of getLegacyOpenClawDisposableCacheDirs(userDataDir)) {
+    try {
+      await fs.promises.access(dir);
+    } catch {
+      continue;
+    }
+    try {
+      await fs.promises.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 250,
+      });
+      dirsRemoved += 1;
+    } catch (error) {
+      console.warn(`[MigrationV2] failed to remove disposable cache dir ${dir}:`, error);
+    }
+  }
+  return { dirsRemoved };
+}
+
+function listTopLevelEntryNames(dirPath: string): string[] {
+  if (!fs.existsSync(dirPath)) return [];
+  try {
+    return fs
+      .readdirSync(dirPath, { withFileTypes: true })
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Run the 6-step pure offline atomic OpenClaw -> DSH migration.
  */
 export function runLegacyOpenClawMigration(
@@ -2925,6 +2964,7 @@ export function runLegacyOpenClawMigration(
         // Non-JSON completion marker is treated as an upgraded database.
       }
       if (!isFreshInstall) {
+        preserveLegacyImBotIdentities(db, userDataDir);
         migrateLegacyPermissionPresets(db);
       }
       migrateLegacyBrowserDisplayModeConfig(db);
@@ -2989,11 +3029,7 @@ export function runLegacyOpenClawMigration(
       // ── Step 2: Offline Extract & Transform ──────────────────────────────
       migrateLegacySubagentHistory(db, openclawStateDir);
       migrateLegacyConversationImages(db, userDataDir);
-      const externalBrowserConfigsMigrated = migrateLegacyBrowserDisplayModeConfig(
-        db,
-        incompatibleEntries,
-        archivedModules,
-      );
+      migrateLegacyBrowserDisplayModeConfig(db);
       const { workspacesMigrated, dreamDiariesMigrated } = migrateLegacyWorkspaces(
         openclawStateDir,
         workspacesDir,
@@ -3009,6 +3045,7 @@ export function runLegacyOpenClawMigration(
         path.join(userDataDir, 'SKILLs'),
       );
       backfillAgentPersonaFiles(db, workspacesDir);
+      preserveLegacyImBotIdentities(db);
       migrateLegacyPermissionPresets(db);
 
       // Scheduled tasks & run history: import OpenClaw cron jobs & runs into LobsterScheduler tables.
@@ -3021,7 +3058,7 @@ export function runLegacyOpenClawMigration(
         nowMs: now().getTime(),
       });
 
-      // IM allowFrom whitelists for the 7 retained platforms.
+      // IM allowFrom whitelists for the retained platforms.
       let imAllowListsMigrated = 0;
       const credsDir = path.join(openclawStateDir, 'credentials');
       const allowListsByPlatform: Record<string, string[]> = {};
@@ -3134,18 +3171,33 @@ export function runLegacyOpenClawMigration(
       }
 
       // 3b. `third-party-extensions/` & `openclaw/state/extensions/`
+      // Record a lightweight manifest only; keep directories intact on disk so
+      // migration never blocks reading/compressing large extension trees.
       const thirdPartyExtDir = path.join(userDataDir, 'third-party-extensions');
-      const thirdPartyEntries = collectDirectoryTarEntries(thirdPartyExtDir, 'third-party-extensions');
-      const openclawExtEntries = collectDirectoryTarEntries(
-        path.join(openclawStateDir, 'extensions'),
-        'openclaw-extensions',
-      );
-      if (thirdPartyEntries.length > 0 || openclawExtEntries.length > 0) {
-        incompatibleEntries.push(...thirdPartyEntries, ...openclawExtEntries);
+      const openclawExtDir = path.join(openclawStateDir, 'extensions');
+      const thirdPartyExtNames = listTopLevelEntryNames(thirdPartyExtDir);
+      const openclawExtNames = listTopLevelEntryNames(openclawExtDir);
+      if (thirdPartyExtNames.length > 0 || openclawExtNames.length > 0) {
+        incompatibleEntries.push({
+          archivePath: 'sqlite/legacy_extensions_manifest.json',
+          content: Buffer.from(
+            JSON.stringify(
+              {
+                thirdPartyExtensionsDir: thirdPartyExtDir,
+                thirdPartyExtensions: thirdPartyExtNames,
+                openclawExtensionsDir: openclawExtDir,
+                openclawExtensions: openclawExtNames,
+              },
+              null,
+              2,
+            ),
+            'utf8',
+          ),
+        });
         archivedModules.push({
           category: 'third_party_extensions',
           label: 'Legacy OpenClaw extensions',
-          count: thirdPartyEntries.length + openclawExtEntries.length,
+          count: thirdPartyExtNames.length + openclawExtNames.length,
         });
       }
 
@@ -3167,7 +3219,7 @@ export function runLegacyOpenClawMigration(
         }
       }
 
-      // 3d. Retired IM platform configs (POPO, NIM, NetEase Bee, Email)
+      // 3d. Retired IM platform configs (NIM, NetEase Bee, Email)
       if (tableExists(db, 'im_config')) {
         const imCols = getTableColumns(db, 'im_config');
         const keyCol = imCols.has('platform') ? 'platform' : imCols.has('key') ? 'key' : null;
@@ -3183,7 +3235,7 @@ export function runLegacyOpenClawMigration(
             });
             archivedModules.push({
               category: 'retired_im',
-              label: 'Retired IM configs (POPO / NIM / NetEase Bee / Email)',
+              label: 'Retired IM configs (NIM / NetEase Bee / Email)',
               count: retiredRows.length,
             });
           }
@@ -3224,30 +3276,24 @@ export function runLegacyOpenClawMigration(
         throw new Error('Incompatible modules archive failed verification');
       }
 
-      // ── Step 5: Free Disposable Caches & Archive Remaining `openclaw/state` ─
+      // ── Step 5: Preserve Legacy Data In Place & Free Pure Caches ─────────
+      // Keep `openclaw/state` (including `media/`, `agents/`, workspaces, and
+      // configs) and `third-party-extensions/` in place on disk instead of
+      // synchronously tar+gzipping and deleting them before the window opens:
+      //  - Avoids multi-minute main-thread freezes on large OpenClaw profiles.
+      //  - Preserves original paths for historical IM/conversation media files.
+      // Only pure disposable caches are cleaned (asynchronously after window
+      // creation when `deferDisposableCacheCleanup` is enabled).
       let disposableBytesFreed = 0;
-      const disposableDirs = [
-        path.join(openclawRootDir, 'logs'),
-        path.join(openclawRootDir, '.compile-cache'),
-        path.join(openclawRootDir, 'repair-backups'),
-        path.join(openclawStateDir, '.compile-cache'),
-        path.join(openclawStateDir, 'memory'),
-        path.join(userDataDir, 'dsh-runtime'), // Old experimental 160MB runtime cache
-      ];
-      for (const dir of disposableDirs) {
-        if (!fs.existsSync(dir)) continue;
-        disposableBytesFreed += measureDirSize(dir);
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-
-      let legacyStateArchivePath: string | null = null;
-      if (fs.existsSync(openclawStateDir)) {
-        const remainingEntries = collectDirectoryTarEntries(openclawStateDir, 'openclaw-state');
-        if (remainingEntries.length > 0) {
-          legacyStateArchivePath = path.join(backupDir, 'legacy-openclaw-state.tar.gz');
-          writeTarGzArchive(legacyStateArchivePath, remainingEntries);
+      if (!options.deferDisposableCacheCleanup) {
+        for (const dir of getLegacyOpenClawDisposableCacheDirs(userDataDir)) {
+          if (!fs.existsSync(dir)) continue;
+          disposableBytesFreed += measureDirSize(dir);
+          fs.rmSync(dir, { recursive: true, force: true });
         }
       }
+
+      const legacyStateArchivePath: string | null = null;
 
       // Build final report and commit atomically into SQLite `kv`.
       const report: MigrationV2Report = {
@@ -3271,7 +3317,6 @@ export function runLegacyOpenClawMigration(
           tavilyMcpMigrated,
           mcpOAuthTokensMigrated,
           disposableBytesFreed,
-          externalBrowserConfigsMigrated,
         },
         archivedModules,
         reauthRequired,
@@ -3333,15 +3378,6 @@ export function runLegacyOpenClawMigration(
         `${JSON.stringify(report, null, 2)}\n`,
         'utf8',
       );
-
-      // Remove old OpenClaw directory & third-party-extensions only AFTER
-      // SQLite commit and backup archives are verified on disk.
-      if (fs.existsSync(openclawRootDir)) {
-        fs.rmSync(openclawRootDir, { recursive: true, force: true });
-      }
-      if (fs.existsSync(thirdPartyExtDir)) {
-        fs.rmSync(thirdPartyExtDir, { recursive: true, force: true });
-      }
 
       return { status: MigrationV2Status.Completed, report };
     } catch (error) {

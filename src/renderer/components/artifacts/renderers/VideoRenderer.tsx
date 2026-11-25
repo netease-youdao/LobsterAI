@@ -4,10 +4,17 @@ import {
   LOCAL_FILE_THUMBNAIL_PARAM,
   LocalFileThumbnailFit,
 } from '@shared/artifactPreview/localFileThumbnail';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
+import VideoPreviewModal, { type VideoPreviewSource } from '@/components/cowork/VideoPreviewModal';
 import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
+
+import { clampVideoAspectRatio, formatVideoMetaLabel } from '../inlineVideoLayout';
+import VideoPlayer, {
+  VideoPlayerFullscreenMode,
+  type VideoPlayerHandle,
+} from '../VideoPlayer';
 
 interface VideoRendererProps {
   artifact: Artifact;
@@ -73,7 +80,7 @@ function buildFileUrlSrc(filePath: string): string {
     : `file://${encoded}`;
 }
 
-function buildVideoSources(
+export function buildVideoSources(
   filePath: string | undefined,
   remoteUrl: string | undefined,
   content: string,
@@ -103,18 +110,17 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
     ),
     [artifact.content, artifact.createdAt, artifact.filePath, artifact.remoteUrl],
   );
-  const [activeSourceIndex, setActiveSourceIndex] = useState(0);
-  const [error, setError] = useState(false);
-  const [videoAspectRatio, setVideoAspectRatio] = useState<string | undefined>();
-  const src = sources[activeSourceIndex] || '';
+  const playerRef = useRef<VideoPlayerHandle>(null);
+  const [aspectRatio, setAspectRatio] = useState<number | undefined>();
+  const [metaLabel, setMetaLabel] = useState<string | null>(null);
+  const [fullscreenVideo, setFullscreenVideo] = useState<VideoPreviewSource | null>(null);
 
   useEffect(() => {
-    setActiveSourceIndex(0);
-    setError(false);
-    setVideoAspectRatio(undefined);
+    setAspectRatio(undefined);
+    setMetaLabel(null);
   }, [sources]);
 
-  if (!src) {
+  if (sources.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-muted text-sm">
         {t('artifactVideoLoading')}
@@ -122,41 +128,48 @@ const VideoRenderer: React.FC<VideoRendererProps> = ({ artifact }) => {
     );
   }
 
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted text-sm">
-        {t('artifactVideoError')}
-      </div>
-    );
-  }
+  const title = artifact.fileName || artifact.title || t('artifactFileKindVideo');
+  const clampedRatio = aspectRatio ? clampVideoAspectRatio(aspectRatio) : undefined;
 
   return (
     <div className="flex items-center justify-center w-full h-full overflow-hidden p-4">
-      <video
-        key={src}
-        src={src}
-        controls
-        playsInline
-        preload="metadata"
-        className="block max-w-full max-h-full rounded bg-black object-contain"
-        style={videoAspectRatio ? { aspectRatio: videoAspectRatio } : undefined}
-        onLoadedMetadata={(event) => {
-          const { videoHeight, videoWidth } = event.currentTarget;
-          if (videoWidth > 0 && videoHeight > 0) {
-            setVideoAspectRatio(`${videoWidth} / ${videoHeight}`);
-          }
+      <VideoPlayer
+        ref={playerRef}
+        sources={sources}
+        title={title}
+        posterMode={false}
+        fullscreenMode={VideoPlayerFullscreenMode.Enter}
+        className="max-h-full max-w-full rounded-xl bg-black"
+        style={clampedRatio && clampedRatio < 1
+          ? { aspectRatio: String(clampedRatio), height: '100%', maxWidth: '100%' }
+          : { aspectRatio: String(clampedRatio ?? 16 / 9), width: '100%', maxHeight: '100%' }}
+        onToggleFullscreen={(currentTime) => {
+          setFullscreenVideo({
+            sources,
+            name: title,
+            metaLabel,
+            aspectRatio: clampedRatio,
+            initialTime: currentTime,
+            autoPlay: true,
+          });
         }}
-        onError={(event) => {
-          window.electron?.log?.fromRenderer?.('warn', 'ArtifactPreview', `Video source failed: ${JSON.stringify({
-            sourceIndex: activeSourceIndex,
-            code: event.currentTarget.error?.code,
-            message: event.currentTarget.error?.message,
-          })}`);
-          if (activeSourceIndex < sources.length - 1) {
-            setActiveSourceIndex(index => index + 1);
-            return;
+        onMetadataLoaded={(meta) => {
+          if (meta.width > 0 && meta.height > 0) {
+            setAspectRatio(meta.width / meta.height);
           }
-          setError(true);
+          setMetaLabel(formatVideoMetaLabel(meta));
+        }}
+        onSourceError={(info) => {
+          window.electron?.log?.fromRenderer?.('warn', 'ArtifactPreview', `Video source failed: ${JSON.stringify(info)}`);
+        }}
+      />
+      <VideoPreviewModal
+        video={fullscreenVideo}
+        onClose={(lastTime) => {
+          if (typeof lastTime === 'number' && lastTime > 0) {
+            playerRef.current?.seekTo(lastTime, true);
+          }
+          setFullscreenVideo(null);
         }}
       />
     </div>

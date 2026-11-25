@@ -16,6 +16,7 @@ import {
   buildIsolatedDshChildEnv,
   DshHostManager,
   resolveBundledDshPaths,
+  resolveDefaultDshBootTimeoutMs,
 } from './dshHostManager';
 import type { DshTypertClient } from './dshTypertClient';
 
@@ -312,7 +313,13 @@ describe('DshHostManager', () => {
         '      PATH: process.env.PATH ?? null,',
         '    },',
         '  }));',
-        '  console.log("dsh web: http://127.0.0.1:43210/?token=test-token");',
+        '  const bytes = Buffer.from("[dsh-logger][warn][probe] 中文\\r\\nnext line\\n");',
+        '  const cut = bytes.indexOf(Buffer.from("中")) + 1;',
+        '  process.stderr.write(bytes.subarray(0, cut));',
+        '  process.stdout.write("dsh web: http://127.0.0.1:43210/?token=test-");',
+        '  await new Promise(resolve => setTimeout(resolve, 20));',
+        '  process.stderr.write(bytes.subarray(cut));',
+        '  console.log("token");',
         '  setInterval(() => {}, 1000);',
         '}',
         '',
@@ -344,8 +351,16 @@ describe('DshHostManager', () => {
       },
     });
 
+    const logs = vi.fn();
+    manager.on('log', logs);
     try {
       await manager.start();
+      expect(fakeClient.connect).toHaveBeenCalledWith('http://127.0.0.1:43210/?token=test-token');
+      expect(logs).toHaveBeenCalledWith({ stream: 'stdout', text: 'dsh web: http://127.0.0.1:43210/?token=[redacted]' });
+      await vi.waitFor(() => {
+        expect(logs).toHaveBeenCalledWith({ stream: 'stderr', text: '[dsh-logger][warn][probe] 中文' });
+        expect(logs).toHaveBeenCalledWith({ stream: 'stderr', text: 'next line' });
+      });
       const status = manager.getStatus();
       const launcherPath = path.join(status.dshHomeDir, 'dsh-launcher', 'launch.mjs');
       expect(fs.existsSync(launcherPath)).toBe(true);
@@ -837,5 +852,27 @@ describe('DshHostManager', () => {
     expect(env.LOBSTERAI_PYTHON_ROOT).toBe(pythonDir);
     expect(env.PYTHONUTF8).toBe('1');
     expect(env.DSH_HOME).toBe(path.join(temp, 'userData', 'dsh-profile'));
+  });
+
+  test('resolveDefaultDshBootTimeoutMs allows longer cold boot on Windows and injects NODE_COMPILE_CACHE', () => {
+    expect(resolveDefaultDshBootTimeoutMs('win32')).toBe(90_000);
+    expect(resolveDefaultDshBootTimeoutMs('darwin')).toBe(45_000);
+    expect(resolveDefaultDshBootTimeoutMs('linux')).toBe(45_000);
+
+    const temp = createTempDir();
+    const dshHomeDir = path.join(temp, 'dsh-profile');
+    const env = buildIsolatedDshChildEnv({
+      baseEnv: {},
+      dshHomeDir,
+      bridgeUrl: 'http://127.0.0.1:41234',
+      bridgeSecret: 'secret',
+      workspacesDir: path.join(temp, 'workspaces'),
+      skillsDir: path.join(temp, 'SKILLs'),
+      searchPolicy: DshSearchPolicy.AllowAll,
+      runtimeVersion: '0.2.2-rc.5',
+    });
+    expect(env.NODE_COMPILE_CACHE).toBe(
+      path.join(dshHomeDir, 'cache', 'node-compile-cache', '0.2.2-rc.5'),
+    );
   });
 });

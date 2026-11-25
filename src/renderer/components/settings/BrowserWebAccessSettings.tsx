@@ -10,7 +10,6 @@ import {
 import {
   BrowserDisplayMode,
   BrowserNetworkMode,
-  BrowserProfileMode,
   type BrowserWebAccessConfig,
   normalizeBrowserHostnameList,
 } from '../../../shared/browserWebAccess/constants';
@@ -99,8 +98,6 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
     onChange({
       ...value,
       browserEnabled: true,
-      displayMode: BrowserDisplayMode.InApp,
-      profileMode: BrowserProfileMode.Managed,
       ...patch,
     });
   };
@@ -146,12 +143,57 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
   const networkModeDescription = value.networkMode === BrowserNetworkMode.Strict
     ? i18nService.t('browserNetworkStrictDescription')
     : i18nService.t('browserNetworkOpenDescription');
+  const external = value.displayMode === BrowserDisplayMode.External;
 
   return (
     <>
       <div className="space-y-6">
         <SettingsSection title={i18nService.t('browserSettingsGeneralSection')}>
           <SettingsCard>
+            <SettingsItem
+              title={i18nService.t('browserDisplayModeTitle')}
+              description={i18nService.t(external ? 'browserDisplayModeExternalDescription' : 'browserDisplayModeInAppDescription')}
+              control={(
+                <div className={SELECT_WIDTH_CLASS}>
+                  <ThemedSelect
+                    id="browser-display-mode"
+                    size="sm"
+                    value={value.displayMode}
+                    onChange={displayMode => update({ displayMode: displayMode as BrowserDisplayMode })}
+                    options={[
+                      { value: BrowserDisplayMode.InApp, label: i18nService.t('browserDisplayModeInApp') },
+                      { value: BrowserDisplayMode.External, label: i18nService.t('browserDisplayModeExternal') },
+                    ]}
+                  />
+                </div>
+              )}
+            />
+            {external && (
+              <>
+                <SettingsItem
+                  title={i18nService.t('browserExecutablePath')}
+                  control={(
+                    <input
+                      aria-label={i18nService.t('browserExecutablePath')}
+                      className="h-8 w-64 rounded-lg border border-border bg-surface px-2.5 text-xs text-foreground"
+                      value={value.executablePath ?? ''}
+                      onChange={event => update({ executablePath: event.target.value })}
+                    />
+                  )}
+                />
+                <SettingsItem
+                  title={i18nService.t('browserCdpUrl')}
+                  control={(
+                    <input
+                      aria-label={i18nService.t('browserCdpUrl')}
+                      className="h-8 w-64 rounded-lg border border-border bg-surface px-2.5 text-xs text-foreground"
+                      value={value.cdpUrl ?? ''}
+                      onChange={event => update({ cdpUrl: event.target.value })}
+                    />
+                  )}
+                />
+              </>
+            )}
             <SettingsItem
               title={i18nService.t('browserNetworkSectionTitle')}
               description={networkModeDescription}

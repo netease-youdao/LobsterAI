@@ -11,11 +11,14 @@ import {
   RetainedImPlatform,
   type RetainedImPlatform as RetainedImPlatformType,
 } from '../../shared/dshEngine/hostConstants';
+import { ImPeerKind } from '../../shared/platform';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkLocalMediaAttachment, CoworkRuntime } from '../libs/agentEngine/types';
 import { isRetainedImPlatform } from './dshChannelsBridge';
 import { stripThinkingBlocks } from './imReplyGuard';
+import type { DirectSessionRoute } from './legacyDirectSessionMapping';
+import { findLegacyPopoMapping } from './popoSessionMapping';
 import type { IMSessionMapping, Platform } from './types';
 
 export const DshImAttachmentKind = {
@@ -72,6 +75,8 @@ export interface DshImInboundCoworkStorePort {
 }
 
 export interface DshImInboundIMStorePort {
+  findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null;
+  getPopoInstances?(): Array<{ instanceId: string }>;
   getSessionMapping(
     imConversationId: string,
     platform: Platform,
@@ -158,6 +163,8 @@ function getPlatformTitlePrefix(platform: RetainedImPlatformType): string {
       return t('channelPrefixDingtalk');
     case RetainedImPlatform.WeCom:
       return t('channelPrefixWecom');
+    case RetainedImPlatform.Popo:
+      return 'POPO';
     case RetainedImPlatform.QQ:
       return 'QQ';
     case RetainedImPlatform.Telegram:
@@ -553,7 +560,19 @@ export class DshImInboundHandler {
     const mappingPlatform = buildMappingPlatform(platform, instanceId);
     const resolvedCwd = eventCwd || this.deps.getDefaultCwd(agentId);
 
-    const existingMapping = this.deps.imStore.getSessionMapping(chatId, mappingPlatform, agentId);
+    // Prefer the verified original even if an earlier DSH build already split
+    // the conversation. Its separate transcript remains available on desktop.
+    const legacyDirect = (latestEvent.chatType ?? ImPeerKind.Direct) === ImPeerKind.Direct
+      ? this.deps.imStore.findLegacyDirectSessionMapping({
+          platform, instanceId, agentId, chatId, senderId: latestEvent.senderId,
+        })
+      : null;
+    const existingMapping = legacyDirect ?? this.deps.imStore.getSessionMapping(chatId, mappingPlatform, agentId)
+      ?? (platform === RetainedImPlatform.Popo
+        ? findLegacyPopoMapping(this.deps.imStore, instanceId, latestEvent.chatType ?? 'direct', chatId, agentId)
+        : null);
+    const storedChatId = existingMapping?.imConversationId ?? chatId;
+    const storedPlatform = existingMapping?.platform ?? mappingPlatform;
     let session = existingMapping
       ? this.deps.coworkStore.getSession(existingMapping.coworkSessionId)
       : null;
@@ -572,8 +591,8 @@ export class DshImInboundHandler {
       );
       if (existingMapping) {
         this.deps.imStore.updateSessionMappingTarget(
-          chatId,
-          mappingPlatform,
+          storedChatId,
+          storedPlatform,
           session.id,
           agentId,
           undefined,
@@ -584,7 +603,7 @@ export class DshImInboundHandler {
       }
       this.deps.notifySessionsChanged?.(session.id);
     } else {
-      this.deps.imStore.updateSessionLastActive(chatId, mappingPlatform, agentId);
+      this.deps.imStore.updateSessionLastActive(storedChatId, storedPlatform, agentId);
     }
 
     const sessionId = session.id;

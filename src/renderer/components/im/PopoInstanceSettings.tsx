@@ -568,7 +568,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
 
           {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
           {instance.dmPolicy === 'pairing' && (
-            <PairingSection platform="popo" />
+            <PairingSection platform={`popo:${instance.instanceId}`} />
           )}
 
           {/* Allow From */}

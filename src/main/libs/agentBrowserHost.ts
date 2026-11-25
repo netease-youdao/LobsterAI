@@ -249,7 +249,7 @@ const DENIED_PERMISSION_CHECKS: ReadonlySet<string> = new Set([
   'window-management',
 ]);
 
-const isBlockedHostname = (url: string, config: BrowserWebAccessConfig): boolean => {
+export const isBlockedAgentBrowserUrl = (url: string, config: BrowserWebAccessConfig): boolean => {
   if (url === DEFAULT_PAGE_URL) return false;
   let hostname: string;
   try {
@@ -1054,7 +1054,7 @@ export class AgentBrowserHost {
   }
 
   private isAllowedUrl(url: string): boolean {
-    return !isBlockedHostname(
+    return !isBlockedAgentBrowserUrl(
       url,
       normalizeBrowserWebAccessConfig(this.deps.getBrowserConfig()),
     );

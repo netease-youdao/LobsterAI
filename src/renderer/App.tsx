@@ -24,7 +24,6 @@ import {
 } from '../shared/library/constants';
 import type { LibrarySessionRef } from '../shared/library/types';
 import { ProviderName, ProviderRegistry } from '../shared/providers';
-import { SIDEBAR_TASK_FILTER_ENABLED } from './components/agentSidebar/SidebarTaskFilterButton';
 import { DEFAULT_SIDEBAR_TASK_FILTER, type SidebarTaskFilter } from './components/agentSidebar/taskFilter';
 import { CoworkView } from './components/cowork';
 import {
@@ -206,7 +205,6 @@ const App: React.FC = () => {
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [taskFilter, setTaskFilter] = useState<SidebarTaskFilter>(DEFAULT_SIDEBAR_TASK_FILTER);
-  const [hasUnreadCompletedTasks, setHasUnreadCompletedTasks] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
     status: AppUpdateStatus.Idle,
@@ -1780,11 +1778,6 @@ const App: React.FC = () => {
       onNewChat={canUseWindowsCollapsedTopBarActions ? handleNewChat : undefined}
       sidebarToggleLabel={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
       searchLabel={i18nService.t('search')}
-      showFilterIcon={SIDEBAR_TASK_FILTER_ENABLED && canUseWindowsTopBarActions && !isSidebarCollapsed}
-      filterLabel={i18nService.t('sidebarFilter')}
-      taskFilter={taskFilter}
-      hasFilterNotice={hasUnreadCompletedTasks}
-      onTaskFilterChange={handleTaskFilterChange}
       newChatLabel={i18nService.t('newChat')}
       updateBadge={canUseWindowsCollapsedTopBarActions ? updateBadge : null}
     />
@@ -1794,12 +1787,12 @@ const App: React.FC = () => {
     // Matches index.html's static two-plane boot shell so startup transitions
     // directly into the main workspace with no splash overlay flash.
     return (
-      <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
+      <div className="h-screen overflow-hidden flex flex-col bg-[var(--lobster-sidebar-bg)]">
         {windowsStandaloneTitleBar}
         <div className="flex flex-1 min-h-0 overflow-hidden">
           {!isSidebarCollapsed && (
             <div
-              className="shrink-0 bg-surface-raised"
+              className="shrink-0 border-r border-border/80 bg-[var(--lobster-sidebar-bg)]"
               style={{ width: sidebarWidth }}
             />
           )}
@@ -1863,7 +1856,7 @@ const App: React.FC = () => {
     <SkinProvider>
       <SkinPresentationScope
         enabled
-        className="h-screen overflow-hidden flex flex-col bg-surface-raised"
+        className="h-screen overflow-hidden flex flex-col bg-[var(--lobster-sidebar-bg)]"
       >
       {toastMessage && (
         <Toast
@@ -1907,9 +1900,7 @@ const App: React.FC = () => {
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
           taskFilter={taskFilter}
-          hasUnreadCompletedTasks={hasUnreadCompletedTasks}
           onTaskFilterChange={handleTaskFilterChange}
-          onTaskFilterSummaryChange={setHasUnreadCompletedTasks}
           onWidthChange={setSidebarWidth}
           updateNotice={!isSidebarCollapsed && !isUpdateInteractionBlocked ? updateCard : null}
           hideAdBanner={isUpdateCardExpanded}

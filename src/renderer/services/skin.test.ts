@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   SkinAssetSlot,
+  SkinBackdropVisibility,
   SkinParticleDensity,
   SkinPreferredAppearance,
   SkinPresentationMode,
@@ -113,6 +114,38 @@ describe('normalizeActiveSkin', () => {
       },
     })).toBeNull();
     expect(normalizeActiveSkin({ success: true, skin: null })).toBeNull();
+  });
+
+  test('preserves backdropVisibility and supports backdrop-only skins without home.emblem', () => {
+    const skin = normalizeActiveSkin({
+      id: 'direct-wallpaper',
+      name: 'Pandaria',
+      presentation: {
+        mode: SkinPresentationMode.ImmersiveShell,
+        palette: {
+          canvas: '#12090b',
+          panel: '#1d0d10',
+          panelRaised: '#2a1216',
+          accent: '#e5b941',
+          accentForeground: '#160b0d',
+          accentAlt: '#d85a45',
+          foreground: '#f7eee8',
+          muted: '#c7aaa5',
+          border: '#745126',
+        },
+        backdropVisibility: SkinBackdropVisibility.Vivid,
+      },
+      assets: {
+        [SkinAssetSlot.WorkspaceBackdrop]: {
+          url: 'lobster-skin://asset/direct-wallpaper/workspace.backdrop',
+          cacheKey: 'backdrop-hash',
+        },
+      },
+    });
+
+    expect(skin?.presentation?.backdropVisibility).toBe(SkinBackdropVisibility.Vivid);
+    expect(skin?.assets[SkinAssetSlot.WorkspaceBackdrop]?.url).toContain('workspace.backdrop');
+    expect(skin?.assets[SkinAssetSlot.HomeEmblem]).toBeUndefined();
   });
 });
 

@@ -6,6 +6,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Bundled common-CJK subset of Noto Serif SC Medium (SIL OFL 1.1) for the
+   home headline so macOS Songti SC's narrow, floating U+FF1F question mark
+   and cross-OS serif fallback inconsistencies are avoided. */
+@font-face {
+  font-family: 'Lobster Home Serif';
+  src: url('./assets/fonts/LobsterHomeSerif-Medium.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* KaTeX styles */
 .katex-display {
   overflow-x: auto;
@@ -112,6 +123,18 @@ blockquote {
 }
 
 :root {
+  /* Sidebar rail: soft light-gray surface in light themes so the rail
+     separates cleanly from content canvases. */
+  --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface-raised) 88%, var(--lobster-background));
+  --lobster-sidebar-item-hover: rgba(0, 0, 0, 0.045);
+}
+
+.dark {
+  --lobster-sidebar-bg: color-mix(in srgb, var(--lobster-surface) 58%, var(--lobster-background));
+  --lobster-sidebar-item-hover: rgba(255, 255, 255, 0.055);
+}
+
+:root {
   /* Pre-JS fallbacks; must match what applyTypographyPreferences() emits for
      the default preferences (UiFontSizeDefault 15 over the 14px baseline),
      otherwise text visibly resizes right after startup. */
@@ -138,7 +161,8 @@ blockquote {
   --lobster-text-markdownH4: 16px;
   --lobster-text-promptLarge: 16px;
   --lobster-text-sidebarCompact: 14px;
-  --lobster-text-sidebarTask: 13px;
+  --lobster-text-sidebarTask: 14px;
+  --lobster-text-sidebarMeta: 12px;
   --lobster-leading-xs: 17px;
   --lobster-leading-sm: 21px;
   --lobster-leading-base: 26px;

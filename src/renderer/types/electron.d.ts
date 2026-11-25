@@ -15,6 +15,14 @@ import type { AgentModelSelection } from '../../shared/agent/modelSelection';
 import type { ExpertCatalog, ExpertUpgradeStatus } from '../../shared/agent/presets';
 import type { UsageContext } from '../../shared/analytics/usage';
 import type { AppUpdateActiveWorkloads, AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type {
+  CreateBlankDocumentRequest,
+  CreateBlankDocumentResponse,
+  ProbeGitWorkspaceRequest,
+  ProbeGitWorkspaceResponse,
+  RenameArtifactFileRequest,
+  RenameArtifactFileResponse,
+} from '../../shared/artifactPreview/blankDocument';
 import type { MarkdownFileBridge } from '../../shared/artifactPreview/markdownEditing';
 import type { ReviewScopeRequest } from '../../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest, ReviewSourceResponse } from '../../shared/artifactPreview/reviewSource';
@@ -148,6 +156,7 @@ import type {
   LocalWebService,
 } from '../../shared/localWebServices/constants';
 import type { McpAuthMode, McpOAuthActionResult, McpOAuthStatusResult } from '../../shared/mcp/auth';
+import type { McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
 import type {
   MediaPreference,
@@ -210,6 +219,7 @@ import type {
   SiteUpdateAccessStatusInput,
   SiteUpdateTitleInput,
 } from '../../shared/site/constants';
+import type { SkinBackdropVisibility } from '../../shared/skin/constants';
 import type {
   SkinApplyResponse,
   SkinBindThemeResponse,
@@ -217,6 +227,7 @@ import type {
   SkinDeleteResponse,
   SkinGetActiveResponse,
   SkinListResponse,
+  SkinSetBackdropVisibilityResponse,
 } from '../../shared/skin/types';
 import type { SubscriptionTrialBridge } from '../../shared/subscriptionTrial/constants';
 import type { CoworkTempDirPreview, DreamDiaryData, DreamingStatusData } from './cowork';
@@ -289,10 +300,12 @@ interface CoworkSessionSummary {
   status: 'idle' | 'running' | 'completed' | 'error';
   pinned: boolean;
   pinOrder?: number | null;
+  cwd?: string;
   agentId?: string;
   parentSessionId?: string | null;
   forkedAt?: number | null;
   forkMode?: 'none' | 'conversation' | 'worktree';
+  forkGitBranch?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -523,6 +536,7 @@ interface McpServerConfigIPC {
   isBuiltIn: boolean;
   githubUrl?: string;
   registryId?: string;
+  runtimeConnection?: McpManagedConnection;
   launchResolution?: {
     serverId: string;
     resolverKind: 'npx' | 'uvx' | 'python' | 'raw';
@@ -823,6 +837,10 @@ interface IElectronAPI {
     list: () => Promise<SkinListResponse>;
     apply: (skinId: string, boundThemeId?: string) => Promise<SkinApplyResponse>;
     bindTheme: (skinId: string, themeId: string) => Promise<SkinBindThemeResponse>;
+    setBackdropVisibility: (
+      skinId: string,
+      visibility: SkinBackdropVisibility,
+    ) => Promise<SkinSetBackdropVisibilityResponse>;
     deactivate: () => Promise<SkinDeactivateResponse>;
     delete: (skinId: string) => Promise<SkinDeleteResponse>;
     onChanged: (callback: () => void) => () => void;
@@ -1109,6 +1127,9 @@ interface IElectronAPI {
       sessionId: string;
       pinned: boolean;
     }) => Promise<{ success: boolean; pinOrder?: number | null; error?: string }>;
+    reorderPinnedSessions: (options: {
+      sessionIds: string[];
+    }) => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
     renameSession: (options: {
       sessionId: string;
       title: string;
@@ -1136,7 +1157,13 @@ interface IElectronAPI {
     remoteManaged: (
       sessionId: string,
     ) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
-    listSessions: (options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) => Promise<{
+    listSessions: (options?: {
+      limit?: number;
+      offset?: number;
+      agentId?: string;
+      searchQuery?: string;
+      pinnedFirst?: boolean;
+    }) => Promise<{
       success: boolean;
       sessions?: CoworkSessionSummary[];
       hasMore?: boolean;
@@ -1729,6 +1756,9 @@ interface IElectronAPI {
       batchId: string;
     }) => Promise<{ success: boolean; error?: string }>;
     listLocalWebServices: (options?: ListLocalWebServicesOptions) => Promise<LocalWebService[]>;
+    createBlankDocument: (request: CreateBlankDocumentRequest) => Promise<CreateBlankDocumentResponse>;
+    probeGitWorkspace: (request?: ProbeGitWorkspaceRequest) => Promise<ProbeGitWorkspaceResponse>;
+    renameFile: (request: RenameArtifactFileRequest) => Promise<RenameArtifactFileResponse>;
   };
   autoLaunch: {
     get: () => Promise<{ enabled: boolean }>;
@@ -2253,6 +2283,7 @@ interface IElectronAPI {
     getPendingCallback: () => Promise<string | null>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
+    onCreditsActivity: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
   };

@@ -9,6 +9,7 @@ import {
   SkinPreferredAppearance,
   SkinPresentationMode,
   SkinRecordStatus,
+  SkinStoreErrorCode,
   SkinToolAction,
   SkinWorkflowKind,
 } from '../../shared/skin/constants';
@@ -76,6 +77,7 @@ const ready: SkinRecord = {
 const createStoreDouble = () => ({
   createDraft: vi.fn(async () => draft),
   registerAsset: vi.fn(async () => backdrop),
+  registerAssetBuffer: vi.fn(async () => backdrop),
   getSkin: vi.fn(async () => ready),
   apply: vi.fn(async () => ready),
   deactivate: vi.fn(async () => undefined),
@@ -164,5 +166,63 @@ describe('skin tool handler', () => {
       details: { status: 'applied', skinId: draft.id },
     });
     expect(onChanged).toHaveBeenCalledOnce();
+  });
+
+  test('resolves attached image reference tokens to local files or buffers and rejects unknown tokens', async () => {
+    const store = createStoreDouble();
+    const imageBytes = Buffer.from('fake-image-bytes');
+    const handler = createSkinToolHandler({
+      store,
+      isWorkflowAllowed: () => true,
+      resolveSourceReference: (_sessionKey, source) => {
+        if (source === '@图片1') return { kind: 'path', path: '/uploads/wow.jpg' };
+        if (source === '@图片2') return { kind: 'buffer', data: imageBytes };
+        return null;
+      },
+    });
+
+    await handler({
+      args: {
+        action: SkinToolAction.RegisterAsset,
+        skinId: draft.id,
+        slot: SkinAssetSlot.WorkspaceBackdrop,
+        sourcePath: '@图片1',
+      },
+      context,
+    });
+    expect(store.registerAsset).toHaveBeenCalledWith({
+      skinId: draft.id,
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      source: '/uploads/wow.jpg',
+    });
+
+    await handler({
+      args: {
+        action: SkinToolAction.RegisterAsset,
+        skinId: draft.id,
+        slot: SkinAssetSlot.WorkspaceBackdrop,
+        sourcePath: '@图片2',
+      },
+      context,
+    });
+    expect(store.registerAssetBuffer).toHaveBeenCalledWith({
+      skinId: draft.id,
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      data: imageBytes,
+    });
+
+    const missing = await handler({
+      args: {
+        action: SkinToolAction.RegisterAsset,
+        skinId: draft.id,
+        slot: SkinAssetSlot.WorkspaceBackdrop,
+        sourcePath: '@图片9',
+      },
+      context,
+    });
+    expect(missing).toMatchObject({
+      isError: true,
+      details: { code: SkinStoreErrorCode.InvalidSource },
+    });
   });
 });

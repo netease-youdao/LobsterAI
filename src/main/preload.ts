@@ -16,6 +16,15 @@ import type { UsageContext } from '../shared/analytics/usage';
 import { AppIpcChannel, WindowIpcChannel, type WindowZoomChangedPayload } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
+import {
+  ArtifactWorkspaceIpc,
+  type CreateBlankDocumentRequest,
+  type CreateBlankDocumentResponse,
+  type ProbeGitWorkspaceRequest,
+  type ProbeGitWorkspaceResponse,
+  type RenameArtifactFileRequest,
+  type RenameArtifactFileResponse,
+} from '../shared/artifactPreview/blankDocument';
 import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
@@ -163,7 +172,7 @@ import {
   type SiteUpdateAccessStatusInput,
   type SiteUpdateTitleInput,
 } from '../shared/site/constants';
-import { SkinIpc } from '../shared/skin/constants';
+import { type SkinBackdropVisibility, SkinIpc } from '../shared/skin/constants';
 import type {
   SkinApplyResponse,
   SkinBindThemeResponse,
@@ -171,6 +180,7 @@ import type {
   SkinDeleteResponse,
   SkinGetActiveResponse,
   SkinListResponse,
+  SkinSetBackdropVisibilityResponse,
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { createMessageSpeechBridge } from './conversation/messageSpeechPreload';
@@ -352,6 +362,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(SkinIpc.Apply, skinId, boundThemeId),
     bindTheme: (skinId: string, themeId: string): Promise<SkinBindThemeResponse> =>
       ipcRenderer.invoke(SkinIpc.BindTheme, skinId, themeId),
+    setBackdropVisibility: (
+      skinId: string,
+      visibility: SkinBackdropVisibility,
+    ): Promise<SkinSetBackdropVisibilityResponse> =>
+      ipcRenderer.invoke(SkinIpc.SetBackdropVisibility, skinId, visibility),
     deactivate: (): Promise<SkinDeactivateResponse> => ipcRenderer.invoke(SkinIpc.Deactivate),
     delete: (skinId: string): Promise<SkinDeleteResponse> => ipcRenderer.invoke(SkinIpc.Delete, skinId),
     onChanged: (callback: () => void) => {
@@ -759,6 +774,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.DeleteSessions, sessionIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>
       ipcRenderer.invoke('cowork:session:pin', options),
+    reorderPinnedSessions: (options: { sessionIds: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.ReorderPinnedSessions, options),
     renameSession: (options: { sessionId: string; title: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.RenameSession, options),
     forkSession: (options: {
@@ -777,8 +794,13 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.OpenSessionFromNotificationReady),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: (options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) =>
-      ipcRenderer.invoke('cowork:session:list', options),
+    listSessions: (options?: {
+      limit?: number;
+      offset?: number;
+      agentId?: string;
+      searchQuery?: string;
+      pinnedFirst?: boolean;
+    }) => ipcRenderer.invoke(CoworkIpcChannel.ListSessions, options),
     getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('cowork:session:getMessages', options),
     getSessionSearchMessages: (options: {
@@ -1283,6 +1305,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(ArtifactPreviewIpc.DeleteBrowserAnnotationBatchAssets, input),
     listLocalWebServices: (options?: ListLocalWebServicesOptions) =>
       ipcRenderer.invoke(LocalWebServicesIpc.List, options) as Promise<LocalWebService[]>,
+    createBlankDocument: (request: CreateBlankDocumentRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.CreateBlankDocument, request) as Promise<CreateBlankDocumentResponse>,
+    probeGitWorkspace: (request?: ProbeGitWorkspaceRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.ProbeGitWorkspace, request ?? {}) as Promise<ProbeGitWorkspaceResponse>,
+    renameFile: (request: RenameArtifactFileRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.RenameFile, request) as Promise<RenameArtifactFileResponse>,
   },
   autoLaunch: {
     get: () => ipcRenderer.invoke(AppSettingsIpc.GetAutoLaunch),
@@ -1582,6 +1610,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = () => callback();
       ipcRenderer.on(AuthIpcChannel.QuotaChanged, handler);
       return () => ipcRenderer.removeListener(AuthIpcChannel.QuotaChanged, handler);
+    },
+    onCreditsActivity: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(AuthIpcChannel.CreditsActivity, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.CreditsActivity, handler);
     },
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: AuthSessionChangedEvent) => callback(data);

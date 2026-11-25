@@ -1,6 +1,7 @@
 import {
   SKIN_ASSET_SLOTS,
   type SkinAssetSlot,
+  SkinStoreErrorCode,
   SkinToolAction,
   SkinWorkflowKind,
 } from '../../shared/skin/constants';
@@ -22,9 +23,14 @@ export interface SkinToolResult {
   details?: Record<string, unknown>;
 }
 
+export type ResolvedSkinAssetSource =
+  | { kind: 'path'; path: string }
+  | { kind: 'buffer'; data: Buffer };
+
 export interface SkinToolHandlerOptions {
   store: SkinStore;
   isWorkflowAllowed: (sessionKey: string) => boolean;
+  resolveSourceReference?: (sessionKey: string, source: string) => ResolvedSkinAssetSource | null;
   onChanged?: () => void;
 }
 
@@ -102,7 +108,19 @@ export function createSkinToolHandler(
             'invalid_arguments',
           );
         }
-        await options.store.registerAsset({ skinId, slot, source });
+        const resolved = options.resolveSourceReference?.(request.context.sessionKey, source) ?? null;
+        if (resolved?.kind === 'buffer') {
+          await options.store.registerAssetBuffer({ skinId, slot, data: resolved.data });
+        } else if (resolved?.kind === 'path') {
+          await options.store.registerAsset({ skinId, slot, source: resolved.path });
+        } else if (source.startsWith('@')) {
+          return errorResult(
+            `Attached image reference "${source}" was not found for this turn.`,
+            SkinStoreErrorCode.InvalidSource,
+          );
+        } else {
+          await options.store.registerAsset({ skinId, slot, source });
+        }
         const skin = await options.store.getSkin(skinId);
         if (!skin) return errorResult('Skin does not exist.', 'skin_not_found');
         const presented = presentSkin(skin);

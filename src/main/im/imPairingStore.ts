@@ -10,6 +10,7 @@
  *   credentials/<channel>-<accountId>-allowFrom.json → (account-scoped variant)
  */
 
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -127,6 +128,21 @@ export function listPairingRequests(channel: string, stateDir: string): PairingR
  */
 export function readAllowFromStore(channel: string, stateDir: string): string[] {
   return readAllowFromFile(channel, stateDir);
+}
+
+/** Called on the Electron main thread, alongside approval and rejection. */
+export function requestPopoPairing(instanceId: string, senderId: string, stateDir: string): {
+  approved: boolean; code?: string;
+} {
+  const channel = `popo:${instanceId}`;
+  if (readAllowFromStore(channel, stateDir).includes(senderId)) return { approved: true };
+  const pending = listPairingRequests(channel, stateDir);
+  if (pending.some(request => request.id === senderId) || pending.length >= 32) return { approved: false };
+  const code = randomBytes(5).toString('hex').toUpperCase();
+  const now = new Date().toISOString();
+  pending.push({ id: senderId, code, createdAt: now, lastSeenAt: now });
+  writePairingFile(channel, stateDir, pending);
+  return { approved: false, code };
 }
 
 /**
