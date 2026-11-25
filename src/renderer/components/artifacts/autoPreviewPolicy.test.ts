@@ -93,6 +93,7 @@ describe('autoPreviewPolicy', () => {
       }),
       category: ArtifactAutoPreviewCategory.Document,
       openTarget: ArtifactAutoPreviewOpenTarget.PreviewTab,
+      autoPreview: false,
     },
   ])('classifies and routes $label preview', ({ artifact, category, openTarget, autoPreview = true }) => {
     expect(getAutoPreviewCategory(artifact)).toBe(category);
@@ -100,14 +101,29 @@ describe('autoPreviewPolicy', () => {
     expect(selectAutoPreviewArtifact([artifact])?.id).toBe(autoPreview ? artifact.id : undefined);
   });
 
-  test('leaves raster images and videos to inline galleries while still previewing svg', () => {
+  test('leaves raster images, videos, and markdown files to on-demand preview while still previewing svg', () => {
     const selected = selectAutoPreviewArtifact([
       makeArtifact('image', ArtifactTypeValue.Image, { filePath: '/Users/admin/project/cover.png' }),
       makeArtifact('video', ArtifactTypeValue.Video, { filePath: '/Users/admin/project/clip.mp4' }),
+      makeArtifact('markdown', ArtifactTypeValue.Markdown, { filePath: '/Users/admin/project/notes.md' }),
       makeArtifact('svg', ArtifactTypeValue.Svg, { filePath: '/Users/admin/project/vector.svg' }),
     ]);
 
     expect(selected?.id).toBe('svg');
+  });
+
+  test('skips markdown artifacts so html or binary documents are selected instead', () => {
+    const selectedHtml = selectAutoPreviewArtifact([
+      makeArtifact('markdown', ArtifactTypeValue.Markdown, { filePath: '/Users/admin/project/README.md' }),
+      makeArtifact('html', ArtifactTypeValue.Html, { filePath: '/Users/admin/project/index.html' }),
+    ]);
+    expect(selectedHtml?.id).toBe('html');
+
+    const selectedPdf = selectAutoPreviewArtifact([
+      makeArtifact('markdown', ArtifactTypeValue.Markdown, { filePath: '/Users/admin/project/README.md' }),
+      makeArtifact('report', ArtifactTypeValue.Document, { filePath: '/Users/admin/project/report.pdf' }),
+    ]);
+    expect(selectedPdf?.id).toBe('report');
   });
 
   test('selects by priority before display order', () => {

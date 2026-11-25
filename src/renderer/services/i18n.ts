@@ -4498,8 +4498,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserWebFetchUserAgent: '网页抓取 User-Agent',
     browserWebFetchAllowFakeIp: '允许 fake-IP 代理网段',
     browserWebFetchAllowFakeIpDescription: '仅在 Clash TUN、Surge 等代理环境需要时开启。',
-    sqliteAutoBackupEnabled: '启用自动备份与恢复',
-    sqliteAutoBackupEnabledDescription: '开启后将自动备份数据，并在启动时尝试恢复损坏的数据',
+    sqliteAutoBackupEnabled: '本地数据库防损坏保护',
+    sqliteAutoBackupEnabledDescription:
+      '定期为本地数据库生成快照，并在启动检测到损坏时自动恢复（仅用于本机容灾，非跨设备迁移备份）',
     taskCompletionNotificationMode: '任务完成通知',
     taskCompletionNotificationModeDescription: '设置任务完成时的系统提醒时机',
     taskCompletionNotificationModeAlways: '总是',
@@ -4519,10 +4520,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     usageAnalyticsEnabled: '帮助改进 LobsterAI',
     usageAnalyticsEnabledDescription:
       '允许发送基础使用统计，帮助我们改进功能体验。不会上传对话内容、文件内容或 API Key。',
-    // 通用设置分组标题
+    // 设置页签与分组标题
+    dataPrivacyTab: '数据与隐私',
     settingsGroupBasics: '常规',
+    settingsGroupBasicsAndTasks: '常规与任务',
+    settingsGroupAppAndNetwork: '应用与网络',
     settingsGroupNotifications: '通知',
     settingsGroupDataPrivacy: '数据与隐私',
+    settingsGroupStorageProtection: '存储与保护',
+    settingsGroupBackupMigration: '备份与迁移',
+    settingsGroupPrivacy: '隐私',
     coworkTempUsageTitle: '会话临时文件',
     coworkTempUsageLoading: '正在统计占用空间…',
     coworkTempUsageLabel:
@@ -9738,9 +9745,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserWebFetchAllowFakeIp: 'Allow fake-IP proxy range',
     browserWebFetchAllowFakeIpDescription:
       'Only enable this when using proxy setups such as Clash TUN or Surge.',
-    sqliteAutoBackupEnabled: 'Enable Auto Backup and Recovery',
+    sqliteAutoBackupEnabled: 'Local Database Corruption Protection',
     sqliteAutoBackupEnabledDescription:
-      'When enabled, the app automatically backs up data and tries to restore corrupted data on startup',
+      'Periodically snapshots the local database and automatically recovers it if corruption is detected on startup (for local resilience, not cross-device backup)',
     taskCompletionNotificationMode: 'Task Completion Notifications',
     taskCompletionNotificationModeDescription:
       'Set when to show a system alert after a task completes',
@@ -9765,10 +9772,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     usageAnalyticsEnabled: 'Help improve LobsterAI',
     usageAnalyticsEnabledDescription:
       'Allow basic usage analytics to help improve the product. Chat content, file content, and API keys are not uploaded.',
-    // General settings group titles
+    // Settings tab and group titles
+    dataPrivacyTab: 'Data & Privacy',
     settingsGroupBasics: 'General',
+    settingsGroupBasicsAndTasks: 'General & Tasks',
+    settingsGroupAppAndNetwork: 'App & Network',
     settingsGroupNotifications: 'Notifications',
     settingsGroupDataPrivacy: 'Data & Privacy',
+    settingsGroupStorageProtection: 'Storage & Protection',
+    settingsGroupBackupMigration: 'Backup & Migration',
+    settingsGroupPrivacy: 'Privacy',
     coworkTempUsageTitle: 'Session temp files',
     coworkTempUsageLoading: 'Measuring usage…',
     coworkTempUsageLabel:

@@ -1,4 +1,4 @@
-import { normalizeSettingsTab, type SettingsTab } from '../components/settings/settingsTabs';
+import { normalizeSettingsTab, type SettingsTab, SettingsTabId } from '../components/settings/settingsTabs';
 import { MainView } from '../types/navigation';
 
 /**
@@ -11,11 +11,7 @@ export const AppDeepLinkEvent = {
   Navigate: 'app:deepLinkNavigate',
 } as const;
 
-const SETTINGS_TABS = [
-  'general', 'appearance', 'desktopCompanion', 'coworkAgentEngine', 'model', 'im',
-  'browserWebAccess', 'email', 'coworkMemory', 'coworkDreaming', 'plugins',
-  'experimental', 'shortcuts', 'help', 'about',
-] as const satisfies readonly SettingsTab[];
+const SETTINGS_TABS: readonly SettingsTab[] = Object.values(SettingsTabId);
 
 const MAIN_VIEWS: readonly MainView[] = Object.values(MainView);
 
@@ -26,21 +22,22 @@ export type AppDeepLinkTarget =
 /** i18n keys of the names users know these destinations by (settings tab titles, sidebar entries). */
 const SETTINGS_LABEL_KEY = 'settings';
 const SETTINGS_TAB_LABEL_KEYS: Record<SettingsTab, string> = {
-  general: 'general',
-  appearance: 'appearance',
-  desktopCompanion: 'desktopCompanionTitle',
-  coworkAgentEngine: 'coworkAgentEngine',
-  model: 'settingsCustomModel',
-  im: 'imBot',
-  browserWebAccess: 'browserWebAccessTab',
-  email: 'emailTab',
-  coworkMemory: 'coworkMemoryTitle',
-  coworkDreaming: 'coworkMemoryTabDreaming',
-  plugins: 'pluginsTab',
-  experimental: 'experimentalTab',
-  shortcuts: 'shortcuts',
-  help: 'helpAndFeedback',
-  about: 'about',
+  [SettingsTabId.General]: 'general',
+  [SettingsTabId.Appearance]: 'appearance',
+  [SettingsTabId.DesktopCompanion]: 'desktopCompanionTitle',
+  [SettingsTabId.CoworkAgentEngine]: 'coworkAgentEngine',
+  [SettingsTabId.Model]: 'settingsCustomModel',
+  [SettingsTabId.Im]: 'imBot',
+  [SettingsTabId.BrowserWebAccess]: 'browserWebAccessTab',
+  [SettingsTabId.Email]: 'emailTab',
+  [SettingsTabId.CoworkMemory]: 'coworkMemoryTitle',
+  [SettingsTabId.CoworkDreaming]: 'coworkMemoryTabDreaming',
+  [SettingsTabId.Plugins]: 'pluginsTab',
+  [SettingsTabId.DataPrivacy]: 'dataPrivacyTab',
+  [SettingsTabId.Experimental]: 'experimentalTab',
+  [SettingsTabId.Shortcuts]: 'shortcuts',
+  [SettingsTabId.Help]: 'helpAndFeedback',
+  [SettingsTabId.About]: 'about',
 };
 const MAIN_VIEW_LABEL_KEYS: Record<MainView, string> = {
   [MainView.Cowork]: 'newChat',
