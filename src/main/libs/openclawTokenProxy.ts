@@ -674,7 +674,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
             res.end();
           }
         } catch (error) {
-          console.warn(`[OpenClawTokenProxy] OAuth upstream request failed for ${providerId}:`, error);
+          console.warn('[OpenClawTokenProxy] OAuth upstream request failed for %s:', providerId, error);
           if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(buildUpstreamRequestFailureBody(error));
