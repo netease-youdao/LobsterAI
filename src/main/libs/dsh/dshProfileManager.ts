@@ -97,8 +97,17 @@ export function buildIsolatedDshBaseEnv(params: {
   return env;
 }
 
+function resolveAsarUnpackedPath(targetPath: string): string | null {
+  const pattern = /([\\/])app\.asar(?=[\\/]|$)/u;
+  if (!pattern.test(targetPath)) return null;
+  return targetPath.replace(pattern, '$1app.asar.unpacked');
+}
+
 /**
  * Locate the bundled pnpm entry script inside `<runtimeDir>/package-manager/pnpm`.
+ * When `<runtimeDir>` lives inside `app.asar`, prefers the sibling
+ * `app.asar.unpacked` copy on real disk so pnpm's native addons and helper
+ * executables run outside the virtual archive.
  * Returns null if the runtime was built without a bundled pnpm package.
  */
 export function resolveBundledPnpmEntry(runtimeDir: string): string | null {
@@ -108,20 +117,33 @@ export function resolveBundledPnpmEntry(runtimeDir: string): string | null {
   } catch {
     // Keep original path when runtimeDir does not exist yet.
   }
-  const packageRoot = path.join(resolvedRuntimeDir, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
-  let raw: string;
-  try {
-    raw = fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
-  } catch {
-    return null;
+
+  const candidateRoots: string[] = [];
+  const unpackedRuntimeDir = resolveAsarUnpackedPath(resolvedRuntimeDir);
+  if (unpackedRuntimeDir) {
+    candidateRoots.push(unpackedRuntimeDir);
   }
-  const binRelPath = parseDshPnpmBinRelPath(raw);
-  if (!binRelPath) {
-    console.warn(`[DSH] Bundled pnpm at ${packageRoot} declares no usable bin entry`);
-    return null;
+  candidateRoots.push(resolvedRuntimeDir);
+
+  for (const root of candidateRoots) {
+    const packageRoot = path.join(root, ...DSH_PNPM_PACKAGE_RELPATH.split('/'));
+    let raw: string;
+    try {
+      raw = fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8');
+    } catch {
+      continue;
+    }
+    const binRelPath = parseDshPnpmBinRelPath(raw);
+    if (!binRelPath) {
+      console.warn(`[DSH] Bundled pnpm at ${packageRoot} declares no usable bin entry`);
+      continue;
+    }
+    const entry = path.join(packageRoot, ...binRelPath.split('/'));
+    if (fs.existsSync(entry)) {
+      return entry;
+    }
   }
-  const entry = path.join(packageRoot, ...binRelPath.split('/'));
-  return fs.existsSync(entry) ? entry : null;
+  return null;
 }
 
 /**

@@ -64,12 +64,16 @@ npm run dist:win:web -- --keyfrom <channel> [--silent] [--pkg-base-url <cdn-dir>
   it re-applies `patches/app-builder-lib+*.patch` and runs the installer
   contract tests against `node_modules`. If it fails, run `npm ci`. Never ship
   an installer from a tree where it fails.
-- macOS installers include `Contents/Resources/dsh-runtime/`, `dsh-bundles/`,
-  `SKILLs/`, and optional `computer-use/*.zip`; `afterPack` removes
-  `node_modules/.bin` symlinks inside packaged DSH trees for codesign
-  compatibility. Windows packs `dsh-runtime/`, `dsh-bundles/`, `SKILLs/`, and
-  `python-win/` into `win-resources.tar` for extraction by
-  `unpack-dsh-resources.cjs` during installation.
+- Both macOS and Windows pack `dsh-runtime` inside `app.asar/dsh-runtime`
+  (with native addons, helper binaries, and bundled `pnpm` in
+  `app.asar.unpacked/dsh-runtime`), while shipping `dsh-bundles/`, `SKILLs/`,
+  and platform-specific resources (`computer-use/*.zip` on macOS,
+  `python-win/` on Windows) directly under `extraResources`. `afterPack`
+  verifies `app.asar/dsh-runtime` and removes `node_modules/.bin` directories
+  from unpacked macOS trees for codesign compatibility. Windows installers run
+  as `asInvoker` (`RequestExecutionLevel user`) with on-demand elevation only
+  for legacy per-machine (`HKLM`) installations, and do not use a second-stage
+  `win-resources.tar` unpack step.
 - Offline/private-mirror packaging env vars (`LOBSTERAI_PORTABLE_PYTHON_*`,
   `LOBSTERAI_WINDOWS_EMBED_PYTHON_*`, `LOBSTERAI_WINDOWS_GET_PIP_URL`,
   `LOBSTERAI_WINDOWS_PIP_PYZ_URL`, `LOBSTERAI_PORTABLE_GIT_*`) are listed in

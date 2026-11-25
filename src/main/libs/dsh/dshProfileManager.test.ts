@@ -219,11 +219,26 @@ describe('buildIsolatedDshBaseEnv', () => {
 });
 
 describe('prepareDshLaunchEntry', () => {
+  test('resolveBundledPnpmEntry prefers app.asar.unpacked when runtimeDir points inside app.asar', () => {
+    const root = createTempDir();
+    const asarRuntimeDir = path.join(root, 'resources', 'app.asar', 'dsh-runtime');
+    const unpackedPnpmDir = path.join(root, 'resources', 'app.asar.unpacked', 'dsh-runtime', 'package-manager', 'pnpm');
+    fs.mkdirSync(asarRuntimeDir, { recursive: true });
+    fs.mkdirSync(path.join(unpackedPnpmDir, 'bin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(unpackedPnpmDir, 'package.json'),
+      JSON.stringify({ name: 'pnpm', version: '11.28.5', bin: { pnpm: 'bin/pnpm.cjs' } }),
+    );
+    const unpackedEntry = path.join(unpackedPnpmDir, 'bin', 'pnpm.cjs');
+    fs.writeFileSync(unpackedEntry, 'console.log("11.28.5");\n');
+
+    expect(resolveBundledPnpmEntry(asarRuntimeDir)).toBe(fs.realpathSync(unpackedEntry));
+  });
+
   test('generates bundled-pnpm launcher wiring runCli({ packageManager }) when bundled pnpm exists', () => {
     const root = createTempDir();
     const dshHomeDir = path.join(root, 'dsh-home');
     const { runtimeDir, pnpmEntry } = createMockRuntime(root, { withBundledPnpm: true });
-
     expect(resolveBundledPnpmEntry(runtimeDir)).toBe(fs.realpathSync(pnpmEntry));
 
     const prepared = prepareDshLaunchEntry({

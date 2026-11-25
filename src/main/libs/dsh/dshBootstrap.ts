@@ -33,7 +33,11 @@ import {
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { McpIpcChannel } from '../../../shared/mcp/constants';
-import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
+import {
+  OpenClawEngineErrorCode,
+  OpenClawEnginePhase,
+} from '../../../shared/openclawEngine/constants';
+import { t } from '../../i18n';
 import {
   type DshChannelInstanceConfig,
   DshChannelsBridge,
@@ -81,6 +85,11 @@ import {
   writeDshCleanShutdownMarker,
 } from '../dshOrphanReaper';
 import { resolveDshBundledGitBinDir } from '../dshRuntime';
+import {
+  detectLoopbackBlock,
+  type LoopbackBlockCheck,
+  LoopbackSelfTestOutcome,
+} from '../loopbackSelfTest';
 import { appendPythonRuntimeToEnv } from '../pythonRuntime';
 import {
   type ApprovalAllowRulePort,
@@ -113,6 +122,8 @@ export interface DshCompatEngineStatus {
   version: string;
   message?: string;
   progress?: number;
+  errorCode?: OpenClawEngineErrorCode;
+  canRetry?: boolean;
 }
 
 export interface DshBootstrapSyncInput {
@@ -211,6 +222,10 @@ export interface DshBootstrapOptions {
   skipElectronRunAsNode?: boolean;
   /** Optional boot timeout override for DshHostManager. */
   bootTimeoutMs?: number;
+  /** Optional platform override (useful in tests). */
+  platform?: NodeJS.Platform;
+  /** Optional loopback firewall block detector override (useful in tests). */
+  detectLoopbackBlock?: () => Promise<LoopbackBlockCheck>;
 }
 
 export interface SingleFlightAsyncTracker<T> {
@@ -491,6 +506,8 @@ export class DshBootstrap {
   private startingInProgress = false;
   private initialConfigSynced = false;
   private initialSyncPromise: Promise<boolean> | null = null;
+  private lastInitialConfigSyncFn: DshInitialConfigSyncFn | null = null;
+  private startupBlockStatus: DshCompatEngineStatus | null = null;
   private dreamDiaryBackfillPromise: Promise<LegacyDreamDiaryBackfillResult> | null = null;
   private lastMcpServerRecords: LobsterMcpServerRecord[] = [];
   private lastNeedsReauthMcpKey = '';
@@ -697,6 +714,9 @@ export class DshBootstrap {
   }
 
   private mapEffectiveEngineStatus(hostStatus: DshHostStatus): DshCompatEngineStatus {
+    if (this.startupBlockStatus) {
+      return this.startupBlockStatus;
+    }
     const mapped = mapDshHostStatusToEngineStatus(hostStatus);
     if (this.startingInProgress && mapped.phase === OpenClawEnginePhase.Running) {
       return {
@@ -706,6 +726,40 @@ export class DshBootstrap {
       };
     }
     return mapped;
+  }
+
+  private async checkWindowsLoopbackBeforeStart(): Promise<DshCompatEngineStatus | null> {
+    const platform = this.options.platform ?? process.platform;
+    if (platform !== 'win32') {
+      return null;
+    }
+    const detector = this.options.detectLoopbackBlock ?? detectLoopbackBlock;
+    const loopback = await detector();
+    if (loopback.last.outcome === LoopbackSelfTestOutcome.Inconclusive) {
+      console.warn(
+        `[DshBootstrap] loopback self-test inconclusive (${loopback.last.code ?? 'UNKNOWN'}) in ${loopback.last.elapsedMs}ms; continuing DSH start`,
+      );
+      return null;
+    }
+    if (!loopback.blocked) {
+      return null;
+    }
+    const code = loopback.last.code ?? 'ETIMEDOUT';
+    console.error(
+      `[DshBootstrap] loopback self-test blocked across ${loopback.attempts} attempts (${code}, ${loopback.last.elapsedMs}ms); pausing DSH start`,
+    );
+    const version = this.hostManager.getStatus().runtimeVersion ?? '0.2.2-rc.5';
+    const status: DshCompatEngineStatus = {
+      phase: OpenClawEnginePhase.Error,
+      version,
+      errorCode: OpenClawEngineErrorCode.LoopbackBlocked,
+      message: t('openClawLoopbackBlocked', { code }),
+      canRetry: true,
+    };
+    this.startupBlockStatus = status;
+    this.startingInProgress = false;
+    this.emitStatusChange();
+    return status;
   }
 
   private emitStatusChange(): void {
@@ -928,8 +982,17 @@ export class DshBootstrap {
   }
 
   private async doStart(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
+    if (options?.syncInitialConfig) {
+      this.lastInitialConfigSyncFn = options.syncInitialConfig;
+    }
+    this.startupBlockStatus = null;
     this.startingInProgress = true;
     try {
+      const loopbackBlockedStatus = await this.checkWindowsLoopbackBeforeStart();
+      if (loopbackBlockedStatus) {
+        return loopbackBlockedStatus;
+      }
+
       // One-shot idempotent backfills for users who completed v2 migration before
       // `cron_jobs`, `DREAMS.md`, Tavily, or `mcp_oauth_stores` extraction landed.
       // All run concurrently with DSH boot and return instantaneously once completed.
@@ -1087,15 +1150,26 @@ export class DshBootstrap {
   }
 
   async restart(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
+    if (options?.syncInitialConfig) {
+      this.lastInitialConfigSyncFn = options.syncInitialConfig;
+    }
+    this.startupBlockStatus = null;
     this.startingInProgress = true;
     try {
+      const loopbackBlockedStatus = await this.checkWindowsLoopbackBeforeStart();
+      if (loopbackBlockedStatus) {
+        return loopbackBlockedStatus;
+      }
       await this.hostManager.restart();
       await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
         console.warn('[DshBootstrap] Failed to sync dynamic host tools after restart:', error);
       });
-      if (options?.syncInitialConfig) {
-        await this.runInitialConfigSync(options.syncInitialConfig, { force: true });
+      const syncFn = options?.syncInitialConfig
+        ?? (!this.initialConfigSynced ? this.lastInitialConfigSyncFn : null);
+      if (syncFn) {
+        await this.runInitialConfigSync(syncFn, { force: Boolean(options?.syncInitialConfig) });
       }
+      this.scheduler.start();
       this.started = true;
       this.startingInProgress = false;
       this.emitStatusChange();
@@ -1110,6 +1184,7 @@ export class DshBootstrap {
   async stop(): Promise<void> {
     this.started = false;
     this.startingInProgress = false;
+    this.startupBlockStatus = null;
     this.initialConfigSynced = false;
     this.initialSyncPromise = null;
     this.mcpOAuthRefreshScheduler.stop();
