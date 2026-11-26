@@ -3231,7 +3231,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         anchorAccessPrompt={narrow}
         onLoginRequired={narrow ? () => setShowChatLoginExperiencePrompt(true) : undefined}
         dropdownDirection="up"
-        alignDropdownToTriggerEnd={useHomeContextLayout}
+        alignDropdownToTriggerEnd={useHomeContextLayout || showReadOnlyContext}
         portal={showReadOnlyContext}
         triggerMaxWidthClassName={largeModelTriggerMaxWidthClassName}
         hideCustomProviderName={useLargeToolbarCompactLayout}

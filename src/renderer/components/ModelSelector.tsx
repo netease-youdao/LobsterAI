@@ -96,6 +96,7 @@ const LIST_VERTICAL_PADDING = 8; // scroll container py-1
 const LIST_MAX_HEIGHT = 288; // default cap for the scrollable model list (18rem)
 const LIST_MIN_HEIGHT = MODEL_ITEM_HEIGHT * 3 + LIST_VERTICAL_PADDING; // never collapse below three rows
 const DROPDOWN_VIEWPORT_MARGIN = 8;
+const POPOVER_BOUNDARY_SELECTOR = '[data-popover-boundary="true"]';
 const DROPDOWN_TRIGGER_GAP = 4; // matches mt-1/mb-1 and the +4 offset in portal mode
 const DROPDOWN_TABS_BLOCK_HEIGHT = 49; // group tabs block: p-2 + p-0.5 + py-1.5 + leading-4 + border-b
 const DROPDOWN_FOOTER_HEIGHT = 33; // current-model footer: py-2 + leading-4 + border-t
@@ -319,6 +320,52 @@ export function resolveDropdownListMaxHeight(
     + (hasGroupTabs ? DROPDOWN_TABS_BLOCK_HEIGHT : 0)
     + (hasCurrentModelFooter ? DROPDOWN_FOOTER_HEIGHT : 0);
   return Math.min(Math.max(availableSpace - chromeHeight, LIST_MIN_HEIGHT), LIST_MAX_HEIGHT);
+}
+
+export function resolvePortalDropdownPlacement(options: {
+  anchorLeft: number;
+  anchorRight: number;
+  alignToTriggerEnd: boolean;
+  viewportWidth: number;
+  preferredWidth?: number;
+  boundaryLeft?: number;
+  boundaryRight?: number;
+  margin?: number;
+}): { left: number; width: number } {
+  const {
+    anchorLeft,
+    anchorRight,
+    alignToTriggerEnd,
+    viewportWidth,
+    preferredWidth = DROPDOWN_WIDTH,
+    boundaryLeft = 0,
+    boundaryRight = viewportWidth,
+    margin = DROPDOWN_VIEWPORT_MARGIN,
+  } = options;
+  // Never cross `boundaryRight` (which separates the chat pane from native
+  // WebContentsView sidebars such as Agent Browser / Word), while allowing the
+  // portal to extend leftward past `boundaryLeft` over HTML chrome if needed.
+  const effectiveRight = Math.min(viewportWidth, boundaryRight);
+  const maxAvailableWidth = Math.max(0, effectiveRight - margin * 2);
+  const width = maxAvailableWidth > 0 ? Math.min(preferredWidth, maxAvailableWidth) : preferredWidth;
+  const maxLeft = Math.max(margin, effectiveRight - width - margin);
+  const preferredMinLeft = boundaryLeft + margin;
+  const minLeft = preferredMinLeft <= maxLeft ? preferredMinLeft : margin;
+
+  const primaryLeft = alignToTriggerEnd ? anchorRight - width : anchorLeft;
+  const fallbackLeft = alignToTriggerEnd ? anchorLeft : anchorRight - width;
+  const fitsBounds = (candidate: number): boolean => (
+    candidate >= minLeft && candidate <= maxLeft
+  );
+  const chosenLeft = fitsBounds(primaryLeft)
+    ? primaryLeft
+    : fitsBounds(fallbackLeft)
+      ? fallbackLeft
+      : primaryLeft;
+  return {
+    left: Math.min(Math.max(chosenLeft, minLeft), maxLeft),
+    width,
+  };
 }
 
 export function resolveHoverCardTop(
@@ -769,20 +816,37 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     return resolveDropdownListMaxHeight(availableSpace, shouldShowGroupTabs, showCurrentModelFooter);
   }, [portal, shouldShowGroupTabs, showCurrentModelFooter]);
 
+  const resolvePortalHorizontalBounds = React.useCallback(() => {
+    const boundaryEl = containerRef.current?.closest<HTMLElement>(POPOVER_BOUNDARY_SELECTOR);
+    if (!boundaryEl) {
+      return { boundaryLeft: 0, boundaryRight: window.innerWidth, boundaryEl: null };
+    }
+    const boundaryRect = boundaryEl.getBoundingClientRect();
+    return {
+      boundaryLeft: Math.max(0, boundaryRect.left),
+      boundaryRight: Math.min(window.innerWidth, boundaryRect.right),
+      boundaryEl,
+    };
+  }, []);
+
   const updatePortalPosition = React.useCallback((direction: 'up' | 'down') => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const desiredLeft = alignDropdownToTriggerEnd
-      ? rect.right - DROPDOWN_WIDTH
-      : rect.left;
-    const left = Math.min(
-      Math.max(desiredLeft, DROPDOWN_VIEWPORT_MARGIN),
-      window.innerWidth - DROPDOWN_WIDTH - DROPDOWN_VIEWPORT_MARGIN
-    );
+    const { boundaryLeft, boundaryRight } = resolvePortalHorizontalBounds();
+    const { left, width } = resolvePortalDropdownPlacement({
+      anchorLeft: rect.left,
+      anchorRight: rect.right,
+      alignToTriggerEnd: alignDropdownToTriggerEnd,
+      viewportWidth: window.innerWidth,
+      preferredWidth: DROPDOWN_WIDTH,
+      boundaryLeft,
+      boundaryRight,
+      margin: DROPDOWN_VIEWPORT_MARGIN,
+    });
     const nextStyle: React.CSSProperties = {
       left,
       position: 'fixed',
-      width: DROPDOWN_WIDTH,
+      width,
       zIndex: 10000,
     };
 
@@ -793,7 +857,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
 
     setPortalStyle(nextStyle);
-  }, [alignDropdownToTriggerEnd]);
+  }, [alignDropdownToTriggerEnd, resolvePortalHorizontalBounds]);
 
   const updateInPlacePlacement = React.useCallback(() => {
     const container = containerRef.current;
@@ -831,12 +895,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
     window.addEventListener('resize', handlePositionUpdate);
     window.addEventListener('scroll', handlePositionUpdate, true);
+    const { boundaryEl } = resolvePortalHorizontalBounds();
+    const resizeObserver = boundaryEl && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => handlePositionUpdate())
+      : null;
+    if (boundaryEl && resizeObserver) {
+      resizeObserver.observe(boundaryEl);
+    }
 
     return () => {
       window.removeEventListener('resize', handlePositionUpdate);
       window.removeEventListener('scroll', handlePositionUpdate, true);
+      resizeObserver?.disconnect();
     };
-  }, [isOpen, portal, resolvedDirection, updatePortalPosition, updateInPlacePlacement, resolveListMaxHeight]);
+  }, [isOpen, portal, resolvedDirection, updatePortalPosition, updateInPlacePlacement, resolveListMaxHeight, resolvePortalHorizontalBounds]);
 
   React.useLayoutEffect(() => {
     if (!isOpen || !selectedModelKey) return;
@@ -1208,14 +1280,15 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       );
       // Prefer the side that fits both panels before the pointer enters the
       // detail card, avoiding a jump when a setting is hovered later.
+      const { boundaryRight } = resolvePortalHorizontalBounds();
       const cascadeWidth = HOVER_CARD_WIDTH + nestedMenuWidth + HOVER_CARD_VIEWPORT_MARGIN;
-      const preferredSide = window.innerWidth - dropdownRect.right < cascadeWidth
+      const preferredSide = boundaryRight - dropdownRect.right < cascadeWidth
         && dropdownRect.left >= cascadeWidth ? CascadeSide.Left : CascadeSide.Right;
       const placement = resolveCascadePlacement({
         anchorLeft: dropdownRect.left,
         anchorRight: dropdownRect.right,
         width: HOVER_CARD_WIDTH,
-        viewportWidth: window.innerWidth,
+        viewportWidth: boundaryRight,
         preferredSide,
       });
       setHoverCardSide(placement.side);
@@ -1258,11 +1331,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const card = hoverCardRef.current;
     if (!card) return;
     const cardRect = card.getBoundingClientRect();
+    const { boundaryRight } = resolvePortalHorizontalBounds();
     const { left } = resolveNestedCascadePlacement({
       anchorLeft: cardRect.left,
       anchorRight: cardRect.right,
       width: THINKING_MENU_WIDTH,
-      viewportWidth: window.innerWidth,
+      viewportWidth: boundaryRight,
       preferredSide: hoverCardSide,
     });
     setThinkingMenuStyle({
@@ -1282,11 +1356,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setIsThinkingMenuOpen(false);
     if (isContextWindowMenuOpen || !hoverCardRef.current) return;
     const cardRect = hoverCardRef.current.getBoundingClientRect();
+    const { boundaryRight } = resolvePortalHorizontalBounds();
     const { left } = resolveNestedCascadePlacement({
       anchorLeft: cardRect.left,
       anchorRight: cardRect.right,
       width: CONTEXT_WINDOW_MENU_WIDTH,
-      viewportWidth: window.innerWidth,
+      viewportWidth: boundaryRight,
       preferredSide: hoverCardSide,
     });
     setContextWindowMenuStyle({

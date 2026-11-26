@@ -12,6 +12,7 @@ export interface ImageStudioRequest { artifact: Artifact; operation?: ImageEditO
 /** An edit sent to the conversation. One per image, so every editor of that image shows it until the new version arrives. */
 export interface ImageEditJob {
   requestId: string; sessionId: string; rootId: string; sourceId: string; operation: ImageEditOperation; regionCount: number; startedAt: number;
+  observedRunning?: boolean;
 }
 export const imageEditJobKey = (sessionId: string, rootId: string): string => `${sessionId}:${rootId}`;
 const initialState: { documents: Record<string, ImageEditorDocument>; jobs: Record<string, ImageEditJob>; focus?: ImageEditorFocus; studio?: ImageStudioRequest } = {
@@ -49,11 +50,16 @@ const imageEditorSlice = createSlice({ name: 'imageEditor', initialState, reduce
   startImageEditJob(state, action: PayloadAction<ImageEditJob>) {
     state.jobs[imageEditJobKey(action.payload.sessionId, action.payload.rootId)] = action.payload;
   },
+  markImageEditJobRunning(state, action: PayloadAction<string>) {
+    for (const job of Object.values(state.jobs)) {
+      if (job.requestId === action.payload) job.observedRunning = true;
+    }
+  },
   /** Ends the job for this request only; a newer edit of the same image keeps running. */
   endImageEditJob(state, action: PayloadAction<string>) {
     for (const [key, job] of Object.entries(state.jobs)) if (job.requestId === action.payload) delete state.jobs[key];
   },
 } });
 export const { commitImageDrawing, undoImageDrawing, redoImageDrawing, setImageRegions, requestImageEditorFocus, consumeImageEditorFocus,
-  openImageStudio, closeImageStudio, startImageEditJob, endImageEditJob } = imageEditorSlice.actions;
+  openImageStudio, closeImageStudio, startImageEditJob, markImageEditJobRunning, endImageEditJob } = imageEditorSlice.actions;
 export default imageEditorSlice.reducer;

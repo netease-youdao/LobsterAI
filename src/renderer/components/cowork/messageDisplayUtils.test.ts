@@ -49,6 +49,7 @@ import {
   getTurnMessageIds,
   getTurnReplyMessageIds,
   getTurnStartTimestamp,
+  getVisibleAssistantItems,
   isAbandonedToolPlaceholder,
   isActivityConsolidatedItem,
   isActivityItemLive,
@@ -316,7 +317,7 @@ test('a turn that began before the loaded message window keeps its real start', 
   expect(getTurnStartTimestamp(userTurn)).toBe(5000);
 });
 
-test('a context compaction split keeps timing the work it continues', () => {
+test('a manual context compaction split keeps timing the work it continues', () => {
   const turns = buildConversationTurns(buildDisplayItems([{
     id: 'user-1', type: 'user', content: 'long task', timestamp: 1000,
   }, {
@@ -334,12 +335,12 @@ test('a context compaction split keeps timing the work it continues', () => {
   }, {
     id: 'compaction-1',
     type: 'system',
-    content: 'Context compaction completed, continuing task',
+    content: 'Context compacted manually',
     timestamp: 3000,
     metadata: {
       kind: CoworkSystemMessageKind.ContextCompaction,
-      mode: ContextCompactionMode.Auto,
-      status: ContextCompactionStatus.Retrying,
+      mode: ContextCompactionMode.Manual,
+      status: ContextCompactionStatus.Completed,
     },
   }, {
     id: 'assistant-1', type: 'assistant', content: 'finished', timestamp: 4000,
@@ -349,6 +350,50 @@ test('a context compaction split keeps timing the work it continues', () => {
   expect(turns[1].userMessage).toBeNull();
   expect(getTurnStartTimestamp(turns[1])).toBe(1000);
   expect(getTurnEndTimestamp(turns[1])).toBe(4000);
+});
+
+test('mid-turn auto context compaction stays in one turn and folds into the process', () => {
+  const turns = buildConversationTurns(buildDisplayItems([{
+    id: 'user-1', type: 'user', content: 'audit scheduled tasks', timestamp: 1000,
+  }, {
+    id: 'assistant-pre', type: 'assistant', content: 'Let me unpack the archive first.', timestamp: 1500,
+  }, {
+    id: 'tool-1',
+    type: 'tool_use',
+    content: '',
+    timestamp: 2000,
+    metadata: { toolUseId: 'tool-use-1', toolName: 'exec' },
+  }, {
+    id: 'tool-result-1',
+    type: 'tool_result',
+    content: 'done',
+    timestamp: 2500,
+    metadata: { toolUseId: 'tool-use-1' },
+  }, {
+    id: 'compaction-auto-1',
+    type: 'system',
+    content: '',
+    timestamp: 3000,
+    metadata: {
+      kind: CoworkSystemMessageKind.ContextCompaction,
+      mode: ContextCompactionMode.Auto,
+      status: ContextCompactionStatus.Completed,
+    },
+  }, {
+    id: 'assistant-final', type: 'assistant', content: 'Full audit report.', timestamp: 4000,
+  }]));
+
+  expect(turns).toHaveLength(1);
+  expect(turns[0].userMessage?.id).toBe('user-1');
+  const visible = getVisibleAssistantItems(turns[0].assistantItems);
+  expect(visible.some(item => item.type === 'system' && item.message.id === 'compaction-auto-1')).toBe(true);
+  const chunks = chunkConsolidatedItemsForDisplay(visible);
+  const answerStart = getTurnAnswerStartIndex(chunks);
+  expect(answerStart).toBe(chunks.length - 1);
+  expect(chunks[answerStart]).toMatchObject({
+    kind: 'item',
+    item: { type: 'assistant', message: { id: 'assistant-final' } },
+  });
 });
 
 test('turn end timestamp is the latest message time and duration formats in locale units', () => {

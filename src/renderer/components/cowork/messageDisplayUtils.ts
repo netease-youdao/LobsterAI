@@ -692,6 +692,10 @@ export const isContextCompactionMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ContextCompaction
 );
 
+export const isAutoContextCompactionMessage = (message: CoworkMessage): boolean => (
+  isContextCompactionMessage(message) && message.metadata?.mode === ContextCompactionMode.Auto
+);
+
 export const isModelChangeMessage = (message: CoworkMessage): boolean => (
   message.type === 'system' && message.metadata?.kind === CoworkSystemMessageKind.ModelChanged
   && !!message.metadata.modelChange
@@ -718,6 +722,7 @@ const isRenderableAssistantOrSystemMessage = (message: CoworkMessage): boolean =
     return false;
   }
   if (isModelChangeMessage(message)) return true;
+  if (isContextCompactionMessage(message)) return true;
   if (hasText(message.content) || hasText(message.metadata?.error)) {
     return true;
   }
@@ -955,7 +960,11 @@ export const buildConversationTurns = (
       currentTurn = null;
       continue;
     }
-    if (isContextCompactionMessage(message) && currentTurn?.assistantItems.length) {
+    if (
+      isContextCompactionMessage(message)
+      && !isAutoContextCompactionMessage(message)
+      && currentTurn?.assistantItems.length
+    ) {
       currentTurn = null;
     }
     const turn = ensureTurn(message.id);
@@ -1651,8 +1660,12 @@ export const getTurnAnswerStartIndex = (chunks: ConsolidatedRenderChunk[]): numb
     const chunk = chunks[index - 1];
     if (chunk.kind !== 'item') break;
     const item = chunk.item;
-    // A reconnect row is process detail and folds away with the steps around it.
-    const isAnswerItem = (item.type === 'system' && !isModelReconnectMessage(item.message))
+    // Reconnect and auto-compaction rows are mid-turn process details and fold away with the steps around them.
+    const isAnswerItem = (
+      item.type === 'system'
+      && !isModelReconnectMessage(item.message)
+      && !isAutoContextCompactionMessage(item.message)
+    )
       || (item.type === 'assistant' && item.message.metadata?.isThinking !== true);
     if (!isAnswerItem) break;
     index -= 1;

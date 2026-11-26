@@ -18,7 +18,7 @@ export const ImApprovalDecision = {
 export type ImApprovalDecision =
   typeof ImApprovalDecision[keyof typeof ImApprovalDecision];
 
-export const DEFAULT_IM_APPROVAL_TIMEOUT_MS = 90_000;
+export const DEFAULT_IM_APPROVAL_TIMEOUT_MS = 300_000;
 const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
 const MAX_ACTION_SUMMARY_CHARS = 200;
 const MAX_REASON_CHARS = 240;
