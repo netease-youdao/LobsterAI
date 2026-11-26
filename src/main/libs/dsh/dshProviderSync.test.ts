@@ -404,9 +404,13 @@ describe('buildDshProvidersPayload', () => {
     ]);
     expect(byId.openai).toMatchObject({
       id: 'openai',
+      catalogProvider: OpenClawProviderId.OpenAICodex,
       api: OpenClawApi.OpenAIResponses,
       baseURL: 'http://127.0.0.1:45555/v1/openai-codex',
       apiKey: 'proxy-secret',
+      compat: {
+        supportsMaxOutputTokens: false,
+      },
     });
     expect(byId.xai).toMatchObject({
       id: 'xai',

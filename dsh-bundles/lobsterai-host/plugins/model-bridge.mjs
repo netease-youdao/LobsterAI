@@ -22,12 +22,16 @@ import { DEFAULT_LOBSTER_RETRY_POLICY, guardEmptyStopStream } from './empty-stop
 import {
   canonicalizeProviderId,
   dispatchProviderStream,
+  hasVerifiedModelThinkingLevels,
+  lookupBuiltinCatalogModel,
   normalizeProtocol,
   normalizeProviderBaseUrl,
+  resolveCatalogProviderCandidates,
   resolveDefaultRequestMaxTokens,
   resolveEffectiveContextWindow,
   resolveModelCompat,
   resolveModelThinkingLevelMap,
+  sanitizeExposedModelInfo,
 } from './model-bridge-helpers.mjs';
 import { getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 
@@ -43,36 +47,44 @@ const DEFAULT_MAX_REQUEST_IMAGES = 50;
 const DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048;
 const DEFAULT_REQUEST_IMAGE_MAX_BYTES = 1024 * 1024;
 
-/** @type {Promise<Record<string, () => unknown>> | null} */
-let piAiProtocolsPromise = null;
+/** @type {Promise<{ protocols: Record<string, () => unknown>; getBuiltinModel?: (provider: string, modelId: string) => unknown }> | null} */
+let piAiRuntimePromise = null;
 
 /**
- * Load pi-ai's lazy protocol factories through DSH's profile ESM resolver so
- * the exact installed `@earendil-works/pi-ai` package is used.
+ * Load pi-ai's lazy protocol factories and built-in model catalog lookup through
+ * DSH's profile ESM resolver so the exact installed `@earendil-works/pi-ai`
+ * package is used.
  */
-async function loadPiAiProtocols() {
-  if (!piAiProtocolsPromise) {
-    piAiProtocolsPromise = (async () => {
+async function loadPiAiRuntime() {
+  if (!piAiRuntimePromise) {
+    piAiRuntimePromise = (async () => {
       const [
         { openAICompletionsApi },
         { openAIResponsesApi },
         { anthropicMessagesApi },
         { googleGenerativeAIApi },
+        catalogModule,
       ] = await Promise.all([
         import('@earendil-works/pi-ai/api/openai-completions.lazy'),
         import('@earendil-works/pi-ai/api/openai-responses.lazy'),
         import('@earendil-works/pi-ai/api/anthropic-messages.lazy'),
         import('@earendil-works/pi-ai/api/google-generative-ai.lazy'),
+        import('@earendil-works/pi-ai/providers/all').catch(() => null),
       ]);
       return {
-        'openai-completions': openAICompletionsApi,
-        'openai-responses': openAIResponsesApi,
-        'anthropic-messages': anthropicMessagesApi,
-        'google-generative-ai': googleGenerativeAIApi,
+        protocols: {
+          'openai-completions': openAICompletionsApi,
+          'openai-responses': openAIResponsesApi,
+          'anthropic-messages': anthropicMessagesApi,
+          'google-generative-ai': googleGenerativeAIApi,
+        },
+        getBuiltinModel: typeof catalogModule?.getBuiltinModel === 'function'
+          ? catalogModule.getBuiltinModel
+          : undefined,
       };
     })();
   }
-  return piAiProtocolsPromise;
+  return piAiRuntimePromise;
 }
 
 const W3C_TRACE_ID_RE = /^[0-9a-f]{32}$/i;
@@ -162,7 +174,7 @@ function createProviderObject(spec, protocols, modelRuntimeMeta, getRequestConte
  * Normalize one incoming LobsterAI provider definition into the exact
  * resolved profile shape consumed by `PiAiAdapter`.
  */
-function buildResolvedProfile(entry, protocols, getRequestContext, ctx, state) {
+function buildResolvedProfile(entry, protocols, getBuiltinModel, getRequestContext, ctx, state) {
   const provider = canonicalizeProviderId(String(entry.id || ''));
   if (!provider) {
     throw new Error('lobster-model-bridge: provider id must be non-empty');
@@ -184,8 +196,11 @@ function buildResolvedProfile(entry, protocols, getRequestContext, ctx, state) {
     ? entry.defaultMaxTokens
     : DEFAULT_MAX_TOKENS;
 
+  const catalogProviderCandidates = resolveCatalogProviderCandidates(provider, entry.catalogProvider);
   const configuredMaxTokens = new Map();
   const modelRuntimeMeta = new Map();
+  /** @type {Set<string>} */
+  const verifiedThinkingModels = new Set();
   /** @type {Map<string, Array<{ id: string, label?: string, contextWindow: number }>>} */
   const modelContextWindows = new Map();
   const rawModels = Array.isArray(entry.models) ? entry.models : [];
@@ -250,9 +265,18 @@ function buildResolvedProfile(entry, protocols, getRequestContext, ctx, state) {
       ? rawModel.input.filter((m) => m === 'text' || m === 'image')
       : (rawModel.supportsImage ? ['text', 'image'] : ['text']);
     const reasoning = Boolean(rawModel.reasoning || rawModel.supportsThinking);
+    const catalogModel = lookupBuiltinCatalogModel(
+      getBuiltinModel,
+      catalogProviderCandidates,
+      modelId,
+      modelApi,
+    );
 
     const compat = resolveModelCompat(modelApi, modelBaseUrl, entry.compat, rawModel.compat, api);
-    const thinkingLevelMap = resolveModelThinkingLevelMap(rawModel, reasoning);
+    const thinkingLevelMap = resolveModelThinkingLevelMap(rawModel, reasoning, catalogModel);
+    if (hasVerifiedModelThinkingLevels(rawModel, reasoning, catalogModel)) {
+      verifiedThinkingModels.add(modelId);
+    }
 
     const runtimeProfile = typeof rawModel.runtimeProfile === 'string' && rawModel.runtimeProfile.trim().length > 0
       ? rawModel.runtimeProfile.trim()
@@ -330,6 +354,7 @@ function buildResolvedProfile(entry, protocols, getRequestContext, ctx, state) {
       `lobster-model-bridge: "${provider}"`,
     ),
     configuredMaxTokens,
+    verifiedThinkingModels,
     modelErrors: new Map(),
     piProvider,
   };
@@ -432,11 +457,25 @@ export function apply(ctx) {
     return runIterableInRequestContext(requestContextStorage, reqCtx, () => rawAdapterStream(options));
   };
 
+  const isModelThinkingVerified = (provider, model) => {
+    const canonical = canonicalizeProviderId(provider);
+    return Boolean(currentProfiles.get(canonical)?.verifiedThinkingModels?.has(model));
+  };
+
+  const rawAdapterResolveModel = adapter.resolveModel.bind(adapter);
+  adapter.resolveModel = async (provider, model, signal) => {
+    const verified = isModelThinkingVerified(provider, model);
+    const info = await rawAdapterResolveModel(provider, model, signal);
+    return sanitizeExposedModelInfo(info, verified);
+  };
+
   const rawAdapterPrepareCall = adapter.prepareCall.bind(adapter);
   adapter.prepareCall = async (provider, model, signal) => {
+    const verified = isModelThinkingVerified(provider, model);
     const prepared = await rawAdapterPrepareCall(provider, model, signal);
     return {
       ...prepared,
+      model: sanitizeExposedModelInfo(prepared.model, verified),
       stream: (options) => {
         const reqCtx = {
           provider: options?.provider ?? provider,
@@ -485,7 +524,7 @@ export function apply(ctx) {
   state.syncProviders = async (payload) => {
     const body = payload && typeof payload === 'object' ? payload : {};
     const providersList = Array.isArray(body.providers) ? body.providers : [];
-    const protocols = await loadPiAiProtocols();
+    const { protocols, getBuiltinModel } = await loadPiAiRuntime();
 
     const nextProfiles = new Map();
     const nextKeys = new Map();
@@ -505,6 +544,7 @@ export function apply(ctx) {
       const resolved = buildResolvedProfile(
         { ...entry, id },
         protocols,
+        getBuiltinModel,
         getRequestContext,
         ctx,
         state,

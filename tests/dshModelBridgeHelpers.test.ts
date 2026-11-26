@@ -23,10 +23,29 @@ type ModelBridgeHelpers = {
     modelCompat?: unknown,
     providerApi?: string,
   ) => Record<string, unknown>;
+  resolveCatalogProviderCandidates: (
+    providerId: string,
+    catalogProviderHint?: unknown,
+  ) => string[];
+  isCatalogThinkingMapCompatible: (modelApi: string, catalogApi: unknown) => boolean;
+  lookupBuiltinCatalogModel: (
+    getBuiltinModel: ((provider: string, modelId: string) => unknown) | undefined,
+    providerCandidates: readonly string[],
+    modelId: string,
+    modelApi: string,
+  ) => Record<string, unknown> | undefined;
+  hasVerifiedModelThinkingLevels: (
+    rawModel: Record<string, unknown>,
+    reasoning: boolean,
+    catalogModel?: Record<string, unknown>,
+  ) => boolean;
+  sanitizeExposedModelInfo: <T>(modelInfo: T, hasVerifiedThinkingLevels: boolean) => T;
   resolveModelThinkingLevelMap: (
     rawModel: Record<string, unknown>,
     reasoning: boolean,
+    catalogModel?: Record<string, unknown>,
   ) => Record<string, string | null> | undefined;
+  omitSyntheticDisabledThinking: (payload: Record<string, unknown>, modelApi: unknown) => void;
   resolveDefaultRequestMaxTokens: (
     rawDefaultMaxTokens: unknown,
     rawMaxTokens: unknown,
@@ -227,17 +246,62 @@ describe('model-bridge-helpers', () => {
     expect(anthropicFactory).toHaveBeenCalledTimes(1);
   });
 
-  test('preserves explicit thinkingLevelMap nulls, ignores unknown keys, and derives maps from thinkingConfig', async () => {
-    const { resolveModelThinkingLevelMap } = await loadHelpers();
+  test('preserves explicit thinkingLevelMap nulls, inherits catalog maps, disables off in fallback, and derives maps from thinkingConfig', async () => {
+    const {
+      hasVerifiedModelThinkingLevels,
+      resolveModelThinkingLevelMap,
+      sanitizeExposedModelInfo,
+    } = await loadHelpers();
 
     expect(resolveModelThinkingLevelMap({ thinkingLevelMap: { high: 'max' } }, false)).toBeUndefined();
     expect(resolveModelThinkingLevelMap({}, true)).toEqual({
+      off: null,
       minimal: 'minimal',
       low: 'low',
       medium: 'medium',
       high: 'high',
       xhigh: 'xhigh',
       max: 'max',
+    });
+
+    // Unknown hand-declared model with only `supportsThinking` is unverified so
+    // DSH modelInfo hides guessed `reasoning.efforts` from auxiliary callers.
+    expect(hasVerifiedModelThinkingLevels({}, true)).toBe(false);
+    expect(
+      sanitizeExposedModelInfo(
+        { id: 'gpt-6.2-astra', provider: 'openai', reasoning: { efforts: [{ id: 'minimal', name: 'Minimal' }] } },
+        false,
+      ),
+    ).toEqual({ id: 'gpt-6.2-astra', provider: 'openai' });
+
+    // Built-in pi-ai catalog model (e.g. gpt-6-astra) supplies authoritative thinkingLevelMap.
+    const catalogGpt6Astra = {
+      id: 'gpt-6-astra',
+      api: 'openai-codex-responses',
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: 'low',
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        max: 'max',
+      },
+    };
+    expect(resolveModelThinkingLevelMap({}, true, catalogGpt6Astra)).toEqual(
+      catalogGpt6Astra.thinkingLevelMap,
+    );
+    expect(hasVerifiedModelThinkingLevels({}, true, catalogGpt6Astra)).toBe(true);
+    expect(
+      sanitizeExposedModelInfo(
+        { id: 'gpt-6-astra', provider: 'openai', reasoning: { efforts: [{ id: 'low', name: 'Low' }] } },
+        true,
+      ),
+    ).toEqual({
+      id: 'gpt-6-astra',
+      provider: 'openai',
+      reasoning: { efforts: [{ id: 'low', name: 'Low' }] },
     });
 
     expect(
@@ -255,6 +319,7 @@ describe('model-bridge-helpers', () => {
           },
         },
         true,
+        catalogGpt6Astra,
       ),
     ).toEqual({
       off: null,
@@ -290,6 +355,75 @@ describe('model-bridge-helpers', () => {
     });
 
     expect(resolveModelThinkingLevelMap({}, false)).toBeUndefined();
+    expect(hasVerifiedModelThinkingLevels({}, false, catalogGpt6Astra)).toBe(false);
+  });
+
+  test('resolves pi-ai built-in catalog candidates and matches compatible protocols only', async () => {
+    const { lookupBuiltinCatalogModel, resolveCatalogProviderCandidates } = await loadHelpers();
+
+    expect(resolveCatalogProviderCandidates('openai', 'openai-codex')).toEqual(['openai-codex', 'openai']);
+    expect(resolveCatalogProviderCandidates('openai')).toEqual(['openai']);
+    expect(resolveCatalogProviderCandidates('gemini')).toEqual(['google']);
+    expect(resolveCatalogProviderCandidates('zhipu')).toEqual(['zai', 'zai-coding-cn']);
+    expect(resolveCatalogProviderCandidates('lobsterai-server')).toEqual([]);
+    expect(resolveCatalogProviderCandidates('custom_0')).toEqual([]);
+
+    const catalog: Record<string, Record<string, Record<string, unknown>>> = {
+      'openai-codex': {
+        'gpt-6-astra': {
+          id: 'gpt-6-astra',
+          type: 'chat',
+          api: 'openai-codex-responses',
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: 'low', low: 'low' },
+        },
+      },
+      openai: {
+        'gpt-6-astra': {
+          id: 'gpt-6-astra',
+          type: 'chat',
+          api: 'openai-responses',
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: 'low' },
+        },
+        'gpt-5.4': {
+          id: 'gpt-5.4',
+          type: 'chat',
+          api: 'openai-responses',
+          reasoning: true,
+          thinkingLevelMap: { off: 'none', low: 'low' },
+        },
+      },
+      anthropic: {
+        'claude-opus-4-7': {
+          id: 'claude-opus-4-7',
+          type: 'chat',
+          api: 'anthropic-messages',
+          reasoning: true,
+          thinkingLevelMap: { off: null, high: 'high' },
+        },
+      },
+    };
+    const getBuiltinModel = (provider: string, modelId: string) => catalog[provider]?.[modelId];
+
+    // Codex OAuth prefers `openai-codex` over `openai` and falls back to `openai`.
+    expect(
+      lookupBuiltinCatalogModel(getBuiltinModel, ['openai-codex', 'openai'], 'gpt-6-astra', 'openai-responses'),
+    ).toEqual(catalog['openai-codex']['gpt-6-astra']);
+    expect(
+      lookupBuiltinCatalogModel(getBuiltinModel, ['openai-codex', 'openai'], 'gpt-5.4', 'openai-responses'),
+    ).toEqual(catalog.openai['gpt-5.4']);
+    // Unknown newer model returns undefined rather than guessing.
+    expect(
+      lookupBuiltinCatalogModel(getBuiltinModel, ['openai-codex', 'openai'], 'gpt-6.2-astra', 'openai-responses'),
+    ).toBeUndefined();
+    // Incompatible wire protocol (Anthropic model routed via OpenAI completions) is skipped.
+    expect(
+      lookupBuiltinCatalogModel(getBuiltinModel, ['anthropic'], 'claude-opus-4-7', 'openai-completions'),
+    ).toBeUndefined();
+    expect(
+      lookupBuiltinCatalogModel(getBuiltinModel, ['anthropic'], 'claude-opus-4-7', 'anthropic-messages'),
+    ).toEqual(catalog.anthropic['claude-opus-4-7']);
   });
 
   test('caps huge catalog maxTokens to safe per-request defaults while honoring explicit caps', async () => {
@@ -467,42 +601,104 @@ describe('model-bridge-helpers', () => {
     ).toThrow(/requires openai-completions/);
   });
 
-  test('omits synthetic disabled thinking on Anthropic models without thinkingConfig', async () => {
+  test('omits synthetic disabled thinking across protocols unless explicitly requested as off or overridden via customParams', async () => {
     const { invokeModelApiStream } = await loadHelpers();
 
-    let capturedOptions: Record<string, unknown> | undefined;
-    const apiImpl = {
-      stream: vi.fn(),
-      streamSimple: vi.fn((_m: unknown, _c: unknown, opts: Record<string, unknown>) => {
-        capturedOptions = opts;
-        return 'ok';
-      }),
+    const runPayload = async (
+      model: Record<string, unknown>,
+      payload: Record<string, unknown>,
+      extra: {
+        options?: Record<string, unknown>;
+        modelMeta?: Record<string, unknown>;
+        requestContext?: Record<string, unknown>;
+      } = {},
+    ) => {
+      let capturedOptions: Record<string, unknown> | undefined;
+      const apiImpl = {
+        stream: vi.fn(),
+        streamSimple: vi.fn((_m: unknown, _c: unknown, opts: Record<string, unknown>) => {
+          capturedOptions = opts;
+          return 'ok';
+        }),
+      };
+      invokeModelApiStream({
+        method: 'streamSimple',
+        apiImpl,
+        model,
+        context: {},
+        options: extra.options ?? {},
+        modelMeta: extra.modelMeta,
+        requestContext: extra.requestContext,
+      });
+      const onPayload = capturedOptions?.onPayload as ((p: Record<string, unknown>, m: unknown) => unknown) | undefined;
+      if (onPayload) {
+        await onPayload(payload, model);
+      }
+      return payload;
     };
 
-    invokeModelApiStream({
-      method: 'streamSimple',
-      apiImpl,
-      model: { id: 'claude-sonnet-5-5-hc-YoudaoInner', provider: 'lobsterai-server', api: 'anthropic-messages' },
-      context: {},
-      options: {},
+    // Anthropic: omits synthetic disabled thinking on default turns, preserves adaptive thinking.
+    const anthropicModel = { id: 'claude-sonnet-5-5-hc-YoudaoInner', provider: 'lobsterai-server', api: 'anthropic-messages' };
+    expect(
+      (await runPayload(anthropicModel, { model: anthropicModel.id, thinking: { type: 'disabled' }, messages: [] })).thinking,
+    ).toBeUndefined();
+    expect(
+      (await runPayload(anthropicModel, { model: anthropicModel.id, thinking: { type: 'adaptive', display: 'summarized' }, messages: [] })).thinking,
+    ).toEqual({ type: 'adaptive', display: 'summarized' });
+
+    // OpenAI Responses (e.g. Codex OAuth gpt-6.2-astra / gpt-6-luna):
+    // 1. Default turn (no reasoningEffort) strips pi-ai's synthetic `{ effort: 'none' }`.
+    const responsesModel = { id: 'gpt-6.2-astra', provider: 'openai', api: 'openai-responses' };
+    expect(
+      (await runPayload(responsesModel, { model: responsesModel.id, reasoning: { effort: 'none' }, input: [] })).reasoning,
+    ).toBeUndefined();
+    // 2. Non-'none' reasoning effort is preserved.
+    expect(
+      (await runPayload(responsesModel, { model: responsesModel.id, reasoning: { effort: 'medium', summary: 'auto' }, input: [] })).reasoning,
+    ).toEqual({ effort: 'medium', summary: 'auto' });
+    // 3. Explicit `requestContext.reasoningEffort: 'off'` (e.g. title generation on gpt-6-luna) keeps `{ effort: 'none' }`.
+    expect(
+      (await runPayload(
+        { id: 'gpt-6-luna', provider: 'openai', api: 'openai-responses' },
+        { model: 'gpt-6-luna', reasoning: { effort: 'none' }, input: [] },
+        { requestContext: { reasoningEffort: 'off' } },
+      )).reasoning,
+    ).toEqual({ effort: 'none' });
+    // 4. User customParams wins over synthetic-off stripping (both `{ effort: 'high' }` and explicit `{ effort: 'none' }`).
+    expect(
+      (await runPayload(
+        responsesModel,
+        { model: responsesModel.id, reasoning: { effort: 'none' }, input: [] },
+        { modelMeta: { customParams: { reasoning: { effort: 'high' } } } },
+      )).reasoning,
+    ).toEqual({ effort: 'high' });
+    expect(
+      (await runPayload(
+        responsesModel,
+        { model: responsesModel.id, reasoning: { effort: 'none' }, input: [] },
+        { modelMeta: { customParams: { reasoning: { effort: 'none' } } } },
+      )).reasoning,
+    ).toEqual({ effort: 'none' });
+
+    // Google Gemini: omits synthetic disabled thinkingConfig (without includeThoughts), preserves enabled thinkingConfig.
+    const geminiModel = { id: 'gemini-2.5-pro', provider: 'gemini', api: 'google-generative-ai' };
+    expect(
+      (await runPayload(geminiModel, { model: geminiModel.id, config: { thinkingConfig: { thinkingBudget: 0 } } })).config,
+    ).toEqual({});
+    expect(
+      (await runPayload(geminiModel, { model: geminiModel.id, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'HIGH' } } })).config,
+    ).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: 'HIGH' } });
+
+    // OpenAI Completions: omits synthetic `reasoning_effort: 'none'` and `reasoning: { effort: 'none' }`.
+    const completionsModel = { id: 'custom-reasoner', provider: 'custom_0', api: 'openai-completions' };
+    const completionsResult = await runPayload(completionsModel, {
+      model: completionsModel.id,
+      reasoning_effort: 'none',
+      reasoning: { effort: 'none' },
+      messages: [],
     });
-
-    const disabledPayload: Record<string, unknown> = {
-      model: 'claude-sonnet-5-5-hc-YoudaoInner',
-      thinking: { type: 'disabled' },
-      messages: [],
-    };
-    const onPayload = capturedOptions?.onPayload as (p: Record<string, unknown>, m: unknown) => unknown;
-    await onPayload(disabledPayload, {});
-    expect(disabledPayload.thinking).toBeUndefined();
-
-    const enabledPayload: Record<string, unknown> = {
-      model: 'claude-sonnet-5-5-hc-YoudaoInner',
-      thinking: { type: 'adaptive', display: 'summarized' },
-      messages: [],
-    };
-    await onPayload(enabledPayload, {});
-    expect(enabledPayload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+    expect(completionsResult.reasoning_effort).toBeUndefined();
+    expect(completionsResult.reasoning).toBeUndefined();
   });
 
   test('injects customParams and flattens text-only content arrays when requiresStringContent is enabled', async () => {
