@@ -1,5 +1,6 @@
 export const mediaTranslations = {
   zh: {
+    mediaWatermarkRestoreUnavailable: '当前服务无法取回无水印原图。',
     mediaImageProcessingUnavailable: '当前服务或所选模型不支持该操作。可查询模型列表，选择支持此操作的图片编辑模型。',
     mediaImageProcessingSource: '请选择一张要处理的原图。',
     mediaImageEraseTargetRequired: '请说明要擦除的内容。',
@@ -71,6 +72,7 @@ export const mediaTranslations = {
     mediaTaskVideoUrlRequired: '所选模型的参考视频需要可访问的 HTTP(S) 链接，请先上传视频后再生成。',
   },
   en: {
+    mediaWatermarkRestoreUnavailable: 'The service could not retrieve the original image.',
     mediaImageProcessingUnavailable: 'This operation is unavailable with the current service or model. List the image models to find a compatible one.',
     mediaImageProcessingSource: 'Select one source image to process.',
     mediaImageEraseTargetRequired: 'Specify what to erase from the image.',

@@ -196,7 +196,7 @@ import {
 import { LogIpc } from '../shared/logExport/constants';
 import { McpAuthMode } from '../shared/mcp/auth';
 import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
-import { ImageProcessingOperation, LOBSTERAI_WATERMARK_TARGET, MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, REMOVE_WATERMARK_OPERATION, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
+import { ImageProcessingOperation, MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { MediaDefaultsProtocol } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
@@ -492,6 +492,7 @@ import { ExpertStore } from './libs/expertStore';
 import { ExternalBrowserHost } from './libs/externalBrowserHost';
 import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
 import { fitImageBytesForModel } from './libs/fitImageForModel';
+import { isFixedWatermarkRestore, watermarkOriginalSource } from './libs/fixedImageWatermark';
 import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import {
   createOfficePreviewSession,
@@ -5959,6 +5960,33 @@ if (!gotTheLock) {
     ) {
       return staleAccountResult();
     }
+    if (isFixedWatermarkRestore(tool, args)) {
+      try {
+        const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
+        const cwd = ownerSessionId ? getCoworkStore().getSession(ownerSessionId)?.cwd : undefined;
+        const source = await watermarkOriginalSource(args, refs, cwd);
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        const response = await fetchWithAuth(serverBaseUrl + '/api/media/images/watermark/original', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }),
+          signal: request.signal ?? AbortSignal.timeout(30_000),
+        });
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (!response.ok) throw new Error(t('mediaWatermarkRestoreUnavailable'));
+        const body = await response.json() as { code: number; message?: string; data?: { url?: string } };
+        if (body.code !== 0 || !body.data?.url?.startsWith('https://')) {
+          throw new Error(body.message || t('mediaWatermarkRestoreUnavailable'));
+        }
+        const asset = { type: MediaType.Image, url: body.data.url, filename: typeof args.filename === 'string' ? args.filename : undefined };
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        const result = ownerSessionId ? await persistGeneratedImages(ownerSessionId, [asset]) : null;
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        const saved = result?.saved[0];
+        return { content: [{ type: 'text', text: saved ? formatPersistedImageLink(saved, t('mediaImageSavedToRecovery')) : asset.url }],
+          details: { status: MediaTaskStatus.Succeeded, assets: [saved ?? asset] } };
+      } catch (error) {
+        return { content: [{ type: 'text', text: error instanceof Error ? error.message : t('mediaWatermarkRestoreUnavailable') }], isError: true };
+      }
+    }
     const selection: MediaSelectionState | undefined = nativeRun
       ? { mode: MediaSelectionMode.Auto }
       : resolveMediaSelectionForSession(ownerSessionId);
@@ -6273,13 +6301,9 @@ if (!gotTheLock) {
         return { content: [{ type: 'text', text: t('mediaSelectedModelUnavailable') }], isError: true,
           details: { status: 'failed', warnings: [MediaGenerationGateReason.ModelUnavailable] } };
       }
-      let imageOperation = mediaType === 'image' && typeof args.imageOperation === 'string' ? args.imageOperation : undefined;
-      if (imageOperation === ImageProcessingOperation.Erase && args.eraseTarget === LOBSTERAI_WATERMARK_TARGET) {
-        imageOperation = REMOVE_WATERMARK_OPERATION;
-      }
+      const imageOperation = mediaType === 'image' && typeof args.imageOperation === 'string' ? args.imageOperation : undefined;
       if (imageOperation) {
-        const supported = imageOperation === REMOVE_WATERMARK_OPERATION ? modelCapability.supportsWatermarkRemoval
-          : modelCapability.supportedImageOperations?.includes(imageOperation);
+        const supported = modelCapability.supportedImageOperations?.includes(imageOperation);
         if (!supported) return { content: [{ type: 'text', text: t('mediaImageProcessingUnavailable') }], isError: true };
         if (imageOperation === ImageProcessingOperation.Erase && !prompt.trim()) {
           return { content: [{ type: 'text', text: t('mediaImageEraseTargetRequired') }], isError: true };
@@ -6855,7 +6879,8 @@ if (!gotTheLock) {
   };
 
   getMcpRuntime().setMediaGenerationHandler(request => {
-    if (request.tool !== MediaGenerationTool.Image && request.tool !== MediaGenerationTool.Video) {
+    if ((request.tool !== MediaGenerationTool.Image && request.tool !== MediaGenerationTool.Video)
+      || isFixedWatermarkRestore(request.tool, request.args)) {
       return handleMediaGenerationCallback(request);
     }
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);
