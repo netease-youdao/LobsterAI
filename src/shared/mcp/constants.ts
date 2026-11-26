@@ -18,6 +18,8 @@ export const McpIpcChannel = {
 } as const;
 export type McpIpcChannel = typeof McpIpcChannel[keyof typeof McpIpcChannel];
 
+export const McpManagedProvider = { Qichacha: 'qichacha', NeteaseMail: 'netease-mail' } as const;
+export type McpManagedProvider = typeof McpManagedProvider[keyof typeof McpManagedProvider];
 export const McpManagedConnection = {
   Connecting: 'connecting',
   Connected: 'connected',

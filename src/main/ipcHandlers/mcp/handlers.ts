@@ -17,6 +17,7 @@ import {
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
+import { NeteaseMail } from '../../../shared/neteaseMail/constants';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthClientCredentials,
@@ -30,9 +31,14 @@ import {
   McpToolDiscoveryTimeoutMs,
   normalizeMcpToolDiscoveryRequest,
 } from '../../mcp/mcpToolDiscovery';
+import type { NeteaseMailConnection } from '../../mcp/neteaseMailConnection';
+import { NeteaseMailIntegration } from '../../mcp/neteaseMailIntegration';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
+import { registerNeteaseMailHandlers } from './neteaseMail';
 
 export interface McpHandlerDeps {
+  getMainWindow?: () => BrowserWindow | null;
+  mail?: NeteaseMailConnection;
   getMcpRuntime: () => McpRuntime;
   syncDshConfig: (options: { reason: string }) => Promise<{ success: boolean; changed: boolean }>;
   getMcpOAuthManager: () => McpOAuthManager | null;
@@ -321,7 +327,9 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   const { getMcpRuntime, syncDshConfig, getMcpOAuthManager } = deps;
   const syncMcpConfig = createSerializedMcpConfigSync(syncDshConfig);
 
-  const clearOAuthCredentials = (server: McpServerRecord): void => {
+  if (deps.mail && deps.getMainWindow) registerNeteaseMailHandlers(deps.getMainWindow, new NeteaseMailIntegration(deps.mail));
+  const clearOAuthCredentials = async (server: McpServerRecord): Promise<void> => {
+    if (server.registryId === NeteaseMail.RegistryId && deps.mail) await deps.mail.clearCredentials();
     cancelMcpOAuthLogin(server.id);
     getMcpOAuthManager()?.deleteToken(server.id);
   };
@@ -404,7 +412,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         const normalizedData = normalizeMcpServerInput(data as Partial<McpServerFormData>);
         const existing = mcpRuntime.getStore().getServer(id);
         if (isOAuthRemoteServer(existing) && isMcpOAuthIdentityRemoved(existing, normalizedData)) {
-          clearOAuthCredentials(existing);
+          await clearOAuthCredentials(existing);
         }
         const server = mcpRuntime.getStore().updateServer(id, normalizedData);
         if (server?.enabled) {
@@ -425,7 +433,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     try {
       const mcpRuntime = getMcpRuntime();
       const existing = mcpRuntime.getStore().getServer(id);
-      if (isOAuthRemoteServer(existing)) clearOAuthCredentials(existing);
+      if (isOAuthRemoteServer(existing)) await clearOAuthCredentials(existing);
       mcpRuntime.getStore().deleteServer(id);
       await syncMcpConfig('mcp-server-deleted');
       return { success: true, servers: mcpRuntime.getDisplayServers() };
@@ -449,7 +457,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         .listServers()
         .filter(server => server.registryId === normalizedRegistryId);
       for (const server of matchingServers) {
-        if (isOAuthRemoteServer(server)) clearOAuthCredentials(server);
+        if (isOAuthRemoteServer(server)) await clearOAuthCredentials(server);
         store.deleteServer(server.id);
       }
       await syncMcpConfig('mcp-registry-deleted');
@@ -470,6 +478,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         mcpRuntime.ensureLaunchResolution(options.id, 'mcp-server-enabled');
       } else {
         cancelMcpOAuthLogin(options.id);
+        if (mcpRuntime.getStore().getServer(options.id)?.registryId === NeteaseMail.RegistryId) deps.mail?.invalidateConfirmations();
       }
       await syncMcpConfig('mcp-server-toggled');
       return { success: true, servers: mcpRuntime.getDisplayServers() };
@@ -500,6 +509,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
             mcpRuntime.ensureLaunchResolution(server.id, 'mcp-registry-enabled');
           } else {
             cancelMcpOAuthLogin(server.id);
+            if (normalizedRegistryId === NeteaseMail.RegistryId) deps.mail?.invalidateConfirmations();
           }
         }
         await syncMcpConfig('mcp-registry-toggled');
@@ -542,7 +552,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         const launch = await getMcpRuntime().resolveToolDiscoveryLaunch(request);
         if (launch.transportType !== 'stdio' && request.serverId) {
           const saved = getMcpRuntime().getStore().getServer(request.serverId);
-          if (isOAuthRemoteServer(saved)) {
+          if (isOAuthRemoteServer(saved) && saved.registryId !== NeteaseMail.RegistryId) {
             const authHeaders = await getMcpOAuthManager()
               ?.resolveAuthorizationHeaders(saved.id)
               .catch((): null => null);
@@ -619,7 +629,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.OAuthLogin, async (_event, id: string): Promise<McpOAuthActionResult> => {
     const server = getMcpRuntime().getStore().getServer(id);
-    if (!isOAuthRemoteServer(server)) {
+    if (!isOAuthRemoteServer(server) || server.registryId === NeteaseMail.RegistryId) {
       return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: 'This MCP server does not use OAuth.' };
     }
     if (!server.enabled) {
@@ -674,7 +684,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
 
   ipcMain.handle(McpIpcChannel.OAuthLogout, async (_event, id: string): Promise<McpOAuthActionResult> => {
     const server = getMcpRuntime().getStore().getServer(id);
-    if (!isOAuthRemoteServer(server)) {
+    if (!isOAuthRemoteServer(server) || server.registryId === NeteaseMail.RegistryId) {
       return { success: false, code: McpOAuthErrorCode.NotOAuthServer, error: 'This MCP server does not use OAuth.' };
     }
     const oauthManager = getMcpOAuthManager();
@@ -688,7 +698,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   });
 
   ipcMain.handle(McpIpcChannel.OAuthStatus, async (): Promise<McpOAuthStatusResult> => {
-    const servers = getMcpRuntime().getStore().listServers().filter(isOAuthRemoteServer);
+    const servers = getMcpRuntime().getStore().listServers().filter(server => isOAuthRemoteServer(server) && server.registryId !== NeteaseMail.RegistryId);
     if (servers.length === 0) return { success: true, states: {} };
     const oauthManager = getMcpOAuthManager();
     const states: Record<string, McpOAuthState> = {};

@@ -10,6 +10,9 @@
 
 import { createHash, randomBytes } from 'crypto';
 
+import { NeteaseMailAuth } from '../../shared/neteaseMail/constants';
+import { MailRefreshError, refreshMailCredential } from './neteaseMail/refresh';
+
 export const MCP_OAUTH_TOKEN_KV_PREFIX = 'mcp.oauth.token.';
 export const MCP_OAUTH_REFRESH_LEEWAY_MS = 60_000;
 export const DEFAULT_MCP_OAUTH_CLIENT_ID = 'lobsterai-desktop';
@@ -23,6 +26,7 @@ export interface McpOAuthTokenRecord {
   accessToken: string;
   refreshToken?: string;
   tokenType: string;
+  mailAuthorizationId?: string;
   expiresAtMs?: number;
   scope?: string;
   tokenEndpoint?: string;
@@ -91,6 +95,7 @@ export type McpOAuthFetch = (
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    redirect?: RequestRedirect;
     signal?: AbortSignal;
   },
 ) => Promise<McpOAuthFetchResponse>;
@@ -725,19 +730,37 @@ export class McpOAuthManager {
   private async refreshTokenDeduplicated(
     record: McpOAuthTokenRecord,
   ): Promise<McpOAuthTokenRecord> {
-    const existing = this.inflightRefreshes.get(record.serverId);
+    const key = record.mailAuthorizationId ?? record.serverId;
+    const existing = this.inflightRefreshes.get(key);
     if (existing) return existing;
 
     const promise = this.refreshToken(record).finally(() => {
-      if (this.inflightRefreshes.get(record.serverId) === promise) {
-        this.inflightRefreshes.delete(record.serverId);
+      if (this.inflightRefreshes.get(key) === promise) {
+        this.inflightRefreshes.delete(key);
       }
     });
-    this.inflightRefreshes.set(record.serverId, promise);
+    this.inflightRefreshes.set(key, promise);
     return promise;
   }
 
   private async refreshToken(record: McpOAuthTokenRecord): Promise<McpOAuthTokenRecord> {
+    if (record.mailAuthorizationId) {
+      const renewed = await refreshMailCredential({
+        type: NeteaseMailAuth.CredentialType, provider: NeteaseMailAuth.Provider, clientId: record.clientId,
+        access: record.accessToken, refresh: record.refreshToken!, scope: record.scope, expires: record.expiresAtMs ?? 0,
+      }, { clientId: record.clientId! }, body => this.fetcher(NeteaseMailAuth.TokenUrl, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: body.toString(), redirect: 'error', signal: AbortSignal.timeout(30_000),
+      }), this.now);
+      // A disconnect or a new login can complete while the provider is rotating the token.
+      if (this.getToken(record.serverId)?.mailAuthorizationId !== record.mailAuthorizationId) {
+        throw new Error(MailRefreshError.Unauthorized);
+      }
+      const updated = { ...record, accessToken: renewed.access, refreshToken: renewed.refresh,
+        expiresAtMs: renewed.expires, scope: renewed.scope, updatedAt: this.now() };
+      this.saveToken(updated);
+      return updated;
+    }
     const params = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: record.refreshToken!,

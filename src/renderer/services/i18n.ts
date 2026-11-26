@@ -4,6 +4,7 @@ import { homeShowcaseTranslations } from '../../shared/homeShowcase/copy';
 import { imageCreationTranslations } from '../../shared/imageCreation/copy';
 import { imageEditingTranslations } from '../../shared/imageEditing/copy';
 import { mediaTranslations } from '../../shared/media/copy';
+import { neteaseMailTranslations } from '../../shared/neteaseMail/copy';
 import { pptCreationTranslations } from '../../shared/pptCreation/copy';
 import { pptCoverTranslations } from '../../shared/pptCreation/coverCopy';
 import { modelContextWindowTranslations } from '../../shared/providers/contextWindowCopy';
@@ -30,6 +31,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.zh,
     ...homeShowcaseTranslations.zh,
     ...mediaTranslations.zh,
+    ...neteaseMailTranslations.zh,
     ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     ...imageCreationTranslations.zh,
@@ -5452,6 +5454,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     ...desktopCompanionTranslations.en,
     ...homeShowcaseTranslations.en,
     ...mediaTranslations.en,
+    ...neteaseMailTranslations.en,
     ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     ...imageCreationTranslations.en,

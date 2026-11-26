@@ -644,6 +644,7 @@ import { WebSearchHost } from './libs/webSearchHost';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
+import { createNeteaseMailDesktop } from './mcp/neteaseMail/desktop';
 import {
   type AccountBoundValue,
   type AuthExchangeIntentSnapshot,
@@ -2309,12 +2310,20 @@ const isAppQuitConfirmationEnabled = (): boolean => {
   }
 };
 
+const neteaseMailDesktop = createNeteaseMailDesktop({
+  getRuntime: () => getMcpRuntime(), getStore: () => getCoworkStore(),
+  getManager: () => dshBootstrap?.mcpOAuthManager ?? null,
+  getAdapter: () => dshBootstrap?.runtimeAdapter,
+  sync: options => syncOpenClawConfig(options),
+});
+
 const getDshBootstrap = (): DshBootstrap => {
   if (!dshBootstrap) {
     const userDataDir = app.getPath('userData');
     const storeInstance = getCoworkStore();
     dshBootstrap = new DshBootstrap({
       toolProviders: [
+        neteaseMailDesktop.host,
         createDshMediaGenerationProvider(
           request => getMcpRuntime().executeMediaGeneration(request),
           sessionId => dshBootstrap?.runtimeAdapter.getActiveTurnSignal(sessionId),
@@ -3525,6 +3534,7 @@ const getSkillManager = () => {
 const getMcpRuntime = (): McpRuntime => {
   if (!mcpRuntime) {
     mcpRuntime = new McpRuntime({
+      getMailToken: id => dshBootstrap?.mcpOAuthManager.getToken(id) ?? null,
       getStore,
       syncOpenClawConfig,
       bridgeSecret: getOpenClawLoopbackState().mcpBridgeSecret,
@@ -9463,6 +9473,8 @@ if (!gotTheLock) {
   );
 
   registerMcpHandlers({
+    getMainWindow: () => mainWindow,
+    mail: neteaseMailDesktop.connection,
     getMcpRuntime,
     syncDshConfig: syncOpenClawConfig,
     getMcpOAuthManager: () => getDshBootstrap().mcpOAuthManager,
@@ -14722,6 +14734,8 @@ if (!gotTheLock) {
     messageSpeechController = null;
     skillManager?.stopWatching();
     cancelAllMcpOAuthLogins();
+    void neteaseMailDesktop.connection.cancelAuthorization();
+    neteaseMailDesktop.host.invalidate();
     stopMediaPollTimer();
     pendingMediaTasks.clear();
     mediaTaskOwnerById.clear();

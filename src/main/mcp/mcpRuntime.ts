@@ -8,6 +8,8 @@ import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel, McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
+import { NeteaseMail } from '../../shared/neteaseMail/constants';
+import { getNeteaseMailNativeTools, getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
 import {
   isComputerUseKitInstalled,
   isComputerUseSkillEnabled,
@@ -36,8 +38,10 @@ import { resolveStdioCommand } from '../libs/resolveStdioCommand';
 import type { SqliteStore } from '../sqliteStore';
 import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus } from './mcpLaunchResolution';
 import { McpLaunchResolverManager } from './mcpLaunchResolverManager';
+import type { McpOAuthTokenRecord } from './mcpOAuthManager';
 import { type McpServerRecord, McpStore } from './mcpStore';
 import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
+import { getNeteaseMailOAuthConfig, matchesNeteaseMailRegistration } from './neteaseMailConfig';
 import type { ResolvedMcpServer } from './types';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
@@ -87,6 +91,7 @@ function buildGatewayChildPath(): string {
 }
 
 export interface McpRuntimeDeps {
+  getMailToken?: (serverId: string) => McpOAuthTokenRecord | null;
   getStore: () => SqliteStore;
   syncOpenClawConfig: (options: {
     reason: string;
@@ -576,6 +581,15 @@ export class McpRuntime {
         rawCount++;
         await pushRawStdioServer(server);
       } else {
+        if (server.registryId === NeteaseMail.RegistryId) {
+          const config = getNeteaseMailOAuthConfig(app.isPackaged);
+          const token = this.deps.getMailToken?.(server.id);
+          if (!config || !matchesNeteaseMailRegistration(token, config)) continue;
+          const include = getNeteaseMailNativeTools(getNeteaseMailScopes(token.scope));
+          if (include.length) resolved.push({ id: server.id, name: NeteaseMail.RegistryId, transportType: 'http',
+            url: config.mcpUrl, auth: McpAuthMode.OAuth, toolFilter: { include } });
+          continue;
+        }
         resolved.push({
           id: server.id,
           name: server.name,

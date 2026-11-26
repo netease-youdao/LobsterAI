@@ -281,6 +281,7 @@ export function runPreBootLegacyOpenClawMigration(options: {
     const result = runLegacyOpenClawMigration({
       userDataDir: options.userDataDir,
       sqlitePath: options.sqlitePath,
+      isPackaged: app.isPackaged,
       deferDisposableCacheCleanup: true,
     });
     console.log(`[MigrationV2] startup check completed: status=${result.status}`);
@@ -989,6 +990,7 @@ export class DshBootstrap {
       const mcpOAuthBackfillPromise = backfillLegacyMcpOAuthTokensFromBackup({
         userDataDir: this.options.userDataDir,
         db: this.options.db,
+        isPackaged: app.isPackaged,
       }).catch((error) => {
         console.warn('[MigrationV2] MCP OAuth backup backfill failed:', error);
         return { status: 'failed' as const, tokensMigrated: 0, migratedServerIds: [] as string[] };

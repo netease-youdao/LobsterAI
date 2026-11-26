@@ -63,6 +63,7 @@ import {
   type MigrationV2Report,
   MigrationV2Status,
 } from '../../shared/migration/constants';
+import { NeteaseMail } from '../../shared/neteaseMail/constants';
 import {
   XAI_AUTH_CREDENTIAL_TYPE,
   XAI_AUTH_PROVIDER,
@@ -94,6 +95,7 @@ import {
 } from '../scheduledTask/lobsterScheduler';
 import { migrateLegacyConversationImages } from './legacyConversationImages';
 import { legacyImBotIdentities, preserveLegacyImBotIdentities } from './legacyImBotIdentities';
+import { readLegacyNeteaseMailToken } from './legacyNeteaseMail';
 import { seedLegacySessionsToDsh } from './legacySessionSeeder';
 import { migrateLegacySubagentHistory } from './legacySubagentHistory';
 import {
@@ -123,6 +125,7 @@ export interface RunLegacyOpenClawMigrationOptions {
   userDataDir: string;
   /** Absolute path to `lobsterai.sqlite`. */
   sqlitePath: string;
+  isPackaged?: boolean;
   /** Optional clock override for deterministic backup folder timestamps. */
   now?: () => Date;
   /**
@@ -1681,6 +1684,7 @@ export function migrateLegacyMcpOAuthTokens(params: {
   openclawStateDir: string;
   db: Database.Database;
   nowMs?: number;
+  isPackaged?: boolean;
 }): MigrateLegacyMcpOAuthTokensResult {
   const { openclawStateDir, db } = params;
   const nowMs = params.nowMs ?? Date.now();
@@ -1710,11 +1714,12 @@ export function migrateLegacyMcpOAuthTokens(params: {
     config_json?: string;
   }>;
 
-  const remoteMcpServers: Array<{ id: string; name: string; url?: string }> = [];
+  const remoteMcpServers: Array<{ id: string; name: string; url?: string; managedMail: boolean }> = [];
   for (const row of mcpRows) {
     const config = safeParseJsonObject(row.config_json);
     if (!config || !isLegacyOAuthMcpRow(config, row.transport_type)) continue;
     remoteMcpServers.push({
+      managedMail: config.registryId === NeteaseMail.RegistryId,
       id: row.id,
       name: (typeof row.name === 'string' && row.name.trim()) ? row.name.trim() : row.id,
       url: typeof config.url === 'string' && config.url.trim() ? config.url.trim() : undefined,
@@ -1735,30 +1740,22 @@ export function migrateLegacyMcpOAuthTokens(params: {
       continue;
     }
 
-    const matched = matchLegacyMcpOAuthStore({
-      serverName: server.name,
-      serverUrl: server.url,
-      entries: legacyEntries,
-      usedStoreKeys,
+    const matched = !server.managedMail && matchLegacyMcpOAuthStore({
+      serverName: server.name, serverUrl: server.url, entries: legacyEntries, usedStoreKeys,
     });
-
-    if (matched) {
-      usedStoreKeys.add(matched.storeKey);
-      const tokenRecord = extractUsableTokenRecordFromLegacyStore({
-        serverId: server.id,
-        serverUrl: server.url,
-        entry: matched,
-        nowMs,
-      });
-      if (tokenRecord) {
-        setKv(
-          db,
-          `${MCP_OAUTH_TOKEN_KV_PREFIX}${server.id}`,
-          encodeMigratedMcpOAuthToken(tokenRecord),
-        );
-        migratedServerIds.push(server.id);
-        continue;
-      }
+    if (matched) usedStoreKeys.add(matched.storeKey);
+    const tokenRecord = server.managedMail ? readLegacyNeteaseMailToken(openclawStateDir, server, openLegacyOpenClawDbReadOnly, params.isPackaged)
+      : matched ? extractUsableTokenRecordFromLegacyStore({
+        serverId: server.id, serverUrl: server.url, entry: matched, nowMs,
+      }) : null;
+    if (tokenRecord) {
+      setKv(
+        db,
+        `${MCP_OAUTH_TOKEN_KV_PREFIX}${server.id}`,
+        encodeMigratedMcpOAuthToken(tokenRecord),
+      );
+      migratedServerIds.push(server.id);
+      continue;
     }
 
     reauthRequired.push({
@@ -1781,6 +1778,8 @@ function isMcpOAuthMigrationArchiveEntry(archivePath: string): boolean {
     normalized === 'openclaw-state/state/openclaw.sqlite'
     || normalized === 'openclaw-state/state/openclaw.sqlite-wal'
     || normalized === 'openclaw-state/state/openclaw.sqlite-shm'
+    || normalized === 'openclaw-state/netease-mail-authorization.json'
+    || /^openclaw-state\/agents\/main\/agent\/(?:openclaw-agent\.sqlite(?:-wal|-shm)?|auth-profiles\.json)$/.test(normalized)
     || normalized.startsWith('openclaw-state/mcp-oauth/')
   );
 }
@@ -1800,6 +1799,7 @@ export async function backfillLegacyMcpOAuthTokensFromBackup(options: {
   userDataDir: string;
   db: Database.Database;
   now?: () => Date;
+  isPackaged?: boolean;
 }): Promise<LegacyMcpOAuthBackfillResult> {
   const { userDataDir, db } = options;
   const now = options.now ?? (() => new Date());
@@ -1845,6 +1845,7 @@ export async function backfillLegacyMcpOAuthTokensFromBackup(options: {
       openclawStateDir: extractedStateDir,
       db,
       nowMs: now().getTime(),
+      isPackaged: options.isPackaged,
     });
 
     const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
@@ -3277,6 +3278,7 @@ export function runLegacyOpenClawMigration(
         openclawStateDir,
         db,
         nowMs: now().getTime(),
+        isPackaged: options.isPackaged,
       });
       reauthRequired.push(...mcpOAuthReauthRequired);
 
