@@ -17,6 +17,7 @@ interface ChatLoginExperienceModalProps {
   showcasePaused?: boolean;
   hideClose?: boolean;
   dismissOnBackdrop?: boolean;
+  allowEscape?: boolean;
 }
 
 const ChatLoginExperienceModal: React.FC<ChatLoginExperienceModalProps> = ({
@@ -27,6 +28,7 @@ const ChatLoginExperienceModal: React.FC<ChatLoginExperienceModalProps> = ({
   showcasePaused = false,
   hideClose = false,
   dismissOnBackdrop = true,
+  allowEscape = true,
 }) => {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -67,7 +69,7 @@ const ChatLoginExperienceModal: React.FC<ChatLoginExperienceModalProps> = ({
   return (
     <Modal
       onClose={() => { if (dismissOnBackdrop) onClose(); }}
-      onEscape={onClose}
+      onEscape={allowEscape ? onClose : undefined}
       overlayClassName="login-introduction-overlay draggable fixed inset-0 z-[10050] flex items-center justify-center pt-6"
       className="login-introduction-card non-draggable relative overflow-hidden rounded-2xl bg-white text-[#1c1b19]"
     >

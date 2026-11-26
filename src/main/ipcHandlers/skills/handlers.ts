@@ -1,15 +1,17 @@
 import { ipcMain } from 'electron';
 
+import { createAuthRequiredIpcError } from '../../libs/authAccessPolicy';
 import type { SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;
   getSkillStoreUrl: () => string;
   onSkillsPolicyChanged?: () => Promise<void> | void;
+  isAuthGateBlocked?: () => boolean;
 }
 
 export function registerSkillHandlers(deps: SkillHandlerDeps): void {
-  const { getSkillManager, getSkillStoreUrl, onSkillsPolicyChanged } = deps;
+  const { getSkillManager, getSkillStoreUrl, onSkillsPolicyChanged, isAuthGateBlocked } = deps;
 
   ipcMain.handle('skills:list', () => {
     try {
@@ -21,6 +23,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   });
 
   ipcMain.handle('skills:setEnabled', async (_event, options: { id: string; enabled: boolean }) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const skills = getSkillManager().setSkillEnabled(options.id, options.enabled);
       try {
@@ -35,6 +38,7 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   });
 
   ipcMain.handle('skills:delete', async (_event, id: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const skills = await getSkillManager().deleteSkill(id);
       await Promise.resolve(onSkillsPolicyChanged?.()).catch((): void => undefined);
@@ -46,14 +50,17 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
   });
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     return getSkillManager().downloadSkill(source);
   });
 
   ipcMain.handle('skills:upgrade', async (_event, skillId: string, downloadUrl: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     return getSkillManager().upgradeSkill(skillId, downloadUrl);
   });
 
   ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     const validActions = ['install', 'installDisabled', 'cancel'];
     if (!validActions.includes(action)) {
       return { success: false, error: 'Invalid action' };

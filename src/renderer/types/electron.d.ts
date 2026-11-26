@@ -2147,6 +2147,7 @@ interface IElectronAPI {
   };
   auth: {
     login: (loginUrl?: string) => Promise<AuthLoginResult>;
+    getAccessState: () => Promise<import('../../shared/auth/constants').AuthAccessState>;
     cancelLogin: () => Promise<{ success: boolean }>;
     exchange: (
       code: string,
@@ -2312,6 +2313,9 @@ interface IElectronAPI {
     onCreditsActivity: (callback: () => void) => () => void;
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => () => void;
     onLifecycleEvent: (callback: (event: AuthLifecycleEvent) => void) => () => void;
+    onAccessStateChanged: (
+      callback: (state: import('../../shared/auth/constants').AuthAccessState) => void,
+    ) => () => void;
   };
   imageCreation: {
     getCatalog: () => Promise<ImageCreationCatalog>;

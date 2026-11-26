@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import {
+  type AuthAccessState,
   AuthSessionStatus,
   type AuthSessionStatus as AuthSessionStatusValue,
 } from '@shared/auth/constants';
@@ -119,6 +120,7 @@ interface AuthState {
   isLoggedIn: boolean;
   isLoading: boolean;
   sessionStatus: AuthSessionStatusValue;
+  accessState: AuthAccessState | null;
   user: UserProfile | null;
   quota: UserQuota | null;
   purchaseOffer: LowCreditPurchaseOffer | null;
@@ -132,6 +134,7 @@ const initialState: AuthState = {
   isLoggedIn: false,
   isLoading: true,
   sessionStatus: AuthSessionStatus.Unauthenticated,
+  accessState: null,
   user: null,
   quota: null,
   purchaseOffer: null,
@@ -147,6 +150,9 @@ const authSlice = createSlice({
   reducers: {
     setAuthLoading(state, action: PayloadAction<boolean>) {
       state.isLoading = action.payload;
+    },
+    setAuthAccessState(state, action: PayloadAction<AuthAccessState | null>) {
+      state.accessState = action.payload;
     },
     setLoggedIn(state, action: PayloadAction<{
       user: UserProfile;
@@ -251,6 +257,7 @@ const authSlice = createSlice({
 
 export const {
   clearProfileSummary,
+  setAuthAccessState,
   setAuthExpired,
   invalidateAuthAccountContext,
   setAuthLoading,

@@ -1,5 +1,6 @@
 import { createAccountOwnerKey } from '@shared/auth/accountOwner';
 import {
+  type AuthAccessState,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   AuthLoginFailureReason,
@@ -31,6 +32,7 @@ import {
   invalidateAuthAccountContext,
   type LowCreditPurchaseOffer,
   type ProfileSummary,
+  setAuthAccessState,
   setAuthExpired,
   setAuthLoading,
   setAuthTemporarilyUnavailable,
@@ -390,6 +392,7 @@ class AuthService {
     onError: error => writeAuthRendererLog('warn', 'account recovery failed', error),
   });
   private unsubCallback: (() => void) | null = null;
+  private unsubAccessStateChanged: (() => void) | null = null;
   private unsubLifecycleEvent: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
   private unsubCreditsActivity: (() => void) | null = null;
@@ -505,6 +508,15 @@ class AuthService {
     void this.loadPublicPricingCatalogModels();
   }
 
+  async loadAccessState(): Promise<AuthAccessState | null> {
+    if (typeof window.electron?.auth?.getAccessState !== 'function') {
+      return null;
+    }
+    const state = await window.electron.auth.getAccessState();
+    store.dispatch(setAuthAccessState(state));
+    return state;
+  }
+
   /**
    * Initialize: try to restore login state from persisted token.
    */
@@ -518,6 +530,9 @@ class AuthService {
     this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
       await this.handleCallback(code);
     });
+    this.unsubAccessStateChanged = window.electron.auth.onAccessStateChanged?.(nextState => {
+      store.dispatch(setAuthAccessState(nextState));
+    }) ?? null;
     this.unsubSessionChanged = window.electron.auth.onSessionChanged(event => {
       void this.handleSessionChanged(event);
     });
@@ -1187,6 +1202,8 @@ class AuthService {
     this.clearEnterpriseQuotaBoundaryTimer();
     this.unsubCallback?.();
     this.unsubCallback = null;
+    this.unsubAccessStateChanged?.();
+    this.unsubAccessStateChanged = null;
     this.unsubLifecycleEvent?.();
     this.unsubLifecycleEvent = null;
     this.unsubQuotaChanged?.();

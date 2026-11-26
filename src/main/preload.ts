@@ -45,6 +45,7 @@ import {
   type AsrRealtimeSessionRequest,
 } from '../shared/asr/constants';
 import {
+  type AuthAccessState,
   AuthIpcChannel,
   type AuthLifecycleEvent,
   type AuthSessionChangedEvent,
@@ -1659,6 +1660,7 @@ contextBridge.exposeInMainWorld('electron', {
     selectSession: (sessionId: string, presetId: ModelPresetId, thinkingLevel?: ModelThinkingLevel) => ipcRenderer.invoke(ModelPresetIpc.SelectSession, sessionId, presetId, thinkingLevel),
   },
   auth: {
+    getAccessState: (): Promise<AuthAccessState> => ipcRenderer.invoke(AuthIpcChannel.GetAccessState),
     login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
     cancelLogin: () => ipcRenderer.invoke(AuthIpcChannel.CancelLogin),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
@@ -1701,6 +1703,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: Electron.IpcRendererEvent, data: AuthLifecycleEvent) => callback(data);
       ipcRenderer.on(AuthIpcChannel.LifecycleEvent, handler);
       return () => ipcRenderer.removeListener(AuthIpcChannel.LifecycleEvent, handler);
+    },
+    onAccessStateChanged: (callback: (state: AuthAccessState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: AuthAccessState) => callback(data);
+      ipcRenderer.on(AuthIpcChannel.AccessStateChanged, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.AccessStateChanged, handler);
     },
   },
   imageCreation: {

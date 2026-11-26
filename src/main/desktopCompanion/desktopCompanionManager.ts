@@ -143,6 +143,7 @@ export interface DesktopCompanionServices {
 
 interface DesktopCompanionOptions {
   enginePhase: OpenClawEnginePhase;
+  authGateBlocked?: boolean;
   store: CompanionStore;
   preloadPath: string;
   rendererDirectory: string;
@@ -218,6 +219,7 @@ function describeDraggedPaths(paths: string[]): DesktopCompanionDropFile[] {
 
 export class DesktopCompanionManager {
   private enginePhase: OpenClawEnginePhase;
+  private authGateBlocked: boolean;
   private pendingPanelSource: AnalyticsSource | null = null;
   private pendingMainPage: DesktopCompanionMainPage | null = null;
   private orb: BrowserWindow | null = null;
@@ -276,6 +278,7 @@ export class DesktopCompanionManager {
 
   constructor(private readonly options: DesktopCompanionOptions) {
     this.enginePhase = options.enginePhase;
+    this.authGateBlocked = options.authGateBlocked === true;
     this.analytics = new CompanionAnalytics(options.reportAnalytics, options.getAnalyticsOwner);
     this.login = new CompanionLoginTracker(this.analytics);
     const { store } = options;
@@ -355,7 +358,7 @@ export class DesktopCompanionManager {
       preferences: () => this.preferences,
       // Selection tools use direct HTTP, not the agent gateway. A gateway restart
       // must not hide their answer card and cancel an otherwise healthy request.
-      isAvailable: () => this.preferences.enabled && !this.snooze && !this.capturing,
+      isAvailable: () => !this.authGateBlocked && this.preferences.enabled && !this.snooze && !this.capturing,
       isCapturing: () => this.capturing,
       createWindow: (surface, focusable) => this.createWindow(surface, focusable),
       setPreferences: patch => { this.setPreferences(patch, AnalyticsSource.Selection); },
@@ -396,9 +399,30 @@ export class DesktopCompanionManager {
     screen.on('display-added', this.reposition);
     screen.on('display-removed', this.reposition);
     screen.on('display-metrics-changed', this.reposition);
-    this.shortcutUnavailable = !this.registerShortcut(this.preferences.shortcut);
+    this.shortcutUnavailable = this.authGateBlocked ? false : !this.registerShortcut(this.preferences.shortcut);
     this.scheduleSnoozeWake();
     this.applyActivity();
+  }
+
+  setAuthGateBlocked(blocked: boolean): void {
+    if (this.disposing || this.authGateBlocked === blocked) return;
+    this.authGateBlocked = blocked;
+    if (blocked) {
+      this.pendingPanelSource = null;
+      this.unregisterShortcut();
+      this.hidePanel();
+      this.languageTools.reset();
+      this.clearTaskAnalytics();
+      this.contextMenu.hide();
+      this.permissionGuide.close();
+      this.stage.clear();
+      this.results.hide();
+      this.applyActivity();
+    } else {
+      this.shortcutUnavailable = !this.registerShortcut(this.preferences.shortcut);
+      this.applyActivity();
+    }
+    this.publish();
   }
 
   isComposerWebContents(webContents: WebContents): boolean {
@@ -469,7 +493,7 @@ export class DesktopCompanionManager {
       next.selectionExcludedApps = normalizeCompanionPreferences({ selectionExcludedApps: patch.selectionExcludedApps }).selectionExcludedApps;
     }
     const updatingShortcut = typeof patch?.shortcut === 'string';
-    if (updatingShortcut && !this.registerShortcut(next.shortcut)) {
+    if (updatingShortcut && !this.authGateBlocked && !this.registerShortcut(next.shortcut)) {
       return { success: false, state: this.getState(), error: t('desktopCompanionShortcutConflict') };
     }
     if (updatingShortcut) this.shortcutUnavailable = false;
@@ -509,6 +533,10 @@ export class DesktopCompanionManager {
 
   togglePanel(source: AnalyticsSource = AnalyticsSource.Tray): void {
     if (this.capturing) return;
+    if (this.authGateBlocked) {
+      this.options.openMain(null);
+      return;
+    }
     if (this.pendingPanelSource) { this.pendingPanelSource = null; return; }
     if (this.panelVisible) this.hidePanel();
     else this.showPanel(source);
@@ -618,7 +646,7 @@ export class DesktopCompanionManager {
 
   /** Present only when the gateway can accept tasks and the user enables it. */
   private isPresent(): boolean {
-    return this.isTaskReady() && this.preferences.enabled && !this.snooze;
+    return !this.authGateBlocked && this.isTaskReady() && this.preferences.enabled && !this.snooze;
   }
 
   /** Reconciles windows and system monitors with preferences and snooze. */
@@ -832,6 +860,7 @@ export class DesktopCompanionManager {
   // ── Panel ─────────────────────────────────────────────────
 
   private showPanel(source: AnalyticsSource = AnalyticsSource.System): void {
+    if (this.authGateBlocked) return;
     if (!this.isTaskReady()) {
       this.pendingPanelSource = source;
       return;
@@ -1313,6 +1342,7 @@ export class DesktopCompanionManager {
   // ── Shortcut, menu, IPC ───────────────────────────────────
 
   private registerShortcut(shortcut: string): boolean {
+    if (this.authGateBlocked) return true;
     if (shortcut === this.registeredShortcut) return true;
     if (shortcut && !/(?:^|\+)(?:CommandOrControl|Command|Cmd|Control|Ctrl|Alt|Option)\+/i.test(shortcut)) return false;
     try {
@@ -1323,6 +1353,16 @@ export class DesktopCompanionManager {
     if (this.registeredShortcut) globalShortcut.unregister(this.registeredShortcut);
     this.registeredShortcut = shortcut;
     return true;
+  }
+
+  private unregisterShortcut(): void {
+    if (!this.registeredShortcut) return;
+    try {
+      globalShortcut.unregister(this.registeredShortcut);
+    } catch {
+      // Ignore unregister errors when shortcut was already released.
+    }
+    this.registeredShortcut = '';
   }
 
   private companionWindows(): Array<BrowserWindow | null> {

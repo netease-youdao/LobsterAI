@@ -61,6 +61,15 @@
 .login-first-run-text:hover { color: #242321; text-decoration: underline; text-underline-offset: 3px; }
 .login-first-run-panel button:disabled { cursor: wait; opacity: .6; }
 .login-first-run-note, .login-first-run-benefits .login-first-run-note { color: #777469; font-size: 12px; line-height: 1.7; }
+.login-first-run-notice {
+  border-radius: 8px;
+  border: 1px solid #f0dfd9;
+  background: #fff7f4;
+  color: #8c3422;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px 12px;
+}
 .login-first-run-agreement { color: #777469; font-size: 11px; line-height: 1.7; text-align: center; }
 .login-first-run-agreement button:hover { color: #242321; text-decoration: underline; }
 .login-first-run-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

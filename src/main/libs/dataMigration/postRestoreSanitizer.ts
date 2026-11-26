@@ -2,6 +2,10 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import {
+  AuthAccessPolicy,
+  AuthAccessPolicyStoreKey,
+} from '../../../shared/auth/constants';
 import type {
   DataMigrationMissingPluginInfo,
   DataMigrationPostRestoreNotices,
@@ -11,6 +15,10 @@ import {
   DSH_PROFILE_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { readInstalledProfilePlugins } from '../../ipcHandlers/dshHost/pluginOperations';
+import {
+  detectLegacyInstallationInSqlite,
+  parseAuthAccessPolicy,
+} from '../authAccessPolicy';
 import { getSqliteTableColumns, sqliteTableExists } from './sqliteMigrationSnapshot';
 
 const DSH_CACHED_SHELL_PATH_KV_KEY = 'dsh_cached_shell_path_v1';
@@ -70,6 +78,38 @@ const clearTransientStateInSqlite = (db: Database.Database): void => {
   }
   if (sqliteTableExists(db, 'mcp_launch_resolutions')) {
     db.prepare('DELETE FROM mcp_launch_resolutions').run();
+  }
+};
+
+const backfillLegacyAuthAccessPolicyInSqlite = (
+  db: Database.Database,
+  userDataPath: string,
+): void => {
+  if (!sqliteTableExists(db, 'kv')) return;
+  const existingRow = db
+    .prepare('SELECT value FROM kv WHERE key = ?')
+    .get(AuthAccessPolicyStoreKey.Policy) as { value: string } | undefined;
+  if (existingRow) {
+    try {
+      if (parseAuthAccessPolicy(JSON.parse(existingRow.value)) !== null) {
+        return;
+      }
+    } catch {
+      // Malformed value; fall through to legacy detection.
+    }
+  }
+  if (detectLegacyInstallationInSqlite({ db, userDataDir: userDataPath })) {
+    db.prepare(`
+      INSERT INTO kv (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+    `).run(
+      AuthAccessPolicyStoreKey.Policy,
+      JSON.stringify(AuthAccessPolicy.LegacyOptional),
+      Date.now(),
+    );
   }
 };
 
@@ -320,6 +360,7 @@ export const sanitizeRestoredStateSync = (
     try {
       db = new Database(options.dbPath);
       clearTransientStateInSqlite(db);
+      backfillLegacyAuthAccessPolicyInSqlite(db, options.userDataPath);
 
       const clearedBrowserCredentialCount = sanitizeBrowserCredentials(
         db,

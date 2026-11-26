@@ -25,6 +25,7 @@ import {
   type Platform,
   PlatformRegistry,
 } from '../../../shared/platform';
+import { createAuthRequiredIpcError } from '../../libs/authAccessPolicy';
 import type { CronJobServiceFacade } from './cronJobServiceManager';
 import {
   dedupeConversationMappings,
@@ -136,6 +137,7 @@ export interface ScheduledTaskHandlerDeps {
     chatId: string;
     text: string;
   }) => Promise<unknown>;
+  isAuthGateBlocked?: () => boolean;
 }
 
 function applyLocalAnnounceDeliveryNormalization(
@@ -268,6 +270,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     getCoworkSessionTitle,
     getCoworkSession,
     sendProactiveImMessage,
+    isAuthGateBlocked,
   } = deps;
 
   const weixinReportDelivery = new WeixinReportDelivery({
@@ -287,6 +290,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.ResendWeixinReport, async (_event, taskId: string, runId: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       await weixinReportDelivery.resend(taskId, runId);
       return { success: true };
@@ -320,6 +324,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       applyLocalAnnounceDeliveryNormalization(normalizedInput, { getIMGatewayManager });
@@ -334,6 +339,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       applyLocalAnnounceDeliveryNormalization(normalizedInput, { getIMGatewayManager });
@@ -348,6 +354,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.Delete, async (_event, id: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       await getCronJobService().removeJob(id);
       return { success: true, result: true };
@@ -360,6 +367,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.Toggle, async (_event, id: string, enabled: boolean) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const task = await getCronJobService().toggleJob(id, enabled);
       return { success: true, task };
@@ -372,6 +380,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   });
 
   ipcMain.handle(ScheduledTaskIpc.RunManually, async (_event, id: string) => {
+    if (isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const existing = await getCronJobService().getJob(id);
       if (existing) {

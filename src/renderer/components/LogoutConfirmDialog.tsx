@@ -6,12 +6,14 @@ import Modal from './common/Modal';
 
 interface LogoutConfirmDialogProps {
   isLoggingOut: boolean;
+  loginRequired?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 const LogoutConfirmDialog: React.FC<LogoutConfirmDialogProps> = ({
   isLoggingOut,
+  loginRequired = false,
   onCancel,
   onConfirm,
 }) => {
@@ -43,7 +45,9 @@ const LogoutConfirmDialog: React.FC<LogoutConfirmDialogProps> = ({
               {i18nService.t('authLogoutConfirmTitle')}
             </h2>
             <p id={descriptionId} className="mt-1.5 text-sm leading-5 text-secondary">
-              {i18nService.t('authLogoutConfirmMessage')}
+              {i18nService.t(
+                loginRequired ? 'authLogoutConfirmMessageForced' : 'authLogoutConfirmMessage',
+              )}
             </p>
           </div>
         </div>
