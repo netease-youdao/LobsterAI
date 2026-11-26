@@ -528,6 +528,8 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  dshDelivery?: import('../shared/dshEngine/hostConstants').DshDeliveryOutcome | null;
+  submissionOwner?: string;
   /** The native dsh log that owns this assistant event's sequence number. */
   dshSessionId?: string;
   seq?: number;

@@ -258,6 +258,7 @@ import {
 import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
+import { DshMessageDelivery, useDshMessageRecovery } from './DshMessageDelivery';
 import {
   getIMSessionDisplayTitle,
   getIMSessionPlatformIconClassName,
@@ -1406,6 +1407,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
+  const recovery = useDshMessageRecovery(currentSession?.id, isStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
   const lastMessageContent = useSelector(selectLastMessageContent);
   const messagesLength = useSelector(selectCurrentMessagesLength);
@@ -6724,7 +6726,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             }}
             resolveLocalFilePath={resolveLocalFilePath}
             localServiceDirectory={currentSession?.cwd}
-            showActivityIndicator
+            showActivityIndicator={!recovery}
             activityStatusOverride={
               activityStatusOverride
             }
@@ -6750,7 +6752,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const turnMessageIds = getTurnMessageIds(turn);
       // Persistent busy-state indicator at the insertion point of the
       // running turn (Codex/ChatGPT style: visible for the whole run).
-      const showActivityIndicator = isSessionBusy && isLastTurn;
+      const phase = recovery && recovery.messageId === turn.userMessage?.id ? recovery.phase : undefined;
+      const outcome = turn.userMessage?.metadata?.dshDelivery;
+      const canAct = isLastTurn && !isSessionBusy && !remoteManaged && !isExportingImage && !messageEdit.editing && !messageEdit.pending;
+      const showActivityIndicator = isSessionBusy && isLastTurn && !phase && !outcome;
       const showAssistantBlock = turn.assistantItems.length > 0 || showActivityIndicator || Boolean(getConversationTurnUsage(turn));
       // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX).
       // While exporting the conversation image, force-render every turn:
@@ -6808,6 +6813,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 />
               ) : <UserMessageItem
                 message={turn.userMessage}
+                delivery={(outcome || phase) && <DshMessageDelivery outcome={outcome} phase={phase} onCancel={onStop}
+                  onRetry={canAct ? () => void coworkService.continueSession({
+                    sessionId: currentSession.id, retryMessageId: turn.userMessage!.id, prompt: turn.userMessage!.content,
+                  }) : undefined} />}
                 skills={skills}
                 marketplaceKits={marketplaceKits}
                 sessionId={sessionId}
@@ -6881,6 +6890,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               />
             </div>
           )}
+          {(outcome || phase) && <DshMessageDelivery reply outcome={outcome} phase={phase}
+            onContinue={canAct ? () => promptInputRef.current?.focus() : undefined} />}
         </LazyRenderTurn>
       );
     });

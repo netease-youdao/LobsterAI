@@ -277,6 +277,7 @@ const MessageImageThumbnail: React.FC<{
 
 const UserMessageItem: React.FC<{
   message: CoworkMessage;
+  delivery?: React.ReactNode;
   skills: Skill[];
   marketplaceKits?: MarketplaceKit[];
   /** Session the message belongs to; used to resolve browser annotation screenshot assets. */
@@ -289,7 +290,7 @@ const UserMessageItem: React.FC<{
   onLocateSelectedText?: (sourceMessageId: string) => void;
   /** Opens the annotation restore view in the artifact panel. */
   onOpenAnnotation?: (message: CoworkMessage, payload: BrowserAnnotationAttachmentOpenPayload) => void;
-}> = React.memo(({ message, skills, marketplaceKits = [], sessionId, onReEdit, reEditDisabled, onSwitchVersion, versionSwitchDisabled, onLocateSelectedText, onOpenAnnotation }) => {
+}> = React.memo(({ message, delivery, skills, marketplaceKits = [], sessionId, onReEdit, reEditDisabled, onSwitchVersion, versionSwitchDisabled, onLocateSelectedText, onOpenAnnotation }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ImagePreviewSource | null>(null);
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
@@ -513,6 +514,7 @@ const UserMessageItem: React.FC<{
                   />
                 )}
               </div>
+              {delivery}
               <div className="flex w-full items-center justify-end gap-2">
                 <div className={messageMetaClassName(isHovered, 'right')} aria-hidden={!isHovered}>
                   <span>{formatMessageDateTime(message.timestamp)}</span>

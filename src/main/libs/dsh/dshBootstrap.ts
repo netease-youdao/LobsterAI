@@ -786,6 +786,11 @@ export class DshBootstrap {
     return this.started && !this.startingInProgress && this.hostManager.isReady() && this.initialConfigSynced;
   }
 
+  canQueueTurnDuringReconnect(): boolean {
+    return this.started && !this.startingInProgress && this.initialConfigSynced
+      && !this.hostManager.isReady() && this.hostManager.hasLiveHost();
+  }
+
   resolveNodeToolchain(): DshNodeToolchain {
     const npmBinDir = app.isPackaged
       ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
@@ -927,7 +932,8 @@ export class DshBootstrap {
    * concurrently. Failed boots clear the in-flight promise so retries succeed.
    */
   async start(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
-    if (this.started && this.hostManager.isReady()) {
+    if (this.started) {
+      if (!this.hostManager.isReady()) await this.hostManager.start();
       if (options?.syncInitialConfig && !this.initialConfigSynced) {
         await this.runInitialConfigSync(options.syncInitialConfig);
       }

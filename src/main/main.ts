@@ -148,6 +148,7 @@ import {
   DSH_POPO_PAIRING_EVENT,
   DSH_PROFILE_DIR_NAME,
   DSH_QUESTION_REQUEST_ID_PREFIX,
+  DshHostIpc,
 } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
@@ -361,6 +362,8 @@ import {
   CoworkEngineRouter,
   type PermissionResult,
 } from './libs/agentEngine';
+import { prepareMessageEdit } from './libs/agentEngine/prepareMessageEdit';
+import { getRetryableUserMessage } from './libs/agentEngine/prepareUnsentRetry';
 import { pickChangedAgentPersona, seedAgentPersonaFiles, writeAgentPersonaFiles } from './libs/agentPersonaFiles';
 import {
   APP_QUIT_CONFIRMATION_STORE_KEY,
@@ -2360,6 +2363,7 @@ const getDshBootstrap = (): DshBootstrap => {
         messageVersions: storeInstance.messageVersions,
         getSession: (sessionId, messageLimit) => storeInstance.getSession(sessionId, messageLimit),
         getLatestUserMessage: sessionId => storeInstance.getLatestUserMessage(sessionId),
+        getMessage: (sessionId, messageId) => storeInstance.getMessage(sessionId, messageId),
         addMessage: (sessionId, message) => storeInstance.addMessage(sessionId, message),
         updateMessageContent: (sessionId, messageId, content, metadata) => {
           storeInstance.updateMessage(sessionId, messageId, { content, ...(metadata ? { metadata } : {}) });
@@ -2492,6 +2496,11 @@ const getDshBootstrap = (): DshBootstrap => {
       onStatusChange: (compatStatus) => {
         forwardOpenClawStatus(compatStatus);
       },
+    });
+    dshBootstrap.hostManager.on('connectionChange', () => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.ConnectionChanged);
+      }
     });
   }
   return dshBootstrap;
@@ -2708,19 +2717,23 @@ const settleCoworkTurnUsage = (sessionId: string, nativeRuns?: NativeTurnRuns): 
 };
 
 type CoworkEngineAdmission = {
+  queueDuringReconnect?: boolean;
   taskModelRef?: string;
   joinsActiveTurn?: boolean;
 };
 
 const ensureOpenClawRunningForCowork = async (
-  _admission: CoworkEngineAdmission = {},
+  admission: CoworkEngineAdmission = {},
 ): Promise<DshCompatEngineStatus> => {
   await waitForPendingTokenRefresh();
+  const bootstrap = getDshBootstrap();
+  if (admission.queueDuringReconnect && bootstrap.canQueueTurnDuringReconnect()) {
+    return bootstrap.getEngineStatus();
+  }
   const inFlightBootstrap = bootstrapEngineFlight.getInFlight();
   if (inFlightBootstrap) {
     return inFlightBootstrap;
   }
-  const bootstrap = getDshBootstrap();
   if (bootstrap.isReadyForTurns()) {
     return bootstrap.getEngineStatus();
   }
@@ -9438,6 +9451,7 @@ if (!gotTheLock) {
 
   registerDshHostHandlers({
     getHostManager: () => getDshBootstrap().hostManager,
+    getRecoveryTask: id => getDshBootstrap().runtimeAdapter.getRecoveryTask(id),
     getRuntimeDir: () => getDshBootstrap().runtimeDir,
     getExecutablePath: () => getDshBootstrap().executablePath,
     getNodeToolchain: () => getDshBootstrap().resolveNodeToolchain(),
@@ -9456,6 +9470,10 @@ if (!gotTheLock) {
   });
 
   // Cowork IPC handlers
+  const checkSubmissionAccount = (scope: MediaAccountScope | null) => {
+    if (!isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope())) throw new Error(t('authAccountChanged'));
+  };
+  const submissionOwner = (scope: MediaAccountScope | null) => JSON.stringify([getServerApiBaseUrl(), scope?.ownerAccountKey ?? null]);
   const sessionTitleGenerator = new SessionTitleGenerator({
     getAuth: () => {
       const tokens = getAuthTokens();
@@ -9478,6 +9496,7 @@ if (!gotTheLock) {
     async (
       _event,
       options: {
+        submissionId?: string;
         analytics?: UsageContext;
         prompt: string;
         cwd?: string;
@@ -9541,6 +9560,7 @@ if (!gotTheLock) {
             return { success: false, error: modelRunGate.error };
           }
           const engineStatus = await ensureOpenClawRunningForCowork({
+            queueDuringReconnect: true,
             taskModelRef: resolveCoworkTurnModelRef({
               modelOverride: options.modelOverride,
               agentId: options.agentId,
@@ -9634,7 +9654,7 @@ if (!gotTheLock) {
             const modelRunGate = await ensureServerModelReadyForRun(session.modelOverride);
             if (modelRunGate.allowed === false) throw new Error(modelRunGate.error);
             // Admission must inspect the resolved model, not the agent's default.
-            const engineStatus = await ensureOpenClawRunningForCowork({ taskModelRef: session.modelOverride });
+            const engineStatus = await ensureOpenClawRunningForCowork({ taskModelRef: session.modelOverride, queueDuringReconnect: true });
             if (engineStatus.phase !== 'running') {
               coworkStoreInstance.updateSession(session.id, { status: 'error' });
               return getEngineNotReadyResponse(engineStatus);
@@ -9729,6 +9749,9 @@ if (!gotTheLock) {
         );
         runtime
           .startSession(session.id, prompt, {
+            submissionOwner: submissionOwner(requestAccountScope),
+            checkAccount: () => checkSubmissionAccount(requestAccountScope),
+            requestId: options.submissionId ? `desktop-${options.submissionId}` : undefined,
             analytics: options.analytics,
             skipInitialUserMessage: true,
             systemPrompt,
@@ -9785,10 +9808,13 @@ if (!gotTheLock) {
     },
   );
 
+  const preparingContinuations = new Map<string, AbortController>();
   const continueCoworkSession = async (
       _event: Electron.IpcMainInvokeEvent,
       options: {
+        submissionId?: string;
         editRequest?: CoworkMessageEditRequest;
+        retryMessageId?: string;
         localMediaAttachments?: CoworkMessage['metadata']['localMediaAttachments'];
         analytics?: UsageContext;
         sessionId: string;
@@ -9807,10 +9833,30 @@ if (!gotTheLock) {
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
     ) => {
+      const preparation = new AbortController();
+      if (options.retryMessageId && preparingContinuations.has(options.sessionId)) {
+        return { success: false, error: t('coworkUnsentRetryUnavailable') };
+      }
+      if (!options.editRequest) preparingContinuations.set(options.sessionId, preparation);
       try {
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
+        let retryRequestId: string | undefined;
+        if (options.retryMessageId) {
+          const { sessionId, retryMessageId, analytics } = options;
+          if (getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId)) {
+            return { success: false, error: t('coworkUnsentRetryUnavailable') };
+          }
+          const { message, requestId } = getRetryableUserMessage(getCoworkStore(), sessionId, retryMessageId, submissionOwner(requestAccountScope));
+          const prepared = await prepareMessageEdit(message, { sessionId, messageId: message.id, prompt: message.content }, {
+            fitImage: fitImageBytesForModel,
+            resolveImageEdit: (id, ref) => imageEditing.resolve(id, ref),
+          });
+          options = { ...prepared, sessionId, analytics, retryMessageId, prompt: message.content,
+            activeSkillIds: prepared.messageSkillIds, runtimeSkillIds: prepared.skillIds };
+          retryRequestId = requestId;
+        }
         console.log(
           '[CoworkFirstResponseTiming] continue IPC received.',
           `Session ${options.sessionId}.`,
@@ -9831,6 +9877,7 @@ if (!gotTheLock) {
           return { success: false, error: modelRunGate.error };
         }
         const engineStatus = await ensureOpenClawRunningForCowork({
+          queueDuringReconnect: !options.editRequest,
           taskModelRef: resolveCoworkTurnModelRef({ sessionId: options.sessionId }),
         });
         if (engineStatus.phase !== 'running') {
@@ -9965,8 +10012,18 @@ if (!gotTheLock) {
           return { success: true };
         }
         const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
+        if (preparation.signal.aborted) return { success: true };
+        if (options.retryMessageId) {
+          if (preparingContinuations.get(options.sessionId) !== preparation) return { success: false, error: t('coworkUnsentRetryUnavailable') };
+          getRetryableUserMessage(coworkStoreInstance, options.sessionId, options.retryMessageId, submissionOwner(requestAccountScope));
+        }
         runtime
           .continueSession(options.sessionId, options.prompt, {
+            submissionOwner: submissionOwner(requestAccountScope),
+            checkAccount: () => checkSubmissionAccount(requestAccountScope),
+            requestId: retryRequestId ?? (options.submissionId ? `desktop-${options.submissionId}` : undefined),
+            skipInitialUserMessage: Boolean(retryRequestId),
+            localMediaAttachments: options.localMediaAttachments,
             analytics: options.analytics,
             systemPrompt: continuationSystemPrompt,
             skillIds: options.runtimeSkillIds ?? options.activeSkillIds,
@@ -10013,6 +10070,8 @@ if (!gotTheLock) {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to continue session',
         };
+      } finally {
+        if (preparingContinuations.get(options.sessionId) === preparation) preparingContinuations.delete(options.sessionId);
       }
     };
 
@@ -10368,6 +10427,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
+      preparingContinuations.get(sessionId)?.abort();
       const runtime = getCoworkEngineRouter();
       runtime.stopSession(sessionId);
       return { success: true };

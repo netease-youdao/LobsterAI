@@ -1054,6 +1054,7 @@ interface IElectronAPI {
   };
   cowork: {
     startSession: (options: {
+      submissionId?: string;
       pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
@@ -1088,6 +1089,8 @@ interface IElectronAPI {
     recoverMessageEdit: (request: { sessionId: string; operationId: string }) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
     switchMessageVersion: (request: import('../../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => Promise<import('../../shared/cowork/messageEdit').CoworkMessageEditResult>;
     continueSession: (options: {
+      retryMessageId?: string;
+      submissionId?: string;
       analytics?: UsageContext;
       sessionId: string;
       prompt: string;
@@ -2455,6 +2458,8 @@ interface IElectronAPI {
     ) => () => void;
   };
   dshHost: {
+    getSessionRecovery: (sessionId: string) => Promise<import('../../shared/dshEngine/hostConstants').DshSessionRecovery | null>;
+    onConnectionChanged: (listener: () => void) => () => void;
     getStatus: () => Promise<{
       phase: string;
       origin: string | null;

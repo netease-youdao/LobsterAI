@@ -366,7 +366,7 @@ class CoworkService {
     // Message update listener (for streaming content updates)
     const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content, metadata }) => {
       const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
-      if (metadata?.isFinal !== true && session?.status !== 'completed') {
+      if (metadata?.isFinal !== true && !Object.prototype.hasOwnProperty.call(metadata ?? {}, 'dshDelivery') && session?.status !== 'completed') {
         store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
         this.queuedFollowUpCoordinator.handleSessionRunning(sessionId);
       }
@@ -1185,7 +1185,7 @@ class CoworkService {
     const analytics = beginTaskSubmission(options.agentId);
     let result: Awaited<ReturnType<typeof cowork.startSession>>;
     try {
-      result = await cowork.startSession({ ...options, analytics });
+      result = await cowork.startSession({ ...options, analytics, submissionId: crypto.randomUUID() });
     } catch (error) {
       finishTaskSubmission(analytics, undefined, error);
       store.dispatch(setStreaming(false));
@@ -1236,6 +1236,8 @@ class CoworkService {
 
     const analytics = beginTaskSubmission(undefined, options.sessionId);
     const result = await cowork.continueSession({
+      retryMessageId: options.retryMessageId,
+      submissionId: crypto.randomUUID(),
       analytics,
       sessionId: options.sessionId,
       prompt: options.prompt,

@@ -340,7 +340,9 @@ describe('DshHostManager', () => {
       ].join('\n'),
     );
 
+    const transport = Promise.withResolvers<void>();
     const fakeClient = {
+      waitUntilConnected: () => transport.promise,
       connect: vi.fn(async () => undefined),
       callOps: vi.fn(async () => ({ ok: true })),
       isConnected: vi.fn(() => true),
@@ -406,6 +408,12 @@ describe('DshHostManager', () => {
 
       const reconstructedCommand = [process.execPath, ...probe.execArgv, ...probe.argv.slice(1)].join(' ');
       expect(isDshWebCommand(reconstructedCommand, process.execPath)).toBe(true);
+      vi.mocked(fakeClient.isConnected).mockReturnValue(false);
+      const joins = [manager.start(), manager.start()];
+      transport.resolve();
+      await Promise.all(joins);
+      expect(fakeClient.connect).toHaveBeenCalledTimes(1);
+      expect(manager.getStatus().pid).toBe(status.pid);
     } finally {
       await manager.stop();
     }
@@ -496,8 +504,9 @@ describe('DshHostManager', () => {
       },
     });
 
-    expect(withInheritedTz.SKILLS_ROOT).toBe(skillsDir);
-    expect(withInheritedTz.LOBSTERAI_SKILLS_ROOT).toBe(skillsDir);
+    const shellSkillsRoot = skillsDir.split(path.sep).join('/');
+    expect(withInheritedTz.SKILLS_ROOT).toBe(shellSkillsRoot);
+    expect(withInheritedTz.LOBSTERAI_SKILLS_ROOT).toBe(shellSkillsRoot);
     expect(withInheritedTz.LOBSTERAI_ELECTRON_PATH).toBe('/Apps/LobsterAI Helper');
     expect(withInheritedTz.LOBSTERAI_NPM_BIN_DIR).toBe('/Apps/resources/npm/bin');
     expect(withInheritedTz.LOBSTERAI_PYTHON_ROOT).toBe(pythonDir);
@@ -549,8 +558,9 @@ describe('DshHostManager', () => {
       npmBinDir,
     });
 
-    expect(env.SKILLS_ROOT).toBe(skillsDir);
-    expect(env.LOBSTERAI_SKILLS_ROOT).toBe(skillsDir);
+    const shellSkillsRoot = skillsDir.split(path.sep).join('/');
+    expect(env.SKILLS_ROOT).toBe(shellSkillsRoot);
+    expect(env.LOBSTERAI_SKILLS_ROOT).toBe(shellSkillsRoot);
     expect(env[DshHostBundleEnvVar.SkillsDir]).toBe(skillsDir);
     expect(env.LOBSTERAI_ELECTRON_PATH).toBe('/Apps/LobsterAI Helper');
     expect(env.LOBSTERAI_NPM_BIN_DIR).toBe(npmBinDir);
