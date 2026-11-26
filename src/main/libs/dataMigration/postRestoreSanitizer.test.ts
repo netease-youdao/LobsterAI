@@ -240,4 +240,72 @@ describe('postRestoreSanitizer', () => {
       checkDb.close();
     }
   });
+
+  test('backfills legacy_optional policy when restoring an older backup without auth_access_policy', () => {
+    const userData = makeTempDir();
+    const dbPath = path.join(userData, 'lobsterai.sqlite');
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE cowork_sessions (id TEXT PRIMARY KEY);
+    `);
+    db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'privacy_agreed',
+      JSON.stringify(true),
+      Date.now(),
+    );
+    db.prepare('INSERT INTO cowork_sessions (id) VALUES (?)').run('legacy-session-1');
+    db.close();
+
+    sanitizeRestoredStateSync({
+      dbPath,
+      userDataPath: userData,
+      sourceUserDataPath: userData,
+      sourcePlatform: process.platform,
+    });
+
+    const checkDb = new Database(dbPath, { readonly: true });
+    try {
+      const row = checkDb
+        .prepare("SELECT value FROM kv WHERE key = 'auth_access_policy'")
+        .get() as { value: string } | undefined;
+      expect(row ? JSON.parse(row.value) : null).toBe('legacy_optional');
+    } finally {
+      checkDb.close();
+    }
+  });
+
+  test('preserves an explicit login_required policy present in a newer backup', () => {
+    const userData = makeTempDir();
+    const dbPath = path.join(userData, 'lobsterai.sqlite');
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE cowork_sessions (id TEXT PRIMARY KEY);
+    `);
+    db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'auth_access_policy',
+      JSON.stringify('login_required'),
+      Date.now(),
+    );
+    db.prepare('INSERT INTO cowork_sessions (id) VALUES (?)').run('new-session-1');
+    db.close();
+
+    sanitizeRestoredStateSync({
+      dbPath,
+      userDataPath: userData,
+      sourceUserDataPath: userData,
+      sourcePlatform: process.platform,
+    });
+
+    const checkDb = new Database(dbPath, { readonly: true });
+    try {
+      const row = checkDb
+        .prepare("SELECT value FROM kv WHERE key = 'auth_access_policy'")
+        .get() as { value: string } | undefined;
+      expect(row ? JSON.parse(row.value) : null).toBe('login_required');
+    } finally {
+      checkDb.close();
+    }
+  });
 });

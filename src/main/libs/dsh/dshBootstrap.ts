@@ -508,6 +508,7 @@ export class DshBootstrap {
   private initialConfigSynced = false;
   private initialSyncPromise: Promise<boolean> | null = null;
   private lastInitialConfigSyncFn: DshInitialConfigSyncFn | null = null;
+  private lifecycleGeneration = 0;
   private startupBlockStatus: DshCompatEngineStatus | null = null;
   private lastMcpServerRecords: LobsterMcpServerRecord[] = [];
   private lastNeedsReauthMcpKey = '';
@@ -959,6 +960,8 @@ export class DshBootstrap {
   }
 
   private async doStart(options?: DshBootstrapStartOptions): Promise<DshCompatEngineStatus> {
+    const startGeneration = this.lifecycleGeneration;
+    const isSuperseded = (): boolean => startGeneration !== this.lifecycleGeneration;
     if (options?.syncInitialConfig) {
       this.lastInitialConfigSyncFn = options.syncInitialConfig;
     }
@@ -968,6 +971,9 @@ export class DshBootstrap {
       const loopbackBlockedStatus = await this.checkWindowsLoopbackBeforeStart();
       if (loopbackBlockedStatus) {
         return loopbackBlockedStatus;
+      }
+      if (isSuperseded()) {
+        return this.getEngineStatus();
       }
 
       // One-shot idempotent backfills for users who completed v2 migration before
@@ -1051,6 +1057,10 @@ export class DshBootstrap {
         console.warn('[DshBootstrap] Host launch timed out, retrying startup with the saved configuration');
         await this.hostManager.start();
       }
+      if (isSuperseded()) {
+        await this.hostManager.stop().catch((): void => undefined);
+        return this.getEngineStatus();
+      }
       await this.bridgeWiring.syncDynamicHostTools().catch((error) => {
         console.warn('[DshBootstrap] Failed to sync dynamic host tools:', error);
       });
@@ -1085,8 +1095,18 @@ export class DshBootstrap {
         console.warn('[MigrationV2] background backfill finalization failed:', error);
       });
 
+      if (isSuperseded()) {
+        await this.hostManager.stop().catch((): void => undefined);
+        return this.getEngineStatus();
+      }
+
       if (options?.syncInitialConfig) {
         await this.runInitialConfigSync(options.syncInitialConfig);
+      }
+
+      if (isSuperseded()) {
+        await this.hostManager.stop().catch((): void => undefined);
+        return this.getEngineStatus();
       }
 
       this.scheduler.start();
@@ -1170,7 +1190,36 @@ export class DshBootstrap {
     }
   }
 
+  /**
+   * Non-destructive suspension used by the forced-login gate when a new user
+   * signs out or their session expires. Stops active runs, scheduler polling,
+   * the DSH child process, and all DSH-hosted IM channels while keeping
+   * `bridgeWiring` and `memoryService` alive so a subsequent `start()` cleanly
+   * resumes after re-authentication.
+   */
+  async suspend(): Promise<void> {
+    this.lifecycleGeneration += 1;
+    this.started = false;
+    this.startingInProgress = false;
+    this.startupBlockStatus = null;
+    this.initialConfigSynced = false;
+    this.initialSyncPromise = null;
+    this.mcpOAuthRefreshScheduler.stop();
+    this.scheduler.stop();
+    this.closeEcosystemWindow();
+    this.runtimeAdapter.stopAllSessions();
+    try {
+      await this.hostManager.stop();
+      if (typeof writeDshCleanShutdownMarker === 'function') {
+        writeDshCleanShutdownMarker(this.cleanShutdownMarkerPath, this.executablePath);
+      }
+    } finally {
+      this.emitStatusChange();
+    }
+  }
+
   async stop(): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.started = false;
     this.startingInProgress = false;
     this.startupBlockStatus = null;

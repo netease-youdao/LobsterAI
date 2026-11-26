@@ -18,6 +18,7 @@ import {
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { NeteaseMail } from '../../../shared/neteaseMail/constants';
+import { createAuthRequiredIpcError } from '../../libs/authAccessPolicy';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthClientCredentials,
@@ -42,6 +43,7 @@ export interface McpHandlerDeps {
   getMcpRuntime: () => McpRuntime;
   syncDshConfig: (options: { reason: string }) => Promise<{ success: boolean; changed: boolean }>;
   getMcpOAuthManager: () => McpOAuthManager | null;
+  isAuthGateBlocked?: () => boolean;
 }
 
 function isOAuthRemoteServer(server: McpServerRecord | null): server is McpServerRecord {
@@ -368,6 +370,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       },
     ) => {
       try {
+        if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
         const mcpRuntime = getMcpRuntime();
         const normalizedData = normalizeMcpServerInput(data as McpServerFormData) as McpServerFormData;
         const server = mcpRuntime.getStore().createServer(normalizedData);
@@ -408,6 +411,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       },
     ) => {
       try {
+        if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
         const mcpRuntime = getMcpRuntime();
         const normalizedData = normalizeMcpServerInput(data as Partial<McpServerFormData>);
         const existing = mcpRuntime.getStore().getServer(id);
@@ -430,6 +434,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   );
 
   ipcMain.handle(McpIpcChannel.Delete, async (_event, id: string) => {
+    if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const mcpRuntime = getMcpRuntime();
       const existing = mcpRuntime.getStore().getServer(id);
@@ -446,6 +451,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   });
 
   ipcMain.handle(McpIpcChannel.DeleteByRegistryId, async (_event, registryId: string) => {
+    if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const normalizedRegistryId = registryId.trim();
       if (!normalizedRegistryId) {
@@ -471,6 +477,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   });
 
   ipcMain.handle(McpIpcChannel.SetEnabled, async (_event, options: { id: string; enabled: boolean }) => {
+    if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
     try {
       const mcpRuntime = getMcpRuntime();
       mcpRuntime.getStore().setEnabled(options.id, options.enabled);
@@ -493,6 +500,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
   ipcMain.handle(
     McpIpcChannel.SetEnabledByRegistryId,
     async (_event, options: { registryId: string; enabled: boolean }) => {
+      if (deps.isAuthGateBlocked?.()) return createAuthRequiredIpcError();
       try {
         const normalizedRegistryId = options.registryId.trim();
         if (!normalizedRegistryId) {

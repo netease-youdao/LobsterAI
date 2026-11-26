@@ -350,6 +350,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
   const user = useSelector((state: RootState) => state.auth.user);
   const quota = useSelector((state: RootState) => state.auth.quota);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
+  const accessState = useSelector((state: RootState) => state.auth.accessState);
   const connectionState = useSelector((state: RootState) => getAccountConnectionState(state.auth));
   const isEn = i18nService.getLanguage() === 'en';
   // The menu fetches on mount, so start in the loading state to avoid a
@@ -812,6 +813,7 @@ const UserMenu: React.FC<UserMenuProps> = ({
       {logoutConfirmOpen && (
         <LogoutConfirmDialog
           isLoggingOut={loggingOut}
+          loginRequired={Boolean(accessState?.loginRequired)}
           onCancel={() => setLogoutConfirmOpen(false)}
           onConfirm={() => void handleLogout()}
         />

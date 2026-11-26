@@ -55,6 +55,9 @@ import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspa
 import type { AsrRealtimeSessionRequest, AsrRealtimeSessionResult } from '../shared/asr/constants';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
 import {
+  AuthAccessPolicy,
+  type AuthAccessState,
+  AuthGateReason,
   AuthIpcChannel,
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
@@ -321,6 +324,7 @@ import {
   createRealtimeAsrSession,
   registerAsrIpcHandlers,
 } from './ipcHandlers/asr';
+import { registerAuthGateHandlers } from './ipcHandlers/authGate';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
 import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
@@ -383,8 +387,14 @@ import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoo
 import { AppUpdateGrayClient, type AppUpdateGraySession } from './libs/appUpdateGrayClient';
 import { attachArtifactBrowserWindowOpenHandler } from './libs/artifactBrowserWindowOpen';
 import { ArtifactFileWatcher } from './libs/artifactFileWatcher';
+import {
+  createAuthRequiredIpcError,
+  evaluateAuthAccessState,
+  resolveAndPersistAuthAccessPolicy,
+} from './libs/authAccessPolicy';
 import { openBrowserLogin } from './libs/authBrowserLogin';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
+import { AuthGateLifecycleCoordinator } from './libs/authGateLifecycle';
 import { startAuthLocalCallback, stopAuthLocalCallback } from './libs/authLocalCallbackServer';
 import { AuthLoginAttempt } from './libs/authLoginAttempt';
 import {
@@ -2259,6 +2269,40 @@ let resolveAppUpdateGraySession: () => AppUpdateGraySession | null = () => null;
 let mainLogReporter: MainLogReporter | null = null;
 let libraryIndexService: LibraryIndexService | null = null;
 let unsubscribeLibrarySessionChanges: (() => void) | null = null;
+let resolvedAuthAccessPolicy: AuthAccessPolicy = AuthAccessPolicy.LoginRequired;
+let lastAuthGateSessionChangeReason: AuthSessionChangeReason | null = null;
+let authGateLifecycle: AuthGateLifecycleCoordinator | null = null;
+
+const getAuthAccessState = (): AuthAccessState => {
+  if (!store) {
+    const loginRequired = resolvedAuthAccessPolicy === AuthAccessPolicy.LoginRequired;
+    return {
+      policy: resolvedAuthAccessPolicy,
+      loginRequired,
+      blocked: loginRequired,
+      reason: loginRequired ? AuthGateReason.FirstRun : null,
+    };
+  }
+  const enterpriseConfig = store.get<{ ui?: Record<string, string> }>('enterprise_config');
+  return evaluateAuthAccessState({
+    policy: resolvedAuthAccessPolicy,
+    enterpriseLoginHidden: enterpriseConfig?.ui?.login === 'hide',
+    hasCredentials: Boolean(store.get('auth_tokens')),
+    lastSessionChangeReason: lastAuthGateSessionChangeReason,
+    privacyAgreed: store.get<boolean>('privacy_agreed') === true,
+  });
+};
+
+const isAuthGateBlocked = (): boolean => getAuthAccessState().blocked;
+
+const emitAuthAccessStateChanged = (): void => {
+  const nextState = getAuthAccessState();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(AuthIpcChannel.AccessStateChanged, nextState);
+    }
+  }
+};
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
   if (enabled) {
@@ -3670,6 +3714,9 @@ const getIMGatewayManager = () => {
 
     let channelStatusBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
     getDshBootstrap().hostManager.setChannelEventHandler(async (payload) => {
+      if (isAuthGateBlocked()) {
+        return { ok: false, blocked: true };
+      }
       if (payload?.type === DSH_POPO_PAIRING_EVENT) {
         const { instanceId, senderId } = payload;
         if (typeof instanceId !== 'string' || typeof senderId !== 'string' || !senderId
@@ -4782,6 +4829,9 @@ if (!gotTheLock) {
         }
       }
       refreshEndpointsTestMode(getStore());
+      if (isAuthGateBlocked()) {
+        return;
+      }
       const proxyChanged = previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy;
       if (proxyChanged && getDshBootstrap().getEngineStatus().phase === 'running') {
         console.log('[DSH] Deferred app_config sync to the system proxy watcher.');
@@ -4818,7 +4868,7 @@ if (!gotTheLock) {
   ipcMain.on('network:status-change', (_event, status: 'online' | 'offline') => {
     console.log(`[Main] Network status changed: ${status}`);
 
-    if (status === 'online' && imGatewayManager) {
+    if (status === 'online' && imGatewayManager && !isAuthGateBlocked()) {
       console.log('[Main] Network restored, reconnecting IM gateways...');
       imGatewayManager.reconnectAllDisconnected();
     }
@@ -5182,6 +5232,7 @@ if (!gotTheLock) {
     clearStartupAuthCache(getStore());
     clearEnterpriseAccountContext(getStore());
     clearServerModelMetadata();
+    lastAuthGateSessionChangeReason = AuthSessionChangeReason.EnterpriseMembershipRevoked;
     mediaSelectionBySession.clear();
     mediaTurnAccountScopeBySession.clear();
     mediaReferencesBySession.clear();
@@ -5191,12 +5242,17 @@ if (!gotTheLock) {
     if (pendingMediaTasks.size === 0) {
       stopMediaPollTimer();
     }
-    syncOpenClawConfig({
-      reason: 'enterprise-account-context-invalidated',
-      restartGatewayIfRunning: quotaGateChanged,
-    }).catch(error => {
-      console.warn('[EnterpriseAccount] failed to sync OpenClaw after context invalidation:', error);
-    });
+    if (isAuthGateBlocked()) {
+      emitAuthAccessStateChanged();
+      void authGateLifecycle?.syncState('enterprise-account-context-invalidated');
+    } else {
+      syncOpenClawConfig({
+        reason: 'enterprise-account-context-invalidated',
+        restartGatewayIfRunning: quotaGateChanged,
+      }).catch(error => {
+        console.warn('[EnterpriseAccount] failed to sync OpenClaw after context invalidation:', error);
+      });
+    }
 
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
@@ -7478,20 +7534,27 @@ if (!gotTheLock) {
     clearEnterpriseAccountContext(getStore());
     clearServerModelMetadata();
     resetAuthQuotaGateState();
+    lastAuthGateSessionChangeReason = options.reason;
 
-    const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
-    if (!quotaGateSyncScheduled) {
-      const syncReason = options.reason === AuthSessionChangeReason.EnterpriseMembershipRevoked
-        ? 'enterprise-membership-revoked-server-models-cleared'
-        : options.reason === AuthSessionChangeReason.RefreshRejected
-          ? 'auth-session-expired-server-models-cleared'
-          : 'auth-logout-server-models-cleared';
-      syncOpenClawConfig({
-        reason: syncReason,
-        restartGatewayIfRunning: false,
-      }).catch(error => {
-        console.warn('[Auth] failed to sync OpenClaw config after auth cleanup:', error);
-      });
+    const blockedAfterClear = isAuthGateBlocked();
+    if (blockedAfterClear) {
+      emitAuthAccessStateChanged();
+      void authGateLifecycle?.syncState(options.reason);
+    } else {
+      const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
+      if (!quotaGateSyncScheduled) {
+        const syncReason = options.reason === AuthSessionChangeReason.EnterpriseMembershipRevoked
+          ? 'enterprise-membership-revoked-server-models-cleared'
+          : options.reason === AuthSessionChangeReason.RefreshRejected
+            ? 'auth-session-expired-server-models-cleared'
+            : 'auth-logout-server-models-cleared';
+        syncOpenClawConfig({
+          reason: syncReason,
+          restartGatewayIfRunning: false,
+        }).catch(error => {
+          console.warn('[Auth] failed to sync OpenClaw config after auth cleanup:', error);
+        });
+      }
     }
 
     if (options.notifyRenderer) {
@@ -7578,6 +7641,11 @@ if (!gotTheLock) {
     getMainWindow: () => mainWindow,
     getServerBaseUrl: getServerApiBaseUrl,
     fetchPublic: (url, options) => net.fetch(url, options),
+  });
+
+  registerAuthGateHandlers({
+    ipcMain,
+    getAuthAccessState,
   });
 
   registerSubscriptionTrialIpcHandlers({
@@ -7720,6 +7788,9 @@ if (!gotTheLock) {
       // again to restore them. That load syncs once and reads the new gate.
       // The initiating renderer applies the exchange result; other windows
       // must refresh their own auth stores without consuming the OAuth code.
+      lastAuthGateSessionChangeReason = null;
+      emitAuthAccessStateChanged();
+      void authGateLifecycle?.syncState('user-login');
       emitAuthSessionChanged({
         status: AuthSessionStatus.Authenticated,
         reason: AuthSessionChangeReason.UserLogin,
@@ -9128,11 +9199,14 @@ if (!gotTheLock) {
   registerSkillHandlers({
     getSkillManager,
     getSkillStoreUrl,
+    isAuthGateBlocked,
     onSkillsPolicyChanged: async () => {
       if (!isWebSearchSkillEnabled()) {
         webSearchHost?.dispose();
       }
-      await syncOpenClawConfig({ reason: 'skills-enabled-changed' });
+      if (!isAuthGateBlocked()) {
+        await syncOpenClawConfig({ reason: 'skills-enabled-changed' });
+      }
     },
   });
 
@@ -9159,6 +9233,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(OpenClawEngineIpc.Install, async () => {
+    if (isAuthGateBlocked()) return createAuthRequiredIpcError();
     try {
       const status = await bootstrapOpenClawEngine({
         forceReinstall: false,
@@ -9178,6 +9253,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(OpenClawEngineIpc.RetryInstall, async () => {
+    if (isAuthGateBlocked()) return createAuthRequiredIpcError();
     try {
       const status = await bootstrapOpenClawEngine({
         forceReinstall: true,
@@ -9198,6 +9274,7 @@ if (!gotTheLock) {
 
   let restartGatewayPromise: Promise<DshCompatEngineStatus> | null = null;
   ipcMain.handle(OpenClawEngineIpc.RestartGateway, async () => {
+    if (isAuthGateBlocked()) return createAuthRequiredIpcError();
     if (restartGatewayPromise) {
       const status = await restartGatewayPromise;
       return { success: status.phase === 'running' || status.phase === 'ready', status };
@@ -9221,6 +9298,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(OpenClawEngineIpc.RepairGatewayState, async () => {
+    if (isAuthGateBlocked()) return createAuthRequiredIpcError();
     try {
       const status = await getDshBootstrap().restart();
       return { success: status.phase === 'running', status };
@@ -9478,6 +9556,7 @@ if (!gotTheLock) {
     getMcpRuntime,
     syncDshConfig: syncOpenClawConfig,
     getMcpOAuthManager: () => getDshBootstrap().mcpOAuthManager,
+    isAuthGateBlocked,
   });
 
   registerDecisionModelHandlers({
@@ -9494,6 +9573,7 @@ if (!gotTheLock) {
     getRuntimeDir: () => getDshBootstrap().runtimeDir,
     getExecutablePath: () => getDshBootstrap().executablePath,
     getNodeToolchain: () => getDshBootstrap().resolveNodeToolchain(),
+    isAuthGateBlocked,
     openEcosystemWindow: (authenticatedUrl, routeHash) => {
       getDshBootstrap().openEcosystemWindow(authenticatedUrl, routeHash);
     },
@@ -9571,6 +9651,9 @@ if (!gotTheLock) {
       },
     ) => {
       try {
+        if (isAuthGateBlocked()) {
+          return createAuthRequiredIpcError();
+        }
         const ipcStartedAtMs = Date.now();
         const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
         const requestAccountScope = getCurrentMediaAccountScope();
@@ -9884,6 +9967,9 @@ if (!gotTheLock) {
       },
     ) => {
       const preparation = new AbortController();
+      if (isAuthGateBlocked()) {
+        return createAuthRequiredIpcError();
+      }
       if (options.retryMessageId && preparingContinuations.has(options.sessionId)) {
         return { success: false, error: t('coworkUnsentRetryUnavailable') };
       }
@@ -11877,6 +11963,7 @@ if (!gotTheLock) {
       chatId: string;
       text: string;
     }) => getDshBootstrap().channelsBridge.sendProactiveMessage(params),
+    isAuthGateBlocked,
   };
   registerScheduledTaskHandlers(scheduledTaskHandlerDeps);
 
@@ -12032,6 +12119,7 @@ if (!gotTheLock) {
   };
 
   ipcMain.handle('im:config:set', async (_event, config: Partial<IMGatewayConfig>, options?: IMConfigSetOptions) => {
+    if (isAuthGateBlocked()) return createAuthRequiredIpcError();
     try {
       mutateImOpenClawConfig(() => {
         getIMGatewayManager().setConfig(config, {
@@ -12056,6 +12144,7 @@ if (!gotTheLock) {
   // Called from the global Settings Save button after IM fields have been
   // persisted locally without gateway sync.
   ipcMain.handle('im:config:sync', async () => {
+    if (isAuthGateBlocked()) return createAuthRequiredIpcError();
     try {
       const nextFingerprint = getCurrentImOpenClawConfigFingerprint();
       const previousFingerprint = ensureLastSyncedImOpenClawConfigFingerprint(nextFingerprint);
@@ -14550,13 +14639,16 @@ if (!gotTheLock) {
           enabled: !desktopCompanionManager.getState().preferences.enabled,
         }, CompanionAnalyticsSource.Tray),
         openPanel: () => desktopCompanionManager?.togglePanel(),
+        isAuthGateBlocked,
       });
 
       // Start scheduler polling after the window is ready.
-      try {
-        getCronJobService().startPolling();
-      } catch (err) {
-        console.warn('[Main] LobsterScheduler not available yet:', err);
+      if (!isAuthGateBlocked()) {
+        try {
+          getCronJobService().startPolling();
+        } catch (err) {
+          console.warn('[Main] LobsterScheduler not available yet:', err);
+        }
       }
     };
 
@@ -15007,6 +15099,14 @@ if (!gotTheLock) {
     store = await initStore();
     profiler.measure('initStore');
     console.log('[Main] initApp: store initialized');
+    // Resolve and persist the durable installation auth access policy BEFORE
+    // startup writes keyfrom_attribution, enterprise_config, or auto-launch
+    // keys, so fresh installs are accurately classified as login_required.
+    resolvedAuthAccessPolicy = resolveAndPersistAuthAccessPolicy(
+      store.getDatabase(),
+      store,
+      { userDataDir: app.getPath('userData') },
+    ).policy;
     const libraryLocalStore = new LibraryLocalStore(store.getDatabase());
     const emitLibraryChanged = (payload: LibraryChangedPayload): void => {
       for (const window of BrowserWindow.getAllWindows()) {
@@ -15360,21 +15460,68 @@ if (!gotTheLock) {
     });
     profiler.measure('startAskUserServer');
 
-    void proxyPreferenceReady
-      .then(() => bootstrapOpenClawEngine({ reason: 'startup' }))
-      .then(() => {
+    const startDshAndScheduler = async (reason: string): Promise<void> => {
+      await proxyPreferenceReady;
+      await bootstrapOpenClawEngine({ reason });
+      try {
+        getCronJobService().startPolling();
+      } catch (err) {
+        console.warn('[Main] LobsterScheduler start failed after DSH boot:', err);
+      }
+      void migrateScheduledTaskAnnounceJobs(scheduledTaskHandlerDeps).catch(err => {
+        console.warn('[Main] Scheduled task IM announce job normalization failed:', err);
+      });
+    };
+
+    authGateLifecycle = new AuthGateLifecycleCoordinator({
+      isBlocked: isAuthGateBlocked,
+      startDshAndScheduler: () => startDshAndScheduler('post-login'),
+      startImGateways: () => getIMGatewayManager().startAllEnabled(),
+      stopCoworkSessions: () => {
+        coworkEngineRouter?.stopAllSessions();
+      },
+      stopSchedulerPolling: () => {
         try {
-          getCronJobService().startPolling();
-        } catch (err) {
-          console.warn('[Main] LobsterScheduler start failed after DSH boot:', err);
+          getCronJobService().stopPolling();
+        } catch {
+          // Scheduler may not be initialized yet.
         }
-        void migrateScheduledTaskAnnounceJobs(scheduledTaskHandlerDeps).catch(err => {
-          console.warn('[Main] Scheduled task IM announce job normalization failed:', err);
-        });
-      })
-      .catch(error => {
+      },
+      stopImGateways: async () => {
+        await imGatewayManager?.stopAll();
+      },
+      suspendDsh: async () => {
+        if (dshBootstrap) {
+          await dshBootstrap.suspend();
+        }
+      },
+      setCompanionAuthBlocked: (blocked) => {
+        desktopCompanionManager?.setAuthGateBlocked(blocked);
+      },
+      refreshTrayMenu: () => {
+        updateTrayMenu(() => isQuitting ? null : mainWindow);
+      },
+      log: {
+        info: message => console.log(message),
+        warn: (message, error) => {
+          if (error === undefined) {
+            console.warn(message);
+          } else {
+            console.warn(message, error);
+          }
+        },
+      },
+    });
+
+    if (!isAuthGateBlocked()) {
+      authGateLifecycle.markServicesActive(true);
+      void startDshAndScheduler('startup').catch(error => {
+        authGateLifecycle?.markServicesActive(false);
         console.error('[DSH] Failed to auto-start DSH host on app startup:', error);
       });
+    } else {
+      console.log('[AuthGate] Deferring DSH host, scheduler, and IM startup until authentication completes');
+    }
 
     // ── Step 1: Show window ASAP (zero remote network gating) ─────────
     setContentSecurityPolicy();
@@ -15399,6 +15546,7 @@ if (!gotTheLock) {
     profiler.measure('createWindow');
     desktopCompanionManager = new DesktopCompanionManager({
       enginePhase: getDshBootstrap().getEngineStatus().phase,
+      authGateBlocked: isAuthGateBlocked(),
       reportAnalytics: event => getMainLogReporter().report(event),
       getAnalyticsOwner: () => getStore().get<AppConfigSettings>('app_config')?.usageAnalyticsEnabled === false ? null : getAuthSessionKey() ?? '',
       getTaskInfo: sessionId => {
@@ -15499,6 +15647,7 @@ if (!gotTheLock) {
 
     // When skills change (install/enable/disable/delete), re-sync DSH skills policy.
     manager.onSkillsChanged(skillChangeBatch => {
+      if (isAuthGateBlocked()) return;
       syncOpenClawConfig({ reason: 'skills-changed', skillChangeBatch }).catch(error => {
         console.warn('[Main] Failed to sync OpenClaw config after skills change:', error);
       });
@@ -15551,11 +15700,13 @@ if (!gotTheLock) {
     }
 
     // Auto-reconnect IM bots (skipped if initial DSH bootstrap is already syncing IM in Phase 2).
-    getIMGatewayManager()
-      .startAllEnabled()
-      .catch(error => {
-        console.error('[IM] Failed to auto-start enabled gateways:', error);
-      });
+    if (!isAuthGateBlocked()) {
+      getIMGatewayManager()
+        .startAllEnabled()
+        .catch(error => {
+          console.error('[IM] Failed to auto-start enabled gateways:', error);
+        });
+    }
 
     // ── Step 3: Stagger non-urgent background maintenance ────────────
     // Avoid disk/CPU contention while Chromium first-paints and DSH cold-boots.
@@ -15610,7 +15761,9 @@ if (!gotTheLock) {
 
     // Reconcile missed scheduled tasks after system wake from sleep/suspend
     powerMonitor.on('resume', () => {
-      dshBootstrap?.scheduler.reconcileMissedJobs();
+      if (!isAuthGateBlocked()) {
+        dshBootstrap?.scheduler.reconcileMissedJobs();
+      }
     });
 
     // macOS posts this for logout, restart, and shutdown right before it asks

@@ -13,6 +13,7 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
+import { AuthAccessPolicy } from '../shared/auth/constants';
 import { BrowserPasskeyUiEvent } from '../shared/browserWebAccess/passkeys';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { DesktopCompanionMainPage } from '../shared/desktopCompanion/constants';
@@ -78,6 +79,10 @@ import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
 import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
 import { authService } from './services/auth';
+import {
+  RendererAuthGateMode,
+  resolveRendererAuthGateState,
+} from './services/authGate';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
 import {
@@ -110,6 +115,7 @@ import {
   selectPendingPermissions,
 } from './store/selectors/coworkSelectors';
 import { openArtifactPreviewTab } from './store/slices/artifactSlice';
+import { setAuthAccessState } from './store/slices/authSlice';
 import {
   addDraftAttachment,
   clearDraftAttachments,
@@ -253,6 +259,8 @@ const App: React.FC = () => {
   const coreStartupServicesInitializedRef = useRef(false);
   const enterpriseGateRequestIdRef = useRef(0);
   const privacyGateRequestIdRef = useRef(0);
+  const authAccessGateRequestIdRef = useRef(0);
+  const workspaceServicesBootstrappedRef = useRef(false);
   const isUserInitiatedUpdateFlowActiveRef = useRef(false);
   const dispatch = useDispatch();
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
@@ -260,6 +268,10 @@ const App: React.FC = () => {
   const pendingPermission = useSelector(selectFirstCurrentSessionPendingPermission);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const authUser = useSelector((state: RootState) => state.auth.user);
+  const authIsLoading = useSelector((state: RootState) => state.auth.isLoading);
+  const authIsLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+  const authSessionStatus = useSelector((state: RootState) => state.auth.sessionStatus);
+  const authAccessState = useSelector((state: RootState) => state.auth.accessState);
   const isEnterpriseAccount = useSelector(selectIsEnterpriseAccount);
   const isWindows = window.electron.platform === 'win32';
   const [minimizedPermissionIds, setMinimizedPermissionIds] = useState<string[]>([]);
@@ -271,11 +283,21 @@ const App: React.FC = () => {
     isUserInitiatedUpdateFlowActive,
     appUpdateState.status,
   );
-  const shouldShowNewUserOnboarding =
-    privacyAgreed === false
-    && !authUser
-    && !isNewUserOnboardingDismissed
-    && !isUpdateInteractionBlocked;
+  const authGate = resolveRendererAuthGateState({
+    accessState: authAccessState,
+    authIsLoading,
+    authIsLoggedIn,
+    authHasUser: Boolean(authUser),
+    authSessionStatus,
+    enterpriseLoginHidden: enterpriseConfig?.ui?.login === 'hide',
+    privacyAgreed,
+    isNewUserOnboardingDismissed,
+    isUpdateInteractionBlocked,
+  });
+  const isForcedLoginLoading = authGate.mode === RendererAuthGateMode.Loading;
+  const isForcedLoginBlocked = authGate.mode === RendererAuthGateMode.ForcedLogin;
+  const isAuthGateRestricted = isForcedLoginLoading || isForcedLoginBlocked;
+  const shouldShowNewUserOnboarding = authGate.mode === RendererAuthGateMode.LegacyFirstRun;
 
   // The agent's Office tools edit the file open in the artifact panel in place.
   useEffect(() => installOfficeAgentBridges(), []);
@@ -387,6 +409,7 @@ const App: React.FC = () => {
           action: LogReporterAction.AppStarted,
           providerModelCount,
           hasLoggedInUser: !!store.getState().auth.user?.yid,
+          authAccessPolicy: store.getState().auth.accessState?.policy,
         });
       }
     };
@@ -407,7 +430,7 @@ const App: React.FC = () => {
       // use fresh IPC invokes on retry to recover from an early renderer/main
       // handshake stall.
       if (!requiredStartupGatesReadyRef.current) {
-        const [enterpriseReady, privacyReady] = await Promise.all([
+        const [enterpriseReady, privacyReady, authAccessReady] = await Promise.all([
           runStep('enterprise.getConfig', async () => {
             const requestId = beginLatestAsyncRequest(enterpriseGateRequestIdRef);
             const result = await window.electron.enterprise.getConfig();
@@ -430,14 +453,30 @@ const App: React.FC = () => {
             attempts: INIT_REQUIRED_GATE_MAX_ATTEMPTS,
             firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS,
           }),
+          runStep('auth.getAccessState', async () => {
+            const requestId = beginLatestAsyncRequest(authAccessGateRequestIdRef);
+            const state = typeof window.electron?.auth?.getAccessState === 'function'
+              ? await window.electron.auth.getAccessState()
+              : {
+                policy: AuthAccessPolicy.LegacyOptional,
+                loginRequired: false,
+                blocked: false,
+                reason: null,
+              };
+            if (!isLatestAsyncRequest(authAccessGateRequestIdRef, requestId)) return;
+            dispatch(setAuthAccessState(state));
+          }, {
+            attempts: INIT_REQUIRED_GATE_MAX_ATTEMPTS,
+            firstTimeoutMs: INIT_STEP_RETRY_TIMEOUT_MS,
+          }),
         ]);
-        if (!enterpriseReady || !privacyReady) {
+        if (!enterpriseReady || !privacyReady || !authAccessReady) {
           throw new Error(
-            `Required startup gates unavailable (enterprise=${enterpriseReady}, privacy=${privacyReady}).`,
+            `Required startup gates unavailable (enterprise=${enterpriseReady}, privacy=${privacyReady}, authAccess=${authAccessReady}).`,
           );
         }
         requiredStartupGatesReadyRef.current = true;
-        mark('required privacy and enterprise gates done');
+        mark('required privacy, enterprise, and auth access gates done');
       }
 
       mark('configService.init begin');
@@ -483,8 +522,11 @@ const App: React.FC = () => {
         mark('themeService done');
 
         // Pre-warm Cowork session/config/engine snapshots while i18n and auth
-        // hydrate so CoworkView mounts ready with zero intermediate loading frame.
-        void coworkService.init();
+        // hydrate when the workspace is not blocked by the forced-login gate.
+        if (!store.getState().auth.accessState?.blocked) {
+          workspaceServicesBootstrappedRef.current = true;
+          void coworkService.init();
+        }
 
         mark('i18nService + authService init begin');
         const [i18nReady, authReady] = await Promise.all([
@@ -515,9 +557,11 @@ const App: React.FC = () => {
         configReady ? 'shell ready' : 'shell ready (degraded: default config)',
       );
 
-      void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
-        console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
-      });
+      if (!store.getState().auth.accessState?.blocked) {
+        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
+          console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
+        });
+      }
 
       if (!configReady) {
         // Schedule only after the startup pass releases its in-flight guard;
@@ -548,7 +592,7 @@ const App: React.FC = () => {
     } finally {
       initPassRunningRef.current = false;
     }
-  }, [applyConfigToApp, waitWithTimeout]);
+  }, [applyConfigToApp, dispatch, waitWithTimeout]);
 
   useEffect(() => {
     runInitPassRef.current = (mode: InitPassMode) => { void runInitPass(mode); };
@@ -586,6 +630,24 @@ const App: React.FC = () => {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isInitialized || isAuthGateRestricted) return;
+    if (workspaceServicesBootstrappedRef.current) return;
+    workspaceServicesBootstrappedRef.current = true;
+    void coworkService.init();
+    void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
+      console.error('[App] post-login scheduledTaskService.init failed:', error);
+    });
+  }, [isInitialized, isAuthGateRestricted, waitWithTimeout]);
+
+  useEffect(() => {
+    if (isForcedLoginBlocked) {
+      workspaceServicesBootstrappedRef.current = false;
+      setShowSettings(false);
+      setShowFeedback(false);
+    }
+  }, [isForcedLoginBlocked]);
 
   useEffect(() => {
     if (authUser) {
@@ -763,6 +825,7 @@ const App: React.FC = () => {
   // In-app links from ads and other server-configured entries (lobsterai://settings/…, lobsterai://view/…).
   useEffect(() => {
     const handleDeepLink = (event: Event) => {
+      if (isAuthGateRestricted) return;
       const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
       if (!target) return;
       if (target.kind === 'view' && target.view === MainView.Experts && !ENABLE_EXPERT_PLAZA_UI) return;
@@ -777,7 +840,7 @@ const App: React.FC = () => {
     };
     window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
     return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
-  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
+  }, [handleShowExperts, handleShowLibrary, handleShowSettings, isAuthGateRestricted]);
 
   const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
@@ -1154,15 +1217,17 @@ const App: React.FC = () => {
   // Only a verified account completes browser login. Enter the existing home
   // immediately; gateway/model preparation has its own UI and lifecycle.
   useEffect(() => {
-    if (privacyAgreed !== false || !authUser) return;
+    if (privacyAgreed !== false || (!authUser && !authIsLoggedIn)) return;
     coworkService.clearSession();
     setMainView(MainView.Cowork);
     setIsNewUserOnboardingDismissed(true);
-    reportOnboardingAction('login_success_home', { source: 'first_run_gate' });
+    reportOnboardingAction('login_success_home', {
+      source: authGate.isLoginRequired ? 'forced_login_gate' : 'first_run_gate',
+    });
     void acceptPrivacyAgreement().catch((error) => {
       console.error('[Onboarding] failed to persist completion after login:', error);
     });
-  }, [privacyAgreed, authUser, acceptPrivacyAgreement]);
+  }, [privacyAgreed, authUser, authIsLoggedIn, authGate.isLoginRequired, acceptPrivacyAgreement]);
 
   const handleFirstRunGuest = useCallback(async () => {
     await acceptPrivacyAgreement();
@@ -1260,7 +1325,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || event.defaultPrevented || showFeedback || isShortcutInputActive()) return;
+      if (isAuthGateRestricted || event.repeat || event.defaultPrevented || showFeedback || isShortcutInputActive()) return;
 
       const { shortcuts } = configService.getConfig();
       const activeShortcuts = {
@@ -1466,6 +1531,7 @@ const App: React.FC = () => {
     handleShowSettings,
     handleShowSkills,
     handleToggleSidebar,
+    isAuthGateRestricted,
     isUpdateInteractionBlocked,
     mainView,
     isPermissionModalOpen,
@@ -1483,7 +1549,8 @@ const App: React.FC = () => {
       // The app page has no history of its own to step through.
       event.preventDefault();
       if (
-        mainView !== MainView.Cowork
+        isAuthGateRestricted
+        || mainView !== MainView.Cowork
         || showSettings
         || showFeedback
         || showUpdateModal
@@ -1494,7 +1561,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('mouseup', handleMouseUp);
     return () => window.removeEventListener('mouseup', handleMouseUp);
-  }, [isPermissionModalOpen, isUpdateInteractionBlocked, mainView, showFeedback, showSettings, showUpdateModal]);
+  }, [isAuthGateRestricted, isPermissionModalOpen, isUpdateInteractionBlocked, mainView, showFeedback, showSettings, showUpdateModal]);
 
   useEffect(() => {
     return () => {
@@ -1517,6 +1584,7 @@ const App: React.FC = () => {
   // Listen for ask-ai events: close settings, open a new chat, and pre-fill its input.
   useEffect(() => {
     const handler = (e: Event) => {
+      if (isAuthGateRestricted) return;
       const text = (e as CustomEvent<string>).detail;
       if (typeof text !== 'string' || !text.trim()) {
         console.warn('[AskAI] ignored navigation request because the prompt was empty.');
@@ -1568,7 +1636,7 @@ const App: React.FC = () => {
         askAiFocusTimerRef.current = null;
       }
     };
-  }, [dispatch]);
+  }, [dispatch, isAuthGateRestricted]);
 
   useEffect(() => {
     const openBrowserSettings = () => handleShowSettings({ initialTab: 'browserWebAccess' });
@@ -1599,15 +1667,16 @@ const App: React.FC = () => {
   // 监听托盘菜单、桌面悬浮球打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on(AppIpcChannel.OpenSettings, (request?: OpenSettingsRequest) => {
+      if (isAuthGateRestricted) return;
       const tab = request?.tab;
       handleShowSettings(tab && Object.values(OpenSettingsTab).includes(tab) ? { initialTab: tab } : undefined);
     });
     return unsubscribe;
-  }, [handleShowSettings]);
+  }, [handleShowSettings, isAuthGateRestricted]);
 
   useEffect(() => {
     const companion = window.electron.desktopCompanion;
-    if (!isInitialized || !companion?.consumeMainPage) return;
+    if (!isInitialized || isAuthGateRestricted || !companion?.consumeMainPage) return;
     const openRequestedPage = () => {
       void companion.consumeMainPage().then(page => {
         if (page === DesktopCompanionMainPage.Kits || page === DesktopCompanionMainPage.Skills) {
@@ -1619,32 +1688,34 @@ const App: React.FC = () => {
     const unsubscribe = companion.onMainPageRequested(openRequestedPage);
     openRequestedPage();
     return unsubscribe;
-  }, [isInitialized]);
+  }, [isAuthGateRestricted, isInitialized]);
 
   // 监听托盘菜单新建任务的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:newTask', () => {
+      if (isAuthGateRestricted) return;
       handleNewChat();
     });
     return unsubscribe;
-  }, [handleNewChat]);
+  }, [handleNewChat, isAuthGateRestricted]);
 
   useEffect(() => {
     const unsubscribe = window.electron.cowork.onOpenSessionFromNotification?.(({ sessionId }) => {
+      if (isAuthGateRestricted) return;
       setShowSettings(false);
       setMainView(MainView.Cowork);
       void coworkService.loadSession(sessionId);
     });
     void window.electron.cowork.notifyOpenSessionFromNotificationReady?.();
     return unsubscribe;
-  }, []);
+  }, [isAuthGateRestricted]);
 
   // macOS Finder "Open With" and Dock drops: start a new task with the items
   // attached, keeping whatever the home draft already holds.
   useEffect(() => {
     const openWith = window.electron.openWith;
     // A dev renderer can hot-reload ahead of an older preload.
-    if (!isInitialized || !openWith) return;
+    if (!isInitialized || isAuthGateRestricted || !openWith) return;
     const attachOpenWithPaths = async () => {
       try {
         const paths = await openWith.consumePaths();
@@ -1676,7 +1747,7 @@ const App: React.FC = () => {
     });
     void attachOpenWithPaths();
     return unsubscribe;
-  }, [dispatch, isInitialized]);
+  }, [dispatch, isAuthGateRestricted, isInitialized]);
 
   // Tell the main process which session is currently visible so desktop
   // notifications for that session can be suppressed and cleared.
@@ -1806,7 +1877,8 @@ const App: React.FC = () => {
     || showUpdateInstallConfirm
     || isPermissionModalOpen
     || isUpdateInteractionBlocked
-    || shouldShowNewUserOnboarding;
+    || shouldShowNewUserOnboarding
+    || isForcedLoginBlocked;
   // Downloads stay silent: the badge and sidebar card only appear once the
   // installer is ready or the update needs the user's attention.
   const shouldShowUpdateNotice = shouldShowAppUpdateNotice(appUpdateState);
@@ -1824,7 +1896,10 @@ const App: React.FC = () => {
       onExpandedChange={setIsUpdateCardExpanded}
     />
   ) : null;
-  const canUseWindowsTopBarActions = isInitialized && !initError && !isUpdateInteractionBlocked;
+  const canUseWindowsTopBarActions = isInitialized
+    && !initError
+    && !isUpdateInteractionBlocked
+    && !isAuthGateRestricted;
   const canUseWindowsCollapsedTopBarActions = canUseWindowsTopBarActions && isSidebarCollapsed;
   const collapsedHeaderUpdateBadge = isSidebarCollapsed && !isWindows ? updateBadge : null;
   const windowsStandaloneTitleBar = isWindows ? (
@@ -1832,7 +1907,7 @@ const App: React.FC = () => {
       isOverlayActive={isOverlayActive}
       isSidebarCollapsed={isSidebarCollapsed}
       sidebarWidth={sidebarWidth}
-      sidebarColumnVisible={isInitialized && !initError && !isSidebarCollapsed}
+      sidebarColumnVisible={isInitialized && !initError && !isSidebarCollapsed && !isAuthGateRestricted}
       onToggleSidebar={canUseWindowsTopBarActions ? handleToggleSidebar : undefined}
       onSearch={canUseWindowsTopBarActions && !isSidebarCollapsed
         ? handleOpenTaskSearch
@@ -1845,9 +1920,9 @@ const App: React.FC = () => {
     />
   ) : null;
 
-  if (!isInitialized) {
+  if (!isInitialized || isForcedLoginLoading) {
     // Matches index.html's static two-plane boot shell so startup transitions
-    // directly into the main workspace with no splash overlay flash.
+    // directly into the main workspace or forced-login gate with no flash.
     return (
       <div className="h-screen overflow-hidden flex flex-col bg-[var(--lobster-sidebar-bg)]">
         {windowsStandaloneTitleBar}
@@ -1887,7 +1962,7 @@ const App: React.FC = () => {
               >
                 {i18nService.t('restartApp')}
               </button>
-              {enterpriseConfigLoaded && privacyAgreed === true && (
+              {enterpriseConfigLoaded && privacyAgreed === true && (!authGate.isLoginRequired || authIsLoggedIn) && (
                 <button
                   onClick={() => handleShowSettings()}
                   className="px-6 py-2.5 border border-border text-foreground hover:bg-surface-raised rounded-xl transition-colors text-sm font-medium"
@@ -1911,6 +1986,56 @@ const App: React.FC = () => {
             </SkinProvider>
           )}
         </div>
+      </div>
+    );
+  }
+
+  if (isForcedLoginBlocked) {
+    return (
+      <div className="h-screen overflow-hidden flex flex-col bg-background">
+        {toastMessage && (
+          <Toast
+            message={toastMessage.message}
+            actionLabel={toastMessage.actionLabel}
+            onAction={toastMessage.onAction}
+            closeLabel={i18nService.t('close')}
+            onClose={() => setToastMessage(null)}
+          />
+        )}
+        {windowsStandaloneTitleBar}
+        <div
+          className="relative flex flex-1 min-h-0 overflow-hidden"
+          aria-busy={isUpdateInteractionBlocked}
+        >
+          {isUpdateInteractionBlocked ? (
+            <AppUpdateInteractionOverlay>
+              <AppUpdateBlockingPanel updateState={appUpdateState} />
+            </AppUpdateInteractionOverlay>
+          ) : (
+            <FirstRunLoginIntroduction
+              forced
+              gateReason={authGate.reason}
+            />
+          )}
+        </div>
+        {showUpdateModal && updateInfo && (
+          <AppUpdateModal
+            updateState={appUpdateState}
+            onCancel={() => {
+              if (appUpdateState.status !== AppUpdateStatus.Installing) {
+                setShowUpdateModal(false);
+              }
+            }}
+            onConfirm={handleConfirmUpdate}
+            onRetry={handleRetryUpdate}
+          />
+        )}
+        {showUpdateInstallConfirm && (
+          <AppUpdateInstallConfirmDialog
+            onCancel={() => setShowUpdateInstallConfirm(false)}
+            onConfirm={() => void installReadyUpdate()}
+          />
+        )}
       </div>
     );
   }
@@ -2062,7 +2187,7 @@ const App: React.FC = () => {
 
       <EngineFailureOverlay
         onRequestAppSettings={handleShowSettings}
-        suspended={showSettings || showFeedback || showUpdateModal || showUpdateInstallConfirm || isPermissionModalOpen}
+        suspended={showSettings || showFeedback || showUpdateModal || showUpdateInstallConfirm || isPermissionModalOpen || isAuthGateRestricted}
       />
 
       <MigrationReportModal />

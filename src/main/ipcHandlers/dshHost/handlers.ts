@@ -108,6 +108,7 @@ export interface DshHostIpcDeps {
   getRuntimeDir: () => string;
   getExecutablePath: () => string;
   getNodeToolchain?: () => DshNodeToolchain | null;
+  isAuthGateBlocked?: () => boolean;
   openEcosystemWindow?: (authenticatedUrl: string, routeHash?: string) => Promise<void> | void;
   closeEcosystemWindow?: () => void;
   syncAgentWorkspaces?: () => Promise<unknown> | void;
@@ -263,6 +264,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
 
 
   ipcMain.handle(DshHostIpc.Restart, async () => {
+    if (deps.isAuthGateBlocked?.()) return { ok: false, error: 'Authentication is required.' };
     const manager = deps.getHostManager();
     if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
     try {
@@ -274,6 +276,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
   });
 
   ipcMain.handle(DshHostIpc.GetWebUrl, async () => {
+    if (deps.isAuthGateBlocked?.()) return { ok: false, error: 'Authentication is required.' };
     const manager = deps.getHostManager();
     if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
     if (!manager.isReady()) {
@@ -283,6 +286,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
   });
 
   ipcMain.handle(DshHostIpc.OpenEcosystemView, async (_event, routeHash?: string) => {
+    if (deps.isAuthGateBlocked?.()) return { ok: false, error: 'Authentication is required.' };
     const manager = deps.getHostManager();
     if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
     if (!manager.isReady()) {
@@ -445,6 +449,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
   );
 
   ipcMain.handle(DshHostIpc.InstallPlugin, async (_event, rawRequest: unknown) => {
+    if (deps.isAuthGateBlocked?.()) return { ok: false, error: 'Authentication is required.' };
     const manager = deps.getHostManager();
     if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
     const parsed = parseInstallRequest(rawRequest);
@@ -547,6 +552,7 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
   });
 
   ipcMain.handle(DshHostIpc.RemovePlugin, async (_event, packageName: string) => {
+    if (deps.isAuthGateBlocked?.()) return { ok: false, error: 'Authentication is required.' };
     const manager = deps.getHostManager();
     if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
     const name = validatePluginPackageName(packageName);

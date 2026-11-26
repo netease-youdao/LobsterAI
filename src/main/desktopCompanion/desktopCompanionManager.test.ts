@@ -172,7 +172,7 @@ let requestScreenAccess: ReturnType<typeof vi.fn>;
 let contextInspector: CompanionContextInspector | undefined;
 
 function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
-  loadSelectionHook: () => SelectionHookModule | null = () => null) {
+  loadSelectionHook: () => SelectionHookModule | null = () => null, authGateBlocked = false) {
   reportAnalytics = vi.fn();
   guideOpenSettings = vi.fn(() => Promise.resolve());
   requestScreenAccess = vi.fn();
@@ -189,6 +189,7 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
   });
   manager = new DesktopCompanionManager({
     enginePhase,
+    authGateBlocked,
     reportAnalytics,
     store: {
       get: <T>(key: string) => values.get(key) as T | undefined,
@@ -3109,5 +3110,36 @@ describe('hover launcher', () => {
     expect(stageKind()).toBe(DesktopCompanionStageKind.None);
     vi.advanceTimersByTime(LauncherOpenDelayMs + LauncherCloseDelayMs * 2);
     expect(stageKind()).toBe(DesktopCompanionStageKind.None);
+  });
+});
+
+describe('auth gate blocking', () => {
+  test('defers orb, global shortcut, selection listener, and quick panel while authGateBlocked is true and restores when unblocked', () => {
+    const startSelection = vi.spyOn(FakeSelectionHook.prototype, 'start');
+    const stopSelection = vi.spyOn(FakeSelectionHook.prototype, 'stop');
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    create(undefined, OpenClawEnginePhase.Running, () => FakeSelectionHook, true);
+
+    expect(mocks.windows).toHaveLength(1); // Only the main window exists; no orb was created.
+    expect(globalShortcut.register).not.toHaveBeenCalled();
+    expect(startSelection).not.toHaveBeenCalled();
+
+    manager.togglePanel(AnalyticsSource.Tray);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(openMain).toHaveBeenCalledWith(null);
+
+    manager.setAuthGateBlocked(false);
+    expect(globalShortcut.register).toHaveBeenCalledTimes(1);
+    expect(mocks.windows.length).toBeGreaterThan(1);
+    expect(startSelection).toHaveBeenCalledTimes(1);
+
+    manager.togglePanel(AnalyticsSource.Tray);
+    expect(manager.getState().panelVisible).toBe(true);
+
+    manager.setAuthGateBlocked(true);
+    expect(manager.getState().panelVisible).toBe(false);
+    expect(globalShortcut.unregister).toHaveBeenCalledTimes(1);
+    expect(orb().visible).toBe(false);
+    expect(stopSelection).toHaveBeenCalledTimes(1);
   });
 });
