@@ -5,7 +5,11 @@ import {
   DEFAULT_DSH_PERMISSION_PRESET,
   type DshPermissionPreset,
   type DshPluginApplicationStatus,
+  type DshPluginAvailability,
   type DshPluginSurface,
+  type DshPluginUpdateKind,
+  type DshPluginUpdateOutcomeKind,
+  type DshPluginUpdateStep,
 } from '../../shared/dshEngine/hostConstants';
 
 export const DSH_PERMISSION_PRESET_CHANGED_EVENT = 'dsh:permissionPresetChanged';
@@ -117,6 +121,9 @@ export interface DshPluginEntry {
   description?: DshPluginLocalizedText;
   icon?: string;
   official?: boolean;
+  availability?: DshPluginAvailability;
+  update?: DshPluginUpdateKind;
+  source?: string;
   removable?: boolean;
   surface?: DshPluginSurface;
   isThemePlugin?: boolean;
@@ -191,6 +198,90 @@ export interface DshPluginRegistriesResult {
   error?: string;
 }
 
+export interface DshPluginRegistryAttempt {
+  registry: string | null;
+  problem?: 'not-found' | 'network' | 'unknown';
+  reason?: string;
+}
+
+export interface DshPluginVersionInfo {
+  version: string;
+  publishedAt?: string;
+  tags: string[];
+  prerelease: boolean;
+  deprecated?: string;
+  bundle: boolean;
+  incompatible?: DshPluginIncompatibleInfo;
+}
+
+export type DshPluginVersionList =
+  | {
+    status: 'listed';
+    installed: string;
+    registry: string | null;
+    attempts: DshPluginRegistryAttempt[];
+    versions: DshPluginVersionInfo[];
+    omitted: number;
+  }
+  | {
+    status: 'refused';
+    problem: 'not-updatable' | 'not-found' | 'network' | 'unknown';
+    reason: string;
+    attempts: DshPluginRegistryAttempt[];
+  };
+
+export interface DshPluginCheckVersionsRequest {
+  name: string;
+  registry?: string | null;
+}
+
+export interface DshPluginCheckVersionsResult {
+  ok: boolean;
+  checkedAt?: number;
+  list?: DshPluginVersionList;
+  error?: string;
+}
+
+export interface DshPluginUpdateRequest {
+  name: string;
+  version: string;
+  registry?: string | null;
+  spec?: string;
+  requestId?: string;
+}
+
+export interface DshPluginUpdateProgress {
+  requestId: string;
+  step: DshPluginUpdateStep;
+}
+
+export interface DshPluginUpdateOutcome {
+  ok: boolean;
+  outcome: DshPluginUpdateOutcomeKind;
+  from: string;
+  to: string;
+  step?: 'check' | 'remove' | 'install';
+  application?: DshPluginApplicationStatus;
+  restartRequired?: boolean;
+  restartReason?: string;
+  errorCode?: string;
+  failureKind?: string;
+  failedAt?: 'registry' | 'spec-host';
+  error?: string;
+  pendingBuilds?: string[];
+  incompatible?: DshPluginIncompatibleInfo[];
+  output?: string;
+  logPath?: string;
+  restored?: boolean;
+  restoreApplication?: DshPluginApplicationStatus;
+  restoreError?: string;
+  plugins?: DshPluginEntry[];
+}
+
+export interface DshPluginChangedPayload {
+  reason?: string;
+}
+
 export const dshHostService = {
   getStatus(): Promise<DshHostStatusSnapshot | null> {
     return window.electron.dshHost.getStatus();
@@ -260,6 +351,36 @@ export const dshHostService = {
       dispatchDshPluginsChanged(res.plugins);
     }
     return res;
+  },
+
+  checkPluginVersions(
+    request: string | DshPluginCheckVersionsRequest,
+  ): Promise<DshPluginCheckVersionsResult> {
+    return window.electron.dshHost.checkPluginVersions(request);
+  },
+
+  async updatePlugin(request: DshPluginUpdateRequest): Promise<DshPluginUpdateOutcome> {
+    const res = await window.electron.dshHost.updatePlugin(request);
+    if (res?.plugins) {
+      dispatchDshPluginsChanged(res.plugins);
+    }
+    return res;
+  },
+
+  onPluginUpdateState(listener: (progress: DshPluginUpdateProgress) => void): () => void {
+    const subscribe = window.electron?.dshHost?.onPluginUpdateState;
+    if (typeof subscribe !== 'function') {
+      return () => undefined;
+    }
+    return subscribe(listener);
+  },
+
+  onPluginsChanged(listener: (change: DshPluginChangedPayload) => void): () => void {
+    const subscribe = window.electron?.dshHost?.onPluginsChanged;
+    if (typeof subscribe !== 'function') {
+      return () => undefined;
+    }
+    return subscribe(listener);
   },
 
   getPluginRegistries(): Promise<DshPluginRegistriesResult> {

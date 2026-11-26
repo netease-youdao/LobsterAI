@@ -1,4 +1,5 @@
 import {
+  ArrowDownTrayIcon,
   ArrowPathIcon,
   ArrowTopRightOnSquareIcon,
   CheckIcon,
@@ -21,6 +22,8 @@ import {
   type DshHostStatusSnapshot,
   type DshPluginEntry,
   type DshPluginMutationResult,
+  type DshPluginUpdateOutcome,
+  type DshPluginVersionList,
 } from '@/services/dshHost';
 import { i18nService } from '@/services/i18n';
 
@@ -37,6 +40,20 @@ import {
   SETTINGS_META_TEXT,
 } from '../settings/settingsTypography';
 import { DshPluginInstallModal } from './DshPluginInstallModal';
+import {
+  DshPluginUpdateModal,
+  type DshPluginUpdateTarget,
+} from './DshPluginUpdateModal';
+import { DshPluginVersionDrawer } from './DshPluginVersionDrawer';
+import {
+  BatchUpdateCheckSummaryTone,
+  dropStaleVersionChecks,
+  getPluginRecommendedVersion,
+  getPluginVersionCheckRegistry,
+  isRegistryUpdatablePlugin,
+  type PluginVersionCheckState,
+  summarizeBatchUpdateCheck,
+} from './pluginUpdateViewModel';
 import {
   formatPluginVersion,
   isHostPhaseHealthy,
@@ -62,6 +79,10 @@ export const DshPluginEcosystemView: React.FC = () => {
 
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<DshPluginEntry | null>(null);
+  const [updateTarget, setUpdateTarget] = useState<DshPluginUpdateTarget | null>(null);
+  const [versionChecks, setVersionChecks] = useState<Record<string, PluginVersionCheckState>>({});
+  const [checkingAllUpdates, setCheckingAllUpdates] = useState(false);
+  const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({});
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [coreExpanded, setCoreExpanded] = useState(false);
   const [copiedCli, setCopiedCli] = useState(false);
@@ -70,27 +91,67 @@ export const DshPluginEcosystemView: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const versionChecksRef = useRef(versionChecks);
+  versionChecksRef.current = versionChecks;
+  const updateTargetRef = useRef(updateTarget);
+  updateTargetRef.current = updateTarget;
+  const mountedRef = useRef(true);
 
-  const refresh = useCallback(async (isManual = false) => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const refresh = useCallback(async (isManual = false): Promise<DshPluginEntry[]> => {
     if (isManual) setRefreshing(true);
     try {
       const [nextStatus, pluginRes] = await Promise.all([
         dshHostService.getStatus(),
         dshHostService.listPlugins(),
       ]);
+      if (!mountedRef.current) return [];
+      const nextPlugins = pluginRes.plugins ?? [];
       setStatus(nextStatus);
-      setPlugins(pluginRes.plugins ?? []);
+      setPlugins(nextPlugins);
+      setVersionChecks((prev) => dropStaleVersionChecks(nextPlugins, prev));
       setCliShimPath(pluginRes.cliShimPath ?? nextStatus?.cliShimPath ?? null);
+      return nextPlugins;
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      if (mountedRef.current) {
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+      }
+      return [];
     } finally {
-      setLoading(false);
-      if (isManual) setRefreshing(false);
+      if (mountedRef.current) {
+        setLoading(false);
+        if (isManual) setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  // Sync plugin list when changed externally (e.g. built-in CLI or DSH Web view).
+  useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = dshHostService.onPluginsChanged(() => {
+      if (updateTargetRef.current !== null) return;
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (mountedRef.current && updateTargetRef.current === null) {
+          void refresh();
+        }
+      }, 250);
+    });
+    return () => {
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      unsubscribe();
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -115,6 +176,120 @@ export const DshPluginEcosystemView: React.FC = () => {
   }, [moreMenuOpen]);
 
   const { userPlugins, coreComponents } = useMemo(() => partitionPlugins(plugins), [plugins]);
+  const updatablePlugins = useMemo(
+    () => userPlugins.filter(isRegistryUpdatablePlugin),
+    [userPlugins],
+  );
+  const batchUpdateSummary = useMemo(
+    () => summarizeBatchUpdateCheck(userPlugins, versionChecks, (key) => i18nService.t(key)),
+    [userPlugins, versionChecks],
+  );
+
+  const checkSinglePluginVersions = useCallback(async (packageName: string): Promise<void> => {
+    if (!mountedRef.current) return;
+    if (versionChecksRef.current[packageName]?.phase === 'checking') return;
+    if (updateTargetRef.current?.name === packageName) return;
+
+    setVersionChecks((prev) => ({
+      ...prev,
+      [packageName]: { phase: 'checking' },
+    }));
+
+    let list: DshPluginVersionList;
+    let checkedAt = Date.now();
+    try {
+      const res = await dshHostService.checkPluginVersions({ name: packageName });
+      if (res.ok && res.list) {
+        list = res.list;
+        checkedAt = res.checkedAt ?? Date.now();
+      } else {
+        list = {
+          status: 'refused',
+          problem: 'unknown',
+          reason: res.error || i18nService.t('dshPluginsVersionsFailedOther'),
+          attempts: [],
+        };
+      }
+    } catch (error) {
+      list = {
+        status: 'refused',
+        problem: 'unknown',
+        reason: error instanceof Error ? error.message : String(error),
+        attempts: [],
+      };
+    }
+
+    if (!mountedRef.current) return;
+    setVersionChecks((prev) => ({
+      ...prev,
+      [packageName]: { phase: 'done', checkedAt, list },
+    }));
+  }, []);
+
+  const ensurePluginVersions = useCallback(
+    (packageName: string) => {
+      if (versionChecksRef.current[packageName] !== undefined) return;
+      void checkSinglePluginVersions(packageName);
+    },
+    [checkSinglePluginVersions],
+  );
+
+  const handleCheckAllUpdates = async () => {
+    if (checkingAllUpdates || restarting || updateTarget !== null) return;
+    setCheckingAllUpdates(true);
+    setErrorMessage(null);
+    try {
+      const latestPlugins = await refresh();
+      const targets = latestPlugins.filter(isRegistryUpdatablePlugin);
+      for (const plugin of targets) {
+        if (!mountedRef.current) break;
+        await checkSinglePluginVersions(plugin.name);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setCheckingAllUpdates(false);
+      }
+    }
+  };
+
+  const handleToggleVersionsDrawer = (pluginName: string) => {
+    const nextOpen = !expandedVersions[pluginName];
+    setExpandedVersions((prev) => ({ ...prev, [pluginName]: nextOpen }));
+    if (nextOpen) {
+      ensurePluginVersions(pluginName);
+    }
+  };
+
+  const handleOpenUpdateModal = (
+    plugin: DshPluginEntry,
+    version: string,
+    registry?: string | null,
+  ) => {
+    if (busyPlugin || restarting || updateTarget !== null) return;
+    setUpdateTarget({
+      name: plugin.name,
+      title: resolvePluginDisplayTitle(plugin, language, t),
+      fromVersion: plugin.version ?? '',
+      toVersion: version,
+      ...(registry !== undefined ? { registry } : {}),
+    });
+  };
+
+  const handleUpdateSettled = (outcome: DshPluginUpdateOutcome) => {
+    const updatedName = updateTargetRef.current?.name;
+    if (outcome.plugins) {
+      setPlugins(outcome.plugins);
+      setVersionChecks((prev) => dropStaleVersionChecks(outcome.plugins!, prev));
+    }
+    if (outcome.restartRequired) {
+      setRestartRequired(true);
+    }
+    void refresh().then(() => {
+      if (outcome.ok && updatedName && mountedRef.current) {
+        void checkSinglePluginVersions(updatedName);
+      }
+    });
+  };
 
   const applyMutationFeedback = (res: DshPluginMutationResult, appliedMessageKey: string) => {
     if (res.plugins) {
@@ -238,10 +413,26 @@ export const DshPluginEcosystemView: React.FC = () => {
         </p>
 
         <div className="flex shrink-0 items-center gap-2">
+          {updatablePlugins.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void handleCheckAllUpdates()}
+              disabled={!hostHealthy || restarting || checkingAllUpdates || updateTarget !== null}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ArrowPathIcon
+                className={`h-3.5 w-3.5 text-secondary ${checkingAllUpdates ? 'animate-spin' : ''}`}
+              />
+              {checkingAllUpdates
+                ? t('dshPluginsCheckingUpdatesBtn')
+                : t('dshPluginsCheckUpdatesBtn')}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setInstallModalOpen(true)}
-            disabled={restarting}
+            disabled={restarting || updateTarget !== null}
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-3.5 w-3.5 stroke-[2.2]" />
@@ -423,11 +614,24 @@ export const DshPluginEcosystemView: React.FC = () => {
 
       {/* User Installed Plugins Section */}
       <section className="space-y-2.5">
-        <div className="flex items-center justify-between px-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-secondary">
             {t('dshPluginsInstalledHeading')}
             {userPlugins.length > 0 ? ` (${userPlugins.length})` : ''}
           </h4>
+          {batchUpdateSummary && (
+            <span
+              className={`text-xs ${
+                batchUpdateSummary.tone === BatchUpdateCheckSummaryTone.Info
+                  ? 'font-medium text-foreground'
+                  : batchUpdateSummary.tone === BatchUpdateCheckSummaryTone.Error
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-secondary'
+              }`}
+            >
+              {batchUpdateSummary.text}
+            </span>
+          )}
         </div>
 
         {loading ? (
@@ -465,130 +669,226 @@ export const DshPluginEcosystemView: React.FC = () => {
               const showPackageNameSub = title !== plugin.name;
               const isHybrid = plugin.surface === DshPluginSurface.Hybrid;
               const isWebOnly = plugin.surface === DshPluginSurface.WebOnly;
+              const isRegistryUpdatable = isRegistryUpdatablePlugin(plugin);
+              const versionCheck = versionChecks[plugin.name];
+              const recommendedVersion = getPluginRecommendedVersion(versionCheck);
+              const recommendedVersionLabel = formatPluginVersion(recommendedVersion);
+              const checkedRegistry = getPluginVersionCheckRegistry(versionCheck);
+              const versionsExpanded = Boolean(expandedVersions[plugin.name]);
+              const isCheckingThis = versionCheck?.phase === 'checking';
+              const hasBlockedNewer =
+                !recommendedVersion
+                && versionCheck?.phase === 'done'
+                && versionCheck.list.status === 'listed'
+                && versionCheck.list.versions.length > 0;
+              const hasIncompatibleStable =
+                hasBlockedNewer
+                && versionCheck.phase === 'done'
+                && versionCheck.list.status === 'listed'
+                && versionCheck.list.versions.some((v) => !v.prerelease && v.incompatible !== undefined);
+              const checkFailed =
+                versionCheck?.phase === 'done' && versionCheck.list.status === 'refused';
 
               return (
-                <div
-                  key={plugin.name}
-                  className="flex items-start justify-between gap-4 px-4 py-3.5"
-                >
-                  <div className="flex min-w-0 flex-1 items-start gap-3">
-                    {/* Plugin Icon */}
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-raised">
-                      {plugin.icon ? (
-                        <img
-                          src={plugin.icon}
-                          alt=""
-                          className="h-6 w-6 object-contain"
-                        />
-                      ) : (
-                        <PuzzlePieceIcon className="h-4 w-4 text-secondary" />
-                      )}
-                    </div>
-
-                    {/* Plugin Info */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`truncate font-medium text-foreground ${SETTINGS_ITEM_TITLE_TEXT}${
-                            plugin.enabled ? '' : ' opacity-60'
-                          }`}
-                        >
-                          {title}
-                        </span>
-                        {versionLabel && (
-                          <span className="rounded bg-surface-raised px-1.5 py-0.5 font-mono text-[11px] text-secondary">
-                            {versionLabel}
-                          </span>
-                        )}
-                        {isHybrid && (
-                          <span
-                            title={t('dshPluginsHybridTooltip')}
-                            className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
-                          >
-                            {t('dshPluginsBadgeHybrid')}
-                          </span>
-                        )}
-                        {isWebOnly && (
-                          <span
-                            title={t('dshPluginsWebOnlyTooltip')}
-                            className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
-                          >
-                            {plugin.isThemePlugin
-                              ? t('dshPluginsBadgeWebTheme')
-                              : t('dshPluginsBadgeWebOnly')}
-                          </span>
-                        )}
-                        {plugin.errorCode && (
-                          <SettingsStatusBadge
-                            tone={SettingsStatusTone.Danger}
-                            label={t('dshPluginsBadgeError')}
-                            title={plugin.errorMessage || plugin.errorCode}
+                <div key={plugin.name} className="px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      {/* Plugin Icon */}
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-raised">
+                        {plugin.icon ? (
+                          <img
+                            src={plugin.icon}
+                            alt=""
+                            className="h-6 w-6 object-contain"
                           />
+                        ) : (
+                          <PuzzlePieceIcon className="h-4 w-4 text-secondary" />
                         )}
                       </div>
 
-                      {description && (
-                        <p className={`mt-0.5 line-clamp-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                          {description}
-                        </p>
-                      )}
-
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                        {showPackageNameSub && (
-                          <span className={`truncate font-mono ${SETTINGS_META_TEXT} text-secondary/80`}>
-                            {plugin.name}
-                          </span>
-                        )}
-                        {plugin.enabled && plugin.panelId && !plugin.isThemePlugin && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              dispatchOpenEmbeddedPlugin({
-                                name: plugin.name,
-                                panelId: plugin.panelId!,
-                                title,
-                                ...(plugin.icon ? { icon: plugin.icon } : {}),
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
+                      {/* Plugin Info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={`truncate font-medium text-foreground ${SETTINGS_ITEM_TITLE_TEXT}${
+                              plugin.enabled ? '' : ' opacity-60'
+                            }`}
                           >
-                            {t('dshPluginsOpenPluginPanel')}
-                          </button>
+                            {title}
+                          </span>
+                          {versionLabel && (
+                            <span className="rounded bg-surface-raised px-1.5 py-0.5 font-mono text-[11px] text-secondary">
+                              {versionLabel}
+                            </span>
+                          )}
+                          {recommendedVersion && recommendedVersionLabel && (
+                            <button
+                              type="button"
+                              disabled={!hostHealthy || busyPlugin !== null || restarting || updateTarget !== null}
+                              onClick={() =>
+                                handleOpenUpdateModal(plugin, recommendedVersion, checkedRegistry)
+                              }
+                              className="inline-flex items-center gap-1 rounded bg-action/15 px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-action/25 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <span>→ {recommendedVersionLabel}</span>
+                            </button>
+                          )}
+                          {hasBlockedNewer && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleVersionsDrawer(plugin.name)}
+                              className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-400/25 dark:text-amber-300"
+                            >
+                              {hasIncompatibleStable
+                                ? t('dshPluginsBadgeIncompatibleUpdate')
+                                : t('dshPluginsBadgePrereleaseOnly')}
+                            </button>
+                          )}
+                          {checkFailed && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleVersionsDrawer(plugin.name)}
+                              className="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-500/25 dark:text-red-300"
+                            >
+                              {t('dshPluginsBadgeCheckFailed')}
+                            </button>
+                          )}
+                          {isHybrid && (
+                            <span
+                              title={t('dshPluginsHybridTooltip')}
+                              className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
+                            >
+                              {t('dshPluginsBadgeHybrid')}
+                            </span>
+                          )}
+                          {isWebOnly && (
+                            <span
+                              title={t('dshPluginsWebOnlyTooltip')}
+                              className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+                            >
+                              {plugin.isThemePlugin
+                                ? t('dshPluginsBadgeWebTheme')
+                                : t('dshPluginsBadgeWebOnly')}
+                            </span>
+                          )}
+                          {plugin.errorCode && (
+                            <SettingsStatusBadge
+                              tone={SettingsStatusTone.Danger}
+                              label={t('dshPluginsBadgeError')}
+                              title={plugin.errorMessage || plugin.errorCode}
+                            />
+                          )}
+                        </div>
+
+                        {description && (
+                          <p className={`mt-0.5 line-clamp-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                            {description}
+                          </p>
+                        )}
+
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          {showPackageNameSub && (
+                            <span className={`truncate font-mono ${SETTINGS_META_TEXT} text-secondary/80`}>
+                              {plugin.name}
+                            </span>
+                          )}
+                          {isRegistryUpdatable && hostHealthy && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleVersionsDrawer(plugin.name)}
+                              aria-expanded={versionsExpanded}
+                              className="inline-flex items-center gap-1 text-xs text-secondary transition-colors hover:text-foreground"
+                            >
+                              {isCheckingThis ? (
+                                <ArrowPathIcon className="h-3 w-3 animate-spin" />
+                              ) : versionsExpanded ? (
+                                <ChevronDownIcon className="h-3 w-3" />
+                              ) : (
+                                <ChevronRightIcon className="h-3 w-3" />
+                              )}
+                              <span>{t('dshPluginsVersionsToggle')}</span>
+                            </button>
+                          )}
+                          {plugin.enabled && plugin.panelId && !plugin.isThemePlugin && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                dispatchOpenEmbeddedPlugin({
+                                  name: plugin.name,
+                                  panelId: plugin.panelId!,
+                                  title,
+                                  ...(plugin.icon ? { icon: plugin.icon } : {}),
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
+                            >
+                              {t('dshPluginsOpenPluginPanel')}
+                            </button>
+                          )}
+                        </div>
+
+                        {plugin.errorMessage && (
+                          <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                            {plugin.errorMessage}
+                          </p>
                         )}
                       </div>
+                    </div>
 
-                      {plugin.errorMessage && (
-                        <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                          {plugin.errorMessage}
-                        </p>
+                    {/* Plugin Actions */}
+                    <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                      {recommendedVersion && (
+                        <button
+                          type="button"
+                          disabled={
+                            !hostHealthy || busyPlugin !== null || restarting || updateTarget !== null
+                          }
+                          onClick={() =>
+                            handleOpenUpdateModal(plugin, recommendedVersion, checkedRegistry)
+                          }
+                          className="inline-flex h-7 items-center gap-1 rounded-lg bg-action px-2.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+                          {t('dshPluginsUpdateBtn')}
+                        </button>
+                      )}
+                      {isBusy && (
+                        <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-secondary" />
+                      )}
+                      <SettingsSwitch
+                        checked={plugin.enabled}
+                        label={plugin.enabled ? t('dshEcosystemDisableLabel') : t('dshEcosystemEnableLabel')}
+                        disabled={busyPlugin !== null || restarting || updateTarget !== null}
+                        onClick={() => handleToggleEnabled(plugin, !plugin.enabled)}
+                      />
+                      {plugin.removable !== false && (
+                        <button
+                          type="button"
+                          disabled={busyPlugin !== null || restarting || updateTarget !== null}
+                          onClick={() => setRemoveTarget(plugin)}
+                          title={t('dshEcosystemRemoveBtn')}
+                          aria-label={t('dshEcosystemRemoveBtn')}
+                          className="rounded-lg p-1.5 text-secondary transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30 dark:hover:text-red-400"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Plugin Actions */}
-                  <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                    {isBusy && (
-                      <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-secondary" />
-                    )}
-                    <SettingsSwitch
-                      checked={plugin.enabled}
-                      label={plugin.enabled ? t('dshEcosystemDisableLabel') : t('dshEcosystemEnableLabel')}
-                      disabled={busyPlugin !== null || restarting}
-                      onClick={() => handleToggleEnabled(plugin, !plugin.enabled)}
-                    />
-                    {plugin.removable !== false && (
-                      <button
-                        type="button"
-                        disabled={busyPlugin !== null || restarting}
-                        onClick={() => setRemoveTarget(plugin)}
-                        title={t('dshEcosystemRemoveBtn')}
-                        aria-label={t('dshEcosystemRemoveBtn')}
-                        className="rounded-lg p-1.5 text-secondary transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30 dark:hover:text-red-400"
-                      >
-                        <TrashIcon className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
+                  {isRegistryUpdatable && versionsExpanded && (
+                    <div className="pl-12">
+                      <DshPluginVersionDrawer
+                        installedVersion={plugin.version}
+                        check={versionCheck}
+                        disabled={!hostHealthy || busyPlugin !== null || restarting || updateTarget !== null}
+                        onRecheck={() => void checkSinglePluginVersions(plugin.name)}
+                        onSelectUpdate={(version, registry) =>
+                          handleOpenUpdateModal(plugin, version, registry)
+                        }
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -651,6 +951,14 @@ export const DshPluginEcosystemView: React.FC = () => {
         isOpen={installModalOpen}
         onClose={() => setInstallModalOpen(false)}
         onInstalled={handleInstalled}
+      />
+
+      {/* Update Modal */}
+      <DshPluginUpdateModal
+        target={updateTarget}
+        onClose={() => setUpdateTarget(null)}
+        onSettled={handleUpdateSettled}
+        onRestartHost={handleRestart}
       />
 
       {/* Remove Confirmation Modal */}

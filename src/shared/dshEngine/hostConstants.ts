@@ -238,6 +238,43 @@ export const DshPluginInstallSource = {
 export type DshPluginInstallSource =
   typeof DshPluginInstallSource[keyof typeof DshPluginInstallSource];
 
+export const DshPluginUpdateKind = {
+  Registry: 'registry',
+  Git: 'git',
+} as const;
+export type DshPluginUpdateKind =
+  typeof DshPluginUpdateKind[keyof typeof DshPluginUpdateKind];
+
+export const DshPluginAvailability = {
+  Installation: 'installation',
+  Profile: 'profile',
+  Missing: 'missing',
+} as const;
+export type DshPluginAvailability =
+  typeof DshPluginAvailability[keyof typeof DshPluginAvailability];
+
+export const DshPluginUpdateStep = {
+  Checking: 'checking',
+  Removing: 'removing',
+  Installing: 'installing',
+  Restoring: 'restoring',
+} as const;
+export type DshPluginUpdateStep =
+  typeof DshPluginUpdateStep[keyof typeof DshPluginUpdateStep];
+
+export const DshPluginUpdateOutcomeKind = {
+  Applied: 'applied',
+  RestartRequired: 'restart-required',
+  CheckRefused: 'check-refused',
+  RemoveFailed: 'remove-failed',
+  InstallFailedKept: 'install-failed-kept',
+  InstallFailedRestored: 'install-failed-restored',
+  InstallFailedBroken: 'install-failed-broken',
+  TransportLost: 'transport-lost',
+} as const;
+export type DshPluginUpdateOutcomeKind =
+  typeof DshPluginUpdateOutcomeKind[keyof typeof DshPluginUpdateOutcomeKind];
+
 export const DshHostIpc = {
   GetStatus: 'dshHost:getStatus',
   GetSessionRecovery: 'dshHost:getSessionRecovery',
@@ -252,6 +289,10 @@ export const DshHostIpc = {
   CancelPluginInstall: 'dshHost:cancelPluginInstall',
   RemovePlugin: 'dshHost:removePlugin',
   SetPluginEnabled: 'dshHost:setPluginEnabled',
+  CheckPluginVersions: 'dshHost:checkPluginVersions',
+  UpdatePlugin: 'dshHost:updatePlugin',
+  PluginUpdateState: 'dshHost:pluginUpdateState',
+  PluginsChanged: 'dshHost:pluginsChanged',
   GetPluginRegistries: 'dshHost:getPluginRegistries',
   PickLocalPluginDir: 'dshHost:pickLocalPluginDir',
   OpenProfileDir: 'dshHost:openProfileDir',

@@ -2502,6 +2502,16 @@ const getDshBootstrap = (): DshBootstrap => {
         if (!win.isDestroyed()) win.webContents.send(DshHostIpc.ConnectionChanged);
       }
     });
+    dshBootstrap.hostManager.on('pluginUpdateState', (progress: unknown) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginUpdateState, progress);
+      }
+    });
+    dshBootstrap.hostManager.on('pluginsChanged', (change: unknown) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginsChanged, change);
+      }
+    });
   }
   return dshBootstrap;
 };
