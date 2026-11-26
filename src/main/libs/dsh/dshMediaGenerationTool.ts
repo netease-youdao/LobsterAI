@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { UsageStage } from '../../../shared/analytics/usage';
 import { buildManagedSessionKey } from '../../../shared/cowork/managedSessionKey';
-import { MediaDeliveryStatus, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
+import { ImageProcessingOperation, LOBSTERAI_WATERMARK_TARGET, MediaDeliveryStatus, MediaTaskStatus, REMOVE_WATERMARK_OPERATION, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { MediaPreferenceMode, type MediaSelection, MediaSelectionMode } from '../../../shared/media/defaultPolicy';
 import { SkinToolName, SkinWorkflowKind } from '../../../shared/skin/constants';
 import { t } from '../../i18n';
@@ -35,6 +35,8 @@ const imageTool: DshHostToolDescriptor = {
       action: { type: 'string', enum: imageActions, description: 'Defaults to generate.' },
       prompt: { type: 'string', description: 'Describe the requested image or edit.' },
       model: { type: 'string', description: 'The selected image model ID.' },
+      imageOperation: { type: 'string', enum: [...Object.values(ImageProcessingOperation), REMOVE_WATERMARK_OPERATION], description: 'Process one existing image. Pick one operation. For a named third-party watermark (e.g. WorkBuddy), use erase_watermark and identify the mark and its location in the prompt. Matting returns a transparent PNG. remove_watermark is the legacy LobsterAI watermark edit.' },
+      eraseTarget: { type: 'string', enum: [LOBSTERAI_WATERMARK_TARGET], description: 'With erase, try the free LobsterAI template for LobsterAI or unspecified watermarks. A template mismatch uses the selected image-editing model at its normal price.' },
       image: { type: 'string', description: 'Reference image file path or URL.' },
       images: { type: 'array', items: { type: 'string' }, description: 'Reference image file paths or URLs.' },
       size: { type: 'string' },
@@ -110,6 +112,7 @@ export function buildDshMediaTurnInstruction(
   const useVideo = video && selection.videoPreference !== MediaPreferenceMode.Off
     && (selection.mode === MediaSelectionMode.Video || selection.mode === MediaSelectionMode.Auto);
   const instructions = [
+    'For a LobsterAI or unspecified watermark, use erase with eraseTarget lobsterai_watermark. A match is free, even with image generation off. On template mismatch the desktop handles the model edit in the same call. For a known third-party mark such as WorkBuddy, use erase_watermark directly. Use the saved image if a link has expired. Track any returned task ID.',
     useImage ? `For an explicit request to generate or edit an image, use ${MediaGenerationTool.Image} with the selected LobsterAI model ${JSON.stringify(image)}.`
       : 'LobsterAI image generation is unavailable for this turn.',
     useVideo ? `For an explicit video generation request, use ${MediaGenerationTool.Video} with the selected LobsterAI model ${JSON.stringify(video)}. List its capabilities before generation. The desktop collects confirmation and verifies the saved file. Once status returns its file link, reply with that exact link. Use shell or file tools only for further work the user explicitly requests.`

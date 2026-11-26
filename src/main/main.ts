@@ -34,6 +34,7 @@ import {
   AgentId,
   AgentIpcChannel,
   AgentModelSelectionMode,
+  AgentSource,
 } from '../shared/agent/constants';
 import {
   LogReporterAction,
@@ -198,7 +199,7 @@ import {
 import { LogIpc } from '../shared/logExport/constants';
 import { McpAuthMode } from '../shared/mcp/auth';
 import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
-import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
+import { ImageProcessingOperation, MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { MediaDefaultsProtocol } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
@@ -501,6 +502,7 @@ import { ExpertStore } from './libs/expertStore';
 import { ExternalBrowserHost } from './libs/externalBrowserHost';
 import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
 import { fitImageBytesForModel } from './libs/fitImageForModel';
+import { isFixedWatermarkErase, watermarkEraseSource } from './libs/fixedImageWatermark';
 import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import {
   createOfficePreviewSession,
@@ -6024,6 +6026,55 @@ if (!gotTheLock) {
     ) {
       return staleAccountResult();
     }
+    if (isFixedWatermarkErase(tool, args)) {
+      try {
+        const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
+        const cwd = ownerSessionId ? getCoworkStore().getSession(ownerSessionId)?.cwd : undefined;
+        const source = await watermarkEraseSource(args, refs, cwd, url => {
+          const cached = persistedGeneratedImageAssetsByUrl.get(`${ownerSessionId}:${mediaSourceKey(url)}`);
+          return cached && fs.existsSync(cached.filePath) ? cached.filePath : undefined;
+        });
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        const response = await fetchWithAuth(serverBaseUrl + '/api/media/images/watermark/erase', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }),
+          signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(150_000)]) : AbortSignal.timeout(150_000),
+        });
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (!response.ok) throw new Error(t('mediaWatermarkEraseUnavailable'));
+        const body = await response.json() as {
+          code: number; message?: string; data?: { url?: string; error?: { reason?: string } };
+        };
+        if (!isRequestAccountCurrent() || serverBaseUrl !== getServerApiBaseUrl()) return staleAccountResult();
+        if (body.code === 4000 && body.data?.error?.reason === 'WATERMARK_TEMPLATE_MISMATCH') {
+          request.signal?.throwIfAborted();
+          if (sessionId && turnUserMessageId && getCoworkStore().getLatestUserMessage(sessionId)?.id !== turnUserMessageId) {
+            return imageConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
+          }
+          // Reuse the same tool call for model selection, credit approval, accounting and task recovery.
+          // The model edit has a distinct operation, so it cannot re-enter the template check.
+          const result = await getMcpRuntime().executeMediaGeneration({
+            ...request,
+            args: {
+              action: MediaGenerationAction.Generate, imageOperation: ImageProcessingOperation.EraseWatermark,
+              image: source, prompt: args.prompt, model: args.model, filename: args.filename,
+            },
+          });
+          return { ...result, content: [{ type: 'text', text: t('mediaWatermarkTemplateMismatch') }, ...result.content] };
+        }
+        if (body.code !== 0 || !body.data?.url?.startsWith('https://')) {
+          throw new Error(body.message || t('mediaWatermarkEraseUnavailable'));
+        }
+        const asset = { type: MediaType.Image, url: body.data.url, filename: typeof args.filename === 'string' ? args.filename : undefined };
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        const result = ownerSessionId ? await persistGeneratedImages(ownerSessionId, [asset]) : null;
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        const saved = result?.saved[0];
+        return { content: [{ type: 'text', text: saved ? formatPersistedImageLink(saved, t('mediaImageSavedToRecovery')) : asset.url }],
+          details: { status: MediaTaskStatus.Succeeded, assets: [saved ?? asset] } };
+      } catch (error) {
+        return { content: [{ type: 'text', text: error instanceof Error ? error.message : t('mediaWatermarkEraseUnavailable') }], isError: true };
+      }
+    }
     const selection: MediaSelectionState | undefined = nativeRun
       ? { mode: MediaSelectionMode.Auto }
       : resolveMediaSelectionForSession(ownerSessionId);
@@ -6108,9 +6159,10 @@ if (!gotTheLock) {
         });
         console.log(`[MediaGeneration] server returned ${models.length} ${mediaType} models.`);
         let text = models.length > 0
-          ? `Available ${mediaType} models:\n\n${(models as Array<{ modelId: string; displayName: string; capabilities?: string; parameterSpec?: Record<string, unknown> }>).map(m => {
+          ? `Available ${mediaType} models:\n\n${(models as Array<{ modelId: string; displayName: string; capabilities?: string; supportedImageOperations?: string[]; parameterSpec?: Record<string, unknown> }>).map(m => {
               let line = `### ${m.displayName} (model: "${m.modelId}")`;
               if (m.capabilities) line += `\n${m.capabilities}`;
+              if (m.supportedImageOperations?.length) line += `\nImage operations: ${m.supportedImageOperations.join(', ')}`;
               if (m.parameterSpec) line += `\nSupported parameters:\n${JSON.stringify(m.parameterSpec, null, 2)}`;
               return line;
             }).join('\n\n')}`
@@ -6330,12 +6382,20 @@ if (!gotTheLock) {
       // action === 'generate'
       const mediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
       const modelResponse = await fetchWithAuth(`${serverBaseUrl}/api/media/${mediaType === 'image' ? 'images' : 'videos'}/models`, { signal: AbortSignal.timeout(15_000) });
-      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; pricingDescription?: string; capabilities?: string; parameterSpec?: Record<string, unknown>; pricing?: Record<string, unknown> }> };
+      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; supportsWatermarkRemoval?: boolean; supportedImageOperations?: string[]; pricingDescription?: string; capabilities?: string; parameterSpec?: Record<string, unknown>; pricing?: Record<string, unknown> }> };
       if (modelBody.code !== 0 || !isRequestAccountCurrent()) return staleAccountResult();
       const modelCapability = modelBody.data?.find(model => canonicalizeMediaModelId(model.modelId) === canonicalizeMediaModelId(selectedModel));
       if (!modelCapability) {
         return { content: [{ type: 'text', text: t('mediaSelectedModelUnavailable') }], isError: true,
           details: { status: 'failed', warnings: [MediaGenerationGateReason.ModelUnavailable] } };
+      }
+      const imageOperation = mediaType === 'image' && typeof args.imageOperation === 'string' ? args.imageOperation : undefined;
+      if (imageOperation) {
+        const supported = modelCapability.supportedImageOperations?.includes(imageOperation);
+        if (!supported) return { content: [{ type: 'text', text: t('mediaImageProcessingUnavailable') }], isError: true };
+        if (imageOperation === ImageProcessingOperation.Erase && !prompt.trim()) {
+          return { content: [{ type: 'text', text: t('mediaImageEraseTargetRequired') }], isError: true };
+        }
       }
       const useDurableTasks = modelCapability.protocolVersions?.includes(MediaProtocol.Durable) === true;
       const endpoint = useDurableTasks ? MEDIA_V2_TASKS_PATH
@@ -6377,7 +6437,7 @@ if (!gotTheLock) {
       if (args.count) params.count = args.count;
       if (args.durationSeconds != null) params.durationSeconds = args.durationSeconds;
       if (args.audio != null) params.audio = args.audio;
-      if (args.watermark != null) params.watermark = args.watermark;
+      if (mediaType === 'video' && args.watermark != null) params.watermark = args.watermark;
       if (args.seed != null) params.seed = args.seed;
       if (args.returnLastFrame != null) params.returnLastFrame = args.returnLastFrame;
       if (args.cameraFixed != null) params.cameraFixed = args.cameraFixed;
@@ -6396,7 +6456,7 @@ if (!gotTheLock) {
       const automaticDefault = mediaType === MediaType.Image ? selection?.imageDefault : selection?.videoDefault;
       params = applyMediaDefaultParameters(params, automaticDefault, mediaType);
       const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
-      const imageEditId = mediaType === MediaType.Image ? refs?.find(ref => ref.imageEdit)?.imageEdit?.id : undefined;
+      const imageEditId = mediaType === MediaType.Image && !imageOperation ? refs?.find(ref => ref.imageEdit)?.imageEdit?.id : undefined;
       const imageEdit = imageEditId && sessionId ? imageEditing.resolve(sessionId, imageEditId) : undefined;
       const editGeneration = imageEdit ? imageEditing.generation(imageEdit, modelCapability ?? {}, prompt) : undefined;
       params = applyMediaReferencesToGenerationParams({
@@ -6405,9 +6465,16 @@ if (!gotTheLock) {
           : MediaGenerationRequestType.Image,
         params,
         refs,
-        preferExplicitImageInputs: Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId),
+        preferExplicitImageInputs: Boolean(imageOperation) || (Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId)),
       });
       if (editGeneration) params = editGeneration.params;
+      if (imageOperation) {
+        if (!Array.isArray(params.images) || params.images.length !== 1) {
+          return { content: [{ type: 'text', text: t('mediaImageProcessingSource') }], isError: true };
+        }
+        params.n = 1;
+        delete params.count;
+      }
 
       // Convert local file paths to data URLs
       const MEDIA_MIME: Record<string, string> = {
@@ -6420,7 +6487,24 @@ if (!gotTheLock) {
       const maxMediaBytes = 50 * 1024 * 1024;
       const sessionCwd = sessionId ? getCoworkStore().getSession(sessionId)?.cwd?.trim() : undefined;
       const resolvedLocalFileBySource = new Map<string, string>();
+      const validateImage = (buf: Buffer) => {
+        if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
+        const decodedImage = nativeImage.createFromBuffer(buf);
+        const dimensions = decodedImage.isEmpty() ? readImageDimensions(buf) : decodedImage.getSize();
+        const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
+        if (dimensions && (dimensions.width < minimum || dimensions.height < minimum)) {
+          throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
+        }
+      };
       const resolveRef = async (ref: string): Promise<string> => {
+        // The free template path also accepts larger images. Apply the model's usual input checks
+        // to the exact bytes that failed the template check before starting a paid edit.
+        if (imageOperation === ImageProcessingOperation.EraseWatermark && ref?.startsWith('data:image/')) {
+          const offset = ref.indexOf(',') + 1;
+          if (!offset || !ref.slice(0, offset).endsWith(';base64,')) throw new Error(t('mediaImageProcessingSource'));
+          if (ref.length - offset > 4 * Math.ceil(maxImageBytes / 3)) throw new Error(t('mediaTaskInputTooLarge'));
+          validateImage(Buffer.from(ref.slice(offset), 'base64'));
+        }
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://')
           ? fileURLToPath(ref)
@@ -6440,15 +6524,7 @@ if (!gotTheLock) {
         const buf = await fs.promises.readFile(filePath);
         // DSH stores attached images at content-addressed paths without extensions.
         const mime = extensionMime ?? sniffImageMimeType(buf) ?? 'application/octet-stream';
-        if (mime.startsWith('image/')) {
-          if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
-          const decodedImage = nativeImage.createFromBuffer(buf);
-          const dimensions = decodedImage.isEmpty() ? readImageDimensions(buf) : decodedImage.getSize();
-          const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
-          if (dimensions && (dimensions.width < minimum || dimensions.height < minimum)) {
-            throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
-          }
-        }
+        if (mime.startsWith('image/')) validateImage(buf);
         const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
         resolvedLocalFileBySource.set(dataUrl, filePath);
         return dataUrl;
@@ -6529,7 +6605,12 @@ if (!gotTheLock) {
       const happyHorse11Selection = mediaType === 'video'
         ? resolveHappyHorse11Selection(selectedModel, params)
         : null;
+      const agentId = mediaType === 'image' && ownerSessionId && !nativeRun
+        ? getCoworkStore().getSession(ownerSessionId, 0)?.agentId : undefined;
+      const agent = agentId ? getCoworkStore().getAgent(agentId) : undefined;
       const generateReq = {
+        ...(agent?.source === AgentSource.Preset && agent.presetId ? { expertPresetId: agent.presetId } : {}),
+        ...(imageOperation ? { imageOperation } : {}),
         usageContext,
         model: selectedModel,
         type: mediaType === 'video'
@@ -6895,7 +6976,8 @@ if (!gotTheLock) {
   };
 
   getMcpRuntime().setMediaGenerationHandler(request => {
-    if (request.tool !== MediaGenerationTool.Image && request.tool !== MediaGenerationTool.Video) {
+    if ((request.tool !== MediaGenerationTool.Image && request.tool !== MediaGenerationTool.Video)
+      || isFixedWatermarkErase(request.tool, request.args)) {
       return handleMediaGenerationCallback(request);
     }
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);

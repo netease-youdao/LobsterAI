@@ -23,6 +23,16 @@ export const MediaTaskPhase = {
 } as const;
 
 export const MediaProtocol = { Legacy: 1, Durable: 2 } as const;
+export const ImageProcessingOperation = {
+  Erase: 'erase',
+  EraseWatermark: 'erase_watermark',
+  Enhance: 'enhance',
+  Beauty: 'beauty',
+  Restore: 'restore',
+  Matting: 'matting',
+} as const;
+export const LOBSTERAI_WATERMARK_TARGET = 'lobsterai_watermark';
+export const REMOVE_WATERMARK_OPERATION = 'remove_watermark';
 export const MediaDeliveryStatus = { Pending: 'pending', Retrying: 'retrying', Saved: 'saved', Failed: 'failed' } as const;
 export const MediaBillingStatus = { Reserved: 'reserved', Settled: 'settled', Refunded: 'refunded' } as const;
 export const MediaTaskWarning = { LayerDecompositionIncomplete: 'LAYER_DECOMPOSITION_INCOMPLETE' } as const;
