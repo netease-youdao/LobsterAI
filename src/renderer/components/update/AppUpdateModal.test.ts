@@ -55,7 +55,7 @@ describe('AppUpdateModal', () => {
     expect(html).toContain('bg-surface-raised/60');
     expect(html).toContain('稍后');
     expect(html).toContain('立即更新');
-    expect(html).toContain('bg-foreground');
+    expect(html).toContain('bg-action');
     expect(html).toContain('aria-label="关闭"');
   });
 

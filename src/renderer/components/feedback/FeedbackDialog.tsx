@@ -119,7 +119,7 @@ export default function FeedbackDialog({ onClose }: { onClose: () => void }) {
             <h3 className="mt-3 text-sm font-semibold text-foreground">{t('feedbackSuccess')}</h3>
             <p className="mt-1.5 text-xs text-secondary">{t('feedbackSuccessDescription')}</p>
             <p className="mt-1 text-xs tabular-nums text-muted">{t('feedbackReference')} #{submittedId}</p>
-            <button type="button" onClick={onClose} className="mt-6 h-8 rounded-lg bg-primary px-6 text-[13px] font-medium text-white transition-colors hover:bg-primary-hover">{t('feedbackDone')}</button>
+            <button type="button" onClick={onClose} className="mt-6 h-8 rounded-lg bg-action px-6 text-[13px] font-medium text-action-foreground transition-colors hover:bg-action-hover">{t('feedbackDone')}</button>
           </div>
         ) : (
           <>
@@ -184,7 +184,7 @@ export default function FeedbackDialog({ onClose }: { onClose: () => void }) {
                 </p>
               </div>
               <button type="button" onClick={() => void submit()} disabled={submitting || !content.trim()}
-                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-4 text-[13px] font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40">
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-action px-4 text-[13px] font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40">
                 {submitting && <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />}{t(submitting ? 'feedbackSubmitting' : 'feedbackSubmit')}
               </button>
             </footer>}

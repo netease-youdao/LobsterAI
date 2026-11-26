@@ -94,7 +94,7 @@ const LibraryShareConfirmDialog: React.FC<LibraryShareConfirmDialogProps> = ({
             className={`rounded-lg px-4 py-2 ${MANAGEMENT_BODY_TEXT} font-medium transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${
               destructive
                 ? 'bg-destructive text-destructive-foreground'
-                : 'bg-primary text-white'
+                : 'bg-action text-action-foreground hover:bg-action-hover'
             }`}
           >
             {busy ? i18nService.t('saving') : confirmLabel}

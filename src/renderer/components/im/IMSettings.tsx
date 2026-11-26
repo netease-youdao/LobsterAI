@@ -1786,7 +1786,7 @@ const IMSettings: React.FC = () => {
                     setActiveInstanceForPlatform(platform, instance.instanceId);
                   }
                 }}
-                className="group relative flex min-h-[82px] flex-col justify-center rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-primary/40 hover:bg-surface-raised"
+                className="group relative flex min-h-[82px] flex-col justify-center rounded-lg border border-border-subtle bg-surface p-3 text-left transition-colors hover:border-foreground/20 hover:bg-surface-raised"
               >
                 {isMenuOpen && (
                   <div
@@ -1830,7 +1830,7 @@ const IMSettings: React.FC = () => {
                   </div>
                 )}
                 <div className="flex items-start gap-2.5">
-                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10 p-1">
+                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-raised p-1">
                     <img
                       src={PlatformRegistry.logo(platform)}
                       alt={i18nService.t(platform)}
@@ -1863,7 +1863,7 @@ const IMSettings: React.FC = () => {
                           }
                         }}
                         onBlur={() => void finishRenamingInstanceFromCard(platform, instance)}
-                        className={`block w-full rounded-md border border-primary/50 bg-surface px-1.5 py-0.5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground outline-none`}
+                        className={`block w-full rounded-md border border-foreground/40 bg-surface px-1.5 py-0.5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground outline-none`}
                         autoFocus
                       />
                     ) : (
@@ -1912,7 +1912,7 @@ const IMSettings: React.FC = () => {
             <button
               type="button"
               onClick={() => void addInstanceForPlatform(platform)}
-              className="flex min-h-[82px] flex-col items-center justify-center rounded-lg border border-dashed border-border-subtle bg-surface text-secondary transition-colors hover:border-primary/50 hover:bg-surface-raised hover:text-primary"
+              className="flex min-h-[82px] flex-col items-center justify-center rounded-lg border border-dashed border-border-subtle bg-surface text-secondary transition-colors hover:border-foreground/30 hover:bg-surface-raised hover:text-foreground"
             >
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-raised">
                 <PlusIcon className="h-4 w-4" />
@@ -1966,7 +1966,7 @@ const IMSettings: React.FC = () => {
               aria-current={isActive ? 'page' : undefined}
               title={statusDotClass ? `${i18nService.t(platform)} · ${getPlatformStatusLabel(platform)}` : undefined}
               className={`group flex h-10 w-full flex-shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors ${
-                isActive ? 'bg-primary-muted' : 'hover:bg-surface-raised'
+                isActive ? 'bg-surface-raised' : 'hover:bg-surface-raised/60'
               }`}
             >
               <img
@@ -2299,7 +2299,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowSecrets(prev => ({ ...prev, [`email.${inst.instanceId}.apiKey`]: !prev[`email.${inst.instanceId}.apiKey`] }))}
-                      className="absolute right-2 inset-y-0 flex items-center p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      className="absolute right-2 inset-y-0 flex items-center p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={showSecrets[`email.${inst.instanceId}.apiKey`] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                     >
                       {showSecrets[`email.${inst.instanceId}.apiKey`]
@@ -2310,7 +2310,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void handleEmailGetApiKey()}
-                    className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors whitespace-nowrap"
+                    className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors whitespace-nowrap"
                   >
                     {i18nService.t('getApiKey')}
                   </button>
@@ -2320,7 +2320,7 @@ const IMSettings: React.FC = () => {
 
               {/* Advanced Options */}
               <details className="group">
-                <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+                <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
                   {i18nService.t('imAdvancedSettings')}
                 </summary>
                 <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -2626,7 +2626,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleNeteaseBeeChanChange('clientId', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], clientId: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -2655,7 +2655,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleNeteaseBeeChanChange('secret', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], secret: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -2664,7 +2664,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'netease-bee.secret': !prev['netease-bee.secret'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                    className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                     title={showSecrets['netease-bee.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['netease-bee.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -2720,7 +2720,7 @@ const IMSettings: React.FC = () => {
                         <QRCodeSVG value={weixinQrUrl} size={148} />
                       </div>
                     ) : weixinQrStatus === 'loading' ? (
-                      <ArrowPathIcon className="h-6 w-6 animate-spin text-primary" />
+                      <ArrowPathIcon className="h-6 w-6 animate-spin text-foreground" />
                     ) : weixinQrStatus === 'success' ? (
                       <CheckCircleIcon className="h-10 w-10 text-green-500" />
                     ) : (
@@ -2738,7 +2738,7 @@ const IMSettings: React.FC = () => {
                     <ol className="mt-3 space-y-2">
                       {weixinGuideSteps.map((step, index) => (
                         <li key={step} className={`flex items-start gap-2.5 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                          <span className="mt-px flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-primary-muted text-[11px] font-semibold text-primary">
+                          <span className="mt-px flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-surface-raised text-[11px] font-semibold text-foreground">
                             {index + 1}
                           </span>
                           <span className="min-w-0">{step}</span>
@@ -2762,7 +2762,7 @@ const IMSettings: React.FC = () => {
                           type="button"
                           onClick={() => void handleWeixinQrLogin()}
                           disabled={isWeixinQrBusy}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-4 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {weixinQrStatus === 'loading'
                             ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
@@ -2780,7 +2780,7 @@ const IMSettings: React.FC = () => {
                               console.error('[IM] Failed to open guide URL:', err);
                             });
                           }}
-                          className="text-xs font-medium text-secondary underline-offset-2 transition-colors hover:text-primary hover:underline"
+                          className="text-xs font-medium text-secondary underline-offset-2 transition-colors hover:text-foreground hover:underline"
                         >
                           {i18nService.t('imViewGuide')}
                         </button>
@@ -2855,7 +2855,7 @@ const IMSettings: React.FC = () => {
                               console.error('[IM] Failed to open guide URL:', err);
                             });
                           }}
-                          className="ml-1.5 font-medium text-primary underline-offset-2 hover:underline"
+                          className="ml-1.5 font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                         >
                           {i18nService.t('imViewGuide')}
                         </button>

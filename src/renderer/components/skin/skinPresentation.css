@@ -22,6 +22,13 @@
     var(--lobster-skin-foreground)
   );
   --lobster-primary-muted: color-mix(in srgb, var(--lobster-skin-accent) 15%, transparent);
+  --lobster-action: var(--lobster-skin-accent);
+  --lobster-action-foreground: var(--lobster-skin-accent-foreground);
+  --lobster-action-hover: color-mix(
+    in srgb,
+    var(--lobster-skin-accent) 82%,
+    var(--lobster-skin-foreground)
+  );
   --lobster-accent: var(--lobster-skin-accent-alt);
   --lobster-accent-foreground: var(--lobster-skin-foreground);
   --lobster-background: var(--lobster-skin-canvas);

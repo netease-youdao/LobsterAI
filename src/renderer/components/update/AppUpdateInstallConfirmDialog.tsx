@@ -66,7 +66,7 @@ const AppUpdateInstallConfirmDialog: React.FC<AppUpdateInstallConfirmDialogProps
         <button
           type="button"
           onClick={onConfirm}
-          className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+          className="rounded-xl bg-action px-4 py-2 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
         >
           {i18nService.t('updateInstallConfirmContinue')}
         </button>

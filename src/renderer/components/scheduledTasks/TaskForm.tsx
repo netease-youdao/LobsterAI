@@ -1656,7 +1656,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
             type="button"
             onClick={() => void handleSubmit()}
             disabled={submitting}
-            className="px-4 py-1.5 text-[14px] font-semibold leading-5 bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
+            className="px-4 py-1.5 text-[14px] font-semibold leading-5 bg-action text-action-foreground hover:bg-action-hover rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting
               ? i18nService.t('saving')
@@ -1733,7 +1733,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
           <button
             type="button"
             onClick={() => setPayloadEditorOpen(false)}
-            className="px-4 py-1.5 text-[14px] font-semibold leading-5 bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+            className="px-4 py-1.5 text-[14px] font-semibold leading-5 bg-action text-action-foreground hover:bg-action-hover rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
           >
             {i18nService.t('scheduledTasksFormPayloadEditorDone')}
           </button>

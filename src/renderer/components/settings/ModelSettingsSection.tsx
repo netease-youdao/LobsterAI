@@ -574,7 +574,7 @@ export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
           <button
             type="button"
             onClick={handleSaveNewModel}
-            className="px-3 py-1.5 text-xs text-white bg-primary hover:bg-primary-hover rounded-xl active:scale-[0.98]"
+            className="px-3 py-1.5 text-xs text-action-foreground bg-action hover:bg-action-hover rounded-xl active:scale-[0.98]"
           >
             {i18nService.t('save')}
           </button>
@@ -793,7 +793,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     <button
                       type="button"
                       onClick={() => setProviderFilter('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-3.5 w-3.5" />
@@ -823,7 +823,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     onClick={() => handleProviderChange(providerKey)}
                     className={`group flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                       activeProvider === provider
-                        ? 'bg-primary-muted border border-primary shadow-subtle'
+                        ? 'bg-surface-raised border border-border shadow-subtle'
                         : 'bg-surface hover:bg-surface-raised border border-transparent'
                     }`}
                   >
@@ -836,13 +836,13 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <div className="flex flex-col min-w-0">
                         <span className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium truncate ${
                           activeProvider === provider
-                            ? 'text-primary'
+                            ? 'text-foreground font-semibold'
                             : 'text-foreground'
                         }`}>
                           {displayLabel}
                         </span>
                         {isCustom && (
-                          <span className={`${SETTINGS_META_TEXT} mt-0.5 text-primary`}>
+                          <span className={`${SETTINGS_META_TEXT} mt-0.5 text-secondary`}>
                             {i18nService.t('customBadge')}
                           </span>
                         )}
@@ -899,7 +899,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
               <button
                 type="button"
                 onClick={handleAddCustomProvider}
-                className="w-full flex items-center justify-center p-2 rounded-xl border border-dashed border-claude-border dark:border-claude-darkBorder text-claude-secondaryText dark:text-claude-darkSecondaryText hover:border-claude-accent hover:text-claude-accent transition-colors text-sm"
+                className="w-full flex items-center justify-center p-2 rounded-xl border border-dashed border-border text-secondary hover:border-foreground/30 hover:text-foreground hover:bg-surface-raised/50 transition-colors text-sm"
               >
                 {i18nService.t('addCustomProvider')}
               </button>
@@ -921,7 +921,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     <button
                       type="button"
                       onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get(activeProvider)!.website!)}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('visitOfficialSite')}
                       aria-label={i18nService.t('visitOfficialSite')}
                     >
@@ -964,11 +964,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           }));
                           setMinimaxOAuthPhase({ kind: 'idle' });
                         }}
-                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!minimaxIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!minimaxIsOAuthMode ? 'border-action bg-surface-raised/50' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
                         <div className="flex items-start justify-between">
                           <KeyIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
-                          {!minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                          {!minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-foreground shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabApiKey')}</p>
                         <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('minimaxAuthApiKeyDesc')}</p>
@@ -983,11 +983,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             enabled: prev.minimax.enabled && (prev.minimax.oauthAccessToken?.trim().length ?? 0) > 0,
                           },
                         }))}
-                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${minimaxIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${minimaxIsOAuthMode ? 'border-action bg-surface-raised/50' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
                         <div className="flex items-start justify-between">
                           <ShieldCheckIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
-                          {minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                          {minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-foreground shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabOAuth')}</p>
                         <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('minimaxAuthOAuthDesc')}</p>
@@ -1006,7 +1006,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get('minimax')!.apiKeyUrl!)}
-                            className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
+                            className={`${SETTINGS_META_TEXT} text-secondary hover:text-foreground underline underline-offset-2 transition-colors`}
                           >
                             {i18nService.t('getApiKey')} →
                           </button>
@@ -1026,7 +1026,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => handleProviderConfigChange('minimax', 'apiKey', '')}
-                            className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                            className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                             title={i18nService.t('clear') || 'Clear'}
                           >
                             <XCircleIconSolid className="h-4 w-4" />
@@ -1035,7 +1035,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                         <button
                           type="button"
                           onClick={() => setShowApiKey(!showApiKey)}
-                          className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                          className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                           title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                         >
                           {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -1086,14 +1086,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setMinimaxOAuthRegion('cn')}
-                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'cn' ? 'bg-primary text-white' : 'text-secondary hover:bg-surface-raised'}`}
+                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'cn' ? 'bg-action text-action-foreground' : 'text-secondary hover:bg-surface-raised'}`}
                               >
                                 {i18nService.t('minimaxOAuthRegionCN')}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setMinimaxOAuthRegion('global')}
-                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'global' ? 'bg-primary text-white' : 'text-secondary hover:bg-surface-raised'}`}
+                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'global' ? 'bg-action text-action-foreground' : 'text-secondary hover:bg-surface-raised'}`}
                               >
                                 {i18nService.t('minimaxOAuthRegionGlobal')}
                               </button>
@@ -1102,7 +1102,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
-                            className="w-full py-2 text-xs font-medium rounded-xl bg-primary text-white hover:bg-primary-hover transition-colors"
+                            className="w-full py-2 text-xs font-medium rounded-xl bg-action text-action-foreground hover:bg-action-hover transition-colors"
                           >
                             {i18nService.t('minimaxOAuthLogin')}
                           </button>
@@ -1131,14 +1131,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <span className={`${SETTINGS_META_TEXT} text-secondary`}>
                               {i18nService.t('minimaxOAuthUserCode')}:&nbsp;
                             </span>
-                            <code className="text-xs font-mono text-primary">
+                            <code className="text-xs font-mono font-semibold text-foreground">
                               {minimaxOAuthPhase.userCode}
                             </code>
                           </div>
                           <a
                             href={minimaxOAuthPhase.verificationUri}
                             onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(minimaxOAuthPhase.verificationUri); }}
-                            className={`block ${SETTINGS_META_TEXT} text-primary underline truncate`}
+                            className={`block ${SETTINGS_META_TEXT} text-foreground underline underline-offset-2 truncate transition-opacity hover:opacity-75`}
                           >
                             {minimaxOAuthPhase.verificationUri}
                           </a>
@@ -1177,7 +1177,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
-                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors`}
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors`}
                             >
                               {i18nService.t('minimaxOAuthRelogin')}
                             </button>
@@ -1217,11 +1217,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           }));
                           setOpenaiOAuthPhase({ kind: 'idle' });
                         }}
-                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!openaiIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!openaiIsOAuthMode ? 'border-action bg-surface-raised/50' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
                         <div className="flex items-start justify-between">
                           <KeyIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
-                          {!openaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                          {!openaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-foreground shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('openaiOAuthTabApiKey')}</p>
                         <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('openaiAuthApiKeyDesc')}</p>
@@ -1235,11 +1235,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             authType: 'oauth',
                           },
                         }))}
-                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${openaiIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${openaiIsOAuthMode ? 'border-action bg-surface-raised/50' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
                         <div className="flex items-start justify-between">
                           <ShieldCheckIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
-                          {openaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                          {openaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-foreground shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('openaiOAuthTabOAuth')}</p>
                         <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('openaiAuthOAuthDesc')}</p>
@@ -1282,7 +1282,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={handleOpenAIOAuthLogin}
-                            className="w-full py-2 text-xs font-medium rounded-xl bg-primary text-white hover:bg-primary-hover transition-colors"
+                            className="w-full py-2 text-xs font-medium rounded-xl bg-action text-action-foreground hover:bg-action-hover transition-colors"
                           >
                             {i18nService.t('openaiOAuthLogin')}
                           </button>
@@ -1334,7 +1334,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={handleOpenAIOAuthLogin}
-                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors`}
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors`}
                             >
                               {i18nService.t('openaiOAuthRelogin')}
                             </button>
@@ -1374,11 +1374,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           }));
                           setXaiOAuthPhase({ kind: 'idle' });
                         }}
-                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!xaiIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!xaiIsOAuthMode ? 'border-action bg-surface-raised/50' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
                         <div className="flex items-start justify-between">
                           <KeyIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
-                          {!xaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                          {!xaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-foreground shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('xaiOAuthTabApiKey')}</p>
                         <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('xaiAuthApiKeyDesc')}</p>
@@ -1392,11 +1392,11 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             authType: 'oauth',
                           },
                         }))}
-                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${xaiIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${xaiIsOAuthMode ? 'border-action bg-surface-raised/50' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
                         <div className="flex items-start justify-between">
                           <ShieldCheckIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
-                          {xaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                          {xaiIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-foreground shrink-0" />}
                         </div>
                         <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('xaiOAuthTabOAuth')}</p>
                         <p className={`${SETTINGS_META_TEXT} text-secondary mt-0.5`}>{i18nService.t('xaiAuthOAuthDesc')}</p>
@@ -1439,7 +1439,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={handleXaiOAuthLogin}
-                            className="w-full py-2 text-xs font-medium rounded-xl bg-primary text-white hover:bg-primary-hover transition-colors"
+                            className="w-full py-2 text-xs font-medium rounded-xl bg-action text-action-foreground hover:bg-action-hover transition-colors"
                           >
                             {i18nService.t('xaiOAuthLogin')}
                           </button>
@@ -1478,14 +1478,14 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <span className={`${SETTINGS_META_TEXT} text-secondary`}>
                               {i18nService.t('xaiOAuthUserCode')}:&nbsp;
                             </span>
-                            <code className="text-xs font-mono text-primary">
+                            <code className="text-xs font-mono font-semibold text-foreground">
                               {xaiOAuthPhase.userCode}
                             </code>
                           </div>
                           <a
                             href={xaiOAuthPhase.verificationUri}
                             onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(xaiOAuthPhase.verificationUri); }}
-                            className={`block ${SETTINGS_META_TEXT} text-primary underline truncate`}
+                            className={`block ${SETTINGS_META_TEXT} text-foreground underline underline-offset-2 truncate transition-opacity hover:opacity-75`}
                           >
                             {xaiOAuthPhase.verificationUri}
                           </a>
@@ -1522,7 +1522,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={handleXaiOAuthLogin}
-                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors`}
+                              className={`px-2.5 py-1 ${SETTINGS_META_TEXT} font-medium rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors`}
                             >
                               {i18nService.t('xaiOAuthRelogin')}
                             </button>
@@ -1577,7 +1577,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get(activeProvider)!.apiKeyUrl!)}
-                            className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
+                            className={`${SETTINGS_META_TEXT} text-secondary hover:text-foreground underline underline-offset-2 transition-colors`}
                           >
                             {i18nService.t('getApiKey')} →
                           </button>
@@ -1597,7 +1597,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={() => handleProviderConfigChange(activeProvider, 'apiKey', '')}
-                              className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                              className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                               title={i18nService.t('clear') || 'Clear'}
                             >
                               <XCircleIconSolid className="h-4 w-4" />
@@ -1606,7 +1606,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => setShowApiKey(!showApiKey)}
-                            className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                            className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                             title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                           >
                             {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -1628,7 +1628,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get('qwen')!.apiKeyUrl!)}
-                            className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
+                            className={`${SETTINGS_META_TEXT} text-secondary hover:text-foreground underline underline-offset-2 transition-colors`}
                           >
                             {i18nService.t('getApiKey')} →
                           </button>
@@ -1648,7 +1648,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             <button
                               type="button"
                               onClick={() => handleProviderConfigChange('qwen', 'apiKey', '')}
-                              className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                              className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                               title={i18nService.t('clear') || 'Clear'}
                             >
                               <XCircleIconSolid className="h-4 w-4" />
@@ -1657,7 +1657,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => setShowApiKey(!showApiKey)}
-                            className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                            className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                             title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                           >
                             {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -1682,7 +1682,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <button
                         type="button"
                         onClick={handleCopilotSignIn}
-                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-claude-accent text-white text-xs font-medium hover:bg-claude-accent/90 transition-colors"
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-action text-action-foreground text-xs font-medium hover:bg-action-hover transition-colors"
                       >
                         <GitHubCopilotIcon className="w-4 h-4" />
                         {i18nService.t('githubCopilotSignIn')}
@@ -1718,7 +1718,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                             onClick={() => {
                               navigator.clipboard.writeText(copilotUserCode);
                             }}
-                            className={`px-2 py-0.5 rounded ${SETTINGS_META_TEXT} text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent border border-claude-border dark:border-claude-darkBorder transition-colors`}
+                            className={`px-2 py-0.5 rounded ${SETTINGS_META_TEXT} text-secondary hover:text-foreground hover:bg-surface-raised border border-border transition-colors`}
                           >
                             {i18nService.t('copy') || 'Copy'}
                           </button>
@@ -1726,7 +1726,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                         <button
                           type="button"
                           onClick={() => window.electron.shell.openExternal(copilotVerificationUri)}
-                          className="mt-2 text-xs text-claude-accent hover:underline"
+                          className="mt-2 text-xs text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                         >
                           {copilotVerificationUri}
                         </button>
@@ -1808,7 +1808,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <button
                         type="button"
                         onClick={() => handleProviderConfigChange(activeProvider, 'baseUrl', '')}
-                        className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                        className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                         title={i18nService.t('clear') || 'Clear'}
                       >
                         <XCircleIconSolid className="h-4 w-4" />
@@ -1831,9 +1831,9 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                         handleProviderConfigChange(activeProvider, 'baseUrl', example.url);
                       }}
                       title={i18nService.t('clickToFillBaseUrl')}
-                      className="flex w-full items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2 py-1 text-left transition-colors hover:border-primary hover:bg-primary-muted"
+                      className="flex w-full items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2 py-1 text-left transition-colors hover:border-foreground/25 hover:bg-surface-raised"
                     >
-                      <code className={`min-w-0 flex-1 truncate ${SETTINGS_META_TEXT} text-primary`}>{example.url}</code>
+                      <code className={`min-w-0 flex-1 truncate ${SETTINGS_META_TEXT} text-foreground`}>{example.url}</code>
                       <span className={`shrink-0 rounded-md bg-surface-raised px-1.5 py-0.5 ${SETTINGS_META_TEXT} text-secondary`}>{example.label}</span>
                     </button>
                   ))}
@@ -1841,48 +1841,48 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 )}
                 {/* GLM Coding Plan 提示 */}
                 {activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled && (
-                  <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
+                  <div className="mt-1.5 p-2 rounded-lg bg-surface-raised/70 border border-border">
+                    <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                       <span className="font-medium">GLM Coding Plan:</span> {i18nService.t('zhipuCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
                 {/* Qwen Coding Plan 提示 */}
                 {activeProvider === 'qwen' && providers.qwen.codingPlanEnabled && (
-                  <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
+                  <div className="mt-1.5 p-2 rounded-lg bg-surface-raised/70 border border-border">
+                    <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('qwenCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
                 {/* Volcengine Coding Plan 提示 */}
                 {activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled && (
-                  <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
+                  <div className="mt-1.5 p-2 rounded-lg bg-surface-raised/70 border border-border">
+                    <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('volcengineCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
                 {/* Moonshot Coding Plan 提示 */}
                 {activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled && (
-                  <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
+                  <div className="mt-1.5 p-2 rounded-lg bg-surface-raised/70 border border-border">
+                    <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('moonshotCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
                 {/* Qianfan Coding Plan 提示 */}
                 {activeProvider === 'qianfan' && providers.qianfan.codingPlanEnabled && (
-                  <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
+                  <div className="mt-1.5 p-2 rounded-lg bg-surface-raised/70 border border-border">
+                    <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('qianfanCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
                 {/* Xiaomi Coding Plan 提示 */}
                 {activeProvider === 'xiaomi' && providers.xiaomi.codingPlanEnabled && (
-                  <div className="mt-1.5 p-2 rounded-lg bg-primary-muted border border-primary-muted">
-                    <p className={`${SETTINGS_META_TEXT} text-primary dark:text-primary`}>
+                  <div className="mt-1.5 p-2 rounded-lg bg-surface-raised/70 border border-border">
+                    <p className={`${SETTINGS_META_TEXT} text-secondary`}>
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('xiaomiCodingPlanEndpointHint')}
                     </p>
                   </div>
@@ -1923,7 +1923,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         GLM Coding Plan
                       </span>
-                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                         Beta
                       </span>
                     </div>
@@ -1951,7 +1951,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                         {i18nService.t('codingPlanSubscriptionBadge')}
                       </span>
                     </div>
@@ -1979,7 +1979,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                         Beta
                       </span>
                     </div>
@@ -2007,7 +2007,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                         Beta
                       </span>
                     </div>
@@ -2035,7 +2035,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                         Beta
                       </span>
                     </div>
@@ -2063,7 +2063,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <span className="text-xs font-medium text-foreground">
                         Coding Plan
                       </span>
-                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                      <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                         Beta
                       </span>
                     </div>
@@ -2131,7 +2131,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                   <button
                     type="button"
                     onClick={handleAddModel}
-                    className="inline-flex items-center text-xs text-primary hover:text-primary-hover"
+                    className="inline-flex items-center text-xs font-medium text-foreground transition-opacity hover:opacity-75"
                   >
                     <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
                     {i18nService.t('addModel')}
@@ -2143,7 +2143,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                   {(providers[activeProvider].models ?? []).map(model => (
                     <div
                       key={model.id}
-                      className="bg-surface p-2 rounded-xl border-border border transition-colors hover:border-primary group"
+                      className="bg-surface p-2 rounded-xl border-border border transition-colors hover:border-foreground/25 group"
                     >
                       <div className="flex items-center justify-between gap-2 min-w-0">
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -2155,12 +2155,12 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                         </div>
                         <div className="flex items-center shrink-0 space-x-1">
                           {model.supportsImage && (
-                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                               {i18nService.t('imageInput')}
                             </span>
                           )}
                           {model.supportsThinking && (
-                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-primary-muted text-primary`}>
+                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
                               {i18nService.t('thinkingOutput')}
                             </span>
                           )}
@@ -2175,7 +2175,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                               model.customParams,
                               model.maxTokens,
                             )}
-                            className="p-0.5 text-secondary hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="p-0.5 text-secondary hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
                           >
                             <EditIcon className="h-3.5 w-3.5" />
                           </button>
@@ -2197,7 +2197,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <button
                         type="button"
                         onClick={handleAddModel}
-                        className={`mt-1.5 inline-flex items-center ${SETTINGS_META_TEXT} font-medium text-primary hover:text-primary-hover`}
+                        className={`mt-1.5 inline-flex items-center ${SETTINGS_META_TEXT} font-medium text-foreground transition-opacity hover:opacity-75`}
                       >
                         <PlusCircleIcon className="h-3 w-3 mr-1" />
                         {i18nService.t('addFirstModel')}

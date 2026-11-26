@@ -914,7 +914,7 @@ const NewUserOnboardingOverlay: React.FC<NewUserOnboardingOverlayProps> = ({
               <button
                 type="button"
                 onClick={onNext}
-                className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background shadow-sm transition-colors hover:opacity-90"
+                className="rounded-lg bg-action px-4 py-2 text-sm font-semibold text-action-foreground shadow-sm transition-colors hover:bg-action-hover"
               >
                 {i18nService.t('newUserOnboardingNext')}
               </button>

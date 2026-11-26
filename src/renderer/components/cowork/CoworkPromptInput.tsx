@@ -3527,7 +3527,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       disabled={!canUseSubmitButton}
       className={`flex ${largeSendButtonSizeClass} shrink-0 items-center justify-center rounded-full transition-all ${
         canUseSubmitButton
-          ? 'bg-neutral-950 text-white shadow-subtle hover:bg-neutral-800 active:scale-95 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200'
+          ? 'bg-action text-action-foreground shadow-subtle hover:bg-action-hover active:scale-95'
           : 'cursor-not-allowed bg-neutral-300 text-white dark:bg-neutral-700 dark:text-neutral-500'
       }`}
       aria-label={i18nService.t('sendMessage')}
@@ -4203,7 +4203,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 type="button"
                 onClick={() => void handleSubmitGoalEditModal()}
                 disabled={!canSaveGoalEdit}
-                className="rounded-xl bg-foreground px-5 py-2 text-sm font-medium text-background transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-muted disabled:opacity-100"
+                className="rounded-xl bg-action px-5 py-2 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-muted disabled:opacity-100"
               >
                 {i18nService.t('save')}
               </button>
@@ -4471,7 +4471,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   disabled={!canSubmit}
                   className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-all ${
                     canSubmit
-                      ? 'bg-neutral-950 text-white shadow-subtle hover:bg-neutral-800 active:scale-95 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200'
+                      ? 'bg-action text-action-foreground shadow-subtle hover:bg-action-hover active:scale-95'
                       : 'cursor-not-allowed bg-neutral-300 text-white dark:bg-neutral-700 dark:text-neutral-500'
                   }`}
                   aria-label={i18nService.t('sendMessage')}
@@ -4545,7 +4545,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           <button
             type="button"
             onClick={() => { void handleVoiceQuotaPrimary(); }}
-            className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+            className="mt-5 w-full rounded-lg bg-action px-3 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover"
           >
             {i18nService.t(isAsrSubscribed ? 'voiceInputQuotaAcknowledge' : 'voiceInputUpgradeSubscription')}
           </button>

@@ -52,7 +52,7 @@ const EXAMPLE_KEYS = ['decisionModelExample1', 'decisionModelExample2', 'decisio
 const LABEL_CLASS = 'block text-xs font-medium text-foreground';
 const FIELD_CLASS =
   'block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs';
-const ICON_BUTTON_CLASS = 'p-0.5 rounded text-secondary hover:text-primary transition-colors';
+const ICON_BUTTON_CLASS = 'p-0.5 rounded text-secondary hover:text-foreground transition-colors';
 
 interface DecisionModelDraft {
   enabled: boolean;
@@ -299,7 +299,7 @@ export const DecisionModelExperimentalSettings: React.FC<DecisionModelExperiment
                   <button
                     type="button"
                     onClick={() => void window.electron.shell.openExternal(apiKeyUrl)}
-                    className={`${SETTINGS_META_TEXT} text-claude-accent hover:underline transition-colors`}
+                    className={`${SETTINGS_META_TEXT} text-secondary hover:text-foreground underline underline-offset-2 transition-colors`}
                   >
                     {i18nService.t('getApiKey')} →
                   </button>

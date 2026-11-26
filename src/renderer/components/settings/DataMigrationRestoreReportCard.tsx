@@ -134,7 +134,7 @@ const DataMigrationRestoreReportCard: React.FC<DataMigrationRestoreReportCardPro
                   type="button"
                   onClick={onReinstallPlugins}
                   disabled={isReinstallingPlugins}
-                  className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {isReinstallingPlugins && <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />}
                   {isReinstallingPlugins

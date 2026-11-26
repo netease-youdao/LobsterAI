@@ -97,7 +97,7 @@ const ProviderTransferDialog: React.FC<ProviderTransferDialogProps> = ({ state, 
           <button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm text-foreground hover:bg-surface-raised">
             {i18nService.t('cancel')}
           </button>
-          <button type="submit" disabled={busy} className="rounded-lg bg-primary px-4 py-2 text-sm text-white hover:bg-primary-hover disabled:opacity-50">
+          <button type="submit" disabled={busy} className="rounded-lg bg-action px-4 py-2 text-sm text-action-foreground hover:bg-action-hover disabled:opacity-50">
             {i18nService.t(busy ? 'providersTransferWorking' : isExport ? 'export' : 'import')}
           </button>
         </div>

@@ -71,7 +71,7 @@ const DataMigrationDialogs: React.FC<DataMigrationDialogsProps> = ({
           >
             <div className="border-b border-border px-5 pt-5 pb-4">
               <div className="flex items-center gap-3">
-                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                   <ArrowPathRoundedSquareIcon className="h-5 w-5" />
                 </span>
                 <div className="min-w-0">
@@ -151,7 +151,7 @@ const DataMigrationDialogs: React.FC<DataMigrationDialogsProps> = ({
                 type="button"
                 onClick={onConfirmRestore}
                 disabled={isRestoring}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-action px-3.5 py-1.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
               >
                 {isRestoring
                   ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -168,7 +168,7 @@ const DataMigrationDialogs: React.FC<DataMigrationDialogsProps> = ({
       {(isBackingUp || isRestoring) && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-surface px-5 py-5 text-center shadow-xl">
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-primary-muted text-primary">
+            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-surface-raised text-foreground">
               <ArrowPathIcon className="h-5 w-5 animate-spin" />
             </div>
             <h3 className="mt-4 text-base font-semibold text-foreground">

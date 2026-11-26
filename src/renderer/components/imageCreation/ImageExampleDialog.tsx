@@ -155,9 +155,9 @@ export default function ImageExampleDialog({ example, onClose, onUse }: Props) {
         {error && <p role="alert" className="mt-3 text-xs text-red-500">{error}</p>}
         <div className="mt-5 flex flex-wrap gap-2">
           {example.referenceImageUrl && !reference ? <>
-            <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(true)} className="flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationUseDemo')}<ArrowRightIcon className="h-4 w-4" /></button>
+            <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(true)} className="flex items-center justify-center gap-2 rounded-xl bg-action px-5 py-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationUseDemo')}<ArrowRightIcon className="h-4 w-4" /></button>
             <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="rounded-xl border border-border px-4 py-3 text-sm text-foreground hover:bg-surface-raised">{t('imageCreationUseOwn')}</button>
-          </> : <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(false)} className="flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationRemix')}<ArrowRightIcon className="h-4 w-4" /></button>}
+          </> : <button type="button" disabled={busy || !prompt.trim()} onClick={() => void handleUseExample(false)} className="flex items-center justify-center gap-2 rounded-xl bg-action px-5 py-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50">{busy ? t('imageCreationPreparing') : t('imageCreationRemix')}<ArrowRightIcon className="h-4 w-4" /></button>}
         </div>
         <p className="mt-3 text-xs leading-5 text-muted">{t('imageCreationDraftHint')}</p>
         <p className="mt-auto pt-5 text-[11px] text-muted">{t('imageCreationModelLabel')} {example.modelName}</p>

@@ -381,7 +381,7 @@ const RemixExampleDialog: React.FC<RemixExampleDialogProps> = ({ example, onClos
                       type="button"
                       disabled={busy}
                       onClick={() => void handleSubmit(ShowcaseRemixMode.Custom)}
-                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-action px-4 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50"
                     >
                       {busy ? t('homeShowcaseCtaPreparing') : t('homeShowcaseCtaCustom')}
                       <ArrowRightIcon aria-hidden="true" className="h-4 w-4" />
@@ -402,7 +402,7 @@ const RemixExampleDialog: React.FC<RemixExampleDialogProps> = ({ example, onClos
                       type="button"
                       disabled={busy}
                       onClick={() => void handleSubmit(ShowcaseRemixMode.Demo)}
-                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-action px-4 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50"
                     >
                       <SparklesIcon aria-hidden="true" className="h-4 w-4" />
                       {busy ? t('homeShowcaseCtaPreparing') : t('homeShowcaseCtaDemo')}

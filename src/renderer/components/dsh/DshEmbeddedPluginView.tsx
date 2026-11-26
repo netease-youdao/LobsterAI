@@ -304,7 +304,7 @@ export const DshEmbeddedPluginView: React.FC<DshEmbeddedPluginViewProps> = ({
               <button
                 type="button"
                 onClick={() => void fetchAuthenticatedUrl(true)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-3.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 <ArrowPathIcon className="h-3.5 w-3.5" />
                 {t('dshPluginsEmbeddedRetry')}

@@ -126,7 +126,7 @@ const CreditsResetCampaignFloat: React.FC = () => {
       <button
         type="button"
         onClick={() => void openActivity()}
-        className="h-7 shrink-0 rounded-full bg-foreground px-4 text-xs font-medium text-background transition-opacity hover:opacity-85 cursor-pointer"
+        className="h-7 shrink-0 rounded-full bg-action px-4 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover cursor-pointer"
       >
         {action}
       </button>

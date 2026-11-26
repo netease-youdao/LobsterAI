@@ -633,7 +633,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                   />
                   <span className="truncate">{activeAgent?.name}</span>
                   {activeAgent?.isMain && (
-                    <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    <span className="shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
                       {i18nService.t('coworkMemoryGlobalSharedBadge')}
                     </span>
                   )}
@@ -664,7 +664,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                           onClick={() => handleSelectAgent(option.id)}
                           className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
                             isSelected
-                              ? 'bg-primary/10 text-foreground'
+                              ? 'bg-surface-raised text-foreground'
                               : 'text-foreground hover:bg-surface-raised'
                           }`}
                         >
@@ -680,7 +680,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                                 {option.name}
                               </span>
                               {option.isMain && (
-                                <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                                <span className="shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
                                   {i18nService.t('coworkMemoryGlobalSharedBadge')}
                                 </span>
                               )}
@@ -692,7 +692,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                             </span>
                           )}
                           <CheckIcon
-                            className={`h-3.5 w-3.5 shrink-0 text-primary ${
+                            className={`h-3.5 w-3.5 shrink-0 text-foreground ${
                               isSelected ? 'opacity-100' : 'opacity-0'
                             }`}
                           />
@@ -710,7 +710,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                   iconClassName="h-3.5 w-3.5"
                 />
                 <span>{activeAgent?.name}</span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
                   {i18nService.t('coworkMemoryGlobalSharedBadge')}
                 </span>
                 <span className="text-[11px] font-normal text-secondary">
@@ -751,7 +751,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
               type="button"
               onClick={openInlineAdd}
               disabled={mutating}
-              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <PlusIcon className="h-3.5 w-3.5" />
               {i18nService.t('coworkMemoryCrudCreate')}
@@ -774,7 +774,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
       {/* 3. Search & Scope Filter Bar (or Batch Selection Bar) */}
       <div className="shrink-0">
         {batchMode ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/25 bg-primary/[0.04] px-3.5 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-raised/60 px-3.5 py-2">
             <div className="flex items-center gap-3">
               <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground select-none">
                 <input
@@ -864,7 +864,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                       onClick={() => setScopeFilter(chip.key)}
                       className={`rounded-md px-2.5 py-1 transition-colors ${
                         active
-                          ? 'bg-primary text-white font-medium'
+                          ? 'bg-action text-action-foreground font-medium'
                           : 'text-secondary hover:bg-surface-raised hover:text-foreground'
                       }`}
                     >
@@ -887,7 +887,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
       >
         {/* Inline Quick-Add Composer */}
         {isAdding && (
-          <div className="border-b border-border bg-primary/[0.03] px-4 py-3">
+          <div className="border-b border-border bg-surface-raised/40 px-4 py-3">
             <textarea
               ref={addTextareaRef}
               rows={3}
@@ -929,7 +929,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                   type="button"
                   onClick={() => { void handleSaveNewEntry(); }}
                   disabled={!addDraft.trim() || mutating}
-                  className="rounded-lg bg-primary px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-lg bg-action px-3 py-1 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {i18nService.t('save')}
                 </button>
@@ -972,7 +972,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
               <button
                 type="button"
                 onClick={openInlineAdd}
-                className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+                className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-action px-3.5 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 <PlusIcon className="h-3.5 w-3.5" />
                 {i18nService.t('coworkMemoryAddFirst')}
@@ -1038,7 +1038,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
 
                   if (isEditingThis) {
                     return (
-                      <div key={entry.id} className="bg-primary/[0.03] px-4 py-3">
+                      <div key={entry.id} className="bg-surface-raised/40 px-4 py-3">
                         <textarea
                           ref={editTextareaRef}
                           rows={Math.min(8, Math.max(3, editDraft.split('\n').length + 1))}
@@ -1055,7 +1055,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                               void handleSaveEditEntry();
                             }
                           }}
-                          className="w-full resize-y rounded-lg border border-primary/50 bg-surface px-3 py-2 text-[13px] leading-relaxed text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
+                          className="w-full resize-y rounded-lg border border-border-input bg-surface px-3 py-2 text-[13px] leading-relaxed text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                         />
                         {editError && (
                           <div className="mt-2">
@@ -1079,7 +1079,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                               type="button"
                               onClick={() => { void handleSaveEditEntry(); }}
                               disabled={!editDraft.trim() || mutating}
-                              className="rounded-lg bg-primary px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                              className="rounded-lg bg-action px-3 py-1 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {i18nService.t('save')}
                             </button>
@@ -1096,7 +1096,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                       className={`group px-3.5 py-3 transition-colors ${
                         batchMode
                           ? isSelected
-                            ? 'cursor-pointer bg-primary/[0.06]'
+                            ? 'cursor-pointer bg-surface-raised/80'
                             : 'cursor-pointer hover:bg-surface-raised/60'
                           : 'hover:bg-surface-raised/50'
                       }`}
@@ -1128,7 +1128,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                                 <span
                                   key={key}
                                   title={key}
-                                  className="inline-flex max-w-[240px] items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+                                  className="inline-flex max-w-[240px] items-center gap-1 rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary"
                                 >
                                   <FolderIcon className="h-3 w-3 shrink-0" />
                                   <span className="truncate">{formatProjectKeyLabel(key)}</span>
@@ -1149,7 +1149,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
                                 event.stopPropagation();
                                 toggleExpandedId(entry.id);
                               }}
-                              className={`mt-1.5 ${SETTINGS_META_TEXT} text-primary hover:underline`}
+                              className={`mt-1.5 ${SETTINGS_META_TEXT} text-secondary underline underline-offset-2 transition-colors hover:text-foreground`}
                             >
                               {i18nService.t(isExpanded ? 'coworkMemoryCollapse' : 'coworkMemoryExpand')}
                             </button>
@@ -1206,7 +1206,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
               type="button"
               onClick={() => { void handleUndoDelete(); }}
               disabled={restoringUndo}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
             >
               <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
               {i18nService.t('coworkMemoryUndo')}
@@ -1281,7 +1281,7 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({
               type="button"
               onClick={() => { void handleSaveRaw(); }}
               disabled={rawSaving}
-              className="rounded-lg bg-primary px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-lg bg-action px-3.5 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {rawSaving ? i18nService.t('saving') : i18nService.t('save')}
             </button>
