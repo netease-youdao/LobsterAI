@@ -9,6 +9,7 @@ import {
   type LocalFileThumbnailFit,
   parseLocalFileThumbnailFit,
 } from '../shared/artifactPreview/localFileThumbnail';
+import { sniffImageMimeType } from '../shared/cowork/imageAttachments';
 
 // Only media files, which is all the app displays through this scheme (conversation images, media
 // artifacts, the image editor). Any other type is refused, documents included.
@@ -78,6 +79,26 @@ export function getLocalFileProtocolPath(requestUrl: string): string {
 /** The served type for a file, or null when the scheme does not serve that kind of file. */
 export function getLocalFileMimeType(filePath: string): string | null {
   return LOCAL_FILE_MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? null;
+}
+
+const IMAGE_SNIFF_HEADER_BYTES = 16;
+
+/**
+ * Sniffs raster image magic bytes for extensionless files (such as DSH
+ * content-addressed attachment objects under `attachments/v1/objects/`).
+ * Files with an explicit non-media extension are never sniffed.
+ */
+async function sniffExtensionlessLocalImageMimeType(filePath: string): Promise<string | null> {
+  if (path.extname(filePath) !== '') return null;
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(IMAGE_SNIFF_HEADER_BYTES);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead <= 0) return null;
+    return sniffImageMimeType(header.subarray(0, bytesRead)) ?? null;
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -189,7 +210,8 @@ export async function createLocalFileProtocolResponse(
 ): Promise<Response> {
   try {
     const sourcePath = resolveServableLocalPath(getLocalFileProtocolPath(request.url));
-    if (!sourcePath || !getLocalFileMimeType(sourcePath)) {
+    const extensionMime = sourcePath ? getLocalFileMimeType(sourcePath) : null;
+    if (!sourcePath || (!extensionMime && path.extname(sourcePath) !== '')) {
       console.warn('[ArtifactPreview] refused local file request: not a served media file on a local disk');
       return new Response('Forbidden', { status: 403 });
     }
@@ -197,9 +219,15 @@ export async function createLocalFileProtocolResponse(
     if (!sourceStat.isFile()) {
       return new Response('Not found', { status: 404 });
     }
+    const sourceMime = extensionMime ?? await sniffExtensionlessLocalImageMimeType(sourcePath);
+    if (!sourceMime) {
+      console.warn('[ArtifactPreview] refused local file request: not a served media file on a local disk');
+      return new Response('Forbidden', { status: 403 });
+    }
     const { filePath, stat } = await resolveThumbnailFile(request.url, sourcePath, sourceStat, options);
 
-    const mimeType = getLocalFileMimeType(filePath);
+    const mimeType = getLocalFileMimeType(filePath)
+      ?? (filePath === sourcePath ? sourceMime : await sniffExtensionlessLocalImageMimeType(filePath));
     if (!mimeType) {
       return new Response('Forbidden', { status: 403 });
     }

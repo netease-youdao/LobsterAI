@@ -110,6 +110,7 @@ export interface DshHostIpcDeps {
   getNodeToolchain?: () => DshNodeToolchain | null;
   openEcosystemWindow?: (authenticatedUrl: string, routeHash?: string) => Promise<void> | void;
   closeEcosystemWindow?: () => void;
+  syncAgentWorkspaces?: () => Promise<unknown> | void;
   getPermissionPreset?: (sessionId?: string) => {
     preset: DshPermissionPreset;
     defaultPreset: DshPermissionPreset;
@@ -289,6 +290,13 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
     }
     const url = manager.getAuthenticatedWebUrl();
     if (!url) return { ok: false, error: 'DSH web URL unavailable' };
+    if (deps.syncAgentWorkspaces) {
+      try {
+        await deps.syncAgentWorkspaces();
+      } catch (error) {
+        console.warn('[DSH Host] Failed to refresh agent workspaces before opening ecosystem view:', error);
+      }
+    }
     if (deps.openEcosystemWindow) {
       await deps.openEcosystemWindow(url, typeof routeHash === 'string' ? routeHash : undefined);
       return { ok: true, url };

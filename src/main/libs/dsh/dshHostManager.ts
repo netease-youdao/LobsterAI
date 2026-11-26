@@ -830,6 +830,17 @@ export class DshHostManager extends EventEmitter {
     return this.getClient().callOps(DshOpsAction.SyncAgents, payload);
   }
 
+  async refreshAgentWorkspaces(workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
+    if (!this.lastAgentSync) return { skipped: true };
+    const payload = {
+      agents: this.lastAgentSync.agents,
+      workspaceDirectories: workspaceDirectories ?? this.lastAgentSync.workspaceDirectories,
+    };
+    this.lastAgentSync = payload;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncAgents, payload);
+  }
+
   async syncSubagentBindings(
     bindings: DshSubagentAgentBinding[],
     options: { replace?: boolean } = {},
