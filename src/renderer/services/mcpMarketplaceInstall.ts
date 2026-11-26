@@ -1,4 +1,5 @@
 import { McpAuthMode } from '../../shared/mcp/auth';
+import { isCliConnectorId } from '../../shared/mcp/cliConnector';
 import {
   buildMcpConnectorCredentials,
   type McpConnectorCredentialsResult,
@@ -9,7 +10,6 @@ import type {
   McpMarketplaceServer,
   McpRegistryEntry,
   McpServerFormData,
-  McpTransportType,
 } from '../types/mcp';
 
 /**
@@ -20,6 +20,9 @@ import type {
 export function convertMarketplaceToRegistry(servers: McpMarketplaceServer[]): McpRegistryEntry[] {
   const entries: McpRegistryEntry[] = [];
   for (const server of servers) {
+    const transport = server.transportType;
+    if (transport !== 'stdio' && transport !== 'sse' && transport !== 'http'
+      && !(transport === 'skill' && isCliConnectorId(server.id))) continue;
     const parsed = parseMcpMarketplaceConnector(
       server as unknown as Record<string, unknown>,
       server.transportType,
@@ -38,7 +41,7 @@ export function convertMarketplaceToRegistry(servers: McpMarketplaceServer[]): M
       description_en: server.description_en,
       category: server.category as McpCategory,
       categoryKey: '',
-      transportType: server.transportType as McpTransportType,
+      transportType: transport,
       command: server.command ?? '',
       defaultArgs: server.defaultArgs ?? [],
       requiredEnvKeys: server.requiredEnvKeys,
@@ -89,6 +92,7 @@ export function buildRegistryRemoteServerData(
   entry: McpRegistryEntry,
   tokenValues: Record<string, string>,
 ): RegistryRemoteServerDataResult {
+  if (entry.transportType === 'skill') return { ok: false, code: 'invalid_url', fieldErrors: {} };
   const connector = entry.connector ?? {};
   const credentials = buildMcpConnectorCredentials(
     connector,

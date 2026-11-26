@@ -108,8 +108,9 @@ export function mergeMarketplaceRegistry(
   const managedLocalIds = new Set(managedLocalEntries.map(entry => entry.id));
   const merged = remoteRegistry.filter(entry => !managedLocalIds.has(entry.id));
 
+  const featuredCount = merged.filter(entry => entry.featured).length;
   for (const entry of managedLocalEntries) {
-    const insertionIndex = getMarketplaceInsertionIndex(entry.marketplacePosition, merged.length);
+    const insertionIndex = Math.max(featuredCount, getMarketplaceInsertionIndex(entry.marketplacePosition, merged.length));
     merged.splice(insertionIndex, 0, entry);
   }
 

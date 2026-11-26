@@ -10,6 +10,8 @@ export const McpIpcChannel = {
   ListTools: 'mcp:listTools',
   FetchMarketplace: 'mcp:fetchMarketplace',
   ConnectQichacha: 'mcp:qichachaConnect',
+  ConnectCli: 'mcp:connectCli',
+  CancelCli: 'mcp:cancelCli',
   OAuthLogin: 'mcp:oauthLogin',
   OAuthCancel: 'mcp:oauthCancel',
   OAuthLogout: 'mcp:oauthLogout',

@@ -4,6 +4,7 @@ import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
+import { isCliConnectorId } from '../../../shared/mcp/cliConnector';
 import { McpManagedConnection } from '../../../shared/mcp/constants';
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
@@ -19,8 +20,10 @@ import {
   mergeMarketplaceRegistry,
   pickMcpConnectorText,
 } from '../../services/mcpRegistryPresentation';
+import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { setMcpServers } from '../../store/slices/mcpSlice';
+import { setSkills } from '../../store/slices/skillSlice';
 import { McpMarketplaceCategoryInfo,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../../types/mcp';
 import {
   CARD_SECONDARY_PILL_CLASS,
@@ -41,12 +44,12 @@ import {
   getServerAnalyticsParams,
   reportMcpAction,
 } from './analytics';
+import ConnectorDialog from './ConnectorDialog';
 import McpCard from './McpCard';
 import McpDetailModal, { type McpDetailInfoRow, type McpDetailStat } from './McpDetailModal';
 import McpServerFormModal from './McpServerFormModal';
 import { MCP_TAB_ORDER, McpTab } from './mcpTabs';
 import { describeMcpToolFilter } from './mcpToolFilterLabels';
-import TdxConnectDialog from './TdxConnectDialog';
 
 const TRANSPORT_BADGE_CLASS = 'shrink-0 rounded bg-surface-raised px-1.5 py-0.5 font-medium';
 
@@ -154,14 +157,15 @@ const McpManager: React.FC = () => {
   // Set once the first `mcp status` read finishes. If that read fails, the sign-in
   // button still appears, since it is then the only way to get a token.
   const [oauthStatusReady, setOAuthStatusReady] = useState(false);
-  const tdxAttempt = useRef<{ cancelled: boolean; serverId?: string } | null>(null);
-  const cancelTdxAttempt = useCallback(() => {
-    const attempt = tdxAttempt.current;
+  const connectionAttempt = useRef<{ cancelled: boolean; serverId?: string; cliId?: string } | null>(null);
+  const cancelConnectionAttempt = useCallback(() => {
+    const attempt = connectionAttempt.current;
     if (!attempt) return;
     attempt.cancelled = true;
+    if (attempt.cliId) void window.electron.mcp.cancelCli(attempt.cliId);
     if (attempt.serverId) void mcpService.oauthCancel(attempt.serverId);
   }, []);
-  useEffect(() => cancelTdxAttempt, [cancelTdxAttempt]);
+  useEffect(() => cancelConnectionAttempt, [cancelConnectionAttempt]);
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   // First frame renders the cached copy of the last fetch, so entries and
   // localized names don't visibly swap in when the live response lands. With
@@ -175,6 +179,20 @@ const McpManager: React.FC = () => {
   const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(() =>
     initialCache ? buildCategoryOptions(initialCache.categories) : mcpCategories,
   );
+  const skills = useSelector((state: RootState) => state.skill.skills);
+  const enabledSkills = useMemo(() => new Set(skills.filter(skill => skill.enabled).map(skill => skill.id)), [skills]);
+  useEffect(() => {
+    let active = true;
+    let read = 0;
+    const refresh = async () => {
+      const version = ++read;
+      const skills = await skillService.loadSkills();
+      if (active && version === read) dispatch(setSkills(skills));
+    };
+    const unsubscribe = skillService.onSkillsChanged(refresh);
+    void refresh();
+    return () => { active = false; unsubscribe(); };
+  }, [dispatch]);
   const currentLanguage = i18nService.getLanguage();
 
   useEffect(() => {
@@ -799,12 +817,14 @@ const McpManager: React.FC = () => {
    */
   const handleInstallOAuthRegistryEntry = async (entry: McpRegistryEntry) => {
     setActionError('');
-    if (servers.some(server => server.name === entry.name)) {
+    const name = entry.id === 'notion-oauth' && servers.some(server => server.name === entry.name)
+      ? entry.name + ' (OAuth)' : entry.name;
+    if (servers.some(server => server.name === name)) {
       setActionError(i18nService.t('mcpNameExists'));
       return;
     }
     const built = buildOAuthRegistryInstallData(entry, {
-      name: entry.name,
+      name,
       description: getRegistryEntryDescription(entry),
     });
     if (!built.ok) {
@@ -829,10 +849,10 @@ const McpManager: React.FC = () => {
     }
   };
 
-  const connectTdx = async (entry: McpRegistryEntry, example?: string) => {
-    if (tdxAttempt.current) return;
-    const attempt: { cancelled: boolean; serverId?: string } = { cancelled: false };
-    tdxAttempt.current = attempt;
+  const connectOAuthEntry = async (entry: McpRegistryEntry, example?: string) => {
+    if (connectionAttempt.current) return;
+    const attempt: { cancelled: boolean; serverId?: string; cliId?: string } = { cancelled: false };
+    connectionAttempt.current = attempt;
     setActionError('');
     try {
       let server = servers.find(item => item.registryId === entry.id);
@@ -853,7 +873,43 @@ const McpManager: React.FC = () => {
     } catch (error) {
       setActionError(error instanceof Error ? error.message : i18nService.t('mcpOAuthSignInFailed'));
     } finally {
-      tdxAttempt.current = null;
+      connectionAttempt.current = null;
+    }
+  };
+
+  const connectCliEntry = async (entry: McpRegistryEntry, example?: string) => {
+    if (connectionAttempt.current || !isCliConnectorId(entry.id)) return;
+    const attempt = { cancelled: false, cliId: entry.id };
+    connectionAttempt.current = attempt;
+    setConnectingRegistryId(entry.id);
+    setActionError('');
+    try {
+      const guided = entry.id === 'baidu-drive';
+      if (!guided) await window.electron.mcp.connectCli(entry.id);
+      if (attempt.cancelled) return;
+      const skills = await skillService.setSkillEnabled(entry.id, true);
+      if (!skills.some(skill => skill.id === entry.id && skill.enabled)) throw new Error(i18nService.t('mcpCreateFailed'));
+      dispatch(setSkills(skills));
+      if (attempt.cancelled) return;
+      const prompt = example || (guided ? i18nService.t('mcpBaiduLoginPrompt') : '');
+      if (prompt) {
+        setDetailTarget(null);
+        window.dispatchEvent(new CustomEvent('app:ask-ai', { detail: { text: prompt, skillId: entry.id } }));
+      }
+    } catch (error) {
+      if (!attempt.cancelled) setActionError(error instanceof Error ? error.message : i18nService.t('mcpOAuthSignInFailed'));
+    } finally {
+      connectionAttempt.current = null;
+      setConnectingRegistryId(null);
+    }
+  };
+
+  const disableCliEntry = async (id: string) => {
+    try {
+      const skills = await skillService.setSkillEnabled(id, false);
+      dispatch(setSkills(skills));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : i18nService.t('mcpUpdateFailed'));
     }
   };
 
@@ -1005,7 +1061,7 @@ const McpManager: React.FC = () => {
 
   const openServerDetail = (server: McpServerConfig) => {
     const entry = getRegistryEntryForServer(server);
-    if (entry?.id === 'tdx' && isOAuthRegistryEntry(entry)) {
+    if (entry && isOAuthRegistryEntry(entry) && isOAuthRemoteServer(server)) {
       openMarketplaceDetail(entry);
       return;
     }
@@ -1397,26 +1453,33 @@ const McpManager: React.FC = () => {
     );
   };
 
+  const installedCli = dynamicRegistry.filter(entry => entry.transportType === 'skill' && enabledSkills.has(entry.id));
+  const filteredCli = filteredMarketplace.filter(entry => entry.transportType === 'skill' && enabledSkills.has(entry.id));
+
   const renderMarketplaceDetail = (entry: McpRegistryEntry) => {
     const isInstalled = installedRegistryIds.has(entry.id);
     const isConnecting = connectingRegistryId === entry.id;
     const installedServers = servers.filter(server => server.registryId === entry.id);
-    if (entry.id === 'tdx' && isOAuthRegistryEntry(entry)) {
-      const server = installedServers[0];
+    if (entry.transportType === 'skill' || isOAuthRegistryEntry(entry)) {
+      const cli = entry.transportType === 'skill';
+      const server = installedServers.find(isOAuthRemoteServer);
       return (
-        <TdxConnectDialog
+        <ConnectorDialog
           title={getRegistryEntryName(entry)}
           icon={entry.icon}
           description={getRegistryEntryDescription(entry)}
           examples={getRegistryEntryExamples(entry, currentLanguage) ?? []}
-          connected={Boolean(server && getOAuthPhase(server) === OAuthPhase.SignedIn)}
+          connectLabel={entry.id === 'baidu-drive' ? i18nService.t('mcpConnectInChat') : undefined}
+          disconnectLabel={cli ? i18nService.t('mcpDisableConnector') : undefined}
+          onReconnect={cli && enabledSkills.has(entry.id) ? () => { void connectCliEntry(entry); } : undefined}
+          connected={cli ? enabledSkills.has(entry.id) : Boolean(server && getOAuthPhase(server) === OAuthPhase.SignedIn)}
           busy={isConnecting || Boolean(server && signingInServerId === server.id)}
           error={actionError}
-          onConnect={example => { void connectTdx(entry, example); }}
-          onDisconnect={() => { if (server) void handleOAuthSignOut(server); }}
-          onCancel={cancelTdxAttempt}
+          onConnect={example => { if (cli) void connectCliEntry(entry, example); else void connectOAuthEntry(entry, example); }}
+          onDisconnect={() => { if (cli) void disableCliEntry(entry.id); else if (server) void handleOAuthSignOut(server); }}
+          onCancel={cancelConnectionAttempt}
           onClose={() => {
-            cancelTdxAttempt();
+            cancelConnectionAttempt();
             setActionError('');
             closeDetail();
           }}
@@ -1561,7 +1624,7 @@ const McpManager: React.FC = () => {
               setActiveTab(targetTab);
             }}
             className={`mr-auto rounded-lg px-3 py-2 text-sm font-medium ${activeTab === McpTab.Installed ? 'bg-surface-raised text-foreground' : 'text-secondary'}`}>
-            {i18nService.t('mcpInstalled')} {installedItems.length}
+            {i18nService.t('mcpInstalled')} {installedItems.length + installedCli.length}
           </button>
           <div className="relative w-64 max-w-full min-w-0">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
@@ -1612,7 +1675,7 @@ const McpManager: React.FC = () => {
       <div>
       {/* ── Tab: Installed ──────────────────────────────── */}
       {activeTab === McpTab.Installed && (
-        filteredInstalled.length === 0 ? (
+        filteredInstalled.length + filteredCli.length === 0 ? (
           searchQuery.trim() ? (
             <div className="py-12 text-center text-sm text-secondary">
               {i18nService.t('mcpNoInstalledServers')}
@@ -1650,6 +1713,10 @@ const McpManager: React.FC = () => {
           )
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,230px),1fr))] gap-3">
+            {filteredCli.map(entry => (
+              <McpCard key={entry.id} title={getRegistryEntryName(entry)} icon={entry.icon}
+                description={getRegistryEntryDescription(entry)} onOpenDetail={() => openMarketplaceDetail(entry)} />
+            ))}
             {filteredInstalled.map((item) => {
               if (item.kind === 'registryGroup') {
                 const groupName = getRegistryGroupName(item);
@@ -1732,7 +1799,7 @@ const McpManager: React.FC = () => {
               </div>
             ) : (
               filteredMarketplace.map((entry) => {
-                const isInstalled = installedRegistryIds.has(entry.id);
+                const isInstalled = entry.transportType === 'skill' ? enabledSkills.has(entry.id) : installedRegistryIds.has(entry.id);
                 const server = servers.find(item => item.registryId === entry.id);
                 const connected = server && getOAuthPhase(server) === OAuthPhase.SignedIn;
                 return (

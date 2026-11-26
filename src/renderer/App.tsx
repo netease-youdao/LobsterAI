@@ -1517,7 +1517,8 @@ const App: React.FC = () => {
   // Listen for ask-ai events: close settings, open a new chat, and pre-fill its input.
   useEffect(() => {
     const handler = (e: Event) => {
-      const text = (e as CustomEvent<string>).detail;
+      const detail = (e as CustomEvent<string | { text: string; skillId: string }>).detail;
+      const text = typeof detail === 'string' ? detail : detail?.text;
       if (typeof text !== 'string' || !text.trim()) {
         console.warn('[AskAI] ignored navigation request because the prompt was empty.');
         return;
@@ -1544,6 +1545,10 @@ const App: React.FC = () => {
         mode: CoworkCollaborationMode.Default,
       }));
       dispatch(setDraftPrompt({ sessionId: '__home__', draft: text }));
+      if (typeof detail === 'object' && typeof detail.skillId === 'string') {
+        dispatch(setActiveSkillIds([detail.skillId]));
+        dispatch(setDraftSkillIds({ draftKey: '__home__', skillIds: [detail.skillId] }));
+      }
       dispatch(clearDraftAttachments('__home__'));
       dispatch(clearDraftSelectedTextSnippets('__home__'));
       setShowSettings(false);

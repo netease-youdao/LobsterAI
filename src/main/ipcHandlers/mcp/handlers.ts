@@ -11,12 +11,14 @@ import {
   McpOAuthState,
   type McpOAuthStatusResult,
 } from '../../../shared/mcp/auth';
+import { isCliConnectorId } from '../../../shared/mcp/cliConnector';
 import { McpIpcChannel } from '../../../shared/mcp/constants';
 import {
   McpToolDiscoveryErrorCode,
   type McpToolDiscoveryResult,
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
+import { connectCliAccount } from '../../mcp/cliMarketplaceLogin';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthClientCredentials,
@@ -59,6 +61,7 @@ const INVALID_URL_ERROR = 'MCP server URL must be an absolute HTTP or HTTPS URL.
 const OAUTH_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 const oauthLoginControllers = new Map<string, AbortController>();
+const cliLogins = new Map<string, AbortController>();
 
 function cancelMcpOAuthLogin(id: string): void {
   oauthLoginControllers.get(id)?.abort();
@@ -66,6 +69,7 @@ function cancelMcpOAuthLogin(id: string): void {
 
 export function cancelAllMcpOAuthLogins(): void {
   for (const controller of oauthLoginControllers.values()) controller.abort();
+  for (const controller of cliLogins.values()) controller.abort();
 }
 
 async function openAuthorizationUrl(url: string): Promise<void> {
@@ -331,6 +335,22 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     cancelMcpOAuthLogin(server.id);
     getMcpOAuthManager()?.deleteToken(server.id);
   };
+
+  ipcMain.handle(McpIpcChannel.CancelCli, (_, id: string) => cliLogins.get(id)?.abort());
+  ipcMain.handle(McpIpcChannel.ConnectCli, async (event, id: string) => {
+    if (!isCliConnectorId(id) || id === 'baidu-drive') throw new Error('Unknown CLI connector');
+    if (cliLogins.has(id)) throw new Error('授权正在进行中');
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    event.sender.once('destroyed', cancel);
+    cliLogins.set(id, controller);
+    try {
+      await connectCliAccount(id, AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)]));
+    } finally {
+      event.sender.removeListener('destroyed', cancel);
+      cliLogins.delete(id);
+    }
+  });
 
   ipcMain.handle(McpIpcChannel.List, () => {
     try {

@@ -91,7 +91,7 @@ export interface McpRegistryEntry {
   description_en?: string;       // English description (remote data)
   category: McpCategory;         // category tag
   categoryKey: string;           // i18n translation key for category
-  transportType: McpTransportType;
+  transportType: McpTransportType | 'skill';
   command: string;               // default command, e.g. 'npx'; empty for remote entries
   defaultArgs: string[];         // default arguments
   requiredEnvKeys?: string[];    // env vars the user must fill
@@ -99,6 +99,7 @@ export interface McpRegistryEntry {
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
   oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
   kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
+  featured?: boolean;
   marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
   connector?: McpMarketplaceConnector; // remote URL/auth/credential form, tool allowlist, examples
 }

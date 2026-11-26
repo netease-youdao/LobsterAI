@@ -18,7 +18,17 @@ const MARKETPLACE_CACHE_KEY = 'mcpMarketplaceCache.v1';
 
 interface MarketplaceCachePayload {
   servers: McpMarketplaceServer[];
+  featuredConnectors?: McpMarketplaceServer[];
   categories: McpMarketplaceCategoryInfo[];
+}
+
+function marketplaceEntries(payload: MarketplaceCachePayload): McpRegistryEntry[] {
+  const featured = convertMarketplaceToRegistry(Array.isArray(payload.featuredConnectors) ? payload.featuredConnectors : [])
+    .map(entry => ({ ...entry, featured: true }));
+  const replaced = new Set(featured.map(entry => entry.id));
+  if (replaced.has('connector-github')) replaced.add('github');
+  if (replaced.has('notion-oauth')) replaced.add('notion');
+  return [...featured, ...convertMarketplaceToRegistry(payload.servers).filter(entry => !replaced.has(entry.id))];
 }
 
 function readMarketplaceCache(): MarketplaceCachePayload | null {
@@ -285,7 +295,7 @@ class McpService {
       const result = await window.electron.mcp.fetchMarketplace();
       if (result.success && result.data) {
         writeMarketplaceCache(result.data);
-        const registry = convertMarketplaceToRegistry(result.data.servers);
+        const registry = marketplaceEntries(result.data);
         return { registry, categories: result.data.categories };
       }
       return null;
@@ -303,7 +313,7 @@ class McpService {
     const cached = readMarketplaceCache();
     if (!cached) return null;
     return {
-      registry: convertMarketplaceToRegistry(cached.servers),
+      registry: marketplaceEntries(cached),
       categories: cached.categories,
     };
   }

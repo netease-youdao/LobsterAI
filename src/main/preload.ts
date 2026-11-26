@@ -352,6 +352,8 @@ contextBridge.exposeInMainWorld('electron', {
     fetchMarketplace: () => ipcRenderer.invoke(McpIpcChannel.FetchMarketplace),
     connectQichacha: () => ipcRenderer.invoke(McpIpcChannel.ConnectQichacha),
     oauthLogin: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthLogin, id),
+    connectCli: (id: string) => ipcRenderer.invoke(McpIpcChannel.ConnectCli, id),
+    cancelCli: (id: string) => ipcRenderer.invoke(McpIpcChannel.CancelCli, id),
     oauthCancel: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthCancel, id),
     oauthLogout: (id: string) => ipcRenderer.invoke(McpIpcChannel.OAuthLogout, id),
     oauthStatus: () => ipcRenderer.invoke(McpIpcChannel.OAuthStatus),

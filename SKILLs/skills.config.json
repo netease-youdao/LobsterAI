@@ -20,6 +20,11 @@
     "imap-smtp-email": { "order": 211, "enabled": true },
     "skin-creator": { "order": 214, "enabled": false },
     "youdaonote": { "order": 298, "enabled": true },
+    "connector-wecom": { "enabled": false },
+    "connector-feishu": { "enabled": false },
+    "connector-dingtalk": { "enabled": false },
+    "connector-github": { "enabled": false },
+    "baidu-drive": { "enabled": false },
     "skill-creator": { "order": 300, "enabled": true }
   }
 }

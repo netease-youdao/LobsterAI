@@ -182,7 +182,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setParallelToolCalls(server.supportsParallelToolCalls === true);
       // Open the advanced section when it holds something the checklist can't show.
       setShowAdvanced(!isPlainExcludeFilter(server.toolFilter) || server.supportsParallelToolCalls === true);
-    } else if (registryEntry) {
+    } else if (registryEntry && registryEntry.transportType !== 'skill') {
       // Registry install mode — pre-fill from template
       setName(registryEntry.name);
       const registryDescription =

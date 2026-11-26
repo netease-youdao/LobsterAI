@@ -581,6 +581,7 @@ interface McpMarketplaceCategory {
 }
 
 interface McpMarketplaceData {
+  featuredConnectors?: McpMarketplaceServer[];
   categories: McpMarketplaceCategory[];
   servers: McpMarketplaceServer[];
 }
@@ -822,6 +823,8 @@ interface IElectronAPI {
       servers?: McpServerConfigIPC[];
       error?: string;
     }>;
+    connectCli: (id: string) => Promise<void>;
+    cancelCli: (id: string) => Promise<void>;
     oauthLogin: (id: string) => Promise<McpOAuthActionResult>;
     oauthCancel: (id: string) => Promise<boolean>;
     oauthLogout: (id: string) => Promise<McpOAuthActionResult>;

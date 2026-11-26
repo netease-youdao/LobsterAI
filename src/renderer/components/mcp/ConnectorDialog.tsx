@@ -12,14 +12,17 @@ interface Props {
   examples: string[];
   connected: boolean;
   busy: boolean;
+  connectLabel?: string;
+  disconnectLabel?: string;
   error: string;
   onConnect: (example?: string) => void;
   onDisconnect: () => void;
+  onReconnect?: () => void;
   onCancel: () => void;
   onClose: () => void;
 }
 
-export default function TdxConnectDialog(props: Props) {
+export default function ConnectorDialog(props: Props) {
   const t = (key: string) => i18nService.t(key);
   return createPortal(
     <Modal onClose={props.onClose} onEscape={props.onClose}
@@ -43,11 +46,16 @@ export default function TdxConnectDialog(props: Props) {
           </button>
         ) : props.connected ? (
           <button type="button" onClick={props.onDisconnect} className="rounded-lg bg-surface-raised px-4 py-2 text-sm">
-            {t('mcpConnected')} · {t('mcpOAuthSignOut')}
+            {props.disconnectLabel ?? (t('mcpConnected') + ' · ' + t('mcpOAuthSignOut'))}
           </button>
         ) : (
           <button type="button" onClick={() => props.onConnect()} className="rounded-lg bg-action px-5 py-2 text-sm text-action-foreground">
-            {t('mcpConnectAction')}
+            {props.connectLabel ?? t('mcpConnectAction')}
+          </button>
+        )}
+        {props.onReconnect && !props.busy && (
+          <button type="button" onClick={props.onReconnect} className="text-sm underline">
+            {props.connectLabel ?? t('mcpOAuthSignIn')}
           </button>
         )}
         {props.error && <p role="alert" className="text-sm text-red-500">{props.error}</p>}
