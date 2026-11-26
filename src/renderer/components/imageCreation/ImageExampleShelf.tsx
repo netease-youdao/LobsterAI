@@ -27,7 +27,7 @@ export default function ImageExampleShelf({ catalog, onSelect }: {
         data-image-example={example.id} title={example.title[language]} aria-label={`${example.title[language]} · ${t('imageCreationPreview')}`}
         className={`group min-w-0 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-4 focus-visible:ring-offset-background ${hiddenWhenNarrow(index)}`}>
         <ImageExampleThumbnail example={example} alt="" referenceAlt="" />
-        <p className="mt-2 truncate px-0.5 text-[13px] font-medium leading-5 text-foreground">{example.title[language]}</p>
+        <p className="mt-2 truncate px-0.5 text-xs font-medium leading-5 text-foreground">{example.title[language]}</p>
       </button>)}
     </div>
   </div>;

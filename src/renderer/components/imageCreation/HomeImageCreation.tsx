@@ -70,7 +70,7 @@ export default function HomeImageCreation({ actions, selectedActionId, onActionS
           aria-controls="image-creation-gallery"
           data-image-creation-tab={ImageCreation.TabId}
           onClick={() => { if (selectedActionId) onDeselect(); setExpanded(!visible); }}
-          icon={<PhotoIcon className="h-[22px] w-[22px]" strokeWidth={1.8} />}
+          icon={<PhotoIcon className="h-6 w-6" strokeWidth={1.75} />}
           iconAccentClassName="text-amber-500 dark:text-amber-400"
           label={t('imageCreationTab')}
         />

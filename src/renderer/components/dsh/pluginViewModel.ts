@@ -9,12 +9,13 @@ import {
   DshHostPhase,
   DshPluginSurface,
 } from '../../../shared/dshEngine/hostConstants';
-import type {
-  DshPluginEntry,
-  DshPluginInspectResult,
-  DshPluginLocalizedText,
-  DshPluginMutationResult,
-  DshPluginRegistriesResult,
+import {
+  type DshPluginEntry,
+  type DshPluginInspectResult,
+  type DshPluginLocalizedText,
+  type DshPluginMutationResult,
+  type DshPluginRegistriesResult,
+  sanitizeDshPluginOrder,
 } from '../../services/dshHost';
 
 export const OFFICIAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
@@ -85,12 +86,94 @@ export function resolvePluginDisplayTitle(
   return plugin.name;
 }
 
+export const MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS = 2;
+
+export const SidebarPluginPlacement = {
+  Pinned: 'pinned',
+  Overflow: 'overflow',
+} as const;
+export type SidebarPluginPlacement =
+  typeof SidebarPluginPlacement[keyof typeof SidebarPluginPlacement];
+
 export interface SidebarPluginPanelItem {
   name: string;
   panelId: string;
   title: string;
   icon?: string;
   description?: string;
+}
+
+export interface PartitionedSidebarPluginPanels {
+  visiblePanels: SidebarPluginPanelItem[];
+  overflowPanels: SidebarPluginPanelItem[];
+}
+
+export function sortPluginsByDisplayOrder(
+  plugins: readonly DshPluginEntry[],
+  displayOrder: readonly string[],
+): DshPluginEntry[] {
+  const normalizedOrder = sanitizeDshPluginOrder(displayOrder);
+  if (normalizedOrder.length === 0 || plugins.length <= 1) {
+    return [...plugins];
+  }
+  const rankByName = new Map<string, number>();
+  normalizedOrder.forEach((name, index) => {
+    rankByName.set(name, index);
+  });
+  return plugins
+    .map((plugin, index) => ({
+      plugin,
+      index,
+      rank: rankByName.get(plugin.name),
+    }))
+    .sort((a, b) => {
+      if (a.rank !== undefined && b.rank !== undefined) {
+        return a.rank - b.rank;
+      }
+      if (a.rank !== undefined) return -1;
+      if (b.rank !== undefined) return 1;
+      return a.index - b.index;
+    })
+    .map((item) => item.plugin);
+}
+
+export function resolveSidebarPluginPlacement(
+  orderedPlugins: readonly DshPluginEntry[],
+  maxVisible: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
+): Record<string, SidebarPluginPlacement> {
+  const safeMax = Math.max(0, Math.floor(maxVisible));
+  const placement: Record<string, SidebarPluginPlacement> = {};
+  const seenPanelIds = new Set<string>();
+  let visibleIndex = 0;
+  for (const plugin of orderedPlugins) {
+    if (plugin.managed || !plugin.enabled || plugin.isThemePlugin) continue;
+    const panelId = plugin.panelId?.trim();
+    if (!panelId || seenPanelIds.has(panelId)) continue;
+    seenPanelIds.add(panelId);
+    placement[plugin.name] =
+      visibleIndex < safeMax
+        ? SidebarPluginPlacement.Pinned
+        : SidebarPluginPlacement.Overflow;
+    visibleIndex += 1;
+  }
+  return placement;
+}
+
+export function partitionSidebarPluginPanels(
+  panels: readonly SidebarPluginPanelItem[],
+  maxVisible: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
+): PartitionedSidebarPluginPanels {
+  const safeMax = Math.max(0, Math.floor(maxVisible));
+  if (panels.length <= safeMax) {
+    return {
+      visiblePanels: [...panels],
+      overflowPanels: [],
+    };
+  }
+  return {
+    visiblePanels: panels.slice(0, safeMax),
+    overflowPanels: panels.slice(safeMax),
+  };
 }
 
 export function getSidebarPluginPanels(

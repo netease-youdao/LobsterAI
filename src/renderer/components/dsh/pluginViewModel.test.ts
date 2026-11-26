@@ -6,7 +6,7 @@ import {
   DshHostPhase,
   DshPluginSurface,
 } from '../../../shared/dshEngine/hostConstants';
-import type { DshPluginEntry } from '../../services/dshHost';
+import { type DshPluginEntry, sanitizeDshPluginOrder } from '../../services/dshHost';
 import {
   buildDshEmbeddedPluginHash,
   buildDshEmbeddedPluginUrl,
@@ -15,9 +15,11 @@ import {
   getSidebarPluginPanels,
   isHostPhaseHealthy,
   isWebOnlyOrThemeInspection,
+  MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
   NPMMIRROR_REGISTRY,
   OFFICIAL_NPM_REGISTRY,
   partitionPlugins,
+  partitionSidebarPluginPanels,
   RegistryPreset,
   resolveEffectiveRegistryUrl,
   resolveHostPhaseLabelKey,
@@ -25,6 +27,9 @@ import {
   resolveMutationErrorMessage,
   resolvePluginDisplayDescription,
   resolvePluginDisplayTitle,
+  resolveSidebarPluginPlacement,
+  SidebarPluginPlacement,
+  sortPluginsByDisplayOrder,
 } from './pluginViewModel';
 
 const identityT = (key: string) => key;
@@ -205,6 +210,88 @@ describe('pluginViewModel', () => {
         title: '自媒体工作台',
       },
     ]);
+  });
+
+  test('partitions sidebar plugin panels when count exceeds the visible cap', () => {
+    const panels = [
+      { name: 'plugin-a', panelId: 'panel-a', title: 'Plugin A' },
+      { name: 'plugin-b', panelId: 'panel-b', title: 'Plugin B' },
+      { name: 'plugin-c', panelId: 'panel-c', title: 'Plugin C' },
+      { name: 'plugin-d', panelId: 'panel-d', title: 'Plugin D' },
+    ];
+
+    expect(MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS).toBe(2);
+    expect(partitionSidebarPluginPanels([])).toEqual({
+      visiblePanels: [],
+      overflowPanels: [],
+    });
+    expect(partitionSidebarPluginPanels(panels.slice(0, 1))).toEqual({
+      visiblePanels: panels.slice(0, 1),
+      overflowPanels: [],
+    });
+    expect(partitionSidebarPluginPanels(panels.slice(0, 2))).toEqual({
+      visiblePanels: panels.slice(0, 2),
+      overflowPanels: [],
+    });
+    expect(partitionSidebarPluginPanels(panels.slice(0, 3))).toEqual({
+      visiblePanels: panels.slice(0, 2),
+      overflowPanels: panels.slice(2, 3),
+    });
+    expect(partitionSidebarPluginPanels(panels)).toEqual({
+      visiblePanels: panels.slice(0, 2),
+      overflowPanels: panels.slice(2),
+    });
+    expect(partitionSidebarPluginPanels(panels, 0)).toEqual({
+      visiblePanels: [],
+      overflowPanels: panels,
+    });
+    expect(partitionSidebarPluginPanels(panels, -3)).toEqual({
+      visiblePanels: [],
+      overflowPanels: panels,
+    });
+  });
+
+  test('sanitizes saved plugin order and sorts plugins stably with new entries appended', () => {
+    expect(sanitizeDshPluginOrder([' a ', '', 'b', 'a', 123, null, 'c'])).toEqual(['a', 'b', 'c']);
+    expect(sanitizeDshPluginOrder('not-an-array')).toEqual([]);
+
+    const plugins: DshPluginEntry[] = [
+      { name: 'plugin-a', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'a' },
+      { name: 'plugin-b', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'b' },
+      { name: 'plugin-c', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'c' },
+      { name: 'plugin-d', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'd' },
+    ];
+
+    expect(
+      sortPluginsByDisplayOrder(plugins, ['plugin-c', 'removed-plugin', 'plugin-a']).map((p) => p.name),
+    ).toEqual(['plugin-c', 'plugin-a', 'plugin-b', 'plugin-d']);
+
+    expect(sortPluginsByDisplayOrder(plugins, []).map((p) => p.name)).toEqual([
+      'plugin-a',
+      'plugin-b',
+      'plugin-c',
+      'plugin-d',
+    ]);
+  });
+
+  test('resolves sidebar pinned vs overflow placement ignoring non-panel, theme, disabled, and managed plugins', () => {
+    const orderedPlugins: DshPluginEntry[] = [
+      { name: 'cli-tool', specifier: '^1.0.0', managed: false, enabled: true },
+      { name: 'disabled-panel', specifier: '^1.0.0', managed: false, enabled: false, panelId: 'disabled' },
+      { name: 'theme-plugin', specifier: '^1.0.0', managed: false, enabled: true, isThemePlugin: true, panelId: 'theme' },
+      { name: 'panel-1', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'p1' },
+      { name: 'managed-core', specifier: 'bundled', managed: true, enabled: true, panelId: 'core' },
+      { name: 'panel-2', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'p2' },
+      { name: 'panel-3', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'p3' },
+      { name: 'panel-4', specifier: '^1.0.0', managed: false, enabled: true, panelId: 'p4' },
+    ];
+
+    expect(resolveSidebarPluginPlacement(orderedPlugins)).toEqual({
+      'panel-1': SidebarPluginPlacement.Pinned,
+      'panel-2': SidebarPluginPlacement.Pinned,
+      'panel-3': SidebarPluginPlacement.Overflow,
+      'panel-4': SidebarPluginPlacement.Overflow,
+    });
   });
 
   test('builds chromeless embed hashes and URLs preserving auth token query', () => {

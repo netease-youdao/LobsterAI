@@ -1079,7 +1079,6 @@ describe('desktop companion lifecycle', () => {
       shortcut: '',
       skin: 'lobster',
       selectionToolbar: true,
-      dragAssist: true,
       contextHints: true,
       selectionExcludedApps: [],
       selectionToolbarOrder: [...DEFAULT_COMPANION_TOOLBAR_ORDER],
@@ -2085,12 +2084,12 @@ describe('stage: on-demand context and drops', () => {
     expect(manager.getState().stage).toMatchObject({ files: [], kinds: [CompanionFileKind.Image] });
   });
 
-  test('turning off drag assistance immediately dismisses an open strip', () => {
+  test('turning off the orb immediately dismisses an open drop strip', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
     dragOverOrb(DesktopCompanionFileDragPhase.Enter);
-    manager.setPreferences({ dragAssist: false });
+    manager.setPreferences({ enabled: false });
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
     expect(manager.getState().fileDragActive).toBe(false);
     dragOverOrb(DesktopCompanionFileDragPhase.Enter);
@@ -2579,12 +2578,14 @@ describe('stage: on-demand context and drops', () => {
     expect(manager.getState().foreground).toEqual({ appId: 'com.microsoft.Excel', category: 'spreadsheet' });
   });
 
-  test('drag detection and drops stay off when the drop zone is disabled', () => {
+  test('legacy dragAssist: false preference keeps file drag assistance enabled by default', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, dragAssist: false });
     create();
-    expect(fileDrag.start).not.toHaveBeenCalled();
+    expect(fileDrag.start).toHaveBeenCalled();
     fileDrag.emit(FileDragEvent.Start, { paths: ['/tmp/a.pdf'] });
-    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    expect(manager.getState().fileDragActive).toBe(true);
+    dragOverOrb(DesktopCompanionFileDragPhase.Enter);
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.Drop);
   });
 });
 

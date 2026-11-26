@@ -86,7 +86,7 @@ export default function PptExampleGallery({ examples, full = false, busy, onSele
           {full ? (
             <div className="mt-2 px-0.5">
               <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-[13px] font-medium leading-5 text-foreground">
+                <p className="truncate text-xs font-medium leading-5 text-foreground">
                   {example.title[language]}
                 </p>
                 <span className="shrink-0 text-[11px] text-secondary">
@@ -98,7 +98,7 @@ export default function PptExampleGallery({ examples, full = false, busy, onSele
               </p>
             </div>
           ) : (
-            <p className="mt-2 truncate px-0.5 text-[13px] font-medium leading-5 text-foreground">
+            <p className="mt-2 truncate px-0.5 text-xs font-medium leading-5 text-foreground">
               {example.title[language]}
             </p>
           )}

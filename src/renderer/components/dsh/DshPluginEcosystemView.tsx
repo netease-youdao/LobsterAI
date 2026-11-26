@@ -1,4 +1,19 @@
 import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
   ArrowTopRightOnSquareIcon,
@@ -18,12 +33,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   dispatchOpenEmbeddedPlugin,
+  DSH_PLUGIN_ORDER_CHANGED_EVENT,
   dshHostService,
   type DshHostStatusSnapshot,
   type DshPluginEntry,
   type DshPluginMutationResult,
+  type DshPluginOrderChangedDetail,
   type DshPluginUpdateOutcome,
   type DshPluginVersionList,
+  loadDshPluginOrder,
+  saveDshPluginOrder,
 } from '@/services/dshHost';
 import { i18nService } from '@/services/i18n';
 
@@ -57,12 +76,17 @@ import {
 import {
   formatPluginVersion,
   isHostPhaseHealthy,
+  MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
   partitionPlugins,
   resolveHostPhaseLabelKey,
   resolveMutationErrorMessage,
   resolvePluginDisplayDescription,
   resolvePluginDisplayTitle,
+  resolveSidebarPluginPlacement,
+  SidebarPluginPlacement,
+  sortPluginsByDisplayOrder,
 } from './pluginViewModel';
+import { SortablePluginRow } from './SortablePluginRow';
 
 export const DshPluginEcosystemView: React.FC = () => {
   const t = (key: string) => i18nService.t(key);
@@ -70,6 +94,7 @@ export const DshPluginEcosystemView: React.FC = () => {
 
   const [status, setStatus] = useState<DshHostStatusSnapshot | null>(null);
   const [plugins, setPlugins] = useState<DshPluginEntry[]>([]);
+  const [pluginOrder, setPluginOrder] = useState<string[]>([]);
   const [cliShimPath, setCliShimPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -135,6 +160,24 @@ export const DshPluginEcosystemView: React.FC = () => {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let active = true;
+    void loadDshPluginOrder().then((order) => {
+      if (active) setPluginOrder(order);
+    });
+    const handleOrderChanged = (event: Event) => {
+      const detail = (event as CustomEvent<DshPluginOrderChangedDetail>).detail;
+      if (detail?.order) {
+        setPluginOrder(detail.order);
+      }
+    };
+    window.addEventListener(DSH_PLUGIN_ORDER_CHANGED_EVENT, handleOrderChanged);
+    return () => {
+      active = false;
+      window.removeEventListener(DSH_PLUGIN_ORDER_CHANGED_EVENT, handleOrderChanged);
+    };
+  }, []);
+
   // Sync plugin list when changed externally (e.g. built-in CLI or DSH Web view).
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -175,7 +218,40 @@ export const DshPluginEcosystemView: React.FC = () => {
     };
   }, [moreMenuOpen]);
 
-  const { userPlugins, coreComponents } = useMemo(() => partitionPlugins(plugins), [plugins]);
+  const { userPlugins: rawUserPlugins, coreComponents } = useMemo(
+    () => partitionPlugins(plugins),
+    [plugins],
+  );
+  const userPlugins = useMemo(
+    () => sortPluginsByDisplayOrder(rawUserPlugins, pluginOrder),
+    [rawUserPlugins, pluginOrder],
+  );
+  const sidebarPlacementByName = useMemo(
+    () => resolveSidebarPluginPlacement(userPlugins),
+    [userPlugins],
+  );
+  const sidebarPanelCount = Object.keys(sidebarPlacementByName).length;
+  const hasSidebarOverflow = sidebarPanelCount > MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS;
+  const canReorderPlugins = userPlugins.length > 1;
+  const isReorderDisabled =
+    !canReorderPlugins || busyPlugin !== null || restarting || updateTarget !== null;
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const handlePluginDragEnd = useCallback(
+    ({ active, over }: DragEndEvent) => {
+      if (!over || active.id === over.id || isReorderDisabled) return;
+      const ids = userPlugins.map((plugin) => plugin.name);
+      const oldIndex = ids.indexOf(String(active.id));
+      const newIndex = ids.indexOf(String(over.id));
+      if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
+      const nextOrder = arrayMove(ids, oldIndex, newIndex);
+      setPluginOrder(nextOrder);
+      void saveDshPluginOrder(nextOrder);
+    },
+    [isReorderDisabled, userPlugins],
+  );
   const updatablePlugins = useMemo(
     () => userPlugins.filter(isRegistryUpdatablePlugin),
     [userPlugins],
@@ -614,23 +690,30 @@ export const DshPluginEcosystemView: React.FC = () => {
 
       {/* User Installed Plugins Section */}
       <section className="space-y-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-secondary">
-            {t('dshPluginsInstalledHeading')}
-            {userPlugins.length > 0 ? ` (${userPlugins.length})` : ''}
-          </h4>
-          {batchUpdateSummary && (
-            <span
-              className={`text-xs ${
-                batchUpdateSummary.tone === BatchUpdateCheckSummaryTone.Info
-                  ? 'font-medium text-foreground'
-                  : batchUpdateSummary.tone === BatchUpdateCheckSummaryTone.Error
-                    ? 'text-red-600 dark:text-red-400'
-                    : 'text-secondary'
-              }`}
-            >
-              {batchUpdateSummary.text}
-            </span>
+        <div className="space-y-1 px-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-secondary">
+              {t('dshPluginsInstalledHeading')}
+              {userPlugins.length > 0 ? ` (${userPlugins.length})` : ''}
+            </h4>
+            {batchUpdateSummary && (
+              <span
+                className={`text-xs ${
+                  batchUpdateSummary.tone === BatchUpdateCheckSummaryTone.Info
+                    ? 'font-medium text-foreground'
+                    : batchUpdateSummary.tone === BatchUpdateCheckSummaryTone.Error
+                      ? 'text-red-600 dark:text-red-400'
+                      : 'text-secondary'
+                }`}
+              >
+                {batchUpdateSummary.text}
+              </span>
+            )}
+          </div>
+          {canReorderPlugins && (
+            <p className="text-xs text-secondary">
+              {t('dshPluginsReorderHint').replace('{count}', String(MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS))}
+            </p>
           )}
         </div>
 
@@ -660,239 +743,281 @@ export const DshPluginEcosystemView: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-border rounded-xl border border-border bg-surface">
-            {userPlugins.map((plugin) => {
-              const isBusy = busyPlugin === plugin.name;
-              const title = resolvePluginDisplayTitle(plugin, language, t);
-              const description = resolvePluginDisplayDescription(plugin, language);
-              const versionLabel = formatPluginVersion(plugin.version);
-              const showPackageNameSub = title !== plugin.name;
-              const isHybrid = plugin.surface === DshPluginSurface.Hybrid;
-              const isWebOnly = plugin.surface === DshPluginSurface.WebOnly;
-              const isRegistryUpdatable = isRegistryUpdatablePlugin(plugin);
-              const versionCheck = versionChecks[plugin.name];
-              const recommendedVersion = getPluginRecommendedVersion(versionCheck);
-              const recommendedVersionLabel = formatPluginVersion(recommendedVersion);
-              const checkedRegistry = getPluginVersionCheckRegistry(versionCheck);
-              const versionsExpanded = Boolean(expandedVersions[plugin.name]);
-              const isCheckingThis = versionCheck?.phase === 'checking';
-              const hasBlockedNewer =
-                !recommendedVersion
-                && versionCheck?.phase === 'done'
-                && versionCheck.list.status === 'listed'
-                && versionCheck.list.versions.length > 0;
-              const hasIncompatibleStable =
-                hasBlockedNewer
-                && versionCheck.phase === 'done'
-                && versionCheck.list.status === 'listed'
-                && versionCheck.list.versions.some((v) => !v.prerelease && v.incompatible !== undefined);
-              const checkFailed =
-                versionCheck?.phase === 'done' && versionCheck.list.status === 'refused';
+          <DndContext
+            sensors={dragSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handlePluginDragEnd}
+          >
+            <SortableContext
+              items={userPlugins.map((plugin) => plugin.name)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="divide-y divide-border rounded-xl border border-border bg-surface">
+                {userPlugins.map((plugin) => {
+                  const isBusy = busyPlugin === plugin.name;
+                  const title = resolvePluginDisplayTitle(plugin, language, t);
+                  const description = resolvePluginDisplayDescription(plugin, language);
+                  const versionLabel = formatPluginVersion(plugin.version);
+                  const showPackageNameSub = title !== plugin.name;
+                  const isHybrid = plugin.surface === DshPluginSurface.Hybrid;
+                  const isWebOnly = plugin.surface === DshPluginSurface.WebOnly;
+                  const sidebarPlacement = sidebarPlacementByName[plugin.name];
+                  const isRegistryUpdatable = isRegistryUpdatablePlugin(plugin);
+                  const versionCheck = versionChecks[plugin.name];
+                  const recommendedVersion = getPluginRecommendedVersion(versionCheck);
+                  const recommendedVersionLabel = formatPluginVersion(recommendedVersion);
+                  const checkedRegistry = getPluginVersionCheckRegistry(versionCheck);
+                  const versionsExpanded = Boolean(expandedVersions[plugin.name]);
+                  const isCheckingThis = versionCheck?.phase === 'checking';
+                  const hasBlockedNewer =
+                    !recommendedVersion
+                    && versionCheck?.phase === 'done'
+                    && versionCheck.list.status === 'listed'
+                    && versionCheck.list.versions.length > 0;
+                  const hasIncompatibleStable =
+                    hasBlockedNewer
+                    && versionCheck.phase === 'done'
+                    && versionCheck.list.status === 'listed'
+                    && versionCheck.list.versions.some((v) => !v.prerelease && v.incompatible !== undefined);
+                  const checkFailed =
+                    versionCheck?.phase === 'done' && versionCheck.list.status === 'refused';
 
-              return (
-                <div key={plugin.name} className="px-4 py-3.5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex min-w-0 flex-1 items-start gap-3">
-                      {/* Plugin Icon */}
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-raised">
-                        {plugin.icon ? (
-                          <img
-                            src={plugin.icon}
-                            alt=""
-                            className="h-6 w-6 object-contain"
-                          />
-                        ) : (
-                          <PuzzlePieceIcon className="h-4 w-4 text-secondary" />
-                        )}
-                      </div>
+                  return (
+                    <SortablePluginRow
+                      key={plugin.name}
+                      id={plugin.name}
+                      showHandle={canReorderPlugins}
+                      disabled={isReorderDisabled}
+                      dragHandleLabel={t('dshPluginsDragHandleLabel').replace('{name}', title)}
+                    >
+                      {(dragHandle) => (
+                        <>
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex min-w-0 flex-1 items-start gap-3">
+                              {dragHandle}
+                              {/* Plugin Icon */}
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-raised">
+                                {plugin.icon ? (
+                                  <img
+                                    src={plugin.icon}
+                                    alt=""
+                                    className="h-6 w-6 object-contain"
+                                  />
+                                ) : (
+                                  <PuzzlePieceIcon className="h-4 w-4 text-secondary" />
+                                )}
+                              </div>
 
-                      {/* Plugin Info */}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span
-                            className={`truncate font-medium text-foreground ${SETTINGS_ITEM_TITLE_TEXT}${
-                              plugin.enabled ? '' : ' opacity-60'
-                            }`}
-                          >
-                            {title}
-                          </span>
-                          {versionLabel && (
-                            <span className="rounded bg-surface-raised px-1.5 py-0.5 font-mono text-[11px] text-secondary">
-                              {versionLabel}
-                            </span>
-                          )}
-                          {recommendedVersion && recommendedVersionLabel && (
-                            <button
-                              type="button"
-                              disabled={!hostHealthy || busyPlugin !== null || restarting || updateTarget !== null}
-                              onClick={() =>
-                                handleOpenUpdateModal(plugin, recommendedVersion, checkedRegistry)
-                              }
-                              className="inline-flex items-center gap-1 rounded bg-action/15 px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-action/25 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              <span>→ {recommendedVersionLabel}</span>
-                            </button>
-                          )}
-                          {hasBlockedNewer && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleVersionsDrawer(plugin.name)}
-                              className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-400/25 dark:text-amber-300"
-                            >
-                              {hasIncompatibleStable
-                                ? t('dshPluginsBadgeIncompatibleUpdate')
-                                : t('dshPluginsBadgePrereleaseOnly')}
-                            </button>
-                          )}
-                          {checkFailed && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleVersionsDrawer(plugin.name)}
-                              className="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-500/25 dark:text-red-300"
-                            >
-                              {t('dshPluginsBadgeCheckFailed')}
-                            </button>
-                          )}
-                          {isHybrid && (
-                            <span
-                              title={t('dshPluginsHybridTooltip')}
-                              className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
-                            >
-                              {t('dshPluginsBadgeHybrid')}
-                            </span>
-                          )}
-                          {isWebOnly && (
-                            <span
-                              title={t('dshPluginsWebOnlyTooltip')}
-                              className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
-                            >
-                              {plugin.isThemePlugin
-                                ? t('dshPluginsBadgeWebTheme')
-                                : t('dshPluginsBadgeWebOnly')}
-                            </span>
-                          )}
-                          {plugin.errorCode && (
-                            <SettingsStatusBadge
-                              tone={SettingsStatusTone.Danger}
-                              label={t('dshPluginsBadgeError')}
-                              title={plugin.errorMessage || plugin.errorCode}
-                            />
-                          )}
-                        </div>
+                              {/* Plugin Info */}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span
+                                    className={`truncate font-medium text-foreground ${SETTINGS_ITEM_TITLE_TEXT}${
+                                      plugin.enabled ? '' : ' opacity-60'
+                                    }`}
+                                  >
+                                    {title}
+                                  </span>
+                                  {versionLabel && (
+                                    <span className="rounded bg-surface-raised px-1.5 py-0.5 font-mono text-[11px] text-secondary">
+                                      {versionLabel}
+                                    </span>
+                                  )}
+                                  {recommendedVersion && recommendedVersionLabel && (
+                                    <button
+                                      type="button"
+                                      disabled={!hostHealthy || busyPlugin !== null || restarting || updateTarget !== null}
+                                      onClick={() =>
+                                        handleOpenUpdateModal(plugin, recommendedVersion, checkedRegistry)
+                                      }
+                                      className="inline-flex items-center gap-1 rounded bg-action/15 px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-action/25 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      <span>→ {recommendedVersionLabel}</span>
+                                    </button>
+                                  )}
+                                  {hasBlockedNewer && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleVersionsDrawer(plugin.name)}
+                                      className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-400/25 dark:text-amber-300"
+                                    >
+                                      {hasIncompatibleStable
+                                        ? t('dshPluginsBadgeIncompatibleUpdate')
+                                        : t('dshPluginsBadgePrereleaseOnly')}
+                                    </button>
+                                  )}
+                                  {checkFailed && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleVersionsDrawer(plugin.name)}
+                                      className="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-500/25 dark:text-red-300"
+                                    >
+                                      {t('dshPluginsBadgeCheckFailed')}
+                                    </button>
+                                  )}
+                                  {hasSidebarOverflow && sidebarPlacement === SidebarPluginPlacement.Pinned && (
+                                    <span
+                                      title={t('dshPluginsSidebarPinnedTooltip')}
+                                      className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+                                    >
+                                      {t('dshPluginsSidebarPinnedBadge')}
+                                    </span>
+                                  )}
+                                  {hasSidebarOverflow && sidebarPlacement === SidebarPluginPlacement.Overflow && (
+                                    <span
+                                      title={t('dshPluginsSidebarOverflowTooltip').replace(
+                                        '{count}',
+                                        String(MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS),
+                                      )}
+                                      className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
+                                    >
+                                      {t('dshPluginsSidebarOverflowBadge')}
+                                    </span>
+                                  )}
+                                  {isHybrid && (
+                                    <span
+                                      title={t('dshPluginsHybridTooltip')}
+                                      className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
+                                    >
+                                      {t('dshPluginsBadgeHybrid')}
+                                    </span>
+                                  )}
+                                  {isWebOnly && (
+                                    <span
+                                      title={t('dshPluginsWebOnlyTooltip')}
+                                      className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+                                    >
+                                      {plugin.isThemePlugin
+                                        ? t('dshPluginsBadgeWebTheme')
+                                        : t('dshPluginsBadgeWebOnly')}
+                                    </span>
+                                  )}
+                                  {plugin.errorCode && (
+                                    <SettingsStatusBadge
+                                      tone={SettingsStatusTone.Danger}
+                                      label={t('dshPluginsBadgeError')}
+                                      title={plugin.errorMessage || plugin.errorCode}
+                                    />
+                                  )}
+                                </div>
 
-                        {description && (
-                          <p className={`mt-0.5 line-clamp-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                            {description}
-                          </p>
-                        )}
+                                {description && (
+                                  <p className={`mt-0.5 line-clamp-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+                                    {description}
+                                  </p>
+                                )}
 
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                          {showPackageNameSub && (
-                            <span className={`truncate font-mono ${SETTINGS_META_TEXT} text-secondary/80`}>
-                              {plugin.name}
-                            </span>
-                          )}
-                          {isRegistryUpdatable && hostHealthy && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleVersionsDrawer(plugin.name)}
-                              aria-expanded={versionsExpanded}
-                              className="inline-flex items-center gap-1 text-xs text-secondary transition-colors hover:text-foreground"
-                            >
-                              {isCheckingThis ? (
-                                <ArrowPathIcon className="h-3 w-3 animate-spin" />
-                              ) : versionsExpanded ? (
-                                <ChevronDownIcon className="h-3 w-3" />
-                              ) : (
-                                <ChevronRightIcon className="h-3 w-3" />
+                                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                  {showPackageNameSub && (
+                                    <span className={`truncate font-mono ${SETTINGS_META_TEXT} text-secondary/80`}>
+                                      {plugin.name}
+                                    </span>
+                                  )}
+                                  {isRegistryUpdatable && hostHealthy && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleVersionsDrawer(plugin.name)}
+                                      aria-expanded={versionsExpanded}
+                                      className="inline-flex items-center gap-1 text-xs text-secondary transition-colors hover:text-foreground"
+                                    >
+                                      {isCheckingThis ? (
+                                        <ArrowPathIcon className="h-3 w-3 animate-spin" />
+                                      ) : versionsExpanded ? (
+                                        <ChevronDownIcon className="h-3 w-3" />
+                                      ) : (
+                                        <ChevronRightIcon className="h-3 w-3" />
+                                      )}
+                                      <span>{t('dshPluginsVersionsToggle')}</span>
+                                    </button>
+                                  )}
+                                  {plugin.enabled && plugin.panelId && !plugin.isThemePlugin && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        dispatchOpenEmbeddedPlugin({
+                                          name: plugin.name,
+                                          panelId: plugin.panelId!,
+                                          title,
+                                          ...(plugin.icon ? { icon: plugin.icon } : {}),
+                                        });
+                                      }}
+                                      className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
+                                    >
+                                      {t('dshPluginsOpenPluginPanel')}
+                                    </button>
+                                  )}
+                                </div>
+
+                                {plugin.errorMessage && (
+                                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                                    {plugin.errorMessage}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Plugin Actions */}
+                            <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                              {recommendedVersion && (
+                                <button
+                                  type="button"
+                                  disabled={
+                                    !hostHealthy || busyPlugin !== null || restarting || updateTarget !== null
+                                  }
+                                  onClick={() =>
+                                    handleOpenUpdateModal(plugin, recommendedVersion, checkedRegistry)
+                                  }
+                                  className="inline-flex h-7 items-center gap-1 rounded-lg bg-action px-2.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+                                  {t('dshPluginsUpdateBtn')}
+                                </button>
                               )}
-                              <span>{t('dshPluginsVersionsToggle')}</span>
-                            </button>
+                              {isBusy && (
+                                <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-secondary" />
+                              )}
+                              <SettingsSwitch
+                                checked={plugin.enabled}
+                                label={plugin.enabled ? t('dshEcosystemDisableLabel') : t('dshEcosystemEnableLabel')}
+                                disabled={busyPlugin !== null || restarting || updateTarget !== null}
+                                onClick={() => handleToggleEnabled(plugin, !plugin.enabled)}
+                              />
+                              {plugin.removable !== false && (
+                                <button
+                                  type="button"
+                                  disabled={busyPlugin !== null || restarting || updateTarget !== null}
+                                  onClick={() => setRemoveTarget(plugin)}
+                                  title={t('dshEcosystemRemoveBtn')}
+                                  aria-label={t('dshEcosystemRemoveBtn')}
+                                  className="rounded-lg p-1.5 text-secondary transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30 dark:hover:text-red-400"
+                                >
+                                  <TrashIcon className="h-4 w-4" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {isRegistryUpdatable && versionsExpanded && (
+                            <div className={canReorderPlugins ? 'pl-[76px]' : 'pl-12'}>
+                              <DshPluginVersionDrawer
+                                installedVersion={plugin.version}
+                                check={versionCheck}
+                                disabled={!hostHealthy || busyPlugin !== null || restarting || updateTarget !== null}
+                                onRecheck={() => void checkSinglePluginVersions(plugin.name)}
+                                onSelectUpdate={(version, registry) =>
+                                  handleOpenUpdateModal(plugin, version, registry)
+                                }
+                              />
+                            </div>
                           )}
-                          {plugin.enabled && plugin.panelId && !plugin.isThemePlugin && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                dispatchOpenEmbeddedPlugin({
-                                  name: plugin.name,
-                                  panelId: plugin.panelId!,
-                                  title,
-                                  ...(plugin.icon ? { icon: plugin.icon } : {}),
-                                });
-                              }}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
-                            >
-                              {t('dshPluginsOpenPluginPanel')}
-                            </button>
-                          )}
-                        </div>
-
-                        {plugin.errorMessage && (
-                          <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                            {plugin.errorMessage}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Plugin Actions */}
-                    <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                      {recommendedVersion && (
-                        <button
-                          type="button"
-                          disabled={
-                            !hostHealthy || busyPlugin !== null || restarting || updateTarget !== null
-                          }
-                          onClick={() =>
-                            handleOpenUpdateModal(plugin, recommendedVersion, checkedRegistry)
-                          }
-                          className="inline-flex h-7 items-center gap-1 rounded-lg bg-action px-2.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <ArrowDownTrayIcon className="h-3.5 w-3.5" />
-                          {t('dshPluginsUpdateBtn')}
-                        </button>
+                        </>
                       )}
-                      {isBusy && (
-                        <ArrowPathIcon className="h-3.5 w-3.5 animate-spin text-secondary" />
-                      )}
-                      <SettingsSwitch
-                        checked={plugin.enabled}
-                        label={plugin.enabled ? t('dshEcosystemDisableLabel') : t('dshEcosystemEnableLabel')}
-                        disabled={busyPlugin !== null || restarting || updateTarget !== null}
-                        onClick={() => handleToggleEnabled(plugin, !plugin.enabled)}
-                      />
-                      {plugin.removable !== false && (
-                        <button
-                          type="button"
-                          disabled={busyPlugin !== null || restarting || updateTarget !== null}
-                          onClick={() => setRemoveTarget(plugin)}
-                          title={t('dshEcosystemRemoveBtn')}
-                          aria-label={t('dshEcosystemRemoveBtn')}
-                          className="rounded-lg p-1.5 text-secondary transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30 dark:hover:text-red-400"
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {isRegistryUpdatable && versionsExpanded && (
-                    <div className="pl-12">
-                      <DshPluginVersionDrawer
-                        installedVersion={plugin.version}
-                        check={versionCheck}
-                        disabled={!hostHealthy || busyPlugin !== null || restarting || updateTarget !== null}
-                        onRecheck={() => void checkSinglePluginVersions(plugin.name)}
-                        onSelectUpdate={(version, registry) =>
-                          handleOpenUpdateModal(plugin, version, registry)
-                        }
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    </SortablePluginRow>
+                  );
+                })}
+              </div>
+            </SortableContext>
+          </DndContext>
         )}
       </section>
 

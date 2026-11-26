@@ -1051,7 +1051,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                           />
                           <h2
                             className={`font-medium leading-[1.3] tracking-[-0.015em] text-foreground transition-all duration-200 animate-fade-in-up ${
-                              selectedActionId ? 'text-[22px] sm:text-[24px]' : 'text-[28px] sm:text-[30px]'
+                              selectedActionId ? 'text-[22px] sm:text-[24px]' : 'text-[30px] sm:text-[32px]'
                             }`}
                             style={{
                               fontFamily: HOME_HEADLINE_FONT_FAMILY,
@@ -1065,7 +1065,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                         </div>
 
                         <div
-                          className={`relative z-0 flex flex-col items-center animate-fade-in-up ${selectedActionId ? 'mt-5' : 'mt-10'} ${COWORK_DETAIL_CONTENT_CLASS}`}
+                          className={`relative z-0 flex flex-col items-center animate-fade-in-up ${selectedActionId ? 'mt-5' : 'mt-8'} ${COWORK_DETAIL_CONTENT_CLASS}`}
                           style={{ animationDelay: '100ms', animationFillMode: 'both' }}
                         >
                           <HomeShowcaseHub
