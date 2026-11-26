@@ -169,6 +169,7 @@ export class ChannelManager {
       const driver = factory({
         instanceId,
         config: item.config || {},
+        logStartup: (message) => this.ctx.logger?.info?.(message),
         requestPairing: (senderId) => this.bridgeNotify?.({ type: 'popoPairing', instanceId, senderId }),
         onInbound: (msg) => this.handleInbound(msg, agentId, item.cwd),
         onStatus: (status) => {

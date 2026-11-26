@@ -16,6 +16,37 @@ function makeFakeEntry(label: string) {
   };
 }
 
+test('logs one first-connect timeline per driver without account details', async () => {
+  const { ChannelManager } = await import(REGISTRY_PATH);
+  const info = vi.fn<(line: string) => void>();
+  const manager = new ChannelManager({ ctx: { logger: { info } } });
+  const desired = [
+    { platform: 'wecom', instanceId: 'private-account', config: { webhookUrl: 'https://private.invalid/secret' } },
+    { platform: 'weixin', instanceId: 'private-login', config: {} },
+  ];
+  const result = await manager.syncInstances(desired);
+  expect(result.errors).toHaveLength(1);
+  const driver = manager.instances.get('wecom:private-account').driver;
+  driver.markInbound();
+  driver.setState('reconnecting');
+  driver.setState('connected');
+  await manager.syncInstances(desired);
+  const retry = manager.instances.get('weixin:private-login').driver;
+  retry.setState('error', 'private error details');
+  retry.setState('connected');
+  await manager.syncInstances([]);
+
+  const lines = info.mock.calls.map(([line]) => line);
+  for (const line of lines) {
+    expect(line).toMatch(/^\[DshStartup\] pid=\d+ platform=(wecom|weixin) attempt=\d+ stage=(connecting|connected|error) elapsedMs=\d+$/);
+  }
+  const stages = (platform: string) => lines.filter(line => line.includes(`platform=${platform} `))
+    .map(line => line.match(/stage=(\w+)/)?.[1]);
+  expect(stages('wecom')).toEqual(['connecting', 'connected']);
+  expect(stages('weixin')).toEqual(['connecting', 'error', 'connected']);
+  expect(new Set(lines.map(line => line.match(/attempt=(\d+)/)?.[1])).size).toBe(2);
+});
+
 describe('DSH ChannelManager multi-instance prefix resolution', () => {
   test('matches exact key, unique 8-char UUID prefix, and sole running instance fallback', async () => {
     const { ChannelManager, resolveChannelInstanceEntry } = await import(REGISTRY_PATH);

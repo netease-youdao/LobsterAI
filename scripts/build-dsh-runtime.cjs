@@ -121,6 +121,12 @@ const PATCH_SENTINELS = [
     expect: '--expose-internals',
     minOccurrences: 1,
   },
+  {
+    patch: '02-app-boot-startup-timings.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
+    expect: 'markBoot("tree-loaded");',
+    occurrences: 1,
+  },
 ];
 
 const TARGETS = {

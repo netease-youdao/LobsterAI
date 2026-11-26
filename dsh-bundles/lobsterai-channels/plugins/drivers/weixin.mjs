@@ -370,14 +370,17 @@ export class WeixinChannelDriver extends BaseChannelDriver {
     if (!this.token) return;
     const reqAbort = createRequestAbort(NOTIFY_TIMEOUT_MS, signal);
     try {
-      await fetch(`${this.baseUrl}/${endpoint}`, {
+      const response = await fetch(`${this.baseUrl}/${endpoint}`, {
         method: 'POST',
         headers: buildPostHeaders(this.token),
         body: JSON.stringify({ base_info: buildBaseInfo() }),
         signal: reqAbort.signal,
       });
+      return response.ok ? 'ok' : 'http-error';
     } catch {
-      // Best-effort lifecycle notification; never block startup/shutdown.
+      // Best effort: report why the wait ended and continue starting/stopping.
+      if (reqAbort.didTimeout()) return 'timeout';
+      return signal?.aborted ? 'aborted' : 'network-error';
     } finally {
       reqAbort.cleanup();
     }
@@ -387,7 +390,8 @@ export class WeixinChannelDriver extends BaseChannelDriver {
     if (!this.token) {
       throw new Error('Weixin not configured: iLink token is required (complete QR login first)');
     }
-    await this.notifyLifecycle('ilink/bot/msg/notifystart', signal);
+    const outcome = await this.notifyLifecycle('ilink/bot/msg/notifystart', signal);
+    this.markStartupStage('weixin-notify-finished', outcome);
     if (signal.aborted) return;
     this.setState('connected', null, { accountId: this.accountId });
     void this.pollLoop(signal);

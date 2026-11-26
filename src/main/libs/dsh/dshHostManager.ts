@@ -913,6 +913,7 @@ export class DshHostManager extends EventEmitter {
   // ── Internal Boot & Supervision ────────────────────────────────────────────
 
   private async doStart(): Promise<void> {
+    const startRequestedAt = performance.now();
     this.lastError = null;
     this.setPhase(DshHostPhase.Starting);
 
@@ -941,8 +942,9 @@ export class DshHostManager extends EventEmitter {
         dshHomeDir: this.dshHomeDir,
       });
 
-      const launchUrl = await this.spawnAndWaitForLaunchUrl(launchInfo.entryPath, childEnv);
+      const launchUrl = await this.spawnAndWaitForLaunchUrl(launchInfo.entryPath, childEnv, startRequestedAt);
       const owner = this.child;
+      const readyUrlAt = performance.now();
 
       const client = this.options.clientFactory
         ? this.options.clientFactory()
@@ -974,6 +976,9 @@ export class DshHostManager extends EventEmitter {
       if (health && 'ok' in health && health.ok === false) {
         throw new Error(`DSH host health check failed: ${JSON.stringify(health)}`);
       }
+      const healthyAt = performance.now();
+      const startupTag = `[DshStartup] pid=${owner?.pid ?? 'unknown'}`;
+      console.log(`${startupTag} stage=health-ok phaseMs=${Math.round(healthyAt - readyUrlAt)}`);
 
       this.authenticatedWebUrl = launchUrl;
       this.origin = new URL(launchUrl).origin;
@@ -985,6 +990,9 @@ export class DshHostManager extends EventEmitter {
       await this.replayCachedSyncs(client);
       if (this.child !== owner) throw new Error('DSH host exited during startup');
       this.setDisconnectedAt(null);
+      const readyAt = performance.now();
+      console.log(`${startupTag} stage=host-ready phaseMs=${Math.round(readyAt - healthyAt)}`
+        + ` totalMs=${Math.round(readyAt - startRequestedAt)}`);
       this.setPhase(DshHostPhase.Ready);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1116,7 +1124,9 @@ export class DshHostManager extends EventEmitter {
     return prepared;
   }
 
-  private spawnAndWaitForLaunchUrl(launchEntryPath: string, childEnv: NodeJS.ProcessEnv): Promise<string> {
+  private spawnAndWaitForLaunchUrl(
+    launchEntryPath: string, childEnv: NodeJS.ProcessEnv, startRequestedAt: number,
+  ): Promise<string> {
     const args = [
       ...DSH_NODE_EXEC_ARGV,
       launchEntryPath,
@@ -1136,9 +1146,13 @@ export class DshHostManager extends EventEmitter {
       windowsHide: true,
     });
     this.child = child;
+    const spawnStartedAt = performance.now();
 
     const bootTimeoutMs = this.options.bootTimeoutMs ?? resolveDefaultDshBootTimeoutMs();
-    const spawnStartedAt = Date.now();
+    const startupTag = `[DshStartup] pid=${child.pid ?? 'unknown'}`;
+    const layout = path.normalize(this.options.runtimeDir).split(path.sep).includes('app.asar') ? 'asar' : 'directory';
+    console.log(`${startupTag} stage=spawn prepareMs=${Math.round(spawnStartedAt - startRequestedAt)}`
+      + ` runtime=${this.runtimeVersion ?? 'unknown'} layout=${layout} target=${process.platform}-${process.arch}`);
 
     return new Promise<string>((resolve, reject) => {
       let stderrBuf = '';
@@ -1158,7 +1172,8 @@ export class DshHostManager extends EventEmitter {
           if (match) {
             settled = true;
             clearTimeout(timer);
-            console.log(`[DSH Host] ready URL received in ${Date.now() - spawnStartedAt}ms`);
+            const spawnToUrlMs = Math.round(performance.now() - spawnStartedAt);
+            console.log(`[DSH Host] ready URL received in ${spawnToUrlMs}ms ${startupTag} stage=ready-url spawnToUrlMs=${spawnToUrlMs}`);
             resolve(match[1]);
           }
         }
