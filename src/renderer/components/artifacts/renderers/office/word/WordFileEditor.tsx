@@ -194,7 +194,13 @@ function ActiveWordEditor({
         </div>
       )}
     >
-      <div className="lobster-word-frame" ref={frame} onPointerUp={chat.handlePointerUp} {...(readOnly ? {} : imageTransfer)}>
+      <div
+        className="lobster-word-frame"
+        ref={frame}
+        data-local-file-drop={readOnly ? undefined : 'true'}
+        onPointerUp={chat.handlePointerUp}
+        {...(readOnly ? {} : imageTransfer)}
+      >
         <div
           className="lobster-word-mount docx-editor__scroll-container"
           ref={host}

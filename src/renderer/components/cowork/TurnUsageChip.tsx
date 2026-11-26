@@ -5,7 +5,7 @@ import {
   DocumentDuplicateIcon,
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 
@@ -25,6 +25,7 @@ import { i18nService } from '../../services/i18n';
 import type { RootState } from '../../store';
 import { formatModelDisplayName } from '../../utils/modelDisplayName';
 import CreditsIcon from '../icons/CreditsIcon';
+import { resolveFixedPopoverPlacement, resolvePopoverBoundaryBounds } from './popoverPlacement';
 import {
   buildTurnModelTokenRows,
   formatTurnCredits,
@@ -47,6 +48,7 @@ const POPOVER_WIDTH_PX = 260;
 const POPOVER_ESTIMATED_HEIGHT_PX = 320;
 const COPIED_RESET_MS = 2000;
 const POPOVER_GAP_PX = 8;
+const POPOVER_BOUNDARY_MARGIN_PX = 12;
 
 const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage, durationMs }) => {
   const sessionId = useSelector((state: RootState) => state.cowork.currentSession?.id ?? null);
@@ -85,6 +87,31 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
     });
   }, [sessionId, userMessageId, turnUsage.traceId, turnUsage.status]);
 
+  const updatePopoverPosition = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    const boundary = resolvePopoverBoundaryBounds(root);
+    const placement = resolveFixedPopoverPlacement({
+      anchor: rect,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      desiredWidth: POPOVER_WIDTH_PX,
+      estimatedHeight: POPOVER_ESTIMATED_HEIGHT_PX,
+      gap: POPOVER_GAP_PX,
+      margin: POPOVER_BOUNDARY_MARGIN_PX,
+      boundary,
+    });
+    setPosition({
+      width: placement.width,
+      left: placement.left,
+      ...(placement.direction === 'up'
+        ? { bottom: placement.bottom }
+        : { top: placement.top }),
+      maxHeight: placement.maxHeight,
+    });
+  }, []);
+
   useEffect(() => {
     if (!open) return undefined;
     popoverRef.current?.focus({ preventScroll: true });
@@ -102,17 +129,25 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
       if (event.target instanceof Node && popoverRef.current?.contains(event.target)) return;
       setOpen(false);
     };
+    const boundaryEl = rootRef.current ? resolvePopoverBoundaryBounds(rootRef.current).element : null;
+    const resizeObserver = boundaryEl && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => updatePopoverPosition())
+      : null;
+    if (boundaryEl && resizeObserver) {
+      resizeObserver.observe(boundaryEl);
+    }
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
     window.addEventListener('resize', closeOnViewportChange);
     window.addEventListener('scroll', closeOnViewportChange, true);
     return () => {
+      resizeObserver?.disconnect();
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', closeOnViewportChange);
       window.removeEventListener('scroll', closeOnViewportChange, true);
     };
-  }, [open]);
+  }, [open, updatePopoverPosition]);
 
   useEffect(() => () => {
     if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
@@ -130,18 +165,7 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
 
   const togglePopover = () => {
     if (!open && rootRef.current) {
-      const rect = rootRef.current.getBoundingClientRect();
-      const width = Math.min(POPOVER_WIDTH_PX, window.innerWidth - 2 * POPOVER_GAP_PX);
-      const above = rect.top - 2 * POPOVER_GAP_PX;
-      const below = window.innerHeight - rect.bottom - 2 * POPOVER_GAP_PX;
-      const upwards = above >= POPOVER_ESTIMATED_HEIGHT_PX || above > below;
-      setPosition({
-        width,
-        left: Math.max(POPOVER_GAP_PX, Math.min(rect.left, window.innerWidth - width - POPOVER_GAP_PX)),
-        ...(upwards ? { bottom: window.innerHeight - rect.top + POPOVER_GAP_PX }
-          : { top: rect.bottom + POPOVER_GAP_PX }),
-        maxHeight: Math.max(0, upwards ? above : below),
-      });
+      updatePopoverPosition();
       setDetailsFailed(false);
       // Settled details live with the local conversation, independently of login.
       // Retry empty legacy snapshots so they can recover under the original account.

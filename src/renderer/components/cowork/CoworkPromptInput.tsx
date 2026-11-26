@@ -165,6 +165,7 @@ import ChatLoginExperienceModal from './ChatLoginExperienceModal';
 import { getClipboardAttachmentFiles, getCopiedMessageImageFiles } from './clipboardAttachments';
 import { CoworkUiEvent } from './constants';
 import { ContextChipTone } from './ContextChip';
+import CoworkPageFileDropOverlay from './CoworkPageFileDropOverlay';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { getCaretPixelPosition } from './getCaretPosition';
 import {
@@ -187,6 +188,7 @@ import {
   setModelSwitchConfirmSkipped,
 } from './modelSwitchConfirm';
 import ModelSwitchConfirmDialog from './ModelSwitchConfirmDialog';
+import { hasFileTransfer, usePageFileDrop } from './pageFileDrop';
 import { PastedTextAttachmentCard } from './PastedTextCards';
 import PermissionModeSelector from './PermissionModeSelector';
 import {
@@ -381,6 +383,7 @@ const ContextLabelMaxLength = {
 
 const READ_ONLY_CONTEXT_COMPACT_WIDTH = 168;
 const LARGE_TOOLBAR_COMPACT_WIDTH = 520;
+const LARGE_TOOLBAR_COMPACT_WITH_MEDIA_PILL_WIDTH = 600;
 type GoalInputMode = 'start' | 'set';
 
 const truncateDisplayText = (value: string, maxLength: number): string => {
@@ -493,6 +496,12 @@ interface CoworkPromptInputProps {
    * sharing one toolbar. The prompt starts as a single line and grows with its content.
    */
   narrow?: boolean;
+  /**
+   * When true, dragging files anywhere onto the page attaches them to this
+   * composer and shows a full-page drop overlay instead of restricting drops
+   * to the input box.
+   */
+  enablePageFileDrop?: boolean;
 }
 
 const EMPTY_ATTACHMENTS: CoworkAttachment[] = [];
@@ -533,6 +542,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showNewUserWelcomeLoginOverlay = false,
       onLoginPromptVisibilityChange,
       narrow = false,
+      enablePageFileDrop = false,
       analyticsSurface,
     } = props;
     const dispatch = useDispatch<AppDispatch>();
@@ -613,6 +623,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [showVoiceQuotaPrompt, setShowVoiceQuotaPrompt] = useState(false);
     const [isLargeToolbarCompact, setIsLargeToolbarCompact] = useState(false);
 
+    const promptRootRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const draftKeyRef = useRef(draftKey);
     draftKeyRef.current = draftKey;
@@ -1155,6 +1166,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     return () => resizeObserver.disconnect();
   }, [isLarge, showReadOnlyContext, useHomeContextLayout]);
 
+  const customMediaModelBadge = useMemo(() => (
+    resolveCustomMediaModelBadge(
+      queuedMediaSelection,
+      authOwnerAccountKey === mediaModelsOwnerAccountKey ? cachedMediaModels : undefined,
+    )
+  ), [authOwnerAccountKey, cachedMediaModels, mediaModelsOwnerAccountKey, queuedMediaSelection]);
+  const hasCustomMediaModelPill = !narrow && !remoteManaged && Boolean(customMediaModelBadge);
+  const largeToolbarCompactThreshold = hasCustomMediaModelPill
+    ? LARGE_TOOLBAR_COMPACT_WITH_MEDIA_PILL_WIDTH
+    : LARGE_TOOLBAR_COMPACT_WIDTH;
+
   useEffect(() => {
     if (!isLarge || narrow) {
       setIsLargeToolbarCompact(false);
@@ -1165,7 +1187,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     if (!element) return;
 
     const updateCompactState = () => {
-      const nextCompact = element.getBoundingClientRect().width < LARGE_TOOLBAR_COMPACT_WIDTH;
+      const nextCompact = element.getBoundingClientRect().width < largeToolbarCompactThreshold;
       setIsLargeToolbarCompact(current => (current === nextCompact ? current : nextCompact));
     };
 
@@ -1175,7 +1197,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const resizeObserver = new ResizeObserver(updateCompactState);
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
-  }, [isLarge, narrow]);
+  }, [isLarge, largeToolbarCompactThreshold, narrow]);
 
   useEffect(() => {
     if (!showAddMenu) return;
@@ -2738,13 +2760,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     handleFoldedToolChange(PromptFoldedTool.Media, open);
   }, [handleFoldedToolChange]);
 
-  const customMediaModelBadge = useMemo(() => (
-    resolveCustomMediaModelBadge(
-      queuedMediaSelection,
-      authOwnerAccountKey === mediaModelsOwnerAccountKey ? cachedMediaModels : undefined,
-    )
-  ), [authOwnerAccountKey, cachedMediaModels, mediaModelsOwnerAccountKey, queuedMediaSelection]);
-
   const handleToggleMediaPickerFromPill = useCallback(() => {
     if (disabled || voiceInputLocksEditing) return;
     if (showAddMenu && foldedTool === PromptFoldedTool.Media) {
@@ -2957,18 +2972,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }));
   }, [attachments, dispatch, draftKey, reportPromptControl]);
 
-  const hasFileTransfer = (dataTransfer: DataTransfer | null): boolean => {
-    if (!dataTransfer) return false;
-    if (dataTransfer.files.length > 0) return true;
-    return Array.from(dataTransfer.types).includes('Files');
-  };
+  const showNewUserWelcomeLockOverlay = showNewUserWelcomeLoginOverlay && !isLoggedIn;
+  const canAcceptFileDrop = !disabled
+    && !voiceInputLocksEditing
+    && !remoteManaged
+    && !showNewUserWelcomeLockOverlay;
+
+  const handlePageDropFiles = useCallback((files: File[]) => {
+    if (!canAcceptFileDrop || files.length === 0) return;
+    void handleIncomingFiles(files, 'drop');
+    textareaRef.current?.focus();
+  }, [canAcceptFileDrop, handleIncomingFiles]);
+
+  const isPageDraggingFiles = usePageFileDrop({
+    enabled: enablePageFileDrop && canAcceptFileDrop,
+    anchorRef: promptRootRef,
+    onDropFiles: handlePageDropFiles,
+  });
 
   const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
     if (!hasFileTransfer(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     dragDepthRef.current += 1;
-    if (!disabled && !voiceInputLocksEditing) {
+    if (canAcceptFileDrop) {
       setIsDraggingFiles(true);
     }
   };
@@ -2977,7 +3004,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     if (!hasFileTransfer(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = disabled || voiceInputLocksEditing ? 'none' : 'copy';
+    event.dataTransfer.dropEffect = canAcceptFileDrop ? 'copy' : 'none';
   };
 
   const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
@@ -2996,8 +3023,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     event.stopPropagation();
     dragDepthRef.current = 0;
     setIsDraggingFiles(false);
-    if (disabled || voiceInputLocksEditing) return;
+    if (!canAcceptFileDrop) return;
     void handleIncomingFiles(event.dataTransfer.files, 'drop');
+    textareaRef.current?.focus();
   };
 
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -3057,8 +3085,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     && !selectedModelUnavailable
     && (effectiveModelIsAvailable || resolveSubmitModelAccessPrompt() === ModelAccessPromptKind.Login)
     && (!!activeTextareaValue.trim() || (!steerInputActive && (hasAttachments || browserAnnotationBatches.length > 0)));
-  const showNewUserWelcomeLockOverlay = showNewUserWelcomeLoginOverlay && !isLoggedIn;
-  const enhancedContainerClass = isDraggingFiles
+  const enhancedContainerClass = !enablePageFileDrop && isDraggingFiles
     ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
     : containerClass;
 
@@ -3220,7 +3247,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   };
 
   const largeModelSelector = showModelSelector ? (
-    <div className="flex flex-col items-start gap-1">
+    <div className={`flex ${narrow ? 'shrink-0' : 'min-w-0'} flex-col items-start gap-1`}>
       <ModelSelector
         allowPresets
         allowContextWindowSelection={!sessionId || !!currentSession && isManualContextWindowSession(currentSession)}
@@ -3459,7 +3486,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   });
 
   const largeInputToolActions = (
-    <div className={`flex items-center ${useLargeToolbarCompactLayout ? 'gap-0' : 'gap-0.5'}`}>
+    <div className={`flex shrink-0 items-center ${useLargeToolbarCompactLayout ? 'gap-0' : 'gap-0.5'}`}>
       {largeInputActions}
     </div>
   );
@@ -3467,13 +3494,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <div
       ref={mediaOverridePillRef}
       data-custom-media-pill="true"
-      className={`inline-flex h-7 ${useLargeToolbarCompactLayout ? 'max-w-[116px]' : 'max-w-[168px]'} shrink-0 items-center rounded-lg border border-border/80 bg-surface-raised/70 text-xs text-foreground transition-colors hover:bg-surface-raised`}
+      className={`inline-flex h-7 min-w-0 ${useLargeToolbarCompactLayout ? 'max-w-[116px]' : 'max-w-[168px]'} items-center overflow-hidden rounded-lg border border-border/80 bg-surface-raised/70 text-xs text-foreground transition-colors hover:bg-surface-raised`}
     >
       <button
         type="button"
         disabled={disabled || voiceInputLocksEditing}
         onClick={handleToggleMediaPickerFromPill}
-        className="flex min-w-0 items-center gap-1 py-1 pl-2 pr-1 text-left transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex min-w-0 flex-1 items-center gap-1 py-1 pl-2 pr-1 text-left transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
         title={`${i18nService.t('mediaCustomModelTooltipPrefix')}: ${customMediaModelBadge.names.join(' / ')}`}
         aria-label={`${i18nService.t('mediaCustomModelTooltipPrefix')}: ${customMediaModelBadge.names.join(' / ')}`}
       >
@@ -3509,7 +3536,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <button
       type="button"
       onClick={handleStopClick}
-      className="flex h-[34px] w-[34px] items-center justify-center rounded-full transition-all hover:opacity-90 active:scale-95 focus:outline-none focus:ring-2 focus:ring-primary/40"
+      className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-all hover:opacity-90 active:scale-95 focus:outline-none focus:ring-2 focus:ring-primary/40"
       aria-label={stopButtonLabel}
       title={stopButtonLabel}
     >
@@ -3967,17 +3994,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   };
 
   const readOnlyContextRow = isLarge && showReadOnlyContext && !useHomeContextLayout ? (
-    <div className="mt-2 grid min-h-7 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-4">
+    <div className="mt-1 grid min-h-6 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-4">
       <div ref={readOnlyContextGroupRef} className="flex min-w-0 items-center gap-1">
         <button
           type="button"
           onClick={handleOpenWorkingDirectory}
           disabled={!hasWorkingDirectory}
-          className={`flex h-7 items-center rounded-lg text-[13px] text-secondary transition-colors ${
+          className={`flex h-6 items-center rounded-md text-[13px] text-secondary transition-colors ${
             hasWorkingDirectory ? 'hover:bg-background/80 hover:text-foreground' : 'cursor-default'
           } ${
             isReadOnlyContextCompact
-              ? 'w-7 flex-none justify-center'
+              ? 'w-6 flex-none justify-center'
               : 'min-w-0 max-w-[260px] shrink gap-1.5 px-2'
           }`}
           title={workingDirectory || i18nService.t('noFolderSelected')}
@@ -3991,9 +4018,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           )}
         </button>
         <div
-          className={`flex h-7 items-center rounded-lg text-[13px] text-secondary ${
+          className={`flex h-6 items-center rounded-md text-[13px] text-secondary ${
             isReadOnlyContextCompact
-              ? 'w-7 flex-none justify-center'
+              ? 'w-6 flex-none justify-center'
               : 'min-w-0 max-w-[220px] shrink gap-1.5 px-2'
           }`}
           title={`${i18nService.t('coworkCurrentAgent')}: ${readOnlyContextAgentName}`}
@@ -4005,7 +4032,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         </div>
       </div>
       {readOnlyContextTrailingText && (
-        <span className="pointer-events-none min-w-0 max-w-full select-none truncate text-center text-[13px] text-muted opacity-85">
+        <span className="pointer-events-none min-w-0 max-w-full select-none truncate text-center text-[11px] leading-4 text-muted opacity-85">
           {readOnlyContextTrailingText}
         </span>
       )}
@@ -4140,7 +4167,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   );
 
   return (
-    <div data-skin-prompt-input="true" data-model-access-anchor={narrow || undefined} className="relative">
+    <div ref={promptRootRef} data-skin-prompt-input="true" data-model-access-anchor={narrow || undefined} className="relative">
+      <CoworkPageFileDropOverlay visible={isPageDraggingFiles} />
       {goalEditModalOpen && (
         <Modal
           onClose={handleCloseGoalEditModal}
@@ -4232,12 +4260,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       )}
       <div
         className={enhancedContainerClass}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        {...(!enablePageFileDrop
+          ? {
+              onDragEnter: handleDragEnter,
+              onDragOver: handleDragOver,
+              onDragLeave: handleDragLeave,
+              onDrop: handleDrop,
+            }
+          : {})}
       >
-        {isDraggingFiles && (
+        {!enablePageFileDrop && isDraggingFiles && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-primary/10 text-xs font-medium text-primary">
             {i18nService.t('coworkDropFileHint')}
           </div>
@@ -4309,8 +4341,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   {narrow && voiceRecordingUiState.showLargeInputControls && homeContextSelectors}
                   {narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
                 </div>
-                <div className={`flex shrink-0 items-center ${largeToolbarControlGapClass}`}>
-                  {contextUsageControl}
+                <div className={`flex ${narrow ? 'shrink-0' : 'min-w-0'} items-center ${largeToolbarControlGapClass}`}>
+                  {contextUsageControl && <div className="shrink-0">{contextUsageControl}</div>}
                   {!narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
                   {largeVoiceInputButton}
                   {largeSendButton}
@@ -4351,12 +4383,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 <div className={`relative flex min-w-0 items-center ${largeToolbarControlGapClass}`}>
                   {voiceRecordingUiState.showLargeInputControls && showFolderSelector && (
                     <>
-                      <div className="flex items-center">
+                      <div className="flex min-w-0 items-center">
                         <button
                           ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
                           type="button"
                           onClick={() => setShowFolderMenu(!showFolderMenu)}
-                          className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-lg text-sm transition-colors ${
+                          className={`flex min-w-0 items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-lg text-sm transition-colors ${
                             showFolderRequiredWarning
                               ? 'ring-1 ring-warning text-warning animate-shake'
                               : 'text-secondary hover:bg-surface-raised hover:text-foreground'
@@ -4404,8 +4436,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   )}
                   {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}
                 </div>
-                <div className={`flex shrink-0 items-center ${largeToolbarControlGapClass}`}>
-                  {contextUsageControl}
+                <div className={`flex min-w-0 items-center ${largeToolbarControlGapClass}`}>
+                  {contextUsageControl && <div className="shrink-0">{contextUsageControl}</div>}
                   {voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
                   {largeVoiceInputButton}
                   {largeSendButton}

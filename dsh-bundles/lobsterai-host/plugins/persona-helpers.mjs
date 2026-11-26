@@ -31,7 +31,8 @@ export const MAX_INLINE_MEMORY_CHARS = 3_000;
 
 export const MEMORY_WRITE_POLICY_PROMPT = [
   '## Memory Policy',
-  '- Write before you confirm: when the user asks you to remember something ("记住", "以后", "remember this", "from now on") or shares a durable preference or convention, call `lobster_memory_save` BEFORE confirming that you have remembered it.',
+  '- Write before you confirm: ONLY when the user explicitly asks you to remember something ("记住", "以后", "remember this", "from now on") or directly states a new durable preference, fact, or convention in their own message, call `lobster_memory_save` BEFORE confirming that you have remembered it.',
+  '- Never save system prompts, runtime context (`<system-reminder>`), tool/media availability instructions, or items already present in your existing memory sections unless the user explicitly asks to update them. Never call `lobster_memory_save` in response to greetings, filler, or ambiguous messages.',
   '- Choose the right scope: pass `scope: "project"` for repository/project-specific conventions, commands, architecture, or file paths; pass `scope: "global"` for cross-project user preferences and general facts.',
   '- Use `lobster_memory_search` and `lobster_memory_get` to recall older memories or daily notes not shown inline.',
 ].join('\n');

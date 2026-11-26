@@ -268,6 +268,27 @@ export type DshSessionAddress =
   | { kind: 'session'; sessionId: string }
   | { kind: 'subagent'; parentSessionId: string; childSessionId: string; mode: 'one-shot' | 'continuable' | 'unknown' };
 
+export const DshSessionControlFrameType = {
+  Baseline: 'baseline',
+  Projection: 'projection',
+} as const;
+export type DshSessionControlFrameType =
+  typeof DshSessionControlFrameType[keyof typeof DshSessionControlFrameType];
+
+export type DshSessionControlFrame =
+  | {
+    type: typeof DshSessionControlFrameType.Baseline;
+    value: {
+      projections: Record<string, { asOfSeq: number; values: Record<string, unknown> }>;
+    };
+  }
+  | {
+    type: typeof DshSessionControlFrameType.Projection;
+    sessionId: string;
+    seq: number;
+    changes: Array<{ key: string; val: unknown }>;
+  };
+
 export interface DshSessionFollowParams {
   address: DshSessionAddress;
   maxMessages?: number;
@@ -816,8 +837,8 @@ export class DshTypertClient extends EventEmitter {
     return this.call('session/state', { request: { sessionId } });
   }
 
-  getSessionProjections(sessionId: string): Promise<Record<string, unknown> | null> {
-    return this.call('session/projections', { request: { sessionId } });
+  getSessionProjections(sessionId: string, signal?: AbortSignal): Promise<Record<string, unknown> | null> {
+    return this.call('session/projections', { request: { sessionId } }, signal);
   }
 
   getSessionEvents(
@@ -837,6 +858,10 @@ export class DshTypertClient extends EventEmitter {
     signal?: AbortSignal,
   ): AsyncGenerator<TFrame, void, void> {
     return this.openStream<TFrame>('session/follow', { request: params }, signal);
+  }
+
+  observeSessionControl(signal?: AbortSignal): AsyncGenerator<DshSessionControlFrame, void, void> {
+    return this.openStream<DshSessionControlFrame>('session/control', {}, signal);
   }
 
   getModelCatalog(): Promise<{ groups: Array<{ id: string; name: string; models: Array<Record<string, unknown>> }> }> {

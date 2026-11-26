@@ -195,6 +195,7 @@ export interface DshHostSessionContext {
   allowedSkillIds?: string[] | null;
   customSystemPrompt?: string;
   officeAgentPrompt?: string;
+  mediaTurnInstruction?: string;
   executionMode?: string;
   memoryEnabled?: boolean;
   permissionPreset?: DshPermissionPreset;

@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import {
+  COWORK_TEMP_SESSION_ID_PREFIX,
+  CoworkContextUsageSource,
+} from '../../shared/cowork/constants';
+import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { ConversationScrollAnchorAttribute } from '../components/cowork/conversationScrollAnchor';
 import {
   SESSION_RESTORE_WINDOW_LEADING_CONTEXT,
@@ -9,8 +14,15 @@ import {
 } from '../components/cowork/conversationSessionScrollState';
 import { setPendingConversationSearch } from '../components/cowork/pendingConversationSearch';
 import { store } from '../store';
-import { addMessage, setCurrentSession, setDraftPrompt, setMessageWindow } from '../store/slices/coworkSlice';
 import {
+  addMessage,
+  invalidateEditedHistory,
+  setCurrentSession,
+  setDraftPrompt,
+  setMessageWindow,
+} from '../store/slices/coworkSlice';
+import {
+  type CoworkContextUsage,
   type CoworkMessage,
   type CoworkSession,
   CoworkSessionStatusValue,
@@ -975,5 +987,222 @@ describe('coworkService rail navigation loading', () => {
     const loaded = await coworkService.loadSession('session-1');
     expect(getSessionMessages).not.toHaveBeenCalled();
     expect(loaded?.messagesOffset).toBe(90);
+  });
+});
+
+describe('coworkService session-entry context usage refresh', () => {
+  const makeUsage = (sessionId: string, percent: number): CoworkContextUsage => ({
+    sessionId,
+    usedTokens: percent * 1_000,
+    contextTokens: 100_000,
+    percent,
+    status: 'normal',
+    updatedAt: 1_000,
+  });
+
+  beforeEach(() => {
+    coworkService.destroy();
+    store.dispatch(invalidateEditedHistory('session-a'));
+    store.dispatch(invalidateEditedHistory('session-b'));
+  });
+
+  afterEach(() => {
+    coworkService.destroy();
+    vi.useRealTimers();
+  });
+
+  test('refreshes context usage on loadSession and respects cooldown across rapid switches', async () => {
+    vi.useFakeTimers();
+    const sessionA: CoworkSession = { ...makeSession(makeMessages(4), 0, 4), id: 'session-a' };
+    const sessionB: CoworkSession = { ...makeSession(makeMessages(4), 0, 4), id: 'session-b' };
+    const getContextUsage = vi.fn(async (sessionId: string) => ({
+      success: true as const,
+      usage: makeUsage(sessionId, sessionId === 'session-a' ? 12 : 45),
+      source: CoworkContextUsageSource.Live,
+    }));
+
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession: vi.fn(async (id: string) => ({
+            success: true,
+            session: id === 'session-a' ? sessionA : sessionB,
+          })),
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+          getContextUsage,
+        },
+      },
+    });
+
+    await coworkService.loadSession('session-a');
+    await Promise.resolve();
+    expect(store.getState().cowork.contextUsageBySessionId['session-a']?.percent).toBe(12);
+
+    // Calling entry refresh again immediately (e.g. from CoworkSessionDetail useEffect) hits cooldown.
+    coworkService.refreshContextUsageForSessionEntry('session-a');
+    coworkService.refreshContextUsageForSessionEntry(`${COWORK_TEMP_SESSION_ID_PREFIX}1`);
+    expect(getContextUsage).toHaveBeenCalledTimes(1);
+
+    // Switching to another task loads its usage without losing the previous session's cached usage.
+    await coworkService.loadSession('session-b');
+    await Promise.resolve();
+    expect(store.getState().cowork.contextUsageBySessionId['session-b']?.percent).toBe(45);
+    expect(store.getState().cowork.contextUsageBySessionId['session-a']?.percent).toBe(12);
+
+    // After cooldown elapses, returning to session-a refreshes again.
+    vi.advanceTimersByTime(1_600);
+    await coworkService.loadSession('session-a');
+    await Promise.resolve();
+    expect(getContextUsage).toHaveBeenCalledTimes(3);
+  });
+
+  test('defers entry refresh while engine is starting and refreshes active session once running', async () => {
+    const sessionA: CoworkSession = { ...makeSession(makeMessages(4), 0, 4), id: 'session-a' };
+    const progressListeners: Array<(status: { phase: OpenClawEnginePhase }) => void> = [];
+    const getContextUsage = vi.fn(async (sessionId: string) => ({
+      success: true as const,
+      usage: makeUsage(sessionId, 28),
+      source: CoworkContextUsageSource.Live,
+    }));
+
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession: vi.fn(async () => ({ success: true, session: sessionA })),
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+          getContextUsage,
+        },
+        openclaw: {
+          engine: {
+            getStatus: vi.fn(async () => ({
+              success: true,
+              status: { phase: OpenClawEnginePhase.Starting },
+            })),
+            onProgress: vi.fn((cb: (status: { phase: OpenClawEnginePhase }) => void) => {
+              progressListeners.push(cb);
+              return () => {
+                const idx = progressListeners.indexOf(cb);
+                if (idx >= 0) progressListeners.splice(idx, 1);
+              };
+            }),
+          },
+        },
+      },
+    });
+
+    await coworkService.loadOpenClawEngineStatus();
+    await coworkService.loadSession('session-a');
+    expect(getContextUsage).not.toHaveBeenCalled();
+
+    progressListeners.forEach(listener => listener({ phase: OpenClawEnginePhase.Running }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getContextUsage).toHaveBeenCalledTimes(1);
+    expect(getContextUsage).toHaveBeenCalledWith('session-a');
+    expect(store.getState().cowork.contextUsageBySessionId['session-a']?.percent).toBe(28);
+  });
+
+  test('suppresses repeated auto lookups after unavailable and refreshes after version switch', async () => {
+    vi.useFakeTimers();
+    const sessionA: CoworkSession = { ...makeSession(makeMessages(4), 0, 4), id: 'session-a' };
+    const getContextUsage = vi.fn()
+      .mockResolvedValueOnce({
+        success: true as const,
+        usage: null,
+        source: CoworkContextUsageSource.Unavailable,
+      })
+      .mockResolvedValueOnce({
+        success: true as const,
+        usage: makeUsage('session-a', 19),
+        source: CoworkContextUsageSource.Live,
+      });
+
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession: vi.fn(async () => ({ success: true, session: sessionA })),
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+          switchMessageVersion: vi.fn(async () => ({ success: true })),
+          getContextUsage,
+        },
+      },
+    });
+
+    await coworkService.loadSession('session-a');
+    await Promise.resolve();
+    expect(getContextUsage).toHaveBeenCalledTimes(1);
+
+    // Even after the 1.5s entry cooldown, Unavailable suppresses auto retries.
+    vi.advanceTimersByTime(2_000);
+    await coworkService.loadSession('session-a');
+    await Promise.resolve();
+    expect(getContextUsage).toHaveBeenCalledTimes(1);
+
+    // Switching message version invalidates history and clears suppression so usage refreshes.
+    await coworkService.switchMessageVersion({
+      sessionId: 'session-a',
+      messageId: 'message-0',
+      targetIndex: 1,
+    });
+    await Promise.resolve();
+    expect(getContextUsage).toHaveBeenCalledTimes(2);
+    expect(store.getState().cowork.contextUsageBySessionId['session-a']?.percent).toBe(19);
+  });
+
+  test('does not schedule post-run polling on stream complete and applies pushed context usage updates', async () => {
+    vi.useFakeTimers();
+    const sessionA: CoworkSession = { ...makeSession(makeMessages(4), 0, 4), id: 'session-a' };
+    const completeListeners: Array<(payload: { sessionId: string }) => void> = [];
+    const contextUsageListeners: Array<(payload: { sessionId: string; usage: CoworkContextUsage }) => void> = [];
+    const getContextUsage = vi.fn(async (sessionId: string) => ({
+      success: true as const,
+      usage: makeUsage(sessionId, 33),
+      source: CoworkContextUsageSource.Live,
+    }));
+
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession: vi.fn(async () => ({ success: true, session: sessionA })),
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+          getContextUsage,
+          onStreamMessage: vi.fn(() => () => undefined),
+          onStreamMessageUpdate: vi.fn(() => () => undefined),
+          onStreamPermission: vi.fn(() => () => undefined),
+          onStreamPermissionDismiss: vi.fn(() => () => undefined),
+          onStreamComplete: vi.fn((cb: (payload: { sessionId: string }) => void) => {
+            completeListeners.push(cb);
+            return () => undefined;
+          }),
+          onStreamError: vi.fn(() => () => undefined),
+          onSessionsChanged: vi.fn(() => () => undefined),
+          onStreamContextUsage: vi.fn((cb: (payload: { sessionId: string; usage: CoworkContextUsage }) => void) => {
+            contextUsageListeners.push(cb);
+            return () => undefined;
+          }),
+        },
+      },
+    });
+
+    (coworkService as unknown as { setupStreamListeners: () => void }).setupStreamListeners();
+    store.dispatch(setCurrentSession(sessionA));
+
+    // Stream completion must not schedule delayed getContextUsage polling timers.
+    completeListeners.forEach(cb => cb({ sessionId: 'session-a' }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(getContextUsage).not.toHaveBeenCalled();
+
+    // Pushed usage with breakdown updates Redux immediately.
+    const pushedUsage: CoworkContextUsage = {
+      ...makeUsage('session-a', 42),
+      breakdown: {
+        systemTokens: 10_000,
+        toolsTokens: 7_000,
+        messageTokens: 25_000,
+      },
+    };
+    contextUsageListeners.forEach(cb => cb({ sessionId: 'session-a', usage: pushedUsage }));
+    expect(store.getState().cowork.contextUsageBySessionId['session-a']).toEqual(pushedUsage);
   });
 });

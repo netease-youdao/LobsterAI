@@ -38,6 +38,11 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
     : p.customSystemPrompt === null
       ? { customSystemPrompt: '' }
       : {};
+  const mediaTurnInstructionPatch = typeof p.mediaTurnInstruction === 'string'
+    ? { mediaTurnInstruction: p.mediaTurnInstruction }
+    : p.mediaTurnInstruction === null
+      ? { mediaTurnInstruction: '' }
+      : {};
 
   const context = {
     ...base,
@@ -53,6 +58,7 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
     ...(typeof p.officeAgentPrompt === 'string' && p.officeAgentPrompt.trim().length > 0
       ? { officeAgentPrompt: p.officeAgentPrompt }
       : {}),
+    ...mediaTurnInstructionPatch,
     ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
     ...(typeof p.memoryEnabled === 'boolean' ? { memoryEnabled: p.memoryEnabled } : {}),
     ...(nextPreset ? { permissionPreset: nextPreset } : {}),

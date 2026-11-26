@@ -110,4 +110,34 @@ describe('ops-rpc-helpers mergeBoundSessionContext', () => {
     });
     expect(reset.context.permissionPresetExplicit).toBe(false);
   });
+
+  test('sets, preserves, and clears mediaTurnInstruction across turns', async () => {
+    const { mergeBoundSessionContext } = await loadHelpers();
+
+    const turn1 = mergeBoundSessionContext(
+      {},
+      {
+        agentId: 'main',
+        mediaTurnInstruction: 'For an explicit request to generate an image, use lobsterai_image_generate.',
+      },
+    );
+    expect(turn1.context.mediaTurnInstruction).toContain('lobsterai_image_generate');
+
+    // Non-turn context patch omitting mediaTurnInstruction keeps the bound instruction intact.
+    const patched = mergeBoundSessionContext(turn1.context, {
+      contextWindowOverride: 200_000,
+    });
+    expect(patched.context.mediaTurnInstruction).toBe(turn1.context.mediaTurnInstruction);
+
+    // Explicit empty string or null clears mediaTurnInstruction on the next turn.
+    const clearedEmpty = mergeBoundSessionContext(patched.context, {
+      mediaTurnInstruction: '',
+    });
+    expect(clearedEmpty.context.mediaTurnInstruction).toBe('');
+
+    const clearedNull = mergeBoundSessionContext(patched.context, {
+      mediaTurnInstruction: null,
+    });
+    expect(clearedNull.context.mediaTurnInstruction).toBe('');
+  });
 });

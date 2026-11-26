@@ -637,7 +637,7 @@ export const DshPluginEcosystemView: React.FC = () => {
           </div>
           {canReorderPlugins && (
             <p className="text-xs text-secondary">
-              {t('dshPluginsReorderHint').replace('{count}', String(MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS))}
+              {t('dshPluginsReorderHint').replace(/\{count\}/g, String(MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS))}
             </p>
           )}
         </div>
@@ -790,10 +790,7 @@ export const DshPluginEcosystemView: React.FC = () => {
                                   )}
                                   {hasSidebarOverflow && sidebarPlacement === SidebarPluginPlacement.Overflow && (
                                     <span
-                                      title={t('dshPluginsSidebarOverflowTooltip').replace(
-                                        '{count}',
-                                        String(MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS),
-                                      )}
+                                      title={t('dshPluginsSidebarOverflowTooltip')}
                                       className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
                                     >
                                       {t('dshPluginsSidebarOverflowBadge')}

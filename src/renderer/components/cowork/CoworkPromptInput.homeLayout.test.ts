@@ -102,6 +102,7 @@ function renderPrompt(options: {
   showFolderSelector?: boolean;
   showAgentSelector?: boolean;
   showReadOnlyContext?: boolean;
+  readOnlyContextTrailingText?: string;
   narrow?: boolean;
   mediaSelection?: MediaSelection;
 } = {}) {
@@ -158,6 +159,7 @@ function renderPrompt(options: {
         showModelSelector: true,
         showAgentSelector: options.showAgentSelector ?? !options.session,
         showReadOnlyContext: options.showReadOnlyContext ?? Boolean(options.session),
+        readOnlyContextTrailingText: options.readOnlyContextTrailingText,
         narrow: options.narrow ?? false,
         onSubmit: vi.fn(),
       }),
@@ -208,6 +210,31 @@ describe('CoworkPromptInput unified top-cap home layout', () => {
     const html = renderPrompt({ mediaSelection: selection });
     expect(html).toContain('data-custom-media-pill="true"');
     expect(html).toContain('Nano Banana 2');
+    // The pill must be allowed to shrink inside narrow split-pane toolbars so
+    // it truncates instead of colliding with the model selector on the right.
+    const pillTagMatch = html.match(/<div[^>]*data-custom-media-pill="true"[^>]*>/);
+    expect(pillTagMatch?.[0]).toContain('min-w-0');
+    expect(pillTagMatch?.[0]).toContain('overflow-hidden');
+    expect(pillTagMatch?.[0]).not.toContain('shrink-0');
+  });
+
+  test('allows the right toolbar group and model selector trigger to shrink on narrow widths', () => {
+    const selection = resolveMediaPreferences({
+      schemaVersion: 1,
+      revision: 2,
+      image: { mode: MediaPreferenceMode.Selected, modelId: 'banana-2', modelName: 'Nano Banana 2' },
+      video: { mode: MediaPreferenceMode.Inherit },
+    });
+    for (const html of [
+      renderPrompt({ mediaSelection: selection }),
+      renderPrompt({ session: activeSession, mediaSelection: selection }),
+    ]) {
+      // ModelSelector root wraps the trigger with w-fit min-w-0 max-w-full so
+      // flex shrinking truncates the model label instead of overlapping left controls.
+      expect(html).toContain('w-fit min-w-0 max-w-full');
+      expect(html).not.toContain('flex shrink-0 items-center gap-2');
+      expect(html).not.toContain('flex shrink-0 items-center gap-1');
+    }
   });
 
   test('keeps permission inside the card in active sessions without a standalone magic wand', () => {
@@ -225,5 +252,15 @@ describe('CoworkPromptInput unified top-cap home layout', () => {
     expect(cardIndex).toBeGreaterThan(-1);
     expect(trayIndex).toBeGreaterThan(cardIndex);
     expect(html).not.toContain('data-custom-media-pill');
+  });
+
+  test('renders active-session read-only footer row compactly with a smaller disclaimer font size', () => {
+    const disclaimer = i18nService.t('aiGeneratedDisclaimer');
+    const html = renderPrompt({
+      session: activeSession,
+      readOnlyContextTrailingText: disclaimer,
+    });
+    expect(html).toContain('mt-1 grid min-h-6');
+    expect(html).toContain(`text-[11px] leading-4 text-muted opacity-85">${disclaimer}</span>`);
   });
 });

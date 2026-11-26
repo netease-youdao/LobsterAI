@@ -216,6 +216,7 @@ import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlo
 import type { BrowserAnnotationAttachmentOpenPayload } from './BrowserAnnotationMessageAttachments';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
+import { resolveContextCompactActionState } from './contextUsagePopover';
 import {
   bucketCount,
   bucketDistance,
@@ -1432,10 +1433,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   );
   const isContextBusy = isContextCompacting || isContextMaintenance;
   const isSessionBusy = isStreaming || isContextMaintenance;
+  const compactActionState = resolveContextCompactActionState({
+    hasSession: Boolean(currentSession?.id),
+    remoteManaged,
+    compacting: isContextBusy,
+    isSessionBusy,
+    isSessionRunning: currentSession?.status === CoworkSessionStatusValue.Running,
+  });
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<CoworkPromptInputRef>(null);
-  const compactConfirmRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const shouldAutoScrollRef = useRef(true);
   const userDetachedFromBottomRef = useRef(false);
@@ -1450,7 +1457,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   currentSessionRef.current = currentSession;
   const messageOffsetByIdRef = useRef<Map<string, number>>(new Map());
   const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showCompactConfirm, setShowCompactConfirm] = useState(false);
   const [selectedTextAction, setSelectedTextAction] = useState<{
     text: string;
     sourceMessageId: string;
@@ -1592,6 +1598,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // back to a recently visited task keeps measured turn heights intact.
 
   useEffect(() => {
+    if (!sessionId) return;
+    coworkService.refreshContextUsageForSessionEntry(sessionId);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (!sessionId || !latestProposedPlan) return;
     if (draftCollaborationMode !== CoworkCollaborationMode.Plan) return;
     if (isSessionBusy || currentSession?.status === CoworkSessionStatusValue.Running) return;
@@ -1620,7 +1631,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   ]);
 
   useEffect(() => {
-    setShowCompactConfirm(false);
     closeSelectedTextAction({ clearSelection: true });
   }, [closeSelectedTextAction, sessionId]);
 
@@ -1653,30 +1663,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [closeSelectedTextAction, isMac, selectedTextAction]);
-
-  useEffect(() => {
-    if (!showCompactConfirm) return undefined;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && compactConfirmRef.current?.contains(target)) {
-        return;
-      }
-      setShowCompactConfirm(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setShowCompactConfirm(false);
-      }
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [showCompactConfirm]);
 
   // Rail navigation states
   const [currentRailIndex, setCurrentRailIndex] = useState(-1);
@@ -1971,9 +1957,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setRestoreContentElement(element);
   }, [setAnchorContentElement, setEntryContentElement, setRestoreContentElement]);
 
-  const handleCompactContext = useCallback(() => {
+  const handleContextUsagePopoverOpenChange = useCallback((open: boolean) => {
+    console.debug(`[CoworkSessionDetail] context usage popover ${open ? 'opened' : 'closed'}.`);
+    reportConversationNavigationAction({
+      actionType: open ? 'context_compact_confirm_open' : 'context_compact_confirm_close',
+      params: {
+        ...getConversationControlAnalyticsParams(),
+        targetOpen: open,
+      },
+    });
+  }, [getConversationControlAnalyticsParams]);
+
+  const handleConfirmCompactContext = useCallback(() => {
     if (!currentSession?.id) {
-      console.warn('[CoworkSessionDetail] manual context compaction was ignored because no session is selected.');
+      console.warn('[CoworkSessionDetail] manual context compaction confirmation was ignored because no session is selected.');
       return;
     }
     if (isContextBusy) {
@@ -2001,18 +1998,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       }));
       return;
     }
-    console.debug('[CoworkSessionDetail] manual context compaction confirmation toggled.');
-    setShowCompactConfirm(prev => {
-      const targetOpen = !prev;
-      reportConversationNavigationAction({
-        actionType: targetOpen ? 'context_compact_confirm_open' : 'context_compact_confirm_close',
-        params: {
-          ...getConversationControlAnalyticsParams(),
-          targetOpen,
-        },
-      });
-      return targetOpen;
+    console.log(`[CoworkSessionDetail] manual context compaction confirmed for session ${currentSession.id}.`);
+    reportConversationNavigationAction({
+      actionType: 'context_compact_confirm',
+      params: getConversationControlAnalyticsParams(),
     });
+    void coworkService.compactContext(currentSession.id);
   }, [
     currentSession?.id,
     currentSession?.status,
@@ -2020,30 +2011,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isContextBusy,
     isSessionBusy,
   ]);
-
-  const handleCancelCompactContext = useCallback(() => {
-    console.debug('[CoworkSessionDetail] manual context compaction was canceled by the user.');
-    reportConversationNavigationAction({
-      actionType: 'context_compact_cancel',
-      params: getConversationControlAnalyticsParams(),
-    });
-    setShowCompactConfirm(false);
-  }, [getConversationControlAnalyticsParams]);
-
-  const handleConfirmCompactContext = useCallback(() => {
-    if (!currentSession?.id) {
-      setShowCompactConfirm(false);
-      console.warn('[CoworkSessionDetail] manual context compaction confirmation was ignored because no session is selected.');
-      return;
-    }
-    console.log(`[CoworkSessionDetail] manual context compaction confirmed for session ${currentSession.id}.`);
-    reportConversationNavigationAction({
-      actionType: 'context_compact_confirm',
-      params: getConversationControlAnalyticsParams(),
-    });
-    setShowCompactConfirm(false);
-    void coworkService.compactContext(currentSession.id);
-  }, [currentSession?.id, getConversationControlAnalyticsParams]);
 
   const handleForkMessage = useCallback((messageId: string) => {
     if (!currentSession?.id) {
@@ -7632,7 +7599,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       <div
         ref={promptInputAreaRef}
         className={`relative shrink-0 ${COWORK_DETAIL_GUTTER_CLASS} ${
-          isArtifactPanelExpanded ? 'z-50 bg-background pb-2 pt-1' : 'pb-4 pt-0'
+          isArtifactPanelExpanded ? 'z-50 bg-background pb-2 pt-1' : 'pb-1 pt-0'
         } ${isArtifactPanelExpanded && isExpandedPromptInputHidden ? 'hidden' : ''}`}
       >
         {isArtifactPanelExpanded && !isExpandedPromptInputHidden && (
@@ -7863,6 +7830,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             showModelSelector={true}
             showReadOnlyContext={!isArtifactPanelExpanded}
             showNewUserWelcomeLoginOverlay={isNewUserWelcomeSession}
+            enablePageFileDrop={true}
             readOnlyContextTrailingText={isArtifactPanelExpanded ? undefined : i18nService.t('aiGeneratedDisclaimer')}
             workingDirectory={currentSession?.cwd ?? ''}
             contextAgentId={currentSession?.agentId}
@@ -7874,35 +7842,21 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             steerPreviewPortalTarget={showExternalSteerPreview ? steerPreviewPortalTarget : null}
             contextUsageControl={(
               <div className="flex min-w-0 items-center gap-2">
-                <div ref={compactConfirmRef} className="relative inline-flex flex-shrink-0">
-                  <ContextUsageIndicator
-                    usage={contextUsage}
-                    compacting={isContextBusy}
-                    disabled={remoteManaged || !currentSession?.id}
-                    onCompact={handleCompactContext}
-                    showTooltip={!showCompactConfirm}
-                    active={showCompactConfirm}
-                    className="-mr-1"
-                  />
-                  {showCompactConfirm && (
-                    <div className="absolute bottom-full left-1/2 z-50 mb-1.5 flex -translate-x-1/2 items-center gap-2 rounded-xl border border-border bg-surface p-1.5 shadow-popover">
-                      <button
-                        type="button"
-                        onClick={handleCancelCompactContext}
-                        className="whitespace-nowrap rounded-md bg-surface-raised px-2.5 py-1 text-center text-[11px] font-medium leading-4 text-secondary transition-colors hover:text-foreground"
-                      >
-                        {i18nService.t('cancel')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleConfirmCompactContext}
-                        className="whitespace-nowrap rounded-md bg-action px-2.5 py-1 text-center text-[11px] font-semibold leading-4 text-action-foreground transition-colors hover:bg-action-hover"
-                      >
-                        {i18nService.t('coworkContextCompactConfirmActionShort')}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <ContextUsageIndicator
+                  sessionId={currentSession?.id}
+                  usage={contextUsage}
+                  compacting={isContextBusy}
+                  showCompactAction={compactActionState.visible}
+                  compactDisabled={compactActionState.disabled}
+                  compactBlockedReason={
+                    compactActionState.blockedReasonKey
+                      ? i18nService.t(compactActionState.blockedReasonKey)
+                      : undefined
+                  }
+                  onCompact={handleConfirmCompactContext}
+                  onPopoverOpenChange={handleContextUsagePopoverOpenChange}
+                  className="-mr-1"
+                />
               </div>
             )}
           />

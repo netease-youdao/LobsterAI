@@ -143,12 +143,19 @@ export interface CoworkMessageMetadata {
   [key: string]: unknown;
 }
 
+export interface CoworkContextUsageBreakdown {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+}
+
 export interface CoworkContextUsage {
   sessionId: string;
   sessionKey?: string;
   usedTokens?: number;
   contextTokens?: number;
   percent?: number;
+  breakdown?: CoworkContextUsageBreakdown;
   compactionCount?: number;
   status: 'unknown' | 'normal' | 'warning' | 'danger' | 'compacting';
   latestCompactionCheckpointId?: string;

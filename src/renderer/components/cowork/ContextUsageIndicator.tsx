@@ -1,23 +1,56 @@
-import React from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 import type { CoworkContextUsage } from '../../types/cowork';
 import { formatTokenCount } from '../../utils/tokenFormat';
+import {
+  buildContextUsagePopoverViewModel,
+  ContextBarSegmentKind,
+  ContextBreakdownSegmentKey,
+} from './contextUsagePopover';
+import {
+  type FixedPopoverPlacement,
+  resolveFixedPopoverPlacement,
+  resolvePopoverBoundaryBounds,
+} from './popoverPlacement';
 
 interface ContextUsageIndicatorProps {
+  sessionId?: string;
   usage?: CoworkContextUsage;
   compacting?: boolean;
-  disabled?: boolean;
+  showCompactAction?: boolean;
+  compactDisabled?: boolean;
+  compactBlockedReason?: string;
   onCompact?: () => void;
+  onPopoverOpenChange?: (open: boolean) => void;
   className?: string;
   showTooltip?: boolean;
-  active?: boolean;
 }
 
 const RADIUS = 7;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+const POPOVER_DESIRED_WIDTH = 268;
+const POPOVER_ESTIMATED_HEIGHT = 224;
+const POPOVER_GAP_PX = 8;
 
-const formatTooltip = (usage: CoworkContextUsage | undefined, showActionHint: boolean): string => {
+const SEGMENT_BAR_CLASS: Record<ContextBarSegmentKind, string> = {
+  [ContextBarSegmentKind.System]: 'bg-sky-500 dark:bg-sky-400',
+  [ContextBarSegmentKind.Tools]: 'bg-amber-500 dark:bg-amber-400',
+  [ContextBarSegmentKind.Messages]: 'bg-violet-500 dark:bg-violet-400',
+  [ContextBarSegmentKind.Total]: 'bg-foreground/55',
+};
+
+const ROW_SWATCH_CLASS: Record<ContextBreakdownSegmentKey, string> = {
+  [ContextBreakdownSegmentKey.System]: 'bg-sky-500 dark:bg-sky-400',
+  [ContextBreakdownSegmentKey.Tools]: 'bg-amber-500 dark:bg-amber-400',
+  [ContextBreakdownSegmentKey.Messages]: 'bg-violet-500 dark:bg-violet-400',
+};
+
+const formatTooltip = (
+  usage: CoworkContextUsage | undefined,
+  showCompactAction: boolean,
+): string => {
   if (!usage || typeof usage.percent !== 'number') {
     return i18nService.t('coworkContextUsageUnknown');
   }
@@ -31,45 +64,162 @@ const formatTooltip = (usage: CoworkContextUsage | undefined, showActionHint: bo
         .replace('{total}', formatTokenCount(usage.contextTokens)),
     );
   }
-  if (showActionHint) {
-    lines.push(i18nService.t('coworkContextUsageCompactHint'));
-  }
+  lines.push(
+    i18nService.t(showCompactAction ? 'coworkContextUsageDetailsHint' : 'coworkContextUsageReadOnlyHint'),
+  );
   return lines.join('\n');
 };
 
 const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
+  sessionId,
   usage,
   compacting = false,
-  disabled = false,
+  showCompactAction = false,
+  compactDisabled = false,
+  compactBlockedReason,
   onCompact,
+  onPopoverOpenChange,
   className = '',
   showTooltip = true,
-  active = false,
 }) => {
-  const percent = typeof usage?.percent === 'number' ? usage.percent : undefined;
+  const viewModel = useMemo(() => buildContextUsagePopoverViewModel(usage), [usage]);
+  const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<FixedPopoverPlacement | null>(null);
+  const rootRef = useRef<HTMLSpanElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  const setOpenWithCallback = useCallback((nextOpen: boolean) => {
+    setOpen((prev) => {
+      if (prev === nextOpen) return prev;
+      onPopoverOpenChange?.(nextOpen);
+      return nextOpen;
+    });
+  }, [onPopoverOpenChange]);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!viewModel && open) {
+      setOpenWithCallback(false);
+    }
+  }, [open, setOpenWithCallback, viewModel]);
+
+  const updatePlacement = useCallback(() => {
+    const anchorEl = rootRef.current;
+    if (!anchorEl) return;
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const boundary = resolvePopoverBoundaryBounds(anchorEl);
+    setPlacement(resolveFixedPopoverPlacement({
+      anchor: {
+        top: anchorRect.top,
+        bottom: anchorRect.bottom,
+        left: anchorRect.left,
+        right: anchorRect.right,
+      },
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      desiredWidth: POPOVER_DESIRED_WIDTH,
+      estimatedHeight: POPOVER_ESTIMATED_HEIGHT,
+      gap: POPOVER_GAP_PX,
+      boundary,
+      preferredAlign: 'right',
+    }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || !viewModel) {
+      setPlacement(null);
+      return undefined;
+    }
+    updatePlacement();
+    window.addEventListener('resize', updatePlacement);
+    window.addEventListener('scroll', updatePlacement, true);
+    return () => {
+      window.removeEventListener('resize', updatePlacement);
+      window.removeEventListener('scroll', updatePlacement, true);
+    };
+  }, [open, updatePlacement, viewModel]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node
+        && (rootRef.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpenWithCallback(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenWithCallback(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, setOpenWithCallback]);
+
+  const percent = viewModel?.percent;
   if (!compacting && percent === undefined) {
     return null;
   }
+
   const offset = percent === undefined
     ? CIRCUMFERENCE
     : CIRCUMFERENCE * (1 - Math.min(Math.max(percent, 0), 100) / 100);
-  const isDisabled = disabled || compacting || !onCompact;
-  const tooltip = compacting ? i18nService.t('coworkContextCompacting') : formatTooltip(usage, !isDisabled);
+  const canOpenPopover = Boolean(viewModel);
+  const isActionButtonDisabled = compactDisabled || compacting || !onCompact;
+  const tooltip = compacting
+    ? i18nService.t('coworkContextCompacting')
+    : formatTooltip(usage, showCompactAction && Boolean(onCompact));
   const tooltipLines = tooltip.split('\n');
 
+  const handleTogglePopover = () => {
+    if (!canOpenPopover) return;
+    setOpenWithCallback(!open);
+  };
+
+  const handleCompactClick = () => {
+    if (isActionButtonDisabled) return;
+    setOpenWithCallback(false);
+    onCompact?.();
+  };
+
+  const popoverStyle: React.CSSProperties | undefined = placement
+    ? {
+        position: 'fixed',
+        left: `${placement.left}px`,
+        width: `${placement.width}px`,
+        ...(placement.bottom !== undefined
+          ? { bottom: `${placement.bottom}px` }
+          : { top: `${placement.top ?? 0}px` }),
+        maxHeight: `${Math.max(120, placement.maxHeight)}px`,
+      }
+    : undefined;
+
   return (
-    <span className={`group relative inline-flex flex-shrink-0 ${className}`}>
+    <span ref={rootRef} className={`group relative inline-flex flex-shrink-0 ${className}`}>
       <button
         type="button"
-        onClick={onCompact}
-        disabled={isDisabled}
+        onClick={handleTogglePopover}
+        disabled={!canOpenPopover}
         aria-label={tooltip}
+        aria-haspopup={canOpenPopover ? 'dialog' : undefined}
+        aria-expanded={canOpenPopover ? open : undefined}
         className={`relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors ${
-          isDisabled
+          !canOpenPopover
             ? 'cursor-default text-secondary/70'
-            : active
+            : open
               ? 'bg-surface-raised text-foreground'
-            : 'text-secondary hover:bg-surface-raised hover:text-foreground'
+              : 'text-secondary hover:bg-surface-raised hover:text-foreground'
         }`}
       >
         <svg
@@ -102,17 +252,91 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
           />
         </svg>
       </button>
-      {showTooltip && (
+      {showTooltip && !open && (
         <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden min-w-max max-w-[min(260px,calc(100vw-24px))] -translate-x-1/2 whitespace-nowrap rounded-xl border border-border bg-surface px-3 py-2 text-left text-[12px] leading-5 text-foreground shadow-popover group-hover:block">
           {tooltipLines.map((line, index) => (
             <React.Fragment key={`${line}-${index}`}>
-              <span className={index === tooltipLines.length - 1 && !isDisabled && !compacting ? 'text-secondary' : undefined}>
+              <span className={index === tooltipLines.length - 1 && canOpenPopover && !compacting ? 'text-secondary' : undefined}>
                 {line}
               </span>
               {index < tooltipLines.length - 1 && <br />}
             </React.Fragment>
           ))}
         </span>
+      )}
+      {open && viewModel && popoverStyle && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={popoverRef}
+          role="dialog"
+          aria-label={i18nService.t('coworkContextUsagePercent').replace('{percent}', String(viewModel.percent))}
+          style={popoverStyle}
+          className="z-[70] overflow-y-auto rounded-2xl border border-border bg-surface p-3.5 text-foreground shadow-popover"
+        >
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[13px] font-medium text-foreground tabular-nums">
+              {i18nService.t('coworkContextUsagePercent').replace('{percent}', String(viewModel.percent))}
+            </span>
+            {typeof viewModel.usedTokens === 'number' && typeof viewModel.contextTokens === 'number' && (
+              <span className="text-[11px] text-secondary tabular-nums">
+                {`~${formatTokenCount(viewModel.usedTokens)} / ${formatTokenCount(viewModel.contextTokens)}`}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-2.5 flex h-2 w-full overflow-hidden rounded-full bg-surface-raised">
+            {viewModel.barSegments.map((segment) => (
+              <div
+                key={segment.key}
+                className={`h-full transition-[width] duration-200 ${SEGMENT_BAR_CLASS[segment.key]}`}
+                style={{ width: `${segment.widthPercent}%` }}
+              />
+            ))}
+          </div>
+
+          {viewModel.rows.length > 0 && (
+            <dl className="mt-3 space-y-1.5 text-xs">
+              {viewModel.rows.map((row) => (
+                <div key={row.key} className="flex items-center justify-between gap-3">
+                  <dt className="flex min-w-0 items-center gap-2 text-secondary">
+                    <span
+                      className={`h-2 w-2 flex-shrink-0 rounded-full ${ROW_SWATCH_CLASS[row.key]}`}
+                      aria-hidden="true"
+                    />
+                    <span className="truncate">{i18nService.t(row.labelKey)}</span>
+                  </dt>
+                  <dd className="flex-shrink-0 font-medium text-foreground tabular-nums">
+                    {`~${formatTokenCount(row.tokens)}`}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+
+          {showCompactAction && onCompact && (
+            <div className="mt-3 border-t border-border pt-2.5">
+              <button
+                type="button"
+                onClick={handleCompactClick}
+                disabled={isActionButtonDisabled}
+                className={`flex w-full items-center justify-center rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  isActionButtonDisabled
+                    ? 'cursor-not-allowed bg-surface-raised text-secondary'
+                    : 'bg-action text-action-foreground hover:bg-action-hover'
+                }`}
+              >
+                {compacting
+                  ? i18nService.t('coworkContextCompacting')
+                  : i18nService.t('coworkContextCompactAction')}
+              </button>
+              {compactDisabled && !compacting && compactBlockedReason && (
+                <p className="mt-1.5 text-center text-[11px] leading-4 text-secondary">
+                  {compactBlockedReason}
+                </p>
+              )}
+            </div>
+          )}
+        </div>,
+        document.body,
       )}
     </span>
   );

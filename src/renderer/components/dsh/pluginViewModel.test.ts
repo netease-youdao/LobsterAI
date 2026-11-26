@@ -212,7 +212,7 @@ describe('pluginViewModel', () => {
     ]);
   });
 
-  test('partitions sidebar plugin panels when count exceeds the visible cap', () => {
+  test('partitions sidebar plugin panels within the 2-slot budget', () => {
     const panels = [
       { name: 'plugin-a', panelId: 'panel-a', title: 'Plugin A' },
       { name: 'plugin-b', panelId: 'panel-b', title: 'Plugin B' },
@@ -234,12 +234,16 @@ describe('pluginViewModel', () => {
       overflowPanels: [],
     });
     expect(partitionSidebarPluginPanels(panels.slice(0, 3))).toEqual({
-      visiblePanels: panels.slice(0, 2),
-      overflowPanels: panels.slice(2, 3),
+      visiblePanels: panels.slice(0, 1),
+      overflowPanels: panels.slice(1, 3),
     });
     expect(partitionSidebarPluginPanels(panels)).toEqual({
-      visiblePanels: panels.slice(0, 2),
-      overflowPanels: panels.slice(2),
+      visiblePanels: panels.slice(0, 1),
+      overflowPanels: panels.slice(1),
+    });
+    expect(partitionSidebarPluginPanels(panels.slice(0, 2), 1)).toEqual({
+      visiblePanels: [],
+      overflowPanels: panels.slice(0, 2),
     });
     expect(partitionSidebarPluginPanels(panels, 0)).toEqual({
       visiblePanels: [],
@@ -288,9 +292,13 @@ describe('pluginViewModel', () => {
 
     expect(resolveSidebarPluginPlacement(orderedPlugins)).toEqual({
       'panel-1': SidebarPluginPlacement.Pinned,
-      'panel-2': SidebarPluginPlacement.Pinned,
+      'panel-2': SidebarPluginPlacement.Overflow,
       'panel-3': SidebarPluginPlacement.Overflow,
       'panel-4': SidebarPluginPlacement.Overflow,
+    });
+    expect(resolveSidebarPluginPlacement(orderedPlugins.slice(0, 6))).toEqual({
+      'panel-1': SidebarPluginPlacement.Pinned,
+      'panel-2': SidebarPluginPlacement.Pinned,
     });
   });
 

@@ -694,6 +694,9 @@ export class DshBootstrap {
 
     this.hostManager.on('phaseChange', (_phase, hostStatus: DshHostStatus) => {
       options.onStatusChange?.(this.mapEffectiveEngineStatus(hostStatus), hostStatus);
+      if (hostStatus.phase === DshHostPhase.Ready) {
+        this.runtimeAdapter.syncHostConnection();
+      }
       if (hostStatus.phase === DshHostPhase.Ready && this.lastImInstances) {
         void this.channelsBridge.syncInstances(this.lastImInstances).catch((error) => {
           console.warn('[DshBootstrap] Failed to replay IM channels after host ready:', error);
