@@ -1,5 +1,5 @@
 import type { McpAuthMode } from '../../shared/mcp/auth';
-import type { McpManagedConnection } from '../../shared/mcp/constants';
+import type { McpManagedConnection, McpManagedProvider } from '../../shared/mcp/constants';
 import type { McpMarketplaceConnector } from '../../shared/mcp/marketplace';
 import type { McpToolFilter } from '../../shared/mcp/toolFilter';
 
@@ -97,7 +97,7 @@ export interface McpRegistryEntry {
   requiredEnvKeys?: string[];    // env vars the user must fill
   optionalEnvKeys?: string[];    // optional env vars
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
-  oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
+  oauthProvider?: McpManagedProvider; // special app-managed OAuth/API key flow
   kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
   marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
   connector?: McpMarketplaceConnector; // remote URL/auth/credential form, tool allowlist, examples

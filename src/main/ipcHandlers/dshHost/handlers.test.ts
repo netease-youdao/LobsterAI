@@ -1039,6 +1039,31 @@ describe('registerDshHostHandlers live HMR Typert RPC path', () => {
     expect(pickRes).toEqual({ ok: true, canceled: false, path: '/tmp/my-local-plugin' });
   });
 
+  test('OpenEcosystemView refreshes agent workspaces before opening the DSH view window', async () => {
+    const order: string[] = [];
+    const manager = {
+      isReady: vi.fn(() => true),
+      start: vi.fn(),
+      getAuthenticatedWebUrl: vi.fn(() => 'http://127.0.0.1:4321/#token=abc'),
+    } as unknown as DshHostManager;
+
+    registerDshHostHandlers({
+      getHostManager: () => manager,
+      getRuntimeDir: () => '/tmp/runtime',
+      getExecutablePath: () => '/tmp/electron',
+      syncAgentWorkspaces: async () => {
+        order.push('sync');
+      },
+      openEcosystemWindow: () => {
+        order.push('open');
+      },
+    });
+
+    const result = await registeredHandlers.get(DshHostIpc.OpenEcosystemView)!({});
+    expect(result).toEqual({ ok: true, url: 'http://127.0.0.1:4321/#token=abc' });
+    expect(order).toEqual(['sync', 'open']);
+  });
+
   test('normalizePluginUpdateOutcome classifies all server update outcomes and extracts failure output', () => {
     const baseChange = (overrides: Partial<DshPluginChangeResult> = {}): DshPluginChangeResult => ({
       changed: false,

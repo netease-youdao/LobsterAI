@@ -169,3 +169,49 @@ test('propagates previewUrl and name through videoConfirmationReferences and rea
   });
   expect(parsed?.references).toEqual(references);
 });
+
+test('previews extensionless DSH WebP attachments via localfile and handles direct media.url entries', () => {
+  const hashName = 'a'.repeat(64);
+  const dshAttachmentPath = `${localImageDirectory}/${hashName}`;
+  const largeWebp = `data:image/webp;base64,${'A'.repeat(900 * 1024)}`;
+  const emptyImage: DecodedPreviewImage = {
+    isEmpty: () => true,
+    getSize: () => ({ width: 0, height: 0 }),
+    resize: () => emptyImage,
+    toJPEG: () => Buffer.alloc(0),
+  };
+
+  expect(buildLocalFileImagePreviewUrl(dshAttachmentPath, 'image/webp'))
+    .toBe(`${localImagePreviewDirectory}/${hashName}`);
+  expect(buildLocalFileImagePreviewUrl(dshAttachmentPath)).toBeUndefined();
+
+  expect(createVideoReferenceImagePreview(largeWebp, {
+    localPath: dshAttachmentPath,
+    decodeDataUrl: () => emptyImage,
+  })).toEqual({
+    thumbnail: `${localImagePreviewDirectory}/${hashName}`,
+    previewUrl: `${localImagePreviewDirectory}/${hashName}`,
+  });
+
+  expect(createVideoReferenceImagePreview(largeWebp, {
+    decodeDataUrl: () => emptyImage,
+  })).toEqual({
+    thumbnail: largeWebp,
+    previewUrl: largeWebp,
+  });
+
+  const mediaRefs = videoConfirmationReferences({
+    image: 'data:image/webp;base64,ONE',
+    media: [
+      { type: 'first_frame', url: 'data:image/webp;base64,TWO' },
+      { type: 'reference_video', url: 'https://example.invalid/ref.mp4' },
+      { type: 'reference_audio', url: 'data:audio/mpeg;base64,AUD' },
+    ],
+  }, source => ({ thumbnail: source, previewUrl: source }));
+
+  expect(mediaRefs).toEqual([
+    { kind: 'image', thumbnail: 'data:image/webp;base64,ONE', previewUrl: 'data:image/webp;base64,ONE' },
+    { kind: 'image', thumbnail: 'data:image/webp;base64,TWO', previewUrl: 'data:image/webp;base64,TWO' },
+    { kind: 'video' },
+  ]);
+});

@@ -1,4 +1,5 @@
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import { sendDingTalkCard } from './dingtalk-card.mjs';
 import { DirectRecipientStore } from './direct-recipient-store.mjs';
 import {
   createTimeoutSignal,
@@ -463,46 +464,59 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
   async sendMessage({ chatId, text, replyContext }) {
     const content = String(text || '');
     const webhook = String(replyContext?.sessionWebhook || this.config.webhookUrl || '').trim();
+    const target = String(chatId || '').trim().replace(/^(?:[^:]+:)?direct:/i, '');
+    const staffId = replyContext?.conversationType === '1' && replyContext.senderStaffId
+      ? String(replyContext.senderStaffId) : this.privateRecipients.entries.get(target);
+    const isGroup = replyContext?.conversationType
+      ? replyContext.conversationType === '2' : (!staffId && target.startsWith('cid'));
+    const groupMode = isGroup ? this.config.groupReplyMode : undefined;
+    const markdown = {
+      title: content.split('\n', 1)[0].replace(/^[#*\s>-]+/, '').slice(0, 20) || 'Message',
+      text: content,
+    };
+    const plain = groupMode === 'text';
+    const cardTarget = isGroup ? target : staffId || (!target.startsWith('cid') ? target : '');
+    let token;
+    if (cardTarget && this.clientId && this.clientSecret && !plain && groupMode !== 'markdown') {
+      try {
+        token = await this.getAppAccessToken();
+      } catch (error) {
+        if (!webhook) throw error;
+      }
+      if (token) {
+        const receipt = await sendDingTalkCard({ token, robotCode: this.clientId, target: cardTarget, isGroup, text: content });
+        if (receipt) return receipt;
+      }
+    }
     if (webhook) {
       const res = await fetch(webhook, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          msgtype: 'text',
-          text: { content },
-        }),
+        body: JSON.stringify(plain ? { msgtype: 'text', text: { content } } : { msgtype: 'markdown', markdown }),
       });
       if (!res.ok) {
         throw new Error(`DingTalk sendMessage failed (HTTP ${res.status})`);
       }
+      const ack = await res.json();
+      if (ack.errcode !== 0) throw new Error(`DingTalk webhook did not accept the message: ${ack.errmsg ?? ack.errcode}`);
       return { delivered: true };
     }
 
     // Proactive OpenAPI fallback when no sessionWebhook is present (e.g. scheduled tasks)
-    const target = String(chatId || '').trim().replace(/^(?:[^:]+:)?direct:/i, '');
     if (!target) {
       throw new Error('DingTalk sendMessage requires sessionWebhook or chatId');
     }
-    const token = await this.getAppAccessToken();
-    const staffId = replyContext?.senderStaffId && replyContext.conversationType === '1'
-      ? String(replyContext.senderStaffId) : this.privateRecipients.entries.get(target);
-    const isGroup = replyContext?.conversationType === '2' || (!staffId && target.startsWith('cid'));
+    token ??= await this.getAppAccessToken();
     const url = isGroup
       ? `${DINGTALK_API_BASE}/v1.0/robot/groupMessages/send`
       : `${DINGTALK_API_BASE}/v1.0/robot/oToMessages/batchSend`;
-    const body = isGroup
-      ? {
-          robotCode: this.clientId,
-          openConversationId: target,
-          msgKey: 'sampleText',
-          msgParam: JSON.stringify({ content }),
-        }
-      : {
-          robotCode: this.clientId,
-          userIds: [staffId || target],
-          msgKey: 'sampleText',
-          msgParam: JSON.stringify({ content }),
-        };
+    const useMarkdown = !plain && (groupMode === 'markdown' || /^[#*>-]|[*_`#\[\]\n]/.test(content));
+    const body = {
+      robotCode: this.clientId,
+      ...(isGroup ? { openConversationId: target } : { userIds: [staffId || target] }),
+      msgKey: useMarkdown ? 'sampleMarkdown' : 'sampleText',
+      msgParam: JSON.stringify(useMarkdown ? markdown : { content }),
+    };
     const res = await fetch(url, {
       method: 'POST',
       headers: {

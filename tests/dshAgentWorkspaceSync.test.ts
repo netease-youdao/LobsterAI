@@ -78,3 +78,56 @@ test('serializes updates and leaves a user-removed workspace unregistered across
   await restarted([history, idle]);
   expect(registry.list().map(workspace => workspace.title)).toEqual(['history', 'idle']);
 });
+
+test('reconciles deferred agent directories once workspaceRegistry mounts after startup', async () => {
+  const { createAgentWorkspaceSync } = await import(helper);
+  const { statePath, registry, idle, history } = await fixture();
+  let mounted = false;
+  const readyCallbacks: Array<() => void> = [];
+  const ctx = {
+    get(name: string) {
+      return name === 'workspaceRegistry' && mounted ? registry : undefined;
+    },
+    inject(services: string[], callback: () => void) {
+      if (services.includes('workspaceRegistry')) {
+        readyCallbacks.push(callback);
+      }
+    },
+    logger: { info: vi.fn(), warn: vi.fn() },
+  };
+
+  const sync = createAgentWorkspaceSync(ctx, statePath);
+  const initial = await sync([idle, history]);
+  expect(initial).toMatchObject({ deferred: true, registeredCount: 0 });
+  expect(registry.list()).toEqual([]);
+
+  mounted = true;
+  for (const callback of readyCallbacks) callback();
+  await vi.waitFor(() => {
+    expect(registry.list().map(workspace => workspace.title)).toEqual(['idle', 'history']);
+  });
+  expect(JSON.parse(await fs.readFile(statePath, 'utf8'))).toEqual([idle, history]);
+});
+
+test('retries a directory that appears on disk later and attaches top-level sessions to their workspace', async () => {
+  const { attachSessionToWorkspace, createAgentWorkspaceSync } = await import(helper);
+  const { ctx, statePath, registry, idle, missing } = await fixture();
+  const attachSession = vi.fn(async () => {});
+  const resolveByPath = vi.fn(async (directory: string) => {
+    const canonical = await fs.realpath(directory);
+    return canonical === await fs.realpath(idle) ? { attachSession } : undefined;
+  });
+  Object.assign(registry, { resolveByPath });
+
+  const sync = createAgentWorkspaceSync(ctx, statePath);
+  await sync([idle, missing]);
+  expect(registry.list().map(workspace => workspace.title)).toEqual(['idle']);
+
+  await fs.mkdir(missing);
+  await sync([idle, missing]);
+  expect(registry.list().map(workspace => workspace.title)).toEqual(['idle', 'missing']);
+
+  expect(await attachSessionToWorkspace(ctx, 'sess-1', idle)).toBe(true);
+  expect(attachSession).toHaveBeenCalledWith('sess-1');
+  expect(await attachSessionToWorkspace(ctx, 'sess-2', missing)).toBe(false);
+});

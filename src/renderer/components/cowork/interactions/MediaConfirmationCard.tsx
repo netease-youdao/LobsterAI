@@ -77,12 +77,16 @@ export default function MediaConfirmationCard({
   const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [failedThumbIndices, setFailedThumbIndices] = useState<Record<number, number>>({});
   const t = (key: string) => i18nService.t(key);
   const referenceImageLabel = t('mediaVideoConfirmReferenceImage');
   const { previewImages, previewIndexByReferenceIndex } = useMemo(
     () => buildReferencePreviewGallery(details?.references ?? [], referenceImageLabel),
     [details?.references, referenceImageLabel],
   );
+  useEffect(() => {
+    setFailedThumbIndices({});
+  }, [details?.references]);
   useEffect(() => {
     if (hidden) setPreviewIndex(null);
   }, [hidden]);
@@ -226,7 +230,10 @@ export default function MediaConfirmationCard({
                 <span className="mr-1 text-xs text-secondary">{t('mediaVideoConfirmReferences')}</span>
                 {details.references.map((reference, index) => {
                   const label = reference.name || t(reference.kind === VideoReferenceKind.Video ? 'mediaVideoConfirmReferenceVideo' : 'mediaVideoConfirmReferenceImage');
-                  const thumbSrc = reference.thumbnail ?? reference.previewUrl;
+                  const thumbCandidates = [reference.thumbnail, reference.previewUrl]
+                    .filter((value, candidateIdx, all): value is string => Boolean(value) && all.indexOf(value) === candidateIdx);
+                  const failureCount = failedThumbIndices[index] ?? 0;
+                  const thumbSrc = thumbCandidates[failureCount];
                   const previewIndexForRef = previewIndexByReferenceIndex[index];
                   if (thumbSrc && previewIndexForRef >= 0) {
                     const previewHint = t('mediaVideoConfirmPreviewReference');
@@ -243,6 +250,9 @@ export default function MediaConfirmationCard({
                           src={thumbSrc}
                           alt={label}
                           draggable={false}
+                          onError={() => {
+                            setFailedThumbIndices(prev => ({ ...prev, [index]: (prev[index] ?? 0) + 1 }));
+                          }}
                           className="h-full w-full object-cover transition-transform duration-150 group-hover:scale-105"
                         />
                       </button>

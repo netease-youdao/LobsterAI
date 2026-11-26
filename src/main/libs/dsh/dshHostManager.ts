@@ -187,6 +187,7 @@ export type DshBridgeSubagentBindingHandler = (
 
 export interface DshHostSessionContext {
   sessionId: string;
+  userQuestionsDisabled?: boolean;
   agentId?: string;
   coworkSessionId?: string;
   traceId?: string;
@@ -825,6 +826,17 @@ export class DshHostManager extends EventEmitter {
 
   async syncAgents(agents: DshHostAgentSpec[], workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
     const payload = { agents, workspaceDirectories };
+    this.lastAgentSync = payload;
+    if (!this.isReady()) return { deferred: true };
+    return this.getClient().callOps(DshOpsAction.SyncAgents, payload);
+  }
+
+  async refreshAgentWorkspaces(workspaceDirectories?: string[]): Promise<Record<string, unknown>> {
+    if (!this.lastAgentSync) return { skipped: true };
+    const payload = {
+      agents: this.lastAgentSync.agents,
+      workspaceDirectories: workspaceDirectories ?? this.lastAgentSync.workspaceDirectories,
+    };
     this.lastAgentSync = payload;
     if (!this.isReady()) return { deferred: true };
     return this.getClient().callOps(DshOpsAction.SyncAgents, payload);

@@ -16,6 +16,7 @@ import { messageEditTranslations } from '../shared/cowork/messageEdit';
 import { desktopCompanionTranslations } from '../shared/desktopCompanion/copy';
 import { imageEditingTranslations } from '../shared/imageEditing/copy';
 import { mediaTranslations } from '../shared/media/copy';
+import { neteaseMailTranslations } from '../shared/neteaseMail/copy';
 import { modelContextWindowTranslations } from '../shared/providers/contextWindowCopy';
 
 export type LanguageType = 'zh' | 'en';
@@ -34,6 +35,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.zh,
     ...mediaTranslations.zh,
+    ...neteaseMailTranslations.zh,
     ...modelContextWindowTranslations.zh,
     ...imageEditingTranslations.zh,
     browserPasskeyChooseAccountTitle: '使用通行密钥',
@@ -510,6 +512,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     ...desktopCompanionTranslations.en,
     ...mediaTranslations.en,
+    ...neteaseMailTranslations.en,
     ...modelContextWindowTranslations.en,
     ...imageEditingTranslations.en,
     openClawRepairCommandTimeout: 'Repair command {command} timed out after {seconds} seconds. Repair has stopped. Diagnostics: {path}',

@@ -124,6 +124,7 @@ import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPreview,
   formatCoworkImageAttachmentLimit,
+  readImageDimensions,
   sniffImageMimeType,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
@@ -253,7 +254,10 @@ import { type ShellGetBrowserAppsInput, ShellIpc, ShellOpenFailureReason } from 
 import { isUrlOnDomain } from '../shared/url/hostname';
 import { AgentManager } from './agentManager';
 import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
-import { createLocalFileProtocolResponse } from './artifactLocalFileProtocol';
+import {
+  createLocalFileProtocolResponse,
+  getLocalFileProtocolPath,
+} from './artifactLocalFileProtocol';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
 import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
 import { BrowserCredentialApprovalService } from './browserCredentials/browserCredentialApprovalService';
@@ -650,6 +654,7 @@ import { WebSearchHost } from './libs/webSearchHost';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
+import { createNeteaseMailDesktop } from './mcp/neteaseMail/desktop';
 import {
   type AccountBoundValue,
   type AuthExchangeIntentSnapshot,
@@ -2349,12 +2354,20 @@ const isAppQuitConfirmationEnabled = (): boolean => {
   }
 };
 
+const neteaseMailDesktop = createNeteaseMailDesktop({
+  getRuntime: () => getMcpRuntime(), getStore: () => getCoworkStore(),
+  getManager: () => dshBootstrap?.mcpOAuthManager ?? null,
+  getAdapter: () => dshBootstrap?.runtimeAdapter,
+  sync: options => syncOpenClawConfig(options),
+});
+
 const getDshBootstrap = (): DshBootstrap => {
   if (!dshBootstrap) {
     const userDataDir = app.getPath('userData');
     const storeInstance = getCoworkStore();
     dshBootstrap = new DshBootstrap({
       toolProviders: [
+        neteaseMailDesktop.host,
         createDshMediaGenerationProvider(
           request => getMcpRuntime().executeMediaGeneration(request),
           sessionId => dshBootstrap?.runtimeAdapter.getActiveTurnSignal(sessionId),
@@ -3565,6 +3578,7 @@ const getSkillManager = () => {
 const getMcpRuntime = (): McpRuntime => {
   if (!mcpRuntime) {
     mcpRuntime = new McpRuntime({
+      getMailToken: id => dshBootstrap?.mcpOAuthManager.getToken(id) ?? null,
       getStore,
       syncOpenClawConfig,
       bridgeSecret: getOpenClawLoopbackState().mcpBridgeSecret,
@@ -6404,10 +6418,17 @@ if (!gotTheLock) {
       };
       const maxImageBytes = 20 * 1024 * 1024;
       const maxMediaBytes = 50 * 1024 * 1024;
+      const sessionCwd = sessionId ? getCoworkStore().getSession(sessionId)?.cwd?.trim() : undefined;
       const resolvedLocalFileBySource = new Map<string, string>();
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
-        const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
+        const filePath = ref.startsWith('file://')
+          ? fileURLToPath(ref)
+          : ref.startsWith(`${ArtifactPreviewProtocol.LocalFile}://`)
+            ? getLocalFileProtocolPath(ref)
+            : sessionCwd && !path.isAbsolute(ref)
+              ? path.resolve(sessionCwd, ref)
+              : path.resolve(ref);
         const extensionMime = MEDIA_MIME[path.extname(filePath).toLowerCase()];
         if (selectedModel.toLowerCase().includes('seedance') && extensionMime?.startsWith('video/')) {
           throw new Error(t('mediaTaskVideoUrlRequired'));
@@ -6421,9 +6442,12 @@ if (!gotTheLock) {
         const mime = extensionMime ?? sniffImageMimeType(buf) ?? 'application/octet-stream';
         if (mime.startsWith('image/')) {
           if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
-          const dimensions = nativeImage.createFromBuffer(buf).getSize();
+          const decodedImage = nativeImage.createFromBuffer(buf);
+          const dimensions = decodedImage.isEmpty() ? readImageDimensions(buf) : decodedImage.getSize();
           const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
-          if (dimensions.width < minimum || dimensions.height < minimum) throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
+          if (dimensions && (dimensions.width < minimum || dimensions.height < minimum)) {
+            throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
+          }
         }
         const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
         resolvedLocalFileBySource.set(dataUrl, filePath);
@@ -9527,6 +9551,8 @@ if (!gotTheLock) {
   );
 
   registerMcpHandlers({
+    getMainWindow: () => mainWindow,
+    mail: neteaseMailDesktop.connection,
     getMcpRuntime,
     syncDshConfig: syncOpenClawConfig,
     getMcpOAuthManager: () => getDshBootstrap().mcpOAuthManager,
@@ -9550,6 +9576,17 @@ if (!gotTheLock) {
     isAuthGateBlocked,
     openEcosystemWindow: (authenticatedUrl, routeHash) => {
       getDshBootstrap().openEcosystemWindow(authenticatedUrl, routeHash);
+    },
+    syncAgentWorkspaces: async () => {
+      const workspaceDirectories = [...new Set(
+        getAgentManager().listAgents().map(
+          agent => agent.workingDirectory?.trim() || resolveAgentDefaultWorkingDirectory(agent.id) || os.homedir(),
+        ),
+      )];
+      const result = await getDshBootstrap().hostManager.refreshAgentWorkspaces(workspaceDirectories);
+      if (result && typeof result === 'object' && result.skipped === true) {
+        await syncOpenClawConfig({ reason: 'dsh-ecosystem-open' });
+      }
     },
     closeEcosystemWindow: () => {
       dshBootstrap?.closeEcosystemWindow();
@@ -14789,6 +14826,8 @@ if (!gotTheLock) {
     messageSpeechController = null;
     skillManager?.stopWatching();
     cancelAllMcpOAuthLogins();
+    void neteaseMailDesktop.connection.cancelAuthorization();
+    neteaseMailDesktop.host.invalidate();
     stopMediaPollTimer();
     pendingMediaTasks.clear();
     mediaTaskOwnerById.clear();
