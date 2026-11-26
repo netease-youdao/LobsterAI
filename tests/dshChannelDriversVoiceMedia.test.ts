@@ -185,7 +185,7 @@ describe('DSH IM Channel Drivers — Voice & Image Inbound Support', () => {
         ],
         messageId: 'om_voice_1',
         chatType: 'direct',
-        replyContext: { receiveIdType: 'chat_id', replyToMessageId: 'om_voice_1' },
+        replyContext: { receiveIdType: 'chat_id', isGroup: false, replyToMessageId: 'om_voice_1' },
       },
     ]);
   });

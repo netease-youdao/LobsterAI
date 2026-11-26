@@ -256,6 +256,7 @@ export class QQChannelDriver extends BaseChannelDriver {
       ? `${QQ_API_BASE}/v2/groups/${encodeURIComponent(chatId)}/messages`
       : `${QQ_API_BASE}/v2/users/${encodeURIComponent(chatId)}/messages`;
     const msgId = replyContext?.msgId ? String(replyContext.msgId) : '';
+    const content = String(text || '');
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -263,8 +264,9 @@ export class QQChannelDriver extends BaseChannelDriver {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        content: String(text || ''),
-        msg_type: 0,
+        ...(this.config.markdownSupport === false
+          ? { msg_type: 0, content }
+          : { msg_type: 2, markdown: { content } }),
         ...(msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {}),
       }),
     });

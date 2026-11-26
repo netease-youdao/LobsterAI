@@ -1,4 +1,5 @@
 import { BaseChannelDriver, sleepAbortable } from './base-driver.mjs';
+import { formatCardMarkdown } from './card-markdown.mjs';
 import {
   createTimeoutSignal,
   detectImageMime,
@@ -543,6 +544,7 @@ export class FeishuChannelDriver extends BaseChannelDriver {
       chatType: isGroup ? 'group' : 'direct',
       replyContext: {
         receiveIdType: 'chat_id',
+        isGroup,
         replyToMessageId: messageId,
         ...(threadId ? { threadId, rootMessageId: rootMessageId || undefined, replyInThread: true } : {}),
       },
@@ -711,19 +713,35 @@ export class FeishuChannelDriver extends BaseChannelDriver {
     const url = useReply
       ? `${messagesUrl}/${encodeURIComponent(replyTo)}/reply`
       : `${messagesUrl}?receive_id_type=${encodeURIComponent(receiveIdType)}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        ...(useReply ? { reply_in_thread: replyContext.replyInThread } : { receive_id: recipient }),
-        msg_type: 'text',
-        content: JSON.stringify({ text: String(text || '') }),
-      }),
-    });
-    const data = await res.json();
+    const send = async (msgType, content) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...(useReply ? { reply_in_thread: replyContext.replyInThread } : { receive_id: recipient }),
+          msg_type: msgType,
+          content: JSON.stringify(content),
+        }),
+      });
+      return { res, data: await res.json() };
+    };
+    const markdown = String(text || '');
+    const mode = this.config.replyMode ?? 'auto';
+    const useCard = replyContext?.replyToMessageId && this.config.streaming === true
+      && (mode === 'streaming' || (mode === 'auto' && replyContext.isGroup === false));
+    const post = { zh_cn: { content: [[{ tag: 'md', text: markdown }]] } };
+    let { res, data } = useCard
+      ? await send('interactive', {
+          schema: '2.0',
+          config: { wide_screen_mode: true },
+          body: { elements: [{ tag: 'markdown', content: formatCardMarkdown(markdown) }] },
+        })
+      : await send('post', post);
+    // A rejected card (e.g. too many tables) can still render as a native post.
+    if (useCard && data.code === 230099) ({ res, data } = await send('post', post));
     if (!res.ok || data.code !== 0) {
       throw new Error(`Feishu sendMessage failed: ${data.msg || res.status}`);
     }
