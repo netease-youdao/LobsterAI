@@ -467,7 +467,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
                       type="button"
                       disabled={busy || !Number.isInteger(slideCount) || slideCount < 3 || slideCount > 40}
                       onClick={() => void runSubmit(PptExampleMode.Guided)}
-                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-action px-4 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50"
                     >
                       {busy ? t('pptCreationPreparing') : t(coverSeed ? 'pptCreationContinue' : 'pptCreationFill')}
                       <ArrowRightIcon aria-hidden="true" className="h-4 w-4 shrink-0" />
@@ -490,7 +490,7 @@ export default function PptExampleDialog({ catalog, example, onClose, onUse, onC
                       type="button"
                       disabled={busy || !prompt.trim()}
                       onClick={() => void runSubmit(PptExampleMode.Direct)}
-                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-50"
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-action px-4 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50"
                     >
                       <SparklesIcon aria-hidden="true" className="h-4 w-4 shrink-0" />
                       {busy ? t('pptCreationPreparing') : t(promptEdited ? 'pptCreationFill' : 'pptStreamlinedTryDemo')}

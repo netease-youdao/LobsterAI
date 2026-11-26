@@ -123,7 +123,7 @@ const PublishingQuotaLimitDialog: React.FC<PublishingQuotaLimitDialogProps> = ({
                 );
                 onSubscribe();
               }}
-              className="h-11 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              className="h-11 rounded-lg bg-action px-5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover"
             >
               {t('subscriptionGateOpenAction')}
             </button>
@@ -196,7 +196,7 @@ const PublishingQuotaLimitDialog: React.FC<PublishingQuotaLimitDialogProps> = ({
               );
               onManage();
             }}
-            className="h-9 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            className="h-9 rounded-lg bg-action px-5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover"
           >
             {t('publishingQuotaManage')}
           </button>

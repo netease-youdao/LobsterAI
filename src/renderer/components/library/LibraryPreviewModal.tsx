@@ -495,7 +495,7 @@ const LibraryPreviewModalContent: React.FC<LibraryPreviewModalProps> = ({
               <button
                 type="button"
                 onClick={onOpenLink}
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-white hover:opacity-90"
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                 {i18nService.t('libraryOpenLink')}

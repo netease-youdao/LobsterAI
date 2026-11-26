@@ -235,7 +235,7 @@ const ArtifactFileShareDialog = ({
     ? 'border border-border bg-background text-secondary hover:bg-surface hover:text-foreground'
     : copyStatus === ArtifactFileShareCopyStatus.Failed
       ? 'bg-red-500 text-white hover:bg-red-500/90'
-      : 'bg-primary text-primary-foreground hover:bg-primary-hover';
+      : 'bg-action text-action-foreground hover:bg-action-hover';
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/35 px-4">
@@ -358,7 +358,7 @@ const ArtifactFileShareDialog = ({
               <button
                 type="button"
                 onClick={onRetry}
-                className="inline-flex h-10 min-w-[88px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover"
+                className="inline-flex h-10 min-w-[88px] items-center justify-center rounded-lg bg-action px-4 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 {t('artifactFileShareRetry')}
               </button>
@@ -385,7 +385,7 @@ const ArtifactFileShareDialog = ({
                 type="button"
                 onClick={onCreate}
                 disabled={!canCreate || Boolean(operation)}
-                className="inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 min-w-[104px] items-center justify-center rounded-lg bg-action px-4 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isCreating
                   ? t('artifactFileShareCreating')
@@ -398,7 +398,7 @@ const ArtifactFileShareDialog = ({
                 type="button"
                 onClick={onSubmitPermission}
                 disabled={!canSubmitPermission || Boolean(operation) || trialStatus.isExpired}
-                className="inline-flex h-10 min-w-[128px] items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 min-w-[128px] items-center justify-center rounded-lg bg-action px-4 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isPermissionUpdating
                   ? t('artifactFileSharePermissionUpdating')

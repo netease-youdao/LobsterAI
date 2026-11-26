@@ -242,7 +242,7 @@ export const DshPluginEcosystemView: React.FC = () => {
             type="button"
             onClick={() => setInstallModalOpen(true)}
             disabled={restarting}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-3.5 w-3.5 stroke-[2.2]" />
             {t('dshEcosystemInstallBtn')}
@@ -503,7 +503,7 @@ export const DshPluginEcosystemView: React.FC = () => {
                         {isHybrid && (
                           <span
                             title={t('dshPluginsHybridTooltip')}
-                            className="rounded-full bg-primary-muted px-2 py-0.5 text-[11px] font-medium text-primary"
+                            className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] font-medium text-secondary"
                           >
                             {t('dshPluginsBadgeHybrid')}
                           </span>
@@ -550,7 +550,7 @@ export const DshPluginEcosystemView: React.FC = () => {
                                 ...(plugin.icon ? { icon: plugin.icon } : {}),
                               });
                             }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                           >
                             {t('dshPluginsOpenPluginPanel')}
                           </button>

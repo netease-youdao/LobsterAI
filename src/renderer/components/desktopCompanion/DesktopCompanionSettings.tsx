@@ -83,7 +83,7 @@ export default function DesktopCompanionSettings() {
       return (
         <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
           <span>{t('desktopCompanionSelectionNeedsPermission')}</span>
-          <button type="button" className="shrink-0 rounded-md bg-primary px-2.5 py-1 text-white" onClick={() => { void api.requestPermission(CompanionPermission.Accessibility); }}>
+          <button type="button" className="shrink-0 rounded-md bg-action px-2.5 py-1 text-action-foreground transition-colors hover:bg-action-hover" onClick={() => { void api.requestPermission(CompanionPermission.Accessibility); }}>
             {t('desktopCompanionGrantPermission')}
           </button>
         </div>
@@ -115,13 +115,13 @@ export default function DesktopCompanionSettings() {
                   disabled={!state || saving}
                   onClick={() => { void update({ skin: skin.id }); }}
                   className={'relative flex min-w-0 items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-xs transition-colors disabled:opacity-50 '
-                    + (selected ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-secondary hover:bg-secondary/10')}
+                    + (selected ? 'border-action bg-surface-raised text-foreground' : 'border-border text-secondary hover:bg-surface-raised/60')}
                 >
                   <span className="grid h-11 w-11 shrink-0 place-items-center">
                     <SkinPreview skin={skin} />
                   </span>
                   <span className="min-w-0 truncate font-medium">{t(skin.nameKey)}</span>
-                  {selected && <CheckIcon className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-primary" aria-hidden="true" />}
+                  {selected && <CheckIcon className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-foreground" aria-hidden="true" />}
                 </button>
               );
             })}

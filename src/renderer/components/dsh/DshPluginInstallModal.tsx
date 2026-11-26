@@ -402,7 +402,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
                         }}
                         className={`rounded-lg border px-2.5 py-1 text-xs transition-colors ${
                           registryPreset === opt.id
-                            ? 'border-primary bg-primary-muted font-medium text-primary'
+                            ? 'border-action bg-surface-raised font-medium text-foreground'
                             : 'border-border bg-surface text-secondary hover:text-foreground'
                         }`}
                       >
@@ -446,7 +446,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
               type="button"
               disabled={!spec.trim() || checking}
               onClick={() => void handleStartInstall()}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-action px-4 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               {checking && <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />}
               {checking ? t('dshPluginsChecking') : t('dshEcosystemInstallBtn')}
@@ -525,7 +525,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
               <button
                 type="button"
                 onClick={() => void runInstall()}
-                className="rounded-xl bg-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+                className="rounded-xl bg-action px-4 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 {isWebOnlyWarning ? t('dshPluginsInstallAnyway') : t('dshPluginsInstallNow')}
               </button>
@@ -538,7 +538,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
       {step === InstallStep.Installing && (
         <div className="space-y-4 px-5 py-6">
           <div className="flex items-start gap-3">
-            <ArrowPathIcon className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-primary" />
+            <ArrowPathIcon className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-foreground" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className={`truncate font-medium text-foreground ${SETTINGS_ITEM_TITLE_TEXT}`}>
@@ -604,7 +604,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
             <button
               type="button"
               onClick={() => void runInstall(pendingBuilds)}
-              className="rounded-xl bg-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+              className="rounded-xl bg-action px-4 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
             >
               {t('dshPluginsApproveBuildsAndRetry')}
             </button>
@@ -658,7 +658,7 @@ export const DshPluginInstallModal: React.FC<DshPluginInstallModalProps> = ({
               <button
                 type="button"
                 onClick={() => void runInstall()}
-                className="rounded-xl bg-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+                className="rounded-xl bg-action px-4 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 {t('retry')}
               </button>

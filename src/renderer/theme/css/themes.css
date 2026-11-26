@@ -6,6 +6,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #2563EB;
   --lobster-primary-muted: rgba(59,130,246,0.10);
+  --lobster-action: #1A1A1A;
+  --lobster-action-foreground: #FFFFFF;
+  --lobster-action-hover: #333333;
   --lobster-accent: #3B82F6;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #FFFFFF;
@@ -52,6 +55,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #60A5FA;
   --lobster-primary-muted: rgba(59,130,246,0.12);
+  --lobster-action: #F4F4F5;
+  --lobster-action-foreground: #0F1117;
+  --lobster-action-hover: #E4E5E9;
   --lobster-accent: #3B82F6;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #0F1117;
@@ -98,6 +104,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #2563eb;
   --lobster-primary-muted: rgba(59,130,246,0.08);
+  --lobster-action: #3b82f6;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #2563eb;
   --lobster-accent: #14b8a6;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #f8fafc;
@@ -144,6 +153,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #b45309;
   --lobster-primary-muted: rgba(217,119,6,0.08);
+  --lobster-action: #d97706;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #b45309;
   --lobster-accent: #f97316;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #fffbeb;
@@ -190,6 +202,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #27272a;
   --lobster-primary-muted: rgba(24,24,27,0.06);
+  --lobster-action: #18181b;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #27272a;
   --lobster-accent: #71717a;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #fafaf9;
@@ -236,6 +251,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #db2777;
   --lobster-primary-muted: rgba(236,72,153,0.08);
+  --lobster-action: #ec4899;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #db2777;
   --lobster-accent: #a855f7;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #fdf2f8;
@@ -282,6 +300,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #60a5fa;
   --lobster-primary-muted: rgba(59,130,246,0.12);
+  --lobster-action: #3b82f6;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #60a5fa;
   --lobster-accent: #14b8a6;
   --lobster-accent-foreground: #ffffff;
   --lobster-background: #0f172a;
@@ -328,6 +349,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #38bdf8;
   --lobster-primary-muted: rgba(14,165,233,0.12);
+  --lobster-action: #0ea5e9;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #38bdf8;
   --lobster-accent: #2dd4bf;
   --lobster-accent-foreground: #0c1222;
   --lobster-background: #0c1222;
@@ -374,6 +398,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #34d399;
   --lobster-primary-muted: rgba(16,185,129,0.12);
+  --lobster-action: #10b981;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #34d399;
   --lobster-accent: #67e8f9;
   --lobster-accent-foreground: #0a1a14;
   --lobster-background: #0a1a14;
@@ -420,6 +447,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #fb7185;
   --lobster-primary-muted: rgba(244,63,94,0.12);
+  --lobster-action: #f43f5e;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #fb7185;
   --lobster-accent: #f0abfc;
   --lobster-accent-foreground: #1a0a10;
   --lobster-background: #1a0a10;
@@ -466,6 +496,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #f59e0b;
   --lobster-primary-muted: rgba(217,119,6,0.12);
+  --lobster-action: #d97706;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #f59e0b;
   --lobster-accent: #a78bfa;
   --lobster-accent-foreground: #1a1210;
   --lobster-background: #1a1210;
@@ -512,6 +545,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #fb923c;
   --lobster-primary-muted: rgba(249,115,22,0.12);
+  --lobster-action: #f97316;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #fb923c;
   --lobster-accent: #fb7185;
   --lobster-accent-foreground: #1a0e0a;
   --lobster-background: #1a0e0a;
@@ -558,6 +594,9 @@
   --lobster-primary-foreground: #2e3440;
   --lobster-primary-hover: #8fbcbb;
   --lobster-primary-muted: rgba(136,192,208,0.12);
+  --lobster-action: #88c0d0;
+  --lobster-action-foreground: #2e3440;
+  --lobster-action-hover: #8fbcbb;
   --lobster-accent: #81a1c1;
   --lobster-accent-foreground: #2e3440;
   --lobster-background: #2e3440;
@@ -604,6 +643,9 @@
   --lobster-primary-foreground: #ffffff;
   --lobster-primary-hover: #c084fc;
   --lobster-primary-muted: rgba(168,85,247,0.12);
+  --lobster-action: #a855f7;
+  --lobster-action-foreground: #ffffff;
+  --lobster-action-hover: #c084fc;
   --lobster-accent: #22d3ee;
   --lobster-accent-foreground: #0a0a1a;
   --lobster-background: #0a0a1a;

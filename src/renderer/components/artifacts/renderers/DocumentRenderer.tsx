@@ -319,7 +319,7 @@ const FileInfoFallback: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
       {artifact.filePath && (
         <button
           onClick={handleOpenWithApp}
-          className="px-3 py-1.5 text-xs rounded bg-primary text-white hover:bg-primary/90 transition-colors mt-2"
+          className="px-3 py-1.5 text-xs rounded bg-action text-action-foreground hover:bg-action-hover transition-colors mt-2"
         >
           {t('artifactOpenWithApp')}
         </button>

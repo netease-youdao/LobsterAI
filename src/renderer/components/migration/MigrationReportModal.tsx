@@ -88,7 +88,7 @@ export const MigrationReportModal: React.FC = () => {
           <button
             type="button"
             onClick={() => void handleDismiss()}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700"
+            className="rounded-lg bg-action px-4 py-2 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
           >
             {t('migrationV2ConfirmBtn')}
           </button>

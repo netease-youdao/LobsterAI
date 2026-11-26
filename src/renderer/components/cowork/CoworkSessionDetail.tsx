@@ -7385,7 +7385,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   <p>{i18nService.t('coworkEditRecoveryNeeded')}</p>
                   {messageEdit.error && <p role="alert" className="mt-2 text-red-500">{messageEdit.error}</p>}
                   <button type="button" disabled={messageEdit.busy} onClick={() => void messageEdit.recover()}
-                    className="mt-3 rounded-lg bg-primary px-3 py-2 text-white disabled:opacity-50">
+                    className="mt-3 rounded-lg bg-action px-3 py-2 text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50">
                     {i18nService.t(messageEdit.busy ? 'coworkEditWorking' : 'coworkEditRecover')}
                   </button>
                 </div>
@@ -7852,7 +7852,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       <button
                         type="button"
                         onClick={handleConfirmCompactContext}
-                        className="whitespace-nowrap rounded-md bg-primary px-2.5 py-1 text-center text-[11px] font-semibold leading-4 text-white transition-colors hover:bg-primary-hover"
+                        className="whitespace-nowrap rounded-md bg-action px-2.5 py-1 text-center text-[11px] font-semibold leading-4 text-action-foreground transition-colors hover:bg-action-hover"
                       >
                         {i18nService.t('coworkContextCompactConfirmActionShort')}
                       </button>

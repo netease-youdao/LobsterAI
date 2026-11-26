@@ -33,6 +33,11 @@ module.exports = plugin(function () {
           muted:       withAlpha('--lobster-primary-muted'),
           dark:        withAlpha('--lobster-primary-hover'),  // backward compat alias
         },
+        action: {
+          DEFAULT:     withAlpha('--lobster-action'),
+          foreground:  withAlpha('--lobster-action-foreground'),
+          hover:       withAlpha('--lobster-action-hover'),
+        },
         accent: {
           DEFAULT:     withAlpha('--lobster-accent'),
           foreground:  withAlpha('--lobster-accent-foreground'),

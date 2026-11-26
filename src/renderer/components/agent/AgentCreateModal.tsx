@@ -1183,7 +1183,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
             type="button"
             onClick={() => void handleCreate()}
             disabled={!name.trim() || creating || generating}
-            className="h-9 rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+            className="h-9 rounded-xl bg-action px-5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {creating ? i18nService.t('creating') : i18nService.t('create')}
           </button>

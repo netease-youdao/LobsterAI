@@ -529,7 +529,7 @@ const EmailSkillConfig: React.FC = () => {
           {renderErrorBanner()}
 
           <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface/50 px-6 py-12 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-surface-raised text-foreground">
               <EnvelopeIcon className="h-5 w-5" />
             </span>
             <h4 className={`mt-3.5 ${SETTINGS_ITEM_TITLE_TEXT} font-semibold text-foreground`}>
@@ -541,7 +541,7 @@ const EmailSkillConfig: React.FC = () => {
             <button
               type="button"
               onClick={openCreateForm}
-              className="mt-5 inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
+              className="mt-5 inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-4 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98]"
             >
               <PlusIcon className="h-3.5 w-3.5" />
               {i18nService.t('emailAddButton')}
@@ -570,7 +570,7 @@ const EmailSkillConfig: React.FC = () => {
             <button
               type="button"
               onClick={openCreateForm}
-              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg bg-primary px-3 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98]"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98]"
             >
               <PlusIcon className="h-3.5 w-3.5" />
               {i18nService.t('emailAddButton')}
@@ -602,7 +602,7 @@ const EmailSkillConfig: React.FC = () => {
                   className="group flex items-center justify-between gap-4 px-4 py-3.5 text-left transition-colors hover:bg-surface-raised/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 cursor-pointer"
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                       <EnvelopeIcon className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">
@@ -611,7 +611,7 @@ const EmailSkillConfig: React.FC = () => {
                           {displayName}
                         </span>
                         {isDefault && (
-                          <span className="shrink-0 rounded-full bg-primary/12 px-2 py-0.5 text-xs font-medium text-primary">
+                          <span className="shrink-0 rounded-full bg-surface-raised px-2 py-0.5 text-xs font-medium text-secondary">
                             {i18nService.t('emailDefaultBadge')}
                           </span>
                         )}
@@ -784,7 +784,7 @@ const EmailSkillConfig: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleOpenProviderHelp(preset.helpUrl!)}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-secondary underline underline-offset-2 transition-colors hover:text-foreground"
                 >
                   {helpLinkLabel}
                   <ArrowTopRightOnSquareIcon className="h-3 w-3" />
@@ -804,7 +804,7 @@ const EmailSkillConfig: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => updateDraft({ password: '' })}
-                    className="rounded p-0.5 text-secondary transition-colors hover:text-primary"
+                    className="rounded p-0.5 text-secondary transition-colors hover:text-foreground"
                     aria-label={i18nService.t('clear')}
                   >
                     <XCircleIconSolid className="h-4 w-4" />
@@ -813,7 +813,7 @@ const EmailSkillConfig: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowPassword(prev => !prev)}
-                  className="rounded p-0.5 text-secondary transition-colors hover:text-primary"
+                  className="rounded p-0.5 text-secondary transition-colors hover:text-foreground"
                   aria-label={showPassword ? i18nService.t('hide') : i18nService.t('show')}
                 >
                   {showPassword ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -977,7 +977,7 @@ const EmailSkillConfig: React.FC = () => {
             <button
               type="button"
               onClick={() => handleAskAI(null)}
-              className="inline-flex items-center gap-1 font-medium text-claude-accent hover:underline"
+              className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
             >
               <SparklesIcon className="h-3.5 w-3.5" />
               {i18nService.t('emailConnectivityAskAI')}
@@ -1006,7 +1006,7 @@ const EmailSkillConfig: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleAskAI(connectivityResult)}
-                  className="inline-flex items-center gap-1 rounded-md border border-claude-accent/50 px-2 py-0.5 text-xs font-medium text-claude-accent transition-colors hover:bg-claude-accent/10"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised"
                 >
                   <SparklesIcon className="h-3 w-3" />
                   {i18nService.t('emailConnectivityAskAI')}
@@ -1064,7 +1064,7 @@ const EmailSkillConfig: React.FC = () => {
               type="button"
               onClick={() => void handleSaveForm()}
               disabled={!configured || saving}
-              className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-4 text-xs font-medium text-white transition-colors hover:bg-primary-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
+              className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-action px-4 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
             >
               {saving
                 ? i18nService.t('saving')

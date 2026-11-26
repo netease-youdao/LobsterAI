@@ -1877,7 +1877,7 @@ const App: React.FC = () => {
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 onClick={handleInitRetry}
-                className="px-6 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium"
+                className="px-6 py-2.5 bg-action hover:bg-action-hover text-action-foreground rounded-xl transition-colors text-sm font-medium"
               >
                 {i18nService.t('retry')}
               </button>

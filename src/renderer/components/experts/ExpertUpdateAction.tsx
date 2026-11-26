@@ -96,7 +96,7 @@ export default function ExpertUpdateAction({ agentId, revision, active = true, o
   };
 
   const button = <button type="button" disabled={pending !== null || busy !== false} onClick={() => { void update(); }}
-    className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-neutral-900 px-4 text-sm font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900">
+    className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-action px-4 text-sm font-semibold text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40">
     {t(pending === UpdateAction.Update ? 'expertUpdating' : 'expertUpdate')}
   </button>;
   const Icon = busy ? ClockIcon : ArrowPathIcon;

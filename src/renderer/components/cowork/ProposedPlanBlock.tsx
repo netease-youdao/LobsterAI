@@ -235,7 +235,7 @@ const ProposedPlanBlock: React.FC<ProposedPlanBlockProps> = ({
             <button
               type="button"
               onClick={handleConfirmExecution}
-              className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3.5 text-sm font-medium text-white transition-colors hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
+              className="inline-flex h-8 items-center justify-center rounded-lg bg-action px-3.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
             >
               {i18nService.t('coworkPlanConfirmExecute')}
             </button>

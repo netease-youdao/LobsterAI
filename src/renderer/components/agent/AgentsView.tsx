@@ -157,12 +157,12 @@ const AgentsView: React.FC<AgentsViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsCreateOpen(true)}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-border hover:border-primary hover:bg-primary/5 transition-colors min-h-[140px] cursor-pointer"
+                className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-border hover:border-foreground/30 hover:bg-surface-raised/60 transition-colors min-h-[140px] cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/10">
-                  <PlusIcon className="h-5 w-5 text-primary" />
+                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-raised">
+                  <PlusIcon className="h-5 w-5 text-foreground" />
                 </div>
-                <span className="text-sm font-medium text-primary">
+                <span className="text-sm font-medium text-foreground">
                   {i18nService.t('createNewAgent')}
                 </span>
               </button>
@@ -200,7 +200,7 @@ const AgentCard: React.FC<{
     onClick={onClick}
     className={`flex flex-col items-start gap-2 p-4 rounded-xl border-2 text-left transition-all min-h-[140px] hover:shadow-md hover:bg-surface-raised ${
       isActive
-        ? 'border-primary bg-primary/5'
+        ? 'border-action bg-surface-raised/50'
         : 'border-border'
     }`}
   >
@@ -253,7 +253,7 @@ const UninstalledPresetCard: React.FC<{
       type="button"
       onClick={onAdd}
       disabled={isAdding}
-      className="self-end px-3 py-1 text-xs font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 transition-colors"
+      className="self-end px-3 py-1 text-xs font-medium rounded-lg bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors"
     >
       {isAdding ? '...' : i18nService.t('addAgent')}
     </button>

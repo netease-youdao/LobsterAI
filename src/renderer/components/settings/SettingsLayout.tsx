@@ -9,6 +9,9 @@ import {
 export const SETTINGS_ACTION_BUTTON_CLASS =
   'inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
 
+export const SETTINGS_PRIMARY_BUTTON_CLASS =
+  'inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100';
+
 export const SETTINGS_ICON_BUTTON_CLASS =
   '-mr-1.5 shrink-0 rounded-md p-1.5 text-secondary transition-colors hover:bg-surface-raised hover:text-red-500';
 

@@ -337,7 +337,7 @@ select::-ms-expand {
 
 /* Button styles */
 .btn-primary {
-  @apply bg-primary hover:bg-primary-hover text-white font-medium py-2 px-4 rounded-lg transition-colors;
+  @apply bg-action hover:bg-action-hover text-action-foreground font-medium py-2 px-4 rounded-lg transition-colors;
 }
 
 .btn-secondary {

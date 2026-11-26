@@ -15,6 +15,9 @@ export const classicLight: ThemeDefinition = {
     'primary-foreground': '#ffffff',
     'primary-hover':      '#2563EB',
     'primary-muted':      'rgba(59,130,246,0.10)',
+    'action':             '#1A1A1A',
+    'action-foreground':  '#FFFFFF',
+    'action-hover':       '#333333',
     'accent':             '#3B82F6',
     'accent-foreground':  '#ffffff',
     // Neutral grays with no blue cast: a pure white canvas framed by a light

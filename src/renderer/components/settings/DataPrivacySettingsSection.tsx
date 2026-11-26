@@ -147,7 +147,7 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
       <SettingsRow>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-start gap-3">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
               <ArchiveBoxIcon className="h-[18px] w-[18px]" />
             </span>
             <div className="min-w-0">
@@ -176,7 +176,7 @@ const DataPrivacySettingsSection: React.FC<DataPrivacySettingsSectionProps> = ({
       <SettingsRow>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-start gap-3">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
               <ArrowPathRoundedSquareIcon className="h-[18px] w-[18px]" />
             </span>
             <div className="min-w-0">

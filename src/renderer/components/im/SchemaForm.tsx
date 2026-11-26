@@ -253,7 +253,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
                 <button
                   type="button"
                   onClick={() => handleChange('')}
-                  className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                  className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                   title="Clear"
                 >
                   <XCircleIconSolid className="h-4 w-4" />
@@ -262,7 +262,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               <button
                 type="button"
                 onClick={() => onToggleSecret?.(path)}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
               >
                 {shown ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
               </button>
@@ -297,7 +297,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
                 <button
                   type="button"
                   onClick={() => handleChange('')}
-                  className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                  className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                   title="Clear"
                 >
                   <XCircleIconSolid className="h-4 w-4" />

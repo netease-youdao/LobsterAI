@@ -44,7 +44,7 @@ const PlatformGuide: React.FC<{
             console.error('[IM] Failed to open guide URL:', err);
           });
         }}
-        className="mt-2 text-xs font-medium text-primary dark:text-primary hover:text-primary dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
+        className="mt-2 text-xs font-medium text-secondary hover:text-foreground underline underline-offset-2 transition-colors"
       >
         {i18nService.t('imViewGuide')}
       </button>
@@ -251,11 +251,11 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
                 if (e.key === 'Escape') { setNameValue(instance.instanceName); setEditingName(false); }
               }}
               autoFocus
-              className="text-sm font-medium text-foreground bg-transparent border-b border-primary focus:outline-none px-0 py-0"
+              className="text-sm font-medium text-foreground bg-transparent border-b border-foreground/40 focus:outline-none px-0 py-0"
             />
           ) : (
             <span
-              className="text-sm font-medium text-foreground cursor-pointer hover:text-primary transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
+              className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
               onClick={() => setEditingName(true)}
               title={language === 'zh' ? '点击重命名' : 'Click to rename'}
             >
@@ -284,7 +284,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => void handleStartQr()}
-              className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2.5 rounded-lg text-sm font-medium bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {i18nService.t('feishuBotCreateWizardScanBtn')}
             </button>
@@ -301,7 +301,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         )}
         {qrStatus === 'loading' && (
           <div className="flex flex-col items-center gap-2 py-2">
-            <ArrowPathIcon className="h-7 w-7 text-primary animate-spin" />
+            <ArrowPathIcon className="h-7 w-7 text-foreground animate-spin" />
             <span className="text-xs text-secondary">{i18nService.t('feishuBotCreateWizardGenerating') || '正在生成二维码…'}</span>
           </div>
         )}
@@ -366,7 +366,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ appId: '' }); void onSave({ appId: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -395,7 +395,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ appSecret: '' }); void onSave({ appSecret: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -404,7 +404,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => setShowSecrets(prev => ({ ...prev, 'appSecret': !prev['appSecret'] }))}
-              className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+              className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
               title={showSecrets['appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
             >
               {showSecrets['appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -434,7 +434,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
       {/* Advanced Settings (collapsible) */}
       <details className="group">
-        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
           {i18nService.t('imAdvancedSettings')}
         </summary>
         <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -500,7 +500,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
                     void onSave({ allowFrom: newIds });
                   }
                 }}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('add') || '添加'}
               </button>
@@ -586,7 +586,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
                     void onSave({ groupAllowFrom: newIds });
                   }
                 }}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('add') || '添加'}
               </button>
@@ -647,7 +647,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
           {/* Footer Options (visible when streaming is enabled) */}
           {instance.streaming && (
-            <div className="space-y-2 pl-3 border-l-2 border-primary/20">
+            <div className="space-y-2 pl-3 border-l-2 border-border">
               <div className="flex items-center justify-between">
                 <label className="text-xs text-secondary">
                   {i18nService.t('imFeishuFooterStatus')}

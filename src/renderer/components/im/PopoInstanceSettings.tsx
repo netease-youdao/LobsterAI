@@ -198,11 +198,11 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
                 if (e.key === 'Escape') { setNameValue(instance.instanceName); setEditingName(false); }
               }}
               autoFocus
-              className="text-sm font-medium text-foreground bg-transparent border-b border-primary focus:outline-none px-0 py-0"
+              className="text-sm font-medium text-foreground bg-transparent border-b border-foreground/40 focus:outline-none px-0 py-0"
             />
           ) : (
             <span
-              className="text-sm font-medium text-foreground cursor-pointer hover:text-primary transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
+              className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
               onClick={() => setEditingName(true)}
               title={language === 'zh' ? '点击重命名' : 'Click to rename'}
             >
@@ -231,7 +231,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => void handlePopoQrLogin()}
-              className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2.5 rounded-lg text-sm font-medium bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {i18nService.t('imPopoScanBtn')}
             </button>
@@ -248,7 +248,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
         )}
         {qrStatus === 'loading' && (
           <div className="flex items-center justify-center gap-2 py-4">
-            <ArrowPathIcon className="h-5 w-5 animate-spin text-primary" />
+            <ArrowPathIcon className="h-5 w-5 animate-spin text-foreground" />
             <span className="text-sm text-secondary">
               {i18nService.t('imPopoQrLoading')}
             </span>
@@ -291,7 +291,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
           <button
             type="button"
             onClick={() => { window.electron.shell.openExternal(PlatformRegistry.guideUrl('popo')!).catch(() => {}); }}
-            className="mt-2 text-xs font-medium text-primary hover:text-primary underline underline-offset-2 transition-colors"
+            className="mt-2 text-xs font-medium text-secondary hover:text-foreground underline underline-offset-2 transition-colors"
           >
             {i18nService.t('imViewGuide')}
           </button>
@@ -322,7 +322,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ aesKey: '' }); void onSave({ aesKey: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -331,7 +331,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => setShowSecrets(prev => ({ ...prev, aesKey: !prev.aesKey }))}
-              className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+              className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
             >
               {showSecrets.aesKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
             </button>
@@ -378,7 +378,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
 
       {/* Advanced Settings (collapsible) */}
       <details className="group">
-        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
           {i18nService.t('imAdvancedSettings')}
         </summary>
         <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -418,7 +418,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
               />
               {instance.appKey && (
                 <div className="absolute right-2 inset-y-0 flex items-center">
-                  <button type="button" onClick={() => { onConfigChange({ appKey: '' }); void onSave({ appKey: '' }); }} className="p-0.5 rounded text-secondary hover:text-primary transition-colors" title={i18nService.t('clear') || 'Clear'}>
+                  <button type="button" onClick={() => { onConfigChange({ appKey: '' }); void onSave({ appKey: '' }); }} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors" title={i18nService.t('clear') || 'Clear'}>
                     <XCircleIconSolid className="h-4 w-4" />
                   </button>
                 </div>
@@ -440,11 +440,11 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
               />
               <div className="absolute right-2 inset-y-0 flex items-center gap-1">
                 {instance.appSecret && (
-                  <button type="button" onClick={() => { onConfigChange({ appSecret: '' }); void onSave({ appSecret: '' }); }} className="p-0.5 rounded text-secondary hover:text-primary transition-colors" title={i18nService.t('clear') || 'Clear'}>
+                  <button type="button" onClick={() => { onConfigChange({ appSecret: '' }); void onSave({ appSecret: '' }); }} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors" title={i18nService.t('clear') || 'Clear'}>
                     <XCircleIconSolid className="h-4 w-4" />
                   </button>
                 )}
-                <button type="button" onClick={() => setShowSecrets(prev => ({ ...prev, appSecret: !prev.appSecret }))} className="p-0.5 rounded text-secondary hover:text-primary transition-colors">
+                <button type="button" onClick={() => setShowSecrets(prev => ({ ...prev, appSecret: !prev.appSecret }))} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors">
                   {showSecrets.appSecret ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                 </button>
               </div>
@@ -466,11 +466,11 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
                   {instance.token && (
-                    <button type="button" onClick={() => { onConfigChange({ token: '' }); void onSave({ token: '' }); }} className="p-0.5 rounded text-secondary hover:text-primary transition-colors" title={i18nService.t('clear') || 'Clear'}>
+                    <button type="button" onClick={() => { onConfigChange({ token: '' }); void onSave({ token: '' }); }} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors" title={i18nService.t('clear') || 'Clear'}>
                       <XCircleIconSolid className="h-4 w-4" />
                     </button>
                   )}
-                  <button type="button" onClick={() => setShowSecrets(prev => ({ ...prev, token: !prev.token }))} className="p-0.5 rounded text-secondary hover:text-primary transition-colors">
+                  <button type="button" onClick={() => setShowSecrets(prev => ({ ...prev, token: !prev.token }))} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors">
                     {showSecrets.token ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                   </button>
                 </div>
@@ -492,11 +492,11 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
               />
               <div className="absolute right-2 inset-y-0 flex items-center gap-1">
                 {instance.aesKey && (
-                  <button type="button" onClick={() => { onConfigChange({ aesKey: '' }); void onSave({ aesKey: '' }); }} className="p-0.5 rounded text-secondary hover:text-primary transition-colors" title={i18nService.t('clear') || 'Clear'}>
+                  <button type="button" onClick={() => { onConfigChange({ aesKey: '' }); void onSave({ aesKey: '' }); }} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors" title={i18nService.t('clear') || 'Clear'}>
                     <XCircleIconSolid className="h-4 w-4" />
                   </button>
                 )}
-                <button type="button" onClick={() => setShowSecrets(prev => ({ ...prev, aesKeyAdv: !prev.aesKeyAdv }))} className="p-0.5 rounded text-secondary hover:text-primary transition-colors">
+                <button type="button" onClick={() => setShowSecrets(prev => ({ ...prev, aesKeyAdv: !prev.aesKeyAdv }))} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors">
                   {showSecrets.aesKeyAdv ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                 </button>
               </div>
@@ -603,7 +603,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
                     void onSave({ allowFrom: [...instance.allowFrom, id] });
                   }
                 }}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('add') || '添加'}
               </button>
@@ -680,7 +680,7 @@ const PopoInstanceSettings: React.FC<PopoInstanceSettingsProps> = ({
                     void onSave({ groupAllowFrom: [...instance.groupAllowFrom, id] });
                   }
                 }}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('add') || '添加'}
               </button>

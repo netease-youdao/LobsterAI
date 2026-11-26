@@ -430,7 +430,7 @@ const CreditQuotaExhaustedBanner: React.FC<{ offer: LowCreditPurchaseOffer | nul
         <button
           type="button"
           onClick={handlePurchase}
-          className="ml-2 inline-flex h-8 shrink-0 items-center justify-center rounded-full bg-foreground px-5 text-xs font-medium text-background transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="ml-2 inline-flex h-8 shrink-0 items-center justify-center rounded-full bg-action px-5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           {i18nService.t('coworkCreditQuotaBannerAction')}
         </button>

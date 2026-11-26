@@ -759,7 +759,7 @@ const MyAgentSidebarTree: React.FC<MyAgentSidebarTreeProps> = ({
                   setCreateAgentSource('home_agent_sidebar_empty');
                   setIsCreateOpen(true);
                 }}
-                className="mt-3 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover"
+                className="mt-3 rounded-lg bg-action px-3 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
               >
                 {i18nService.t('createNewAgent')}
               </button>

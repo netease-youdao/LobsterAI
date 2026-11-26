@@ -1139,14 +1139,14 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
           className={`w-28 rounded-lg border px-2.5 py-1 text-xs cursor-pointer select-none text-center outline-none transition-colors
             dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
             ${open
-              ? 'border-claude-accent ring-1 ring-claude-accent/30'
-              : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
+              ? 'border-foreground/40 ring-1 ring-foreground/10'
+              : 'border-border hover:border-foreground/25'
             }`}
         >
           {currentLabel}
         </div>
         {open && (
-          <div className="absolute right-0 mt-1 z-50 min-w-[160px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset shadow-elevated py-1">
+          <div className="absolute right-0 mt-1 z-50 min-w-[160px] rounded-xl border border-border bg-surface shadow-elevated py-1">
             {SEND_SHORTCUT_OPTIONS.map((option) => {
               const label = isMacPlatform ? option.labelMac : option.label;
               const isActive = value === option.value;
@@ -1157,12 +1157,12 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
                   onClick={() => { onChange(option.value); setOpen(false); }}
                   className={`flex items-center justify-between w-full px-3 py-1.5 text-xs transition-colors
                     ${isActive
-                      ? 'dark:text-claude-accent text-claude-accent font-medium'
-                      : 'dark:text-claude-darkText text-claude-text'
-                    } hover:bg-claude-accent/10`}
+                      ? 'bg-surface-raised text-foreground font-medium'
+                      : 'text-foreground'
+                    } hover:bg-surface-raised`}
                 >
                   <span>{label}</span>
-                  {isActive && <span className="text-claude-accent">✓</span>}
+                  {isActive && <span className="text-foreground">✓</span>}
                 </button>
               );
             })}
@@ -2694,7 +2694,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (phase === OpenClawEnginePhase.Running || phase === OpenClawEnginePhase.Ready) {
       return {
         Icon: CheckCircleIcon,
-        iconClassName: 'bg-primary-muted text-primary',
+        iconClassName: 'bg-surface-raised text-foreground',
         progressClassName: 'bg-primary',
         spinIcon: false,
         inProgress: false,
@@ -2709,7 +2709,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (phase === OpenClawEnginePhase.Installing || phase === OpenClawEnginePhase.Starting) {
       return {
         Icon: ArrowPathIcon,
-        iconClassName: 'bg-primary-muted text-primary',
+        iconClassName: 'bg-surface-raised text-foreground',
         progressClassName: 'bg-primary',
         spinIcon: true,
         inProgress: true,
@@ -4040,8 +4040,8 @@ const Settings: React.FC<SettingsProps> = ({
                 disabled={isAppearanceChanging}
                 className="flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
-                  borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
-                  backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
+                  borderColor: isSelected ? 'var(--lobster-action)' : 'var(--lobster-border)',
+                  backgroundColor: isSelected ? 'var(--lobster-surface-raised)' : undefined,
                 }}
               >
                 <svg viewBox="0 0 120 80" className="w-full h-auto rounded-md mb-2 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
@@ -4125,7 +4125,7 @@ const Settings: React.FC<SettingsProps> = ({
                     </>
                   )}
                 </svg>
-                <span className="text-xs font-medium" style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
+                <span className={`text-xs ${isSelected ? 'font-semibold' : 'font-medium'}`} style={{ color: 'var(--lobster-text-primary)' }}>
                   {i18nService.t(mode)}
                 </span>
               </button>
@@ -4149,8 +4149,8 @@ const Settings: React.FC<SettingsProps> = ({
                 disabled={isAppearanceChanging}
                 className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 style={{
-                  borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
-                  backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
+                  borderColor: isSelected ? 'var(--lobster-action)' : 'var(--lobster-border)',
+                  backgroundColor: isSelected ? 'var(--lobster-surface-raised)' : undefined,
                 }}
               >
                 <svg viewBox="0 0 80 48" className="w-full h-auto rounded-md mb-1.5 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
@@ -4160,7 +4160,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <circle cx="52" cy="24" r="8" fill={c3} opacity="0.8" />
                   <rect x="32" y="34" width="40" height="4" rx="2" fill={c1} opacity="0.6" />
                 </svg>
-                <span className={`${SETTINGS_META_TEXT} font-medium truncate w-full text-center`} style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
+                <span className={`${SETTINGS_META_TEXT} ${isSelected ? 'font-semibold' : 'font-medium'} truncate w-full text-center`} style={{ color: 'var(--lobster-text-primary)' }}>
                   {i18nService.t('theme-name-' + t.meta.id) || t.meta.name}
                 </span>
               </button>
@@ -4411,10 +4411,10 @@ const Settings: React.FC<SettingsProps> = ({
                               onClick={handleCopyOpenClawGatewayUrl}
                               title={openClawGatewayCopied ? i18nService.t('copied') : i18nService.t('copyToClipboard')}
                               aria-label={openClawGatewayCopied ? i18nService.t('copied') : i18nService.t('copyToClipboard')}
-                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-background hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
+                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-background hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/25"
                             >
                               {openClawGatewayCopied
-                                ? <CheckCircleIcon className="h-4 w-4 text-primary" />
+                                ? <CheckCircleIcon className="h-4 w-4 text-foreground" />
                                 : <MessageCopyIcon className="h-4 w-4" />}
                             </button>
                           </div>
@@ -4453,7 +4453,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <span
                         className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
                           openClawHeartbeatEnabled
-                            ? 'bg-primary-muted text-primary'
+                            ? 'bg-surface-raised text-foreground'
                             : 'bg-surface-raised text-secondary'
                         }`}
                       >
@@ -4484,7 +4484,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <span
                         className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
                           openClawSkillReviewEnabled
-                            ? 'bg-primary-muted text-primary'
+                            ? 'bg-surface-raised text-foreground'
                             : 'bg-surface-raised text-secondary'
                         }`}
                       >
@@ -4515,7 +4515,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <span
                         className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${
                           openClawMemoryFlushEnabled
-                            ? 'bg-primary-muted text-primary'
+                            ? 'bg-surface-raised text-foreground'
                             : 'bg-surface-raised text-secondary'
                         }`}
                       >
@@ -4550,7 +4550,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <div className="overflow-hidden rounded-xl border border-border bg-surface divide-y divide-border">
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 items-start gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                           <WrenchScrewdriverIcon className="h-[18px] w-[18px]" />
                         </span>
                         <div className="min-w-0">
@@ -4604,7 +4604,7 @@ const Settings: React.FC<SettingsProps> = ({
 
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 items-start gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                           <ArchiveBoxIcon className="h-[18px] w-[18px]" />
                         </span>
                         <div className="min-w-0">
@@ -4631,7 +4631,7 @@ const Settings: React.FC<SettingsProps> = ({
 
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 items-start gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                           <ArrowPathRoundedSquareIcon className="h-[18px] w-[18px]" />
                         </span>
                         <div className="min-w-0">
@@ -4935,7 +4935,7 @@ const Settings: React.FC<SettingsProps> = ({
                       e.stopPropagation();
                       void handleCheckUpdate();
                     }}
-                    className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-primary dark:hover:text-primary hover:border-primary dark:hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {updateButtonLabel}
                   </button>
@@ -4981,7 +4981,7 @@ const Settings: React.FC<SettingsProps> = ({
                     e.stopPropagation();
                     handleOpenServiceTerms();
                   }}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-primary dark:hover:text-primary transition-colors"
+                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-foreground transition-colors"
                 >
                   {i18nService.t('aboutServiceTerms')}
                 </button>
@@ -4993,7 +4993,7 @@ const Settings: React.FC<SettingsProps> = ({
                     void handleExportLogs();
                   }}
                   disabled={isExportingLogs}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-primary dark:hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isExportingLogs ? i18nService.t('aboutExportingLogs') : i18nService.t('aboutExportLogs')}
                 </button>
@@ -5040,8 +5040,8 @@ const Settings: React.FC<SettingsProps> = ({
                 onClick={() => handleTabChange(tab.key)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg ${SETTINGS_NAV_TEXT} font-medium transition-colors text-left ${
                   activeTab === tab.key
-                    ? 'bg-primary-muted text-primary'
-                    : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                    ? 'bg-surface text-foreground shadow-subtle dark:bg-white/[0.08] dark:shadow-none'
+                    : 'text-secondary hover:text-foreground hover:bg-black/[0.04] dark:hover:bg-white/[0.05]'
                 }`}
               >
                 <span className="shrink-0">{tab.icon}</span>
@@ -5133,7 +5133,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <button
                     type="submit"
                     disabled={isSaving || isAppearanceChanging}
-                    className={`px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]`}
+                    className={`px-4 py-2 bg-action hover:bg-action-hover text-action-foreground rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]`}
                   >
                     {isSaving ? i18nService.t('saving') : i18nService.t('save')}
                   </button>
@@ -5199,7 +5199,7 @@ const Settings: React.FC<SettingsProps> = ({
               >
                 <div className="px-5 pt-5 pb-4 border-b border-border">
                   <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                       <WrenchScrewdriverIcon className="h-5 w-5" />
                     </span>
                     <h3 className="text-base font-semibold text-foreground">
@@ -5226,7 +5226,7 @@ const Settings: React.FC<SettingsProps> = ({
                     type="button"
                     onClick={() => { void handleConfirmOpenClawRepair(); }}
                     disabled={isRepairingOpenClaw}
-                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-action-foreground bg-action hover:bg-action-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                   >
                     <WrenchScrewdriverIcon className="h-4 w-4" />
                     {isRepairingOpenClaw
@@ -5251,7 +5251,7 @@ const Settings: React.FC<SettingsProps> = ({
               >
                 <div className="px-5 pt-5 pb-4 border-b border-border">
                   <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-foreground">
                       <TrashIcon className="h-5 w-5" />
                     </span>
                     <h3 className="text-base font-semibold text-foreground">
@@ -5335,7 +5335,7 @@ const Settings: React.FC<SettingsProps> = ({
                       type="button"
                       onClick={() => { void handleConfirmTempClean(); }}
                       disabled={isCleaningTempStorage || tempCleanSelectedDirs.length === 0}
-                      className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                      className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-action-foreground bg-action hover:bg-action-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                     >
                       {isCleaningTempStorage
                         ? <ArrowPathIcon className="h-4 w-4 animate-spin" />

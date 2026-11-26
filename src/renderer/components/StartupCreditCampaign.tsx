@@ -941,7 +941,7 @@ const StartupCreditCampaign: React.FC<StartupCreditCampaignProps> = ({
               onClick={isFailure
                 ? () => void handleRetry()
                 : closeByUser}
-              className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
+              className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-action text-sm font-semibold text-action-foreground transition-colors hover:bg-action-hover"
             >
               {isFailure
                 ? i18nService.t('startupCreditRetry')

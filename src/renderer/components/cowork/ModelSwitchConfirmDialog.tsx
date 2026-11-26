@@ -111,7 +111,7 @@ const ModelSwitchConfirmDialog: React.FC<ModelSwitchConfirmDialogProps> = ({
             type="button"
             onClick={handleConfirm}
             disabled={confirming}
-            className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-action px-4 py-2 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
           >
             {i18nService.t('coworkModelSwitchConfirmAction')}
           </button>

@@ -4906,7 +4906,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       ? t('htmlShareStartSharing')
       : t('htmlShareStopSharing');
   const htmlShareAvailabilityActionClassName = isHtmlShareStoppedDialog
-    ? 'inline-flex h-10 min-w-[96px] items-center justify-center whitespace-nowrap rounded-lg bg-primary px-4 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60'
+    ? 'inline-flex h-10 min-w-[96px] items-center justify-center whitespace-nowrap rounded-lg bg-action px-4 text-base text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60'
     : 'inline-flex h-10 min-w-[96px] items-center justify-center whitespace-nowrap rounded-lg border border-border bg-background px-4 text-base text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60';
   const htmlShareCopyButtonLabel =
     htmlShareCopyStatus === HtmlShareCopyStatus.Failed
@@ -5121,7 +5121,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const nodeDeploymentCopyActionClassName =
     nodeDeploymentFooterActions.showRecovery || isNodeDeploymentRedeployRequired
       ? 'border border-border bg-background text-secondary hover:bg-surface hover:text-foreground'
-      : 'bg-primary text-primary-foreground hover:bg-primary/90';
+      : 'bg-action text-action-foreground hover:bg-action-hover';
   const nodeDeploymentCopyButtonLabel =
     htmlShareCopyStatus === HtmlShareCopyStatus.Failed
       ? t('copyFailed')
@@ -5682,7 +5682,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                         }
                       }}
                       disabled={isHtmlSharing || !htmlSharePendingRequest}
-                      className="inline-flex h-10 min-w-[104px] items-center justify-center whitespace-nowrap rounded-lg bg-primary px-4 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-10 min-w-[104px] items-center justify-center whitespace-nowrap rounded-lg bg-action px-4 text-base text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isHtmlSharing ? t('htmlShareUploading') : t('htmlShareCreateAction')}
                     </button>
@@ -5704,7 +5704,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       type="button"
                       onClick={updateHtmlShareAccessMode}
                       disabled={isHtmlShareAccessModeActionDisabled}
-                      className="inline-flex h-10 min-w-[128px] items-center justify-center whitespace-nowrap rounded-lg bg-primary px-4 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-10 min-w-[128px] items-center justify-center whitespace-nowrap rounded-lg bg-action px-4 text-base text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isHtmlShareStatusUpdating
                         ? t('htmlShareAccessModeUpdating')
@@ -5725,7 +5725,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       className={`inline-flex h-10 min-w-[104px] items-center justify-center whitespace-nowrap rounded-lg px-4 text-base transition-colors ${
                         htmlShareCopyStatus === HtmlShareCopyStatus.Failed
                           ? 'bg-red-500 text-white hover:bg-red-500/90'
-                          : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                          : 'bg-action text-action-foreground hover:bg-action-hover'
                       }`}
                     >
                       {htmlShareCopyButtonLabel}
@@ -6267,7 +6267,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                       className={`inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                         nodeDeployment && !isNodeDeploymentRedeployRequired
                           ? 'border border-border bg-background text-secondary hover:bg-surface hover:text-foreground'
-                          : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                          : 'bg-action text-action-foreground hover:bg-action-hover'
                       }`}
                     >
                       {showNodeDeploymentSubmitSpinner && (
@@ -6286,7 +6286,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
                         type="button"
                         onClick={() => void submitNodeDeploymentPermissionChange()}
                         disabled={isNodeDeploymentPermissionSubmitDisabled}
-                        className="inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex h-10 min-w-[132px] items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-action px-4 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isNodeDeploymentAccessUpdating && (
                           <ArrowPathIcon
@@ -8171,7 +8171,7 @@ const BrowserTabContent: React.FC<BrowserTabContentProps> = ({
                 });
                 onAnnotationSend();
               }}
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-primary pl-2.5 pr-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-action pl-2.5 pr-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
             >
               <span className="whitespace-nowrap">{t('browserAnnotationsSend')}</span>
               <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-semibold">

@@ -1022,7 +1022,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                 type="button"
                 onClick={handleImportJson}
                 disabled={isImporting || !jsonText.trim()}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {i18nService.t('mcpJsonImport')}
               </button>
@@ -1030,7 +1030,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
               <button
                 type="button"
                 onClick={handleSave}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors"
               >
                 {saveText}
               </button>

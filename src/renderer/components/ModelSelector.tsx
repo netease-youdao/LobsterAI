@@ -293,7 +293,7 @@ export const ModelAccessPromptModal: React.FC<ModelAccessPromptModalProps> = ({
         type="button"
         onClick={() => { void handlePrimary(); }}
         disabled={purchaseOffer.isRefreshing}
-        className="mt-5 w-full rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
+        className="mt-5 w-full rounded-lg bg-action px-3 py-2.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-wait disabled:opacity-50"
       >
         {i18nService.t(resolvedPrimaryButtonKey)}
       </button>

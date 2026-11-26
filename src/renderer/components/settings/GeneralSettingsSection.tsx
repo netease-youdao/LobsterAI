@@ -99,7 +99,7 @@ const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
               {i18nService.t('notificationSystemPermissionHint')}{' '}
               <button
                 type="button"
-                className="text-primary hover:underline"
+                className="text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                 onClick={() => {
                   void window.electron.appInfo.openSystemNotificationSettings?.();
                 }}
