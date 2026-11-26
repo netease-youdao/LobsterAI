@@ -33,6 +33,14 @@ export const inject = ['systemPrompt', 'skills'];
 export function apply(ctx) {
   const state = getHostState(ctx);
 
+  // A child's persona can replace deployment:persona-prefix. The host identity
+  // must still precede that persona and the editable workspace documents.
+  ctx.systemPrompt.section({
+    name: 'lobsterai:host-identity',
+    order: -500,
+    text: 'You are LobsterAI, a desktop AI assistant running on the LobsterAI DSH host.',
+  });
+
   // 1. Register workspace persona & long-term memory system prompt section.
   ctx.systemPrompt.section({
     name: 'lobsterai:workspace-persona',

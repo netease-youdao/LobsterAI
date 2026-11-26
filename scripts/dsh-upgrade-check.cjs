@@ -42,6 +42,7 @@ const REQUIRED_DISABLED_IDS = [
   'harness-dev-context',
   'deliverable-file-references',
   'schedule',
+  'session-title-llm',
   'mcp-resources',
   'web-search-deepseek',
   'web-deepseek-api',
