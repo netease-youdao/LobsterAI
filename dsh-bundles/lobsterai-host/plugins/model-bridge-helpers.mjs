@@ -5,8 +5,38 @@
 
 const OPENAI_COMPLETIONS_API = 'openai-completions';
 const OPENAI_RESPONSES_API = 'openai-responses';
+const OPENAI_CODEX_RESPONSES_API = 'openai-codex-responses';
+const AZURE_OPENAI_RESPONSES_API = 'azure-openai-responses';
 const ANTHROPIC_MESSAGES_API = 'anthropic-messages';
 const GOOGLE_GENERATIVE_AI_API = 'google-generative-ai';
+
+const OPENAI_FAMILY_APIS = new Set([
+  OPENAI_COMPLETIONS_API,
+  OPENAI_RESPONSES_API,
+  OPENAI_CODEX_RESPONSES_API,
+  AZURE_OPENAI_RESPONSES_API,
+]);
+
+const OPENAI_RESPONSES_FAMILY_APIS = new Set([
+  OPENAI_RESPONSES_API,
+  OPENAI_CODEX_RESPONSES_API,
+  AZURE_OPENAI_RESPONSES_API,
+]);
+
+const CATALOG_PROVIDER_CANDIDATES = Object.freeze({
+  openai: ['openai'],
+  anthropic: ['anthropic'],
+  deepseek: ['deepseek'],
+  gemini: ['google'],
+  zhipu: ['zai', 'zai-coding-cn'],
+  moonshot: ['moonshotai', 'moonshotai-cn', 'kimi-coding'],
+  minimax: ['minimax', 'minimax-cn'],
+  xai: ['xai'],
+  openrouter: ['openrouter'],
+  'github-copilot': ['github-copilot'],
+  xiaomi: ['xiaomi'],
+  mimo: ['xiaomi'],
+});
 
 const PROVIDER_ID_ALIASES = Object.freeze({
   zai: 'zhipu',
@@ -156,49 +186,219 @@ export function resolveModelCompat(
 }
 
 /**
- * Normalize a model's `thinkingLevelMap` for DSH / pi-ai. Preserves explicit
- * `null` entries because pi-ai uses `null` to mark unsupported effort levels.
+ * Resolve ordered candidate `@earendil-works/pi-ai` built-in catalog provider IDs
+ * for a canonical LobsterAI provider route.
+ *
+ * `lobsterai-server` and `custom_*` routes do not inherit built-in catalog entries
+ * unless an explicit `catalogProviderHint` is supplied.
+ *
+ * @param {string} providerId
+ * @param {unknown} [catalogProviderHint]
+ * @returns {string[]}
+ */
+export function resolveCatalogProviderCandidates(providerId, catalogProviderHint) {
+  const candidates = [];
+  const pushUnique = (id) => {
+    if (typeof id !== 'string') return;
+    const trimmed = id.trim();
+    if (trimmed && !candidates.includes(trimmed)) {
+      candidates.push(trimmed);
+    }
+  };
+
+  pushUnique(catalogProviderHint);
+
+  const normalized = typeof providerId === 'string' ? providerId.trim() : '';
+  if (!normalized || normalized === 'lobsterai-server' || normalized.startsWith('custom_')) {
+    return candidates;
+  }
+
+  const mapped = CATALOG_PROVIDER_CANDIDATES[normalized];
+  if (mapped) {
+    for (const candidate of mapped) {
+      pushUnique(candidate);
+    }
+  } else {
+    pushUnique(normalized);
+  }
+  return candidates;
+}
+
+/**
+ * Determine whether a built-in catalog model's `thinkingLevelMap` is compatible
+ * with the wire protocol configured for the model.
+ *
+ * @param {string} modelApi
+ * @param {unknown} catalogApi
+ * @returns {boolean}
+ */
+export function isCatalogThinkingMapCompatible(modelApi, catalogApi) {
+  if (typeof catalogApi !== 'string' || catalogApi.trim().length === 0) {
+    return true;
+  }
+  const normalizedCatalogApi = catalogApi.trim().toLowerCase();
+  if (modelApi === normalizedCatalogApi) {
+    return true;
+  }
+  return OPENAI_FAMILY_APIS.has(modelApi) && OPENAI_FAMILY_APIS.has(normalizedCatalogApi);
+}
+
+/**
+ * Look up a matching chat model entry from `@earendil-works/pi-ai`'s built-in
+ * catalog across ordered candidate provider IDs.
+ *
+ * @param {((provider: string, modelId: string) => unknown) | undefined} getBuiltinModel
+ * @param {readonly string[]} providerCandidates
+ * @param {string} modelId
+ * @param {string} modelApi
+ * @returns {Record<string, unknown> | undefined}
+ */
+export function lookupBuiltinCatalogModel(getBuiltinModel, providerCandidates, modelId, modelApi) {
+  if (typeof getBuiltinModel !== 'function' || !Array.isArray(providerCandidates) || !modelId) {
+    return undefined;
+  }
+  for (const candidateProvider of providerCandidates) {
+    let entry;
+    try {
+      entry = getBuiltinModel(candidateProvider, modelId);
+    } catch {
+      entry = undefined;
+    }
+    if (!isRecord(entry)) continue;
+    if (entry.type !== undefined && entry.type !== 'chat') continue;
+    if (!isCatalogThinkingMapCompatible(modelApi, entry.api)) continue;
+    return entry;
+  }
+  return undefined;
+}
+
+/**
+ * Sanitize a raw `thinkingLevelMap` object, retaining only recognized thinking
+ * level keys with either `null` (unsupported) or non-empty wire strings.
+ *
+ * @param {unknown} rawMap
+ * @returns {Record<string, string | null> | undefined}
+ */
+function sanitizeThinkingLevelMap(rawMap) {
+  if (!isRecord(rawMap)) return undefined;
+  const sanitized = {};
+  for (const [key, value] of Object.entries(rawMap)) {
+    if (!THINKING_LEVEL_SET.has(key)) continue;
+    if (value === null || (typeof value === 'string' && value.trim().length > 0)) {
+      sanitized[key] = value === null ? null : value.trim();
+    }
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/**
+ * Derive a pi-ai `thinkingLevelMap` from a server `thinkingConfig` when present.
+ *
+ * @param {unknown} thinkingConfig
+ * @returns {Record<string, string | null> | undefined}
+ */
+function deriveThinkingLevelMapFromConfig(thinkingConfig) {
+  if (!isRecord(thinkingConfig) || !Array.isArray(thinkingConfig.options)) {
+    return undefined;
+  }
+  const allowed = new Set();
+  for (const option of thinkingConfig.options) {
+    if (isRecord(option) && typeof option.level === 'string' && THINKING_LEVEL_SET.has(option.level)) {
+      allowed.add(option.level);
+    }
+  }
+  if (allowed.size === 0) return undefined;
+  const map = {};
+  if (!allowed.has('off')) {
+    map.off = null;
+  }
+  for (const level of NON_OFF_THINKING_LEVELS) {
+    map[level] = allowed.has(level) ? level : null;
+  }
+  return map;
+}
+
+/**
+ * Returns true only when the model has an authoritative thinking-level mapping
+ * (explicit `thinkingLevelMap`, `thinkingConfig`, or a matching built-in pi-ai
+ * catalog entry declaring `thinkingLevelMap`).
+ *
+ * Mirrors DSH's `dsh-llm-pi-ai` rule: unknown hand-declared models without a
+ * verified allowlist must not expose guessed `reasoning.efforts` to DSH callers
+ * (such as `session-title-service`), preventing unsupported `off` / `minimal`
+ * effort rejections.
  *
  * @param {Record<string, unknown>} rawModel
  * @param {boolean} reasoning
+ * @param {Record<string, unknown>} [catalogModel]
+ * @returns {boolean}
+ */
+export function hasVerifiedModelThinkingLevels(rawModel, reasoning, catalogModel) {
+  if (!reasoning) return false;
+  if (sanitizeThinkingLevelMap(rawModel?.thinkingLevelMap)) return true;
+  if (deriveThinkingLevelMapFromConfig(rawModel?.thinkingConfig)) return true;
+  if (catalogModel?.reasoning === true && sanitizeThinkingLevelMap(catalogModel.thinkingLevelMap)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Omit DSH `modelInfo.reasoning` when a model lacks verified thinking-level
+ * metadata so auxiliary DSH services (e.g. `session-title-service`) omit
+ * `reasoningEffort` and defer to the upstream model's native default.
+ *
+ * @template T
+ * @param {T} modelInfo
+ * @param {boolean} hasVerifiedThinkingLevels
+ * @returns {T}
+ */
+export function sanitizeExposedModelInfo(modelInfo, hasVerifiedThinkingLevels) {
+  if (hasVerifiedThinkingLevels || !isRecord(modelInfo) || !('reasoning' in modelInfo)) {
+    return modelInfo;
+  }
+  const { reasoning: _omitted, ...rest } = modelInfo;
+  return /** @type {T} */ (rest);
+}
+
+/**
+ * Normalize a model's `thinkingLevelMap` for DSH / pi-ai. Preserves explicit
+ * `null` entries because pi-ai uses `null` to mark unsupported effort levels.
+ *
+ * Priority:
+ * 1. Explicit `rawModel.thinkingLevelMap`
+ * 2. Derived from `rawModel.thinkingConfig`
+ * 3. Matching built-in pi-ai `catalogModel.thinkingLevelMap`
+ * 4. Fail-safe fallback with `off: null` so pi-ai never synthesizes `effort: "none"`
+ *    or `thinking: { type: "disabled" }` for models whose off-support is unknown.
+ *
+ * @param {Record<string, unknown>} rawModel
+ * @param {boolean} reasoning
+ * @param {Record<string, unknown>} [catalogModel]
  * @returns {Record<string, string | null> | undefined}
  */
-export function resolveModelThinkingLevelMap(rawModel, reasoning) {
+export function resolveModelThinkingLevelMap(rawModel, reasoning, catalogModel) {
   if (!reasoning) return undefined;
 
-  if (isRecord(rawModel?.thinkingLevelMap)) {
-    const sanitized = {};
-    for (const [key, value] of Object.entries(rawModel.thinkingLevelMap)) {
-      if (!THINKING_LEVEL_SET.has(key)) continue;
-      if (value === null || (typeof value === 'string' && value.trim().length > 0)) {
-        sanitized[key] = value === null ? null : value.trim();
-      }
-    }
-    if (Object.keys(sanitized).length > 0) {
-      return sanitized;
-    }
+  const explicitMap = sanitizeThinkingLevelMap(rawModel?.thinkingLevelMap);
+  if (explicitMap) {
+    return explicitMap;
   }
 
-  if (isRecord(rawModel?.thinkingConfig) && Array.isArray(rawModel.thinkingConfig.options)) {
-    const allowed = new Set();
-    for (const option of rawModel.thinkingConfig.options) {
-      if (isRecord(option) && typeof option.level === 'string' && THINKING_LEVEL_SET.has(option.level)) {
-        allowed.add(option.level);
-      }
-    }
-    if (allowed.size > 0) {
-      const map = {};
-      if (!allowed.has('off')) {
-        map.off = null;
-      }
-      for (const level of NON_OFF_THINKING_LEVELS) {
-        map[level] = allowed.has(level) ? level : null;
-      }
-      return map;
+  const configMap = deriveThinkingLevelMapFromConfig(rawModel?.thinkingConfig);
+  if (configMap) {
+    return configMap;
+  }
+
+  if (catalogModel?.reasoning === true) {
+    const catalogMap = sanitizeThinkingLevelMap(catalogModel.thinkingLevelMap);
+    if (catalogMap) {
+      return catalogMap;
     }
   }
 
   return {
+    off: null,
     minimal: 'minimal',
     low: 'low',
     medium: 'medium',
@@ -457,10 +657,63 @@ export function applyLobsterAIRequestOptions(payload, thinkingLevel) {
 }
 
 /**
+ * Remove synthetic disabled-thinking payload fields that pi-ai injects when a
+ * reasoning-capable model is invoked without an explicit `reasoningEffort`.
+ *
+ * Always-reasoning models (such as `gpt-6-astra`, `gpt-6.2-astra`, Claude 5.5,
+ * and Gemini 2.5 Pro) reject synthetic `reasoning.effort = "none"`,
+ * `thinking = { type: "disabled" }`, or disabled Gemini `thinkingConfig`; and
+ * models that do accept `"none"` (such as `gpt-6-luna`) would otherwise have
+ * thinking silently turned off whenever the caller left reasoning at default.
+ *
+ * @param {Record<string, unknown>} payload
+ * @param {unknown} modelApi
+ */
+export function omitSyntheticDisabledThinking(payload, modelApi) {
+  if (!isRecord(payload)) return;
+  const api = typeof modelApi === 'string' ? modelApi.trim().toLowerCase() : '';
+
+  if (api === ANTHROPIC_MESSAGES_API) {
+    if (isRecord(payload.thinking) && payload.thinking.type === 'disabled') {
+      delete payload.thinking;
+    }
+    return;
+  }
+
+  if (OPENAI_RESPONSES_FAMILY_APIS.has(api)) {
+    if (isRecord(payload.reasoning) && payload.reasoning.effort === 'none') {
+      delete payload.reasoning;
+    }
+    return;
+  }
+
+  if (api === OPENAI_COMPLETIONS_API) {
+    if (payload.reasoning_effort === 'none') {
+      delete payload.reasoning_effort;
+    }
+    if (isRecord(payload.reasoning) && payload.reasoning.effort === 'none') {
+      delete payload.reasoning;
+    }
+    return;
+  }
+
+  if (api === GOOGLE_GENERATIVE_AI_API) {
+    if (
+      isRecord(payload.config)
+      && isRecord(payload.config.thinkingConfig)
+      && payload.config.thinkingConfig.includeThoughts !== true
+    ) {
+      delete payload.config.thinkingConfig;
+    }
+  }
+}
+
+/**
  * Invoke a pi-ai protocol implementation (`stream` or `streamSimple`) with
  * LobsterAI's per-model payload contracts (Kimi K3, `lobsterai_options` v1,
- * `requiresStringContent` / `customParams`, and safe default Anthropic thinking
- * omission when no thinkingConfig exists).
+ * `requiresStringContent` / `customParams`, and cross-protocol omission of
+ * pi-ai's synthetic disabled-thinking fields when the caller did not
+ * explicitly request `off`).
  *
  * @param {{
  *   method: 'stream' | 'streamSimple';
@@ -505,13 +758,27 @@ export function invokeModelApiStream({
       )
     : undefined;
 
-  // Models such as Claude Sonnet/Opus 5.5 reject `thinking: { type: "disabled" }`.
-  // When a model does not declare configurable thinking controls, omit pi-ai's
-  // synthetic `{ type: "disabled" }` so Anthropic / server applies its native default.
-  const shouldOmitSyntheticDisabledAnthropicThinking =
-    model?.api === ANTHROPIC_MESSAGES_API
-    && !hasRequestOptionsV1
-    && !isRecord(modelMeta?.thinkingConfig);
+  const rawRequestedEffort = typeof requestContext?.reasoningEffort === 'string'
+    ? requestContext.reasoningEffort.trim().toLowerCase()
+    : '';
+  const explicitlyRequestedOff = rawRequestedEffort === 'off';
+  const hasExplicitReasoningOption = Boolean(options?.reasoning || options?.reasoningEffort);
+  // When a model does not declare server `thinkingConfig` and the caller did not
+  // explicitly request `off` (nor a concrete reasoning level), strip pi-ai's
+  // synthetic disabled-thinking payload (`reasoning: { effort: "none" }`,
+  // `thinking: { type: "disabled" }`, etc.) so the upstream applies its native
+  // default instead of rejecting with 400 or silently disabling thinking.
+  const shouldOmitSyntheticDisabledThinking =
+    !hasRequestOptionsV1
+    && !isRecord(modelMeta?.thinkingConfig)
+    && !explicitlyRequestedOff
+    && !hasExplicitReasoningOption
+    && (
+      model?.api === ANTHROPIC_MESSAGES_API
+      || OPENAI_RESPONSES_FAMILY_APIS.has(String(model?.api ?? ''))
+      || model?.api === OPENAI_COMPLETIONS_API
+      || model?.api === GOOGLE_GENERATIVE_AI_API
+    );
 
   const customParams = isRecord(modelMeta?.customParams) && Object.keys(modelMeta.customParams).length > 0
     ? modelMeta.customParams
@@ -523,7 +790,7 @@ export function invokeModelApiStream({
   if (
     !isKimiK3
     && !resolvedThinkingLevel
-    && !shouldOmitSyntheticDisabledAnthropicThinking
+    && !shouldOmitSyntheticDisabledThinking
     && !needsPayloadTransform
   ) {
     return apiImpl[method](model, context, options);
@@ -542,6 +809,12 @@ export function invokeModelApiStream({
   const originalOnPayload = typeof options?.onPayload === 'function' ? options.onPayload : undefined;
   const applyPostHooks = (candidate, payloadModel) => {
     if (!isRecord(candidate)) return;
+    // Strip pi-ai's synthetic disabled thinking BEFORE merging `customParams`
+    // so explicit user `customParams` (e.g. `{ reasoning: { effort: "high" } }`
+    // or `{ reasoning: { effort: "none" } }`) always win.
+    if (shouldOmitSyntheticDisabledThinking) {
+      omitSyntheticDisabledThinking(candidate, (payloadModel ?? effectiveModel)?.api);
+    }
     if (needsPayloadTransform) {
       const transformed = applyModelPayloadTransforms(
         candidate,
@@ -554,13 +827,6 @@ export function invokeModelApiStream({
     }
     if (isKimiK3) {
       applyKimiK3PayloadContract(candidate);
-    }
-    if (
-      shouldOmitSyntheticDisabledAnthropicThinking
-      && isRecord(candidate.thinking)
-      && candidate.thinking.type === 'disabled'
-    ) {
-      delete candidate.thinking;
     }
     if (resolvedThinkingLevel) {
       applyLobsterAIRequestOptions(candidate, resolvedThinkingLevel);

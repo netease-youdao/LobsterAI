@@ -570,6 +570,12 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
     }
 
     const compat: Record<string, unknown> = {};
+    if (isCodexOAuth) {
+      // ChatGPT Codex Responses (`chatgpt.com/backend-api/codex/responses`)
+      // rejects `max_output_tokens`, so suppress it even when a model carries an
+      // explicit maxTokens cap.
+      compat.supportsMaxOutputTokens = false;
+    }
     if (api === OpenClawApi.OpenAICompletions) {
       if (!isNativeOpenAIEndpoint(baseURL)) {
         // pi-ai auto-enables supportsDeveloperRole and supportsStore for any
@@ -589,6 +595,7 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
     const providerSpec: DshHostProviderSpec = {
       id: routeId,
       displayName: routeId,
+      ...(isCodexOAuth ? { catalogProvider: OpenClawProviderId.OpenAICodex } : {}),
       api,
       baseURL,
       ...(apiKey ? { apiKey } : {}),

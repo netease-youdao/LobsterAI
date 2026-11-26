@@ -80,6 +80,7 @@ export interface DshHostProviderModelSpec {
 export interface DshHostProviderSpec {
   id: string;
   displayName?: string;
+  catalogProvider?: string;
   api: 'openai-completions' | 'openai-responses' | 'anthropic-messages' | 'google-generative-ai';
   baseURL: string;
   apiKey?: string;
