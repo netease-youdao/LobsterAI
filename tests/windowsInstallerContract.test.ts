@@ -564,7 +564,7 @@ describe('Windows installer hardening contracts', () => {
     expect(check).toContain('"ambiguous-dual-registration"');
   });
 
-  test('re-kills processes on every stop round and logs survivors on failure', () => {
+  test('re-kills processes on every stop round, elevates on demand for access-denied targets, and logs survivors on failure', () => {
     const start = installerInclude.indexOf('!macro stopLobsterAIProcesses');
     const end = installerInclude.indexOf('!macroend', start);
     const stopMacro = installerInclude.slice(start, end);
@@ -574,7 +574,7 @@ describe('Windows installer hardening contracts', () => {
     const loop = stopMacro.indexOf('for ($$i = 0; $$i -lt 30; $$i++)');
     const emptyCheck = stopMacro.indexOf('if ($$procs.Count -eq 0) { exit 0 }');
     const rekill = stopMacro.indexOf(
-      '$$procs | Stop-Process -Force -ErrorAction SilentlyContinue',
+      'Stop-Process -Id $$p.Id -Force -ErrorAction Stop',
     );
     const sleep = stopMacro.indexOf('Start-Sleep -Milliseconds 500');
     expect(loop).toBeGreaterThan(-1);
@@ -583,9 +583,31 @@ describe('Windows installer hardening contracts', () => {
     expect(sleep).toBeGreaterThan(rekill);
     expect(stopMacro).toContain('exit 3');
 
-    // Survivor dump runs only on the exit-3 verdict, receives its inputs via
-    // the child environment, and always clears them afterwards.
-    expect(stopMacro).toContain('StrCmp $R2 "3" 0 StopLobsterAIProcessesLog');
+    // Access-denied detection must use locale-independent Win32 error 5 or
+    // UnauthorizedAccessException (never English message strings) and elevate
+    // on demand only when interactive and not already admin. The elevated
+    // helper must use the running 64-bit PowerShell's own MainModule.FileName
+    // (Sysnative is only valid in 32-bit WOW64 NSIS, not inside 64-bit PowerShell).
+    expect(stopMacro).toContain('$$code -eq 5');
+    expect(stopMacro).toContain('[System.UnauthorizedAccessException]');
+    expect(stopMacro).toContain('$$env:LOBSTERAI_STOP_SILENT -eq \\"1\\"');
+    expect(stopMacro).toContain('$$psExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName');
+    expect(stopMacro).toContain('$$psi.FileName = $$psExe');
+    expect(stopMacro).toContain('$$psi.Verb = \\"runas\\"');
+    expect(stopMacro).toContain('$$psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden');
+    expect(stopMacro).toContain('-EncodedCommand ');
+    expect(stopMacro).toContain('if ($$elev.ExitCode -eq 0) { exit 6 }');
+    expect(stopMacro).toContain('if ($$n -eq 1223) { exit 1223 }');
+    expect(stopMacro).toContain('StrCmp $R2 "6" 0 +2');
+    expect(stopMacro).toContain('StrCmp $R2 "5" 0 +2');
+    expect(stopMacro).toContain('StrCmp $R2 "1223" 0 +2');
+
+    // Survivor dump runs on timeout (3), access-denied (5), and UAC-declined
+    // (1223), receives its inputs via the child environment, and always clears
+    // them afterwards.
+    expect(stopMacro).toContain('StrCmp $R2 "3" StopLobsterAIProcessesLogSurvivors');
+    expect(stopMacro).toContain('StrCmp $R2 "5" StopLobsterAIProcessesLogSurvivors');
+    expect(stopMacro).toContain('StrCmp $R2 "1223" StopLobsterAIProcessesLogSurvivors');
     expect(stopMacro).toContain(
       String.raw`SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "$APPDATA\LobsterAI\install-timing.log")`,
     );
@@ -599,7 +621,7 @@ describe('Windows installer hardening contracts', () => {
     );
     expect(stopMacro).toContain('name=$$($$p.ProcessName) pid=$$($$p.Id) path=$$fp');
     expect(stopMacro).toContain('phase=process-stop-survivors-logged');
-    expect(stopMacro).toContain('exit $$procs.Count');
+    expect(stopMacro).toContain('exit $$unique.Count');
   });
 
   test('sweeps every process running from the install tree, excluding itself', () => {
@@ -619,19 +641,24 @@ describe('Windows installer hardening contracts', () => {
     expect(stopMacro).toContain(
       'SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "$lobsterCurrentProcessPid")',
     );
+    expect(stopMacro).toContain(
+      'SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "$0")',
+    );
     expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "")');
     expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "")');
+    expect(stopMacro).toContain('SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "")');
 
-    // Both the kill loop and the survivor snapshot must use the same sweep so
-    // diagnostics describe the same process set the kill acted on.
+    // The unelevated kill loop, the elevated fallback, and the survivor
+    // snapshot must all use the same sweep so diagnostics describe the same
+    // process set the kill acted on.
     const sweeps = stopMacro.match(
-      /\$\$fp\.StartsWith\(\$\$root, \[System\.StringComparison\]::OrdinalIgnoreCase\)/g,
+      /`?\$\$fp\.StartsWith\(`?\$\$root, \[System\.StringComparison\]::OrdinalIgnoreCase\)/g,
     );
-    expect(sweeps).toHaveLength(2);
-    const selfExclusions = stopMacro.match(/\$\$_\.Id\.ToString\(\) -ne \$\$selfPid/g);
-    expect(selfExclusions).toHaveLength(2);
-    const rootGuards = stopMacro.match(/\$\$root\.Length -gt 3/g);
-    expect(rootGuards).toHaveLength(2);
+    expect(sweeps).toHaveLength(3);
+    const selfExclusions = stopMacro.match(/`?\$\$_\.Id\.ToString\(\) -ne `?\$\$selfPid/g);
+    expect(selfExclusions).toHaveLength(3);
+    const rootGuards = stopMacro.match(/`?\$\$root\.Length -gt 3/g);
+    expect(rootGuards).toHaveLength(3);
     // The env-var clear must sit on the shared exit label so the non-survivor
     // paths clear it too.
     const logLabel = stopMacro.indexOf('StopLobsterAIProcessesLog:');
@@ -639,6 +666,20 @@ describe('Windows installer hardening contracts', () => {
     expect(
       stopMacro.indexOf('SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "")'),
     ).toBeGreaterThan(logLabel);
+    expect(
+      stopMacro.indexOf('SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "")'),
+    ).toBeGreaterThan(logLabel);
+  });
+
+  test('runs CHECK_APP_RUNNING even in elevated inner instances for per-machine upgrades', () => {
+    // With RequestExecutionLevel user (asInvoker), per-machine installs elevate
+    // via UAC_RunElevated before Section "install" runs, so only the inner
+    // elevated instance executes installSection.nsh. Guarding CHECK_APP_RUNNING
+    // behind !UAC_IsInnerInstance skips process stopping, Skills backup, and
+    // the old-install rename fast path on every per-machine upgrade.
+    expect(installSection).toContain('!insertmacro CHECK_APP_RUNNING');
+    expect(installSection).not.toContain('${ifNot} ${UAC_IsInnerInstance}');
+    expect(appBuilderPatch).toContain('-  ${ifNot} ${UAC_IsInnerInstance}');
   });
 
   test('treats only an enumerably empty target as fresh', () => {

@@ -649,7 +649,7 @@ index 8ec0be3..d059db8 100644
 +  LobsterWebPackageReady:
 +!macroend
 diff --git a/node_modules/app-builder-lib/templates/nsis/installSection.nsh b/node_modules/app-builder-lib/templates/nsis/installSection.nsh
-index 053772f..adc8ad4 100644
+index 053772f..da4938e 100644
 --- a/node_modules/app-builder-lib/templates/nsis/installSection.nsh
 +++ b/node_modules/app-builder-lib/templates/nsis/installSection.nsh
 @@ -11,6 +11,28 @@ StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
@@ -681,8 +681,18 @@ index 053772f..adc8ad4 100644
  !ifdef ONE_CLICK
    !ifdef HEADER_ICO
      File /oname=$PLUGINSDIR\installerHeaderico.ico "${HEADER_ICO}"
-@@ -37,26 +59,26 @@ StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+@@ -32,31 +54,33 @@ StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
    ${endif}
+   !insertmacro CHECK_APP_RUNNING
+ !else
+-  ${ifNot} ${UAC_IsInnerInstance}
+-    !insertmacro CHECK_APP_RUNNING
+-  ${endif}
++  # With RequestExecutionLevel user (asInvoker), per-machine installs elevate
++  # via UAC_RunElevated before this section runs, so only the inner instance
++  # executes installSection.nsh. Skipping CHECK_APP_RUNNING there would bypass
++  # process stopping, Skills backup, and the old-install rename fast path.
++  !insertmacro CHECK_APP_RUNNING
  !endif
  
 -Var /GLOBAL keepShortcuts
@@ -724,7 +734,7 @@ index 053772f..adc8ad4 100644
  SetOutPath $INSTDIR
  
  !ifdef UNINSTALLER_ICON
-@@ -64,6 +86,9 @@ SetOutPath $INSTDIR
+@@ -64,6 +88,9 @@ SetOutPath $INSTDIR
  !endif
  
  !insertmacro installApplicationFiles
@@ -734,7 +744,7 @@ index 053772f..adc8ad4 100644
  !insertmacro registryAddInstallInfo
  !insertmacro addStartMenuLink $keepShortcuts
  !insertmacro addDesktopLink $keepShortcuts
-@@ -102,9 +127,13 @@ ${endIf}
+@@ -102,9 +129,13 @@ ${endIf}
    !endif
    !insertmacro quitSuccess
  !else

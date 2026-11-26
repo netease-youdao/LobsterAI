@@ -516,6 +516,16 @@ FunctionEnd
 ; 30 rounds x 500ms keeps the worst-case gate under ~20s wall time; the
 ; healthy path still converges on the first or second round.
 ;
+; With RequestExecutionLevel user (asInvoker), an existing LobsterAI process
+; running elevated (e.g. launched as administrator or carried over from a
+; pre-asInvoker install) refuses unelevated Stop-Process with Win32
+; ERROR_ACCESS_DENIED (5). When every remaining process hits error 5 across two
+; consecutive rounds, fail fast instead of burning 30 rounds: in interactive
+; installs, elevate the same trusted PowerShell helper on demand (RunAs +
+; hidden ProcessStartInfo + Base64 -EncodedCommand) to stop those processes and
+; report success with exit code 6; in silent (/S) installs never prompt UAC and
+; exit with code 5 so the failure stays zero-UI.
+;
 ; Shared between the installer and the uninstaller via customCheckAppRunning.
 !macro stopLobsterAIProcesses
   DetailPrint "[Installer] Stopping running LobsterAI processes"
@@ -527,25 +537,84 @@ FunctionEnd
   ; directory, including on the helper-not-found path.
   CreateDirectory "$APPDATA\LobsterAI"
   StrCmp $lobsterTrustedPowerShellPath "" StopLobsterAIProcessesDone
-  ; The path-prefix sweep in both helpers below needs the install root and
-  ; this process id. Both travel through the child environment, not string
-  ; interpolation: the install directory is user-selected and may hold shell
-  ; metacharacters. Cleared at StopLobsterAIProcessesLog, which every path
-  ; reaches.
+  ; The path-prefix sweep and on-demand elevated fallback need the install root,
+  ; this process id, and silent mode. All travel through the child environment,
+  ; not string interpolation: the install directory is user-selected and may
+  ; hold shell metacharacters. Cleared at StopLobsterAIProcessesLog, which every
+  ; path reaches. The elevated fallback reuses the running PowerShell's own
+  ; MainModule.FileName rather than $lobsterTrustedPowerShellPath because 32-bit
+  ; NSIS resolves Sysnative, which does not exist inside a 64-bit child process.
+  StrCpy $0 "0"
+  ${If} ${Silent}
+    StrCpy $0 "1"
+  ${EndIf}
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "$INSTDIR")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "$lobsterCurrentProcessPid")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "$0")i'
   Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
     $$root = $$env:LOBSTERAI_STOP_ROOT;\
     if ($$root -and -not $$root.EndsWith([char]92)) { $$root = $$root + [char]92 };\
     $$selfPid = $$env:LOBSTERAI_STOP_SELF_PID;\
     $$sweep = $$root -and $$root.Length -gt 3;\
+    $$deniedRounds = 0;\
     for ($$i = 0; $$i -lt 30; $$i++) {\
       $$procs = @();\
       $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
       $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
       if ($$sweep) { $$procs += Get-Process -ErrorAction SilentlyContinue | Where-Object { $$fp = $$null; try { $$fp = $$_.Path } catch { }; $$fp -and $$fp.StartsWith($$root, [System.StringComparison]::OrdinalIgnoreCase) -and $$_.Id.ToString() -ne $$selfPid } };\
       if ($$procs.Count -eq 0) { exit 0 };\
-      $$procs | Stop-Process -Force -ErrorAction SilentlyContinue;\
+      $$seen = @{};\
+      $$unique = @();\
+      foreach ($$p in $$procs) { if (-not $$seen.ContainsKey($$p.Id)) { $$seen[$$p.Id] = $$true; $$unique += $$p } };\
+      $$denied = $$false;\
+      $$killed = $$false;\
+      foreach ($$p in $$unique) {\
+        try {\
+          Stop-Process -Id $$p.Id -Force -ErrorAction Stop;\
+          $$killed = $$true\
+        } catch {\
+          $$ex = $$_.Exception;\
+          $$code = $$null;\
+          if ($$ex -and ($$ex.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$code = $$ex.NativeErrorCode };\
+          if ($$null -eq $$code -and $$ex -and $$ex.InnerException -and ($$ex.InnerException.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$code = $$ex.InnerException.NativeErrorCode };\
+          if ($$code -eq 5 -or ($$ex -is [System.UnauthorizedAccessException]) -or ($$ex.InnerException -is [System.UnauthorizedAccessException])) { $$denied = $$true }\
+        }\
+      };\
+      if ($$denied -and -not $$killed) {\
+        $$deniedRounds++;\
+        if ($$deniedRounds -ge 2) {\
+          $$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);\
+          $$psExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName;\
+          if ($$isAdmin -or $$env:LOBSTERAI_STOP_SILENT -eq \"1\" -or -not $$psExe) { exit 5 };\
+          $$rootB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$$root));\
+          $$safePid = ($$selfPid -replace \"[^0-9]\", \"\");\
+          $$sq = [char]39;\
+          $$dq = [char]34;\
+          $$elevScript = \"`$$root = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($$sq$$rootB64$$sq)); `$$selfPid = $$sq$$safePid$$sq; `$$sweep = `$$root -and `$$root.Length -gt 3; for (`$$j = 0; `$$j -lt 30; `$$j++) { `$$q = @(); `$$q += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue; `$$q += Get-Process node -ErrorAction SilentlyContinue | Where-Object { `$$_.Path -like $$dq*LobsterAI*$$dq }; if (`$$sweep) { `$$q += Get-Process -ErrorAction SilentlyContinue | Where-Object { `$$fp = `$$null; try { `$$fp = `$$_.Path } catch { }; `$$fp -and `$$fp.StartsWith(`$$root, [System.StringComparison]::OrdinalIgnoreCase) -and `$$_.Id.ToString() -ne `$$selfPid } }; if (`$$q.Count -eq 0) { exit 0 }; `$$q | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }; exit 3\";\
+          $$enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$elevScript));\
+          try {\
+            $$psi = New-Object System.Diagnostics.ProcessStartInfo;\
+            $$psi.FileName = $$psExe;\
+            $$psi.Arguments = \"-NoLogo -NoProfile -NonInteractive -EncodedCommand \" + $$enc;\
+            $$psi.Verb = \"runas\";\
+            $$psi.UseShellExecute = $$true;\
+            $$psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden;\
+            $$elev = [System.Diagnostics.Process]::Start($$psi);\
+            if ($$null -eq $$elev) { exit 5 };\
+            $$elev.WaitForExit();\
+            if ($$elev.ExitCode -eq 0) { exit 6 };\
+            exit $$elev.ExitCode\
+          } catch {\
+            $$n = $$null;\
+            if ($$_.Exception -and ($$_.Exception.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$n = $$_.Exception.NativeErrorCode };\
+            if ($$null -eq $$n -and $$_.Exception -and $$_.Exception.InnerException -and ($$_.Exception.InnerException.PSObject.Properties.Name -contains \"NativeErrorCode\")) { $$n = $$_.Exception.InnerException.NativeErrorCode };\
+            if ($$n -eq 1223) { exit 1223 };\
+            exit 5\
+          }\
+        }\
+      } else {\
+        $$deniedRounds = 0\
+      };\
       Start-Sleep -Milliseconds 500;\
     };\
     exit 3"'
@@ -557,8 +626,19 @@ FunctionEnd
     StrCpy $lobsterTargetProcessesStopStatus "process-start-blocked"
   StrCmp $R2 "0" 0 +2
     StrCpy $lobsterTargetProcessesStopStatus "success"
-  StrCmp $R2 "3" 0 StopLobsterAIProcessesLog
-  ; The exit-3 verdict alone never says WHICH process refused to die. Re-snapshot
+  StrCmp $R2 "6" 0 +2
+    StrCpy $lobsterTargetProcessesStopStatus "success"
+  StrCmp $R2 "5" 0 +2
+    StrCpy $lobsterTargetProcessesStopStatus "access-denied"
+  StrCmp $R2 "1223" 0 +2
+    StrCpy $lobsterTargetProcessesStopStatus "uac-declined"
+  StrCmp $R2 "3" StopLobsterAIProcessesLogSurvivors
+  StrCmp $R2 "5" StopLobsterAIProcessesLogSurvivors
+  StrCmp $R2 "1223" StopLobsterAIProcessesLogSurvivors
+  Goto StopLobsterAIProcessesLog
+
+  StopLobsterAIProcessesLogSurvivors:
+  ; The non-zero verdict alone never says WHICH process refused to die. Re-snapshot
   ; and append one process-stop-survivor line per remaining process before the
   ; completion line below. Inputs travel through the child environment, not
   ; string interpolation: the log path contains the user profile directory,
@@ -576,12 +656,15 @@ FunctionEnd
     $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
     $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
     if ($$sweep) { $$procs += Get-Process -ErrorAction SilentlyContinue | Where-Object { $$fp = $$null; try { $$fp = $$_.Path } catch { }; $$fp -and $$fp.StartsWith($$root, [System.StringComparison]::OrdinalIgnoreCase) -and $$_.Id.ToString() -ne $$selfPid } };\
-    foreach ($$p in $$procs) {\
+    $$seen = @{};\
+    $$unique = @();\
+    foreach ($$p in $$procs) { if (-not $$seen.ContainsKey($$p.Id)) { $$seen[$$p.Id] = $$true; $$unique += $$p } };\
+    foreach ($$p in $$unique) {\
       $$fp = \"unknown\";\
       try { if ($$p.Path) { $$fp = $$p.Path } } catch { };\
       Add-Content -LiteralPath $$env:LOBSTERAI_STOP_LOG_PATH -Value \"$$ts phase=process-stop-survivor attempt_id=$$env:LOBSTERAI_STOP_ATTEMPT_ID name=$$($$p.ProcessName) pid=$$($$p.Id) path=$$fp\" -ErrorAction SilentlyContinue;\
     };\
-    exit $$procs.Count"'
+    exit $$unique.Count"'
   !insertmacro LobsterExecHiddenExitCode
   Pop $1
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_LOG_PATH", t "")i'
@@ -604,6 +687,7 @@ FunctionEnd
   ; Clearing variables that were never set (helper-not-found path) is a no-op.
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_ROOT", t "")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SELF_PID", t "")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_STOP_SILENT", t "")i'
   System::Call 'kernel32::GetTickCount()i .r6'
   IntOp $5 $6 - $7
   FileOpen $9 "$APPDATA\LobsterAI\install-timing.log" a
