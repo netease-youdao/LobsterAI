@@ -17,7 +17,7 @@ interface AppUpdateModalProps {
 const SECONDARY_BUTTON_CLASS_NAME =
   'rounded-xl border border-foreground/15 bg-surface px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
 const PRIMARY_BUTTON_CLASS_NAME =
-  'rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
+  'rounded-xl bg-action px-4 py-2 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface';
 
 /**
  * Release-notes dialog. Confirming from "available" starts a silent background

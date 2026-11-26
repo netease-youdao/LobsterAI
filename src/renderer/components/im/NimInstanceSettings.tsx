@@ -262,11 +262,11 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
                   if (e.key === 'Escape') { setNameValue(instance.instanceName); setEditingName(false); }
                 }}
                 autoFocus
-                className="text-sm font-medium text-foreground bg-transparent border-b border-primary focus:outline-none px-0 py-0"
+                className="text-sm font-medium text-foreground bg-transparent border-b border-foreground/40 focus:outline-none px-0 py-0"
               />
             ) : (
               <span
-                className="text-sm font-medium text-foreground cursor-pointer hover:text-primary transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
+                className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
                 onClick={() => setEditingName(true)}
                 title={i18nService.t('imNimClickToRename')}
               >
@@ -292,7 +292,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => void handleStartQr()}
-                className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="px-4 py-2.5 rounded-lg text-sm font-medium bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {i18nService.t('imNimQrLogin')}
               </button>
@@ -302,7 +302,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
                 <a
                   href={NimDownloadQrImage[downloadPlatform]}
                   onClick={openNimDemo}
-                  className="text-primary hover:underline underline-offset-2"
+                  className="text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                 >
                   {i18nService.t('imNimQrDemoLink')}
                 </a>
@@ -328,7 +328,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
           )}
           {qrStatus === 'loading' && (
             <div className="flex flex-col items-center gap-2 py-2">
-              <ArrowPathIcon className="h-7 w-7 text-primary animate-spin" />
+              <ArrowPathIcon className="h-7 w-7 text-foreground animate-spin" />
               <span className="text-xs text-secondary">{i18nService.t('imNimQrGenerating')}</span>
             </div>
           )}
@@ -343,7 +343,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
                 <a
                   href={NimDownloadQrImage[downloadPlatform]}
                   onClick={openNimDemo}
-                  className="text-primary hover:underline underline-offset-2"
+                  className="text-foreground underline underline-offset-2 transition-opacity hover:opacity-75"
                 >
                   {i18nService.t('imNimQrDemoLink')}
                 </a>
@@ -416,7 +416,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
             />
 
             <details className="group">
-              <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+              <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
                 {i18nService.t('imAdvancedSettings')}
               </summary>
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -487,7 +487,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
                     <button
                       type="button"
                       onClick={() => { onConfigChange({ token: '' }); void onSave({ token: '' }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -496,7 +496,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, token: !prev.token }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                    className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                     title={showSecrets.token ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets.token ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -513,7 +513,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
             type="button"
             onClick={onTestConnectivity}
             disabled={testingPlatform === 'nim'}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <SignalIcon className="h-4 w-4" />
             {testingPlatform === 'nim' ? i18nService.t('testing') : i18nService.t('imConnectivityTest')}
@@ -579,7 +579,7 @@ const NimInstanceSettings: React.FC<NimInstanceSettingsProps> = ({
                     onClick={() => setDownloadPlatform(option.value)}
                     className={`inline-flex h-11 w-20 items-center justify-center rounded-lg transition-colors ${
                       isActive
-                        ? 'bg-primary text-white shadow-sm'
+                        ? 'bg-action text-action-foreground shadow-sm'
                         : 'text-secondary hover:text-foreground'
                     }`}
                     aria-label={option.label}

@@ -167,6 +167,10 @@ import type { Platform } from '../shared/platform';
 import { type PptAssetRequest, type PptCatalog, PptCreationIpc, type PptPreparedFile } from '../shared/pptCreation/constants';
 import { type PptCoverExportRequest, PptCoverIpc, type PptCoverRequest } from '../shared/pptCreation/cover';
 import { ModelContextWindowIpc, type ModelContextWindowRequest } from '../shared/providers/modelContextWindow';
+import {
+  ProviderModelDiscoveryIpcChannel,
+  type ProviderModelDiscoveryRequest,
+} from '../shared/providers/modelDiscovery';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
@@ -514,6 +518,10 @@ contextBridge.exposeInMainWorld('electron', {
     saveConfig: (update: DecisionModelConfigUpdate) => ipcRenderer.invoke(DecisionModelIpcChannel.SaveConfig, update),
     testConnection: (draft: DecisionModelConfigUpdate) =>
       ipcRenderer.invoke(DecisionModelIpcChannel.TestConnection, draft),
+  },
+  providerModels: {
+    discover: (request: ProviderModelDiscoveryRequest) =>
+      ipcRenderer.invoke(ProviderModelDiscoveryIpcChannel.Discover, request),
   },
   openclaw: {
     engine: {
@@ -1877,6 +1885,31 @@ contextBridge.exposeInMainWorld('electron', {
     removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
     setPluginEnabled: (packageName: string, enabled: boolean) =>
       ipcRenderer.invoke(DshHostIpc.SetPluginEnabled, packageName, enabled),
+    checkPluginVersions: (request: string | { name: string; registry?: string | null }) =>
+      ipcRenderer.invoke(DshHostIpc.CheckPluginVersions, request),
+    updatePlugin: (request: {
+      name: string;
+      version: string;
+      registry?: string | null;
+      spec?: string;
+      requestId?: string;
+    }) => ipcRenderer.invoke(DshHostIpc.UpdatePlugin, request),
+    onPluginUpdateState: (listener: (progress: { requestId: string; step: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, progress: { requestId: string; step: string }) =>
+        listener(progress);
+      ipcRenderer.on(DshHostIpc.PluginUpdateState, handler);
+      return () => {
+        ipcRenderer.removeListener(DshHostIpc.PluginUpdateState, handler);
+      };
+    },
+    onPluginsChanged: (listener: (change: { reason?: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, change: { reason?: string }) =>
+        listener(change ?? {});
+      ipcRenderer.on(DshHostIpc.PluginsChanged, handler);
+      return () => {
+        ipcRenderer.removeListener(DshHostIpc.PluginsChanged, handler);
+      };
+    },
     getPluginRegistries: () => ipcRenderer.invoke(DshHostIpc.GetPluginRegistries),
     pickLocalPluginDir: () => ipcRenderer.invoke(DshHostIpc.PickLocalPluginDir),
     openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),

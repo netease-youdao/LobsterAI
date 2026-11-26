@@ -56,7 +56,7 @@ describe('AppUpdateCard', () => {
     expect(html).toContain('第一项优化');
     expect(html).toContain('第二项优化');
     expect(html).not.toContain('第三项优化');
-    expect(html).toContain('bg-foreground');
+    expect(html).toContain('bg-action');
     expect(html).toContain('data-skin-button-solid="true"');
     expect(html).toContain('data-skin-button-plain="true"');
     expect(html).not.toContain('bg-emerald-600');

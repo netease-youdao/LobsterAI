@@ -438,4 +438,164 @@ describe('DshTypertClient', () => {
 
     await client.close();
   });
+
+  test('calls pluginManager/listVersions and pluginManager/updateBundle and emits forwarded plugin events', async () => {
+    const fakeWs = new FakeWebSocket();
+    const rpcCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
+
+    const requester: DshHttpRequester = async (url, options) => {
+      if (url.includes('/connect')) {
+        return {
+          status: 204,
+          headers: { 'set-cookie': 'dsh_session=plugin-sess; HttpOnly' },
+          body: '',
+        };
+      }
+      if (url.endsWith('/api/pluginManager/listVersions') || url.endsWith('/api/pluginManager/updateBundle')) {
+        const parsed = JSON.parse(options.body ?? '{}') as {
+          rpcId: string;
+          method: string;
+          payload?: { args?: Record<string, unknown> };
+        };
+        rpcCalls.push({ method: parsed.method, args: parsed.payload?.args ?? {} });
+
+        if (parsed.method === 'pluginManager/listVersions') {
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              type: 'server-response',
+              rpcId: parsed.rpcId,
+              result: {
+                ok: true,
+                value: {
+                  status: 'listed',
+                  installed: '1.0.0',
+                  registry: 'https://registry.npmmirror.com/',
+                  attempts: [{ registry: 'https://registry.npmmirror.com/' }],
+                  versions: [
+                    {
+                      version: '1.2.0',
+                      tags: ['latest'],
+                      prerelease: false,
+                      bundle: true,
+                    },
+                  ],
+                  omitted: 0,
+                },
+              },
+            }),
+          };
+        }
+
+        if (parsed.method === 'pluginManager/updateBundle') {
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              type: 'server-response',
+              rpcId: parsed.rpcId,
+              result: {
+                ok: true,
+                value: {
+                  from: '1.0.0',
+                  to: '1.2.0',
+                  step: 'install',
+                  result: {
+                    changed: true,
+                    application: 'applied',
+                    stage: 'enable',
+                    target: '@acme/tool',
+                    bundle: '@acme/tool',
+                    version: '1.2.0',
+                  },
+                },
+              },
+            }),
+          };
+        }
+      }
+      return { status: 404, headers: {}, body: 'not found' };
+    };
+
+    const client = new DshTypertClient({
+      requester,
+      webSocketFactory: () => {
+        queueMicrotask(() => {
+          fakeWs.triggerOpen();
+          queueMicrotask(() => {
+            const openEvents = fakeWs.sent.find((m) => m.endpoint === '$events');
+            fakeWs.triggerMessage({
+              type: 'item',
+              streamId: openEvents!.streamId,
+              value: { type: 'ready', clientId: 'c-plugin', host: { home: '/tmp' } },
+            });
+          });
+        });
+        return fakeWs;
+      },
+    });
+
+    await client.connect('http://127.0.0.1:41234/?token=tok');
+
+    const updateStates: unknown[] = [];
+    const pluginChanges: unknown[] = [];
+    client.on('remote:plugin-manager/update-state', (payload) => updateStates.push(payload));
+    client.on('remote:plugin-manager/changed', (payload) => pluginChanges.push(payload));
+
+    const openEvents = fakeWs.sent.find((m) => m.endpoint === '$events');
+    fakeWs.triggerMessage({
+      type: 'item',
+      streamId: openEvents!.streamId,
+      value: {
+        type: 'emit',
+        event: 'plugin-manager/update-state',
+        args: [{ requestId: 'upd-1', step: 'removing' }],
+      },
+    });
+    fakeWs.triggerMessage({
+      type: 'item',
+      streamId: openEvents!.streamId,
+      value: {
+        type: 'emit',
+        event: 'plugin-manager/changed',
+        args: [{ reason: 'install' }],
+      },
+    });
+
+    const versions = await client.listPluginVersions('@acme/tool', {
+      registry: 'https://registry.npmmirror.com/',
+    });
+    expect(versions.status).toBe('listed');
+    expect(rpcCalls[0]).toEqual({
+      method: 'pluginManager/listVersions',
+      args: {
+        name: '@acme/tool',
+        options: { registry: 'https://registry.npmmirror.com/' },
+      },
+    });
+
+    const updated = await client.updatePluginBundle('@acme/tool', '1.2.0', {
+      registry: 'https://registry.npmmirror.com/',
+      requestId: 'upd-1',
+    });
+    expect(updated.step).toBe('install');
+    expect(updated.result.application).toBe('applied');
+    expect(rpcCalls[1]).toEqual({
+      method: 'pluginManager/updateBundle',
+      args: {
+        name: '@acme/tool',
+        version: '1.2.0',
+        options: {
+          registry: 'https://registry.npmmirror.com/',
+          requestId: 'upd-1',
+        },
+      },
+    });
+
+    expect(updateStates).toEqual([{ requestId: 'upd-1', step: 'removing' }]);
+    expect(pluginChanges).toEqual([{ reason: 'install' }]);
+
+    await client.close();
+  });
 });

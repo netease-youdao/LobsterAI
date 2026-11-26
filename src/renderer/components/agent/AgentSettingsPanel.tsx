@@ -1399,7 +1399,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
               type="button"
               onClick={() => void handleSave()}
               disabled={!name.trim() || saving}
-              className={`h-9 rounded-xl bg-foreground px-5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40`}
+              className={`h-9 rounded-xl bg-action px-5 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40`}
             >
               {saving ? i18nService.t('saving') : i18nService.t('save')}
             </button>

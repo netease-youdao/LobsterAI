@@ -1740,7 +1740,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                           || actionLoading
                           || !titleDraft.trim()}
                         onClick={requestEmbeddedSettingsSave}
-                        className="rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded-lg bg-action px-4 py-2 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         {actionLoading
                           ? i18nService.t('saving')
@@ -1848,7 +1848,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                       titleDraft.trim() === selectedSite.title
                     }
                     onClick={() => void saveTitle()}
-                    className="h-9 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-9 rounded-lg bg-action px-4 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {i18nService.t('save')}
                   </button>
@@ -1927,7 +1927,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                         type="button"
                         disabled={readOnly || actionLoading}
                         onClick={() => void saveAccessMode()}
-                        className="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+                        className="h-8 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         {actionLoading
                           ? i18nService.t('saving')
@@ -1966,7 +1966,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setConfirmAction('resume')}
-                      className="h-9 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
+                      className="h-9 rounded-lg bg-action px-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover"
                     >
                       {i18nService.t('sitesResumeAccess')}
                     </button>
@@ -2059,7 +2059,7 @@ const SitesView: React.FC<SitesViewProps> = ({
               type="button"
               disabled={actionLoading}
               onClick={() => void (embedded ? saveEmbeddedSettings() : updateAccessStatus())}
-              className={`rounded-lg px-4 py-2 ${MANAGEMENT_BODY_TEXT} font-medium ${confirmAction === 'stop' ? 'bg-red-600 text-white' : 'bg-primary text-primary-foreground hover:bg-primary-hover'}`}
+              className={`rounded-lg px-4 py-2 ${MANAGEMENT_BODY_TEXT} font-medium ${confirmAction === 'stop' ? 'bg-red-600 text-white' : 'bg-action text-action-foreground hover:bg-action-hover'}`}
             >
               {actionLoading
                 ? i18nService.t('saving')
@@ -2171,7 +2171,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                 setLeaveConfirmOpen(false);
                 exitSiteDetail();
               }}
-              className={`rounded-lg bg-primary px-4 py-2 ${MANAGEMENT_BODY_TEXT} font-medium text-primary-foreground hover:bg-primary-hover`}
+              className={`rounded-lg bg-action px-4 py-2 ${MANAGEMENT_BODY_TEXT} font-medium text-action-foreground transition-colors hover:bg-action-hover`}
             >
               {i18nService.t('sitesDiscardAndLeave')}
             </button>
@@ -2198,7 +2198,7 @@ const SitesView: React.FC<SitesViewProps> = ({
       type="button"
       disabled={readOnly}
       onClick={() => onCreateSiteByChat(i18nService.t('sitesCreatePrompt'))}
-      className={`inline-flex shrink-0 items-center rounded-lg bg-primary font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40 ${compact ? 'h-8 gap-1 px-2.5 text-xs' : 'h-9 gap-1.5 px-3.5 text-sm shadow-sm'}`}
+      className={`inline-flex shrink-0 items-center rounded-lg bg-action font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40 ${compact ? 'h-8 gap-1 px-2.5 text-xs' : 'h-9 gap-1.5 px-3.5 text-sm shadow-sm'}`}
     >
       <PlusIcon className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
       {i18nService.t(compact ? 'sitesCreateShort' : 'sitesCreate')}
@@ -2562,7 +2562,7 @@ const SitesView: React.FC<SitesViewProps> = ({
                 onClick={() =>
                   void (shareHasAccessChange ? updateShareAccessMode() : copyShareLink())
                 }
-                className="inline-flex h-9 min-w-[104px] items-center justify-center gap-1.5 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex h-9 min-w-[104px] items-center justify-center gap-1.5 rounded-lg bg-action px-3.5 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {shareActionLoading && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
                 {!shareActionLoading &&

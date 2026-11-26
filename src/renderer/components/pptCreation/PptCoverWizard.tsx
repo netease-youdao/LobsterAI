@@ -28,7 +28,7 @@ const COVER_STEPS = [
   { step: CoverStep.Export, key: 'pptCoverExport' },
 ] as const;
 const inputClass = 'scrollbar-hidden mt-2 min-h-11 w-full resize-none rounded-xl border border-border-input bg-background px-3 py-2.5 text-sm font-normal text-foreground placeholder:text-foreground/45 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50';
-const primaryButtonClass = 'flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
+const primaryButtonClass = 'flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-action px-4 py-3 text-sm font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
 export default function PptCoverWizard({ catalog, example, initialSession, onBack, onClose, onContinue }: {
   catalog: PptCatalog; example: PptExample; initialSession?: PptCoverSession;
   onBack?: (session?: PptCoverSession) => void;

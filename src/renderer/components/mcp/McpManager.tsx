@@ -128,15 +128,13 @@ const buildCategoryOptions = (
 const CARD_ACTION_REVEAL_CLASS =
   'invisible group-hover:visible group-focus-within:visible';
 const MCP_CARD_ACTION_CLASS =
-  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-neutral-900 px-3 '
-  + `${MANAGEMENT_META_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
-  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 '
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 '
+  + `${MANAGEMENT_META_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
+  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 '
   + 'focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
 const MCP_DETAIL_ACTION_CLASS =
-  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-5 '
-  + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-action px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 const McpManager: React.FC = () => {
@@ -1566,7 +1564,7 @@ const McpManager: React.FC = () => {
           <button
             type="button"
             onClick={handleOpenCreateForm}
-            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-action text-action-foreground hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-5 w-5" aria-hidden="true" />
             <span>{i18nService.t('mcpAddServer')}</span>

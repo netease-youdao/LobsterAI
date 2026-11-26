@@ -196,7 +196,7 @@ const ExpertPlazaView: React.FC<ExpertPlazaViewProps> = ({ onSummon, initialRequ
     return (
       <button type="button" disabled={summoning !== null} onClick={() => update ? showDetail(preset) : void summon(preset)}
         aria-label={`${t(action)} ${name(preset)}`}
-        className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-neutral-900 font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
+        className={`pointer-events-auto relative z-10 inline-flex shrink-0 items-center justify-center rounded-lg bg-action font-semibold text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50 ${large
           ? 'h-8 px-5 text-sm'
           : `h-7 px-3 ${MANAGEMENT_META_TEXT} ${summoning === preset.id || update ? '' : 'invisible group-hover:visible group-focus-within:visible'}`}`}>
         {summoning === preset.id ? t('expertSummoning') : t(action)}

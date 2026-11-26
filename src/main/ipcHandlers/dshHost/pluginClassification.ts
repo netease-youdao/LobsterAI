@@ -9,13 +9,17 @@ import * as path from 'path';
 
 import {
   DshPluginApplicationStatus,
+  DshPluginAvailability,
   DshPluginSurface,
+  DshPluginUpdateKind,
+  DshPluginUpdateOutcomeKind,
 } from '../../../shared/dshEngine/hostConstants';
 import type {
   DshLocalizedText,
   DshPluginBundleInfo,
   DshPluginChangeResult,
   DshPluginIncompatibleInfo,
+  DshPluginUpdateResult,
 } from '../../libs/dsh/dshTypertClient';
 import {
   type DshProfilePluginInfo,
@@ -33,6 +37,9 @@ export interface DshEnrichedPluginEntry extends DshProfilePluginInfo {
   description?: LocalizedTextMap;
   icon?: string;
   official?: boolean;
+  availability?: DshPluginAvailability;
+  update?: DshPluginUpdateKind;
+  source?: string;
   removable?: boolean;
   surface: DshPluginSurface;
   isThemePlugin: boolean;
@@ -97,6 +104,29 @@ export interface DshPluginMutationOutcome {
   logPath?: string;
   stdout?: string;
   stderr?: string;
+  plugins: DshEnrichedPluginEntry[];
+}
+
+export interface DshPluginUpdateOutcome {
+  ok: boolean;
+  outcome: DshPluginUpdateOutcomeKind;
+  from: string;
+  to: string;
+  step?: 'check' | 'remove' | 'install';
+  application?: DshPluginApplicationStatus;
+  restartRequired?: boolean;
+  restartReason?: string;
+  errorCode?: string;
+  failureKind?: string;
+  failedAt?: 'registry' | 'spec-host';
+  error?: string;
+  pendingBuilds?: string[];
+  incompatible?: DshPluginIncompatibleInfo[];
+  output?: string;
+  logPath?: string;
+  restored?: boolean;
+  restoreApplication?: DshPluginApplicationStatus;
+  restoreError?: string;
   plugins: DshEnrichedPluginEntry[];
 }
 
@@ -720,6 +750,9 @@ export function buildEnrichedPluginEntries(options: {
         ...(description ? { description } : {}),
         ...(bundle.meta?.icon ? { icon: bundle.meta.icon } : {}),
         official: bundle.official,
+        availability: bundle.availability as DshPluginAvailability,
+        ...(bundle.update ? { update: bundle.update as DshPluginUpdateKind } : {}),
+        ...(bundle.source ? { source: bundle.source } : {}),
         removable: !managed && bundle.removable,
         surface: surfaceInfo.surface,
         isThemePlugin: surfaceInfo.isThemePlugin,
@@ -838,6 +871,93 @@ export function normalizePluginChangeOutcome(
     ...(incompatible && incompatible.length > 0 ? { incompatible } : {}),
     ...(output ? { output } : {}),
     ...(result.packageResult?.logPath ? { logPath: result.packageResult.logPath } : {}),
+    plugins,
+  };
+}
+
+function isFailedApplication(application: string | undefined): boolean {
+  return (
+    application === DshPluginApplicationStatus.Failed
+    || application === DshPluginApplicationStatus.Cancelled
+  );
+}
+
+function extractChangeErrorMessage(change: DshPluginChangeResult): string | undefined {
+  return (
+    change.error?.diagnostic
+    || (change.error?.code ? `Plugin operation failed (${change.error.code})` : undefined)
+    || (change.packageResult?.kind ? `Package operation failed (${change.packageResult.kind})` : undefined)
+    || change.packageResult?.output?.trim()
+    || undefined
+  );
+}
+
+export function normalizePluginUpdateOutcome(
+  raw: DshPluginUpdateResult,
+  plugins: DshEnrichedPluginEntry[],
+): DshPluginUpdateOutcome {
+  const result = raw.result;
+  const application = result.application as DshPluginApplicationStatus;
+  const resultFailed = isFailedApplication(application);
+  const restore = raw.restore;
+  const restoreApplication = restore
+    ? (restore.application as DshPluginApplicationStatus)
+    : undefined;
+  const restoreFailed = restore !== undefined && isFailedApplication(restoreApplication);
+
+  let ok = false;
+  let outcome: DshPluginUpdateOutcomeKind;
+  if (raw.step === 'check') {
+    outcome = DshPluginUpdateOutcomeKind.CheckRefused;
+  } else if (raw.step === 'remove') {
+    outcome = DshPluginUpdateOutcomeKind.RemoveFailed;
+  } else if (!resultFailed) {
+    ok = true;
+    outcome =
+      application === DshPluginApplicationStatus.RestartRequired
+        ? DshPluginUpdateOutcomeKind.RestartRequired
+        : DshPluginUpdateOutcomeKind.Applied;
+  } else if (!restore) {
+    outcome = DshPluginUpdateOutcomeKind.InstallFailedKept;
+  } else if (restoreFailed) {
+    outcome = DshPluginUpdateOutcomeKind.InstallFailedBroken;
+  } else {
+    outcome = DshPluginUpdateOutcomeKind.InstallFailedRestored;
+  }
+
+  const restartRequired = ok && application === DshPluginApplicationStatus.RestartRequired;
+  const incompatible = result.error?.incompatible ?? result.packageResult?.incompatible;
+  const failedOutput = [result, restore]
+    .map((change) => (change && isFailedApplication(change.application) ? change.packageResult?.output?.trim() : undefined))
+    .find((text) => Boolean(text));
+  const logPath =
+    result.packageResult?.logPath
+    ?? (restoreFailed ? restore?.packageResult?.logPath : undefined);
+  const errorMessage = !ok ? extractChangeErrorMessage(result) : undefined;
+  const restoreError = restoreFailed && restore ? extractChangeErrorMessage(restore) : undefined;
+
+  return {
+    ok,
+    outcome,
+    from: raw.from,
+    to: raw.to,
+    step: raw.step,
+    application,
+    restartRequired,
+    ...(result.restartReason ? { restartReason: result.restartReason } : {}),
+    ...(result.error?.code ? { errorCode: result.error.code } : {}),
+    ...(result.packageResult?.kind ? { failureKind: result.packageResult.kind } : {}),
+    ...(result.failedAt ? { failedAt: result.failedAt } : {}),
+    ...(errorMessage ? { error: errorMessage } : {}),
+    ...(result.pendingBuilds && result.pendingBuilds.length > 0
+      ? { pendingBuilds: result.pendingBuilds }
+      : {}),
+    ...(incompatible && incompatible.length > 0 ? { incompatible } : {}),
+    ...(failedOutput ? { output: failedOutput } : {}),
+    ...(logPath ? { logPath } : {}),
+    ...(restore !== undefined ? { restored: !restoreFailed } : {}),
+    ...(restoreApplication ? { restoreApplication } : {}),
+    ...(restoreError ? { restoreError } : {}),
     plugins,
   };
 }

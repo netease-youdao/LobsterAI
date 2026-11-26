@@ -277,7 +277,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
         data-skin-button-solid="true"
         onClick={() => void handlePrimary()}
         disabled={isActing || isInstalling || isChecking}
-        className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-foreground px-3 text-[13px] font-medium text-background transition-opacity duration-150 hover:opacity-90 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-action px-3 text-[13px] font-medium text-action-foreground transition-colors duration-150 hover:bg-action-hover active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-60"
       >
         {(isActing || isInstalling) && <Spinner className="h-3.5 w-3.5" />}
         <span className="truncate">{primaryLabel}</span>

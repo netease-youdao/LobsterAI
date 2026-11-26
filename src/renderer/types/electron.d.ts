@@ -189,6 +189,10 @@ import type {
 } from '../../shared/openclawUserConfig/constants';
 import type { PptAssetRequest, PptCatalog, PptPreparedFile } from '../../shared/pptCreation/constants';
 import type { PptCoverExportRequest,PptCoverRequest } from '../../shared/pptCreation/cover';
+import type {
+  ProviderModelDiscoveryRequest,
+  ProviderModelDiscoveryResult,
+} from '../../shared/providers/modelDiscovery';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -952,6 +956,9 @@ interface IElectronAPI {
     getConfig: () => Promise<DecisionModelConfigView>;
     saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;
     testConnection: (draft: DecisionModelConfigUpdate) => Promise<DecisionModelTestResult>;
+  };
+  providerModels: {
+    discover: (request: ProviderModelDiscoveryRequest) => Promise<ProviderModelDiscoveryResult>;
   };
   openclaw: {
     engine: {
@@ -2503,6 +2510,18 @@ interface IElectronAPI {
     }>;
     removePlugin: (packageName: string) => Promise<DshHostPluginMutationResult>;
     setPluginEnabled: (packageName: string, enabled: boolean) => Promise<DshHostPluginMutationResult>;
+    checkPluginVersions: (
+      request: string | { name: string; registry?: string | null },
+    ) => Promise<DshHostPluginCheckVersionsResult>;
+    updatePlugin: (request: {
+      name: string;
+      version: string;
+      registry?: string | null;
+      spec?: string;
+      requestId?: string;
+    }) => Promise<DshHostPluginUpdateOutcome>;
+    onPluginUpdateState: (listener: (progress: DshHostPluginUpdateProgress) => void) => () => void;
+    onPluginsChanged: (listener: (change: { reason?: string }) => void) => () => void;
     getPluginRegistries: () => Promise<{
       ok: boolean;
       registry?: string | null;
@@ -2562,6 +2581,9 @@ interface DshHostPluginEntry {
   description?: DshHostPluginLocalizedText;
   icon?: string;
   official?: boolean;
+  availability?: 'installation' | 'profile' | 'missing';
+  update?: 'registry' | 'git';
+  source?: string;
   removable?: boolean;
   surface?: 'native' | 'hybrid' | 'web-only';
   isThemePlugin?: boolean;
@@ -2611,6 +2633,81 @@ interface DshHostPluginMutationResult {
   logPath?: string;
   stdout?: string;
   stderr?: string;
+  plugins?: Array<DshHostPluginEntry>;
+}
+
+interface DshHostPluginRegistryAttempt {
+  registry: string | null;
+  problem?: 'not-found' | 'network' | 'unknown';
+  reason?: string;
+}
+
+interface DshHostPluginVersionInfo {
+  version: string;
+  publishedAt?: string;
+  tags: string[];
+  prerelease: boolean;
+  deprecated?: string;
+  bundle: boolean;
+  incompatible?: DshHostPluginIncompatibleInfo;
+}
+
+type DshHostPluginVersionList =
+  | {
+    status: 'listed';
+    installed: string;
+    registry: string | null;
+    attempts: DshHostPluginRegistryAttempt[];
+    versions: DshHostPluginVersionInfo[];
+    omitted: number;
+  }
+  | {
+    status: 'refused';
+    problem: 'not-updatable' | 'not-found' | 'network' | 'unknown';
+    reason: string;
+    attempts: DshHostPluginRegistryAttempt[];
+  };
+
+interface DshHostPluginCheckVersionsResult {
+  ok: boolean;
+  checkedAt?: number;
+  list?: DshHostPluginVersionList;
+  error?: string;
+}
+
+interface DshHostPluginUpdateProgress {
+  requestId: string;
+  step: 'checking' | 'removing' | 'installing' | 'restoring';
+}
+
+interface DshHostPluginUpdateOutcome {
+  ok: boolean;
+  outcome:
+    | 'applied'
+    | 'restart-required'
+    | 'check-refused'
+    | 'remove-failed'
+    | 'install-failed-kept'
+    | 'install-failed-restored'
+    | 'install-failed-broken'
+    | 'transport-lost';
+  from: string;
+  to: string;
+  step?: 'check' | 'remove' | 'install';
+  application?: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
+  restartRequired?: boolean;
+  restartReason?: string;
+  errorCode?: string;
+  failureKind?: string;
+  failedAt?: 'registry' | 'spec-host';
+  error?: string;
+  pendingBuilds?: string[];
+  incompatible?: DshHostPluginIncompatibleInfo[];
+  output?: string;
+  logPath?: string;
+  restored?: boolean;
+  restoreApplication?: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
+  restoreError?: string;
   plugins?: Array<DshHostPluginEntry>;
 }
 

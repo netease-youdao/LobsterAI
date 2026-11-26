@@ -406,7 +406,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
                 type="button"
                 disabled={resolvingCredentialSave}
                 onClick={() => void resolveCredentialSavePrompt(BrowserCredentialSaveDecision.Save)}
-                className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="rounded-md bg-action px-2.5 py-1 text-[11px] font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50"
               >
                 {i18nService.t(state.credentialSavePrompt.updatesExisting
                   ? 'agentBrowserCredentialUpdate'

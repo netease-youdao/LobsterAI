@@ -1,6 +1,8 @@
 import {
   ApiFormat,
-  applyModelRuntimeProfileMetadata,
+  applyModelRuntimeProfileDefaults,
+  migrateKimiK3LegacyCustomParams,
+  ModelRuntimeProfile,
   ModelRuntimeProfileSource,
   normalizeModelIdForComparison as getProviderModelIdentity,
   OpenClawApi,
@@ -23,6 +25,7 @@ import {
   FontPreferences,
   isCustomProvider,
   normalizeFontPreference,
+  REMOVED_PROVIDER_MODELS_MIGRATION_VERSION,
   resolveArtifactAutoPreviewEnabled,
   ShortcutAction,
   type ShortcutConfig,
@@ -112,6 +115,7 @@ const normalizeProviderModels = (
 ): ProviderConfig['models'] => models?.map(model => {
   const {
     compatibilityMode: _legacyCompatibilityMode,
+    customParams: rawCustomParams,
     ...modelWithoutCompatibilityMode
   } = model as typeof model & { compatibilityMode?: unknown };
   const canonicalModelId = getCanonicalProviderModelId(providerKey, model.id);
@@ -146,7 +150,14 @@ const normalizeProviderModels = (
       ? OpenClawApi.OpenAICompletions
       : OpenClawApi.AnthropicMessages,
   });
-  const runtimeMetadata = applyModelRuntimeProfileMetadata({
+  const kimiK3Migration = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
+    ? migrateKimiK3LegacyCustomParams(rawCustomParams, maxTokens)
+    : null;
+  const effectiveCustomParams = kimiK3Migration
+    ? kimiK3Migration.customParams
+    : rawCustomParams;
+  const effectiveMaxTokens = kimiK3Migration?.migratedMaxTokens ?? maxTokens;
+  const runtimeMetadata = applyModelRuntimeProfileDefaults({
     supportsImage: ProviderRegistry.resolveModelSupportsImage(
       providerKey,
       canonicalModelId,
@@ -156,8 +167,11 @@ const normalizeProviderModels = (
     supportsVideo,
     supportsThinking,
     contextWindow,
-    maxTokens,
-  }, runtimeProfile);
+    maxTokens: effectiveMaxTokens,
+  }, runtimeProfile, {
+    supportsImage: model.capabilityOverrides?.image,
+    supportsThinking: model.capabilityOverrides?.thinking,
+  });
   return {
     ...modelWithoutCompatibilityMode,
     supportsImage: runtimeMetadata.supportsImage ?? false,
@@ -172,6 +186,9 @@ const normalizeProviderModels = (
       : {}),
     ...(runtimeMetadata.maxTokens !== undefined
       ? { maxTokens: runtimeMetadata.maxTokens }
+      : {}),
+    ...(effectiveCustomParams && Object.keys(effectiveCustomParams).length > 0
+      ? { customParams: effectiveCustomParams }
       : {}),
   };
 });
@@ -607,6 +624,8 @@ const omitLegacyVoiceInputConfig = (config: AppConfig): AppConfig => {
 
 const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
   const storedWithoutLegacyVoiceInput = omitLegacyVoiceInputConfig(storedConfig);
+  const hasAppliedRemovedModelsMigration =
+    (storedConfig.removedProviderModelsMigrationVersion ?? 0) >= REMOVED_PROVIDER_MODELS_MIGRATION_VERSION;
   const providerModelMigrationVersions = {
     ...(storedConfig.providerModelMigrationVersions ?? {}),
   };
@@ -622,8 +641,11 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
               ...((defaultConfig.providers as Record<string, unknown>)?.[providerKey] as Record<string, unknown> ?? {}),
               ...providerConfig,
             };
-            // Filter out removed models
-            const removedIds = REMOVED_PROVIDER_MODELS[providerKey];
+            // Filter out retired default models once per migration version so
+            // models explicitly added or discovered by the user survive restarts.
+            const removedIds = !hasAppliedRemovedModelsMigration
+              ? REMOVED_PROVIDER_MODELS[providerKey]
+              : undefined;
             if (removedIds && mergedProvider.models) {
               mergedProvider.models = mergedProvider.models.filter(
                 (m: { id: string }) => !removedIds.includes(m.id)
@@ -709,16 +731,18 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
       )
     : defaultConfig.providers;
 
-  // Migrate model.defaultModel if it was removed
-  const allRemovedIds = Object.values(REMOVED_PROVIDER_MODELS).flat();
+  // Migrate model.defaultModel if it was retired (once per migration version)
   const migratedModel = { ...defaultConfig.model, ...storedConfig.model };
-  if (allRemovedIds.includes(migratedModel.defaultModel)) {
-    migratedModel.defaultModel = defaultConfig.model.defaultModel;
-  }
-  if (migratedModel.availableModels) {
-    migratedModel.availableModels = migratedModel.availableModels.filter(
-      (m: { id: string }) => !allRemovedIds.includes(m.id)
-    );
+  if (!hasAppliedRemovedModelsMigration) {
+    const allRemovedIds = Object.values(REMOVED_PROVIDER_MODELS).flat();
+    if (allRemovedIds.includes(migratedModel.defaultModel)) {
+      migratedModel.defaultModel = defaultConfig.model.defaultModel;
+    }
+    if (migratedModel.availableModels) {
+      migratedModel.availableModels = migratedModel.availableModels.filter(
+        (m: { id: string }) => !allRemovedIds.includes(m.id)
+      );
+    }
   }
 
   return migrateCustomProviders({
@@ -740,6 +764,10 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
     ),
     providers: mergedProviders as AppConfig['providers'],
     providerModelMigrationVersions,
+    removedProviderModelsMigrationVersion: Math.max(
+      storedConfig.removedProviderModelsMigrationVersion ?? 0,
+      REMOVED_PROVIDER_MODELS_MIGRATION_VERSION,
+    ),
     // One-time forced resets to the current defaults (see
     // *_FONT_SIZE_MIGRATION_VERSION); afterwards the stored choice wins.
     uiFontSize: (storedConfig.uiFontSizeMigrationVersion ?? 0) >= UI_FONT_SIZE_MIGRATION_VERSION
@@ -843,7 +871,13 @@ class ConfigService {
       ...newConfig,
       ...(normalizedProviders ? { providers: normalizedProviders } : {}),
       ...(normalizedProviders
-        ? { providerModelMigrationVersions: markCurrentProviderModelMigrationsApplied(base.providerModelMigrationVersions) }
+        ? {
+            providerModelMigrationVersions: markCurrentProviderModelMigrationsApplied(base.providerModelMigrationVersions),
+            removedProviderModelsMigrationVersion: Math.max(
+              newConfig.removedProviderModelsMigrationVersion ?? base.removedProviderModelsMigrationVersion ?? 0,
+              REMOVED_PROVIDER_MODELS_MIGRATION_VERSION,
+            ),
+          }
         : {}),
       uiFontSize: normalizeFontPreference(
         newConfig.uiFontSize ?? base.uiFontSize,

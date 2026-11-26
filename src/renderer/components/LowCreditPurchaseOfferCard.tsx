@@ -163,7 +163,7 @@ const LowCreditPurchaseOfferCard: React.FC<LowCreditPurchaseOfferCardProps> = ({
           onClick={() => void openPortal('boost')}
           className={`min-h-8 min-w-0 flex-1 rounded-full px-2 py-1 text-xs font-medium leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${showSubscriptionButton
             ? 'border border-black/15 transition-colors hover:bg-black/[0.03] dark:border-white/15 dark:hover:bg-white/[0.05]'
-            : 'bg-[#1b1d1e] text-white transition-opacity hover:opacity-85 dark:bg-foreground dark:text-background'}`}
+            : 'bg-action text-action-foreground transition-colors hover:bg-action-hover'}`}
         >
           {isFirstPurchase && boostRate !== null
             ? i18nService.t('lowCreditOfferDiscountRecharge').replace('{discount}', formatPurchaseOfferDiscount(boostRate))
@@ -173,7 +173,7 @@ const LowCreditPurchaseOfferCard: React.FC<LowCreditPurchaseOfferCardProps> = ({
           <button
             type="button"
             onClick={() => void openPortal('subscription')}
-            className="min-h-8 min-w-0 flex-[1.1] rounded-full bg-[#1b1d1e] px-2 py-1 text-xs font-medium leading-5 text-white transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:bg-foreground dark:text-background"
+            className="min-h-8 min-w-0 flex-[1.1] rounded-full bg-action px-2 py-1 text-xs font-medium leading-5 text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             {isFirstPurchase && subscriptionRate !== null && (
               <span className="mr-1 text-[#ff4a28]">

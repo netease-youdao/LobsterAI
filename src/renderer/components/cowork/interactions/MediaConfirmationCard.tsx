@@ -338,7 +338,7 @@ export default function MediaConfirmationCard({
         )}
         <button
           type="button"
-          className={`${buttonClass} bg-foreground text-background hover:bg-foreground/90`}
+          className={`${buttonClass} bg-action text-action-foreground hover:bg-action-hover`}
           disabled={busy || !visible}
           aria-busy={repricing}
           onClick={() => {

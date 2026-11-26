@@ -511,7 +511,7 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                 type="button"
                 onClick={handleSubmit}
                 disabled={!allResolved}
-                className="px-5 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-primary"
+                className="px-5 py-2 text-sm font-medium rounded-lg bg-action text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-action"
                 title={!allResolved ? i18nService.t('coworkQuestionWizardAnswerRequired') : undefined}
               >
                 {i18nService.t('coworkQuestionWizardSubmit')}

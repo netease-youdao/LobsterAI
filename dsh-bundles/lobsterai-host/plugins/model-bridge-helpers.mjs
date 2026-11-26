@@ -145,18 +145,45 @@ export function isNativeOpenAIEndpoint(baseUrl) {
 }
 
 /**
- * Merge provider-level and model-level pi-ai `compat` flags and apply safe
- * defaults for non-native `openai-completions` endpoints.
+ * Extract `compat` flags from a matched built-in `pi-ai` catalog entry only
+ * when the catalog entry speaks the exact same wire protocol as `modelApi`.
+ * Prevents cross-protocol compat leakage (e.g. OpenAI Completions flags onto
+ * Anthropic Messages, or Responses flags onto Completions).
  *
- * Provider-level compat is inherited only when the model speaks the same wire
- * protocol as the provider (so an `anthropic-messages` model inside a mixed
- * `lobsterai-server` provider never inherits OpenAI-completions flags).
+ * @param {string} modelApi
+ * @param {unknown} catalogModel
+ * @returns {Record<string, unknown> | undefined}
+ */
+export function resolveCatalogModelCompat(modelApi, catalogModel) {
+  if (!isRecord(catalogModel) || !isRecord(catalogModel.compat)) {
+    return undefined;
+  }
+  if (
+    typeof catalogModel.api !== 'string'
+    || normalizeProtocol(catalogModel.api) !== normalizeProtocol(modelApi)
+  ) {
+    return undefined;
+  }
+  return catalogModel.compat;
+}
+
+/**
+ * Merge built-in catalog, provider-level, and model-level pi-ai `compat` flags
+ * and apply safe defaults for non-native `openai-completions` endpoints.
+ *
+ * Priority (lowest to highest):
+ * 1. `catalogCompat` (from matching built-in `pi-ai` catalog entry)
+ * 2. `providerCompat` (inherited only when the model speaks the same wire
+ *    protocol as the provider, so an `anthropic-messages` model inside a mixed
+ *    `lobsterai-server` provider never inherits OpenAI-completions flags)
+ * 3. `modelCompat` (explicit per-model / runtime-profile overrides)
  *
  * @param {string} modelApi
  * @param {string} modelBaseUrl
  * @param {unknown} providerCompat
  * @param {unknown} modelCompat
  * @param {string} [providerApi]
+ * @param {unknown} [catalogCompat]
  * @returns {Record<string, unknown>}
  */
 export function resolveModelCompat(
@@ -165,10 +192,12 @@ export function resolveModelCompat(
   providerCompat,
   modelCompat,
   providerApi,
+  catalogCompat,
 ) {
   const inheritProviderCompat = !providerApi
     || normalizeProtocol(providerApi) === normalizeProtocol(modelApi);
   const compat = {
+    ...(isRecord(catalogCompat) ? catalogCompat : {}),
     ...(inheritProviderCompat && isRecord(providerCompat) ? providerCompat : {}),
     ...(isRecord(modelCompat) ? modelCompat : {}),
   };

@@ -72,15 +72,13 @@ const importTabConfig: Record<ImportSourceType, {
 const CARD_ACTION_REVEAL_CLASS =
   'invisible group-hover:visible group-focus-within:visible';
 const SKILL_CARD_ACTION_CLASS =
-  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-neutral-900 px-3 '
-  + `${MANAGEMENT_META_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
-  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 '
+  'inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg bg-action px-3 '
+  + `${MANAGEMENT_META_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
+  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 '
   + 'focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
 const SKILL_DETAIL_USE_CLASS =
-  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-5 '
-  + `${MANAGEMENT_BODY_TEXT} font-semibold text-white transition-colors hover:bg-neutral-800 `
-  + 'dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 '
+  'inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full bg-action px-5 '
+  + `${MANAGEMENT_BODY_TEXT} font-semibold text-action-foreground transition-colors hover:bg-action-hover `
   + 'disabled:cursor-not-allowed disabled:opacity-50';
 
 interface SkillsManagerProps {
@@ -1227,7 +1225,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 return next;
               });
             }}
-            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-action text-action-foreground hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-5 w-5" aria-hidden="true" />
             <span>{i18nService.t('addSkill')}</span>
@@ -2044,7 +2042,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
                 type="button"
                 onClick={handleImportFromDialog}
                 disabled={isDownloadingSkill || !skillDownloadSource.trim()}
-                className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
+                className="w-full py-2.5 rounded-xl bg-action text-action-foreground text-sm font-medium hover:bg-action-hover transition-colors disabled:opacity-50"
               >
                 {isDownloadingSkill ? i18nService.t('importingSkill') : i18nService.t('importSkill')}
               </button>
@@ -2148,7 +2146,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
               <button
                 type="button"
                 onClick={handleSyncFromOpenClaw}
-                className="px-4 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+                className="px-4 py-1.5 text-xs rounded-lg bg-action text-action-foreground hover:bg-action-hover transition-colors"
               >
                 {i18nService.t('skillsSyncNow')}
               </button>

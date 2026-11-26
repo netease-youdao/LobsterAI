@@ -551,7 +551,7 @@ const CoworkBtwFloatingPanel: React.FC<CoworkBtwFloatingPanelProps> = ({
                 disabled={!pendingEntry && !canSubmit}
                 className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-all ${
                   pendingEntry || canSubmit
-                    ? 'bg-neutral-950 text-white shadow-subtle hover:bg-neutral-800 active:scale-95 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200'
+                    ? 'bg-action text-action-foreground shadow-subtle hover:bg-action-hover active:scale-95'
                     : 'cursor-not-allowed bg-neutral-300 text-white dark:bg-neutral-700 dark:text-neutral-500'
                 }`}
                 title={i18nService.t(pendingEntry ? 'coworkBtwStop' : 'coworkBtwSend')}

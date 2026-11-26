@@ -343,6 +343,7 @@ import { cancelAllMcpOAuthLogins, registerMcpHandlers } from './ipcHandlers/mcp'
 import { registerMigrationV2Handlers } from './ipcHandlers/migrationV2/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
+import { registerProviderModelDiscoveryHandlers } from './ipcHandlers/providerModelDiscovery';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -2504,6 +2505,16 @@ const getDshBootstrap = (): DshBootstrap => {
     dshBootstrap.hostManager.on('connectionChange', () => {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send(DshHostIpc.ConnectionChanged);
+      }
+    });
+    dshBootstrap.hostManager.on('pluginUpdateState', (progress: unknown) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginUpdateState, progress);
+      }
+    });
+    dshBootstrap.hostManager.on('pluginsChanged', (change: unknown) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginsChanged, change);
       }
     });
   }
@@ -9462,6 +9473,8 @@ if (!gotTheLock) {
     setDecisionToolHandler: handler => getMcpRuntime().setDecisionToolHandler(handler),
     syncOpenClawConfig,
   });
+
+  registerProviderModelDiscoveryHandlers();
 
   registerDshHostHandlers({
     getHostManager: () => getDshBootstrap().hostManager,

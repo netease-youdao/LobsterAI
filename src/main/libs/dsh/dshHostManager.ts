@@ -953,6 +953,21 @@ export class DshHostManager extends EventEmitter {
       client.on?.('connected', () => {
         if (this.client === client) this.setDisconnectedAt(null);
       });
+      client.on?.('remote:plugin-manager/update-state', (progress: unknown) => {
+        if (this.client !== client) return;
+        if (
+          progress
+          && typeof progress === 'object'
+          && typeof (progress as { requestId?: unknown }).requestId === 'string'
+          && typeof (progress as { step?: unknown }).step === 'string'
+        ) {
+          this.emit('pluginUpdateState', progress);
+        }
+      });
+      client.on?.('remote:plugin-manager/changed', (change: unknown) => {
+        if (this.client !== client) return;
+        this.emit('pluginsChanged', change && typeof change === 'object' ? change : {});
+      });
       await client.connect(launchUrl);
       const health = await client.callOps<{ ok?: boolean }>(DshOpsAction.Health);
       if (health && 'ok' in health && health.ok === false) {

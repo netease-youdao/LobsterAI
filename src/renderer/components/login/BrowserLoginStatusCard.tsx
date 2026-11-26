@@ -83,7 +83,7 @@ const BrowserLoginStatusCard: React.FC<BrowserLoginStatusCardProps> = ({
           <button
             type="button"
             onClick={() => void copy(url)}
-            className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-lg bg-foreground px-2.5 text-xs font-medium text-surface transition-opacity hover:opacity-90"
+            className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-lg bg-action px-2.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover"
           >
             {copied && <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />}
             {i18nService.t(copied ? 'copied' : 'browserLoginCopyLoginLink')}

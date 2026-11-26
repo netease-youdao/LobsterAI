@@ -164,7 +164,7 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
             type="button"
             onClick={() => void handleStartAiSkin()}
             disabled={isMutating}
-            className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-action px-3.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             <MagicIcon className="mr-1.5 h-3.5 w-3.5" />
             {isStartingAiSkin
@@ -207,7 +207,7 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
                   aria-pressed={selected}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                     selected
-                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      ? 'bg-action text-action-foreground shadow-sm'
                       : 'text-secondary hover:text-foreground'
                   }`}
                 >
@@ -238,7 +238,7 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
                 <article
                   key={skin.id}
                   className={`relative h-36 overflow-hidden rounded-xl border bg-background transition-[border-color,box-shadow] ${
-                    isActive ? 'border-primary ring-1 ring-primary/20' : 'border-border'
+                    isActive ? 'border-action ring-1 ring-action/20' : 'border-border'
                   }`}
                 >
                   {backdropUrl && (
@@ -272,7 +272,7 @@ const SkinSettingsSection: React.FC<SkinSettingsSectionProps> = ({ onStartAiSkin
                     }`}
                   />
                   {(isActive || isApplying) && (
-                    <span className="pointer-events-none absolute right-3 top-3 z-20 rounded-full bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground shadow-sm">
+                    <span className="pointer-events-none absolute right-3 top-3 z-20 rounded-full bg-action px-2 py-1 text-[11px] font-medium text-action-foreground shadow-sm">
                       {isApplying
                         ? i18nService.t('aiSkinApplying')
                         : i18nService.t('aiSkinCurrent')}

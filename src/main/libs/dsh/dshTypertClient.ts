@@ -12,6 +12,7 @@ import * as https from 'https';
 import {
   DSH_OPS_ROUTE_PATH,
   DshOpsAction,
+  type DshPluginUpdateStep,
 } from '../../../shared/dshEngine/hostConstants';
 
 export const DSH_REMOTE_MUX_PATH = '/api/remote.mux';
@@ -428,6 +429,61 @@ export interface DshPluginInstallBundleOptions {
   registry?: string | null;
 }
 
+export interface DshPluginRegistryAttempt {
+  readonly registry: string | null;
+  readonly problem?: 'not-found' | 'network' | 'unknown';
+  readonly reason?: string;
+}
+
+export interface DshPluginVersionInfo {
+  readonly version: string;
+  readonly publishedAt?: string;
+  readonly tags: readonly string[];
+  readonly prerelease: boolean;
+  readonly deprecated?: string;
+  readonly bundle: boolean;
+  readonly incompatible?: DshPluginIncompatibleInfo;
+}
+
+export type DshPluginVersionList =
+  | {
+    readonly status: 'listed';
+    readonly installed: string;
+    readonly registry: string | null;
+    readonly attempts: readonly DshPluginRegistryAttempt[];
+    readonly versions: readonly DshPluginVersionInfo[];
+    readonly omitted: number;
+  }
+  | {
+    readonly status: 'refused';
+    readonly problem: 'not-updatable' | 'not-found' | 'network' | 'unknown';
+    readonly reason: string;
+    readonly attempts: readonly DshPluginRegistryAttempt[];
+  };
+
+export interface DshPluginUpdateBundleOptions {
+  readonly registry?: string | null;
+  readonly spec?: string;
+  readonly requestId?: string;
+}
+
+export interface DshPluginUpdateProgress {
+  readonly requestId: string;
+  readonly step: DshPluginUpdateStep;
+}
+
+export interface DshPluginUpdateResult {
+  readonly from: string;
+  readonly to: string;
+  readonly step: 'check' | 'remove' | 'install';
+  readonly result: DshPluginChangeResult;
+  readonly restore?: DshPluginChangeResult;
+}
+
+export interface DshPluginChangedEvent {
+  readonly reason?: 'plugin' | 'bundle' | 'install' | 'remove';
+}
+
 export class DshTypertClient extends EventEmitter {
   private readonly runtimePid?: number;
   private readonly requester: DshHttpRequester;
@@ -834,6 +890,30 @@ export class DshTypertClient extends EventEmitter {
 
   setPluginBundleEnabled(name: string, enabled: boolean): Promise<DshPluginChangeResult> {
     return this.call<DshPluginChangeResult>('pluginManager/setBundleEnabled', { name, enabled });
+  }
+
+  listPluginVersions(
+    name: string,
+    options?: { registry?: string | null },
+    signal?: AbortSignal,
+  ): Promise<DshPluginVersionList> {
+    return this.call<DshPluginVersionList>(
+      'pluginManager/listVersions',
+      { name, ...(options !== undefined ? { options } : {}) },
+      signal,
+    );
+  }
+
+  updatePluginBundle(
+    name: string,
+    version: string,
+    options?: DshPluginUpdateBundleOptions,
+  ): Promise<DshPluginUpdateResult> {
+    return this.call<DshPluginUpdateResult>('pluginManager/updateBundle', {
+      name,
+      version,
+      ...(options !== undefined ? { options } : {}),
+    });
   }
 
   getPluginRegistries(): Promise<DshPluginRegistriesInfo> {

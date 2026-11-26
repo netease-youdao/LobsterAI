@@ -87,6 +87,11 @@ export const SHORTCUTS_MIGRATION_VERSION = 1;
 // version resets at most once and later user choices survive upgrades.
 export const ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION = 1;
 
+// Bump when adding newly retired default model IDs to REMOVED_PROVIDER_MODELS.
+// hydrateStoredConfig persists the applied version so each cleanup runs once
+// and models explicitly re-added or discovered by the user survive restarts.
+export const REMOVED_PROVIDER_MODELS_MIGRATION_VERSION = 1;
+
 export const normalizeFontPreference = (
   value: unknown,
   fallback: number,
@@ -129,6 +134,8 @@ export interface AppConfig {
   };
   providers?: Record<string, ProviderConfig>;
   providerModelMigrationVersions?: Record<string, number>;
+  // 已应用的下线默认模型清理版本(见 REMOVED_PROVIDER_MODELS_MIGRATION_VERSION)
+  removedProviderModelsMigrationVersion?: number;
   // 主题配置
   theme: 'light' | 'dark' | 'system';
   // Optional for configs created before exact default theme persistence was introduced.
@@ -203,6 +210,7 @@ export const defaultConfig: AppConfig = {
     defaultModelProvider: 'deepseek',
   },
   providers: buildDefaultProviders(),
+  removedProviderModelsMigrationVersion: REMOVED_PROVIDER_MODELS_MIGRATION_VERSION,
   theme: 'system',
   uiFontSize: FontPreferences.UiFontSizeDefault,
   uiFontSizeMigrationVersion: UI_FONT_SIZE_MIGRATION_VERSION,

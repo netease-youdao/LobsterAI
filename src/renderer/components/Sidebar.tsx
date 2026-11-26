@@ -8,6 +8,7 @@ import { ShortcutAction } from '../config';
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
 import {
+  dispatchDshPluginsChanged,
   DSH_PLUGINS_CHANGED_EVENT,
   type DshEmbeddedPluginTarget,
   dshHostService,
@@ -314,15 +315,20 @@ const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     let active = true;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let externalRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     let retryCount = 0;
     const MAX_STARTUP_RETRIES = 3;
 
-    const loadPlugins = async () => {
+    const loadPlugins = async (broadcastToApp = false) => {
       try {
         const res = await dshHostService.listPlugins();
         if (!active) return;
         if (res?.ok) {
-          setInstalledDshPlugins(res.plugins ?? []);
+          const nextPlugins = res.plugins ?? [];
+          setInstalledDshPlugins(nextPlugins);
+          if (broadcastToApp) {
+            dispatchDshPluginsChanged(nextPlugins);
+          }
           if (!res.hmrAvailable && retryCount < MAX_STARTUP_RETRIES) {
             retryCount += 1;
             retryTimer = setTimeout(() => {
@@ -344,11 +350,23 @@ const Sidebar: React.FC<SidebarProps> = ({
       }
     };
 
+    const unsubscribeHostPluginsChanged = dshHostService.onPluginsChanged(() => {
+      if (externalRefreshTimer !== null) clearTimeout(externalRefreshTimer);
+      externalRefreshTimer = setTimeout(() => {
+        externalRefreshTimer = null;
+        if (active) {
+          void loadPlugins(true);
+        }
+      }, 300);
+    });
+
     void loadPlugins();
     window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
     return () => {
       active = false;
       if (retryTimer !== null) clearTimeout(retryTimer);
+      if (externalRefreshTimer !== null) clearTimeout(externalRefreshTimer);
+      unsubscribeHostPluginsChanged();
       window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
     };
   }, []);

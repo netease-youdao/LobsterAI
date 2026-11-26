@@ -27,11 +27,26 @@ export {
 } from './lobsterAIRequestOptions';
 export { buildModelCapabilityOverrides } from './modelCapabilityOverrides';
 export type {
+  DiscoveredModel,
+  ProviderModelDiscoveryRequest,
+  ProviderModelDiscoveryResult,
+} from './modelDiscovery';
+export {
+  ModelDiscoveryErrorCode,
+  ModelDiscoveryModality,
+  ProviderDiscoveryProtocol,
+  ProviderModelDiscoveryIpcChannel,
+} from './modelDiscovery';
+export type {
+  MigrateKimiK3CustomParamsOptions,
+  MigrateKimiK3CustomParamsResult,
   ModelRuntimeProfileDefinition,
   ModelRuntimeProfileMetadata,
+  ModelRuntimeProfileMetadataOverrides,
   ResolveModelRuntimeProfileInput,
 } from './modelRuntimeProfiles';
 export {
+  applyModelRuntimeProfileDefaults,
   applyModelRuntimeProfileMetadata,
   findKimiK3ReservedCustomParamKeys,
   getModelRuntimeProfileDefinition,
@@ -41,6 +56,7 @@ export {
   LOBSTERAI_CLIENT_CAPABILITIES,
   LOBSTERAI_CLIENT_CAPABILITIES_HEADER,
   LOBSTERAI_CLIENT_VERSION_HEADER,
+  migrateKimiK3LegacyCustomParams,
   MODEL_RUNTIME_PROFILES,
   ModelRuntimeProfile,
   ModelRuntimeProfileSource,
@@ -64,6 +80,7 @@ export {
   resolveProductThinkingLevel,
 } from './modelThinking';
 export {
+  getDefaultOpenAIApiMode,
   isOpenAIApiModeAvailable,
   normalizeOpenAIApiMode,
   resolveProviderOpenAIApiMode,

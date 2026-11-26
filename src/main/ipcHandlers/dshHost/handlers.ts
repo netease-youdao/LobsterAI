@@ -10,6 +10,7 @@ import {
   DshHostIpc,
   DshPermissionPreset,
   DshPluginApplicationStatus,
+  DshPluginUpdateOutcomeKind,
   type DshSessionRecovery,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
@@ -17,6 +18,8 @@ import type { DshNodeToolchain } from '../../libs/dsh/dshProfileManager';
 import type {
   DshPluginBundleInfo,
   DshPluginInstallBundleOptions,
+  DshPluginUpdateBundleOptions,
+  DshPluginVersionList,
   DshTypertClient,
 } from '../../libs/dsh/dshTypertClient';
 import {
@@ -24,7 +27,9 @@ import {
   classifyBundleSurface,
   type DshEnrichedPluginEntry,
   type DshPluginInspectResult,
+  type DshPluginUpdateOutcome,
   normalizePluginChangeOutcome,
+  normalizePluginUpdateOutcome,
   resolveLocalPathIfExists,
   validateOptionalRegistryUrl,
 } from './pluginClassification';
@@ -44,9 +49,11 @@ export {
   type DshPluginMutationOutcome,
   type DshPluginPanelMetadata,
   type DshPluginSurfaceClassification,
+  type DshPluginUpdateOutcome,
   extractPanelMetadataFromClientSource,
   isAllowedDshEmbedWebviewUrl,
   normalizePluginChangeOutcome,
+  normalizePluginUpdateOutcome,
   validateOptionalRegistryUrl,
 } from './pluginClassification';
 export {
@@ -73,6 +80,26 @@ export interface InstallPluginPayload {
 export interface InspectPluginPayload {
   spec: string;
   registry?: string | null;
+}
+
+export interface CheckPluginVersionsPayload {
+  name: string;
+  registry?: string | null;
+}
+
+export interface UpdatePluginPayload {
+  name: string;
+  version: string;
+  registry?: string | null;
+  spec?: string;
+  requestId?: string;
+}
+
+export interface CheckPluginVersionsResponse {
+  ok: boolean;
+  checkedAt?: number;
+  list?: DshPluginVersionList;
+  error?: string;
 }
 
 export interface DshHostIpcDeps {
@@ -180,6 +207,45 @@ function parseInspectRequest(raw: unknown): InspectPluginPayload | null {
     };
   }
   return null;
+}
+
+const VALID_TARGET_VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$/;
+
+function validatePluginTargetVersion(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || !VALID_TARGET_VERSION_PATTERN.test(trimmed)) return null;
+  return trimmed;
+}
+
+function parseCheckVersionsRequest(raw: unknown): CheckPluginVersionsPayload | null {
+  if (typeof raw === 'string') {
+    return { name: raw };
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    if (typeof record.name !== 'string') return null;
+    return {
+      name: record.name,
+      ...(record.registry !== undefined ? { registry: record.registry as string | null } : {}),
+    };
+  }
+  return null;
+}
+
+function parseUpdatePluginRequest(raw: unknown): UpdatePluginPayload | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.name !== 'string' || typeof record.version !== 'string') return null;
+  return {
+    name: record.name,
+    version: record.version,
+    ...(record.registry !== undefined ? { registry: record.registry as string | null } : {}),
+    ...(typeof record.spec === 'string' && record.spec.trim() ? { spec: record.spec.trim() } : {}),
+    ...(typeof record.requestId === 'string' && record.requestId.trim()
+      ? { requestId: record.requestId.trim() }
+      : {}),
+  };
 }
 
 export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
@@ -638,6 +704,172 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
           runtimeDir: deps.getRuntimeDir(),
         }),
       };
+    },
+  );
+
+  ipcMain.handle(
+    DshHostIpc.CheckPluginVersions,
+    async (_event, rawRequest: unknown): Promise<CheckPluginVersionsResponse> => {
+      const manager = deps.getHostManager();
+      if (!manager) return { ok: false, error: 'DSH host manager not initialized' };
+      const parsed = parseCheckVersionsRequest(rawRequest);
+      const name = parsed ? validatePluginPackageName(parsed.name) : null;
+      if (!parsed || !name) {
+        return { ok: false, error: 'Cannot check versions for managed or invalid plugin package' };
+      }
+      const registry = validateOptionalRegistryUrl(parsed.registry);
+      if (registry === false) {
+        return { ok: false, error: 'Invalid registry URL' };
+      }
+      const client = getLivePluginClient(manager);
+      if (!client || typeof client.listPluginVersions !== 'function') {
+        return { ok: false, error: 'DSH host is not ready' };
+      }
+      try {
+        const listOptions = parsed.registry !== undefined ? { registry } : undefined;
+        const list = await client.listPluginVersions(name, listOptions);
+        return {
+          ok: true,
+          checkedAt: Date.now(),
+          list,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    DshHostIpc.UpdatePlugin,
+    async (_event, rawRequest: unknown): Promise<DshPluginUpdateOutcome> => {
+      const manager = deps.getHostManager();
+      if (!manager) {
+        return {
+          ok: false,
+          outcome: DshPluginUpdateOutcomeKind.TransportLost,
+          from: '',
+          to: '',
+          error: 'DSH host manager not initialized',
+          plugins: [],
+        };
+      }
+      const status = manager.getStatus();
+      const parsed = parseUpdatePluginRequest(rawRequest);
+      const name = parsed ? validatePluginPackageName(parsed.name) : null;
+      const version = parsed ? validatePluginTargetVersion(parsed.version) : null;
+      if (!parsed || !name || !version) {
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          outcome: DshPluginUpdateOutcomeKind.CheckRefused,
+          from: '',
+          to: version ?? '',
+          errorCode: 'invalid-spec',
+          error: 'Cannot update managed or invalid plugin package',
+          plugins,
+        };
+      }
+      const registry = validateOptionalRegistryUrl(parsed.registry);
+      if (registry === false) {
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          outcome: DshPluginUpdateOutcomeKind.CheckRefused,
+          from: '',
+          to: version,
+          errorCode: 'invalid-spec',
+          error: 'Invalid registry URL',
+          plugins,
+        };
+      }
+      const validatedSpec =
+        parsed.spec !== undefined ? validatePluginInstallSpecifier(parsed.spec) : undefined;
+      if (parsed.spec !== undefined && !validatedSpec) {
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          outcome: DshPluginUpdateOutcomeKind.CheckRefused,
+          from: '',
+          to: version,
+          errorCode: 'invalid-spec',
+          error: 'Invalid update package specifier',
+          plugins,
+        };
+      }
+
+      const client = getLivePluginClient(manager);
+      if (!client || typeof client.updatePluginBundle !== 'function') {
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          outcome: DshPluginUpdateOutcomeKind.TransportLost,
+          from: '',
+          to: version,
+          error: 'DSH host is not ready',
+          plugins,
+        };
+      }
+
+      try {
+        const updateOptions: DshPluginUpdateBundleOptions = {
+          ...(parsed.registry !== undefined ? { registry } : {}),
+          ...(validatedSpec ? { spec: validatedSpec } : {}),
+          ...(parsed.requestId ? { requestId: parsed.requestId } : {}),
+        };
+        const rawOutcome = await client.updatePluginBundle(name, version, updateOptions);
+        try {
+          manager.ensureProfileIntegrity?.();
+        } catch (error) {
+          console.warn('[DSH Host] Failed to re-ensure profile integrity after live plugin update:', error);
+        }
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return normalizePluginUpdateOutcome(rawOutcome, plugins);
+      } catch (error) {
+        try {
+          manager.ensureProfileIntegrity?.();
+        } catch (integrityError) {
+          console.warn(
+            '[DSH Host] Failed to re-ensure profile integrity after failed plugin update:',
+            integrityError,
+          );
+        }
+        const { plugins } = await listEnrichedPlugins(
+          manager,
+          status.profileDir,
+          deps.getRuntimeDir(),
+        );
+        return {
+          ok: false,
+          outcome: DshPluginUpdateOutcomeKind.TransportLost,
+          from: '',
+          to: version,
+          error: error instanceof Error ? error.message : String(error),
+          plugins,
+        };
+      }
     },
   );
 

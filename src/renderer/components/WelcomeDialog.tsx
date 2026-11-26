@@ -117,7 +117,7 @@ const WelcomeDialog: React.FC<WelcomeDialogProps> = ({
               {/* primary: login */}
               <button
                 onClick={onLogin}
-                className="w-full h-11 rounded-xl text-sm font-medium bg-foreground text-surface transition-opacity hover:opacity-90 active:opacity-80 outline-none"
+                className="w-full h-11 rounded-xl text-sm font-medium bg-action text-action-foreground transition-colors hover:bg-action-hover active:opacity-90 outline-none"
               >
                 {i18nService.t('welcomeLogin')}
               </button>

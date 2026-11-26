@@ -190,4 +190,87 @@ describe('dshHostService plugin operations', () => {
       },
     ]);
   });
+
+  test('forwards checkPluginVersions, updatePlugin, and event subscriptions', async () => {
+    const dispatched: Array<{ type: string; detail: unknown }> = [];
+    const updatedPlugins = [
+      { name: '@acme/tool', specifier: '1.2.0', managed: false, enabled: true, version: '1.2.0' },
+    ];
+    const checkPluginVersions = vi.fn(async () => ({
+      ok: true,
+      checkedAt: 1234,
+      list: {
+        status: 'listed' as const,
+        installed: '1.0.0',
+        registry: 'https://registry.npmmirror.com/',
+        attempts: [],
+        versions: [],
+        omitted: 0,
+      },
+    }));
+    const updatePlugin = vi.fn(async () => ({
+      ok: true,
+      outcome: 'applied' as const,
+      from: '1.0.0',
+      to: '1.2.0',
+      plugins: updatedPlugins,
+    }));
+    const unsubUpdate = vi.fn();
+    const unsubChanged = vi.fn();
+    const onPluginUpdateState = vi.fn(() => unsubUpdate);
+    const onPluginsChanged = vi.fn(() => unsubChanged);
+
+    vi.stubGlobal('CustomEvent', class MockCustomEvent {
+      type: string;
+      detail: unknown;
+      constructor(type: string, init?: { detail?: unknown }) {
+        this.type = type;
+        this.detail = init?.detail;
+      }
+    });
+    vi.stubGlobal('window', {
+      electron: {
+        dshHost: {
+          checkPluginVersions,
+          updatePlugin,
+          onPluginUpdateState,
+          onPluginsChanged,
+        },
+      },
+      dispatchEvent: (event: { type: string; detail: unknown }) => {
+        dispatched.push(event);
+        return true;
+      },
+    });
+
+    const versionsRes = await dshHostService.checkPluginVersions({ name: '@acme/tool' });
+    expect(checkPluginVersions).toHaveBeenCalledWith({ name: '@acme/tool' });
+    expect(versionsRes.ok).toBe(true);
+
+    const updateRes = await dshHostService.updatePlugin({
+      name: '@acme/tool',
+      version: '1.2.0',
+      registry: 'https://registry.npmmirror.com/',
+      requestId: 'upd-1',
+    });
+    expect(updatePlugin).toHaveBeenCalledWith({
+      name: '@acme/tool',
+      version: '1.2.0',
+      registry: 'https://registry.npmmirror.com/',
+      requestId: 'upd-1',
+    });
+    expect(updateRes.ok).toBe(true);
+    expect(dispatched).toEqual([
+      { type: DSH_PLUGINS_CHANGED_EVENT, detail: { plugins: updatedPlugins } },
+    ]);
+
+    const offUpdate = dshHostService.onPluginUpdateState(() => undefined);
+    const offChanged = dshHostService.onPluginsChanged(() => undefined);
+    offUpdate();
+    offChanged();
+    expect(onPluginUpdateState).toHaveBeenCalledTimes(1);
+    expect(onPluginsChanged).toHaveBeenCalledTimes(1);
+    expect(unsubUpdate).toHaveBeenCalledTimes(1);
+    expect(unsubChanged).toHaveBeenCalledTimes(1);
+  });
 });

@@ -85,11 +85,11 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
                 if (e.key === 'Escape') { setNameValue(instance.instanceName); setEditingName(false); }
               }}
               autoFocus
-              className="text-sm font-medium text-foreground bg-transparent border-b border-primary focus:outline-none px-0 py-0"
+              className="text-sm font-medium text-foreground bg-transparent border-b border-foreground/40 focus:outline-none px-0 py-0"
             />
           ) : (
             <span
-              className="text-sm font-medium text-foreground cursor-pointer hover:text-primary transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
+              className="text-sm font-medium text-foreground cursor-pointer hover:text-foreground transition-colors truncate border-b border-dashed border-gray-400 dark:border-secondary/50 hover:border-primary pb-px"
               onClick={() => setEditingName(true)}
               title={language === 'zh' ? '点击重命名' : 'Click to rename'}
             >
@@ -117,7 +117,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
           type="button"
           disabled={quickSetupStatus === 'pending'}
           onClick={onQuickSetup}
-          className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="px-4 py-2.5 rounded-lg text-sm font-medium bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {quickSetupStatus === 'pending'
             ? i18nService.t('imWecomQuickSetupPending')
@@ -167,7 +167,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
                 console.error('[IM] Failed to open guide URL:', err);
               });
             }}
-            className="mt-2 text-xs font-medium text-primary dark:text-primary hover:text-primary dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
+            className="mt-2 text-xs font-medium text-secondary hover:text-foreground underline underline-offset-2 transition-colors"
           >
             {i18nService.t('imViewGuide')}
           </button>
@@ -193,7 +193,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ botId: '' }); void onSave({ botId: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -222,7 +222,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => { onConfigChange({ secret: '' }); void onSave({ secret: '' }); }}
-                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
                 <XCircleIconSolid className="h-4 w-4" />
@@ -231,7 +231,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => setShowSecrets(prev => ({ ...prev, 'secret': !prev['secret'] }))}
-              className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+              className="p-0.5 rounded text-secondary hover:text-foreground transition-colors"
               title={showSecrets['secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
             >
               {showSecrets['secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -245,7 +245,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
 
       {/* Advanced Settings (collapsible) */}
       <details className="group">
-        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
+        <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-foreground transition-colors">
           {i18nService.t('imAdvancedSettings')}
         </summary>
         <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
@@ -309,7 +309,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
                     void onSave({ allowFrom: newIds });
                   }
                 }}
-                className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('add') || '添加'}
               </button>
@@ -396,7 +396,7 @@ const WecomInstanceSettings: React.FC<WecomInstanceSettingsProps> = ({
                       void onSave({ groupAllowFrom: newIds });
                     }
                   }}
-                  className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                  className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-foreground hover:bg-surface-raised transition-colors"
                 >
                   {i18nService.t('add') || '添加'}
                 </button>

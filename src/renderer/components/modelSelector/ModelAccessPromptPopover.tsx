@@ -141,7 +141,7 @@ export default function ModelAccessPromptPopover({
           type="button"
           onClick={onPrimary}
           disabled={pending}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-wait disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-action px-3 py-2 text-[13px] font-medium text-action-foreground transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-wait disabled:opacity-50"
         >
           {primaryLabel}
           {purchase && <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />}

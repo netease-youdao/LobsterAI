@@ -1498,7 +1498,7 @@ const LibraryShareSettingsView: React.FC<{
                     type="button"
                     disabled={permissionLocked}
                     onClick={requestSave}
-                    className="rounded-lg bg-primary px-4 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded-lg bg-action px-4 py-2 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {state.saving
                       ? i18nService.t('saving')

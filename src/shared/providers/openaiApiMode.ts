@@ -1,4 +1,4 @@
-import { ApiFormat, OpenAIApiMode, ProviderAuthType } from './constants';
+import { ApiFormat, OpenAIApiMode, ProviderAuthType, ProviderName } from './constants';
 import { isCustomProviderKey } from './customProviders';
 
 type OpenAIApiModeContext = {
@@ -10,15 +10,28 @@ type OpenAIApiModeContext = {
 
 /**
  * Whether this provider can offer the Chat Completions / Responses choice.
- * Custom providers only: built-in providers' OpenClaw plugins and runtime
- * profiles are tuned for Chat Completions (e.g. DeepSeek V4 and Xiaomi MiMo
- * thinking wrappers inject Chat Completions fields regardless of transport).
+ * Supported on custom providers and built-in OpenAI (API Key mode). Other
+ * built-in providers stay on Chat Completions by default.
  */
-export const supportsOpenAIApiModeSelection = isCustomProviderKey;
+export const supportsOpenAIApiModeSelection = (providerName: string): boolean => (
+  isCustomProviderKey(providerName) || providerName === ProviderName.OpenAI
+);
+
+/**
+ * Default OpenAI wire mode when `openaiApiMode` is not explicitly persisted.
+ * Official OpenAI models default to Responses (matching pi-ai's OpenAI catalog
+ * and OpenAI API Key connection tests), while custom relays default to Chat
+ * Completions.
+ */
+export const getDefaultOpenAIApiMode = (providerName: string): OpenAIApiMode => (
+  providerName === ProviderName.OpenAI
+    ? OpenAIApiMode.Responses
+    : OpenAIApiMode.ChatCompletions
+);
 
 /**
  * Whether the choice applies to the provider's current setup. Coding plan and
- * OAuth routes use dedicated endpoints with no Responses support.
+ * OAuth routes use dedicated endpoints with fixed transport.
  */
 export const isOpenAIApiModeAvailable = (
   providerName: string,
@@ -29,9 +42,14 @@ export const isOpenAIApiModeAvailable = (
   && config?.authType !== ProviderAuthType.OAuth
 );
 
-export const normalizeOpenAIApiMode = (value: unknown): OpenAIApiMode => (
-  value === OpenAIApiMode.Responses ? OpenAIApiMode.Responses : OpenAIApiMode.ChatCompletions
-);
+export const normalizeOpenAIApiMode = (
+  value: unknown,
+  fallback: OpenAIApiMode = OpenAIApiMode.ChatCompletions,
+): OpenAIApiMode => {
+  if (value === OpenAIApiMode.Responses) return OpenAIApiMode.Responses;
+  if (value === OpenAIApiMode.ChatCompletions) return OpenAIApiMode.ChatCompletions;
+  return fallback;
+};
 
 /**
  * Resolve the OpenAI endpoint family a provider should use. Returns undefined
@@ -44,5 +62,5 @@ export const resolveProviderOpenAIApiMode = (
 ): OpenAIApiMode | undefined => {
   if (!config || config.apiFormat !== ApiFormat.OpenAI) return undefined;
   if (!isOpenAIApiModeAvailable(providerName, config)) return undefined;
-  return normalizeOpenAIApiMode(config.openaiApiMode);
+  return normalizeOpenAIApiMode(config.openaiApiMode, getDefaultOpenAIApiMode(providerName));
 };

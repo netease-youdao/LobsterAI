@@ -11,15 +11,24 @@ import {
   DSH_WEB_APP_BUNDLE_NAME,
   DshHostIpc,
   DshPluginApplicationStatus,
+  DshPluginAvailability,
   DshPluginSurface,
+  DshPluginUpdateKind,
+  DshPluginUpdateOutcomeKind,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
-import type { DshPluginBundleInfo, DshPluginChangeResult } from '../../libs/dsh/dshTypertClient';
+import type {
+  DshPluginBundleInfo,
+  DshPluginChangeResult,
+  DshPluginUpdateResult,
+  DshPluginVersionList,
+} from '../../libs/dsh/dshTypertClient';
 import {
   buildEnrichedPluginEntries,
   classifyBundleSurface,
   extractPanelMetadataFromClientSource,
   isAllowedDshEmbedWebviewUrl,
+  normalizePluginUpdateOutcome,
   readInstalledProfilePlugins,
   registerDshHostHandlers,
   runDshPluginCommand,
@@ -1053,5 +1062,371 @@ describe('registerDshHostHandlers live HMR Typert RPC path', () => {
     const result = await registeredHandlers.get(DshHostIpc.OpenEcosystemView)!({});
     expect(result).toEqual({ ok: true, url: 'http://127.0.0.1:4321/#token=abc' });
     expect(order).toEqual(['sync', 'open']);
+  });
+
+  test('normalizePluginUpdateOutcome classifies all server update outcomes and extracts failure output', () => {
+    const baseChange = (overrides: Partial<DshPluginChangeResult> = {}): DshPluginChangeResult => ({
+      changed: false,
+      application: 'failed',
+      stage: 'install',
+      target: '@acme/demo',
+      ...overrides,
+    });
+
+    const applied = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '1.2.0',
+        step: 'install',
+        result: baseChange({ changed: true, application: 'applied', stage: 'enable' }),
+      },
+      [],
+    );
+    expect(applied).toMatchObject({
+      ok: true,
+      outcome: DshPluginUpdateOutcomeKind.Applied,
+      restartRequired: false,
+    });
+
+    const restartRequired = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '1.2.0',
+        step: 'install',
+        result: baseChange({
+          changed: true,
+          application: 'restart-required',
+          restartReason: 'host-module',
+        }),
+      },
+      [],
+    );
+    expect(restartRequired).toMatchObject({
+      ok: true,
+      outcome: DshPluginUpdateOutcomeKind.RestartRequired,
+      restartRequired: true,
+      restartReason: 'host-module',
+    });
+
+    const checkRefused = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '2.0.0',
+        step: 'check',
+        result: baseChange({
+          error: { code: 'incompatible-version', diagnostic: 'needs newer DSH' },
+        }),
+      },
+      [],
+    );
+    expect(checkRefused).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.CheckRefused,
+      errorCode: 'incompatible-version',
+    });
+
+    const removeFailed = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '1.2.0',
+        step: 'remove',
+        result: baseChange({ stage: 'remove', error: { code: 'bundle-in-use' } }),
+      },
+      [],
+    );
+    expect(removeFailed).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.RemoveFailed,
+      errorCode: 'bundle-in-use',
+    });
+
+    const kept = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '1.2.0',
+        step: 'install',
+        result: baseChange({ error: { code: 'operation-error', diagnostic: 'no-hmr rollback' } }),
+      },
+      [],
+    );
+    expect(kept).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.InstallFailedKept,
+    });
+
+    const restored = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '1.2.0',
+        step: 'install',
+        result: baseChange({
+          packageResult: {
+            exitCode: 1,
+            output: 'ERR_PNPM_FETCH_404',
+            truncated: false,
+            logPath: '/tmp/install.log',
+            kind: 'not-found',
+          },
+        }),
+        restore: baseChange({ changed: true, application: 'applied', stage: 'enable' }),
+      },
+      [],
+    );
+    expect(restored).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.InstallFailedRestored,
+      restored: true,
+      output: 'ERR_PNPM_FETCH_404',
+      failureKind: 'not-found',
+    });
+
+    const broken = normalizePluginUpdateOutcome(
+      {
+        from: '1.0.0',
+        to: '1.2.0',
+        step: 'install',
+        result: baseChange({ error: { code: 'operation-error', diagnostic: 'install boom' } }),
+        restore: baseChange({
+          error: { code: 'operation-error', diagnostic: 'restore boom' },
+          packageResult: {
+            exitCode: 1,
+            output: 'restore stderr',
+            truncated: false,
+            logPath: '/tmp/restore.log',
+          },
+        }),
+      },
+      [],
+    );
+    expect(broken).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.InstallFailedBroken,
+      restored: false,
+      restoreError: 'restore boom',
+      output: 'restore stderr',
+    });
+  });
+
+  test('handles CheckPluginVersions and UpdatePlugin IPCs with integrity protection and validation', async () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'lobster-dsh-update-ipc-'));
+    tempDirs.push(temp);
+    const dshHomeDir = path.join(temp, 'dsh-home');
+    const profileDir = path.join(dshHomeDir, 'profiles', DSH_PROFILE_NAME);
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(profileDir, 'package.json'),
+      JSON.stringify({
+        name: 'lobsterai-dsh-profile',
+        private: true,
+        dependencies: {
+          '@acme/demo-tools': '1.0.0',
+        },
+        dsh: {
+          profile: {
+            bundles: [DSH_BASE_BUNDLE_NAME, '@acme/demo-tools'],
+          },
+        },
+      }),
+    );
+
+    let currentVersion = '1.0.0';
+    const listPluginBundles = vi.fn(async (): Promise<DshPluginBundleInfo[]> => [
+      {
+        name: DSH_BASE_BUNDLE_NAME,
+        official: false,
+        availability: 'installation',
+        version: '0.2.2-rc.5',
+        enabled: true,
+        installed: false,
+        optional: false,
+        removable: false,
+        rows: [],
+        overrides: [],
+      },
+      {
+        name: '@acme/demo-tools',
+        official: false,
+        availability: 'profile',
+        version: currentVersion,
+        source: `@acme/demo-tools@${currentVersion}`,
+        enabled: true,
+        installed: true,
+        optional: false,
+        removable: true,
+        update: 'registry',
+        rows: [],
+        overrides: [],
+      },
+    ]);
+    const listPluginVersions = vi.fn(async (): Promise<DshPluginVersionList> => ({
+      status: 'listed',
+      installed: currentVersion,
+      registry: 'https://registry.npmmirror.com/',
+      attempts: [{ registry: 'https://registry.npmmirror.com/' }],
+      versions: [
+        {
+          version: '1.2.0',
+          publishedAt: '2026-11-25T10:00:00.000Z',
+          tags: ['latest'],
+          prerelease: false,
+          bundle: true,
+        },
+      ],
+      omitted: 0,
+    }));
+    const updatePluginBundle = vi.fn(
+      async (_name: string, version: string): Promise<DshPluginUpdateResult> => {
+        const previous = currentVersion;
+        currentVersion = version;
+        return {
+          from: previous,
+          to: version,
+          step: 'install',
+          result: {
+            changed: true,
+            application: 'applied',
+            stage: 'enable',
+            target: '@acme/demo-tools',
+            bundle: '@acme/demo-tools',
+            version,
+          },
+        };
+      },
+    );
+
+    const ensureIntegrityMock = vi.fn();
+    let hostReady = true;
+    const mockManager = {
+      isReady: () => hostReady,
+      getClient: () => ({
+        listPluginBundles,
+        listPluginVersions,
+        updatePluginBundle,
+      }),
+      getStatus: () => ({
+        phase: hostReady ? 'ready' : 'stopped',
+        origin: 'http://127.0.0.1:4321',
+        authenticatedWebUrl: 'http://127.0.0.1:4321/?token=abc',
+        pid: 999,
+        runtimeVersion: '0.2.2-rc.5',
+        profileDir,
+        dshHomeDir,
+        cliShimPath: path.join(dshHomeDir, 'bin', 'dsh'),
+        lastError: null,
+        startedAt: Date.now(),
+        restartCount: 0,
+      }),
+      ensureProfileIntegrity: ensureIntegrityMock,
+    } as unknown as DshHostManager;
+
+    registerDshHostHandlers({
+      getHostManager: () => mockManager,
+      getRuntimeDir: () => path.join(temp, 'runtime'),
+      getExecutablePath: () => process.execPath,
+    });
+
+    // 1. ListPlugins preserves availability, update kind, and source.
+    const listRes = (await registeredHandlers.get(DshHostIpc.ListPlugins)!({})) as {
+      ok: boolean;
+      plugins: Array<{
+        name: string;
+        availability?: string;
+        update?: string;
+        source?: string;
+      }>;
+    };
+    expect(listRes.plugins.find((p) => p.name === '@acme/demo-tools')).toMatchObject({
+      availability: DshPluginAvailability.Profile,
+      update: DshPluginUpdateKind.Registry,
+      source: '@acme/demo-tools@1.0.0',
+    });
+
+    // 2. CheckPluginVersions rejects managed packages and invalid registry URLs.
+    expect(
+      await registeredHandlers.get(DshHostIpc.CheckPluginVersions)!({}, DSH_HOST_BUNDLE_NAME),
+    ).toMatchObject({ ok: false });
+    expect(
+      await registeredHandlers.get(DshHostIpc.CheckPluginVersions)!({}, {
+        name: '@acme/demo-tools',
+        registry: 'file:///etc/passwd',
+      }),
+    ).toMatchObject({ ok: false });
+
+    // 3. CheckPluginVersions succeeds for third-party registry plugin.
+    const checkRes = (await registeredHandlers.get(DshHostIpc.CheckPluginVersions)!({}, {
+      name: '@acme/demo-tools',
+    })) as { ok: boolean; checkedAt?: number; list?: DshPluginVersionList };
+    expect(checkRes.ok).toBe(true);
+    expect(typeof checkRes.checkedAt).toBe('number');
+    expect(checkRes.list?.status).toBe('listed');
+
+    // 4. UpdatePlugin validates inputs.
+    expect(
+      await registeredHandlers.get(DshHostIpc.UpdatePlugin)!({}, {
+        name: DSH_BASE_BUNDLE_NAME,
+        version: '0.3.0',
+      }),
+    ).toMatchObject({ ok: false, outcome: DshPluginUpdateOutcomeKind.CheckRefused });
+    expect(
+      await registeredHandlers.get(DshHostIpc.UpdatePlugin)!({}, {
+        name: '@acme/demo-tools',
+        version: '--evil-flag',
+      }),
+    ).toMatchObject({ ok: false, outcome: DshPluginUpdateOutcomeKind.CheckRefused });
+
+    // 5. UpdatePlugin runs HMR update, preserves profile integrity, and returns updated plugins.
+    const updateRes = (await registeredHandlers.get(DshHostIpc.UpdatePlugin)!({}, {
+      name: '@acme/demo-tools',
+      version: '1.2.0',
+      registry: 'https://registry.npmmirror.com/',
+      requestId: 'upd-42',
+    })) as {
+      ok: boolean;
+      outcome: string;
+      from: string;
+      to: string;
+      plugins: Array<{ name: string; version?: string }>;
+    };
+    expect(updateRes).toMatchObject({
+      ok: true,
+      outcome: DshPluginUpdateOutcomeKind.Applied,
+      from: '1.0.0',
+      to: '1.2.0',
+    });
+    expect(updateRes.plugins.find((p) => p.name === '@acme/demo-tools')?.version).toBe('1.2.0');
+    expect(updatePluginBundle).toHaveBeenCalledWith('@acme/demo-tools', '1.2.0', {
+      registry: 'https://registry.npmmirror.com/',
+      requestId: 'upd-42',
+    });
+    expect(ensureIntegrityMock).toHaveBeenCalledTimes(1);
+
+    // 6. Transport failure returns TransportLost while still calling ensureProfileIntegrity.
+    updatePluginBundle.mockRejectedValueOnce(new Error('socket hung up'));
+    const lostRes = (await registeredHandlers.get(DshHostIpc.UpdatePlugin)!({}, {
+      name: '@acme/demo-tools',
+      version: '1.3.0',
+    })) as { ok: boolean; outcome: string; error?: string };
+    expect(lostRes).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.TransportLost,
+      error: 'socket hung up',
+    });
+    expect(ensureIntegrityMock).toHaveBeenCalledTimes(2);
+
+    // 7. Offline host rejects both check and update cleanly.
+    hostReady = false;
+    expect(
+      await registeredHandlers.get(DshHostIpc.CheckPluginVersions)!({}, '@acme/demo-tools'),
+    ).toMatchObject({ ok: false, error: 'DSH host is not ready' });
+    expect(
+      await registeredHandlers.get(DshHostIpc.UpdatePlugin)!({}, {
+        name: '@acme/demo-tools',
+        version: '1.3.0',
+      }),
+    ).toMatchObject({
+      ok: false,
+      outcome: DshPluginUpdateOutcomeKind.TransportLost,
+      error: 'DSH host is not ready',
+    });
   });
 });

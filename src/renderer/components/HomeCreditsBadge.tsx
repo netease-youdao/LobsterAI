@@ -342,7 +342,7 @@ const HomeCreditsBadge: React.FC = () => {
                   onClick={() => void openExternalUrl(
                     canUpgradePlan ? getPortalPricingUrl() : getPortalRechargeUrl(),
                   )}
-                  className={`${ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME} cursor-pointer bg-[#111111] text-white transition-colors hover:bg-[#2a2a2a] dark:bg-white dark:text-black dark:hover:bg-white/85`}
+                  className={`${ACCOUNT_MENU_COMPACT_CTA_CLASS_NAME} cursor-pointer bg-action text-action-foreground transition-colors hover:bg-action-hover`}
                 >
                   {i18nService.t(canUpgradePlan ? 'authUpgradePlan' : 'authGoRecharge')}
                 </button>

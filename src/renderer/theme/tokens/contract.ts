@@ -13,6 +13,11 @@ export const TOKEN_CONTRACT = {
   'primary-hover':      '--lobster-primary-hover',
   'primary-muted':      '--lobster-primary-muted',
 
+  // ── Action (primary solid CTA buttons) ──
+  'action':             '--lobster-action',
+  'action-foreground':  '--lobster-action-foreground',
+  'action-hover':       '--lobster-action-hover',
+
   // ── Accent ──
   'accent':             '--lobster-accent',
   'accent-foreground':  '--lobster-accent-foreground',
