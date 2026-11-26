@@ -270,6 +270,7 @@ export class WeComChannelDriver extends BaseChannelDriver {
             secret: this.secret,
           },
         }));
+        this.markStartupStage('wecom-subscribe-sent');
       });
 
       ws.addEventListener('message', (event) => {

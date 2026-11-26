@@ -45,6 +45,7 @@ export class PopoChannelDriver extends BaseChannelDriver {
         const auth = await this.api.request('/im/onceToken/get', {});
         if (!auth?.onceToken || !auth.robotUid) throw new Error('Incomplete POPO Mercury authorization');
         signal.throwIfAborted();
+        this.markStartupStage('popo-authorized');
         this.robotUid = auth.robotUid;
         await this.runSocket(auth.onceToken, signal, () => {
           retryMs = 1000;
@@ -83,7 +84,9 @@ export class PopoChannelDriver extends BaseChannelDriver {
       const handshake = setTimeout(() => finish(new Error('POPO STOMP handshake timed out')), 12_000);
       signal.addEventListener('abort', stop, { once: true });
       ws.onopen = () => {
-        if (!finished) ws.send(stompFrame('CONNECT', { 'accept-version': '1.0,1.1,1.2', host: 'mercury', 'heart-beat': '10000,10000' }));
+        if (finished) return;
+        ws.send(stompFrame('CONNECT', { 'accept-version': '1.0,1.1,1.2', host: 'mercury', 'heart-beat': '10000,10000' }));
+        this.markStartupStage('popo-stomp-connect-sent');
       };
       ws.onerror = () => finish(new Error('POPO Mercury WebSocket connection failed'));
       ws.onclose = e => finish(new Error('POPO Mercury WebSocket closed (' + e.code + ')'));

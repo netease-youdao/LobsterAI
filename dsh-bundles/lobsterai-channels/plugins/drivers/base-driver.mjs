@@ -4,6 +4,8 @@
  * bindings or OpenClaw SDK imports.
  */
 
+let nextStartupAttempt = 0;
+
 export class BaseChannelDriver {
   /**
    * @param {{
@@ -22,6 +24,7 @@ export class BaseChannelDriver {
    *     replyContext?: Record<string, unknown>,
    *   }) => Promise<void>,
    *   onStatus?: (status: { state: string, error?: string | null, botInfo?: Record<string, unknown> }) => void,
+   *   logStartup?: (message: string) => void,
    * }} options
    */
   constructor(options) {
@@ -30,6 +33,8 @@ export class BaseChannelDriver {
     this.config = options.config || {};
     this.onInbound = options.onInbound;
     this.onStatus = options.onStatus;
+    this.logStartup = options.logStartup;
+    this.startup = null;
     this.abortController = null;
     this.state = 'stopped';
     this.lastError = null;
@@ -39,9 +44,24 @@ export class BaseChannelDriver {
     this.lastOutboundAt = null;
   }
 
+  // Only record first-connect milestones. A driver may retry before it is
+  // ready and may report 'connected' again on later polls or reconnects.
+  markStartupStage(stage, outcome) {
+    if (!this.startup || this.startup.seen.has(stage)) return;
+    const { attempt, since, seen } = this.startup;
+    seen.add(stage);
+    const elapsedMs = Math.round(performance.now() - since);
+    this.logStartup(
+      `[DshStartup] pid=${process.pid} platform=${this.platform} attempt=${attempt} stage=${stage} elapsedMs=${elapsedMs}`
+      + (outcome ? ` outcome=${outcome}` : ''),
+    );
+  }
+
   setState(state, error = null, botInfo = undefined) {
     this.state = state;
     this.lastError = error;
+    this.markStartupStage(state);
+    if (state === 'connected' || state === 'stopped') this.startup = null;
     if (botInfo !== undefined) this.botInfo = botInfo;
     if (state === 'connected' && this.startedAt === null) {
       this.startedAt = Date.now();
@@ -108,6 +128,9 @@ export class BaseChannelDriver {
   async start() {
     if (this.abortController) return;
     this.abortController = new AbortController();
+    if (this.logStartup) {
+      this.startup = { attempt: ++nextStartupAttempt, since: performance.now(), seen: new Set() };
+    }
     this.setState('connecting', null);
     try {
       await this.connect(this.abortController.signal);
