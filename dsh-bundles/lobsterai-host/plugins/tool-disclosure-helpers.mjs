@@ -219,6 +219,39 @@ export function groupMountedProgressiveTools(restrictableNames) {
  * @param {unknown} value
  * @returns {Array<{ type: 'text', text: string }>}
  */
+export const SIDE_CHAT_BLOCKED_TOOL_NAMES = Object.freeze(new Set([
+  'subagent',
+  'delegate_agent',
+  'lobster_schedule',
+  'send_message',
+  'interrupt_agent',
+  'wait_agent',
+  'list_agents',
+  'list_subagent_models',
+]));
+
+/**
+ * Evaluate whether a tool call must be blocked inside a side-chat session.
+ * Blocking via `ctx.tools.guard` preserves the inherited parent tool-schema
+ * list so KV-cache prefix reuse remains intact while preventing side chats
+ * from spawning subagents, delegating across agents, or scheduling tasks.
+ * @param {unknown} toolName
+ * @param {boolean} isSideChat
+ * @returns {{ reason: string, info: { name: string, code: string } } | undefined}
+ */
+export function evaluateSideChatToolGuard(toolName, isSideChat) {
+  if (!isSideChat || typeof toolName !== 'string' || !SIDE_CHAT_BLOCKED_TOOL_NAMES.has(toolName)) {
+    return undefined;
+  }
+  return {
+    reason: `Tool "${toolName}" is disabled in side conversations. Answer directly or ask the user to run this in the main conversation.`,
+    info: {
+      name: 'SideChatToolBlockedError',
+      code: 'SIDE_CHAT_TOOL_BLOCKED',
+    },
+  };
+}
+
 export function renderEnableToolsOutput(_args, value) {
   const text = value && typeof value === 'object' && typeof /** @type {Record<string, unknown>} */ (value).text === 'string'
     ? /** @type {Record<string, string>} */ (value).text

@@ -535,6 +535,8 @@ const AssistantTurnBlock: React.FC<{
   awaitingRunStart?: boolean;
   showCopyButtons?: boolean;
   enableMessageSpeech?: boolean;
+  /** Keep the reply meta row minimal (copy + speech + overflow popover for time/model/credits). */
+  compactMeta?: boolean;
   completedGoal?: CoworkGoal | null;
   hiddenSystemMessageId?: string | null;
   searchTargetMessageId?: string | null;
@@ -566,6 +568,7 @@ const AssistantTurnBlock: React.FC<{
   awaitingRunStart = false,
   showCopyButtons = true,
   enableMessageSpeech = false,
+  compactMeta = false,
   completedGoal,
   hiddenSystemMessageId,
   searchTargetMessageId,
@@ -950,6 +953,7 @@ const AssistantTurnBlock: React.FC<{
           mapDisplayText={mapDisplayText}
           showCopyButton={showInlineMeta}
           enableMessageSpeech={enableMessageSpeech && showInlineMeta && planConfirmationMessageId !== item.message.id}
+          compactMeta={compactMeta}
           onFork={showInlineMeta ? onForkMessage : undefined}
           turnMetadata={showInlineMeta
             ? resolveTurnModelMetadata(
@@ -1225,6 +1229,7 @@ const AssistantTurnBlock: React.FC<{
                 turnUsageSlot={deferredReplyMetaMessage.id === turnUsageReplyId ? turnUsageSlot : null}
                 onFork={onForkMessage}
                 enableMessageSpeech={enableMessageSpeech && planConfirmationMessageId !== deferredReplyMetaMessage.id}
+                compactMeta={compactMeta}
                 goalCompletionLabel={getGoalCompletionLabel(completedGoal)}
               />
             )}

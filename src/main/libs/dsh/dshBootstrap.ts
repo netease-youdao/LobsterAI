@@ -38,6 +38,8 @@ import {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase,
 } from '../../../shared/openclawEngine/constants';
+import { CoworkSideChatStore } from '../../coworkSideChatStore';
+import type { CoworkForkSessionOptions, CoworkSession } from '../../coworkStore';
 import { t } from '../../i18n';
 import {
   type DshChannelInstanceConfig,
@@ -115,6 +117,7 @@ import {
   type LobsterProviderConfig,
 } from './dshProviderSync';
 import { executeDshScheduledTask } from './dshScheduledTurn';
+import { DshSideChatManager, type DshSideChatTurnFinishedEvent } from './dshSideChatManager';
 import { DshSubagentSessions } from './dshSubagentSessions';
 
 export interface DshCompatEngineStatus {
@@ -178,6 +181,7 @@ export interface DshBootstrapOptions {
   db: Database.Database;
   skillsDir: string;
   coworkStore: DshCoworkStorePort & {
+    forkSession?: (options: CoworkForkSessionOptions) => CoworkSession;
     createSession?: (
       title: string,
       cwd: string,
@@ -210,6 +214,7 @@ export interface DshBootstrapOptions {
   mcpOAuthFetcher?: McpOAuthFetch;
   onMcpOAuthNeedsReauth?: (serverIds: string[]) => void;
   onStatusChange?: (status: DshCompatEngineStatus, hostStatus: DshHostStatus) => void;
+  onSideChatTurnFinished?: (event: DshSideChatTurnFinishedEvent) => void;
   /** Optional runtime/bundle path override (useful in tests). */
   runtimePaths?: {
     runtimeDir: string;
@@ -487,6 +492,8 @@ export class DshBootstrap {
   readonly channelsBridge: DshChannelsBridge;
   readonly runtimeAdapter: DshRuntimeAdapter;
   readonly subagentSessions: DshSubagentSessions;
+  readonly sideChatStore: CoworkSideChatStore;
+  readonly sideChatManager: DshSideChatManager;
   readonly scheduler: LobsterScheduler;
 
   private readonly options: DshBootstrapOptions;
@@ -611,6 +618,21 @@ export class DshBootstrap {
 
     this.subagentSessions = new DshSubagentSessions(options.db, this.hostManager,
       id => options.coworkStore.getSession(id, Number.MAX_SAFE_INTEGER)?.messages ?? []);
+    this.sideChatStore = new CoworkSideChatStore(options.db);
+    this.sideChatStore.resetRunningStatusesOnStartup();
+    this.sideChatManager = new DshSideChatManager({
+      sideChatStore: this.sideChatStore,
+      coworkStore: options.coworkStore,
+      hostManager: this.hostManager,
+      resolveModelSelection: options.resolveModelSelection,
+      resolveAllowedSkillIds: options.resolveAllowedSkillIds
+        ? (sessionId, agentId) => options.resolveAllowedSkillIds!(sessionId, agentId)
+        : undefined,
+      resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
+      resolveParentDshSessionId: (parentSessionId) => this.runtimeAdapter.resolveExistingDshSessionId(parentSessionId),
+      ensureHostReadyClient: () => this.runtimeAdapter.ensureReadyClientForSideChat(),
+      onTurnFinished: options.onSideChatTurnFinished,
+    });
     this.hostManager.setSubagentBindingHandler((request) => {
       if (request.action === 'delete') {
         this.subagentSessions.deleteAgentBinding(request.childSessionId);
@@ -632,6 +654,7 @@ export class DshBootstrap {
     );
     this.runtimeAdapter = new DshRuntimeAdapter({
       subagentSessions: this.subagentSessions,
+      sideChatManager: this.sideChatManager,
       hostManager: this.hostManager,
       store: options.coworkStore,
       resolveModelSelection: options.resolveModelSelection,

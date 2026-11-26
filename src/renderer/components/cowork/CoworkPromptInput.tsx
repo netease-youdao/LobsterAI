@@ -482,6 +482,7 @@ interface CoworkPromptInputProps {
   contextUsageControl?: React.ReactNode;
   goal?: CoworkGoal | null;
   onGoalCommand?: (command: string) => boolean | void | Promise<boolean | void>;
+  onBtwCommand?: (question: string) => boolean | Promise<boolean>;
   goalStatusBarPortalTarget?: HTMLElement | null;
   goalStatusBarAttached?: boolean;
   steerPreviewPortalTarget?: HTMLElement | null;
@@ -534,6 +535,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       contextUsageControl,
       goal,
       onGoalCommand,
+      onBtwCommand,
       goalStatusBarPortalTarget,
       goalStatusBarAttached = true,
       steerPreviewPortalTarget,
@@ -1523,13 +1525,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         return;
       }
 
-      const runId = createCoworkBtwRunId();
       const submittedDraft = value;
-      const accepted = await coworkService.submitBtw({
-        sessionId,
-        question: btwCommand.question,
-        runId,
-      });
+      const accepted = onBtwCommand
+        ? await onBtwCommand(btwCommand.question)
+        : await coworkService.submitBtw({
+            sessionId,
+            question: btwCommand.question,
+            runId: createCoworkBtwRunId(),
+          });
       if (!accepted) {
         return;
       }
@@ -2084,7 +2087,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     resetGoalInput(false);
     draftStartedAnalyticsRef.current = false;
     inputSourceOverrideRef.current = null;
-  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, currentSession, agents, currentAgentId, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
+  }, [value, steerInputActive, steerValue, isVoiceRecording, stopVoiceRecordingAndRecognize, goalInputActive, goalInputMode, resetGoalInput, isStreaming, canSteer, remoteManaged, disabled, submitDisabled, isPatchingModel, onSubmit, onGoalCommand, onBtwCommand, currentSession, agents, currentAgentId, activeSkillIds, skills, activeKitIds, marketplaceKits, installedKits, attachments, browserAnnotationBatches, showFolderSelector, workingDirectory, dispatch, draftKey, selectedTextSnippets, pendingSteers.length, resolveSubmitModelAccessPrompt, isLoggedIn, hasAccessibleUserModel, narrow, isPlanMode, planConfirmation, reportPromptControl, getPromptCapabilityAnalyticsParams, getPromptContextAnalyticsParams, getPromptInputSource, goal, sessionId, preparePromptPayload, modelSupportsImage, queuedMediaSelection, authOwnerAccountKey, authAccountGeneration, effectiveModelIsAvailable, modelSelectionRefreshPending, effectiveSelectedModel?.id, effectiveSelectedModel?.providerKey]);
   handleSubmitRef.current = handleSubmit;
   useImageEditSubmission({ sessionId, onSubmit, isStreaming, modelSupportsImage,
     blocked: disabled || submitDisabled || isPatchingModel || remoteManaged || isVoiceRecording

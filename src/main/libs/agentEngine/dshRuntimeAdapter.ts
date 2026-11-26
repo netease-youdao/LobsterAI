@@ -82,6 +82,7 @@ import type {
   DshHostSessionContext,
 } from '../dsh/dshHostManager';
 import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
+import type { DshSideChatManager } from '../dsh/dshSideChatManager';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import { admitDshPrompt, DshAdmissionUnconfirmedError, followDshTurn, isDshTransportError, untilAborted } from '../dsh/dshTurnRecovery';
@@ -190,6 +191,10 @@ export type DshReadBrowserAnnotationAsset = (identity: {
 export interface DshRuntimeAdapterDeps {
   subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>
     & Partial<Pick<DshSubagentSessions, 'setDelegatedAgent'>>;
+  sideChatManager?: Pick<
+    DshSideChatManager,
+    'resolveSideChatOwner' | 'handleWaterfall' | 'stopAll' | 'deleteSideChatsForParent'
+  >;
   hostManager: Pick<
     DshHostManager,
     'start' | 'isReady' | 'getClient' | 'bindSessionContext' | 'deleteSessionFiles'
@@ -837,6 +842,7 @@ export function buildLazyContextBridgePrefix(
 
 export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly subagentSessions?: DshRuntimeAdapterDeps['subagentSessions'];
+  private readonly sideChatManager?: DshRuntimeAdapterDeps['sideChatManager'];
   private readonly hostManager: DshRuntimeAdapterDeps['hostManager'];
   private readonly store: DshCoworkStorePort;
   private readonly resolveModelSelection?: DshRuntimeAdapterDeps['resolveModelSelection'];
@@ -871,6 +877,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   constructor(deps: DshRuntimeAdapterDeps) {
     super();
     this.subagentSessions = deps.subagentSessions;
+    this.sideChatManager = deps.sideChatManager;
     this.hostManager = deps.hostManager;
     this.store = deps.store;
     this.resolveModelSelection = deps.resolveModelSelection;
@@ -1779,6 +1786,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   stopAllSessions(): void {
     this.stopProjectionControlStream();
+    this.sideChatManager?.stopAll();
     const ids = new Set([
       ...this.activeTurns.keys(),
       ...this.startingTurns.keys(),
@@ -1892,6 +1900,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   onSessionDeleted(sessionId: string): void {
     this.stopSession(sessionId);
+    void this.sideChatManager?.deleteSideChatsForParent(sessionId).catch((): void => undefined);
     this.lastCancelledTurnBySession.delete(sessionId);
     this.sessionAllowedScopes.delete(sessionId);
     this.sessionPermissionPresets.delete(sessionId);
@@ -1936,6 +1945,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.store.updateMessageContent(sessionId, message.id, message.content, { ...message.metadata, dshDelivery: outcome });
     this.emit('messageUpdate', sessionId, message.id, message.content, { dshDelivery: outcome });
     return true;
+  }
+
+  ensureReadyClientForSideChat(): Promise<DshTypertClient> {
+    return this.ensureReadyClient();
   }
 
   private async ensureReadyClient(signal?: AbortSignal): Promise<DshTypertClient> {
@@ -2134,6 +2147,17 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     kind: 'approval' | 'user-questions',
     evt: DshWaterfallEvent,
   ): Promise<DshWaterfallOutcome> {
+    const sideChatOwner = this.sideChatManager?.resolveSideChatOwner(evt.agentId);
+    if (sideChatOwner && this.sideChatManager) {
+      return this.sideChatManager.handleWaterfall(
+        kind,
+        evt,
+        sideChatOwner,
+        (toolName, rawRequest, callId, parentSessionId) =>
+          this.enrichApprovalToolInput(toolName, rawRequest, callId, parentSessionId),
+      );
+    }
+
     const coworkSessionId = this.dshToCoworkSession.get(evt.agentId)
       ?? this.subagentSessions?.getOwningSessionId(evt.agentId);
     if (!coworkSessionId) {
@@ -2284,7 +2308,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     return client.getSessionProjections(dshSessionId).catch((): null => null);
   }
 
-  private resolveExistingDshSessionId(coworkSessionId: string): string | null {
+  resolveExistingDshSessionId(coworkSessionId: string): string | null {
     const active = this.activeTurns.get(coworkSessionId);
     if (active) return active.dshSessionId;
     const session = this.store.getSession(coworkSessionId, 0);

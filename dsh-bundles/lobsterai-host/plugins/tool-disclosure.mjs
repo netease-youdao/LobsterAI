@@ -26,6 +26,7 @@ import { getHostState, resolveSessionContext } from './shared-state.mjs';
 import {
   collectAdmittedCapabilitiesFromTools,
   computeCombinedDeniedTools,
+  evaluateSideChatToolGuard,
   groupMountedProgressiveTools,
   hasAnyProgressiveToolMounted,
   listMountedToolsForCapability,
@@ -294,7 +295,12 @@ export function apply(ctx) {
   // tool directly, including tools admitted in a previous turn.
   const disposeToolGuard = ctx.tools.guard((exec) => {
     const toolName = exec?.name;
-    if (toolName === ASK_USER_QUESTION && resolveSessionContext(ctx, state, exec.agent?.id)?.userQuestionsDisabled) {
+    const bound = resolveSessionContext(ctx, state, exec.agent?.id);
+    const sideChatBlock = evaluateSideChatToolGuard(toolName, bound?.sideChat === true);
+    if (sideChatBlock) {
+      return sideChatBlock;
+    }
+    if (toolName === ASK_USER_QUESTION && bound?.userQuestionsDisabled) {
       return { reason: 'This session cannot receive interactive questions.' };
     }
     if (

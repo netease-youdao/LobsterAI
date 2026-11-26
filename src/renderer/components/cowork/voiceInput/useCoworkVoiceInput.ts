@@ -36,6 +36,8 @@ interface UseCoworkVoiceInputOptions {
   isLoggedIn: boolean;
   disabled: boolean;
   onQuotaExhausted?: () => void;
+  /** Optional custom persistence callback; defaults to coworkSlice `setDraftPrompt`. */
+  onPersistDraft?: (targetDraftKey: string, nextValue: string) => void;
 }
 
 const showToast = (message: string): void => {
@@ -72,6 +74,7 @@ export const useCoworkVoiceInput = ({
   isLoggedIn,
   disabled,
   onQuotaExhausted,
+  onPersistDraft,
 }: UseCoworkVoiceInputOptions) => {
   const dispatch = useDispatch();
   const [voiceInputState, setVoiceInputState] = useState<VoiceInputState>(VoiceInputState.Idle);
@@ -89,7 +92,11 @@ export const useCoworkVoiceInput = ({
   latestDraftKeyRef.current = draftKey;
 
   const setPromptValue = useCallback((targetDraftKey: string, nextValue: string) => {
-    dispatch(setDraftPrompt({ sessionId: targetDraftKey, draft: nextValue }));
+    if (onPersistDraft) {
+      onPersistDraft(targetDraftKey, nextValue);
+    } else {
+      dispatch(setDraftPrompt({ sessionId: targetDraftKey, draft: nextValue }));
+    }
     if (targetDraftKey !== latestDraftKeyRef.current) {
       return;
     }
@@ -104,7 +111,7 @@ export const useCoworkVoiceInput = ({
       textarea.selectionStart = nextValue.length;
       textarea.selectionEnd = nextValue.length;
     });
-  }, [dispatch, setValue, textareaRef]);
+  }, [dispatch, onPersistDraft, setValue, textareaRef]);
 
   const markQuotaExhaustedIfNeeded = useCallback((error: unknown) => {
     if (!(error instanceof AsrClientError)) return false;

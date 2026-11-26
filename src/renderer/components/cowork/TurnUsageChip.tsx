@@ -253,6 +253,7 @@ const TurnUsageChip: React.FC<TurnUsageChipProps> = ({ userMessageId, turnUsage,
         <div
           ref={popoverRef}
           id={popoverId}
+          data-turn-usage-popover="true"
           role="dialog"
           tabIndex={-1}
           aria-labelledby={`${popoverId}-title`}

@@ -91,6 +91,28 @@ import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import type { CoworkSessionFilterQuery } from '../shared/cowork/sessionFilter';
 import {
+  type CoworkSideChatActionResponse,
+  type CoworkSideChatCreateRequest,
+  type CoworkSideChatCreateResponse,
+  type CoworkSideChatDeleteRequest,
+  type CoworkSideChatGetResponse,
+  CoworkSideChatIpcChannel,
+  type CoworkSideChatListResponse,
+  type CoworkSideChatPermissionRequest,
+  type CoworkSideChatPromoteRequest,
+  type CoworkSideChatPromoteResponse,
+  type CoworkSideChatRenameRequest,
+  type CoworkSideChatRenameResponse,
+  type CoworkSideChatRespondPermissionRequest,
+  type CoworkSideChatSendRequest,
+  type CoworkSideChatStopRequest,
+  type CoworkSideChatStreamMessageEvent,
+  type CoworkSideChatStreamMessageUpdateEvent,
+  type CoworkSideChatStreamMetaChangedEvent,
+  type CoworkSideChatStreamPermissionResolvedEvent,
+  type CoworkSideChatStreamStatusEvent,
+} from '../shared/cowork/sideChat';
+import {
   DataMigrationIpc,
   type DataMigrationPreviewRequest,
   type DataMigrationProgressEvent,
@@ -838,6 +860,56 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.SubmitBtw, options),
     abortBtw: (options: CoworkBtwAbortRequest): Promise<CoworkBtwAbortResponse> =>
       ipcRenderer.invoke(CoworkIpcChannel.AbortBtw, options),
+    sideChat: {
+      list: (options: { parentSessionId: string }): Promise<CoworkSideChatListResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.List, options),
+      get: (options: { sideChatId: string }): Promise<CoworkSideChatGetResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.Get, options),
+      create: (options: CoworkSideChatCreateRequest): Promise<CoworkSideChatCreateResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.Create, options),
+      sendMessage: (options: CoworkSideChatSendRequest): Promise<CoworkSideChatActionResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.SendMessage, options),
+      stop: (options: CoworkSideChatStopRequest): Promise<CoworkSideChatActionResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.Stop, options),
+      rename: (options: CoworkSideChatRenameRequest): Promise<CoworkSideChatRenameResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.Rename, options),
+      delete: (options: CoworkSideChatDeleteRequest): Promise<CoworkSideChatActionResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.Delete, options),
+      promote: (options: CoworkSideChatPromoteRequest): Promise<CoworkSideChatPromoteResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.Promote, options),
+      respondPermission: (options: CoworkSideChatRespondPermissionRequest): Promise<CoworkSideChatActionResponse> =>
+        ipcRenderer.invoke(CoworkSideChatIpcChannel.RespondPermission, options),
+      onStreamMessage: (callback: (data: CoworkSideChatStreamMessageEvent) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: CoworkSideChatStreamMessageEvent) => callback(data);
+        ipcRenderer.on(CoworkSideChatIpcChannel.StreamMessage, handler);
+        return () => ipcRenderer.removeListener(CoworkSideChatIpcChannel.StreamMessage, handler);
+      },
+      onStreamMessageUpdate: (callback: (data: CoworkSideChatStreamMessageUpdateEvent) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: CoworkSideChatStreamMessageUpdateEvent) => callback(data);
+        ipcRenderer.on(CoworkSideChatIpcChannel.StreamMessageUpdate, handler);
+        return () => ipcRenderer.removeListener(CoworkSideChatIpcChannel.StreamMessageUpdate, handler);
+      },
+      onStreamStatus: (callback: (data: CoworkSideChatStreamStatusEvent) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: CoworkSideChatStreamStatusEvent) => callback(data);
+        ipcRenderer.on(CoworkSideChatIpcChannel.StreamStatus, handler);
+        return () => ipcRenderer.removeListener(CoworkSideChatIpcChannel.StreamStatus, handler);
+      },
+      onStreamMetaChanged: (callback: (data: CoworkSideChatStreamMetaChangedEvent) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: CoworkSideChatStreamMetaChangedEvent) => callback(data);
+        ipcRenderer.on(CoworkSideChatIpcChannel.StreamMetaChanged, handler);
+        return () => ipcRenderer.removeListener(CoworkSideChatIpcChannel.StreamMetaChanged, handler);
+      },
+      onStreamPermission: (callback: (data: CoworkSideChatPermissionRequest) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: CoworkSideChatPermissionRequest) => callback(data);
+        ipcRenderer.on(CoworkSideChatIpcChannel.StreamPermission, handler);
+        return () => ipcRenderer.removeListener(CoworkSideChatIpcChannel.StreamPermission, handler);
+      },
+      onStreamPermissionResolved: (callback: (data: CoworkSideChatStreamPermissionResolvedEvent) => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: CoworkSideChatStreamPermissionResolvedEvent) => callback(data);
+        ipcRenderer.on(CoworkSideChatIpcChannel.StreamPermissionResolved, handler);
+        return () => ipcRenderer.removeListener(CoworkSideChatIpcChannel.StreamPermissionResolved, handler);
+      },
+    },
     submitSteer: (options: { sessionId: string; text: string; clientSteerId: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.SubmitSteer, options),
     runGoalCommand: (options: { sessionId: string; command: string }) =>

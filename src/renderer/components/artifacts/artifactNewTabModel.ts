@@ -19,6 +19,7 @@ export const ArtifactNewTabCardId = {
   Files: 'files',
   Browser: 'browser',
   WorkspaceChanges: 'workspaceChanges',
+  SideChat: 'sideChat',
   Subagents: 'subagents',
   OpenLocalFile: 'openLocalFile',
   RevealWorkspace: 'revealWorkspace',
@@ -87,13 +88,25 @@ export function resolveNewTabMode(isGitRepository: boolean): ArtifactNewTabMode 
   return isGitRepository ? ArtifactNewTabMode.Code : ArtifactNewTabMode.Work;
 }
 
-export function resolveNewTabPrimaryCards(mode: ArtifactNewTabMode): ArtifactNewTabCardId[] {
+export function resolveNewTabPrimaryCards(
+  mode: ArtifactNewTabMode,
+  options?: { includeSideChat?: boolean },
+): ArtifactNewTabCardId[] {
+  const includeSideChat = options?.includeSideChat ?? false;
   if (mode === ArtifactNewTabMode.Code) {
     return [
       ArtifactNewTabCardId.Files,
       ArtifactNewTabCardId.WorkspaceChanges,
       ArtifactNewTabCardId.Browser,
-      ArtifactNewTabCardId.NewMarkdown,
+      includeSideChat ? ArtifactNewTabCardId.SideChat : ArtifactNewTabCardId.NewMarkdown,
+    ];
+  }
+  if (includeSideChat) {
+    return [
+      ArtifactNewTabCardId.NewDocument,
+      ArtifactNewTabCardId.Files,
+      ArtifactNewTabCardId.Browser,
+      ArtifactNewTabCardId.SideChat,
     ];
   }
   return [
@@ -106,29 +119,27 @@ export function resolveNewTabPrimaryCards(mode: ArtifactNewTabMode): ArtifactNew
 
 export function resolveNewTabOverflowItems(
   mode: ArtifactNewTabMode,
-  options: { isGitRepository: boolean; hasWorkingDirectory: boolean; includeSubagents?: boolean },
+  options: {
+    isGitRepository: boolean;
+    hasWorkingDirectory: boolean;
+    includeSubagents?: boolean;
+    includeSideChat?: boolean;
+  },
 ): ArtifactNewTabCardId[] {
-  const includeSubagents = options.includeSubagents ?? true;
-  const items: ArtifactNewTabCardId[] = mode === ArtifactNewTabMode.Code
-    ? [
-        ArtifactNewTabCardId.NewDocument,
-        ArtifactNewTabCardId.NewPresentation,
-        ArtifactNewTabCardId.NewSpreadsheet,
-        ArtifactNewTabCardId.OpenLocalFile,
-        ...(includeSubagents ? [ArtifactNewTabCardId.Subagents] : []),
-      ]
-    : [
-        ArtifactNewTabCardId.NewSpreadsheet,
-        ArtifactNewTabCardId.NewMarkdown,
-        ArtifactNewTabCardId.OpenLocalFile,
-        ...(includeSubagents ? [ArtifactNewTabCardId.Subagents] : []),
-        ...(options.isGitRepository ? [ArtifactNewTabCardId.WorkspaceChanges] : []),
-      ];
-
-  if (options.hasWorkingDirectory) {
-    items.push(ArtifactNewTabCardId.RevealWorkspace);
+  if (mode === ArtifactNewTabMode.Code) {
+    return [
+      ArtifactNewTabCardId.NewDocument,
+      ArtifactNewTabCardId.NewPresentation,
+      ArtifactNewTabCardId.NewSpreadsheet,
+      ...(options.includeSideChat ? [ArtifactNewTabCardId.NewMarkdown] : []),
+    ];
   }
-  return items;
+  return [
+    ...(options.includeSideChat ? [ArtifactNewTabCardId.NewPresentation] : []),
+    ArtifactNewTabCardId.NewSpreadsheet,
+    ArtifactNewTabCardId.NewMarkdown,
+    ...(options.isGitRepository ? [ArtifactNewTabCardId.WorkspaceChanges] : []),
+  ];
 }
 
 export function filterSessionArtifactsForOmniBar(

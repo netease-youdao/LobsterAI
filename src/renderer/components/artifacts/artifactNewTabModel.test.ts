@@ -108,43 +108,62 @@ describe('NewTab card layout selection', () => {
       ArtifactNewTabCardId.Files,
       ArtifactNewTabCardId.Browser,
     ]);
+    expect(resolveNewTabPrimaryCards(ArtifactNewTabMode.Work, { includeSideChat: true })).toEqual([
+      ArtifactNewTabCardId.NewDocument,
+      ArtifactNewTabCardId.Files,
+      ArtifactNewTabCardId.Browser,
+      ArtifactNewTabCardId.SideChat,
+    ]);
     expect(resolveNewTabPrimaryCards(ArtifactNewTabMode.Code)).toEqual([
       ArtifactNewTabCardId.Files,
       ArtifactNewTabCardId.WorkspaceChanges,
       ArtifactNewTabCardId.Browser,
       ArtifactNewTabCardId.NewMarkdown,
     ]);
+    expect(resolveNewTabPrimaryCards(ArtifactNewTabMode.Code, { includeSideChat: true })).toEqual([
+      ArtifactNewTabCardId.Files,
+      ArtifactNewTabCardId.WorkspaceChanges,
+      ArtifactNewTabCardId.Browser,
+      ArtifactNewTabCardId.SideChat,
+    ]);
   });
 
-  test('surfaces complementary tools in the overflow menu without duplicating primary cards', () => {
-    const workOverflow = resolveNewTabOverflowItems(ArtifactNewTabMode.Work, {
+  test('surfaces complementary creation tools in the overflow menu without legacy utility rows', () => {
+    const workSessionOverflow = resolveNewTabOverflowItems(ArtifactNewTabMode.Work, {
       isGitRepository: false,
       hasWorkingDirectory: true,
+      includeSideChat: true,
     });
-    expect(workOverflow).toContain(ArtifactNewTabCardId.NewSpreadsheet);
-    expect(workOverflow).toContain(ArtifactNewTabCardId.NewMarkdown);
-    expect(workOverflow).toContain(ArtifactNewTabCardId.OpenLocalFile);
-    expect(workOverflow).toContain(ArtifactNewTabCardId.Subagents);
-    expect(workOverflow).toContain(ArtifactNewTabCardId.RevealWorkspace);
-    expect(workOverflow).not.toContain(ArtifactNewTabCardId.WorkspaceChanges);
+    expect(workSessionOverflow).toEqual([
+      ArtifactNewTabCardId.NewPresentation,
+      ArtifactNewTabCardId.NewSpreadsheet,
+      ArtifactNewTabCardId.NewMarkdown,
+    ]);
+    expect(workSessionOverflow).not.toContain(ArtifactNewTabCardId.OpenLocalFile);
+    expect(workSessionOverflow).not.toContain(ArtifactNewTabCardId.Subagents);
+    expect(workSessionOverflow).not.toContain(ArtifactNewTabCardId.RevealWorkspace);
 
     const codeOverflow = resolveNewTabOverflowItems(ArtifactNewTabMode.Code, {
       isGitRepository: true,
       hasWorkingDirectory: false,
+      includeSideChat: true,
     });
-    expect(codeOverflow).toContain(ArtifactNewTabCardId.NewDocument);
-    expect(codeOverflow).toContain(ArtifactNewTabCardId.NewPresentation);
-    expect(codeOverflow).not.toContain(ArtifactNewTabCardId.RevealWorkspace);
+    expect(codeOverflow).toEqual([
+      ArtifactNewTabCardId.NewDocument,
+      ArtifactNewTabCardId.NewPresentation,
+      ArtifactNewTabCardId.NewSpreadsheet,
+      ArtifactNewTabCardId.NewMarkdown,
+    ]);
 
     const homeOverflow = resolveNewTabOverflowItems(ArtifactNewTabMode.Work, {
       isGitRepository: false,
       hasWorkingDirectory: true,
       includeSubagents: false,
     });
-    expect(homeOverflow).not.toContain(ArtifactNewTabCardId.Subagents);
-    expect(homeOverflow).not.toContain(ArtifactNewTabCardId.WorkspaceChanges);
-    expect(homeOverflow).toContain(ArtifactNewTabCardId.OpenLocalFile);
-    expect(homeOverflow).toContain(ArtifactNewTabCardId.RevealWorkspace);
+    expect(homeOverflow).toEqual([
+      ArtifactNewTabCardId.NewSpreadsheet,
+      ArtifactNewTabCardId.NewMarkdown,
+    ]);
   });
 });
 

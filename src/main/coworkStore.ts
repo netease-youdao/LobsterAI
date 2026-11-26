@@ -838,7 +838,7 @@ interface CoworkContinuityCapsuleRow {
   last_compacted_at: number | null;
 }
 
-interface CoworkForkSessionOptions {
+export interface CoworkForkSessionOptions {
   sourceSessionId: string;
   forkMode?: CoworkForkModeType;
   forkedFromMessageId?: string | null;

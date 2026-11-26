@@ -20,13 +20,6 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../../../shared/browserWebAccess/constants';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
-import {
-  buildCoworkBtwComposerQuestion,
-  buildCoworkBtwContextualQuestion,
-  createCoworkBtwRunId,
-  normalizeCoworkBtwQuestion,
-  resolveCoworkBtwSelectedTextSnippets,
-} from '../../../shared/cowork/btw';
 import { COWORK_TEMP_SESSION_ID_PREFIX, CoworkOnboardingMessageKind } from '../../../shared/cowork/constants';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
 import {
@@ -95,6 +88,7 @@ import {
   activateArtifactFileListTab,
   activateArtifactNewTab,
   activateArtifactPreviewTab,
+  activateArtifactSideChatTab,
   activateArtifactSubagentTab,
   activateArtifactUserAttachmentTab,
   addArtifact,
@@ -114,13 +108,7 @@ import {
 } from '../../store/slices/artifactSlice';
 import {
   addDraftSelectedTextSnippet,
-  clearBtwComposerIfUnchanged,
-  clearBtwEntries,
-  closeBtwThread,
-  openBtwThread,
   PlanConfirmationState,
-  setBtwDraft,
-  setBtwSelectedTextSnippets,
   setDraftCollaborationMode,
   setPlanConfirmationAwaiting,
   setPlanConfirmationHandled,
@@ -148,6 +136,7 @@ import {
   ArtifactNewTabContent,
   ArtifactPanel,
   type LocalServiceDeploymentRequest,
+  SideChatPanelContent,
   SubagentPanelContent,
   UserAttachmentPanelContent,
   type UserAttachmentPreviewPayload,
@@ -184,6 +173,7 @@ import { preloadInlineImages } from '../artifacts/imageEditor/InlineImageGallery
 import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import SideChatIcon from '../icons/SideChatIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
@@ -265,7 +255,6 @@ import {
   sessionViewportStore,
 } from './conversationSessionScrollState';
 import ConversationTurnRail from './ConversationTurnRail';
-import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import { DshMessageDelivery, useDshMessageRecovery } from './DshMessageDelivery';
@@ -307,6 +296,7 @@ import {
   type CoworkTextExportFormat as CoworkTextExportFormatValue,
   mergeCoworkTextExportMessages,
 } from './sessionExport';
+import { getSideChatDisplayTitle } from './sideChatHelpers';
 import SubagentSpawnCard from './SubagentSpawnCard';
 import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useConversationEntrySettle } from './useConversationEntrySettle';
@@ -314,6 +304,7 @@ import { useConversationScrollAnchor } from './useConversationScrollAnchor';
 import { useConversationSessionRestore } from './useConversationSessionRestore';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
 import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
+import { useCoworkSideChats } from './useCoworkSideChats';
 import { expandCollapsedUserMessage } from './userMessageCollapse';
 import UserMessageContent from './UserMessageContent';
 import UserMessageInlineEditor from './UserMessageInlineEditor';
@@ -1411,9 +1402,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const planConfirmation = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.planConfirmations[currentSession.id] : undefined
   );
-  const btwThread = useSelector((state: RootState) =>
-    currentSession?.id ? state.cowork.btwThreadsBySessionId[currentSession.id] : undefined
-  );
   const queuedSteerCount = useSelector((state: RootState) => {
     if (!currentSession?.id) return 0;
     return (
@@ -2176,113 +2164,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     closeSelectedTextAction({ clearSelection: true });
   }, [addSelectedTextSnippetToDraft, closeSelectedTextAction, selectedTextAction]);
 
-  const handleOpenSelectedTextInSideChat = useCallback(() => {
-    if (!selectedTextAction || !currentSession?.id) return;
-    const sourceMessageId = selectedTextAction.sourceMessageId;
-    const sessionId = currentSession.id;
-    const selectedTextSnippet: CoworkSelectedTextSnippet = {
-      id: `btw-selected-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: selectedTextAction.text,
-      sourceMessageId,
-      sourceMessageType: CoworkSelectedTextSource.AssistantMessage,
-      sourceId: sourceMessageId,
-      sourceType: CoworkSelectedTextSource.AssistantMessage,
-      createdAt: Date.now(),
-    };
-    const shouldAppendToOpenThread = btwThread?.isOpen === true;
-    const normalized = resolveCoworkBtwSelectedTextSnippets(
-      btwThread?.selectedTextSnippets ?? [],
-      [selectedTextSnippet],
-      shouldAppendToOpenThread,
-    );
-    closeSelectedTextAction({ clearSelection: true });
-    if (!normalized.success) {
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService.t(SELECTED_TEXT_ERROR_I18N_KEYS[normalized.error]),
-      }));
-      logDetailDiagnostic(
-        `rejected selected assistant text for side chat in session ${sessionId}; `
-        + `source is ${sourceMessageId}; reason=${normalized.error}`,
-      );
-      return;
-    }
-
-    dispatch(openBtwThread({
-      sessionId,
-      selectedTextSnippets: normalized.snippets,
-    }));
-    reportConversationNavigationAction({
-      actionType: 'selected_text_open_side_chat',
-      params: {
-        ...getConversationControlAnalyticsParams(),
-        sourceType: CoworkSelectedTextSource.AssistantMessage,
-        selectedTextLengthBucket: bucketLength(selectedTextSnippet.text.length),
-        selectedSnippetCount: normalized.snippets.length,
-        selectedTextTotalLengthBucket: bucketLength(normalized.snippets.reduce(
-          (total, snippet) => total + snippet.text.length,
-          0,
-        )),
-      },
-    });
-    logDetailDiagnostic(
-      `opened side chat from selected assistant text for session ${sessionId}; `
-      + `source is ${sourceMessageId}; mode=${shouldAppendToOpenThread ? 'append' : 'replace'}; `
-      + `selected excerpts=${normalized.snippets.length}; `
-      + `characters=${normalized.snippets.reduce((total, snippet) => total + snippet.text.length, 0)}`,
-    );
-  }, [
-    btwThread?.isOpen,
-    btwThread?.selectedTextSnippets,
-    closeSelectedTextAction,
-    currentSession?.id,
-    dispatch,
-    getConversationControlAnalyticsParams,
-    selectedTextAction,
-  ]);
-
-  const handleSubmitBtwDraft = useCallback(() => {
-    if (!btwThread || !currentSession?.id) return;
-    const selectedTextSnippets = btwThread.selectedTextSnippets ?? [];
-    const displayQuestion = normalizeCoworkBtwQuestion(btwThread.draft);
-    const composerQuestion = buildCoworkBtwComposerQuestion(
-      displayQuestion,
-      selectedTextSnippets,
-    );
-    if (!composerQuestion) {
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService.t('coworkBtwEmptyQuestion'),
-      }));
-      return;
-    }
-
-    const requestQuestion = buildCoworkBtwContextualQuestion(
-      btwThread.entries,
-      composerQuestion,
-    );
-    const sessionId = currentSession.id;
-    const runId = createCoworkBtwRunId();
-    logDetailDiagnostic(
-      `submitted side-chat draft for session ${sessionId}; run is ${runId}; `
-      + `display characters=${displayQuestion.length}; request characters=${requestQuestion.length}; `
-      + `selected excerpts=${selectedTextSnippets.length}; `
-      + `previous entries=${btwThread.entries.length}`,
-    );
-    void coworkService.submitBtw({
-      sessionId,
-      question: requestQuestion,
-      displayQuestion,
-      selectedTextSnippets,
-      runId,
-    }).then((accepted) => {
-      if (!accepted) return;
-      dispatch(clearBtwComposerIfUnchanged({
-        sessionId,
-        expectedDraft: btwThread.draft,
-        expectedSelectedTextSnippetIds: selectedTextSnippets.map(snippet => snippet.id),
-      }));
-    });
-  }, [btwThread, currentSession?.id, dispatch]);
-
   const handleLocateSelectedText = useCallback((sourceMessageId: string) => {
     const container = scrollContainerRef.current;
     const element = Array.from(
@@ -2830,6 +2711,119 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       activeSpecialPreviewTabBySessionRef.current[sessionId] = tab;
     }
   }, [sessionId]);
+
+  const handleFallbackAfterSideChatClose = useCallback(() => {
+    if (!sessionId) {
+      dispatch(closePanel(undefined));
+      return;
+    }
+    const nextTabId = artifactTabsWithArtifacts[0]?.tab.id;
+    if (nextTabId) {
+      dispatch(activateArtifactPreviewTab({ sessionId, tabId: nextTabId }));
+      return;
+    }
+    if (isBrowserPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
+      dispatch(activateArtifactBrowserTab({ sessionId }));
+      return;
+    }
+    if (isFileListPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.FileList);
+      dispatch(activateArtifactFileListTab({ sessionId }));
+      return;
+    }
+    if (isAgentBrowserPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.AgentBrowser);
+      dispatch(activateArtifactAgentBrowserTab({ sessionId }));
+      return;
+    }
+    if (isSubagentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
+      dispatch(activateArtifactSubagentTab({ sessionId }));
+      return;
+    }
+    if (isUserAttachmentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+      dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+      return;
+    }
+    if (isNewTabPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
+      return;
+    }
+    dispatch(closePanel({ sessionId }));
+  }, [
+    artifactTabsWithArtifacts,
+    dispatch,
+    isAgentBrowserPreviewTabOpen,
+    isBrowserPreviewTabOpen,
+    isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
+    isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+  ]);
+
+  const sideChats = useCoworkSideChats({
+    sessionId,
+    isPanelOpen,
+    activeSpecialPreviewTab,
+    hasActiveArtifactPreviewTab: Boolean(activeArtifactPreviewTab),
+    setSessionActiveSpecialPreviewTab,
+    setSessionNewTabPreviewTabOpen,
+    onFallbackAfterClose: handleFallbackAfterSideChatClose,
+  });
+
+  const handleOpenSelectedTextInSideChat = useCallback(() => {
+    if (!selectedTextAction || !currentSession?.id) return;
+    const sourceMessageId = selectedTextAction.sourceMessageId;
+    const targetSessionId = currentSession.id;
+    const selectedTextSnippet: CoworkSelectedTextSnippet = {
+      id: `btw-selected-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text: selectedTextAction.text,
+      sourceMessageId,
+      sourceMessageType: CoworkSelectedTextSource.AssistantMessage,
+      sourceId: sourceMessageId,
+      sourceType: CoworkSelectedTextSource.AssistantMessage,
+      createdAt: Date.now(),
+    };
+    closeSelectedTextAction({ clearSelection: true });
+    void sideChats.openFromSelectedText(selectedTextSnippet).then((result) => {
+      if (!result.success || !result.snippets) {
+        logDetailDiagnostic(
+          `rejected selected assistant text for side chat in session ${targetSessionId}; `
+          + `source is ${sourceMessageId}; reason=${result.error ?? 'unknown'}`,
+        );
+        return;
+      }
+      reportConversationNavigationAction({
+        actionType: 'selected_text_open_side_chat',
+        params: {
+          ...getConversationControlAnalyticsParams(),
+          sourceType: CoworkSelectedTextSource.AssistantMessage,
+          selectedTextLengthBucket: bucketLength(selectedTextSnippet.text.length),
+          selectedSnippetCount: result.snippets.length,
+          selectedTextTotalLengthBucket: bucketLength(result.snippets.reduce(
+            (total, snippet) => total + snippet.text.length,
+            0,
+          )),
+        },
+      });
+      logDetailDiagnostic(
+        `opened side chat tab from selected assistant text for session ${targetSessionId}; `
+        + `source is ${sourceMessageId}; mode=${result.mode ?? 'new'}; `
+        + `selected excerpts=${result.snippets.length}`,
+      );
+    });
+  }, [
+    closeSelectedTextAction,
+    currentSession?.id,
+    getConversationControlAnalyticsParams,
+    selectedTextAction,
+    sideChats,
+  ]);
 
   useEffect(() => {
     const syncBrowserDisplayMode = () => {
@@ -3497,6 +3491,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (sideChats.isSideChatPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.SideChat);
+      dispatch(activateArtifactSideChatTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -3511,6 +3511,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionNewTabPreviewTabOpen,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const handleNewTabSelectArtifact = useCallback((artifactId: string) => {
@@ -3718,6 +3719,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (sideChats.isSideChatPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.SideChat);
+      dispatch(activateArtifactSideChatTab({ sessionId }));
+      return;
+    }
+
     if (isNewTabPreviewTabOpen) {
       setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
       dispatch(activateArtifactNewTab({ sessionId }));
@@ -3738,6 +3745,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionFileListPreviewTabOpen,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const handleActivateArtifactBrowserTab = useCallback((tabId?: string) => {
@@ -3881,6 +3889,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (sideChats.isSideChatPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.SideChat);
+      dispatch(activateArtifactSideChatTab({ sessionId }));
+      return;
+    }
+
     if (isNewTabPreviewTabOpen) {
       setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
       dispatch(activateArtifactNewTab({ sessionId }));
@@ -3900,6 +3914,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isUserAttachmentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const handleCloseArtifactAgentBrowserTab = useCallback(() => {
@@ -3947,6 +3962,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       dispatch(activateArtifactUserAttachmentTab({ sessionId }));
       return;
     }
+    if (sideChats.isSideChatPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.SideChat);
+      dispatch(activateArtifactSideChatTab({ sessionId }));
+      return;
+    }
     if (isNewTabPreviewTabOpen) {
       setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
       dispatch(activateArtifactNewTab({ sessionId }));
@@ -3967,6 +3987,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionActiveSpecialPreviewTab,
     setSessionAgentBrowserPreviewTabOpen,
     setSessionAgentBrowserUnread,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const handleCloseArtifactSubagentTab = useCallback(() => {
@@ -4019,6 +4040,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (sideChats.isSideChatPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.SideChat);
+      dispatch(activateArtifactSideChatTab({ sessionId }));
+      return;
+    }
+
     if (isNewTabPreviewTabOpen) {
       setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
       dispatch(activateArtifactNewTab({ sessionId }));
@@ -4039,6 +4066,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionSubagentPreviewTabOpen,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const handleActivateArtifactUserAttachmentTab = useCallback(() => {
@@ -4105,6 +4133,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (sideChats.isSideChatPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.SideChat);
+      dispatch(activateArtifactSideChatTab({ sessionId }));
+      return;
+    }
+
     if (isNewTabPreviewTabOpen) {
       setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
       dispatch(activateArtifactNewTab({ sessionId }));
@@ -4125,6 +4159,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionUserAttachmentPreviewTabOpen,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const handleOpenMessageAnnotation = useCallback((
@@ -4214,6 +4249,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       && !isAgentBrowserPreviewTabOpen
       && !isSubagentPreviewTabOpen
       && !isUserAttachmentPreviewTabOpen
+      && !sideChats.isSideChatPreviewTabOpen
     ) {
       dispatch(closePanel({ sessionId }));
     }
@@ -4227,6 +4263,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isSubagentPreviewTabOpen,
     isUserAttachmentPreviewTabOpen,
     sessionId,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   const artifactTabActionTargets: ArtifactTabActionTarget[] = [
@@ -4250,6 +4287,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       [ArtifactSpecialTab.UserAttachment, isUserAttachmentPreviewTabOpen, handleActivateArtifactUserAttachmentTab, handleCloseArtifactUserAttachmentTab],
     ] as const).filter(([, open]) => open).map(([id, , activate, close]) => ({
       id, active: !activeArtifactPreviewTab && activeSpecialPreviewTab === id, activate, close,
+    })),
+    ...sideChats.openSideChatTabs.map(tab => ({
+      id: `sidechat:${tab.id}`,
+      active: !activeArtifactPreviewTab
+        && activeSpecialPreviewTab === ArtifactSpecialTab.SideChat
+        && sideChats.activeSideChatId === tab.id,
+      activate: () => sideChats.activateSideChatTab(tab.id),
+      close: () => sideChats.closeSideChatTabById(tab.id),
     })),
     ...artifactTabsWithArtifacts.map(({ tab }) => ({
       id: tab.id, active: tab.id === activeArtifactPreviewTab?.id,
@@ -4298,6 +4343,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       && !isAgentBrowserPreviewTabOpen
       && !isSubagentPreviewTabOpen
       && !isUserAttachmentPreviewTabOpen
+      && !sideChats.isSideChatPreviewTabOpen
     ) {
       setSessionNewTabPreviewTabOpen(true);
       setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
@@ -4323,6 +4369,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     sessionId,
     setSessionActiveSpecialPreviewTab,
     setSessionNewTabPreviewTabOpen,
+    sideChats.isSideChatPreviewTabOpen,
   ]);
 
   useEffect(() => {
@@ -4387,6 +4434,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isFileListPreviewTabOpen,
     isNewTabPreviewTabOpen,
     shouldPinArtifactAddTab,
+    sideChats.activeSideChatId,
+    sideChats.openSideChatTabs.length,
     updateArtifactTabsScrollState,
   ]);
 
@@ -4427,6 +4476,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isFileListPreviewTabOpen,
     isNewTabPreviewTabOpen,
     panelWidth,
+    sideChats.activeSideChatId,
+    sideChats.openSideChatTabs.length,
     updateArtifactTabsScrollState,
   ]);
 
@@ -7020,6 +7071,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }
                 awaitingRunStart={isAwaitingRunStart}
                 showCopyButtons={!isStreaming || !isLastTurn}
+                compactMeta={isArtifactPanelVisible && !isExportingImage}
                 enableMessageSpeech={!remoteManaged && !isExportingImage && isMessageSpeechTurnCompleted(turn, {
                   isLastTurn: index === lastMessageSpeechTurnIndex,
                   sessionStatus: currentSession.status,
@@ -7233,6 +7285,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment)}
                     />
                   )}
+                  {sideChats.openSideChatTabs.map(tab => (
+                    <ArtifactPreviewTabItem
+                      key={`sidechat:${tab.id}`}
+                      active={!activeArtifactPreviewTab
+                        && activeSpecialPreviewTab === ArtifactSpecialTab.SideChat
+                        && sideChats.activeSideChatId === tab.id}
+                      icon={<SideChatIcon className="h-3.5 w-3.5 shrink-0" />}
+                      label={getSideChatDisplayTitle(tab.id, sideChats.summaries, i18nService.t('coworkSideChatTitle'))}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      onActivate={() => sideChats.activateSideChatTab(tab.id)}
+                      onClose={() => sideChats.closeSideChatTabById(tab.id)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, `sidechat:${tab.id}`)}
+                    />
+                  ))}
                   {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
                     const fileName = artifact.fileName || artifact.title;
                     const renamable = canRenameArtifactFile(artifact);
@@ -7568,7 +7634,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             currentRailIndex={currentRailIndex}
             hasPlaceholderItems={hasPlaceholderRailItems}
             onNavigateToRailItem={navigateToRailItem}
-            onScrollToBottom={handleScrollToBottom}
           />
         )}
         {!exportImageProgress && shouldShowScrollToBottom && (
@@ -7778,31 +7843,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         )}
         <div ref={promptContentAnchorRef} className={COWORK_DETAIL_CONTENT_CLASS}>
           <EnterpriseQuotaPrompt signal={activeEnterpriseQuotaSignal} surface="task" />
-          {btwThread && (
-            <CoworkBtwFloatingPanel
-              thread={btwThread}
-              promptAnchorRef={promptContentAnchorRef}
-              resolveLocalFilePath={resolveLocalFilePath}
-              onClose={() => dispatch(closeBtwThread(btwThread.sessionId))}
-              onClearEntries={() => dispatch(clearBtwEntries(btwThread.sessionId))}
-              onDraftChange={draft => dispatch(setBtwDraft({
-                sessionId: btwThread.sessionId,
-                draft,
-              }))}
-              onSelectedTextSnippetsChange={snippets => dispatch(
-                setBtwSelectedTextSnippets({
-                  sessionId: btwThread.sessionId,
-                  snippets,
-                }),
-              )}
-              onLocateSelectedText={handleLocateSelectedText}
-              onSubmit={handleSubmitBtwDraft}
-              onStop={runId => void coworkService.abortBtw({
-                sessionId: btwThread.sessionId,
-                runId,
-              })}
-            />
-          )}
           {showExternalGoalStatusBar && (
             <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
               <div ref={setGoalStatusBarPortalTarget} />
@@ -7837,6 +7877,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
             goal={!remoteManaged ? currentSession?.goal : null}
             onGoalCommand={!remoteManaged && currentSession?.id ? handleGoalCommand : undefined}
+            onBtwCommand={!remoteManaged && currentSession?.id ? sideChats.submitBtwCommand : undefined}
             goalStatusBarPortalTarget={showExternalGoalStatusBar ? goalStatusBarPortalTarget : null}
             goalStatusBarAttached={!showExternalSteerPreview}
             steerPreviewPortalTarget={showExternalSteerPreview ? steerPreviewPortalTarget : null}
@@ -7929,6 +7970,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   workingDirectory={currentSession.cwd}
                   artifacts={sessionArtifacts}
                   subagents={subagents}
+                  sideChats={sideChats.summaries}
                   hasAgentBrowserActivity={
                     browserDisplayMode === BrowserDisplayMode.InApp
                     && (hasUnreadAgentBrowserActivity || isAgentBrowserPreviewTabOpen)
@@ -7946,6 +7988,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   }
                   onOpenSubagents={handleNewTabOpenSubagents}
                   onOpenWorkspaceChanges={handleNewTabOpenWorkspaceChanges}
+                  onCreateSideChat={!remoteManaged ? () => void sideChats.openNewSideChat({ fromNewTab: true }) : undefined}
+                  onOpenSideChat={(sideChatId) => sideChats.openExistingSideChat(sideChatId, { fromNewTab: true })}
                 />
               )}
               onOpenLocalFilePicker={() => void handleNewTabOpenLocalFilePicker()}
@@ -7978,6 +8022,28 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 <UserAttachmentPanelContent
                   sessionId={currentSession.id}
                   payload={userAttachmentPreview}
+                />
+              )}
+              sideChatPanel={(
+                <SideChatPanelContent
+                  sideChat={sideChats.activeSideChat}
+                  parentSession={currentSession}
+                  loading={sideChats.isLoadingDetail}
+                  draft={sideChats.activeDraft}
+                  selectedTextSnippets={sideChats.activeSelectedTextSnippets}
+                  attachments={sideChats.activeAttachments}
+                  modelSelection={sideChats.activeModelSelection}
+                  pendingPermissions={sideChats.activePendingPermissions}
+                  resolveLocalFilePath={resolveLocalFilePath}
+                  onDraftChange={sideChats.setActiveDraft}
+                  onSelectedTextSnippetsChange={sideChats.setActiveSelectedTextSnippets}
+                  onAddAttachment={sideChats.addActiveAttachment}
+                  onRemoveAttachment={sideChats.removeActiveAttachment}
+                  onModelSelectionChange={sideChats.setActiveModelSelection}
+                  onLocateSelectedText={handleLocateSelectedText}
+                  onSend={(options) => void sideChats.sendActiveMessage(options)}
+                  onStop={sideChats.stopActiveSideChat}
+                  onRespondPermission={sideChats.respondActivePermission}
                 />
               )}
               onAnnotationSend={handleAnnotationSendRequest}

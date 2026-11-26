@@ -95,6 +95,7 @@ import {
   updateSteerStatus,
   updateToolUseMediaStatus,
 } from '../store/slices/coworkSlice';
+import { clearParentSideChats } from '../store/slices/sideChatSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type {
   CoworkConfigUpdate,
@@ -1721,6 +1722,7 @@ class CoworkService {
       this.queuedFollowUpCoordinator.clearSession(sessionId);
       sessionViewportStore.delete(sessionId);
       clearHeightCache(sessionId);
+      store.dispatch(clearParentSideChats(sessionId));
       store.dispatch(deleteSessionAction(sessionId));
       return true;
     }
@@ -1738,6 +1740,7 @@ class CoworkService {
       sessionIds.forEach(sessionId => {
         this.queuedFollowUpCoordinator.clearSession(sessionId);
         clearHeightCache(sessionId);
+        store.dispatch(clearParentSideChats(sessionId));
       });
       sessionViewportStore.deleteMany(sessionIds);
       store.dispatch(deleteSessionsAction(sessionIds));

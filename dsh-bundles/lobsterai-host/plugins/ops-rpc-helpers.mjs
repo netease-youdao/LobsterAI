@@ -61,6 +61,7 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
     ...mediaTurnInstructionPatch,
     ...(typeof p.executionMode === 'string' ? { executionMode: p.executionMode } : {}),
     ...(typeof p.memoryEnabled === 'boolean' ? { memoryEnabled: p.memoryEnabled } : {}),
+    ...(typeof p.sideChat === 'boolean' ? { sideChat: p.sideChat } : {}),
     ...(nextPreset ? { permissionPreset: nextPreset } : {}),
     permissionPresetExplicit,
     ...(mergedUnlocked.size > 0 ? { unlockedCapabilities: [...mergedUnlocked] } : {}),
