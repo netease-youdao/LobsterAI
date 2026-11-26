@@ -22,6 +22,7 @@ const { spawnSync } = require('child_process');
 const { resolveTarCommand } = require('./dsh-tar.cjs');
 
 const LOG_TAG = '[build-dsh-runtime]';
+const BUILDER_VERSION = 4;
 
 function log(message) {
   console.log(`${LOG_TAG} ${message}`);
@@ -143,6 +144,9 @@ if (!dshMeta || !dshMeta.version || !dshMeta.npm) {
 }
 const dshVersion = dshMeta.version;
 const dshPackage = dshMeta.npm;
+// This release's Cordis plugins require the same exact Zod version. Pin it at
+// the runtime root so the plugins load a single copy during startup.
+const sharedZodVersion = dshVersion === '0.2.2-rc.5' ? '4.6.6' : null;
 // Exact pnpm release bundled for dsh's plugin manager. Keep it on the major the
 // upstream repo pins in its own packageManager field: the manager reads pnpm 11
 // settings (allowBuilds) and output formats.
@@ -205,6 +209,7 @@ function isRuntimeComplete() {
   return (
     fs.existsSync(path.join(outDir, 'lib', 'bin.js')) &&
     fs.existsSync(path.join(outDir, 'node_modules')) &&
+    (!sharedZodVersion || fs.existsSync(path.join(outDir, 'node_modules', 'zod', 'package.json'))) &&
     fs.existsSync(path.join(outDir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'index.html')) &&
     fs.existsSync(path.join(pnpmPackageDir, 'package.json'))
   );
@@ -222,7 +227,7 @@ if (process.env.DSH_FORCE_BUILD !== '1' && fs.existsSync(buildInfoPath)) {
       info.patchHash === patchHash &&
       info.target === targetId &&
       info.pnpmVersion === pnpmVersion &&
-      info.builderVersion === 3 &&
+      info.builderVersion === BUILDER_VERSION &&
       isRuntimeComplete()
     ) {
       log(`Runtime ${targetId} for dsh ${dshVersion} (pnpm ${pnpmVersion}) is up to date. Set DSH_FORCE_BUILD=1 to rebuild.`);
@@ -282,6 +287,7 @@ const runtimePkgPath = path.join(outDir, 'package.json');
 const runtimePkg = JSON.parse(fs.readFileSync(runtimePkgPath, 'utf8'));
 delete runtimePkg.devDependencies;
 delete runtimePkg.scripts;
+if (sharedZodVersion) runtimePkg.dependencies.zod = sharedZodVersion;
 fs.writeFileSync(runtimePkgPath, `${JSON.stringify(runtimePkg, null, 2)}\n`);
 
 // [4/7] Install production dependencies scoped to the target platform/arch so
@@ -358,7 +364,7 @@ fs.writeFileSync(
       pnpmVersion,
       patchHash,
       prunedHeavyPackages,
-      builderVersion: 3,
+      builderVersion: BUILDER_VERSION,
     },
     null,
     2
@@ -579,6 +585,25 @@ function verifyRuntimeLayout() {
     if (!fs.existsSync(path.join(outDir, relPath))) {
       fail(`Runtime layout check failed: missing ${label} (${relPath})`);
     }
+  }
+
+  if (sharedZodVersion) {
+    // npm ls checks dependency and peer ranges and prints each installed location once.
+    const result = spawnSync('npm', ['ls', 'zod', '--all', '--omit=dev', '--parseable'], {
+      cwd: outDir,
+      env: installEnv,
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    });
+    if (result.status !== 0) {
+      fail(`Could not validate zod@${sharedZodVersion}: ${result.error?.message || result.stderr || result.stdout}`);
+    }
+    const locations = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    const expectedDir = path.join(outDir, 'node_modules', 'zod');
+    if (locations.length !== 1 || path.relative(expectedDir, locations[0]) !== '') {
+      fail(`Expected one shared zod@${sharedZodVersion} at ${expectedDir}, found: ${locations.join(', ') || '(none)'}`);
+    }
+    log(`Verified a single shared zod@${sharedZodVersion} in the runtime`);
   }
 
   // Platform binaries selected by npm_config_platform/arch. Warn-only until a
