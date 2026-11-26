@@ -13,6 +13,8 @@ const READER_INTERRUPT_EVENTS = ['wheel', 'pointerdown', 'touchstart', 'keydown'
 interface ConversationEntrySettleOptions {
   sessionId: string | undefined;
   scrollContainerRef: RefObject<HTMLElement | null>;
+  /** Set to false when returning to a saved reading position or search hit. */
+  enabled?: boolean;
   /** Whether the conversation is still following its newest content (no navigation, search, or export owns it). */
   canHoldBottom: () => boolean;
 }
@@ -29,6 +31,7 @@ interface ConversationEntrySettleOptions {
 export function useConversationEntrySettle({
   sessionId,
   scrollContainerRef,
+  enabled = true,
   canHoldBottom,
 }: ConversationEntrySettleOptions): (element: HTMLElement | null) => void {
   const [contentElement, setContentElement] = useState<HTMLElement | null>(null);
@@ -38,7 +41,10 @@ export function useConversationEntrySettle({
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
-    if (!sessionId || !container) return;
+    if (!enabled || !sessionId || !container) {
+      settleUntilRef.current = 0;
+      return;
+    }
     settleUntilRef.current = performance.now() + CONVERSATION_ENTRY_SETTLE_MS;
     container.scrollTop = container.scrollHeight;
 
@@ -49,7 +55,7 @@ export function useConversationEntrySettle({
     return () => {
       READER_INTERRUPT_EVENTS.forEach(type => container.removeEventListener(type, endSettle));
     };
-  }, [scrollContainerRef, sessionId]);
+  }, [enabled, scrollContainerRef, sessionId]);
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;

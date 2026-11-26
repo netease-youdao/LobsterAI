@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { ConversationScrollAnchorAttribute } from '../components/cowork/conversationScrollAnchor';
+import {
+  SESSION_RESTORE_WINDOW_LEADING_CONTEXT,
+  SESSION_RESTORE_WINDOW_PAGE_SIZE,
+  SessionViewportMode,
+  sessionViewportStore,
+} from '../components/cowork/conversationSessionScrollState';
+import { setPendingConversationSearch } from '../components/cowork/pendingConversationSearch';
 import { store } from '../store';
 import { addMessage, setCurrentSession, setDraftPrompt, setMessageWindow } from '../store/slices/coworkSlice';
 import {
@@ -45,10 +53,14 @@ const makeSession = (
 });
 
 beforeEach(() => {
+  sessionViewportStore.clear();
+  setPendingConversationSearch('', '');
   coworkService.clearSession();
 });
 
 afterEach(() => {
+  sessionViewportStore.clear();
+  setPendingConversationSearch('', '');
   coworkService.clearSession();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -798,5 +810,170 @@ describe('coworkService rail navigation loading', () => {
     await expect(firstRailPromise).resolves.toEqual(railItems);
     await expect(secondRailPromise).resolves.toEqual(railItems);
     expect(store.getState().cowork.messageRailIndexBySessionId['session-1']).toEqual(railItems);
+  });
+
+  test('pre-fetches the saved reading window when switching back to a session outside the tail page', async () => {
+    const allMessages = makeMessages(120);
+    const tailPage = makeSession(allMessages.slice(90), 90, 120);
+    const otherSession: CoworkSession = { ...makeSession(makeMessages(6), 0, 6), id: 'session-2' };
+    store.dispatch(setCurrentSession(otherSession));
+
+    const captureOther = vi.fn(() => ({
+      sessionId: 'session-2',
+      mode: SessionViewportMode.Reading,
+      anchor: {
+        candidates: [{
+          attribute: ConversationScrollAnchorAttribute.Message,
+          messageId: 'message-2',
+          offset: 30,
+        }],
+      },
+      anchorAbsoluteIndex: 2,
+      messagesOffset: 0,
+      loadedMessageCount: 6,
+      totalMessagesAtSave: 6,
+      scrollTop: 180,
+      railIndex: 1,
+      savedAt: 500,
+    }));
+    const unregister = sessionViewportStore.registerActiveCapturer('session-2', captureOther);
+
+    sessionViewportStore.save({
+      sessionId: 'session-1',
+      mode: SessionViewportMode.Reading,
+      anchor: {
+        candidates: [{
+          attribute: ConversationScrollAnchorAttribute.Message,
+          messageId: 'message-35',
+          offset: 48,
+        }],
+      },
+      anchorAbsoluteIndex: 35,
+      messagesOffset: 20,
+      loadedMessageCount: 60,
+      totalMessagesAtSave: 115,
+      scrollTop: 920,
+      railIndex: 17,
+      savedAt: 1000,
+    });
+
+    const getSession = vi.fn(async () => ({ success: true, session: tailPage }));
+    const getSessionMessages = vi.fn(async (options: { offset: number; limit: number }) => ({
+      success: true,
+      messages: allMessages.slice(options.offset, options.offset + options.limit),
+      offset: options.offset,
+      total: 120,
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession,
+          getSessionMessages,
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+        },
+      },
+    });
+
+    try {
+      const loaded = await coworkService.loadSession('session-1');
+      const expectedOffset = 35 - SESSION_RESTORE_WINDOW_LEADING_CONTEXT;
+      expect(getSessionMessages).toHaveBeenCalledWith({
+        sessionId: 'session-1',
+        offset: expectedOffset,
+        limit: SESSION_RESTORE_WINDOW_PAGE_SIZE,
+      });
+      expect(loaded?.messagesOffset).toBe(expectedOffset);
+      expect(loaded?.messages.some(message => message.id === 'message-35')).toBe(true);
+      expect(store.getState().cowork.currentSession?.messagesOffset).toBe(expectedOffset);
+      // Leaving session-2 captured its viewport right before switching to session-1.
+      expect(captureOther).toHaveBeenCalledTimes(1);
+      expect(sessionViewportStore.get('session-2')?.scrollTop).toBe(180);
+    } finally {
+      unregister();
+    }
+  });
+
+  test('falls back to the default tail page and clears stale snapshot when saved anchor is missing', async () => {
+    const allMessages = makeMessages(120);
+    const tailPage = makeSession(allMessages.slice(90), 90, 120);
+    sessionViewportStore.save({
+      sessionId: 'session-1',
+      mode: SessionViewportMode.Reading,
+      anchor: {
+        candidates: [{
+          attribute: ConversationScrollAnchorAttribute.Message,
+          messageId: 'deleted-message-id',
+          offset: 20,
+        }],
+      },
+      anchorAbsoluteIndex: 30,
+      messagesOffset: 10,
+      loadedMessageCount: 50,
+      totalMessagesAtSave: 120,
+      scrollTop: 400,
+      railIndex: 10,
+      savedAt: 1000,
+    });
+
+    const getSession = vi.fn(async () => ({ success: true, session: tailPage }));
+    const getSessionMessages = vi.fn(async (options: { offset: number; limit: number }) => ({
+      success: true,
+      messages: allMessages.slice(options.offset, options.offset + options.limit),
+      offset: options.offset,
+      total: 120,
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession,
+          getSessionMessages,
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+        },
+      },
+    });
+
+    const loaded = await coworkService.loadSession('session-1');
+    expect(loaded?.messagesOffset).toBe(90);
+    expect(sessionViewportStore.get('session-1')).toBeNull();
+  });
+
+  test('skips saved reading window pre-fetch when a pending conversation search targets the session', async () => {
+    const allMessages = makeMessages(120);
+    const tailPage = makeSession(allMessages.slice(90), 90, 120);
+    sessionViewportStore.save({
+      sessionId: 'session-1',
+      mode: SessionViewportMode.Reading,
+      anchor: {
+        candidates: [{
+          attribute: ConversationScrollAnchorAttribute.Message,
+          messageId: 'message-20',
+          offset: 20,
+        }],
+      },
+      anchorAbsoluteIndex: 20,
+      messagesOffset: 0,
+      loadedMessageCount: 60,
+      totalMessagesAtSave: 120,
+      scrollTop: 500,
+      railIndex: 10,
+      savedAt: 1000,
+    });
+    setPendingConversationSearch('session-1', 'needle');
+
+    const getSession = vi.fn(async () => ({ success: true, session: tailPage }));
+    const getSessionMessages = vi.fn();
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: {
+          getSession,
+          getSessionMessages,
+          remoteManaged: vi.fn(async () => ({ remoteManaged: false })),
+        },
+      },
+    });
+
+    const loaded = await coworkService.loadSession('session-1');
+    expect(getSessionMessages).not.toHaveBeenCalled();
+    expect(loaded?.messagesOffset).toBe(90);
   });
 });
