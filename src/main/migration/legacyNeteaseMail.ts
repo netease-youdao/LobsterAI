@@ -18,8 +18,8 @@ function jsonCell(db: Database.Database, sql: string, key: string) {
 }
 
 /** Follow the old SDK's selected shared owner. A stale agent copy must never revive a removed grant. */
-export function readLegacyNeteaseMailToken(dir: string, server: { id: string; url?: string }, openDb: OpenDb) {
-  const config = getNeteaseMailOAuthConfig(false);
+export function readLegacyNeteaseMailToken(dir: string, server: { id: string; url?: string }, openDb: OpenDb, isPackaged = true) {
+  const config = getNeteaseMailOAuthConfig(isPackaged);
   if (!config || server.url !== config.mcpUrl) return null;
   const shared = openDb(path.join(dir, 'state', 'openclaw.sqlite'));
   try {
@@ -52,6 +52,6 @@ export function readLegacyNeteaseMailToken(dir: string, server: { id: string; ur
     const scopes = (sidecar?.scopes ?? [NeteaseMailScope.Read])
       .filter(scope => credential.scope === undefined || getNeteaseMailScopes(credential.scope).includes(scope));
     if (!scopes.includes(NeteaseMailScope.Read)) return null;
-    return mailTokenRecord(server.id, { ...credential, scope: scopes.join(' '), authorizationId: sidecar?.id });
+    return mailTokenRecord(server.id, { ...credential, scope: scopes.join(' '), authorizationId: sidecar?.id }, config.mcpUrl);
   } catch { return null; } finally { shared?.close(); }
 }

@@ -5,7 +5,7 @@ import type { NeteaseMailConfirmationReference, NeteaseMailConfirmationRequest }
 import type { HostToolProvider } from '../../libs/dsh/dshHostBridgeWiring';
 import type { McpOAuthManager } from '../mcpOAuthManager';
 import type { McpServerRecord } from '../mcpStore';
-import type { NeteaseMailOAuthConfig } from '../neteaseMailConfig';
+import { matchesNeteaseMailRegistration, type NeteaseMailOAuthConfig } from '../neteaseMailConfig';
 import { connectMailClient } from './client';
 import { MailConfirmations } from './confirmation';
 import { failureCode, MAIL_CONFIRMATION_MS, MAIL_FAILURE_CODES, MailCode, MailForwardMode, type MailResult, mailResult, MailScope, MailStatus, MailTool, payload, record, responseCode, responseData } from './protocol';
@@ -54,7 +54,7 @@ export class NeteaseMailHost implements HostToolProvider {
     const server = this.deps.getServer();
     const manager = this.deps.getManager();
     const token = server?.enabled && manager ? manager.getToken(server.id) : null;
-    if (!server || !manager || !this.deps.config || !token?.mailAuthorizationId || token.clientId !== this.deps.config.clientId) return undefined;
+    if (!server || !manager || !this.deps.config || !matchesNeteaseMailRegistration(token, this.deps.config)) return undefined;
     return { id: token.mailAuthorizationId, scopes: token.scope?.split(/\s+/) ?? [],
       serverId: server.id, manager, endpoint: this.deps.config.mcpUrl };
   }

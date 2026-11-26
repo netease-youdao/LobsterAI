@@ -6,8 +6,8 @@ import type { McpServerRecord } from '../mcpStore';
 import { getNeteaseMailOAuthConfig } from '../neteaseMailConfig';
 import { NeteaseMailHost } from './host';
 
-function fixture() {
-  const token = { clientId: NeteaseMail.ClientId, mailAuthorizationId: 'grant', scope: Object.values(NeteaseMailScope).join(' ') };
+function fixture(resource: string = NeteaseMail.Endpoint) {
+  const token = { clientId: NeteaseMail.ClientId, resource, mailAuthorizationId: 'grant', scope: Object.values(NeteaseMailScope).join(' ') };
   const server = { enabled: true, id: 'managed' } as McpServerRecord;
   const session = { claudeSessionId: 'dsh:session-root', imPlatform: null as string | null, scheduledTaskId: null as string | null };
   const fetch = vi.fn();
@@ -41,6 +41,17 @@ test.each(['im', 'scheduled', 'subagent', 'unbound'])('%s cannot start a protect
     sessionId: origin === 'subagent' ? 'child' : 'session-root',
   });
   expect(result.details.code).toBe(NeteaseMailError.InsufficientScope);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test('a grant from another endpoint cannot offer or execute protected operations', async () => {
+  const { host, resolveAuthorizationHeaders, fetch } = fixture('https://staging.example.com/mail/mcp');
+  expect(host.listDescriptors()).toEqual([]);
+  const result = await host.execute(NeteaseMailTool.SendMessage, {}, {
+    coworkSessionId: 'desktop', callId: 'call', agentId: 'main', sessionId: 'session-root',
+  });
+  expect(result.details.code).toBe(NeteaseMailError.InsufficientScope);
+  expect(resolveAuthorizationHeaders).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
 });
 

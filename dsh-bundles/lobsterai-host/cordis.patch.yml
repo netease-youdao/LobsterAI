@@ -223,5 +223,8 @@
     - id: lobster-approval-guard
       name: './plugins/approval-guard.mjs'
 
+    - id: lobster-netease-mail-quota
+      name: './plugins/netease-mail-quota.mjs'
+
     - id: lobster-ops-rpc
       name: './plugins/ops-rpc.mjs'

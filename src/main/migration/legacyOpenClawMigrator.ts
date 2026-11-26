@@ -124,6 +124,7 @@ export interface RunLegacyOpenClawMigrationOptions {
   userDataDir: string;
   /** Absolute path to `lobsterai.sqlite`. */
   sqlitePath: string;
+  isPackaged?: boolean;
   /** Optional clock override for deterministic backup folder timestamps. */
   now?: () => Date;
   /**
@@ -1641,6 +1642,7 @@ export function migrateLegacyMcpOAuthTokens(params: {
   openclawStateDir: string;
   db: Database.Database;
   nowMs?: number;
+  isPackaged?: boolean;
 }): MigrateLegacyMcpOAuthTokensResult {
   const { openclawStateDir, db } = params;
   const nowMs = params.nowMs ?? Date.now();
@@ -1700,7 +1702,7 @@ export function migrateLegacyMcpOAuthTokens(params: {
       serverName: server.name, serverUrl: server.url, entries: legacyEntries, usedStoreKeys,
     });
     if (matched) usedStoreKeys.add(matched.storeKey);
-    const tokenRecord = server.managedMail ? readLegacyNeteaseMailToken(openclawStateDir, server, openLegacyOpenClawDbReadOnly)
+    const tokenRecord = server.managedMail ? readLegacyNeteaseMailToken(openclawStateDir, server, openLegacyOpenClawDbReadOnly, params.isPackaged)
       : matched ? extractUsableTokenRecordFromLegacyStore({
         serverId: server.id, serverUrl: server.url, entry: matched, nowMs,
       }) : null;
@@ -1755,6 +1757,7 @@ export async function backfillLegacyMcpOAuthTokensFromBackup(options: {
   userDataDir: string;
   db: Database.Database;
   now?: () => Date;
+  isPackaged?: boolean;
 }): Promise<LegacyMcpOAuthBackfillResult> {
   const { userDataDir, db } = options;
   const now = options.now ?? (() => new Date());
@@ -1800,6 +1803,7 @@ export async function backfillLegacyMcpOAuthTokensFromBackup(options: {
       openclawStateDir: extractedStateDir,
       db,
       nowMs: now().getTime(),
+      isPackaged: options.isPackaged,
     });
 
     const rawReport = getKv(db, MIGRATION_V2_REPORT_KV_KEY);
@@ -3146,6 +3150,7 @@ export function runLegacyOpenClawMigration(
         openclawStateDir,
         db,
         nowMs: now().getTime(),
+        isPackaged: options.isPackaged,
       });
       reauthRequired.push(...mcpOAuthReauthRequired);
 

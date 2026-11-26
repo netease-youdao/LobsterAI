@@ -3,13 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import { NeteaseMail, NeteaseMailAuth, NeteaseMailScope } from '../../shared/neteaseMail/constants';
 import { readLegacyNeteaseMailToken } from './legacyNeteaseMail';
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -28,23 +29,32 @@ function fixture() {
   insert.run('auth.sharedStore', JSON.stringify({ location: 'state-db' }));
   insert.run('authProfiles.store', JSON.stringify({ profiles }));
   db.close();
-  const read = (url: string = NeteaseMail.Endpoint) => readLegacyNeteaseMailToken(dir, { id: 'mail', url }, file => {
+  const read = (url: string = NeteaseMail.Endpoint, isPackaged = true) => readLegacyNeteaseMailToken(dir, { id: 'mail', url }, file => {
     if (!fs.existsSync(file)) return null;
     const opened = new Database(file, { readonly: true });
     return { db: opened, close: () => opened.close() };
-  });
+  }, isPackaged);
   return { dir, read, pathToDb, agentDir, profiles };
 }
 
 test('imports only the matching client and restores the granted scopes from the legacy profile', () => {
   const f = fixture();
-  expect(f.read()?.scope).toBe(NeteaseMailScope.Read);
+  expect(f.read()).toMatchObject({ scope: NeteaseMailScope.Read, resource: NeteaseMail.Endpoint });
   expect(f.read('https://unrelated.example/mcp')).toBeNull();
   fs.writeFileSync(path.join(f.dir, 'netease-mail-authorization.json'), JSON.stringify({
     version: 1, clientId: NeteaseMail.ClientId, id: 'original-grant', scopes: Object.values(NeteaseMailScope),
   }));
   expect(f.read()).toMatchObject({ serverId: 'mail', mailAuthorizationId: 'original-grant', refreshToken: 'sample-refresh',
     scope: Object.values(NeteaseMailScope).join(' ') });
+});
+
+test('packaged migration ignores development overrides when restoring a mail grant', () => {
+  const f = fixture();
+  const localEndpoint = 'https://development.example/mcp';
+  vi.stubEnv('LOBSTER_NETEASE_MAIL_MCP_URL', localEndpoint);
+  expect(f.read()).toMatchObject({ resource: NeteaseMail.Endpoint });
+  expect(f.read(localEndpoint)).toBeNull();
+  expect(f.read(localEndpoint, false)).toMatchObject({ resource: localEndpoint });
 });
 
 test('the selected shared store cannot resurrect a removed account from a legacy agent file', () => {

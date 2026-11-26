@@ -41,7 +41,7 @@ import { McpLaunchResolverManager } from './mcpLaunchResolverManager';
 import type { McpOAuthTokenRecord } from './mcpOAuthManager';
 import { type McpServerRecord, McpStore } from './mcpStore';
 import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
-import { getNeteaseMailOAuthConfig } from './neteaseMailConfig';
+import { getNeteaseMailOAuthConfig, matchesNeteaseMailRegistration } from './neteaseMailConfig';
 import type { ResolvedMcpServer } from './types';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
@@ -584,7 +584,7 @@ export class McpRuntime {
         if (server.registryId === NeteaseMail.RegistryId) {
           const config = getNeteaseMailOAuthConfig(app.isPackaged);
           const token = this.deps.getMailToken?.(server.id);
-          if (!config || !token?.mailAuthorizationId || token.clientId !== config.clientId) continue;
+          if (!config || !matchesNeteaseMailRegistration(token, config)) continue;
           const include = getNeteaseMailNativeTools(getNeteaseMailScopes(token.scope));
           if (include.length) resolved.push({ id: server.id, name: NeteaseMail.RegistryId, transportType: 'http',
             url: config.mcpUrl, auth: McpAuthMode.OAuth, toolFilter: { include } });

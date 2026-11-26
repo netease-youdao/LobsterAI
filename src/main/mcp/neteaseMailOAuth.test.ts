@@ -92,10 +92,10 @@ test('uses the registered defaults without environment setup on all desktop buil
   }
 });
 
-test('ignores local endpoint overrides in packaged apps and rejects invalid development endpoints', () => {
+test('uses the registered client and endpoint in packaged apps and validates development overrides', () => {
   const env = { LOBSTER_NETEASE_MAIL_CLIENT_ID: 'client-test', LOBSTER_NETEASE_MAIL_MCP_URL: 'https://mail.example.com/mcp' };
   expect(getNeteaseMailOAuthConfig(false, env)).toMatchObject({ clientId: env.LOBSTER_NETEASE_MAIL_CLIENT_ID, mcpUrl: env.LOBSTER_NETEASE_MAIL_MCP_URL });
-  expect(getNeteaseMailOAuthConfig(true, env)).toMatchObject({ mcpUrl: NeteaseMail.Endpoint });
+  expect(getNeteaseMailOAuthConfig(true, env)).toMatchObject({ clientId: NeteaseMail.ClientId, mcpUrl: NeteaseMail.Endpoint });
   for (const mcpUrl of ['not-a-url', 'http://mail.example.com/mcp', 'https://user:password@mail.example.com/mcp']) {
     expect(getNeteaseMailOAuthConfig(false, { ...env, LOBSTER_NETEASE_MAIL_MCP_URL: mcpUrl })).toBeUndefined();
   }

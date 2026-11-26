@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { MailConfirmations, type MailOperation } from '../src/main/mcp/neteaseMail/confirmation';
-import { MailAction, MailCode, MailForwardMode, MailScope, MailStatus, MailTool } from '../src/main/mcp/neteaseMail/protocol';
+import { MailAction, MailCode, mailConfirmationDetailsForIpc, MailForwardMode, MailScope, MailStatus, MailTool } from '../src/main/mcp/neteaseMail/protocol';
 import { NeteaseMailError, NeteaseMailForwardMode, NeteaseMailScope, NeteaseMailTool } from '../src/shared/neteaseMail/constants';
 
 function fixture() {
@@ -22,6 +22,22 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 
+test('the live IPC preview exposes attachment descriptors one level above the depth cutoff', async () => {
+  const f = fixture();
+  const attachment = { filename: 'review.txt', size: 26, mime_type: 'text/plain' };
+  f.operation.summary.attachments = [attachment];
+  const result = f.pending.execute(f.operation);
+  await vi.waitFor(() => expect(f.onUpdate).toHaveBeenCalledOnce());
+  const update = f.onUpdate.mock.calls[0][0];
+  const stored = update.details.data;
+  expect(mailConfirmationDetailsForIpc(update.details)).toEqual({
+    code: MailCode.Confirmation, confirmation_id: stored.confirmation_id, expires_at: stored.expires_at,
+    operation_summary: { ...f.operation.summary, attachments: [attachment] },
+  });
+  expect(JSON.parse(update.content[0].text).data).toEqual(stored);
+  f.pending.resolve(stored.confirmation_id, 'call', MailAction.Cancel, 'grant');
+  await result;
+});
 
 test('only the matching trusted click consumes a pending operation once with frozen arguments', async () => {
   const f = fixture();

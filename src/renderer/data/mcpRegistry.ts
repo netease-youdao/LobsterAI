@@ -15,6 +15,24 @@ import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
  */
 export const mcpRegistry: McpRegistryEntry[] = [
   {
+    id: NeteaseMail.RegistryId,
+    name: 'NetEase Mail',
+    name_zh: '网易邮箱',
+    descriptionKey: 'neteaseMailDescription',
+    category: 'productivity',
+    categoryKey: 'mcpCategoryProductivity',
+    transportType: 'http',
+    command: '',
+    defaultArgs: [],
+    oauthProvider: McpManagedProvider.NeteaseMail,
+    marketplacePosition: 1,
+    connector: {
+      url: NeteaseMail.Endpoint,
+      auth: McpAuthMode.OAuth,
+      allowedTools: [...NeteaseMailReadTools],
+    },
+  },
+  {
     id: 'qichacha',
     name: '企查查',
     descriptionKey: 'mcpDesc_qichacha',
@@ -26,23 +44,6 @@ export const mcpRegistry: McpRegistryEntry[] = [
     oauthProvider: McpManagedProvider.Qichacha,
     kind: McpRegistryEntryKind.Bundle,
     marketplacePosition: 4,
-  },
-  {
-    id: NeteaseMail.RegistryId,
-    name: 'NetEase Mail',
-    name_zh: '网易邮箱',
-    descriptionKey: 'neteaseMailDescription',
-    category: 'productivity',
-    categoryKey: 'mcpCategoryProductivity',
-    transportType: 'http',
-    command: '',
-    defaultArgs: [],
-    oauthProvider: McpManagedProvider.NeteaseMail,
-    connector: {
-      url: NeteaseMail.Endpoint,
-      auth: McpAuthMode.OAuth,
-      allowedTools: [...NeteaseMailReadTools],
-    },
   },
 ];
 

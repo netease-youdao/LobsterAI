@@ -10,6 +10,7 @@ import { createNeteaseMailAuthStore } from '../neteaseMailAuthStore';
 import { getNeteaseMailOAuthConfig } from '../neteaseMailConfig';
 import { NeteaseMailConnection } from '../neteaseMailConnection';
 import { NeteaseMailHost } from './host';
+import { mailConfirmationDetailsForIpc } from './protocol';
 
 interface DesktopDeps {
   getRuntime: () => McpRuntime;
@@ -30,14 +31,15 @@ export function createNeteaseMailDesktop(deps: DesktopDeps) {
     publish: (id, callId, result) => {
       const message = deps.getStore().addMessage(id, { type: 'tool_result', content: result.content[0].text,
         metadata: { toolUseId: callId, toolResultDetails: result.details, isFinal: false, isStreaming: true } });
-      deps.getAdapter()?.emit('message', id, message);
+      deps.getAdapter()?.emit('message', id, { ...message,
+        metadata: { ...message.metadata, toolResultDetails: mailConfirmationDetailsForIpc(result.details) } });
     },
   });
   const connection = new NeteaseMailConnection({
     config, confirmations: host, getMcpStore: () => deps.getRuntime().getStore(),
     getAuthStore: () => {
       const manager = deps.getManager();
-      return config && manager ? createNeteaseMailAuthStore(manager, config.clientId, getServer, () => host.invalidate()) : undefined;
+      return config && manager ? createNeteaseMailAuthStore(manager, config, getServer, () => host.invalidate()) : undefined;
     },
     openExternal: url => shell.openExternal(url), fetch: fetchMail, callbackText: () => t('neteaseMailAuthorizationReturned'),
     sync: async serverId => {

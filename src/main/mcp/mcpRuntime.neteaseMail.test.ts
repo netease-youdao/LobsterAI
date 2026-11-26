@@ -32,10 +32,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function resolveMail(scope?: string) {
+async function resolveMail(scope?: string, resource: string = NeteaseMail.Endpoint) {
   vi.stubEnv('LOBSTER_NETEASE_MAIL_CLIENT_ID', clientId);
   const runtime = new McpRuntime({
-    getMailToken: () => ({ serverId: 'mail', clientId, mailAuthorizationId: 'grant',
+    getMailToken: () => ({ serverId: 'mail', clientId, resource, mailAuthorizationId: 'grant',
       accessToken: 'test', tokenType: 'Bearer', updatedAt: 1, scope }),
     getStore: () => ({ get: () => undefined, getDatabase: () => ({}) }) as never,
     syncOpenClawConfig: async () => ({ success: true, changed: false }),
@@ -61,4 +61,8 @@ test.each([undefined, NeteaseMailScope.Read])('legacy or narrowed scope %s never
 
 test('an empty grant cannot produce an unrestricted remote tool list', async () => {
   expect(await resolveMail('')).toBeUndefined();
+});
+
+test('a grant from another endpoint cannot register native tools with DSH', async () => {
+  expect(await resolveMail(NeteaseMailScope.Read, 'https://staging.example.com/mail/mcp')).toBeUndefined();
 });

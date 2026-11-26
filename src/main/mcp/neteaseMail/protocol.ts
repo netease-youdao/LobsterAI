@@ -67,3 +67,9 @@ export function responseCode(result: Record<string, unknown>): number {
 export function mailResult(details: Record<string, unknown>, isError = false): MailResult {
   return { content: [{ type: 'text', text: JSON.stringify(details) }], details, ...(isError ? { isError: true } : {}) };
 }
+
+/** Keep the attachment descriptors in a live confirmation within Electron's IPC depth limit. */
+export function mailConfirmationDetailsForIpc(details: Record<string, unknown>): Record<string, unknown> {
+  const data = record(details.data);
+  return details.code === MailCode.Confirmation && data ? { ...data, code: MailCode.Confirmation } : details;
+}
