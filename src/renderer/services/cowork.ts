@@ -40,6 +40,12 @@ import { MediaProtocol } from '../../shared/media/constants';
 import type { ModelPresetId } from '../../shared/modelPresets/constants';
 import { OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
+import {
+  getSessionRestoreWindow,
+  sessionViewportStore,
+} from '../components/cowork/conversationSessionScrollState';
+import { clearHeightCache } from '../components/cowork/LazyRenderTurn';
+import { hasPendingConversationSearch } from '../components/cowork/pendingConversationSearch';
 import { store } from '../store';
 import { clearSessionArtifacts } from '../store/slices/artifactSlice';
 import {
@@ -1231,6 +1237,7 @@ class CoworkService {
       return false;
     }
 
+    sessionViewportStore.delete(options.sessionId);
     this.setCurrentSessionStreaming(options.sessionId, true, 'continue_session_requested');
     store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
 
@@ -1717,6 +1724,8 @@ class CoworkService {
     const result = await cowork.deleteSession(sessionId);
     if (result.success) {
       this.queuedFollowUpCoordinator.clearSession(sessionId);
+      sessionViewportStore.delete(sessionId);
+      clearHeightCache(sessionId);
       store.dispatch(deleteSessionAction(sessionId));
       return true;
     }
@@ -1731,7 +1740,11 @@ class CoworkService {
 
     const result = await cowork.deleteSessions(sessionIds);
     if (result.success) {
-      sessionIds.forEach(sessionId => this.queuedFollowUpCoordinator.clearSession(sessionId));
+      sessionIds.forEach(sessionId => {
+        this.queuedFollowUpCoordinator.clearSession(sessionId);
+        clearHeightCache(sessionId);
+      });
+      sessionViewportStore.deleteMany(sessionIds);
       store.dispatch(deleteSessionsAction(sessionIds));
       return true;
     }
@@ -1808,6 +1821,10 @@ class CoworkService {
           invalidated = true;
           store.dispatch(invalidateEditedHistory(sessionId));
           store.dispatch(clearSessionArtifacts(sessionId));
+          clearHeightCache(sessionId);
+          if (!options.keepLoadedRange) {
+            sessionViewportStore.delete(sessionId);
+          }
           if (railIndex) store.dispatch(setMessageRailIndex({ sessionId, items: railIndex }));
         };
         const isCurrent = store.getState().cowork.currentSessionId === sessionId;
@@ -2068,6 +2085,66 @@ class CoworkService {
               return previouslyLoadedSession;
             }
           }
+        } else if (
+          !options.historyReplaced
+          && previouslyLoadedSession?.id !== sessionId
+          && cowork.getSessionMessages
+          && !hasPendingConversationSearch(sessionId)
+        ) {
+          const savedViewport = sessionViewportStore.get(sessionId);
+          const defaultMessageIds = new Set(session.messages.map(message => message.id));
+          const restoreWindow = getSessionRestoreWindow(
+            savedViewport,
+            session.messagesOffset,
+            session.messages.length,
+            session.totalMessages,
+            defaultMessageIds,
+          );
+          if (restoreWindow) {
+            try {
+              const pageResult = await cowork.getSessionMessages({
+                sessionId,
+                offset: restoreWindow.offset,
+                limit: restoreWindow.limit,
+              });
+              if (requestId !== this.latestLoadSessionRequestId) {
+                this.logDiagnostic('debug', `ignored stale restored window load result for session ${sessionId}.`);
+                return session;
+              }
+              const containsExpected = !restoreWindow.expectedMessageId
+                || Boolean(pageResult?.messages?.some(message => message.id === restoreWindow.expectedMessageId));
+              if (pageResult?.success && pageResult.messages && pageResult.messages.length > 0 && containsExpected) {
+                session = {
+                  ...session,
+                  messages: pageResult.messages,
+                  messagesOffset: pageResult.offset ?? restoreWindow.offset,
+                  totalMessages: pageResult.total ?? session.totalMessages,
+                  leadingTurnStartTimestamp: pageResult.leadingTurnStartTimestamp ?? null,
+                  leadingTurnUsage: pageResult.leadingTurnUsage ?? null,
+                };
+                this.logDiagnostic(
+                  'debug',
+                  `restored saved history window for session ${sessionId}; returned ${session.messages.length} of ${session.totalMessages} messages from offset ${session.messagesOffset}.`,
+                );
+              } else if (pageResult?.success && restoreWindow.expectedMessageId && !containsExpected) {
+                this.logDiagnostic(
+                  'debug',
+                  `saved reading anchor for session ${sessionId} was no longer present in the restored window; falling back to latest page.`,
+                );
+                sessionViewportStore.delete(sessionId);
+              }
+            } catch (error) {
+              this.logDiagnostic(
+                'warn',
+                `failed to pre-fetch saved reading window for session ${sessionId}; falling back to latest page.`,
+                error,
+              );
+            }
+          }
+        }
+        const currentSessionBeforeApply = store.getState().cowork.currentSession;
+        if (currentSessionBeforeApply?.id && currentSessionBeforeApply.id !== sessionId) {
+          sessionViewportStore.captureActiveViewport(currentSessionBeforeApply.id);
         }
         options.beforeApply?.();
         store.dispatch(setCurrentSession(session));
@@ -2785,6 +2862,10 @@ class CoworkService {
   }
 
   clearSession(options: { restoreAgentSkills?: boolean } = {}): void {
+    const activeSessionId = store.getState().cowork.currentSession?.id;
+    if (activeSessionId) {
+      sessionViewportStore.captureActiveViewport(activeSessionId);
+    }
     resetDraftAnalytics();
     // Invalidate an in-flight load so an old history/IM session cannot replace
     // the new-task view after the user has explicitly left that session.

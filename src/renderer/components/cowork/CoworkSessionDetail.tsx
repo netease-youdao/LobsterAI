@@ -223,6 +223,10 @@ import {
   reportConversationNavigationAction,
 } from './conversationAnalytics';
 import {
+  computeCappedPlaceholderRailCount,
+  type ConversationRailItem,
+} from './conversationRailDisplay';
+import {
   alignRailTargetInContainer,
   RAIL_NAVIGATION_WINDOW_LEADING_CONTEXT,
   RAIL_NAVIGATION_WINDOW_PAGE_SIZE,
@@ -230,10 +234,8 @@ import {
   resolveRailNavigationMode,
   scheduleRailNavigationSettle,
 } from './conversationRailNavigation';
-import {
-  buildRailTooltipContent,
-  resolveRailTurnTimestamp,
-} from './conversationRailTooltip';
+import { resolveRailTurnTimestamp } from './conversationRailTooltip';
+import { captureConversationScrollAnchor } from './conversationScrollAnchor';
 import {
   canScrollElementInWheelDirection,
   isAtConversationSessionBottom,
@@ -255,6 +257,13 @@ import {
   isUsableConversationSearchRect,
   scheduleConversationSearchSettle,
 } from './conversationSearchNavigation';
+import {
+  hasUnreadProgressSinceSnapshot,
+  SessionViewportMode,
+  type SessionViewportSnapshot,
+  sessionViewportStore,
+} from './conversationSessionScrollState';
+import ConversationTurnRail from './ConversationTurnRail';
 import CoworkBtwFloatingPanel from './CoworkBtwFloatingPanel';
 import CoworkConversationSearch from './CoworkConversationSearch';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
@@ -267,7 +276,7 @@ import {
 } from './imSessionDisplay';
 import QuestionDock from './interactions/QuestionDock';
 import { isQuestionDockRequest } from './interactions/questionDockModel';
-import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
+import LazyRenderTurn from './LazyRenderTurn';
 import { buildMediaTaskPresentations } from './mediaTaskPresentation';
 import {
   buildConversationTurns,
@@ -282,7 +291,10 @@ import {
 } from './messageDisplayUtils';
 import { getLastMessageSpeechTurnIndex, isMessageSpeechTurnCompleted } from './messageSpeech/eligibility';
 import MessageSpeechSession from './messageSpeech/MessageSpeechSession';
-import { takePendingConversationSearch } from './pendingConversationSearch';
+import {
+  hasPendingConversationSearch,
+  takePendingConversationSearch,
+} from './pendingConversationSearch';
 import { parseProposedPlanBlock } from './proposedPlanParser';
 import { buildSelectedKitContextPrompt } from './selectedKitContextPrompt';
 import { buildSelectedSkillRoutingPrompt } from './selectedSkillRoutingPrompt';
@@ -298,6 +310,7 @@ import SubagentSpawnCard from './SubagentSpawnCard';
 import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useConversationEntrySettle } from './useConversationEntrySettle';
 import { useConversationScrollAnchor } from './useConversationScrollAnchor';
+import { useConversationSessionRestore } from './useConversationSessionRestore';
 import { useCoworkConversationSearch } from './useCoworkConversationSearch';
 import { useCoworkMarkdownLinkOpener } from './useCoworkMarkdownLinkOpener';
 import { expandCollapsedUserMessage } from './userMessageCollapse';
@@ -410,12 +423,9 @@ const EXPANDED_CONVERSATION_PREVIEW_COLLAPSED_MAX_LENGTH = 140;
 const EXPANDED_CONVERSATION_PREVIEW_ITEM_MAX_LENGTH = 520;
 const EXPANDED_CONVERSATION_PREVIEW_ITEM_LIMIT = 8;
 const RAIL_LONG_JUMP_VIEWPORT_MULTIPLIER = 2.5;
-const RAIL_LINE_DEFAULT_WIDTH = 8;
-const RAIL_LINE_ACTIVE_WIDTH = 28;
-const RAIL_LINE_HOVER_STEPS = [28, 18, 13, 10] as const;
-const RAIL_LINE_HEIGHT = 3;
 const RAIL_TARGET_RENDER_RELEASE_DELAY = 2400;
 const RAIL_TARGET_SCROLL_RETRY_LIMIT = 10;
+const VIEWPORT_SNAPSHOT_SAVE_DEBOUNCE_MS = 150;
 
 const getPermissionPreviewText = (permission: CoworkPermissionRequest): string => {
   const toolInput = permission.toolInput ?? {};
@@ -441,22 +451,6 @@ const getPermissionPreviewText = (permission: CoworkPermissionRequest): string =
   } catch {
     return permission.toolName;
   }
-};
-
-const getRailLineWidth = (
-  index: number,
-  activeIndex: number,
-  hoveredIndex: number | null,
-): number => {
-  if (hoveredIndex !== null) {
-    const hoverDistance = Math.abs(index - hoveredIndex);
-    if (hoverDistance < RAIL_LINE_HOVER_STEPS.length) {
-      return RAIL_LINE_HOVER_STEPS[hoverDistance];
-    }
-    return RAIL_LINE_DEFAULT_WIDTH;
-  }
-
-  return index === activeIndex ? RAIL_LINE_ACTIVE_WIDTH : RAIL_LINE_DEFAULT_WIDTH;
 };
 
 interface LatestProposedPlan {
@@ -486,19 +480,7 @@ const findLatestProposedPlan = (messages: CoworkMessage[]): LatestProposedPlan |
   return null;
 };
 
-type RailItem = {
-  key: string;
-  messageId: string | null;
-  turnIndex: number;
-  absoluteIndex: number;
-  label: string;
-  summary: string;
-  timestamp: number | null;
-  contentLen: number;
-  isUser: boolean;
-  isLoaded: boolean;
-  isPlaceholder?: boolean;
-};
+type RailItem = ConversationRailItem;
 
 type RailNavigationDecision = {
   behavior: ScrollBehavior;
@@ -692,33 +674,22 @@ const buildPlaceholderRailItems = (
 ): RailItem[] => {
   const count = Math.max(0, Math.floor(totalMessages));
   if (count <= localItems.length) return localItems;
-  const estimatedTurnCount = Math.max(localItems.length, Math.ceil(count / 2));
-
-  const localByRailIndex = new Map<number, RailItem>();
-  localItems.forEach((item) => {
-    localByRailIndex.set(Math.floor(item.absoluteIndex / 2), item);
-  });
-
-  return Array.from({ length: estimatedTurnCount }, (_, index) => {
-    const localItem = localByRailIndex.get(index);
-    if (localItem) {
-      return localItem;
-    }
-
-    return {
-      key: `placeholder-${index}`,
-      messageId: null,
-      turnIndex: -1,
-      absoluteIndex: Math.min(Math.max(0, count - 1), index * 2),
-      label: `Turn ${index + 1}`,
-      summary: '',
-      timestamp: null,
-      contentLen: 1,
-      isUser: false,
-      isLoaded: false,
-      isPlaceholder: true,
-    };
-  });
+  const estimatedTurnCount = computeCappedPlaceholderRailCount(count, localItems.length);
+  const leadingPlaceholderCount = Math.max(0, estimatedTurnCount - localItems.length);
+  const placeholders: RailItem[] = Array.from({ length: leadingPlaceholderCount }, (_, index) => ({
+    key: `placeholder-${index}`,
+    messageId: null,
+    turnIndex: -1,
+    absoluteIndex: Math.min(Math.max(0, count - 1), index * 2),
+    label: `Turn ${index + 1}`,
+    summary: '',
+    timestamp: null,
+    contentLen: 1,
+    isUser: false,
+    isLoaded: false,
+    isPlaceholder: true,
+  }));
+  return [...placeholders, ...localItems];
 };
 
 const buildTurnToRailRange = (railItems: RailItem[]): { first: number; last: number }[] => {
@@ -1469,6 +1440,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const shouldAutoScrollRef = useRef(true);
   const userDetachedFromBottomRef = useRef(false);
   const [isViewportAtSessionBottom, setIsViewportAtSessionBottom] = useState(true);
+  const [hasNewProgressBelow, setHasNewProgressBelow] = useState(false);
+  const unreadProgressBaselineRef = useRef<{
+    totalMessages: number;
+    lastMessageId: string | null;
+    lastMessageLength: number;
+  }>({ totalMessages: 0, lastMessageId: null, lastMessageLength: 0 });
+  const currentSessionRef = useRef(currentSession);
+  currentSessionRef.current = currentSession;
+  const messageOffsetByIdRef = useRef<Map<string, number>>(new Map());
+  const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCompactConfirm, setShowCompactConfirm] = useState(false);
   const [selectedTextAction, setSelectedTextAction] = useState<{
     text: string;
@@ -1558,8 +1539,24 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     });
   }, [closeSelectedTextAction]);
 
-  // Clear lazy-render height cache when session changes
   const sessionId = currentSession?.id;
+  const sessionEntryRestoreState = useMemo(() => {
+    const pendingSearch = Boolean(sessionId && hasPendingConversationSearch(sessionId));
+    if (!sessionId || pendingSearch) {
+      return { pendingSearch, snapshot: null as SessionViewportSnapshot | null };
+    }
+    const saved = sessionViewportStore.get(sessionId);
+    return {
+      pendingSearch: false,
+      snapshot: saved?.mode === SessionViewportMode.Reading ? saved : null,
+    };
+  }, [sessionId]);
+  const pendingRestoreSnapshot = sessionEntryRestoreState.snapshot;
+  const pendingRestoreSnapshotRef = useRef<SessionViewportSnapshot | null>(pendingRestoreSnapshot);
+  pendingRestoreSnapshotRef.current = pendingRestoreSnapshot;
+  const shouldSkipEntryBottomSettle = Boolean(
+    pendingRestoreSnapshot || sessionEntryRestoreState.pendingSearch,
+  );
   const handleGoalCommand = useCallback((command: string) => {
     if (!currentSession?.id) return Promise.resolve(false);
     const goalAction = command.split(/\s+/, 2)[1] ?? 'unknown';
@@ -1591,9 +1588,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       buildSelectedSkillRoutingPrompt(activeSkills),
     ].filter(Boolean).join('\n\n') || undefined;
   }, [activeKitIds, activeSkillIds, installedKits, marketplaceKits, skills]);
-  useEffect(() => {
-    clearHeightCache();
-  }, [sessionId]);
+  // Height cache in LazyRenderTurn is now scoped per session (LRU), so switching
+  // back to a recently visited task keeps measured turn heights intact.
 
   useEffect(() => {
     if (!sessionId || !latestProposedPlan) return;
@@ -1695,7 +1691,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const cancelRailNavigationSettleRef = useRef<(() => void) | null>(null);
   const conversationContentElementRef = useRef<HTMLElement | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
-  const railLinesRef = useRef<HTMLDivElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
   const [forcedRailTurnIndex, setForcedRailTurnIndex] = useState<number | null>(null);
   const [conversationSearchLoadVersion, setConversationSearchLoadVersion] = useState(0);
@@ -1715,13 +1710,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [conversationSearchRevealRequestKey, setConversationSearchRevealRequestKey] = useState(0);
   const conversationSearchHandledRevealRequestKeyRef = useRef(0);
   const scrollToBottomRequestRef = useRef(0);
-  const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
-  const [isRailHovered, setIsRailHovered] = useState(false);
-  const [railTooltip, setRailTooltip] = useState<{
-    railIndex: number;
-    top: number;
-    right: number;
-  } | null>(null);
 
   const markConversationSearchViewportAsManual = useCallback(() => {
     const activeMatchKey = conversationSearchActiveMatchKeyRef.current;
@@ -1757,15 +1745,194 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isStreaming,
   ]);
 
-  useEffect(() => {
-    userDetachedFromBottomRef.current = false;
+  useLayoutEffect(() => {
+    const restoringReading = Boolean(pendingRestoreSnapshot);
+    const activeSession = currentSessionRef.current;
+    const loadedCount = activeSession?.messages.length ?? 0;
+    const messagesOffset = activeSession?.messagesOffset ?? 0;
+    const currentTotal = Math.max(activeSession?.totalMessages ?? loadedCount, messagesOffset + loadedCount);
+    const lastMessage = loadedCount > 0 ? activeSession?.messages[loadedCount - 1] : undefined;
+
+    userDetachedFromBottomRef.current = restoringReading;
     isLoadingNewerMessagesRef.current = false;
     newerMessagesLoadRequestRef.current += 1;
     scrollToBottomRequestRef.current += 1;
     conversationSearchManualViewportMatchKeyRef.current = null;
-    setIsViewportAtSessionBottom(true);
-    updateShouldAutoScroll(true);
-  }, [currentSession?.id, updateShouldAutoScroll]);
+    setIsViewportAtSessionBottom(!restoringReading);
+    updateShouldAutoScroll(!restoringReading);
+
+    if (restoringReading && pendingRestoreSnapshot) {
+      unreadProgressBaselineRef.current = {
+        totalMessages: pendingRestoreSnapshot.totalMessagesAtSave,
+        lastMessageId: pendingRestoreSnapshot.lastMessageIdAtSave ?? lastMessage?.id ?? null,
+        lastMessageLength: pendingRestoreSnapshot.lastMessageLengthAtSave ?? lastMessage?.content.length ?? 0,
+      };
+      setHasNewProgressBelow(hasUnreadProgressSinceSnapshot(
+        pendingRestoreSnapshot,
+        currentTotal,
+        lastMessage ? { id: lastMessage.id, contentLength: lastMessage.content.length } : null,
+      ));
+    } else {
+      unreadProgressBaselineRef.current = {
+        totalMessages: currentTotal,
+        lastMessageId: lastMessage?.id ?? null,
+        lastMessageLength: lastMessage?.content.length ?? 0,
+      };
+      setHasNewProgressBelow(false);
+    }
+  }, [currentSession?.id, pendingRestoreSnapshot, updateShouldAutoScroll]);
+
+  const {
+    setContentElement: setRestoreContentElement,
+    isRestoringRef: isRestoringSessionScrollRef,
+    pinnedAnchorMessageIds: pinnedRestoreAnchorMessageIds,
+    cancelRestore: cancelSessionRestore,
+  } = useConversationSessionRestore({
+    sessionId,
+    snapshot: pendingRestoreSnapshot,
+    scrollContainerRef,
+    canRestore: () => !shouldAutoScrollRef.current
+      && !scrollToBottomIntentRef.current
+      && !isNavigatingRef.current
+      && !isExportingImageRef.current
+      && !conversationSearchViewportLockedRef.current,
+    onRestored: (snapshot) => {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      const scrollable = container.scrollHeight > container.clientHeight;
+      setIsScrollable(prev => (prev === scrollable ? prev : scrollable));
+      const activeSession = currentSessionRef.current;
+      const loadedCount = activeSession?.messages.length ?? 0;
+      const loadedOffset = activeSession?.messagesOffset ?? 0;
+      const totalCount = activeSession?.totalMessages ?? loadedCount;
+      const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const atBottom = isAtConversationSessionBottom(
+        loadedOffset,
+        loadedCount,
+        totalCount,
+        distanceToBottom,
+      );
+      setIsViewportAtSessionBottom(prev => (prev === atBottom ? prev : atBottom));
+      if (snapshot.railIndex >= 0 && railItemCountRef.current > 0) {
+        const clampedRail = Math.min(snapshot.railIndex, railItemCountRef.current - 1);
+        if (currentRailIndexRef.current !== clampedRail) {
+          currentRailIndexRef.current = clampedRail;
+          setCurrentRailIndex(clampedRail);
+        }
+      }
+    },
+  });
+
+  const captureCurrentViewportSnapshot = useCallback((): SessionViewportSnapshot | null => {
+    const activeSession = currentSessionRef.current;
+    const container = scrollContainerRef.current;
+    if (!activeSession?.id || !container) return null;
+
+    // Never overwrite a valid saved snapshot before initial restore has settled.
+    if (
+      isRestoringSessionScrollRef.current
+      && pendingRestoreSnapshotRef.current?.sessionId === activeSession.id
+    ) {
+      return pendingRestoreSnapshotRef.current;
+    }
+
+    const loadedMessageCount = activeSession.messages.length;
+    const messagesOffset = activeSession.messagesOffset ?? 0;
+    const totalMessages = Math.max(
+      activeSession.totalMessages ?? loadedMessageCount,
+      messagesOffset + loadedMessageCount,
+    );
+    const lastMessage = loadedMessageCount > 0 ? activeSession.messages[loadedMessageCount - 1] : undefined;
+    const distanceToBottom = Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
+    const atSessionBottom = isAtConversationSessionBottom(
+      messagesOffset,
+      loadedMessageCount,
+      totalMessages,
+      distanceToBottom,
+    );
+    const followingBottom = atSessionBottom
+      && shouldAutoScrollRef.current
+      && !userDetachedFromBottomRef.current;
+
+    if (followingBottom) {
+      return {
+        sessionId: activeSession.id,
+        mode: SessionViewportMode.Bottom,
+        anchor: null,
+        anchorAbsoluteIndex: null,
+        messagesOffset,
+        loadedMessageCount,
+        totalMessagesAtSave: totalMessages,
+        lastMessageIdAtSave: lastMessage?.id ?? null,
+        lastMessageLengthAtSave: lastMessage?.content.length ?? 0,
+        scrollTop: container.scrollTop,
+        railIndex: currentRailIndexRef.current,
+        savedAt: Date.now(),
+      };
+    }
+
+    const anchor = captureConversationScrollAnchor(container);
+    const primaryMessageId = anchor?.candidates[0]?.messageId ?? null;
+    const anchorAbsoluteIndex = primaryMessageId !== null
+      ? (messageOffsetByIdRef.current.get(primaryMessageId) ?? null)
+      : null;
+    const baseline = unreadProgressBaselineRef.current;
+    const preservedTotalAtSave = baseline.totalMessages > 0
+      ? Math.min(totalMessages, baseline.totalMessages)
+      : totalMessages;
+
+    return {
+      sessionId: activeSession.id,
+      mode: SessionViewportMode.Reading,
+      anchor,
+      anchorAbsoluteIndex,
+      messagesOffset,
+      loadedMessageCount,
+      totalMessagesAtSave: preservedTotalAtSave,
+      lastMessageIdAtSave: preservedTotalAtSave < totalMessages
+        ? baseline.lastMessageId
+        : (lastMessage?.id ?? null),
+      lastMessageLengthAtSave: preservedTotalAtSave < totalMessages
+        ? baseline.lastMessageLength
+        : (lastMessage?.content.length ?? 0),
+      scrollTop: container.scrollTop,
+      railIndex: currentRailIndexRef.current,
+      savedAt: Date.now(),
+    };
+  }, [isRestoringSessionScrollRef]);
+
+  const scheduleViewportSnapshotSave = useCallback(() => {
+    if (isRestoringSessionScrollRef.current || isExportingImageRef.current) return;
+    if (viewportSaveTimerRef.current !== null) {
+      clearTimeout(viewportSaveTimerRef.current);
+    }
+    viewportSaveTimerRef.current = setTimeout(() => {
+      viewportSaveTimerRef.current = null;
+      const snapshot = captureCurrentViewportSnapshot();
+      if (snapshot) {
+        sessionViewportStore.save(snapshot);
+      }
+    }, VIEWPORT_SNAPSHOT_SAVE_DEBOUNCE_MS);
+  }, [captureCurrentViewportSnapshot, isRestoringSessionScrollRef]);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    return sessionViewportStore.registerActiveCapturer(sessionId, captureCurrentViewportSnapshot);
+  }, [captureCurrentViewportSnapshot, sessionId]);
+
+  // Capture on actual unmount (e.g. navigating to Settings/Skills/Home without loadSession).
+  const captureCurrentViewportSnapshotRef = useRef(captureCurrentViewportSnapshot);
+  captureCurrentViewportSnapshotRef.current = captureCurrentViewportSnapshot;
+  useLayoutEffect(() => () => {
+    if (viewportSaveTimerRef.current !== null) {
+      clearTimeout(viewportSaveTimerRef.current);
+      viewportSaveTimerRef.current = null;
+    }
+    const snapshot = captureCurrentViewportSnapshotRef.current();
+    if (snapshot) {
+      sessionViewportStore.save(snapshot);
+    }
+  }, []);
 
   const {
     loadOlderMessages,
@@ -1780,6 +1947,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     canRestore: () => !shouldAutoScrollRef.current
       && !scrollToBottomIntentRef.current
       && !isNavigatingRef.current
+      && !isRestoringSessionScrollRef.current
       && !isExportingImageRef.current
       && !conversationSearchViewportLockedRef.current,
     loadMessages: beforePrepend => sessionId
@@ -1789,8 +1957,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const setEntryContentElement = useConversationEntrySettle({
     sessionId: currentSession?.id,
     scrollContainerRef,
+    enabled: !shouldSkipEntryBottomSettle,
     canHoldBottom: () => shouldAutoScrollRef.current
       && !isNavigatingRef.current
+      && !isRestoringSessionScrollRef.current
       && !isExportingImageRef.current
       && !conversationSearchViewportLockedRef.current,
   });
@@ -1798,7 +1968,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     conversationContentElementRef.current = element;
     setAnchorContentElement(element);
     setEntryContentElement(element);
-  }, [setAnchorContentElement, setEntryContentElement]);
+    setRestoreContentElement(element);
+  }, [setAnchorContentElement, setEntryContentElement, setRestoreContentElement]);
 
   const handleCompactContext = useCallback(() => {
     if (!currentSession?.id) {
@@ -4505,23 +4676,24 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   // Reset nav state when session changes
   useEffect(() => {
+    const restoredRailIndex = pendingRestoreSnapshot && pendingRestoreSnapshot.railIndex >= 0
+      ? pendingRestoreSnapshot.railIndex
+      : -1;
     setIsScrollable(false);
-    setCurrentRailIndex(-1);
-    currentRailIndexRef.current = -1;
+    setCurrentRailIndex(restoredRailIndex);
+    currentRailIndexRef.current = restoredRailIndex;
     railNavigationRequestIdRef.current += 1;
     cancelRailNavigationSettleRef.current?.();
     cancelRailNavigationSettleRef.current = null;
     isNavigatingRef.current = false;
     scrollToBottomIntentRef.current = false;
-    userDetachedFromBottomRef.current = false;
     clearScrollToBottomSettleTimers();
     turnElsCacheRef.current = [];
     loadedRailRangeRef.current = null;
     if (forcedRailTurnReleaseTimerRef.current) clearTimeout(forcedRailTurnReleaseTimerRef.current);
     forcedRailTurnReleaseTimerRef.current = null;
     setForcedRailTurnIndex(null);
-    setHoveredRailIndex(null);
-  }, [clearScrollToBottomSettleTimers, currentSession?.id]);
+  }, [clearScrollToBottomSettleTimers, currentSession?.id, pendingRestoreSnapshot]);
 
   useEffect(() => {
     const handleOpenShareOptions = (event: Event) => {
@@ -5015,10 +5187,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsViewportAtSessionBottom(current => (
       current === nextIsViewportAtSessionBottom ? current : nextIsViewportAtSessionBottom
     ));
+    if (nextIsViewportAtSessionBottom && !isRestoringSessionScrollRef.current) {
+      const lastMessage = loadedMessageCount > 0 ? currentSession?.messages[loadedMessageCount - 1] : undefined;
+      unreadProgressBaselineRef.current = {
+        totalMessages: Math.max(totalMessageCount, loadedMessageOffset + loadedMessageCount),
+        lastMessageId: lastMessage?.id ?? null,
+        lastMessageLength: lastMessage?.content.length ?? 0,
+      };
+      setHasNewProgressBelow(false);
+    }
     const nextShouldAutoScroll = shouldAutoScrollForPosition(
       distanceToBottom,
       userDetachedFromBottomRef.current,
-      conversationSearchViewportLockedRef.current || !hasLoadedSessionEnd || isNavigatingRef.current,
+      conversationSearchViewportLockedRef.current
+        || !hasLoadedSessionEnd
+        || isNavigatingRef.current
+        || isRestoringSessionScrollRef.current,
     );
     if (userDetachedFromBottomRef.current && nextShouldAutoScroll) {
       userDetachedFromBottomRef.current = false;
@@ -5027,13 +5211,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
     }
     updateShouldAutoScroll(nextShouldAutoScroll);
+    scheduleViewportSnapshotSave();
     // Check if content overflows the container (use functional updater to avoid redundant re-renders)
     const scrollable = container.scrollHeight > container.clientHeight;
     setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
     if (!scrollable) return;
 
     const isSearchNavigationActive = conversationSearchPaginationLockRef.current !== null;
-    const isPaginationLocked = isSearchNavigationActive || isNavigatingRef.current;
+    const isPaginationLocked = isSearchNavigationActive
+      || isNavigatingRef.current
+      || isRestoringSessionScrollRef.current;
     let requestedNewerMessages = false;
     if (!isPaginationLocked && shouldLoadNewerConversationMessages(
       loadedMessageOffset,
@@ -5133,11 +5320,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [
     currentSession?.id,
-    currentSession?.messages.length,
+    currentSession?.messages,
     currentSession?.messagesOffset,
     currentSession?.totalMessages,
     isLoadingMoreMessagesRef,
+    isRestoringSessionScrollRef,
     loadOlderMessages,
+    scheduleViewportSnapshotSave,
     updateShouldAutoScroll,
   ]);
 
@@ -5184,6 +5373,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     cancelRailNavigationSettleRef.current?.();
     cancelRailNavigationSettleRef.current = null;
     isNavigatingRef.current = false;
+    cancelSessionRestore();
+    setHasNewProgressBelow(false);
     const requestId = ++scrollToBottomRequestRef.current;
     const scrollLoadedWindowToBottom = () => {
       if (requestId !== scrollToBottomRequestRef.current) return;
@@ -5268,6 +5459,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       console.error(`[CoworkSessionDetail] failed to scroll session ${targetSessionId} to the real bottom.`, error);
     });
   }, [
+    cancelSessionRestore,
     clearScrollToBottomSettleTimers,
     currentSession?.id,
     currentSession?.messages.length,
@@ -5282,6 +5474,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const container = scrollContainerRef.current;
     if (!container) return;
     if (event.deltaY !== 0) {
+      cancelSessionRestore();
       markConversationSearchViewportAsManual();
     }
     if (isWheelScrollingAwayFromBottom(event.deltaY)) {
@@ -5298,29 +5491,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       top: event.deltaY * deltaMultiplier,
       behavior: 'auto',
     });
-  }, [detachAutoScrollForUserIntent, markConversationSearchViewportAsManual]);
-
-  const handleRailWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    const container = railLinesRef.current;
-    if (!container) return;
-
-    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    if (maxScrollTop <= 1) return;
-
-    const deltaMultiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-      ? WHEEL_DELTA_LINE_HEIGHT
-      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-        ? container.clientHeight
-        : 1;
-    const nextScrollTop = Math.max(
-      0,
-      Math.min(maxScrollTop, container.scrollTop + event.deltaY * deltaMultiplier),
-    );
-    if (nextScrollTop === container.scrollTop) return;
-
-    event.stopPropagation();
-    container.scrollTop = nextScrollTop;
-  }, []);
+  }, [cancelSessionRestore, detachAutoScrollForUserIntent, markConversationSearchViewportAsManual]);
 
   // Extend the active window if its content does not fill the viewport, because
   // no scroll event can reach either pagination edge in that state.
@@ -5391,6 +5562,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     scrollToBottomRequestRef.current += 1;
     clearScrollToBottomSettleTimers();
     scrollToBottomIntentRef.current = false;
+    cancelSessionRestore();
     markConversationSearchViewportAsManual();
 
     const isNavigatingToLastRailItem = railIndex >= railItemCountRef.current - 1;
@@ -5407,6 +5579,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       if (!isRequestCurrent()) return;
       cancelRailNavigationSettleRef.current = null;
       isNavigatingRef.current = false;
+      scheduleViewportSnapshotSave();
     };
 
     const forceRenderRailTurn = (turnIndex: number): void => {
@@ -5669,12 +5842,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     executeNavigation(railIndex, item);
   }, [
+    cancelSessionRestore,
     clearScrollToBottomSettleTimers,
     currentSession?.id,
     currentSession?.messages.length,
     currentSession?.totalMessages,
     isStreaming,
     markConversationSearchViewportAsManual,
+    scheduleViewportSnapshotSave,
     updateShouldAutoScroll,
   ]);
 
@@ -5892,6 +6067,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     });
     return offsetById;
   }, [currentSession?.messages, currentSession?.messagesOffset]);
+  messageOffsetByIdRef.current = messageOffsetById;
   const localRailItems = useMemo(() => buildRailItems(turns, messageOffsetById), [messageOffsetById, turns]);
   const railItems = useMemo(
     () => (messageRailIndex.length > 0
@@ -5907,24 +6083,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       messageRailIndex,
     ],
   );
-  const railTooltipItem = railTooltip ? railItems[railTooltip.railIndex] : undefined;
   const hasPlaceholderRailItems = useMemo(
     () => railItems.some(item => item.isPlaceholder),
     [railItems],
   );
-  const railTooltipContent = railTooltip && railTooltipItem
-    ? buildRailTooltipContent({
-      item: railTooltipItem,
-      railIndex: railTooltip.railIndex,
-      totalCount: railItems.length,
-      hasPlaceholderItems: hasPlaceholderRailItems,
-      labels: {
-        unloadedTitle: i18nService.t('coworkRailUnloadedMessageTitle'),
-        unloadedHint: i18nService.t('coworkRailUnloadedMessageHint'),
-        turnPositionTemplate: i18nService.t('coworkRailTurnPosition'),
-      },
-    })
-    : null;
 
   const clearConversationSearchPresentation = useCallback(() => {
     conversationSearchNavigationRequestRef.current += 1;
@@ -5957,6 +6119,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
     userDetachedFromBottomRef.current = true;
     scrollToBottomIntentRef.current = false;
+    cancelSessionRestore();
     clearScrollToBottomSettleTimers();
     updateShouldAutoScroll(false);
     setIsArtifactPanelExpanded(false);
@@ -5965,6 +6128,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsExpandedConversationPreviewOpen(false);
     openConversationSearch();
   }, [
+    cancelSessionRestore,
     clearScrollToBottomSettleTimers,
     isConversationSearchOpen,
     openConversationSearch,
@@ -6520,11 +6684,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // Sync rail index when turns change or rail first appears (isScrollable becomes true)
   useEffect(() => {
     // After turns/scrollable change, if rail index is uninitialized (-1) or out of bounds,
-    // wait for next frame so render IIFE has updated railItemCountRef, then sync
+    // wait for next frame so render IIFE has updated railItemCountRef, then sync.
+    // Skip clamping against temporary placeholder items while restoring a saved reading position.
     const frameId = requestAnimationFrame(() => {
       const count = railItemCountRef.current;
       if (count === 0) return;
       const idx = currentRailIndexRef.current;
+      if (hasPlaceholderRailItems && pendingRestoreSnapshotRef.current && idx >= 0) {
+        return;
+      }
       if (idx < 0 || idx >= count) {
         const resolved = count - 1;
         currentRailIndexRef.current = resolved;
@@ -6532,53 +6700,72 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       }
     });
     return () => cancelAnimationFrame(frameId);
-  }, [isScrollable, railItems.length, turns]);
+  }, [hasPlaceholderRailItems, isScrollable, railItems.length, turns]);
 
-  const alignActiveRailItem = useCallback(() => {
-    const container = railLinesRef.current;
-    if (!container || currentRailIndex < 0) return;
-    const activeEl = container.children[currentRailIndex] as HTMLElement | undefined;
-    if (!activeEl) return;
+  // Surface a non-intrusive "new updates" cue on the bottom button when messages
+  // arrive or stream while the reader is viewing an earlier part of the task.
+  const currentTotalMessages = currentSession?.totalMessages ?? messagesLength;
+  const currentLastMessageId = currentSession && currentSession.messages.length > 0
+    ? currentSession.messages[currentSession.messages.length - 1].id
+    : null;
+  const currentLastMessageLength = lastMessageContent?.length ?? 0;
 
-    if (currentRailIndex <= 0) {
-      container.scrollTop = 0;
-      return;
-    }
-    if (currentRailIndex >= railItemCountRef.current - 1) {
-      container.scrollTop = container.scrollHeight;
-      return;
-    }
-
-    // Use viewport-relative rects instead of offsetTop: the rail list is an
-    // overflow container whose layout can change after lazy pagination prepends.
-    const containerRect = container.getBoundingClientRect();
-    const activeRect = activeEl.getBoundingClientRect();
-    if (activeRect.top < containerRect.top) {
-      container.scrollTop -= containerRect.top - activeRect.top;
-    } else if (activeRect.bottom > containerRect.bottom) {
-      container.scrollTop += activeRect.bottom - containerRect.bottom;
-    }
-  }, [currentRailIndex]);
-
-  // Scroll rail lines container to keep active item visible (without affecting page scroll)
   useEffect(() => {
-    let secondFrameId: number | null = null;
-    const firstFrameId = requestAnimationFrame(() => {
-      alignActiveRailItem();
-      secondFrameId = requestAnimationFrame(() => {
-        alignActiveRailItem();
-      });
-    });
-    return () => {
-      cancelAnimationFrame(firstFrameId);
-      if (secondFrameId !== null) cancelAnimationFrame(secondFrameId);
-    };
+    if (!currentSession?.id) return;
+    if (isViewportAtSessionBottom && shouldAutoScroll) {
+      unreadProgressBaselineRef.current = {
+        totalMessages: Math.max(currentTotalMessages, (currentSession.messagesOffset ?? 0) + messagesLength),
+        lastMessageId: currentLastMessageId,
+        lastMessageLength: currentLastMessageLength,
+      };
+      setHasNewProgressBelow(false);
+      return;
+    }
+
+    const baseline = unreadProgressBaselineRef.current;
+    const totalGrew = currentTotalMessages > baseline.totalMessages;
+    const tailStreamed = isStreaming && (
+      (currentLastMessageId !== null && currentLastMessageId !== baseline.lastMessageId)
+      || (currentLastMessageId === baseline.lastMessageId && currentLastMessageLength > baseline.lastMessageLength)
+    );
+    if (totalGrew || tailStreamed) {
+      setHasNewProgressBelow(true);
+    }
   }, [
-    alignActiveRailItem,
-    currentSession?.messages.length,
+    currentLastMessageId,
+    currentLastMessageLength,
+    currentSession?.id,
     currentSession?.messagesOffset,
-    isScrollable,
-    railItems.length,
+    currentTotalMessages,
+    isStreaming,
+    isViewportAtSessionBottom,
+    messagesLength,
+    shouldAutoScroll,
+  ]);
+
+  const handlePromptSubmit = useCallback<CoworkSessionDetailProps['onContinue']>(async (...args) => {
+    cancelSessionRestore();
+    if (currentSession?.id) {
+      sessionViewportStore.delete(currentSession.id);
+    }
+    setHasNewProgressBelow(false);
+    const submitted = await onContinue(...args);
+    if (submitted) {
+      if (!isViewportAtSessionBottom) {
+        handleScrollToBottom();
+      } else {
+        userDetachedFromBottomRef.current = false;
+        updateShouldAutoScroll(true);
+      }
+    }
+    return submitted;
+  }, [
+    cancelSessionRestore,
+    currentSession?.id,
+    handleScrollToBottom,
+    isViewportAtSessionBottom,
+    onContinue,
+    updateShouldAutoScroll,
   ]);
 
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
@@ -6682,9 +6869,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     permission.sessionId === currentSession.id && isQuestionDockRequest(permission)
   ));
   const expandedConversationPreview = getExpandedConversationPreview(currentSession.messages);
-  const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= railItems.length
-    ? railItems.length - 1
-    : currentRailIndex;
   const planConfirmationMessageId = (
     latestProposedPlan
     && draftCollaborationMode === CoworkCollaborationMode.Plan
@@ -6765,6 +6949,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         || index === editingTurnIndex
         || index === messageVersionSwitch?.turnIndex
         || (anchorMessageId !== null && turnMessageIds.has(anchorMessageId))
+        || (pinnedRestoreAnchorMessageIds.length > 0
+          && pinnedRestoreAnchorMessageIds.some(id => turnMessageIds.has(id)))
         || isExportingImage;
       const messageVersionClass = messageVersionSwitch
         ? MESSAGE_VERSION_PHASE_CLASS[messageVersionSwitch.phase]
@@ -6786,7 +6972,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
 
       return (
-        <LazyRenderTurn key={resolveTurnKey(entryAnimation, turn.id)} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}
+        <LazyRenderTurn key={resolveTurnKey(entryAnimation, turn.id)} sessionId={sessionId} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}
           scrollContainerRef={scrollContainerRef} lastMessageId={Array.from(turnMessageIds).pop()}
           className={editingTurnIndex >= 0 && index > editingTurnIndex
             ? 'opacity-40 transition-opacity'
@@ -7409,165 +7595,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
         {shouldShowTurnNavigationRail && !exportImageProgress && (
-          <div
-            className="absolute right-[18px] top-1/2 -translate-y-1/2 w-5 flex flex-col items-end z-10"
-            style={{ maxHeight: 'calc(100% - 40px)' }}
-            onWheel={handleRailWheel}
-            onMouseEnter={() => setIsRailHovered(true)}
-            onMouseLeave={() => {
-              setIsRailHovered(false);
-              setHoveredRailIndex(null);
-              setRailTooltip(null);
-            }}
-          >
-            {/* Up Arrow */}
-            <button
-              type="button"
-              onClick={() => {
-                const resolvedRail = currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex;
-                if (resolvedRail <= 0) return;
-                navigateToRailItem(resolvedRail - 1, 'rail_prev_click');
-              }}
-              onMouseEnter={() => { setHoveredRailIndex(null); }}
-              className={`shrink-0 flex items-center justify-center w-5 h-5 mb-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
-                ${!isRailHovered
-                  ? 'opacity-0 pointer-events-none'
-                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) <= 0
-                    ? 'opacity-30 cursor-default'
-                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-              </svg>
-            </button>
-
-            {/* Message Lines */}
-            <div
-              ref={railLinesRef}
-              onWheel={handleRailWheel}
-              className="overflow-y-auto overscroll-contain min-h-0"
-              style={{ maxHeight: 'calc(100% - 56px)', scrollbarWidth: 'none' }}
-            >
-              {railItems.map((msg, idx) => {
-                const isActive = idx === resolvedRailIndex;
-                const isHighlighted = hoveredRailIndex === null ? isActive : idx === hoveredRailIndex;
-                const lineWidth = getRailLineWidth(idx, resolvedRailIndex, hoveredRailIndex);
-                return (
-                  <button
-                    key={msg.key}
-                    type="button"
-                    onClick={() => {
-                      navigateToRailItem(idx, 'rail_item_click');
-                    }}
-                    onMouseEnter={(e) => {
-                      setHoveredRailIndex(idx);
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const verticalPadding = Math.min(60, window.innerHeight / 2);
-                      const top = Math.max(
-                        verticalPadding,
-                        Math.min(rect.top + rect.height / 2, window.innerHeight - verticalPadding),
-                      );
-                      setRailTooltip({
-                        railIndex: idx,
-                        top,
-                        right: window.innerWidth - rect.left + 8,
-                      });
-                    }}
-                    onMouseLeave={() => setRailTooltip(null)}
-                    className="flex items-center justify-end cursor-pointer w-5 py-[5px]"
-                  >
-                    <span
-                      className={`block shrink-0 border-solid transition-[width,border-color] ${
-                        isHighlighted
-                          ? 'border-neutral-800 dark:border-neutral-200'
-                          : 'border-neutral-300 dark:border-neutral-600'
-                      }`}
-                      style={{
-                        width: lineWidth,
-                        height: 0,
-                        borderTopWidth: RAIL_LINE_HEIGHT,
-                      }}
-                    />
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Down Arrow */}
-            <button
-              type="button"
-              onClick={() => {
-                const maxRail = railItemCountRef.current - 1;
-                const resolvedRail = currentRailIndex < 0 ? maxRail : currentRailIndex;
-                if (resolvedRail >= maxRail) return;
-                navigateToRailItem(resolvedRail + 1, 'rail_next_click');
-              }}
-              onMouseEnter={() => { setHoveredRailIndex(null); }}
-              className={`shrink-0 flex items-center justify-center w-5 h-5 mt-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
-                ${!isRailHovered
-                  ? 'opacity-0 pointer-events-none'
-                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) >= railItemCountRef.current - 1
-                    ? 'opacity-30 cursor-default'
-                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {railTooltip && railTooltipContent && createPortal(
-          <div
-            className={`fixed z-[100] px-3.5 py-2.5 text-[13px] leading-snug pointer-events-none overflow-hidden
-              shadow-[0_2px_12px_rgba(0,0,0,0.12)]
-              border dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]
-              rounded-xl bg-neutral-50 border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700`}
-            style={{
-              top: railTooltip.top,
-              right: railTooltip.right,
-              width: `min(420px, calc(100vw - ${railTooltip.right + 16}px))`,
-              transform: 'translateY(-50%)',
-            }}
-          >
-            <div
-              className="text-[13px] font-semibold text-neutral-900 dark:text-neutral-100"
-              style={{
-                display: '-webkit-box',
-                WebkitLineClamp: 1,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                wordBreak: 'break-all',
-              }}
-            >
-              {railTooltipContent.title}
-            </div>
-            {railTooltipContent.summary && (
-              <div
-                className="mt-1 text-[13px] text-neutral-600 dark:text-neutral-300"
-                style={{
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                  wordBreak: 'break-all',
-                }}
-              >
-                {railTooltipContent.summary}
-              </div>
-            )}
-            {(railTooltipContent.turnPosition || railTooltipContent.timestampText) && (
-              <div className="mt-2 flex items-center justify-between gap-3 text-[12px] text-neutral-500 dark:text-neutral-400 tabular-nums">
-                {railTooltipContent.turnPosition && (
-                  <span className="shrink-0">{railTooltipContent.turnPosition}</span>
-                )}
-                {railTooltipContent.timestampText && (
-                  <span className="ml-auto shrink-0">{railTooltipContent.timestampText}</span>
-                )}
-              </div>
-            )}
-          </div>,
-          document.body
+          <ConversationTurnRail
+            sessionId={sessionId}
+            railItems={railItems}
+            currentRailIndex={currentRailIndex}
+            hasPlaceholderItems={hasPlaceholderRailItems}
+            onNavigateToRailItem={navigateToRailItem}
+            onScrollToBottom={handleScrollToBottom}
+          />
         )}
         {!exportImageProgress && shouldShowScrollToBottom && (
           <div className="pointer-events-none absolute bottom-4 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3">
@@ -7575,11 +7610,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               type="button"
               onClick={handleScrollToBottom}
               onWheel={handleScrollToBottomWheel}
-              className="pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground/85 shadow-[0_2px_10px_rgba(15,23,42,0.12)] transition-colors hover:bg-surface-raised hover:text-foreground dark:shadow-[0_2px_14px_rgba(0,0,0,0.36)]"
-              aria-label={i18nService.t('coworkScrollToBottom')}
+              className={hasNewProgressBelow
+                ? 'pointer-events-auto inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full border border-primary/40 bg-background/95 px-3 text-xs font-medium text-foreground shadow-[0_3px_12px_rgba(15,23,42,0.16)] backdrop-blur-sm transition-colors hover:bg-surface-raised dark:shadow-[0_4px_16px_rgba(0,0,0,0.42)]'
+                : 'pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground/85 shadow-[0_2px_10px_rgba(15,23,42,0.12)] transition-colors hover:bg-surface-raised hover:text-foreground dark:shadow-[0_2px_14px_rgba(0,0,0,0.36)]'}
+              aria-label={i18nService.t(hasNewProgressBelow ? 'coworkNewProgressScrollToBottom' : 'coworkScrollToBottom')}
               title={i18nService.t('coworkScrollToBottom')}
             >
-              <ArrowDownIcon className="h-4 w-4 stroke-[2.1]" />
+              {hasNewProgressBelow && (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true" />
+                  <span>{i18nService.t('coworkNewProgressScrollToBottom')}</span>
+                </>
+              )}
+              <ArrowDownIcon className={hasNewProgressBelow ? 'h-3.5 w-3.5 stroke-[2.2]' : 'h-4 w-4 stroke-[2.1]'} />
             </button>
           </div>
         )}
@@ -7805,7 +7848,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           )}
           <CoworkPromptInput
             ref={promptInputRef}
-            onSubmit={onContinue}
+            onSubmit={handlePromptSubmit}
             onStop={onStop}
             isStreaming={isSessionBusy}
             canSteer={isStreaming && !isContextBusy}

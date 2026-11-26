@@ -22,6 +22,22 @@ export const setPendingConversationSearch = (
 };
 
 /**
+ * Return whether a non-expired pending query targets `sessionId`, without
+ * consuming it. Used so session scroll restoration yields to search jumps.
+ */
+export const hasPendingConversationSearch = (
+  sessionId: string,
+  now: number = Date.now(),
+): boolean => {
+  if (!pending) return false;
+  if (now - pending.requestedAt > PENDING_CONVERSATION_SEARCH_TTL_MS) {
+    pending = null;
+    return false;
+  }
+  return pending.sessionId === sessionId;
+};
+
+/**
  * Return and clear the pending query when it targets `sessionId` and has not
  * expired. A request for another session is kept for that session to claim.
  */

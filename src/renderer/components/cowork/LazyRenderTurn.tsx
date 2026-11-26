@@ -14,6 +14,8 @@ import { ConversationScrollAnchorAttribute } from './conversationScrollAnchor';
  */
 
 interface LazyRenderTurnProps extends React.HTMLAttributes<HTMLDivElement> {
+  /** Session identifier to scope cached heights across recent sessions */
+  sessionId?: string;
   /** Unique key for height cache */
   turnId: string;
   scrollContainerRef: React.RefObject<HTMLElement | null>;
@@ -25,10 +27,43 @@ interface LazyRenderTurnProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
 }
 
-// Global height cache survives re-renders — keyed by turnId
-const heightCache = new Map<string, number>();
+const DEFAULT_HEIGHT_CACHE_SESSION_KEY = '__default__';
+const MAX_CACHED_HEIGHT_SESSIONS = 12;
+
+// Per-session LRU height cache survives session switches so returning to a
+// recent task starts with accurate placeholder heights instead of 80px stubs.
+const sessionHeightCaches = new Map<string, Map<string, number>>();
+
+const getSessionHeightCache = (sessionId?: string, createIfMissing = false): Map<string, number> | null => {
+  const key = sessionId || DEFAULT_HEIGHT_CACHE_SESSION_KEY;
+  let cache = sessionHeightCaches.get(key);
+  if (cache) {
+    sessionHeightCaches.delete(key);
+    sessionHeightCaches.set(key, cache);
+    return cache;
+  }
+  if (!createIfMissing) return null;
+  cache = new Map<string, number>();
+  sessionHeightCaches.set(key, cache);
+  while (sessionHeightCaches.size > MAX_CACHED_HEIGHT_SESSIONS) {
+    const oldestKey = sessionHeightCaches.keys().next().value;
+    if (oldestKey === undefined) break;
+    sessionHeightCaches.delete(oldestKey);
+  }
+  return cache;
+};
+
+const getCachedTurnHeight = (sessionId: string | undefined, turnId: string): number | undefined => (
+  getSessionHeightCache(sessionId, false)?.get(turnId)
+);
+
+const setCachedTurnHeight = (sessionId: string | undefined, turnId: string, height: number): void => {
+  if (!(height > 0)) return;
+  getSessionHeightCache(sessionId, true)?.set(turnId, height);
+};
 
 const LazyRenderTurn: React.FC<LazyRenderTurnProps> = ({
+  sessionId,
   turnId,
   scrollContainerRef,
   lastMessageId,
@@ -57,7 +92,7 @@ const LazyRenderTurn: React.FC<LazyRenderTurnProps> = ({
         const nowVisible = entry.isIntersecting;
         if (!nowVisible) {
           const height = el.getBoundingClientRect().height;
-          if (height > 0) heightCache.set(turnId, height);
+          if (height > 0) setCachedTurnHeight(sessionId, turnId, height);
         }
         setIsVisible(nowVisible);
       },
@@ -69,7 +104,7 @@ const LazyRenderTurn: React.FC<LazyRenderTurnProps> = ({
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [alwaysRender, rootMargin, scrollContainerRef, turnId]);
+  }, [alwaysRender, rootMargin, scrollContainerRef, sessionId, turnId]);
 
   // Cache height when visible content is rendered
   useEffect(() => {
@@ -80,15 +115,15 @@ const LazyRenderTurn: React.FC<LazyRenderTurnProps> = ({
     const ro = new ResizeObserver(([entry]) => {
       const h = entry.contentRect.height;
       if (h > 0) {
-        heightCache.set(turnId, h);
+        setCachedTurnHeight(sessionId, turnId, h);
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [isVisible, turnId]);
+  }, [isVisible, sessionId, turnId]);
 
   const shouldRender = isVisible || alwaysRender;
-  const cachedHeight = heightCache.get(turnId);
+  const cachedHeight = getCachedTurnHeight(sessionId, turnId);
 
   return (
     <div
@@ -117,5 +152,11 @@ const LazyRenderTurn: React.FC<LazyRenderTurnProps> = ({
 
 export default LazyRenderTurn;
 
-/** Clear all cached heights (e.g. when switching sessions) */
-export const clearHeightCache = () => heightCache.clear();
+/** Clear cached heights for a specific session, or all sessions when omitted. */
+export const clearHeightCache = (sessionId?: string) => {
+  if (sessionId) {
+    sessionHeightCaches.delete(sessionId);
+    return;
+  }
+  sessionHeightCaches.clear();
+};

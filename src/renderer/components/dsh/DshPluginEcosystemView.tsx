@@ -16,11 +16,8 @@ import {
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
-  ArrowTopRightOnSquareIcon,
-  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  ClipboardDocumentIcon,
   EllipsisHorizontalIcon,
   ExclamationTriangleIcon,
   FolderOpenIcon,
@@ -95,9 +92,7 @@ export const DshPluginEcosystemView: React.FC = () => {
   const [status, setStatus] = useState<DshHostStatusSnapshot | null>(null);
   const [plugins, setPlugins] = useState<DshPluginEntry[]>([]);
   const [pluginOrder, setPluginOrder] = useState<string[]>([]);
-  const [cliShimPath, setCliShimPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
   const [busyPlugin, setBusyPlugin] = useState<string | null>(null);
@@ -110,7 +105,6 @@ export const DshPluginEcosystemView: React.FC = () => {
   const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({});
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [coreExpanded, setCoreExpanded] = useState(false);
-  const [copiedCli, setCopiedCli] = useState(false);
 
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -129,8 +123,7 @@ export const DshPluginEcosystemView: React.FC = () => {
     };
   }, []);
 
-  const refresh = useCallback(async (isManual = false): Promise<DshPluginEntry[]> => {
-    if (isManual) setRefreshing(true);
+  const refresh = useCallback(async (): Promise<DshPluginEntry[]> => {
     try {
       const [nextStatus, pluginRes] = await Promise.all([
         dshHostService.getStatus(),
@@ -141,7 +134,6 @@ export const DshPluginEcosystemView: React.FC = () => {
       setStatus(nextStatus);
       setPlugins(nextPlugins);
       setVersionChecks((prev) => dropStaleVersionChecks(nextPlugins, prev));
-      setCliShimPath(pluginRes.cliShimPath ?? nextStatus?.cliShimPath ?? null);
       return nextPlugins;
     } catch (error) {
       if (mountedRef.current) {
@@ -151,7 +143,6 @@ export const DshPluginEcosystemView: React.FC = () => {
     } finally {
       if (mountedRef.current) {
         setLoading(false);
-        if (isManual) setRefreshing(false);
       }
     }
   }, []);
@@ -426,15 +417,6 @@ export const DshPluginEcosystemView: React.FC = () => {
     }
   };
 
-  const handleOpenWebView = async (routeHash?: string) => {
-    setMoreMenuOpen(false);
-    setErrorMessage(null);
-    const res = await dshHostService.openEcosystemView(routeHash);
-    if (!res.ok && res.error) {
-      setErrorMessage(res.error);
-    }
-  };
-
   const handleRestart = async () => {
     if (restarting) return;
     setMoreMenuOpen(false);
@@ -452,18 +434,6 @@ export const DshPluginEcosystemView: React.FC = () => {
       await refresh();
     } finally {
       setRestarting(false);
-    }
-  };
-
-  const handleCopyCliPath = async () => {
-    if (!cliShimPath) return;
-    const res = await dshHostService.copyCliShimCommand();
-    if (res.ok) {
-      setCopiedCli(true);
-      setTimeout(() => {
-        setCopiedCli(false);
-        setMoreMenuOpen(false);
-      }, 900);
     }
   };
 
@@ -533,22 +503,6 @@ export const DshPluginEcosystemView: React.FC = () => {
                 role="menu"
                 className="absolute right-0 z-30 mt-1.5 w-60 rounded-xl border border-border bg-surface p-1 shadow-popover"
               >
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={refreshing}
-                  onClick={() => {
-                    setMoreMenuOpen(false);
-                    void refresh(true);
-                  }}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-surface-raised disabled:opacity-50"
-                >
-                  <ArrowPathIcon className={`h-3.5 w-3.5 text-secondary ${refreshing ? 'animate-spin' : ''}`} />
-                  {t('dshPluginsRefresh')}
-                </button>
-
-                <div className="my-1 border-t border-border" />
-
                 {status && (
                   <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] text-secondary">
                     <span className="flex items-center gap-1.5">
@@ -580,35 +534,6 @@ export const DshPluginEcosystemView: React.FC = () => {
                 >
                   <FolderOpenIcon className="h-3.5 w-3.5 text-secondary" />
                   {t('dshPluginsOpenDataDir')}
-                </button>
-
-                {cliShimPath && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void handleCopyCliPath()}
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-surface-raised"
-                  >
-                    {copiedCli
-                      ? <CheckIcon className="h-3.5 w-3.5 text-emerald-500" />
-                      : <ClipboardDocumentIcon className="h-3.5 w-3.5 text-secondary" />}
-                    {copiedCli ? t('dshPluginsCliCopied') : t('dshPluginsCopyCliPath')}
-                  </button>
-                )}
-
-                <div className="my-1 border-t border-border" />
-
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => void handleOpenWebView()}
-                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-raised"
-                >
-                  <ArrowTopRightOnSquareIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-secondary" />
-                  <div className="min-w-0">
-                    <div className="text-xs text-foreground">{t('dshPluginsOpenAdvancedWeb')}</div>
-                    <div className="text-[11px] text-secondary">{t('dshPluginsOpenAdvancedWebDesc')}</div>
-                  </div>
                 </button>
               </div>
             )}
