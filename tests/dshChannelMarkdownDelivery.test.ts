@@ -61,17 +61,62 @@ test.each([
   const receipt = await driver.sendMessage({ chatId: 'cidRoom', text: reply, replyContext: {
     conversationType, senderStaffId: 'staff42', sessionWebhook: 'https://example.invalid/callback',
   } });
-  expect(fetch).toHaveBeenCalledTimes(2);
-  const [[createUrl, create], [deliverUrl, deliver]] = fetch.mock.calls;
-  expect(new URL(createUrl).pathname).toBe('/v1.0/card/instances');
-  expect(new URL(deliverUrl).pathname).toBe('/v1.0/card/instances/deliver');
-  expect(JSON.parse(String(create.body))).toMatchObject({
-    outTrackId: receipt.messageId,
-    cardData: { cardParamMap: { flowStatus: '3', msgContent: '今日天气\n\n' + table } },
+  expect(fetch.mock.calls.map(([url, init]) => [init.method, new URL(url).pathname])).toEqual([
+    ['POST', '/v1.0/card/instances'],
+    ['POST', '/v1.0/card/instances/deliver'],
+    ['PUT', '/v1.0/card/instances'],
+    ['PUT', '/v1.0/card/streaming'],
+    ['PUT', '/v1.0/card/instances'],
+  ]);
+  const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(String(init.body)));
+  expect(bodies.every(body => body.outTrackId === receipt.messageId)).toBe(true);
+  const [create, deliver, inputting, stream, finished] = bodies;
+  expect(create.cardData.cardParamMap).toEqual({ config: JSON.stringify({ autoLayout: true }) });
+  expect(deliver.openSpaceId).toBe('dtv1.card//' + space);
+  const formatted = '今日天气\n\n' + table;
+  expect(inputting.cardData.cardParamMap).toMatchObject({ flowStatus: '2', msgContent: formatted });
+  expect(stream).toMatchObject({
+    key: 'msgContent', content: formatted, guid: expect.any(String), isFull: true, isFinalize: true, isError: false,
   });
-  expect(JSON.parse(String(deliver.body))).toMatchObject({
-    outTrackId: receipt.messageId, openSpaceId: 'dtv1.card//' + space,
+  expect(finished).toMatchObject({
+    cardData: { cardParamMap: { flowStatus: '3', msgContent: formatted } },
+    cardUpdateOptions: { updateCardDataByKey: true },
   });
+});
+
+test('DingTalk reports a rejected content update without posting a duplicate', async () => {
+  const { DingTalkChannelDriver } = await import(dingTalkModule);
+  const driver = new DingTalkChannelDriver({ config: { clientId: 'bot', clientSecret: 'secret' } });
+  driver.getAppAccessToken = async () => 'token';
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json({ success: true }))
+    .mockResolvedValueOnce(Response.json({ success: true, result: [{ success: true }] }))
+    .mockResolvedValueOnce(Response.json({ success: true }))
+    .mockResolvedValueOnce(Response.json({ success: false, code: 'invalidContent' }));
+  vi.stubGlobal('fetch', fetch);
+  await expect(driver.sendMessage({ chatId: 'staff42', text: reply })).rejects.toThrow('invalidContent');
+  expect(fetch).toHaveBeenCalledTimes(4);
+});
+
+test('DingTalk retries a lost stream acknowledgement on the same card', async () => {
+  const { DingTalkChannelDriver } = await import(dingTalkModule);
+  const driver = new DingTalkChannelDriver({ config: { clientId: 'bot', clientSecret: 'secret' } });
+  driver.getAppAccessToken = async () => 'token';
+  const frames: string[] = [];
+  const fetch = vi.fn(async (url: string, init: RequestInit) => {
+    if (new URL(url).pathname.endsWith('/streaming')) {
+      frames.push(String(init.body));
+      if (frames.length === 1) throw new Error('connection reset');
+    }
+    return Response.json({ success: true, result: [{ success: true }] });
+  });
+  vi.stubGlobal('fetch', fetch);
+  const receipt = await driver.sendMessage({ chatId: 'staff42', text: reply });
+  expect(receipt.delivered).toBe(true);
+  expect(frames).toHaveLength(2);
+  expect(frames[1]).toEqual(frames[0]);
+  expect(JSON.parse(frames[0]).outTrackId).toBe(receipt.messageId);
+  expect(fetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(2);
 });
 
 test('DingTalk falls back on explicit rejection and avoids a duplicate after ambiguous delivery', async () => {
