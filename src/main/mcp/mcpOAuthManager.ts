@@ -517,6 +517,7 @@ export class McpOAuthManager {
   }
 
   beginPkceFlow(options: {
+    state?: string;
     serverId: string;
     metadata: McpOAuthMetadata;
     clientId: string;
@@ -527,7 +528,7 @@ export class McpOAuthManager {
     resource?: string;
   }): McpOAuthPkceStart {
     const { codeVerifier, codeChallenge } = generatePkcePair();
-    const state = randomBytes(16).toString('base64url');
+    const state = options.state ?? randomBytes(16).toString('base64url');
     const effectiveScope = options.scope ?? options.metadata.defaultScope;
     const effectiveResource = options.resource ?? options.metadata.resource;
 
@@ -564,7 +565,11 @@ export class McpOAuthManager {
     return pkce;
   }
 
-  async completePkceFlow(state: string, code: string): Promise<McpOAuthTokenRecord> {
+  discardPkceFlow(state: string): void {
+    this.pendingFlows.delete(state);
+  }
+
+  async completePkceFlow(state: string, code: string, signal?: AbortSignal): Promise<McpOAuthTokenRecord> {
     const flow = this.pendingFlows.get(state);
     if (!flow) {
       throw new Error('Unknown or expired MCP OAuth state');
@@ -595,6 +600,7 @@ export class McpOAuthManager {
     });
 
     const res = await this.fetcher(flow.pkce.tokenEndpoint, {
+      signal,
       method: 'POST',
       headers,
       body: params.toString(),
@@ -634,6 +640,7 @@ export class McpOAuthManager {
       ...(flow.pkce.resource ? { resource: flow.pkce.resource } : {}),
       updatedAt: this.now(),
     };
+    signal?.throwIfAborted();
     this.saveToken(record);
     return record;
   }

@@ -134,7 +134,7 @@ const SkillsAndConnectorsView: React.FC<SkillsAndConnectorsViewProps> = ({
       </div>
 
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-[1120px] px-8 py-6">
+        <div className={`mx-auto w-full px-8 py-6 ${activeSection === SkillsConnectorsSection.Connectors ? '' : 'max-w-[1120px]'}`}>
           {activeSection === SkillsConnectorsSection.Kits ? (
             <KitsManager onTryAsking={onTryAsking} onUseKit={onUseKit} />
           ) : activeSection === SkillsConnectorsSection.Connectors ? (

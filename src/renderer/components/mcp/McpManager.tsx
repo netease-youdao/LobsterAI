@@ -12,7 +12,6 @@ import { buildOAuthRegistryInstallData, isOAuthRegistryEntry } from '../../servi
 import {
   buildInstalledMcpItems,
   getRegistryEntryDisplayName,
-  getRegistryEntryEndpointSummary,
   getRegistryEntryExamples,
   getRegistryEntryLocalizedDescription,
   getRegistryEntryRequiredKeyCount,
@@ -29,8 +28,7 @@ import {
 } from '../common/actionPillStyles';
 import CardOverflowMenu, { type CardOverflowMenuItem } from '../common/CardOverflowMenu';
 import CardToggle from '../common/CardToggle';
-import ManagementSearchHeader from '../common/ManagementSearchHeader';
-import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
+import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
@@ -46,8 +44,9 @@ import {
 import McpCard from './McpCard';
 import McpDetailModal, { type McpDetailInfoRow, type McpDetailStat } from './McpDetailModal';
 import McpServerFormModal from './McpServerFormModal';
-import { MCP_TAB_LABEL_KEYS, MCP_TAB_ORDER, McpTab } from './mcpTabs';
+import { MCP_TAB_ORDER, McpTab } from './mcpTabs';
 import { describeMcpToolFilter } from './mcpToolFilterLabels';
+import TdxConnectDialog from './TdxConnectDialog';
 
 const TRANSPORT_BADGE_CLASS = 'shrink-0 rounded bg-surface-raised px-1.5 py-0.5 font-medium';
 
@@ -155,7 +154,14 @@ const McpManager: React.FC = () => {
   // Set once the first `mcp status` read finishes. If that read fails, the sign-in
   // button still appears, since it is then the only way to get a token.
   const [oauthStatusReady, setOAuthStatusReady] = useState(false);
-  const [activeCategory, setActiveCategory] = useState('all');
+  const tdxAttempt = useRef<{ cancelled: boolean; serverId?: string } | null>(null);
+  const cancelTdxAttempt = useCallback(() => {
+    const attempt = tdxAttempt.current;
+    if (!attempt) return;
+    attempt.cancelled = true;
+    if (attempt.serverId) void mcpService.oauthCancel(attempt.serverId);
+  }, []);
+  useEffect(() => cancelTdxAttempt, [cancelTdxAttempt]);
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   // First frame renders the cached copy of the last fetch, so entries and
   // localized names don't visibly swap in when the live response lands. With
@@ -421,7 +427,7 @@ const McpManager: React.FC = () => {
 
   const filteredMarketplace = useMemo(() => {
     const query = searchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
-    let entries = [...dynamicRegistry];
+    let entries = dynamicRegistry;
     if (query) {
       entries = entries.filter(e =>
         getRegistryEntryName(e).toLowerCase().includes(query)
@@ -429,11 +435,8 @@ const McpManager: React.FC = () => {
         || getRegistryEntryDescription(e).toLowerCase().includes(query)
       );
     }
-    if (activeCategory !== 'all') {
-      entries = entries.filter(e => e.category === activeCategory);
-    }
     return entries;
-  }, [searchQuery, activeCategory, dynamicRegistry, getRegistryEntryDescription, getRegistryEntryName]);
+  }, [searchQuery, dynamicRegistry, getRegistryEntryDescription, getRegistryEntryName]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -445,14 +448,13 @@ const McpManager: React.FC = () => {
       reportMcpAction('search', {
         source: 'mcp_manager',
         activeTab,
-        activeCategory,
+        activeCategory: 'all',
         searchKeywordLength: query.length,
         resultCount,
       });
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
-    activeCategory,
     activeTab,
     filteredInstalled.length,
     filteredMarketplace.length,
@@ -709,7 +711,7 @@ const McpManager: React.FC = () => {
    * token; the gateway picks it up on the next request without a restart.
    */
   const handleOAuthSignIn = async (server: McpServerConfig) => {
-    if (signingInServerId) return;
+    if (signingInServerId) return false;
     setActionError('');
     setSigningInServerId(server.id);
     try {
@@ -720,6 +722,7 @@ const McpManager: React.FC = () => {
           ? i18nService.t(messageKey)
           : `${i18nService.t('mcpOAuthSignInFailed')}${result.error ? `: ${result.error}` : ''}`);
       }
+      return result.success;
     } finally {
       setSigningInServerId(null);
       await refreshOAuthStates();
@@ -745,7 +748,7 @@ const McpManager: React.FC = () => {
     reportMcpAction('marketplace_install_open', {
       source: 'mcp_manager',
       activeTab,
-      activeCategory,
+      activeCategory: 'all',
       ...getRegistryAnalyticsParams(entry),
     });
     if (isQichachaRegistryEntry(entry)) {
@@ -757,7 +760,7 @@ const McpManager: React.FC = () => {
           reportMcpAction('qichacha_connect_failed', {
             source: 'mcp_manager',
             activeTab,
-            activeCategory,
+            activeCategory: 'all',
             result: 'failed',
             errorCode: 'qichacha_connect_failed',
             ...getRegistryAnalyticsParams(entry),
@@ -770,7 +773,7 @@ const McpManager: React.FC = () => {
         reportMcpAction('qichacha_connect_success', {
           source: 'mcp_manager',
           activeTab,
-          activeCategory,
+          activeCategory: 'all',
           result: 'success',
           ...getRegistryAnalyticsParams(entry),
         });
@@ -820,8 +823,37 @@ const McpManager: React.FC = () => {
       }
       if (result.servers) dispatch(setMcpServers(result.servers));
       reportMcpAction('create_success', { ...analyticsParams, result: 'success' });
+      return result.servers?.find(server => server.registryId === entry.id);
     } finally {
       setConnectingRegistryId(null);
+    }
+  };
+
+  const connectTdx = async (entry: McpRegistryEntry, example?: string) => {
+    if (tdxAttempt.current) return;
+    const attempt: { cancelled: boolean; serverId?: string } = { cancelled: false };
+    tdxAttempt.current = attempt;
+    setActionError('');
+    try {
+      let server = servers.find(item => item.registryId === entry.id);
+      if (!server) server = await handleInstallOAuthRegistryEntry(entry);
+      if (!server || attempt.cancelled) return;
+      if (!server.enabled) {
+        const updated = await mcpService.setServerEnabled(server.id, true);
+        dispatch(setMcpServers(updated));
+        server = updated.find(item => item.registryId === entry.id);
+        if (!server?.enabled || attempt.cancelled) return;
+      }
+      attempt.serverId = server.id;
+      if (getOAuthPhase(server) !== OAuthPhase.SignedIn && !(await handleOAuthSignIn(server))) return;
+      if (example && !attempt.cancelled) {
+        setDetailTarget(null);
+        window.dispatchEvent(new CustomEvent('app:ask-ai', { detail: example }));
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : i18nService.t('mcpOAuthSignInFailed'));
+    } finally {
+      tdxAttempt.current = null;
     }
   };
 
@@ -972,6 +1004,11 @@ const McpManager: React.FC = () => {
   };
 
   const openServerDetail = (server: McpServerConfig) => {
+    const entry = getRegistryEntryForServer(server);
+    if (entry?.id === 'tdx' && isOAuthRegistryEntry(entry)) {
+      openMarketplaceDetail(entry);
+      return;
+    }
     reportMcpAction('open_detail', {
       source: 'mcp_manager',
       activeTab,
@@ -993,9 +1030,10 @@ const McpManager: React.FC = () => {
     reportMcpAction('open_detail', {
       source: 'mcp_manager',
       activeTab,
-      activeCategory,
+      activeCategory: 'all',
       ...getRegistryAnalyticsParams(entry),
     });
+    setActionError('');
     setDetailTarget({ kind: 'marketplace', entryId: entry.id });
   };
 
@@ -1118,9 +1156,7 @@ const McpManager: React.FC = () => {
    * share a renderer instead of drifting apart.
    */
   const renderServerCard = (server: McpServerConfig) => {
-    const registryEntry = getRegistryEntryForServer(server);
     const launchStatusLabel = getLaunchStatusLabel(server);
-    const requiredEnvKeyCount = registryEntry?.requiredEnvKeys?.length ?? 0;
     const oauthPhase = getOAuthPhase(server);
     return (
       <McpCard
@@ -1151,9 +1187,6 @@ const McpManager: React.FC = () => {
                 {i18nService.t('mcpCustom')}
               </span>
             )}
-            <span className={TRANSPORT_BADGE_CLASS}>
-              {server.transportType}
-            </span>
             {renderOAuthBadge(server, oauthPhase)}
             {launchStatusLabel && (
               <span
@@ -1172,29 +1205,12 @@ const McpManager: React.FC = () => {
                 {i18nService.t('mcpLaunchRetry')}
               </button>
             )}
-            {requiredEnvKeyCount > 0 && (
-              <>
-                <span className="shrink-0 text-secondary/50">·</span>
-                <span className="shrink-0 text-amber-500 dark:text-amber-400">
-                  {requiredEnvKeyCount} key{requiredEnvKeyCount > 1 ? 's' : ''}
-                </span>
-              </>
-            )}
             {renderOAuthAction(server, oauthPhase, 'card')}
           </>
         )}
       />
     );
   };
-
-  /**
-   * Listen for MCP bridge sync events from the main process.
-   * Main process broadcasts syncStart/syncDone after server config changes.
-   */
-  const marketplaceCount = useMemo(
-    () => dynamicRegistry.length,
-    [dynamicRegistry]
-  );
 
   const DETAIL_FOOTER_BUTTON_CLASS =
     `inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 ${MANAGEMENT_BODY_TEXT} text-secondary transition-colors hover:bg-surface-raised hover:text-foreground`;
@@ -1385,6 +1401,28 @@ const McpManager: React.FC = () => {
     const isInstalled = installedRegistryIds.has(entry.id);
     const isConnecting = connectingRegistryId === entry.id;
     const installedServers = servers.filter(server => server.registryId === entry.id);
+    if (entry.id === 'tdx' && isOAuthRegistryEntry(entry)) {
+      const server = installedServers[0];
+      return (
+        <TdxConnectDialog
+          title={getRegistryEntryName(entry)}
+          icon={entry.icon}
+          description={getRegistryEntryDescription(entry)}
+          examples={getRegistryEntryExamples(entry, currentLanguage) ?? []}
+          connected={Boolean(server && getOAuthPhase(server) === OAuthPhase.SignedIn)}
+          busy={isConnecting || Boolean(server && signingInServerId === server.id)}
+          error={actionError}
+          onConnect={example => { void connectTdx(entry, example); }}
+          onDisconnect={() => { if (server) void handleOAuthSignOut(server); }}
+          onCancel={cancelTdxAttempt}
+          onClose={() => {
+            cancelTdxAttempt();
+            setActionError('');
+            closeDetail();
+          }}
+        />
+      );
+    }
     const requiredKeyCount = getRegistryEntryRequiredKeyCount(entry);
     const tokenFields = entry.connector?.tokenSchema?.fields ?? [];
     const getTokenFieldLabels = (required: boolean): string => tokenFields
@@ -1500,18 +1538,6 @@ const McpManager: React.FC = () => {
     return entry ? renderMarketplaceDetail(entry) : null;
   };
 
-  const tabClass = (tab: McpTab) =>
-    `relative px-2.5 pb-2.5 pt-0.5 ${MANAGEMENT_TITLE_TEXT} font-semibold transition-colors ${
-      activeTab === tab
-        ? 'text-foreground'
-        : 'text-secondary hover:text-foreground'
-    }`;
-
-  const tabIndicatorClass = (tab: McpTab) =>
-    `absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
-      activeTab === tab ? 'bg-foreground' : 'bg-transparent'
-    }`;
-
   return (
     <div className="relative space-y-4">
       {actionError && (
@@ -1521,14 +1547,23 @@ const McpManager: React.FC = () => {
         />
       )}
 
-      {/* Sticky toolbar: Description + Search + Tabs + Category pills */}
+      {/* Marketplace controls */}
       <div
         data-skin-management-toolbar="true"
         className="sticky top-0 z-10 space-y-3 bg-background pb-2"
       >
         {/* Search */}
-        <ManagementSearchHeader description={i18nService.t('mcpDescription')}>
-          <div className="management-search-header__search relative min-w-0">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button type="button" aria-pressed={activeTab === McpTab.Installed}
+            onClick={() => {
+              const targetTab = activeTab === McpTab.Installed ? McpTab.Marketplace : McpTab.Installed;
+              reportMcpAction('tab_change', { source: 'mcp_manager', activeTab, targetTab });
+              setActiveTab(targetTab);
+            }}
+            className={`mr-auto rounded-lg px-3 py-2 text-sm font-medium ${activeTab === McpTab.Installed ? 'bg-surface-raised text-foreground' : 'text-secondary'}`}>
+            {i18nService.t('mcpInstalled')} {installedItems.length}
+          </button>
+          <div className="relative w-64 max-w-full min-w-0">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
             <input
               type="text"
@@ -1546,7 +1581,7 @@ const McpManager: React.FC = () => {
                   reportMcpAction('clear_search', {
                     source: 'mcp_manager',
                     activeTab,
-                    activeCategory,
+                    activeCategory: 'all',
                     searchKeywordLength: searchQuery.trim().length,
                     resultCount: activeTab === McpTab.Marketplace
                       ? filteredMarketplace.length
@@ -1567,71 +1602,11 @@ const McpManager: React.FC = () => {
             className="h-9 px-3.5 text-sm font-medium whitespace-nowrap rounded-xl transition-colors bg-action text-action-foreground hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface flex shrink-0 items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusIcon className="h-5 w-5" aria-hidden="true" />
-            <span>{i18nService.t('mcpAddServer')}</span>
+            <span>{i18nService.t('mcpCustomConnector')}</span>
           </button>
-        </ManagementSearchHeader>
-
-        {/* Tabs */}
-        <div className="flex items-center border-b border-border">
-          {MCP_TAB_ORDER.map((tab) => {
-            const count = tab === McpTab.Installed
-              ? installedItems.length
-              : (isLoadingMarketplace ? 0 : marketplaceCount);
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => {
-                  reportMcpAction('tab_change', {
-                    source: 'mcp_manager',
-                    activeTab,
-                    targetTab: tab,
-                  });
-                  setActiveTab(tab);
-                }}
-                className={tabClass(tab)}
-              >
-                {i18nService.t(MCP_TAB_LABEL_KEYS[tab])}
-                {count > 0 && (
-                  <span className={`ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 ${MANAGEMENT_META_TEXT} font-medium text-secondary`}>
-                    {count}
-                  </span>
-                )}
-                <div className={tabIndicatorClass(tab)} />
-              </button>
-            );
-          })}
         </div>
 
-        {/* Category filters, matching Expert Plaza (Marketplace only). */}
-        {activeTab === McpTab.Marketplace && !isLoadingMarketplace && (
-          <div className="flex flex-wrap items-center gap-2 py-1">
-            {dynamicCategories.map((cat) => (
-              <button
-                key={cat.id}
-                type="button"
-                aria-pressed={activeCategory === cat.id}
-                onClick={() => {
-                  reportMcpAction('category_change', {
-                    source: 'mcp_manager',
-                    activeTab,
-                    activeCategory,
-                    targetCategory: cat.id,
-                    resultCount: filteredMarketplace.length,
-                  });
-                  setActiveCategory(cat.id);
-                }}
-                className={`h-9 shrink-0 whitespace-nowrap rounded-lg px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 ${
-                  activeCategory === cat.id
-                    ? 'bg-surface-raised font-semibold text-foreground'
-                    : 'text-secondary hover:bg-surface-raised hover:text-foreground'
-                }`}
-              >
-                {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
-              </button>
-            ))}
-          </div>
-        )}
+
       </div>
 
       <div>
@@ -1674,7 +1649,7 @@ const McpManager: React.FC = () => {
             </div>
           )
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,230px),1fr))] gap-3">
             {filteredInstalled.map((item) => {
               if (item.kind === 'registryGroup') {
                 const groupName = getRegistryGroupName(item);
@@ -1740,27 +1715,17 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Marketplace ────────────────────────────── */}
       {activeTab === McpTab.Marketplace && (
         isLoadingMarketplace ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4" aria-hidden="true">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,230px),1fr))] gap-3" aria-hidden="true">
           {Array.from({ length: 6 }).map((_, idx) => (
-            <div key={idx} className="animate-pulse rounded-2xl border border-border bg-surface p-4">
-              <div className="mb-3 flex items-center gap-2.5">
-                <div className="h-10 w-10 rounded-[10px] bg-surface-raised" />
-                <div className="h-3.5 w-1/3 rounded bg-surface-raised" />
-              </div>
-              <div className="space-y-2">
-                <div className="h-3 w-full rounded bg-surface-raised" />
-                <div className="h-3 w-2/3 rounded bg-surface-raised" />
-              </div>
-              <div className="mt-3 flex items-center gap-1.5">
-                <div className="h-4 w-12 rounded bg-surface-raised" />
-                <div className="h-4 w-10 rounded bg-surface-raised" />
-              </div>
+            <div key={idx} className="flex h-16 animate-pulse items-center gap-3 rounded-xl border border-border px-3">
+              <div className="h-10 w-10 rounded-lg bg-surface-raised" />
+              <div className="h-3 w-1/2 rounded bg-surface-raised" />
             </div>
           ))}
         </div>
         ) : (
         <div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,230px),1fr))] gap-3">
             {filteredMarketplace.length === 0 ? (
               <div className="col-span-full text-center py-12 text-sm text-secondary">
                 {i18nService.t('noMcpServersAvailable')}
@@ -1768,8 +1733,8 @@ const McpManager: React.FC = () => {
             ) : (
               filteredMarketplace.map((entry) => {
                 const isInstalled = installedRegistryIds.has(entry.id);
-                const isConnecting = connectingRegistryId === entry.id;
-                const requiredEnvKeyCount = getRegistryEntryRequiredKeyCount(entry);
+                const server = servers.find(item => item.registryId === entry.id);
+                const connected = server && getOAuthPhase(server) === OAuthPhase.SignedIn;
                 return (
                   <McpCard
                     key={entry.id}
@@ -1777,38 +1742,12 @@ const McpManager: React.FC = () => {
                     description={getRegistryEntryDescription(entry)}
                     icon={entry.icon}
                     onOpenDetail={() => openMarketplaceDetail(entry)}
-                    actions={isInstalled ? renderMarketplaceInstalledState(entry, 'cardHeader') : (
-                      <button
-                        type="button"
-                        onClick={(event) => { event.stopPropagation(); handleInstallFromRegistry(entry); }}
-                        disabled={isConnecting}
-                        className={`${MCP_CARD_ACTION_CLASS} ${isConnecting ? '' : CARD_ACTION_REVEAL_CLASS}`}
-                      >
-                        {getInstallActionLabel(entry, isConnecting)}
-                      </button>
-                    )}
-                    meta={(
-                      <>
-                        <span className={TRANSPORT_BADGE_CLASS}>
-                          {entry.transportType}
-                        </span>
-                        <span className="shrink-0 text-secondary/50">·</span>
-                        <span className="min-w-0 truncate">{getRegistryEntryEndpointSummary(entry)}</span>
-                        {requiredEnvKeyCount > 0 && (
-                          <>
-                            <span className="shrink-0 text-secondary/50">·</span>
-                            <span className="shrink-0 text-amber-500 dark:text-amber-400">
-                              {requiredEnvKeyCount} key{requiredEnvKeyCount > 1 ? 's' : ''}
-                            </span>
-                          </>
-                        )}
-                        {isOAuthRegistryEntry(entry) && (
-                          <>
-                            <span className="shrink-0 text-secondary/50">·</span>
-                            <span className="shrink-0">{i18nService.t('mcpAuthOAuth')}</span>
-                          </>
-                        )}
-                      </>
+                    actions={isInstalled && (!isOAuthRegistryEntry(entry) || connected) ? (
+                      <CheckIcon aria-label={i18nService.t(connected ? 'mcpConnected' : 'mcpInstalled')} className="h-4 w-4 text-secondary" />
+                    ) : (
+                      <span aria-hidden="true" className="rounded-md bg-surface-raised p-1 text-secondary">
+                        <PlusIcon className="h-4 w-4" />
+                      </span>
                     )}
                   />
                 );

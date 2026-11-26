@@ -9463,6 +9463,8 @@ if (!gotTheLock) {
   );
 
   registerMcpHandlers({
+    getAuthTokens,
+    getAuthSessionKey,
     getMcpRuntime,
     syncDshConfig: syncOpenClawConfig,
     getMcpOAuthManager: () => getDshBootstrap().mcpOAuthManager,

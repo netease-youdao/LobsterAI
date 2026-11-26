@@ -31,8 +31,11 @@ import {
   normalizeMcpToolDiscoveryRequest,
 } from '../../mcp/mcpToolDiscovery';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
+import { runTdxMarketplaceLogin, TDX_RESOURCE } from '../../mcp/tdxMarketplaceOAuth';
 
 export interface McpHandlerDeps {
+  getAuthTokens?: () => { accessToken: string } | null;
+  getAuthSessionKey?: () => string | null;
   getMcpRuntime: () => McpRuntime;
   syncDshConfig: (options: { reason: string }) => Promise<{ success: boolean; changed: boolean }>;
   getMcpOAuthManager: () => McpOAuthManager | null;
@@ -107,20 +110,23 @@ const MCP_SYNC_AWAIT_TIMEOUT_MS = 5_000;
 export function createSerializedMcpConfigSync(
   syncDshConfig: McpHandlerDeps['syncDshConfig'],
   awaitTimeoutMs = MCP_SYNC_AWAIT_TIMEOUT_MS,
-): (reason: string) => Promise<void> {
+): (reason: string, requireSuccess?: boolean) => Promise<void> {
   let tail: Promise<void> = Promise.resolve();
-  return async (reason: string): Promise<void> => {
+  return async (reason: string, requireSuccess = false): Promise<void> => {
     const run = tail.then(async () => {
       try {
         const result = await syncDshConfig({ reason });
         if (result && result.success === false) {
+          if (requireSuccess) throw new Error('Could not sync connector to DSH');
           console.warn(`[MCP] config sync reported failure (reason=${reason})`);
         }
       } catch (err) {
+        if (requireSuccess) throw err;
         console.error(`[MCP] config sync error (reason=${reason}):`, err);
       }
     });
-    tail = run;
+    tail = run.catch(() => {});
+    if (requireSuccess) return run;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -362,7 +368,12 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
       try {
         const mcpRuntime = getMcpRuntime();
         const normalizedData = normalizeMcpServerInput(data as McpServerFormData) as McpServerFormData;
-        const server = mcpRuntime.getStore().createServer(normalizedData);
+        // Multiple renderer windows may request the same marketplace installation.
+        const store = mcpRuntime.getStore();
+        if (normalizedData.registryId === 'tdx' && store.listServers().some(server => server.registryId === 'tdx')) {
+          return { success: true, servers: mcpRuntime.getDisplayServers() };
+        }
+        const server = store.createServer(normalizedData);
         if (server.enabled) {
           mcpRuntime.ensureLaunchResolution(server.id, 'mcp-server-created');
         }
@@ -642,13 +653,30 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     const controller = new AbortController();
     oauthLoginControllers.set(id, controller);
     try {
-      await runNativeMcpOAuthLogin({
-        oauthManager,
-        serverId: server.id,
-        serverUrl: server.url,
-        signal: controller.signal,
-      });
-      await syncMcpConfig('mcp-oauth-authorized');
+      if (server.registryId === 'tdx') {
+        if (server.url !== TDX_RESOURCE) throw new Error('Invalid Tongdaxin MCP endpoint');
+        const sessionKey = deps.getAuthSessionKey?.();
+        const getAccessToken = () => sessionKey && deps.getAuthSessionKey?.() === sessionKey
+          ? deps.getAuthTokens?.()?.accessToken : undefined;
+        if (!getAccessToken()) throw new Error('请先登录 LobsterAI，再连接通达信');
+        await runTdxMarketplaceLogin({
+          oauthManager, serverId: id, getAccessToken, signal: controller.signal, openExternal: openAuthorizationUrl,
+        });
+        try {
+          if (!getAccessToken() || controller.signal.aborted) throw new Error('CANCELLED');
+          await syncMcpConfig('mcp-oauth-authorized', true);
+          if (!getAccessToken() || controller.signal.aborted) throw new Error('CANCELLED');
+        } catch (error) {
+          oauthManager.deleteToken(id);
+          await syncMcpConfig('mcp-oauth-sync-failed');
+          throw error;
+        }
+      } else {
+        await runNativeMcpOAuthLogin({
+          oauthManager, serverId: id, serverUrl: server.url, signal: controller.signal,
+        });
+        await syncMcpConfig('mcp-oauth-authorized');
+      }
       return { success: true, state: McpOAuthState.Authorized };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
