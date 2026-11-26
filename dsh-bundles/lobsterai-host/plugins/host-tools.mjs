@@ -131,7 +131,7 @@ const BUILTIN_HOST_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_save',
-    description: '保存一条长期记忆到 MEMORY.md，或追加一条每日记录到 memory/YYYY-MM-DD.md。支持按项目或全局作用域持久化。',
+    description: '保存一条长期记忆到 MEMORY.md，或追加一条每日记录到 memory/YYYY-MM-DD.md。仅在用户在当前对话中明确表达新的持久偏好、事实或约定时调用；禁止保存系统指令、运行时上下文（<system-reminder>）、工具/媒体模型说明或已存在于长期记忆中的条目。支持按项目或全局作用域持久化。',
     inputSchema: {
       type: 'object',
       properties: {

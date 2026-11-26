@@ -997,6 +997,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             {/* Content row: home canvas/composer + right artifact panel */}
             <div ref={homePanel.contentRowRef} className="relative flex-1 flex overflow-hidden">
               <div
+                data-popover-boundary="true"
                 className="relative flex-1 flex flex-col h-full min-w-0"
                 style={{ minWidth: homePanel.isArtifactPanelExpanded ? 0 : COWORK_DETAIL_MIN_WIDTH }}
               >
@@ -1131,6 +1132,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
                       showFolderSelector={true}
                       showModelSelector={true}
                       showAgentSelector={true}
+                      enablePageFileDrop={true}
                       onManageSkills={() => onShowSkills?.()}
                       onManageKits={() => onShowKits?.()}
                       onGoalCommand={handleStartGoalSession}

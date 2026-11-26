@@ -4,6 +4,8 @@ import { DshOpsAction } from '../../../shared/dshEngine/hostConstants';
 import {
   type DshHttpRequester,
   DshRemoteError,
+  type DshSessionControlFrame,
+  DshSessionControlFrameType,
   DshTypertClient,
   type DshWebSocketLike,
 } from './dshTypertClient';
@@ -595,6 +597,86 @@ describe('DshTypertClient', () => {
 
     expect(updateStates).toEqual([{ requestId: 'upd-1', step: 'removing' }]);
     expect(pluginChanges).toEqual([{ reason: 'install' }]);
+
+    await client.close();
+  });
+
+  test('observeSessionControl opens session/control stream and yields baseline and projection frames', async () => {
+    const fakeWs = new FakeWebSocket();
+    const requester: DshHttpRequester = async (url) => {
+      if (url.includes('/connect?')) {
+        return {
+          status: 302,
+          headers: { 'set-cookie': ['dsh-auth-ctl=1; Path=/'] },
+          body: '',
+        };
+      }
+      return { status: 200, headers: {}, body: '{}' };
+    };
+
+    const client = new DshTypertClient({
+      requester,
+      webSocketFactory: () => {
+        queueMicrotask(() => {
+          fakeWs.triggerOpen();
+          queueMicrotask(() => {
+            const openEvents = fakeWs.sent.find((m) => m.endpoint === '$events');
+            fakeWs.triggerMessage({
+              type: 'item',
+              streamId: openEvents!.streamId,
+              value: { type: 'ready', clientId: 'c-ctl', host: { home: '/tmp' } },
+            });
+          });
+        });
+        return fakeWs;
+      },
+    });
+
+    await client.connect('http://127.0.0.1:41234/?token=tok');
+
+    const frames: DshSessionControlFrame[] = [];
+    const consumePromise = (async () => {
+      for await (const frame of client.observeSessionControl()) {
+        frames.push(frame);
+      }
+    })();
+
+    await vi.waitFor(() => {
+      expect(fakeWs.sent.some((m) => m.endpoint === 'session/control')).toBe(true);
+    });
+    const openFrame = fakeWs.sent.find((m) => m.endpoint === 'session/control')!;
+    expect(openFrame.payload).toEqual({ args: {} });
+    const streamId = openFrame.streamId as string;
+
+    const baselineFrame: DshSessionControlFrame = {
+      type: DshSessionControlFrameType.Baseline,
+      value: {
+        projections: {
+          'dsh-1': {
+            asOfSeq: 4,
+            values: {
+              contextPressure: { projectedTokens: 12_000, contextWindow: 200_000 },
+              contextBreakdown: { systemTokens: 3_000, toolsTokens: 2_000, messageTokens: 7_000 },
+            },
+          },
+        },
+      },
+    };
+    const projectionFrame: DshSessionControlFrame = {
+      type: DshSessionControlFrameType.Projection,
+      sessionId: 'dsh-1',
+      seq: 5,
+      changes: [
+        { key: 'contextPressure', val: { projectedTokens: 15_000, contextWindow: 200_000 } },
+      ],
+    };
+
+    fakeWs.triggerMessage({ type: 'item', streamId, value: baselineFrame });
+    fakeWs.triggerMessage({ type: 'item', streamId, value: projectionFrame });
+    fakeWs.triggerMessage({ type: 'end', streamId });
+
+    await consumePromise;
+    expect(frames).toEqual([baselineFrame, projectionFrame]);
 
     await client.close();
   });

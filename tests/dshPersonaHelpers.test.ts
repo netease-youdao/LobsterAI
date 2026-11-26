@@ -261,10 +261,12 @@ describe('persona-helpers', () => {
     expect(promptDisabled).not.toContain('FALCON');
     expect(promptDisabled).not.toContain('concise bullet points');
 
-    // Write policy prompt covers write-before-confirm and both scopes.
+    // Write policy prompt covers write-before-confirm, both scopes, and anti-pollution guardrails.
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('lobster_memory_save');
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "project"');
     expect(MEMORY_WRITE_POLICY_PROMPT).toContain('scope: "global"');
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('<system-reminder>');
+    expect(MEMORY_WRITE_POLICY_PROMPT).toContain('existing memory sections');
 
     // Agent rules policy directs updates to lobster_agent_rules and prohibits writing shared cwd AGENTS.md / CLAUDE.md.
     const { AGENT_RULES_POLICY_PROMPT } = await loadHelpers();

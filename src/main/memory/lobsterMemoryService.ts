@@ -32,6 +32,7 @@ export type WorkspaceFileName = typeof WorkspaceFileName[keyof typeof WorkspaceF
 
 export const MEMORY_DAILY_DIR_NAME = 'memory';
 export const MEMORY_FTS_DB_NAME = 'memory-fts.sqlite';
+const MEMORY_FTS_SCHEMA_VERSION = 2;
 const MANAGED_AGENTS_MARKER = '<!-- LobsterAI managed:';
 const MEMORY_HEADER = '# User Memories';
 
@@ -1079,14 +1080,16 @@ export class LobsterMemoryService {
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
 
-    // Recreate derived FTS5 index cleanly if an older DB lacks `project_keys`.
+    // Recreate derived FTS5 index cleanly if an older DB lacks `project_keys`
+    // or predates the current chunk-filtering schema version.
     const existingTable = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_chunks'")
       .get() as { name?: string } | undefined;
+    const currentSchemaVersion = Number(db.pragma('user_version', { simple: true }) ?? 0);
     if (existingTable?.name) {
       const cols = db.prepare('PRAGMA table_info(memory_chunks)').all() as Array<{ name?: string }>;
       const hasProjectKeys = cols.some((col) => col.name === 'project_keys');
-      if (!hasProjectKeys) {
+      if (!hasProjectKeys || currentSchemaVersion < MEMORY_FTS_SCHEMA_VERSION) {
         db.exec('DROP TABLE IF EXISTS memory_chunks; DROP TABLE IF EXISTS memory_file_meta;');
       }
     }
@@ -1128,6 +1131,10 @@ export class LobsterMemoryService {
         PRIMARY KEY (agent_id, rel_path)
       );
     `);
+
+    if (currentSchemaVersion < MEMORY_FTS_SCHEMA_VERSION) {
+      db.pragma(`user_version = ${MEMORY_FTS_SCHEMA_VERSION}`);
+    }
 
     this.db = db;
     return db;
@@ -1228,6 +1235,60 @@ export class LobsterMemoryService {
 }
 
 const PROMOTION_COMMENT_RE = /^[ \t]*<!--\s*openclaw-memory-promotion:[^>]*-->[ \t]*\r?\n?/gm;
+const LEGACY_DREAMING_DAILY_START_RE = /^\s*<!--\s*openclaw:dreaming:[a-z0-9_-]+:start\s*-->\s*$/i;
+const LEGACY_DREAMING_DAILY_END_RE = /^\s*<!--\s*openclaw:dreaming:[a-z0-9_-]+:end\s*-->\s*$/i;
+const LEGACY_DREAMING_DAILY_HEADING_RE = /^#{2,6}\s+(?:Light|REM|Deep)\s+Sleep\s*$/i;
+const LEGACY_DREAMING_ORPHAN_TAIL_RE = /(?:memory\/\.dreams\/|status:\s*staged\b|note:\s*reflection\b)/i;
+
+/**
+ * Blank out legacy OpenClaw Dreaming light/rem/deep sleep sections in daily notes
+ * while preserving exact 1-based line numbers for surviving notes in FTS5 search hits.
+ */
+function maskLegacyDreamingDailyBlocks(content: string): string {
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const masked = [...lines];
+  let inDreamingBlock = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (inDreamingBlock) {
+      masked[i] = '';
+      if (LEGACY_DREAMING_DAILY_END_RE.test(line)) {
+        inDreamingBlock = false;
+      }
+      continue;
+    }
+
+    if (LEGACY_DREAMING_DAILY_START_RE.test(line)) {
+      masked[i] = '';
+      inDreamingBlock = true;
+      // Blank an immediately preceding `## Light Sleep` / `## REM Sleep` heading.
+      let prev = i - 1;
+      while (prev >= 0 && masked[prev].trim() === '') prev -= 1;
+      if (prev >= 0 && LEGACY_DREAMING_DAILY_HEADING_RE.test(masked[prev].trim())) {
+        masked[prev] = '';
+      }
+      continue;
+    }
+
+    if (LEGACY_DREAMING_DAILY_END_RE.test(line)) {
+      masked[i] = '';
+      // Legacy OpenClaw occasionally left an orphan truncated tail between two `:end` markers.
+      let start = i - 1;
+      while (start >= 0 && masked[start].trim() !== '' && !HEADING_RE.test(masked[start])) {
+        start -= 1;
+      }
+      const tailSlice = masked.slice(start + 1, i).join('\n');
+      if (LEGACY_DREAMING_ORPHAN_TAIL_RE.test(tailSlice)) {
+        for (let k = start + 1; k < i; k += 1) {
+          masked[k] = '';
+        }
+      }
+    }
+  }
+
+  return masked.join('\n');
+}
 
 interface IndexableFileEntry {
   relPath: string;
@@ -1298,7 +1359,7 @@ interface MarkdownSearchChunk {
 }
 
 function splitMarkdownChunks(content: string): MarkdownSearchChunk[] {
-  const blocks = parseScopedMarkdownBlocks(content);
+  const blocks = parseScopedMarkdownBlocks(maskLegacyDreamingDailyBlocks(content));
   const chunks: MarkdownSearchChunk[] = [];
 
   for (const block of blocks) {
@@ -1314,7 +1375,7 @@ function splitMarkdownChunks(content: string): MarkdownSearchChunk[] {
       const cleaned = stripProjectTags(slice.join('\n'))
         .replace(PROMOTION_COMMENT_RE, '')
         .trim();
-      if (!cleaned) continue;
+      if (!cleaned || LEGACY_DREAMING_EVIDENCE_RE.test(cleaned)) continue;
       chunks.push({
         lineStart: block.lineStart + offset,
         lineEnd: block.lineStart + offset + slice.length - 1,

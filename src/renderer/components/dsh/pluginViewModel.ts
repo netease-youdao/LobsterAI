@@ -86,6 +86,9 @@ export function resolvePluginDisplayTitle(
   return plugin.name;
 }
 
+// Total sidebar row budget reserved for DSH plugin panels.
+// Up to this many panels render directly; once exceeded, the final slot
+// becomes the "More" overflow menu so plugins never occupy more than this many rows.
 export const MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS = 2;
 
 export const SidebarPluginPlacement = {
@@ -137,42 +140,55 @@ export function sortPluginsByDisplayOrder(
     .map((item) => item.plugin);
 }
 
+export function resolveSidebarDirectVisibleCount(
+  totalPanelCount: number,
+  maxSlots: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
+): number {
+  const safeMax = Math.max(0, Math.floor(maxSlots));
+  if (totalPanelCount <= safeMax) {
+    return totalPanelCount;
+  }
+  return Math.max(0, safeMax - 1);
+}
+
 export function resolveSidebarPluginPlacement(
   orderedPlugins: readonly DshPluginEntry[],
-  maxVisible: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
+  maxSlots: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
 ): Record<string, SidebarPluginPlacement> {
-  const safeMax = Math.max(0, Math.floor(maxVisible));
-  const placement: Record<string, SidebarPluginPlacement> = {};
+  const eligiblePluginNames: string[] = [];
   const seenPanelIds = new Set<string>();
-  let visibleIndex = 0;
   for (const plugin of orderedPlugins) {
     if (plugin.managed || !plugin.enabled || plugin.isThemePlugin) continue;
     const panelId = plugin.panelId?.trim();
     if (!panelId || seenPanelIds.has(panelId)) continue;
     seenPanelIds.add(panelId);
-    placement[plugin.name] =
-      visibleIndex < safeMax
+    eligiblePluginNames.push(plugin.name);
+  }
+  const directVisibleCount = resolveSidebarDirectVisibleCount(eligiblePluginNames.length, maxSlots);
+  const placement: Record<string, SidebarPluginPlacement> = {};
+  eligiblePluginNames.forEach((name, index) => {
+    placement[name] =
+      index < directVisibleCount
         ? SidebarPluginPlacement.Pinned
         : SidebarPluginPlacement.Overflow;
-    visibleIndex += 1;
-  }
+  });
   return placement;
 }
 
 export function partitionSidebarPluginPanels(
   panels: readonly SidebarPluginPanelItem[],
-  maxVisible: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
+  maxSlots: number = MAX_VISIBLE_SIDEBAR_PLUGIN_PANELS,
 ): PartitionedSidebarPluginPanels {
-  const safeMax = Math.max(0, Math.floor(maxVisible));
-  if (panels.length <= safeMax) {
+  const directVisibleCount = resolveSidebarDirectVisibleCount(panels.length, maxSlots);
+  if (directVisibleCount >= panels.length) {
     return {
       visiblePanels: [...panels],
       overflowPanels: [],
     };
   }
   return {
-    visiblePanels: panels.slice(0, safeMax),
-    overflowPanels: panels.slice(safeMax),
+    visiblePanels: panels.slice(0, directVisibleCount),
+    overflowPanels: panels.slice(directVisibleCount),
   };
 }
 

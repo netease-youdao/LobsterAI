@@ -327,12 +327,19 @@ interface CoworkSessionSummary {
 
 type CoworkSessionStatus = 'idle' | 'running' | 'completed' | 'error';
 
+interface CoworkContextUsageBreakdown {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+}
+
 interface CoworkContextUsage {
   sessionId: string;
   sessionKey?: string;
   usedTokens?: number;
   contextTokens?: number;
   percent?: number;
+  breakdown?: CoworkContextUsageBreakdown;
   compactionCount?: number;
   status: 'unknown' | 'normal' | 'warning' | 'danger' | 'compacting';
   latestCompactionCheckpointId?: string;

@@ -81,6 +81,26 @@ export function apply(ctx) {
     },
   });
 
+  // 1b. Inject per-turn media generation & skin workflow instructions as DSH
+  // runtime context (`<system-reminder>`) rather than prepending raw prose into
+  // the user's message, preventing models from confusing runtime policies with
+  // user-stated memory preferences or polluting turn outlines.
+  ctx.systemPrompt.context({
+    name: 'lobsterai:media-turn',
+    order: ctx.systemPrompt.getContextOrder('APPROVAL_POLICY') + 1,
+    interpolate: false,
+    required: true,
+    text: (assemblyCtx) => {
+      const sessionId = resolveSessionId(assemblyCtx?.scope)
+        ?? resolveSessionId(assemblyCtx?.agent);
+      const bound = resolveSessionContext(ctx, state, sessionId);
+      const instruction = bound && typeof bound.mediaTurnInstruction === 'string'
+        ? bound.mediaTurnInstruction.trim()
+        : '';
+      return instruction ? `## Media Generation Policy (Current Turn)\n${instruction}` : '';
+    },
+  });
+
   // 2. Register LobsterAI scoped skills provider into DSH's skill registry.
   ctx.skills.registerProvider((control) => {
     state.invalidateSkills = () => control.invalidate();

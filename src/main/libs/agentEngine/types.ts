@@ -67,12 +67,19 @@ export interface CoworkRuntimeEvents {
   sessionStopped: (sessionId: string, turn?: CoworkStoppedTurn) => void;
 }
 
+export type CoworkContextUsageBreakdown = {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+};
+
 export type CoworkContextUsage = {
   sessionId: string;
   sessionKey?: string;
   usedTokens?: number;
   contextTokens?: number;
   percent?: number;
+  breakdown?: CoworkContextUsageBreakdown;
   compactionCount?: number;
   status: 'unknown' | 'normal' | 'warning' | 'danger' | 'compacting';
   latestCompactionCheckpointId?: string;

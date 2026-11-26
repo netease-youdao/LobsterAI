@@ -26,10 +26,17 @@ import {
   DshProgressiveCapability,
 } from '../../../shared/dshEngine/hostConstants';
 import { ImageEditOperation } from '../../../shared/imageEditing/types';
+import { MediaSelectionMode } from '../../../shared/media/defaultPolicy';
 import { ModelPresetId } from '../../../shared/modelPresets/constants';
 import type { CoworkMessage } from '../../coworkStore';
 import { MediaAttachmentKind } from '../../mediaGenerationReferences';
-import type { DshTypertClient, DshWaterfallEvent, DshWaterfallOutcome } from '../dsh/dshTypertClient';
+import {
+  type DshSessionControlFrame,
+  DshSessionControlFrameType,
+  type DshTypertClient,
+  type DshWaterfallEvent,
+  type DshWaterfallOutcome,
+} from '../dsh/dshTypertClient';
 import { getLlmUsageHeaders, hasLlmUsageContext } from '../llmUsageContext';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
@@ -2041,6 +2048,40 @@ describe('DshRuntimeAdapter', () => {
     expect(await adapter.getContextUsage('cw-usage')).toBeNull();
   });
 
+  test('getContextUsage passes a timeout AbortSignal and fails soft on timeout without loading messages', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { store } = createInMemoryStore({
+      id: 'cw-usage-timeout',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-usage-timeout`,
+    });
+    const getSessionSpy = vi.spyOn(store, 'getSession');
+    const timeoutError = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+    });
+    const getSessionProjections = vi.fn(async (_id: string, signal?: AbortSignal) => {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      throw timeoutError;
+    });
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => ({ getSessionProjections }) as unknown as DshTypertClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await expect(adapter.getContextUsage('cw-usage-timeout')).resolves.toBeNull();
+    expect(getSessionSpy).toHaveBeenCalledWith('cw-usage-timeout', 0);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('context usage lookup timed out for session cw-usage-timeout'),
+    );
+    warnSpy.mockRestore();
+  });
+
   test('compactContext invokes commands/execute /compact, distinguishes noop vs committed compaction, and persists notice', async () => {
     const { store, messages } = createInMemoryStore({
       id: 'cw-compact',
@@ -2960,5 +3001,276 @@ describe('DshRuntimeAdapter', () => {
         permissionPreset: DshPermissionPreset.WorkspaceWrite,
       }),
     );
+  });
+
+  test('binds mediaTurnInstruction via session context instead of prepending raw media prose into the user message', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-media-ctx',
+      cwd: '/tmp/media-ctx',
+    });
+
+    const submittedPrompts: Array<Array<{ type: string; text?: string }>> = [];
+    const bindSessionContext = vi.fn(async () => ({ ok: true }));
+    const fakeClient = {
+      createSession: vi.fn(async () => ({ sessionId: 'dsh-media-1' })),
+      selectModel: vi.fn(async () => ({ selected: {} })),
+      onWaterfall: vi.fn(() => () => {}),
+      promptSession: vi.fn(async (params: { content: Array<{ type: string; text?: string }> }) => {
+        submittedPrompts.push(params.content);
+        return { accepted: true };
+      }),
+      followSession: vi.fn(async function* () {
+        yield { type: 'event', event: { type: 'turn/end', seq: 1, data: {} } };
+      }),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext,
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    await adapter.startSession('cw-media-ctx', 'hh', {
+      agentId: 'main',
+      mediaSelection: {
+        mode: MediaSelectionMode.Auto,
+        imageModelId: 'doubao-seedream-5-5-261028',
+        videoModelId: 'doubao-seedance-2-0-fast-260128',
+      },
+    });
+
+    expect(submittedPrompts[0]).toEqual([{ type: 'text', text: 'hh' }]);
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-media-1',
+        mediaTurnInstruction: expect.stringContaining('doubao-seedream-5-5-261028'),
+      }),
+    );
+
+    // Follow-up turn with no mediaSelection explicitly clears mediaTurnInstruction.
+    (fakeClient.followSession as ReturnType<typeof vi.fn>).mockImplementationOnce(async function* () {
+      yield { type: 'event', event: { type: 'turn/end', seq: 2, data: {} } };
+    });
+    await adapter.continueSession('cw-media-ctx', 'next message');
+    expect(submittedPrompts[1]).toEqual([{ type: 'text', text: 'next message' }]);
+    expect(bindSessionContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-media-1',
+        mediaTurnInstruction: '',
+      }),
+    );
+  });
+
+  test('includes contextBreakdown in getContextUsage and omits empty breakdown', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-breakdown',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-bd-1`,
+    });
+
+    const getSessionProjections = vi.fn()
+      .mockResolvedValueOnce({
+        values: {
+          contextPressure: { projectedTokens: 45_000, contextWindow: 200_000 },
+          contextBreakdown: { systemTokens: 10_000, toolsTokens: 5_000, messageTokens: 30_000 },
+        },
+      })
+      .mockResolvedValueOnce({
+        values: {
+          contextPressure: { projectedTokens: 10_000, contextWindow: 200_000 },
+          contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 },
+        },
+      });
+
+    const fakeClient = {
+      getSessionProjections,
+      onWaterfall: vi.fn(() => () => undefined),
+    } as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const withBreakdown = await adapter.getContextUsage('cw-breakdown');
+    expect(withBreakdown).toMatchObject({
+      sessionId: 'cw-breakdown',
+      usedTokens: 45_000,
+      contextTokens: 200_000,
+      percent: 23,
+      breakdown: {
+        systemTokens: 10_000,
+        toolsTokens: 5_000,
+        messageTokens: 30_000,
+      },
+    });
+
+    const withoutBreakdown = await adapter.getContextUsage('cw-breakdown');
+    expect(withoutBreakdown?.breakdown).toBeUndefined();
+  });
+
+  test('streams session/control baseline and incremental projection updates without redundant turn-end polling', async () => {
+    const { store } = createInMemoryStore({
+      id: 'cw-live-proj',
+      cwd: '/tmp/work',
+      claudeSessionId: `${DSH_SESSION_ID_PREFIX}dsh-live-1`,
+    });
+    store.getSessionIdByClaudeSessionId = (claudeId: string) => (
+      claudeId === `${DSH_SESSION_ID_PREFIX}dsh-live-1` ? 'cw-live-proj' : null
+    );
+
+    const frameQueue: DshSessionControlFrame[] = [];
+    let notifyFrame: (() => void) | null = null;
+    let controlAborted = false;
+    const pushFrame = (frame: DshSessionControlFrame): void => {
+      frameQueue.push(frame);
+      const wake = notifyFrame;
+      notifyFrame = null;
+      wake?.();
+    };
+
+    const getSessionProjections = vi.fn(async () => ({
+      values: { contextPressure: { projectedTokens: 99_999, contextWindow: 200_000 } },
+    }));
+    const clientEmitter = new EventEmitter();
+    const fakeClient = Object.assign(clientEmitter, {
+      getSessionProjections,
+      promptSession: vi.fn(async () => ({ accepted: true })),
+      onWaterfall: vi.fn(() => () => undefined),
+      observeSessionControl: vi.fn(async function* (signal?: AbortSignal) {
+        signal?.addEventListener('abort', () => {
+          controlAborted = true;
+          const wake = notifyFrame;
+          notifyFrame = null;
+          wake?.();
+        });
+        while (!signal?.aborted) {
+          if (frameQueue.length > 0) {
+            yield frameQueue.shift()!;
+            continue;
+          }
+          await new Promise<void>((resolve) => {
+            notifyFrame = resolve;
+          });
+        }
+      }),
+      followSession: vi.fn(async function* () {
+        yield {
+          type: 'event',
+          event: {
+            type: 'assistant/message',
+            seq: 1,
+            data: { message: { content: [{ type: 'text', text: 'Done' }] } },
+          },
+        };
+        yield { type: 'event', event: { type: 'turn/end', seq: 2, data: {} } };
+      }),
+    }) as unknown as DshTypertClient;
+
+    const adapter = new DshRuntimeAdapter({
+      hostManager: {
+        start: vi.fn(async () => undefined),
+        isReady: vi.fn(() => true),
+        getClient: vi.fn(() => fakeClient),
+        bindSessionContext: vi.fn(async () => ({ ok: true })),
+        deleteSessionFiles: vi.fn(async () => ({ ok: true })),
+      },
+      store,
+    });
+
+    const updates: Array<{ sessionId: string; usage: CoworkContextUsage }> = [];
+    adapter.on('contextUsageUpdate', (sessionId, usage) => {
+      updates.push({ sessionId, usage });
+    });
+
+    adapter.syncHostConnection();
+
+    pushFrame({
+      type: DshSessionControlFrameType.Baseline,
+      value: {
+        projections: {
+          'dsh-live-1': {
+            asOfSeq: 1,
+            values: {
+              contextPressure: { projectedTokens: 40_000, contextWindow: 200_000 },
+              contextBreakdown: { systemTokens: 8_000, toolsTokens: 4_000, messageTokens: 28_000 },
+            },
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(updates).toHaveLength(1);
+    });
+    expect(updates[0]).toMatchObject({
+      sessionId: 'cw-live-proj',
+      usage: {
+        usedTokens: 40_000,
+        contextTokens: 200_000,
+        percent: 20,
+        breakdown: {
+          systemTokens: 8_000,
+          toolsTokens: 4_000,
+          messageTokens: 28_000,
+        },
+      },
+    });
+
+    // Unrelated projection key changes should not emit duplicate contextUsageUpdate events.
+    pushFrame({
+      type: DshSessionControlFrameType.Projection,
+      sessionId: 'dsh-live-1',
+      seq: 2,
+      changes: [{ key: 'title', val: 'Updated Title' }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(updates).toHaveLength(1);
+
+    // Incremental projection changing only contextBreakdown preserves cached contextPressure.
+    pushFrame({
+      type: DshSessionControlFrameType.Projection,
+      sessionId: 'dsh-live-1',
+      seq: 3,
+      changes: [
+        {
+          key: 'contextBreakdown',
+          val: { systemTokens: 8_000, toolsTokens: 6_000, messageTokens: 36_000 },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(updates).toHaveLength(2);
+    });
+    expect(updates[1].usage).toMatchObject({
+      usedTokens: 40_000,
+      contextTokens: 200_000,
+      percent: 20,
+      breakdown: {
+        systemTokens: 8_000,
+        toolsTokens: 6_000,
+        messageTokens: 36_000,
+      },
+    });
+
+    // Running a turn while session/control is live does not issue fallback getSessionProjections RPCs.
+    await adapter.continueSession('cw-live-proj', 'Check push');
+    expect(getSessionProjections).not.toHaveBeenCalled();
+
+    adapter.stopAllSessions();
+    expect(controlAborted).toBe(true);
   });
 });

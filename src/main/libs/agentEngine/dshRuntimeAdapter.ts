@@ -85,13 +85,15 @@ import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import { admitDshPrompt, DshAdmissionUnconfirmedError, followDshTurn, isDshTransportError, untilAborted } from '../dsh/dshTurnRecovery';
-import type {
-  DshCommandSubmitAttachment,
-  DshPromptPart,
-  DshSessionUpdateQueueParams,
-  DshTypertClient,
-  DshWaterfallEvent,
-  DshWaterfallOutcome,
+import {
+  type DshCommandSubmitAttachment,
+  type DshPromptPart,
+  type DshSessionControlFrame,
+  DshSessionControlFrameType,
+  type DshSessionUpdateQueueParams,
+  type DshTypertClient,
+  type DshWaterfallEvent,
+  type DshWaterfallOutcome,
 } from '../dsh/dshTypertClient';
 import { createCoworkLlmTrace } from '../llmTrace';
 import { registerLlmUsageContext } from '../llmUsageContext';
@@ -103,6 +105,7 @@ import { DshMessageEditCoordinator } from './dshMessageEdit';
 import { toPersistedMediaReferences } from './messageEditMedia';
 import type {
   CoworkContextUsage,
+  CoworkContextUsageBreakdown,
   CoworkContinueOptions,
   CoworkRuntime,
   CoworkRuntimeEvents,
@@ -137,6 +140,7 @@ export interface DshCoworkStorePort {
   messageEdits?: CoworkMessageEditStore;
   messageVersions?: CoworkMessageVersionStore;
   getSession(sessionId: string, messageLimit?: number): DshAdapterSessionRecord | null | undefined;
+  getSessionIdByClaudeSessionId?(claudeSessionId: string): string | null;
   getLatestUserMessage?(sessionId: string): CoworkMessage | null;
   getMessage?(sessionId: string, messageId: string): CoworkMessage | null;
   addMessage(
@@ -290,6 +294,23 @@ interface CancelledTurnRecord {
 }
 
 const CANCEL_GRACE_WINDOW_MS = 30_000;
+const CONTEXT_USAGE_LOOKUP_TIMEOUT_MS = 2_500;
+const PROJECTION_CONTROL_RECONNECT_DELAY_MS = 2_000;
+const CONTEXT_USAGE_PROJECTION_KEYS = new Set([
+  'contextPressure',
+  'contextBreakdown',
+  'tokenUsage',
+  'tokenMeter',
+  'modelSelection',
+]);
+
+function isContextUsageTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const name = 'name' in error ? (error as { name?: unknown }).name : undefined;
+  if (name === 'TimeoutError' || name === 'AbortError') return true;
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+  return code === 'ABORT_ERR' || code === 'gateway/cancelled';
+}
 
 interface PendingInteraction {
   requestId: string;
@@ -839,6 +860,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly sessionThinkingLevels = new Map<string, string>();
   private readonly sessionContextWindows = new Map<string, string | null>();
   private readonly sessionResolvedContextTokens = new Map<string, number>();
+  private readonly liveProjectionsByDshSession = new Map<string, Record<string, unknown>>();
+  private controlStreamAbort: AbortController | null = null;
+  private controlStreamClient: DshTypertClient | null = null;
+  private controlStreamRunning = false;
+  private controlReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private wiredClient: DshTypertClient | null = null;
   private unwireClientHandlers: Array<() => void> = [];
 
@@ -1249,14 +1275,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     };
   }
 
-  async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
-    const dshSessionId = this.resolveExistingDshSessionId(sessionId);
-    if (!dshSessionId || !this.hostManager.isReady()) return null;
-
-    const client = this.hostManager.getClient();
-    if (typeof client.getSessionProjections !== 'function') return null;
-
-    const projections = await client.getSessionProjections(dshSessionId);
+  private resolveContextWindowOverride(sessionId: string): number | null {
     const session = this.store.getSession(sessionId, 0);
     const patchedSelection = this.sessionContextWindows.get(sessionId);
     const patchedTokens = patchedSelection !== undefined
@@ -1266,7 +1285,54 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       ? session.contextWindowOverride
       : null;
     const resolvedTokens = this.sessionResolvedContextTokens.get(sessionId);
-    const contextWindowOverride = patchedTokens ?? persistedTokens ?? resolvedTokens ?? null;
+    return patchedTokens ?? persistedTokens ?? resolvedTokens ?? null;
+  }
+
+  private cacheContextUsageProjectionValues(
+    dshSessionId: string,
+    rawValues: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | null {
+    if (!rawValues) return null;
+    const filtered: Record<string, unknown> = {};
+    let hasRelevant = false;
+    for (const key of CONTEXT_USAGE_PROJECTION_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(rawValues, key)) {
+        filtered[key] = rawValues[key];
+        hasRelevant = true;
+      }
+    }
+    if (!hasRelevant) return null;
+    const merged = {
+      ...(this.liveProjectionsByDshSession.get(dshSessionId) ?? {}),
+      ...filtered,
+    };
+    this.liveProjectionsByDshSession.set(dshSessionId, merged);
+    return merged;
+  }
+
+  async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
+    const dshSessionId = this.resolveExistingDshSessionId(sessionId);
+    if (!dshSessionId || !this.hostManager.isReady()) return null;
+
+    const client = this.hostManager.getClient();
+    if (typeof client.getSessionProjections !== 'function') return null;
+
+    let projections: Record<string, unknown> | null;
+    try {
+      projections = await client.getSessionProjections(
+        dshSessionId,
+        AbortSignal.timeout(CONTEXT_USAGE_LOOKUP_TIMEOUT_MS),
+      );
+    } catch (error) {
+      if (isContextUsageTimeoutError(error)) {
+        console.warn(`[DshRuntime] context usage lookup timed out for session ${sessionId}.`);
+        return null;
+      }
+      throw error;
+    }
+    const rawValues = asPlainRecord(projections?.values) ?? asPlainRecord(projections);
+    this.cacheContextUsageProjectionValues(dshSessionId, rawValues);
+    const contextWindowOverride = this.resolveContextWindowOverride(sessionId);
     return extractContextUsageFromProjections(
       sessionId,
       dshSessionId,
@@ -1712,6 +1778,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 
   stopAllSessions(): void {
+    this.stopProjectionControlStream();
     const ids = new Set([
       ...this.activeTurns.keys(),
       ...this.startingTurns.keys(),
@@ -1835,6 +1902,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     const dshSessionId = this.resolveExistingDshSessionId(sessionId);
     if (dshSessionId) {
       this.dshToCoworkSession.delete(dshSessionId);
+      this.liveProjectionsByDshSession.delete(dshSessionId);
       void this.hostManager.deleteSessionFiles(dshSessionId).catch((): void => undefined);
     }
   }
@@ -1881,16 +1949,32 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     return client;
   }
 
+  syncHostConnection(): void {
+    if (!this.hostManager.isReady()) return;
+    try {
+      const client = this.hostManager.getClient();
+      this.ensureClientWaterfallHandlers(client);
+    } catch {
+      // Host may have transitioned out of ready between checks.
+    }
+  }
+
   private ensureClientWaterfallHandlers(client: DshTypertClient): void {
-    if (this.wiredClient === client) return;
+    if (this.wiredClient === client) {
+      this.startProjectionControlStream(client);
+      return;
+    }
     for (const unwire of this.unwireClientHandlers) unwire();
     this.unwireClientHandlers = [];
+    this.stopProjectionControlStream();
     this.wiredClient = client;
 
-    this.unwireClientHandlers.push(
-      client.onWaterfall('approval/request', (evt) => this.handleHostWaterfall('approval', evt)),
-      client.onWaterfall('user-questions/request', (evt) => this.handleHostWaterfall('user-questions', evt)),
-    );
+    if (typeof client.onWaterfall === 'function') {
+      this.unwireClientHandlers.push(
+        client.onWaterfall('approval/request', (evt) => this.handleHostWaterfall('approval', evt)),
+        client.onWaterfall('user-questions/request', (evt) => this.handleHostWaterfall('user-questions', evt)),
+      );
+    }
 
     if (typeof client.on === 'function' && typeof client.off === 'function') {
       const onGoalActivationChanged = (payload: unknown) => {
@@ -1915,11 +1999,135 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           }
         }
       };
+      const onConnected = () => {
+        if (this.wiredClient === client) {
+          this.startProjectionControlStream(client);
+        }
+      };
       client.on('remote:goal/activation-changed', onGoalActivationChanged);
+      client.on('connected', onConnected);
       this.unwireClientHandlers.push(() => {
         client.off('remote:goal/activation-changed', onGoalActivationChanged);
+        client.off('connected', onConnected);
       });
     }
+
+    this.startProjectionControlStream(client);
+  }
+
+  private resolveCoworkSessionIdForDshSession(dshSessionId: string): string | null {
+    const mapped = this.dshToCoworkSession.get(dshSessionId);
+    if (mapped) return mapped;
+    const stored = this.store.getSessionIdByClaudeSessionId?.(formatStoredDshSessionId(dshSessionId));
+    if (stored) {
+      this.dshToCoworkSession.set(dshSessionId, stored);
+      return stored;
+    }
+    return null;
+  }
+
+  private emitContextUsageFromLiveProjection(dshSessionId: string): void {
+    const cached = this.liveProjectionsByDshSession.get(dshSessionId);
+    if (!cached) return;
+    const coworkSessionId = this.resolveCoworkSessionIdForDshSession(dshSessionId);
+    if (!coworkSessionId) return;
+    const usage = extractContextUsageFromProjections(
+      coworkSessionId,
+      dshSessionId,
+      { values: cached },
+      this.resolveContextWindowOverride(coworkSessionId),
+    );
+    if (usage) {
+      this.emit('contextUsageUpdate', coworkSessionId, usage);
+    }
+  }
+
+  private applyProjectionControlFrame(frame: DshSessionControlFrame): void {
+    if (frame.type === DshSessionControlFrameType.Baseline) {
+      const projections = asPlainRecord(frame.value?.projections);
+      if (!projections) return;
+      for (const [dshSessionId, block] of Object.entries(projections)) {
+        const blockRec = asPlainRecord(block);
+        const values = asPlainRecord(blockRec?.values);
+        if (this.cacheContextUsageProjectionValues(dshSessionId, values)) {
+          this.emitContextUsageFromLiveProjection(dshSessionId);
+        }
+      }
+      return;
+    }
+
+    if (frame.type === DshSessionControlFrameType.Projection) {
+      if (typeof frame.sessionId !== 'string' || !Array.isArray(frame.changes)) return;
+      const updates: Record<string, unknown> = {};
+      let relevantChanged = false;
+      for (const entry of frame.changes) {
+        if (!entry || typeof entry.key !== 'string') continue;
+        if (CONTEXT_USAGE_PROJECTION_KEYS.has(entry.key)) {
+          updates[entry.key] = entry.val;
+          relevantChanged = true;
+        }
+      }
+      if (!relevantChanged) return;
+      this.cacheContextUsageProjectionValues(frame.sessionId, updates);
+      this.emitContextUsageFromLiveProjection(frame.sessionId);
+    }
+  }
+
+  private startProjectionControlStream(client: DshTypertClient): void {
+    if (typeof client.observeSessionControl !== 'function') return;
+    if (this.controlStreamRunning && this.controlStreamClient === client) return;
+
+    this.stopProjectionControlStream();
+    const abortController = new AbortController();
+    this.controlStreamAbort = abortController;
+    this.controlStreamClient = client;
+    this.controlStreamRunning = true;
+
+    void (async () => {
+      try {
+        for await (const frame of client.observeSessionControl(abortController.signal)) {
+          if (abortController.signal.aborted) break;
+          this.applyProjectionControlFrame(frame);
+        }
+      } catch (error) {
+        if (!abortController.signal.aborted && !isContextUsageTimeoutError(error)) {
+          console.debug('[DshRuntime] session/control projection stream ended:', error);
+        }
+      } finally {
+        if (this.controlStreamAbort === abortController) {
+          this.controlStreamAbort = null;
+          this.controlStreamClient = null;
+          this.controlStreamRunning = false;
+          if (
+            !abortController.signal.aborted
+            && this.wiredClient === client
+            && typeof client.isConnected === 'function'
+            && client.isConnected()
+          ) {
+            this.controlReconnectTimer = setTimeout(() => {
+              this.controlReconnectTimer = null;
+              if (this.wiredClient === client) {
+                this.startProjectionControlStream(client);
+              }
+            }, PROJECTION_CONTROL_RECONNECT_DELAY_MS);
+          }
+        }
+      }
+    })();
+  }
+
+  private stopProjectionControlStream(): void {
+    if (this.controlReconnectTimer) {
+      clearTimeout(this.controlReconnectTimer);
+      this.controlReconnectTimer = null;
+    }
+    if (this.controlStreamAbort) {
+      this.controlStreamAbort.abort();
+      this.controlStreamAbort = null;
+    }
+    this.controlStreamClient = null;
+    this.controlStreamRunning = false;
+    this.liveProjectionsByDshSession.clear();
   }
 
   private handleHostWaterfall(
@@ -2079,9 +2287,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private resolveExistingDshSessionId(coworkSessionId: string): string | null {
     const active = this.activeTurns.get(coworkSessionId);
     if (active) return active.dshSessionId;
-    const session = this.store.getSession(coworkSessionId);
+    const session = this.store.getSession(coworkSessionId, 0);
     if (session && isDshBackedSessionId(session.claudeSessionId)) {
-      return stripDshSessionPrefix(session.claudeSessionId!);
+      const dshSessionId = stripDshSessionPrefix(session.claudeSessionId!);
+      this.dshToCoworkSession.set(dshSessionId, coworkSessionId);
+      return dshSessionId;
     }
     return null;
   }
@@ -2377,6 +2587,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         allowedSkillIds,
         customSystemPrompt: boundCustomSystemPrompt,
         ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
+        mediaTurnInstruction: params.mediaInstruction ?? '',
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
         permissionPreset: effectivePermissionPreset,
         ...(!params.autoApprove && explicitPermissionPreset ? { permissionPresetExplicit: true } : {}),
@@ -2565,7 +2776,6 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       );
       const turnPrefix = [
         lazyBridgePrefix,
-        params.mediaInstruction,
         selectedTextSection,
         preparedBrowser.browserAnnotationSection,
       ].filter(Boolean).join('\n\n');
@@ -2803,7 +3013,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         });
         return;
       }
-      await (turn.pendingContextUsageRefresh ?? this.refreshAndEmitContextUsage(coworkSessionId));
+      if (!this.controlStreamRunning) {
+        await (turn.pendingContextUsageRefresh ?? this.refreshAndEmitContextUsage(coworkSessionId));
+      } else if (turn.pendingContextUsageRefresh) {
+        await turn.pendingContextUsageRefresh;
+      }
       this.store.updateSession(coworkSessionId, { status: 'completed' });
       this.emit('sessionStatus', coworkSessionId, 'completed');
       this.emit('complete', coworkSessionId, formatStoredDshSessionId(dshSessionId));
@@ -3200,7 +3414,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         turn.lastFinalizedAssistantText = '';
         turn.suppressedPreSteerAssistantText = null;
         turn.lastCommittedAssistantSeq = null;
-        turn.pendingContextUsageRefresh = this.refreshAndEmitContextUsage(coworkSessionId);
+        if (!this.controlStreamRunning) {
+          turn.pendingContextUsageRefresh = this.refreshAndEmitContextUsage(coworkSessionId);
+        }
         return false;
       }
 
@@ -3230,7 +3446,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           });
           this.emit('message', coworkSessionId, compactionMessage);
         }
-        turn.pendingContextUsageRefresh = this.refreshAndEmitContextUsage(coworkSessionId);
+        if (!this.controlStreamRunning) {
+          turn.pendingContextUsageRefresh = this.refreshAndEmitContextUsage(coworkSessionId);
+        }
         return false;
       }
 
@@ -3715,13 +3933,20 @@ function extractContextUsageFromProjections(
     ?? asPositiveNumber(legacyMeter?.contextTokens);
 
   let breakdownTotal: number | undefined;
+  let breakdown: CoworkContextUsageBreakdown | undefined;
   if (contextBreakdown) {
     const sys = asNonNegativeNumber(contextBreakdown.systemTokens);
     const tools = asNonNegativeNumber(contextBreakdown.toolsTokens);
     const msgs = asNonNegativeNumber(contextBreakdown.messageTokens);
     if (sys !== undefined || tools !== undefined || msgs !== undefined) {
-      const sum = (sys ?? 0) + (tools ?? 0) + (msgs ?? 0);
-      if (sum > 0) breakdownTotal = sum;
+      const systemTokens = sys ?? 0;
+      const toolsTokens = tools ?? 0;
+      const messageTokens = msgs ?? 0;
+      const sum = systemTokens + toolsTokens + messageTokens;
+      if (sum > 0) {
+        breakdownTotal = sum;
+        breakdown = { systemTokens, toolsTokens, messageTokens };
+      }
     }
   }
 
@@ -3777,6 +4002,7 @@ function extractContextUsageFromProjections(
     usedTokens,
     contextTokens,
     percent,
+    ...(breakdown ? { breakdown } : {}),
     status,
     ...(model ? { model } : {}),
     updatedAt: Date.now(),

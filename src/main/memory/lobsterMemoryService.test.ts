@@ -781,3 +781,104 @@ describe('stripLegacyDreamingPromotions', () => {
     expect(untouched).toEqual({ content: cleanUserFile, changed: false, removedEntries: 0 });
   });
 });
+
+describe('LobsterMemoryService FTS5 legacy Dreaming daily-note filtering', () => {
+  test('excludes OpenClaw Dreaming light/rem blocks and orphan tails from search while keeping accurate line numbers', () => {
+    const service = createService();
+    const dailyDir = path.join(service.getAgentWorkspaceDir('main'), 'memory');
+    fs.mkdirSync(dailyDir, { recursive: true });
+    const dailyLines = [
+      '# 2026-06-23',
+      '- Real morning standup note about Phoenix launch',
+      '',
+      '## Light Sleep',
+      '<!-- openclaw:dreaming:light:start -->',
+      '- Candidate: Reflections: Theme: `assistant` kept surfacing across 22 memories.; confidence: 0.76; evidence: memory/.dreams/session-corpus/2026-06-15.txt:2-2; note: reflection',
+      '  - confidence: 0.62',
+      '  - status: staged',
+      '<!-- openclaw:dreaming:light:end -->',
+      'istant` kept surfacing across 35 memories.; confidence: 0.79; evidence: memory/.dreams/session-corpus/2026-06-12.txt:2-2; note: reflection',
+      '  - status: staged',
+      '<!-- openclaw:dreaming:light:end -->',
+      '',
+      '## REM Sleep',
+      '<!-- openclaw:dreaming:rem:start -->',
+      '### Possible Lasting Truths',
+      '- Phantom dreaming truth about Orion Nebula',
+      '<!-- openclaw:dreaming:rem:end -->',
+      '',
+      '- Real evening decision: deploy Phoenix canary on Friday',
+      '',
+    ];
+    fs.writeFileSync(path.join(dailyDir, '2026-06-23.md'), dailyLines.join('\n'), 'utf8');
+
+    expect(service.search('main', 'session-corpus')).toHaveLength(0);
+    expect(service.search('main', 'Orion Nebula')).toHaveLength(0);
+    expect(service.search('main', 'istant')).toHaveLength(0);
+
+    const morningHits = service.search('main', 'Phoenix launch');
+    expect(morningHits).toHaveLength(1);
+    expect(morningHits[0].lineStart).toBe(2);
+
+    const eveningHits = service.search('main', 'Phoenix canary');
+    expect(eveningHits).toHaveLength(1);
+    expect(eveningHits[0].lineStart).toBe(20);
+  });
+
+  test('automatically rebuilds older schema-version memory-fts.sqlite to purge previously indexed Dreaming chunks', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-fts-v1-'));
+    tempDirs.push(dir);
+    const mainDir = path.join(dir, 'main');
+    const dailyDir = path.join(mainDir, 'memory');
+    fs.mkdirSync(dailyDir, { recursive: true });
+    const dailyPath = path.join(dailyDir, '2026-06-23.md');
+    fs.writeFileSync(
+      dailyPath,
+      [
+        '## Light Sleep',
+        '<!-- openclaw:dreaming:light:start -->',
+        '- Candidate: StaleDreamingNoiseToken; evidence: memory/.dreams/session-corpus/2026-06-12.txt:1-1',
+        '<!-- openclaw:dreaming:light:end -->',
+        '',
+        '- GenuineDailySurvivingToken',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const stat = fs.statSync(dailyPath);
+
+    // Seed a legacy user_version=0 DB that already cached the stale Dreaming chunk with matching mtime/size.
+    const legacyDb = new Database(path.join(dir, MEMORY_FTS_DB_NAME));
+    legacyDb.exec(`
+      CREATE VIRTUAL TABLE memory_chunks USING fts5(
+        agent_id UNINDEXED,
+        rel_path UNINDEXED,
+        line_start UNINDEXED,
+        line_end UNINDEXED,
+        project_keys UNINDEXED,
+        content,
+        tokenize='trigram'
+      );
+      CREATE TABLE memory_file_meta (
+        agent_id TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        mtime_ms REAL NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (agent_id, rel_path)
+      );
+    `);
+    legacyDb
+      .prepare('INSERT INTO memory_chunks (agent_id, rel_path, line_start, line_end, project_keys, content) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('main', 'memory/2026-06-23.md', 3, 3, '', 'StaleDreamingNoiseToken');
+    legacyDb
+      .prepare('INSERT INTO memory_file_meta (agent_id, rel_path, mtime_ms, size) VALUES (?, ?, ?, ?)')
+      .run('main', 'memory/2026-06-23.md', stat.mtimeMs, stat.size);
+    legacyDb.close();
+
+    const service = new LobsterMemoryService(dir);
+    services.push(service);
+
+    expect(service.search('main', 'StaleDreamingNoiseToken')).toHaveLength(0);
+    expect(service.search('main', 'GenuineDailySurvivingToken')).toHaveLength(1);
+  });
+});

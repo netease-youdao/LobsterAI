@@ -15,6 +15,7 @@ import {
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
+  COWORK_TEMP_SESSION_ID_PREFIX,
   CoworkContextUsageRefreshMode,
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
@@ -38,7 +39,10 @@ import {
 } from '../../shared/cowork/steer';
 import { MediaProtocol } from '../../shared/media/constants';
 import type { ModelPresetId } from '../../shared/modelPresets/constants';
-import { OpenClawLoopbackRepairOutcome } from '../../shared/openclawEngine/constants';
+import {
+  OpenClawEnginePhase,
+  OpenClawLoopbackRepairOutcome,
+} from '../../shared/openclawEngine/constants';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import {
   getSessionRestoreWindow,
@@ -178,8 +182,7 @@ const hasRecentMatchingErrorMessage = (
   });
 };
 
-const CONTEXT_USAGE_REFRESH_DELAY_MS = 800;
-const FINAL_CONTEXT_USAGE_REFRESH_DELAYS_MS = [800, 2500, 6000, 12000] as const;
+const SESSION_ENTRY_CONTEXT_USAGE_REFRESH_COOLDOWN_MS = 1_500;
 const CONTEXT_USAGE_AUTO_SUPPRESSION_MS = 5 * 60 * 1000;
 const CONTEXT_USAGE_REFRESH_BACKOFF_MS = 30_000;
 const MANUAL_CONTEXT_COMPACTION_WATCHDOG_MS = 130_000;
@@ -214,10 +217,10 @@ class CoworkService {
   // discard an in-flight full rail index load.
   private railIndexRequestGeneration = 0;
   private railIndexInFlightBySessionId = new Map<string, Promise<CoworkMessageRailIndexItem[]>>();
-  private contextUsageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private contextUsageInFlightBySessionId = new Map<string, Promise<CoworkContextUsage | null>>();
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
   private contextUsageBackoffUntil = new Map<string, number>();
+  private sessionEntryContextUsageRefreshAt = new Map<string, number>();
   private contextCompactionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private newUserWelcomeAnimationTimer: ReturnType<typeof setInterval> | null = null;
   private readonly btwAbortRunIds = new Set<string>();
@@ -511,7 +514,8 @@ class CoworkService {
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
       this.setCurrentSessionStreaming(sessionId, false, 'stream_complete');
-      this.scheduleFinalContextUsageRefresh(sessionId, true);
+      this.clearAutomaticContextUsageSuppression(sessionId);
+      this.contextUsageBackoffUntil.delete(sessionId);
       this.queuedFollowUpCoordinator.handleSessionCompleted(sessionId);
     });
     this.streamListenerCleanups.push(completeCleanup);
@@ -602,47 +606,11 @@ class CoworkService {
     return /session .* is still running/i.test(error);
   }
 
-  private scheduleContextUsageRefresh(
-    sessionId: string,
-    notifyCompaction: boolean,
-    delayMs = CONTEXT_USAGE_REFRESH_DELAY_MS,
-    mode: CoworkContextUsageRefreshModeType = CoworkContextUsageRefreshMode.Auto,
-  ): void {
-    const backoffUntil = this.contextUsageBackoffUntil.get(sessionId) ?? 0;
-    if (backoffUntil > Date.now()) {
-      return;
-    }
-    const timerKey = `${sessionId}:${delayMs}:${mode}`;
-    const existing = this.contextUsageRefreshTimers.get(timerKey);
-    if (existing) {
-      clearTimeout(existing);
-    }
-    const timer = setTimeout(() => {
-      this.contextUsageRefreshTimers.delete(timerKey);
-      void this.refreshContextUsage(sessionId, { notifyCompaction, mode });
-    }, delayMs);
-    this.contextUsageRefreshTimers.set(timerKey, timer);
-  }
-
-  private clearContextUsageRefreshTimers(sessionId: string): void {
-    for (const [timerKey, timer] of this.contextUsageRefreshTimers.entries()) {
-      if (!timerKey.startsWith(`${sessionId}:`)) {
-        continue;
-      }
-      clearTimeout(timer);
-      this.contextUsageRefreshTimers.delete(timerKey);
-    }
-  }
-
-  private scheduleFinalContextUsageRefresh(sessionId: string, notifyCompaction: boolean): void {
-    for (const delayMs of FINAL_CONTEXT_USAGE_REFRESH_DELAYS_MS) {
-      this.scheduleContextUsageRefresh(sessionId, notifyCompaction, delayMs, CoworkContextUsageRefreshMode.PostRun);
-    }
-  }
-
   private handleContextUsageUpdate(usage: CoworkContextUsage, notifyCompaction: boolean): void {
     const state = store.getState().cowork;
     const previous = state.contextUsageBySessionId[usage.sessionId];
+    this.clearAutomaticContextUsageSuppression(usage.sessionId);
+    this.contextUsageBackoffUntil.delete(usage.sessionId);
     store.dispatch(setContextUsage(usage));
 
     const nextCount = usage.compactionCount;
@@ -676,7 +644,6 @@ class CoworkService {
 
   private enterContextUsageBackoff(sessionId: string): void {
     this.contextUsageBackoffUntil.set(sessionId, Date.now() + CONTEXT_USAGE_REFRESH_BACKOFF_MS);
-    this.clearContextUsageRefreshTimers(sessionId);
   }
 
   async refreshContextUsage(
@@ -754,6 +721,25 @@ class CoworkService {
 
     this.contextUsageInFlightBySessionId.set(sessionId, request);
     return request;
+  }
+
+  refreshContextUsageForSessionEntry(sessionId: string): void {
+    if (!sessionId || sessionId.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) return;
+    if (this.openClawStatus && this.openClawStatus.phase !== OpenClawEnginePhase.Running) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastRefreshAt = this.sessionEntryContextUsageRefreshAt.get(sessionId) ?? 0;
+    if (now - lastRefreshAt < SESSION_ENTRY_CONTEXT_USAGE_REFRESH_COOLDOWN_MS) {
+      return;
+    }
+
+    this.sessionEntryContextUsageRefreshAt.set(sessionId, now);
+    void this.refreshContextUsage(sessionId, {
+      notifyCompaction: false,
+      mode: CoworkContextUsageRefreshMode.Auto,
+    });
   }
 
   async compactContext(sessionId: string): Promise<boolean> {
@@ -845,21 +831,30 @@ class CoworkService {
     // Describes one refused request while the gateway keeps running; broadcasting
     // it as "starting" would pin the global startup overlay until a later event.
     if (isConfigApplyPendingStatus(status)) return;
+    const wasRunning = this.openClawStatus?.phase === OpenClawEnginePhase.Running;
     this.openClawStatus = status;
     this.openClawStatusListeners.forEach((listener) => {
       listener(status);
     });
+    if (!wasRunning && status.phase === OpenClawEnginePhase.Running) {
+      this.contextUsageAutoSuppressedUntilBySessionId.clear();
+      this.contextUsageBackoffUntil.clear();
+      this.sessionEntryContextUsageRefreshAt.clear();
+      const activeSessionId = store.getState().cowork.currentSession?.id;
+      if (activeSessionId && !activeSessionId.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) {
+        this.refreshContextUsageForSessionEntry(activeSessionId);
+      }
+    }
   }
 
   private cleanupListeners(): void {
     this.streamListenerCleanups.forEach(cleanup => cleanup());
     this.streamListenerCleanups = [];
     this.openClawEngineListenerAttached = false;
-    this.contextUsageRefreshTimers.forEach(timer => clearTimeout(timer));
-    this.contextUsageRefreshTimers.clear();
     this.contextUsageInFlightBySessionId.clear();
     this.contextUsageAutoSuppressedUntilBySessionId.clear();
     this.contextUsageBackoffUntil.clear();
+    this.sessionEntryContextUsageRefreshAt.clear();
     this.messageWindowRequestGeneration += 1;
     this.railIndexRequestGeneration += 1;
     this.railIndexInFlightBySessionId.clear();
@@ -1819,6 +1814,9 @@ class CoworkService {
         const invalidate = (railIndex?: CoworkMessageRailIndexItem[]) => {
           if (invalidated) return;
           invalidated = true;
+          this.clearAutomaticContextUsageSuppression(sessionId);
+          this.contextUsageBackoffUntil.delete(sessionId);
+          this.sessionEntryContextUsageRefreshAt.delete(sessionId);
           store.dispatch(invalidateEditedHistory(sessionId));
           store.dispatch(clearSessionArtifacts(sessionId));
           clearHeightCache(sessionId);
@@ -2149,6 +2147,7 @@ class CoworkService {
         options.beforeApply?.();
         store.dispatch(setCurrentSession(session));
         this.setCurrentSessionStreaming(sessionId, session.status === 'running', 'load_session_completed');
+        this.refreshContextUsageForSessionEntry(sessionId);
         void this.loadSessionMessageRailIndex(sessionId);
         void cowork.markSessionViewed?.(sessionId).catch((error: unknown) => {
           console.warn('[CoworkService] failed to mark session viewed:', error);
@@ -2883,6 +2882,7 @@ class CoworkService {
   destroy(): void {
     this.clearNewUserWelcomeAnimation();
     this.cleanupListeners();
+    this.openClawStatus = null;
     this.openClawStatusListeners.clear();
     this.initialized = false;
     this.initPromise = null;

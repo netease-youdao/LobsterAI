@@ -35,7 +35,7 @@ import { getModelIdentityKey, isSameModelIdentity, ServerModelLoadStatus, setSel
 import { AccountConnectionNotice } from './AccountConnectionNotice';
 import { getAccountConnectionState, getModelConnectionState } from './accountConnectionState';
 import Modal from './common/Modal';
-import { resolvePopoverPlacement } from './cowork/popoverPlacement';
+import { POPOVER_BOUNDARY_SELECTOR, resolvePopoverPlacement } from './cowork/popoverPlacement';
 import BalancedModelIcon from './icons/BalancedModelIcon';
 import BusyModelIcon from './icons/BusyModelIcon';
 import { CustomProviderIcon } from './icons/providers';
@@ -96,7 +96,6 @@ const LIST_VERTICAL_PADDING = 8; // scroll container py-1
 const LIST_MAX_HEIGHT = 288; // default cap for the scrollable model list (18rem)
 const LIST_MIN_HEIGHT = MODEL_ITEM_HEIGHT * 3 + LIST_VERTICAL_PADDING; // never collapse below three rows
 const DROPDOWN_VIEWPORT_MARGIN = 8;
-const POPOVER_BOUNDARY_SELECTOR = '[data-popover-boundary="true"]';
 const DROPDOWN_TRIGGER_GAP = 4; // matches mt-1/mb-1 and the +4 offset in portal mode
 const DROPDOWN_TABS_BLOCK_HEIGHT = 49; // group tabs block: p-2 + p-0.5 + py-1.5 + leading-4 + border-b
 const DROPDOWN_FOOTER_HEIGHT = 33; // current-model footer: py-2 + leading-4 + border-t
@@ -709,8 +708,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const triggerClassName = iconOnly
     ? 'relative h-8 w-8 shrink-0 justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30'
     : compact
-      ? `space-x-1.5 px-2 py-1 rounded-lg ${triggerMaxWidthClass}`
-      : `space-x-2 px-3 py-1.5 rounded-xl ${triggerMaxWidthClass}`;
+      ? 'max-w-full space-x-1.5 px-2 py-1 rounded-lg'
+      : 'max-w-full space-x-2 px-3 py-1.5 rounded-xl';
   const triggerLabel = selectedModel?.presetId
     ? modelPresetName(selectedModel.presetId)
     : selectedModel?.name ?? defaultLabel ?? i18nService.t('selectModel');
@@ -1752,8 +1751,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   ) : null;
 
   return (
-    <div ref={containerRef} className={`relative ${disabled ? 'cursor-wait' : 'cursor-pointer'}`}>
-      <Tooltip content={triggerLabel} position={TooltipPosition.Top} delay={300} multiline disabled={!iconOnly || isOpen || Boolean(restrictedPrompt)}>
+    <div
+      ref={containerRef}
+      className={`relative ${iconOnly ? 'shrink-0' : 'w-fit min-w-0 max-w-full'} ${disabled ? 'cursor-wait' : 'cursor-pointer'}`}
+    >
+      <Tooltip
+        className={iconOnly ? undefined : triggerMaxWidthClass}
+        content={triggerLabel}
+        position={TooltipPosition.Top}
+        delay={300}
+        multiline
+        disabled={!iconOnly || isOpen || Boolean(restrictedPrompt)}
+      >
         <button
           type="button"
           disabled={disabled}
