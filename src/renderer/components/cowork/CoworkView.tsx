@@ -8,6 +8,7 @@ import { buildSessionTitleFromInput, buildSessionTitleInput } from '../../../com
 import { BlankDocumentKind } from '../../../shared/artifactPreview/blankDocument';
 import { COWORK_TEMP_SESSION_ID_PREFIX } from '../../../shared/cowork/constants';
 import { buildCoworkImageAttachmentPreviews } from '../../../shared/cowork/imageAttachments';
+import type { CoworkLocalInput } from '../../../shared/cowork/inputAttachments';
 import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
 import {
   HOME_SHOWCASE_EXPLORE_MORE_ID,
@@ -374,6 +375,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
     browserAnnotations?: CoworkBrowserAnnotationMessageBatch[],
     collaborationMode: CoworkCollaborationModeType = CoworkCollaborationMode.Default,
+    localInput?: CoworkLocalInput,
     titleInput: string = buildSessionTitleInput(prompt),
   ): Promise<boolean | void> => {
     console.log('[CoworkView] handleStartSession: imageAttachments diagnosis', {
@@ -461,6 +463,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         modelPresetId: currentAgentSelectedModel?.presetId,
         thinkingLevel: currentAgentThinkingLevel,
         imageAttachments,
+        localInput,
         mediaSelection,
         mediaReferences,
         selectedTextSnippets,
@@ -543,7 +546,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       logCoworkViewModel(
         `creating session with model ${currentAgentSelectedModelRef || 'default'}; agent model is ${currentAgent?.model || 'empty'}; server quota model is ${homeModelUsesServerQuota}`,
       );
-      const { session: startedSession, error: startError } = await coworkService.startSession(startPlan.options);
+      const { success, session: startedSession, error: startError } = await coworkService.startSession(startPlan.options);
 
       if (!startedSession && startError) {
         // Show the error as a system message in the temp session
@@ -572,6 +575,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           `skipped temp session replacement for ${startedSession.id}; `
           + `current=${currentSessionIdRef.current ?? 'none'} temp=${tempSessionId}`,
         );
+      }
+      if (!success) {
+        if (getPendingCancellationAction() === 'delete') await coworkService.deleteSession(startedSession.id);
+        return false;
       }
       if (!startedSession.goal && optimisticGoal !== undefined) {
         const startedGoal = applyOptimisticGoalCommand(prompt, null, startedSession.id, Date.now());
@@ -617,6 +624,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
     browserAnnotations?: CoworkBrowserAnnotationMessageBatch[],
     collaborationMode: CoworkCollaborationModeType = CoworkCollaborationMode.Default,
+    localInput?: CoworkLocalInput,
     titleInput?: string,
   ) => {
     if (!currentSession) return false;
@@ -625,7 +633,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     if (currentSession.id.startsWith(COWORK_TEMP_SESSION_ID_PREFIX)) {
       return handleStartSession(
         prompt, skillPrompt, imageAttachments, mediaReferences,
-        selectedTextSnippets, browserAnnotations, collaborationMode, titleInput,
+        selectedTextSnippets, browserAnnotations, collaborationMode, localInput, titleInput,
       );
     }
     // Prevent duplicate submissions
@@ -677,6 +685,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         kitReferences: displayKitIds.length > 0 ? kitReferences : undefined,
         resolvedKitCapabilities: displayKitIds.length > 0 ? resolvedKitCapabilities : undefined,
         imageAttachments,
+        localInput,
         mediaSelection,
         mediaReferences,
         selectedTextSnippets,

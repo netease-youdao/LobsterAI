@@ -16,6 +16,7 @@ import {
   normalizeSubagentCollaborationMode,
   SubagentCollaborationMode,
 } from '@shared/agent';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import { ProviderName } from '@shared/providers';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -38,6 +39,7 @@ import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/opencla
 import Modal from '../common/Modal';
 import TrashIcon from '../icons/TrashIcon';
 import ModelSelector from '../ModelSelector';
+import OwnershipDetailButton from '../ownership/OwnershipDetailButton';
 import {
   SETTINGS_DESCRIPTION_TEXT,
   SETTINGS_ITEM_TITLE_TEXT,
@@ -1374,7 +1376,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
         {/* Footer */}
         <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-6 py-3.5">
-          <div>
+          <div className="flex items-center gap-2">
+            <OwnershipDetailButton target={{ kind: OwnershipTargetKind.Agent, id: agentId }} />
             {!isMainAgent && (
               <button
                 type="button"

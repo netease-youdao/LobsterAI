@@ -1,3 +1,4 @@
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -5,6 +6,7 @@ import { i18nService } from '../../services/i18n';
 import ClockIcon from '../icons/ClockIcon';
 import FolderIcon from '../icons/FolderIcon';
 import ForkBranchIcon from '../icons/ForkBranchIcon';
+import { useOwnershipDetail } from '../ownership/useOwnershipDetail';
 import { AgentSidebarIndicator } from './constants';
 import {
   calculateTaskHoverCardPosition,
@@ -72,6 +74,7 @@ export interface AgentTaskHoverCardMeta {
 }
 
 interface AgentTaskHoverCardProps {
+  sessionId: string;
   anchor: TaskHoverCardAnchor;
   title: string;
   timestamp: number;
@@ -84,6 +87,7 @@ interface AgentTaskHoverCardProps {
 }
 
 const AgentTaskHoverCard: React.FC<AgentTaskHoverCardProps> = ({
+  sessionId,
   anchor,
   title,
   timestamp,
@@ -94,6 +98,7 @@ const AgentTaskHoverCard: React.FC<AgentTaskHoverCardProps> = ({
   imPlatformLabel,
   meta,
 }) => {
+  const detail = useOwnershipDetail({ kind: OwnershipTargetKind.Task, id: sessionId }, true);
   const cardRef = useRef<HTMLDivElement>(null);
   const [measuredHeight, setMeasuredHeight] = useState(TASK_HOVER_CARD_DEFAULT_HEIGHT);
 
@@ -102,7 +107,7 @@ const AgentTaskHoverCard: React.FC<AgentTaskHoverCardProps> = ({
     if (height && Math.abs(height - measuredHeight) > 1) {
       setMeasuredHeight(height);
     }
-  }, [anchor.rowTop, cwd, forkGitBranch, indicator, meta.agentName, measuredHeight, title]);
+  }, [anchor.rowTop, detail, cwd, forkGitBranch, indicator, meta.agentName, measuredHeight, title]);
 
   if (typeof document === 'undefined') {
     return null;
@@ -168,6 +173,9 @@ const AgentTaskHoverCard: React.FC<AgentTaskHoverCardProps> = ({
           </div>
         )}
 
+        {detail && <div>{i18nService.t('ownershipTaskOwner')} · {detail.ownership.kind === 'anonymous'
+          ? i18nService.t('ownershipAnonymous')
+          : [detail.ownership.label, detail.ownership.scopeLabel].filter(Boolean).join(' · ')}</div>}
         {workspace && (
           <div className="flex min-w-0 items-center gap-2">
             <FolderIcon className="h-3.5 w-3.5 shrink-0 text-secondary/85" />

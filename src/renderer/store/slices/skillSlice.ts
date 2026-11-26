@@ -1,5 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import { Skill } from '../../types/skill';
+import { resetAccountSessionData } from '../accountSessionBoundary';
 
 interface SkillState {
   skills: Skill[];
@@ -55,6 +57,9 @@ const skillSlice = createSlice({
     clearActiveSkills: (state) => {
       state.activeSkillIds = [];
     },
+  },
+  extraReducers: builder => {
+    builder.addCase(resetAccountSessionData, state => { state.activeSkillIds = []; });
   },
 });
 

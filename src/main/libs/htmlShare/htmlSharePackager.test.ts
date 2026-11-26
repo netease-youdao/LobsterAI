@@ -2,7 +2,7 @@ import fs from 'fs';
 import JSZip from 'jszip';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
   HtmlShareErrorCode,
@@ -35,6 +35,7 @@ async function getArchiveEntries(archivePath: string): Promise<string[]> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all([
     ...tempRoots.splice(0).map(root => fs.promises.rm(root, { recursive: true, force: true })),
     ...archiveRoots.splice(0).map(root => fs.promises.rm(root, { recursive: true, force: true })),
@@ -42,6 +43,74 @@ afterEach(async () => {
 });
 
 describe('htmlSharePackager', () => {
+  test('rejects a hidden local entry before reading it', async () => {
+    const root = await createTempRoot();
+    const entry = path.join(root, 'private.html');
+    await writeFile(entry, '<p>Private</p>');
+    const readFile = vi.spyOn(fs.promises, 'readFile');
+    await expect(packageHtmlFile(entry, () => { throw new Error('Not found'); })).rejects.toThrow('Not found');
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  test('rejects hidden assets reached through nested CSS references', async () => {
+    const root = await createTempRoot();
+    const entry = path.join(root, 'index.html');
+    await writeFile(entry, '<link rel="stylesheet" href="style.css">');
+    await writeFile(path.join(root, 'style.css'), 'body { background: url(private.png); }');
+    await writeFile(path.join(root, 'private.png'), Buffer.from([1, 2, 3]));
+    await expect(packageHtmlFile(entry, filePath => {
+      if (path.basename(filePath) === 'private.png') throw new Error('Not found');
+    })).rejects.toThrow('Not found');
+  });
+
+  test('rejects account changes during dependency reads', async () => {
+    const root = await createTempRoot();
+    const entry = path.join(root, 'index.html');
+    await writeFile(entry, '<p>Private</p>');
+    let allowed = true;
+    const originalReadFile = fs.promises.readFile.bind(fs.promises);
+    vi.spyOn(fs.promises, 'readFile').mockImplementationOnce(async (...args) => {
+      const content = await originalReadFile(...args);
+      allowed = false;
+      return content;
+    });
+    await expect(packageHtmlFile(entry, () => {
+      if (!allowed) throw new Error('Not found');
+    })).rejects.toThrow('Not found');
+  });
+
+  test('cleans the archive when a referenced asset becomes hidden during compression', async () => {
+    const root = await createTempRoot();
+    const entry = path.join(root, 'index.html');
+    await writeFile(entry, '<img src="private.png">');
+    await writeFile(path.join(root, 'private.png'), Buffer.from([1, 2, 3]));
+    let allowed = true;
+    let archiveRoot: string | undefined;
+    const originalReadFile = fs.promises.readFile.bind(fs.promises);
+    vi.spyOn(fs.promises, 'readFile').mockImplementation(async (...args) => {
+      const content = await originalReadFile(...args);
+      if (String(args[0]).endsWith('share.zip')) {
+        archiveRoot = path.dirname(String(args[0]));
+        allowed = false;
+      }
+      return content;
+    });
+    await expect(packageHtmlFile(entry, filePath => {
+      if (!allowed && path.basename(filePath) === 'private.png') throw new Error('Not found');
+    })).rejects.toThrow('Not found');
+    expect(archiveRoot).toBeDefined();
+    expect(fs.existsSync(archiveRoot!)).toBe(false);
+  });
+
+  test('keeps missing-resource warnings when access checks are enabled', async () => {
+    const root = await createTempRoot();
+    const entry = path.join(root, 'index.html');
+    await writeFile(entry, '<img src="missing.png">');
+    const packaged = await packageHtmlFile(entry, filePath => { fs.realpathSync(filePath); });
+    expect(await getArchiveEntries(packaged.archivePath)).toEqual(['index.html']);
+    expect(packaged.warnings).toContain('Missing referenced resource: missing.png');
+  });
+
   test('packages only the dependency closure for an HTML file', async () => {
     const root = await createTempRoot();
     await writeFile(

@@ -1,0 +1,674 @@
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { OwnershipAction, OwnershipTargetKind } from '../../shared/ownership/constants';
+import { REMOTE_PROTOCOL_VERSION, RemoteCapability, type RemoteOwner } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteReplyCapability, RemoteReplyModelLabelCapability } from '../../shared/remote/reply';
+import { RemoteRetention, type RetentionState } from '../../shared/remote/retention';
+import { RemoteSyncTarget, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
+import { AgentOwnerStore } from '../agentOwnership';
+import { OwnershipAssociationService } from '../ownershipAssociation';
+import { OwnershipOperationGate } from '../ownershipOperationGate';
+import { RemoteBridge } from './remoteBridge';
+import { RemoteStore } from './remoteStore';
+import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
+import { remoteSyncTargetId } from './remoteSyncTargetStore';
+
+const owner: RemoteOwner = { userId: '10001', scopeKey: 'personal' };
+const disposables: Array<() => void> = [];
+const response = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
+const missing = (): Response => new Response(JSON.stringify({ code: RemoteRetention.StateMissingCode, message: 'missing' }), { status: 404 });
+const targetA: RemoteSyncTargetIdentity = { version: 1, dataSpaceId: 'space-a', dataGeneration: '1' };
+const targetB: RemoteSyncTargetIdentity = { version: 1, dataSpaceId: 'space-b', dataGeneration: '1' };
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+function fixture(initialTarget: RemoteSyncTargetIdentity | null = targetA) {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
+  const store = new RemoteStore(db, { deferredProjection: true, restoreRuns: false });
+  let environment: RemoteEnvironment = RemoteEnvironment.Test;
+  let apiBaseUrl = 'https://first.example.com';
+  let target = initialTarget;
+  let deviceId = 'desktop';
+  const states = new Map<string, RetentionState>();
+  const request = vi.fn(async (_owner: RemoteOwner, pathname: string, _init: RequestInit): Promise<Response> => {
+    if (pathname.endsWith('/capabilities')) return response({ enabled: true, protocolVersions: [REMOTE_PROTOCOL_VERSION],
+      capabilities: [RemoteCapability.SameAccountAccess, ...(target ? [RemoteSyncTarget.Capability] : [])], ...(target ? { syncTarget: target } : {}) });
+    if (pathname.endsWith('/devices/register')) return response({ deviceId, ...owner, metadataVersion: '1', ...(target ? { syncTarget: target } : {}) });
+    if (pathname.includes('/sync/state?')) {
+      const id = new URL(`https://unused${pathname}`).searchParams.get('localSessionId')!;
+      return states.has(id) ? response(states.get(id)) : missing();
+    }
+    if (pathname.endsWith('/settings')) return response({ settingsVersion: '2' });
+    throw new Error(`Unexpected request: ${pathname}`);
+  });
+  const deps = {
+    store, identity: { installationId: 'installation', deviceKey: 'key', databaseId: 'database' },
+    runSessionTransaction: <T>(operation: () => T) => store.transaction(operation),
+    getOwner: () => owner, getEnvironment: () => environment, getApiBaseUrl: () => apiBaseUrl, request,
+    metadata: { name: 'Desktop', hostName: 'desktop.local', instanceLabel: 'default', platform: 'macos', appVersion: '1' },
+    prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn(),
+  };
+  const bridge: any = new RemoteBridge(deps);
+  vi.spyOn(bridge, 'schedule').mockImplementation(() => undefined);
+  bridge.accountChanged();
+  disposables.push(() => { bridge.stop(); db.close(); });
+  const seed = (id = 'local', mode = 'https://legacy.example.com', actor = owner) => {
+    store.transaction(() => {
+      db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run(id, id, 'idle');
+      store.assignNew(id, actor, 'local_create');
+    });
+    db.prepare('UPDATE remote_sync SET session_id=?,device_id=?,sync_environment=?,source_seq=12,ack_seq=9,server_seq=? WHERE local_id=?')
+      .run(`remote-${id}`, deviceId, mode, '10', id);
+    const state: RetentionState = { deviceId, sessionId: `remote-${id}`, localSessionId: id, syncProtocolVersion: 1,
+      streamEpoch: null, lastSourceSeq: '9', lastSeq: '10', sourcePurgeSeq: '0', eventPurgeSeq: '0', deleted: false };
+    states.set(id, state);
+    return state;
+  };
+  return { bridge, db, store, request, deps, states, seed,
+    switchMode(next: RemoteEnvironment) { environment = next; bridge.accountChanged(); },
+    switchRoute(url: string, nextTarget = target, nextDevice = deviceId) {
+      apiBaseUrl = url; target = nextTarget; deviceId = nextDevice; bridge.accountChanged();
+    },
+    replaceTarget(next: RemoteSyncTargetIdentity | null) { target = next; },
+    silentlySwitchRoute(url: string) { apiBaseUrl = url; },
+  };
+}
+afterEach(() => { for (const dispose of disposables.splice(0).reverse()) dispose(); });
+
+describe('remote synchronization follows the effective service', () => {
+  it('reconnects after an address change but preserves verified same-service progress', async () => {
+    const f = fixture(); f.seed();
+    await f.bridge.ensureRegistration();
+    const targetId = f.bridge.getSyncTargetId();
+    const socket = { close: vi.fn() }; f.bridge.socket = socket; f.bridge.generation = 'old';
+    const current = f.bridge.syncContext();
+    f.switchRoute('https://alias.example.com');
+    expect(current()).toBe(false); expect(socket.close).toHaveBeenCalledOnce();
+    expect(f.bridge.registration).toBeNull();
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).toBe(targetId);
+    expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', source_seq: 12, ack_seq: 9, server_seq: '10' });
+  });
+  it('ignores client mode changes that leave the effective address unchanged', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const registration = f.bridge.registration, epoch = f.bridge.accountGeneration;
+    f.switchMode(RemoteEnvironment.Production);
+    expect(f.bridge.registration).toBe(registration); expect(f.bridge.accountGeneration).toBe(epoch);
+  });
+  it.each([false, true])('rejects late responses after a route switch, including a round trip (%s)', async roundTrip => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const delayed = deferred<Response>(); f.request.mockImplementationOnce(() => delayed.promise);
+    const pending = f.bridge.api('/devices/desktop/settings');
+    const rejected = expect(pending).rejects.toThrow('Account changed during remote request');
+    f.switchRoute('https://alias.example.com'); await f.bridge.ensureRegistration();
+    if (roundTrip) { f.switchRoute('https://first.example.com'); await f.bridge.ensureRegistration(); }
+    delayed.resolve(response({ settingsVersion: 'stale' })); await rejected;
+  });
+  it('rejects a body that finishes after A to B to A', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const started = deferred<void>(), body = deferred<string>();
+    const delayed = response(null); vi.spyOn(delayed, 'text').mockImplementation(() => { started.resolve(); return body.promise; });
+    f.request.mockResolvedValueOnce(delayed);
+    const pending = f.bridge.api('/devices/desktop/settings');
+    const rejected = expect(pending).rejects.toThrow('Account changed during remote response'); await started.promise;
+    f.switchRoute('https://alias.example.com'); await f.bridge.ensureRegistration();
+    f.switchRoute('https://first.example.com'); await f.bridge.ensureRegistration();
+    body.resolve(JSON.stringify({ code: 0, data: {} })); await rejected;
+  });
+  it('does not send old credentials when the route changes before its notification arrives', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration(); f.request.mockClear();
+    f.silentlySwitchRoute('https://different.example.com');
+    await expect(f.bridge.api('/devices/desktop/settings', 'PATCH', {})).rejects.toThrow('route changed');
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('leaves source history out of a new space and restores the previous ACK on return', async () => {
+    const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    const targetId = f.bridge.getSyncTargetId();
+    f.switchRoute('https://other.example.com', targetB, 'desktop-b');
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).not.toBe(targetId);
+    expect(f.store.sync('local')).toBeNull();
+    expect(f.bridge.sessionAdmitted('local')).toBe(false);
+    f.switchRoute('https://first.example.com', targetA, 'desktop'); await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).toBe(targetId);
+    expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', ack_seq: 9, source_seq: 12, server_seq: '10', needs_snapshot: 1 });
+    expect(f.deps.execute).not.toHaveBeenCalled();
+  });
+  it('blocks a generation change without clearing previous progress', async () => {
+    const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    f.switchRoute('https://restored.example.com', { ...targetA, dataGeneration: '2' });
+    await expect(f.bridge.ensureRegistration()).rejects.toThrow('generation requires recovery');
+    expect(f.store.sync('local')?.ack_seq).toBe(9);
+  });
+  it.each(['https://unknown.test.example', RemoteEnvironment.Test, RemoteEnvironment.Production])('claims legacy %s only after server state confirms it', async environment => {
+    const f = fixture(); f.seed('local', environment); f.seed('foreign', environment, { ...owner, userId: 'foreign' });
+    await f.bridge.ensureRegistration();
+    expect(f.store.sync('local')?.sync_environment).toBe(environment);
+    expect(f.request.mock.calls.some(([, path]) => path.includes('/sync/state?'))).toBe(false);
+    await f.bridge.syncSessions(true);
+    expect(f.store.sync('local')?.sync_environment).toBe(f.bridge.getSyncTargetId());
+    expect(f.store.sync('foreign')?.sync_environment).toBe(environment);
+    expect(f.store.sync('local')?.ack_seq).toBe(9);
+  });
+  it.each(['missing', 'rollback', 'ahead', 'wrong-session'])('does not claim an unproven legacy mapping (%s)', async reason => {
+    const f = fixture(); const state = f.seed();
+    if (reason === 'missing') f.states.clear();
+    if (reason === 'rollback') state.lastSourceSeq = '8';
+    if (reason === 'ahead') state.lastSourceSeq = '13';
+    if (reason === 'wrong-session') state.sessionId = 'different';
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('isolated');
+    expect(f.store.sync('local')).toMatchObject({ sync_environment: 'https://legacy.example.com', ack_seq: 9 });
+  });
+  it('blocks a deleted remote session instead of creating a new snapshot mapping', async () => {
+    const f = fixture(); const state = f.seed(); state.deleted = true;
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('closed');
+    expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', ack_seq: 9 });
+    await expect(f.bridge.readSyncState(f.store.sync('local'))).rejects.toThrow('deleted');
+  });
+  it('supports a proven legacy server but refuses an identified target downgrade', async () => {
+    const f = fixture(null); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.getSyncTargetId()).toMatch(/^legacy:/u);
+    f.switchRoute('https://upgraded.example.com', targetA); await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).not.toMatch(/^legacy:/u);
+    f.switchRoute('https://old-node.example.com', null);
+    await expect(f.bridge.ensureRegistration()).rejects.toThrow('cannot be downgraded');
+  });
+  it('reconciles a committed upgrade import before comparing the previous stream epoch', async () => {
+    const f = fixture(); const state = f.seed();
+    f.store.put('import:local', { importId: 'upgrade', sessionId: 'remote-local', baseSourceSeq: '12', snapshotEpoch: 0,
+      expectedSourceSeq: '9', expectedServerSeq: '10', syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: null,
+      beginAttempted: true, owner, deviceId: 'desktop', environment: 'https://legacy.example.com', manifest: { manifestHash: 'hash' }, parts: [] });
+    Object.assign(state, { syncProtocolVersion: RemoteRetention.Version, streamEpoch: 'new-epoch', lastSourceSeq: '12', lastSeq: '18' });
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation((actor, pathname, init) => pathname.endsWith('/sync/imports/upgrade')
+      ? Promise.resolve(response({ state: 'committed', importId: 'upgrade', sessionId: 'remote-local', manifestHash: 'hash',
+        syncProtocolVersion: RemoteRetention.Version, targetStreamEpoch: 'new-epoch', streamEpoch: 'new-epoch',
+        committedSourceSeq: '12', committedSeq: '18', sourcePurgeSeq: '0', eventPurgeSeq: '0' })) : original(actor, pathname, init));
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.store.get('import:local')).toBeNull();
+    expect(f.store.sync('local')).toMatchObject({ ack_seq: 12, server_seq: '18', stream_epoch: 'new-epoch' });
+  });
+  it.each([false, true])('isolates missing imports of verified deleted sessions and still synchronizes a new task (known target: %s)', async knownTarget => {
+    const f = fixture();
+    const state = f.seed();
+    if (knownTarget) await f.bridge.ensureRegistration();
+    state.deleted = true;
+    const pending = { importId: 'rejected-import', sessionId: state.sessionId, beginAttempted: true,
+      owner, deviceId: state.deviceId, manifest: { manifestHash: 'original-hash' }, parts: [] };
+    f.store.put('import:local', pending);
+    f.bridge.registration = null;
+    f.bridge.error = '47002: missing import'; f.bridge.errorCode = 47002;
+    f.bridge.errorRequestKey = '1:GET:/sync/imports/rejected-import';
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.endsWith('/sync/imports/rejected-import')) return new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 });
+      if (pathname.endsWith('/sync/imports') && init.method === 'POST') {
+        const body = JSON.parse(String(init.body));
+        return response({ state: 'committed', importId: body.importId, sessionId: body.sessionId,
+          manifestHash: body.manifest.manifestHash, committedSourceSeq: body.baseSourceSeq, committedSeq: '30' });
+      }
+      return original(actor, pathname, init);
+    });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.getSyncTargetId()).not.toBeNull();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.error).toBeUndefined();
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('closed');
+    expect(f.store.get('import:local')).toMatchObject(pending);
+    expect(f.store.sync('local')).toMatchObject({ ack_seq: 9, server_seq: '10', session_id: 'remote-local' });
+    expect(f.db.prepare('SELECT id FROM cowork_sessions WHERE id=?').get('local')).toBeTruthy();
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('new-task', 'New task', 'idle');
+      f.store.assignNew('new-task', owner, 'local_create');
+    });
+    f.bridge.generation = 'connected';
+    f.request.mockClear();
+    await f.bridge.syncSessions();
+    const uploads = f.request.mock.calls.filter(([, path, init]) => path.endsWith('/sync/imports') && init.method === 'POST');
+    expect(uploads).toHaveLength(1);
+    expect(JSON.parse(String(uploads[0][2].body)).localSessionId).toBe('new-task');
+    const synced = f.store.sync('new-task')!;
+    expect(synced.ack_seq).toBe(synced.source_seq);
+    expect(synced.needs_snapshot).toBe(0);
+    expect(f.store.get('import:local')).toMatchObject(pending);
+    expect(f.deps.execute).not.toHaveBeenCalled();
+  });
+  it.each(['not-deleted', 'wrong-device', 'wrong-session', 'wrong-local', 'rollback', 'ahead', 'server-rollback', 'epoch', 'protocol', 'active-import', 'missing-state', 'wrong-attempt'])('does not infer a deleted stream from an import 404 (%s)', async mismatch => {
+    const f = fixture(); const state = f.seed();
+    f.db.prepare('UPDATE remote_sync SET sync_protocol_version=2,stream_epoch=? WHERE local_id=?').run('original-epoch', 'local');
+    Object.assign(state, { syncProtocolVersion: 2, streamEpoch: 'original-epoch', deleted: true });
+    f.store.put('import:local', { importId: 'rejected-import', sessionId: mismatch === 'wrong-attempt' ? 'foreign' : state.sessionId,
+      beginAttempted: true, owner, deviceId: state.deviceId });
+    if (mismatch === 'not-deleted') state.deleted = false;
+    if (mismatch === 'wrong-device') state.deviceId = 'foreign';
+    if (mismatch === 'wrong-session') state.sessionId = 'foreign';
+    if (mismatch === 'wrong-local') state.localSessionId = 'foreign';
+    if (mismatch === 'rollback') state.lastSourceSeq = '8';
+    if (mismatch === 'ahead') state.lastSourceSeq = '13';
+    if (mismatch === 'server-rollback') state.lastSeq = '9';
+    if (mismatch === 'epoch') state.streamEpoch = 'foreign';
+    if (mismatch === 'protocol') state.syncProtocolVersion = 1;
+    if (mismatch === 'active-import') state.activeImport = { importId: 'unknown' };
+    if (mismatch === 'missing-state') f.states.clear();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => pathname.endsWith('/sync/imports/rejected-import')
+      ? new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 }) : original(actor, pathname, init));
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.getSyncTargetId()).not.toBeNull();
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe('isolated');
+    expect(f.store.sync('local')).toMatchObject({ ack_seq: 9, server_seq: '10', stream_epoch: 'original-epoch' });
+    expect(f.store.get('import:local')).not.toBeNull();
+    expect(f.request.mock.calls.some(([, path, init]) => path.endsWith('/sync/imports') && init.method === 'POST')).toBe(false);
+  });
+  it.each([[403, 47002], [500, 500], [404, 404]])('does not treat HTTP %s / code %s as a missing import receipt', async (status, code) => {
+    const f = fixture(); const state = f.seed(); state.deleted = true;
+    f.store.put('import:local', { importId: 'rejected-import', sessionId: state.sessionId, beginAttempted: true });
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => pathname.endsWith('/sync/imports/rejected-import')
+      ? new Response(JSON.stringify({ code, message: 'unavailable' }), { status }) : original(actor, pathname, init));
+    await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.taskSync.get(f.bridge.taskContext(), 'local')?.phase).toBe(status >= 500 ? 'backoff' : 'isolated');
+    expect(f.request.mock.calls.some(([, path]) => path.includes('/sync/state?'))).toBe(false);
+    expect(f.store.get('import:local')).not.toBeNull();
+  });
+  it('rejects a tombstone response arriving after a route change without binding or acknowledging it', async () => {
+    const f = fixture(); const state = f.seed(); state.deleted = true;
+    f.store.put('import:local', { importId: 'rejected-import', sessionId: state.sessionId, beginAttempted: true });
+    const started = deferred<void>(), finish = deferred<Response>();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.endsWith('/sync/imports/rejected-import')) return new Response(JSON.stringify({ code: 47002, message: 'missing' }), { status: 404 });
+      if (pathname.includes('/sync/state?')) { started.resolve(); return finish.promise; }
+      return original(actor, pathname, init);
+    });
+    await f.bridge.ensureRegistration();
+    const history = f.bridge.syncSessions(true);
+    await started.promise;
+    f.switchRoute('https://other.example.com', targetB, 'desktop-b');
+    finish.resolve(response(state)); await history;
+    expect(f.bridge.registration).toBeNull(); expect(f.bridge.getSyncTargetId()).toBeNull();
+    expect(f.store.sync('local')?.ack_seq).toBe(9);
+    expect(f.store.get('import:local')).not.toBeNull();
+  });
+  it('keeps the result of an old execution in its original inbox without ACKing the new server', async () => {
+    const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    await f.bridge.syncSessions(true);
+    const origin = f.bridge.getSyncTargetId(); f.bridge.generation = 'connected-a';
+    const entry = { targetId: origin, owner, command: { commandId: 'running-command', claimId: 'claim', claimToken: 'secret',
+      claimUntil: new Date(Date.now() + 60000).toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString(),
+      statusVersion: '2', status: 'claimed', type: 'send_message' }, localSessionId: 'local', remoteSessionId: 'remote-local',
+      runId: 'run', state: 'prepared', result: null };
+    f.store.put(`inbox:${origin}:running-command`, entry);
+    const started = deferred<void>(), finish = deferred<{ outcome: string }>();
+    f.deps.execute.mockImplementation(async () => { started.resolve(); return finish.promise; });
+    f.request.mockResolvedValueOnce(response({ status: 'received', statusVersion: '3' }));
+    const execution = f.bridge.applyEntry(entry, 'connected-a'); await started.promise;
+    f.switchRoute('https://other.example.com', targetB, 'desktop-b'); await f.bridge.ensureRegistration();
+    f.request.mockClear(); finish.resolve({ outcome: 'started' }); await execution;
+    expect(f.store.get(`inbox:${origin}:running-command`)).toMatchObject({ targetId: origin, state: 'applied' });
+    expect(f.request).not.toHaveBeenCalled();
+    await expect(f.bridge.ack(entry, 'applied')).rejects.toThrow('another synchronization target');
+    expect(f.deps.execute).toHaveBeenCalledOnce();
+  });
+  it('waits for pending target negotiation before completing a concurrent registration request', async () => {
+    const f = fixture(); f.seed(); const original = f.request.getMockImplementation()!;
+    const started = deferred<void>(), release = deferred<void>();
+    f.request.mockImplementation(async (actor, pathname, init) => {
+      if (pathname.endsWith('/devices/register')) { started.resolve(); await release.promise; }
+      return original(actor, pathname, init);
+    });
+    const first = f.bridge.ensureRegistration(); await started.promise;
+    let completed = false;
+    const second = f.bridge.ensureRegistration().then(() => { completed = true; });
+    await Promise.resolve(); expect(completed).toBe(false);
+    release.resolve(); await Promise.all([first, second]); expect(completed).toBe(true);
+  });
+  it('discovers the target even with a legacy disabled preference, then keeps synchronization disabled', async () => {
+    const f = fixture();
+    f.store.put('settings:10001:personal', { enabled: false, name: 'Disabled', workspaces: [], settingsVersion: '1' });
+    const connect = vi.spyOn(f.bridge, 'connect').mockResolvedValue(undefined);
+    await f.bridge.tick();
+    expect(f.bridge.getSyncTargetId()).not.toBeNull();
+    expect(f.bridge.state().enabled).toBe(false);
+    expect(connect).not.toHaveBeenCalled();
+  });
+  it('applies settings saved during discovery to that target without changing the previous service', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    f.switchRoute('https://other.example.com', targetB, 'desktop-b');
+    await f.bridge.configure({ enabled: false, name: 'Only B' });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.state()).toMatchObject({ enabled: false, name: 'Only B' });
+    f.switchRoute('https://first.example.com', targetA, 'desktop'); await f.bridge.ensureRegistration();
+    expect(f.bridge.state()).toMatchObject({ enabled: true, name: 'desktop.local' });
+  });
+  it('sends target headers on protected requests but not discovery', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration(); await f.bridge.api('/devices/desktop/settings');
+    for (const [, pathname, init] of f.request.mock.calls) {
+      const headers = new Headers(init.headers);
+      expect(headers.get(RemoteSyncTarget.SpaceHeader)).toBe(pathname.endsWith('/capabilities') ? null : targetA.dataSpaceId);
+    }
+  });
+  it('keeps authenticated transport while deferring an oversized legacy admission without repeated work', async () => {
+    const f = fixture(); f.seed(); const before = f.store.sync('local');
+    const candidate = remoteSyncTargetId(targetA, owner);
+    const activate = vi.spyOn(f.bridge.targets, 'activate').mockImplementation(() => { throw new RemoteSyncAdmissionBudgetError(candidate); });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.registration).toMatchObject({ ...owner, deviceId: 'desktop' });
+    expect(f.bridge.getSyncTargetId()).toBe(candidate);
+    expect(f.bridge.state().syncHealth).toMatchObject({ admissionDeferred: true, status: 'degraded' });
+    expect(f.bridge.syncContext()()).toBe(false); expect(f.store.areControlsAdmitted()).toBe(false);
+    expect(f.store.isTaskAdmitted('local')).toBe(false);
+    expect(f.store.sync('local')).toEqual(before); expect(f.bridge.targets.active(owner)).toBeNull();
+    await f.bridge.ensureRegistration(); await f.bridge.ensureRegistration();
+    expect(activate).toHaveBeenCalledOnce();
+    expect(f.request.mock.calls.filter(([, path]) => path.endsWith('/devices/register'))).toHaveLength(1);
+  });
+  it('resumes bounded admission after reconnect and preserves its original ACK', async () => {
+    let now = Date.now(); const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    disposables.push(() => clock.mockRestore());
+    const f = fixture(); f.seed();
+    const candidate = remoteSyncTargetId(targetA, owner);
+    const activate = vi.spyOn(f.bridge.targets, 'activate').mockImplementationOnce(() => { throw new RemoteSyncAdmissionBudgetError(candidate); });
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.state().syncHealth.admissionDeferred).toBe(true);
+    await f.bridge.configure({ retry: true }); await f.bridge.ensureRegistration();
+    expect(activate).toHaveBeenCalledTimes(2);
+    // Archiving and validation commit one bounded page per turn, including after reconnect.
+    for (let page = 0; page < 50 && f.bridge.admissionDeferred; page++) {
+      now += 100; await f.bridge.resumeAdmission();
+    }
+    expect(f.bridge.registration.deviceId).toBe('desktop');
+    expect(f.bridge.state().syncHealth.admissionDeferred).toBe(false);
+    expect(f.bridge.targets.active(owner)?.targetId).toBe(candidate);
+    expect(f.store.areControlsAdmitted()).toBe(true);
+    await f.bridge.syncSessions(true);
+    expect(f.store.isTaskAdmitted('local')).toBe(true);
+    expect(f.store.sync('local')).toMatchObject({ session_id: 'remote-local', source_seq: 12, ack_seq: 9, server_seq: '10' });
+  });
+  it('rejects registration from another data space before activating a work set', async () => {
+    const f = fixture(); const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation((actor, pathname, init) => pathname.endsWith('/devices/register')
+      ? Promise.resolve(response({ ...owner, deviceId: 'desktop', metadataVersion: '1', syncTarget: targetB })) : original(actor, pathname, init));
+    await expect(f.bridge.ensureRegistration()).rejects.toThrow('does not match discovery');
+    expect(f.bridge.getSyncTargetId()).toBeNull();
+  });
+});
+
+
+describe('source provenance through real bridge registration', () => {
+  const create = (f: ReturnType<typeof fixture>, id: string) => f.store.transaction(() => {
+    f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run(id, id, 'idle');
+    f.store.assignNew(id, owner, 'local_create');
+  });
+
+  it('admits a first local session on its original legacy server without syncTarget support', async () => {
+    const f = fixture(null); create(f, 'first-legacy');
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).toMatch(/^legacy:/u);
+    expect(f.bridge.sessionAdmitted('first-legacy')).toBe(true);
+    expect(f.store.isTaskAdmitted('first-legacy')).toBe(true);
+    expect(f.store.sync('first-legacy')).not.toBeNull();
+  });
+
+  it('admits new local work created after original legacy-server registration', async () => {
+    const f = fixture(null); await f.bridge.ensureRegistration();
+    create(f, 'new-on-legacy');
+    expect(f.bridge.sessionAdmitted('new-on-legacy')).toBe(true);
+    expect(f.store.isTaskAdmitted('new-on-legacy')).toBe(true);
+  });
+
+  it('keeps a task created before registration out of the first production login', async () => {
+    const f = fixture(); create(f, 'offline-test');
+    f.switchRoute('https://production.example.com', targetB, 'desktop-b');
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.sessionAdmitted('offline-test')).toBe(false);
+    f.request.mockClear();
+    await f.bridge.syncSessions(true);
+    expect(f.request.mock.calls.some(([, path]) => /\/sync\/(imports|batches)/u.test(path))).toBe(false);
+    expect(f.deps.execute).not.toHaveBeenCalled();
+  });
+
+  it('binds newly created work to a confirmed replacement data space at the same URL', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration(); create(f, 'before-replacement');
+    const originalTarget = f.bridge.getSyncTargetId();
+    f.switchRoute('https://first.example.com', targetB, 'desktop-b');
+    // Same URL does not notify a route change; the current target is rediscovered on registration.
+    f.bridge.registration = null;
+    await f.bridge.ensureRegistration();
+    expect(f.bridge.getSyncTargetId()).not.toBe(originalTarget);
+    create(f, 'after-replacement');
+    expect(f.bridge.sessionAdmitted('before-replacement')).toBe(false);
+    expect(f.bridge.sessionAdmitted('after-replacement')).toBe(true);
+    expect(f.store.isTaskAdmitted('after-replacement')).toBe(true);
+  });
+});
+
+
+describe('explicit linked task publication confirmation', () => {
+  it('resumes only the selected source isolation and preserves mapping and all retry budgets', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const target = f.bridge.associationPublicationTarget(); expect(target).not.toBeNull();
+    for (const id of ['selected', 'unselected']) f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run(id, id, 'completed');
+      f.store.assignNew(id, owner, 'manual_claim');
+    });
+    const context = { owner, target: target.targetId, deviceId: target.deviceId };
+    for (const id of ['selected', 'unselected']) {
+      f.bridge.taskSync.fail(context, id, { phase: 'isolated', scope: 'session', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+      f.store.put(`syncFailure:${id}`, { reason: 'REMOTE_SYNC_STATE_CONFLICT', blocked: true });
+    }
+    const before = f.bridge.taskSync.get(context, 'selected');
+    const mapping = f.store.sync('selected');
+    expect(() => f.bridge.resumeAssociationPublication(['selected'], target)).toThrow('target changed');
+    f.store.transaction(() => f.bridge.resumeAssociationPublication(['selected'], target));
+    const after = f.bridge.taskSync.get(context, 'selected');
+    expect(after.phase).toBe('reconciling');
+    expect(after.manual_retry_at).toBeGreaterThanOrEqual(before.manual_retry_at);
+    for (const key of ['failure_count', 'server_retry_at', 'repair_json', 'auto_probe_json', 'auto_probe_revision']) expect(after[key]).toEqual(before[key]);
+    expect(f.store.sync('selected')).toEqual(mapping);
+    expect(f.store.get('syncFailure:selected')).toBeNull();
+    expect(f.bridge.taskSync.get(context, 'unselected').phase).toBe('isolated');
+    expect(f.store.get('syncFailure:unselected')).toMatchObject({ blocked: true });
+    expect(f.deps.execute).not.toHaveBeenCalled();
+    f.bridge.notifyAssociationChanged(['selected']); expect(f.bridge.schedule).toHaveBeenCalledWith(0);
+  });
+
+  it('invalidates confirmation when the destination route changes and never resets unrelated failures', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const target = f.bridge.associationPublicationTarget(); expect(target).not.toBeNull();
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('task', 'task', 'completed');
+      f.store.assignNew('task', owner, 'manual_claim');
+    });
+    const context = { owner, target: target.targetId, deviceId: target.deviceId };
+    f.bridge.taskSync.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'PROTOCOL_UNSUPPORTED' });
+    const before = f.bridge.taskSync.get(context, 'task');
+    f.store.transaction(() => f.bridge.resumeAssociationPublication(['task'], target));
+    expect(f.bridge.taskSync.get(context, 'task')).toEqual(before);
+    f.silentlySwitchRoute('https://other.example');
+    expect(f.bridge.associationPublicationTarget()).toBeNull();
+    expect(() => f.store.transaction(() => f.bridge.resumeAssociationPublication(['task'], target))).toThrow('target changed');
+    expect(f.bridge.taskSync.get(context, 'task')).toEqual(before);
+  });
+
+  it('does not offer a destination confirmation against an unidentified legacy service', async () => {
+    const f = fixture(null); await f.bridge.ensureRegistration();
+    expect(f.bridge.associationPublicationTarget()).toBeNull();
+  });
+});
+
+
+it.each(['repair', 'automatic', 'scope', 'cooldown'])('does not release invalid or busy publication retry evidence (%s)', async invalid => {
+  const f = fixture(); await f.bridge.ensureRegistration();
+  const target = f.bridge.associationPublicationTarget(); expect(target).not.toBeNull();
+  f.store.transaction(() => {
+    f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('task', 'task', 'completed');
+    f.store.assignNew('task', owner, 'manual_claim');
+  });
+  const context = { owner, target: target.targetId, deviceId: target.deviceId };
+  f.bridge.taskSync.fail(context, 'task', { phase: 'isolated', scope: 'session', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+  if (invalid === 'repair') f.db.prepare("UPDATE remote_sync_task_state SET repair_json='broken'").run();
+  if (invalid === 'automatic') f.db.prepare("UPDATE remote_sync_task_state SET auto_probe_json='broken'").run();
+  if (invalid === 'scope') f.db.prepare("UPDATE remote_sync_task_state SET scope='device'").run();
+  if (invalid === 'cooldown') f.db.prepare('UPDATE remote_sync_task_state SET manual_retry_at=?').run(Date.now());
+  const before = f.bridge.taskSync.get(context, 'task');
+  expect(() => f.store.transaction(() => f.bridge.resumeAssociationPublication(['task'], target))).toThrow('retry is unavailable');
+  expect(f.bridge.taskSync.get(context, 'task')).toEqual(before);
+});
+
+
+it('publishes a newly associated legacy-local task through the first import without requesting a nonexistent old mapping', async () => {
+  const f = fixture();
+  f.store.transaction(() => {
+    f.db.prepare('INSERT INTO cowork_sessions VALUES (?,?,1,1,?)').run('linked-local', 'Old local task', 'completed');
+    f.store.assignNew('linked-local', null, 'local_create');
+  });
+  // Pre-origin clients have local content but no publication identity or remote mapping.
+  f.db.prepare("DELETE FROM remote_publication_origins WHERE local_id='linked-local'").run();
+  await f.bridge.ensureRegistration();
+  f.store.transaction(() => f.store.associateHistorical('linked-local', owner, Date.now()));
+  expect(f.bridge.sessionAdmitted('linked-local')).toBe(true);
+  const original = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (actor, pathname, init) => {
+    if (pathname.endsWith('/sync/imports') && init.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      return response({ state: 'committed', importId: body.importId, sessionId: body.sessionId,
+        manifestHash: body.manifest.manifestHash, committedSourceSeq: body.baseSourceSeq, committedSeq: '1' });
+    }
+    return original(actor, pathname, init);
+  });
+  f.request.mockClear(); f.bridge.generation = 'connected';
+  await f.bridge.syncSessions();
+  const imports = f.request.mock.calls.filter(([, pathname, init]) => pathname.endsWith('/sync/imports') && init.method === 'POST');
+  expect(imports).toHaveLength(1);
+  expect(JSON.parse(String(imports[0][2].body)).localSessionId).toBe('linked-local');
+  expect(f.request.mock.calls.some(([, pathname]) => pathname.includes('/sync/state?'))).toBe(false);
+  const row = f.store.sync('linked-local')!;
+  expect(row.needs_snapshot).toBe(0); expect(row.ack_seq).toBe(row.source_seq);
+  expect(f.deps.execute).not.toHaveBeenCalled();
+});
+
+
+it.each(['anonymous', 'main'])('recovers a failed linked task under %s only after destination confirmation and completes first import', async agentId => {
+  const f = fixture();
+  f.db.exec(`ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT DEFAULT 'anonymous';
+    ALTER TABLE cowork_sessions ADD COLUMN parent_session_id TEXT;
+    ALTER TABLE cowork_sessions ADD COLUMN cwd TEXT DEFAULT '/tmp';
+    CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT,created_at INTEGER,updated_at INTEGER,subagent_allow_agent_ids TEXT);
+    CREATE TABLE subagent_runs(id TEXT PRIMARY KEY,parent_session_id TEXT,child_cowork_session_id TEXT,agent_id TEXT,status TEXT,session_key TEXT);
+    INSERT INTO agents VALUES('main','Main',1,1,'[]'),('anonymous','Old Agent',1,1,'[]');`);
+  const agents = new AgentOwnerStore(f.db);
+  f.store.transaction(() => {
+    for (const id of ['old-task', 'unrelated-task']) {
+      f.db.prepare('INSERT INTO cowork_sessions(id,title,created_at,updated_at,status,agent_id) VALUES (?,?,1,1,?,?)')
+        .run(id, id, 'completed', agentId);
+      f.store.assignNew(id, null, 'local_create');
+    }
+  });
+  const originalAgent = agents.get(agentId);
+  const unrelatedOwnership = f.store.ownershipRecord('unrelated-task');
+  const unrelatedSync = f.store.sync('unrelated-task');
+  // Reproduce the original unresolved association source, not a known foreign source.
+  f.db.prepare("UPDATE remote_publication_origins SET route=NULL,data_space_id=NULL WHERE local_id='old-task'").run();
+  await f.bridge.ensureRegistration(); f.bridge.generation = 'connected';
+  const service = new OwnershipAssociationService({ store: { remote: f.store, agentOwnership: agents,
+    runSessionTransaction: operation => f.store.transaction(operation) }, gate: new OwnershipOperationGate(),
+    actor: () => ({ owner, generation: 'account-generation', label: 'User', scopeLabel: 'Personal' }),
+    publicationTarget: () => f.bridge.associationPublicationTarget(),
+    confirmPublication: (ids, target) => f.bridge.resumeAssociationPublication(ids, target),
+    afterCommit: result => f.bridge.notifyAssociationChanged(result.sessionIds),
+  });
+  const target = { kind: OwnershipTargetKind.Task, id: 'old-task' };
+  const commit = (preview: ReturnType<typeof service.preview>, requestId: string) => service.commit({
+    planId: preview.planId, planVersion: preview.planVersion, accountGeneration: preview.accountGeneration, requestId });
+  commit(service.preview(target), 'original-claim');
+  await f.bridge.syncSessions();
+  const context = f.bridge.taskContext();
+  expect(f.bridge.taskSync.get(context, 'old-task')).toMatchObject({ phase: 'isolated', reason: 'REMOTE_SYNC_STATE_CONFLICT' });
+  const originalMapping = f.store.sync('old-task')!;
+  expect(service.getDetail(target).canConfirmPublication).toBe(true);
+  const preview = service.preview({ ...target, action: OwnershipAction.ConfirmPublication });
+  expect(preview).toMatchObject({ eligible: true, publicationTarget: { route: 'https://first.example.com' } });
+  const result = commit(preview, 'new-destination-confirmation');
+  expect(result.action).toBe(OwnershipAction.ConfirmPublication);
+  expect(f.store.sync('old-task')!.session_id).toBe(originalMapping.session_id);
+  expect(agents.get(agentId)).toEqual(originalAgent);
+  expect(f.bridge.taskSync.get(context, 'old-task')!.phase).toBe('reconciling');
+  const original = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (actor, pathname, init) => {
+    if (pathname.endsWith('/sync/imports') && init.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      return response({ state: 'committed', importId: body.importId, sessionId: body.sessionId,
+        manifestHash: body.manifest.manifestHash, committedSourceSeq: body.baseSourceSeq, committedSeq: '1' });
+    }
+    return original(actor, pathname, init);
+  });
+  f.request.mockClear();
+  await f.bridge.syncSessions();
+  const imports = f.request.mock.calls.filter(([, pathname, init]) => pathname.endsWith('/sync/imports') && init.method === 'POST');
+  expect(imports).toHaveLength(1);
+  expect(JSON.parse(String(imports[0][2].body)).localSessionId).toBe('old-task');
+  expect(agents.get(agentId)).toEqual(originalAgent);
+  expect(f.store.owner('unrelated-task')).toBeNull();
+  expect(f.store.ownershipRecord('unrelated-task')).toEqual(unrelatedOwnership);
+  expect(f.store.sync('unrelated-task')).toEqual(unrelatedSync);
+  const synced = f.store.sync('old-task')!;
+  expect(synced.needs_snapshot).toBe(0); expect(synced.ack_seq).toBe(synced.source_seq);
+  expect(service.getDetail(target).canConfirmPublication).toBe(false);
+  expect(service.getResult({ requestId: 'new-destination-confirmation' })).toMatchObject({ operationId: result.operationId, action: OwnershipAction.ConfirmPublication });
+  expect(f.deps.execute).not.toHaveBeenCalled();
+});
+
+
+describe('reply model label capability compatibility', () => {
+  it('requires server support without a device declaration and invalidates delayed work on downgrade', async () => {
+    const f = fixture(); await f.bridge.ensureRegistration();
+    const configure = vi.spyOn(f.store, 'setReplyModelLabelSupported');
+    const supported = { enabled: true, protocolVersions: [REMOTE_PROTOCOL_VERSION], projectionVersions: [1, 4], syncTarget: targetA,
+      capabilities: [RemoteCapability.SameAccountAccess, RemoteSyncTarget.Capability, RemoteReplyCapability, RemoteReplyModelLabelCapability] };
+    await f.bridge.refreshCapabilities(supported);
+    expect(configure).toHaveBeenLastCalledWith(true);
+    expect(f.bridge.advertisedCapabilities()).not.toContain(RemoteReplyModelLabelCapability);
+    const current = f.bridge.syncContext(); expect(current()).toBe(true);
+    await f.bridge.refreshCapabilities({ ...supported, capabilities: supported.capabilities.filter(value => value !== RemoteReplyModelLabelCapability) });
+    expect(current()).toBe(false);
+    expect(configure).toHaveBeenLastCalledWith(false);
+    expect(f.bridge.advertisedCapabilities()).not.toContain(RemoteReplyModelLabelCapability);
+  });
+
+  it('keeps sealed legacy events intact while an older server lacks label support', async () => {
+    const f = fixture(); f.seed(); await f.bridge.ensureRegistration();
+    const target = f.bridge.getSyncTargetId();
+    f.db.prepare('UPDATE remote_sync SET sync_environment=?,needs_snapshot=0 WHERE local_id=?').run(target, 'local');
+    vi.spyOn(f.bridge, 'sessionAdmitted').mockReturnValue(true);
+    vi.spyOn(f.bridge, 'ownershipSyncBlocked').mockReturnValue(false);
+    vi.spyOn(f.bridge.availability, 'legacyHistoryAllowed').mockReturnValue(true);
+    const events = [{ eventType: 'message.upsert', sourceSeq: '12', payload: { message: { modelLabel: 'deepseek-flash' } } }];
+    vi.spyOn(f.store, 'pending').mockReturnValue(events as any);
+    const before = f.store.sync('local'); f.request.mockClear();
+    await f.bridge.syncSession(before, () => true, { owner, target, deviceId: 'desktop' }, false);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.store.sync('local')).toEqual(before);
+    expect(f.store.pending('local')).toEqual(events);
+  });
+});

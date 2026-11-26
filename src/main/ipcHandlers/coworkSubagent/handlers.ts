@@ -4,12 +4,17 @@ import { CoworkIpcChannel } from '../../../shared/cowork/constants';
 import type { DshSubagentSessions } from '../../libs/dsh/dshSubagentSessions';
 
 export interface CoworkSubagentHandlerDeps {
+  owner?(): import('../../../shared/remote/constants').RemoteOwner | null;
+  canRead?(id: string): boolean;
   getSubagentSessions: () => Pick<DshSubagentSessions,
     'getSubTaskHistory' | 'listSubagentRuns' | 'listSubagentRunsByAgent' | 'deleteSubagentSession'>;
 }
 
 export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps): void {
   const { getSubagentSessions } = deps;
+  const assertReadable = (id: string) => {
+    if (deps.canRead?.(id) === false) throw new Error('Session unavailable');
+  };
 
   ipcMain.handle(
     CoworkIpcChannel.SubTaskHistory,
@@ -22,10 +27,12 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
       },
     ) => {
       try {
+        assertReadable(options.parentSessionId);
         const messages = await getSubagentSessions().getSubTaskHistory(
           options.parentSessionId,
           options.agentId,
         );
+        assertReadable(options.parentSessionId);
         return { success: true, messages };
       } catch (error) {
         return {
@@ -37,7 +44,9 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
   );
 
   ipcMain.handle(CoworkIpcChannel.SubagentList, async (_event, options: { parentSessionId: string }) => {
+    assertReadable(options.parentSessionId);
     const runs = await getSubagentSessions().listSubagentRuns(options.parentSessionId);
+    assertReadable(options.parentSessionId);
     return { success: true, runs };
   });
 
@@ -48,6 +57,7 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
         options.agentId,
         options.limit ?? 20,
         options.offset ?? 0,
+        deps.owner?.(),
       );
       return { success: true, ...result };
     },
@@ -57,6 +67,7 @@ export function registerCoworkSubagentHandlers(deps: CoworkSubagentHandlerDeps):
     CoworkIpcChannel.SubagentDelete,
     async (_event, options: { parentSessionId: string; runId: string }) => {
       try {
+        assertReadable(options.parentSessionId);
         const deleted = await getSubagentSessions().deleteSubagentSession(
           options.parentSessionId,
           options.runId,

@@ -1,4 +1,5 @@
 import type { UsageContext } from '../../shared/analytics/usage';
+import type { ApprovalState } from '../../shared/cowork/approval';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../shared/cowork/browserAnnotations';
 import type {
   CoworkContextUsageFailureReason,
@@ -18,6 +19,7 @@ import type {
   CoworkImageAttachmentPayload,
   CoworkImageAttachmentPreview,
 } from '../../shared/cowork/imageAttachments';
+import type { CoworkLocalInput } from '../../shared/cowork/inputAttachments';
 import type {
   CoworkLlmTrace,
   CoworkTurnUsage,
@@ -348,6 +350,9 @@ export type CoworkMemoryStats = SharedCoworkMemoryStats;
 
 // Cowork pending permission request
 export interface CoworkPermissionRequest {
+  approval?: ApprovalState;
+  submissionState?: 'submitting' | 'unknown';
+  submissionError?: string;
   sessionId: string;
   toolName: string;
   toolInput: Record<string, unknown>;
@@ -427,6 +432,7 @@ export interface SubagentSessionSummary {
 
 // Start session options
 export interface CoworkStartOptions {
+  localInput?: CoworkLocalInput;
   analytics?: UsageContext;
   prompt: string;
   cwd?: string;
@@ -451,6 +457,7 @@ export interface CoworkStartOptions {
 
 // Continue session options
 export interface CoworkContinueOptions {
+  localInput?: CoworkLocalInput;
   retryMessageId?: string;
   analytics?: UsageContext;
   sessionId: string;

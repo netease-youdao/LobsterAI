@@ -1,0 +1,929 @@
+import Database from 'better-sqlite3';
+import { createHash, randomUUID } from 'crypto';
+import { buildSync } from 'esbuild';
+import { strToU8, zipSync } from 'fflate';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { RemoteCapability } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
+import { type RemoteFilePolicy, RemoteFileReason, remoteFileRule } from '../../shared/remote/files';
+import { RemoteFileCapability } from '../../shared/remote/files';
+import type { LibraryIndexedFile } from '../library/libraryLocalStore';
+import { AuthSessionManager } from '../libs/authSessionManager';
+import { captureDesktopInput } from './desktopInputMetadata';
+import { RemoteBridge } from './remoteBridge';
+import { RemoteFileContextRequired, RemoteFileRetryPhase } from './remoteFileRetry';
+import { captureRemoteFileSnapshot, remoteFileCacheDirectory, verifyRemoteFileSnapshot } from './remoteFileSnapshots';
+import { RemoteFileSync } from './remoteFileSync';
+import { projectLiveMessage } from './remoteLiveProjection';
+import { RemoteNetworkTransport } from './remoteNetworkTransport';
+import { RemoteStore } from './remoteStore';
+
+const owner = { userId: 'A', scopeKey: 'personal' };
+const disposable: Array<() => void> = [];
+afterEach(() => { for (const dispose of disposable.splice(0).reverse()) dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
+const policy: RemoteFilePolicy = { policyVersion: '1', features: { inputUpload: true, desktopInputSync: true, artifactPublish: true, artifactDownload: true },
+  types: [{ category: 'text', extensions: ['md', 'txt', 'json', 'yaml', 'js', 'html'], maxFileBytes: '5242880', inputAllowed: true, artifactAutoSync: true },
+    { category: 'image', extensions: ['png'], maxFileBytes: '10485760', inputAllowed: true, artifactAutoSync: true },
+    { category: 'document', extensions: ['pdf', 'docx', 'pptx'], maxFileBytes: '31457280', inputAllowed: true, artifactAutoSync: true }],
+  limits: { partBytes: '4194304', maxInputCount: 10, maxInputBytes: '104857600', maxImageBytes: '20971520', maxTaskArtifactCount: 20, maxTaskArtifactBytes: '209715200' } };
+function folder(): string { const result = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-files-test-'))); disposable.push(() => fs.rmSync(result, { recursive: true, force: true })); return result; }
+const ok = (data: unknown): Response => new Response(JSON.stringify({ code: 0, data }));
+function fixture(sealedProducer = true, deliveries = false, fileName = 'report.md', partBytes = 4194304,
+  partTransport?: (pathname: string, init: RequestInit) => Promise<Response>) {
+  const directory = folder(), source = path.join(directory, fileName), cache = path.join(directory, 'cache'); fs.writeFileSync(source, 'first');
+  const db = new Database(':memory:'); disposable.push(() => db.close());
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);
+    CREATE TABLE library_local_artifacts(id TEXT PRIMARY KEY,file_path TEXT,file_name TEXT,file_identity TEXT,updated_at INTEGER,extension TEXT,size_bytes INTEGER,availability TEXT);
+    CREATE TABLE library_artifact_sessions(artifact_id TEXT,session_id TEXT,last_message_id TEXT,relation_kind TEXT,PRIMARY KEY(artifact_id,session_id));`);
+  const store = new RemoteStore(db); store.setEnabledOwner(owner); store.setFileProjectionSupported(true);
+  store.transaction(() => { db.exec("INSERT INTO cowork_sessions VALUES('s','Task',1,1,'running',NULL,NULL)"); store.assignNew('s', owner, 'local_create'); });
+  const stat = fs.statSync(source), sourceIdentity = `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`;
+  store.beginRun('s', 'run1');
+  store.transaction(() => {
+    db.prepare("INSERT INTO cowork_messages VALUES('m1','s','assistant','report',?,1,1)").run(JSON.stringify({ remoteRunId: 'run1' }));
+    db.prepare("INSERT INTO library_local_artifacts VALUES('local',?,?,?,1,?,5,'available')").run(source, fileName, sourceIdentity, path.extname(fileName).slice(1));
+    db.exec("INSERT INTO library_artifact_sessions VALUES('local','s','m1','created')");
+  });
+  let actor: RemoteOwner | null = owner, generation = '1', version = 0;
+  let routeEpoch = 0, environment = 'https://example.invalid', deviceId = 'pc';
+  let recordHook: (() => Promise<void>) | undefined;
+  const calls: Array<{ pathname: string; body: any; headers: HeadersInit | undefined; generation: string }> = [];
+  const uploads = new Map<string, any>(), bytes = new Map<string, Buffer>(), references: any[] = [], chunks = new Map<string, Map<number, Buffer>>();
+  const latestByArtifact = new Map<string, any>(), artifactIds = new Map<string, string>();
+  let responseHook: ((pathname: string) => Response | void) | undefined, loseVersionReceipt = false, manifestOverrides: Record<string, unknown> = {};
+  const connection = () => ({ owner, environment, deviceId, generation, routeEpoch });
+  const request = vi.fn(async (con, pathname, init) => {
+    const body = init.body && init.method !== 'PUT' ? JSON.parse(String(init.body)) : null;
+    calls.push({ pathname, body, headers: init.headers, generation: con.generation });
+    const override = responseHook?.(pathname);
+    if (override) return override;
+    if (pathname.startsWith('/file-policy')) return ok(policy);
+    if (pathname === '/devices/pc/artifacts') {
+      const artifactId = artifactIds.get(body.localArtifactId) || (artifactIds.size ? `remote-${body.localArtifactId}` : 'remote');
+      artifactIds.set(body.localArtifactId, artifactId);
+      return ok({ artifactId, revision: '1', latestVersion: '0' });
+    }
+    const manifest = (artifactId = 'remote') => {
+      const latest = latestByArtifact.get(artifactId);
+      return { artifactId, sessionId: store.sync('s')!.session_id, name: fileName, revision: String(version + 1), availability: latest ? 'ready' : 'desktop_only', latest,
+        latestVersion: latest?.artifactVersion || '0', lastCaptureSequence: latest ? uploads.get(latest.assetId).captureSequence : '0',
+        pendingArtifactVersion: [...uploads.values()].find(item => item.artifactId === artifactId && item.publicationStatus === 'uploading')?.artifactVersion || null, ...manifestOverrides };
+    };
+    if (pathname.startsWith('/sessions/')) return ok(manifest(pathname.split('/').at(-1)));
+    if (/^\/artifacts\/[^/]+\/versions$/.test(pathname)) {
+      const artifactId = pathname.split('/')[2];
+      const existing = [...uploads.values()].find(item => item.artifactId === artifactId && item.publicationId === body.publicationId);
+      if (existing) return ok(existing);
+      const item = { ...body, artifactId, assetId: `asset${++version}`, artifactVersion: String(version), assetVersion: '1', writerGeneration: con.generation,
+        status: 'uploading', publicationStatus: 'uploading', published: false, partBytes: String(partBytes), partCount: Math.ceil(Number(body.sizeBytes) / partBytes), completedParts: [] };
+      uploads.set(item.assetId, item);
+      if (loseVersionReceipt) { loseVersionReceipt = false; throw new Error('create receipt lost'); }
+      return ok(item);
+    }
+    if (pathname.includes('/parts/')) {
+      expect(init.method).toBe('PUT'); expect(init.body).toBeInstanceOf(ArrayBuffer);
+      const headers = new Headers(init.headers), part = Buffer.from(init.body);
+      if (partTransport) {
+        const response = await partTransport(pathname, init);
+        expect(response.status).toBe(200);
+        const receipt = await response.json();
+        expect(receipt.data).toMatchObject({ bytes: part.length, sha256: createHash('sha256').update(part).digest('hex'), attempts: 2 });
+        expect(receipt.data.workerPid).not.toBe(process.pid);
+      }
+      expect(headers.has('Content-Length')).toBe(false);
+      expect(headers.get('Content-Type')).toBe('application/octet-stream');
+      expect(headers.get('X-Content-SHA256')).toBe(createHash('sha256').update(part).digest('hex'));
+      const id = pathname.split('/')[2], partNo = Number(pathname.split('/').at(-1));
+      const parts = chunks.get(id) || new Map<number, Buffer>(); parts.set(partNo, part); chunks.set(id, parts);
+      bytes.set(id, Buffer.concat([...parts.entries()].sort(([left], [right]) => left - right).map(([, value]) => value)));
+      uploads.get(id).completedParts = [...parts.keys()]; return ok({});
+    }
+    if (pathname.endsWith('/complete')) { const item = uploads.get(pathname.split('/')[2]); item.status = 'ready'; return ok(item); }
+    if (pathname.endsWith('/resume')) { const item = uploads.get(pathname.split('/')[2]); item.writerGeneration = con.generation; return ok(item); }
+    if (pathname.startsWith('/artifact-uploads/')) return ok(uploads.get(pathname.split('/')[2]));
+    if (pathname.endsWith('/publish')) {
+      const artifactId = pathname.split('/')[2];
+      const item = [...uploads.values()].find(item => item.artifactId === artifactId && item.artifactVersion === pathname.split('/')[4]);
+      item.publicationStatus = 'published'; item.published = true;
+      latestByArtifact.set(artifactId, { artifactVersion: item.artifactVersion, assetId: item.assetId, assetVersion: '1', mimeType: item.mimeType, sizeBytes: item.sizeBytes, sha256: item.sha256 });
+      return ok(manifest(artifactId));
+    }
+    if (pathname.endsWith('/references')) { references.push(body); return ok({}); }
+    if (pathname.endsWith('/sync-state')) return ok({});
+    throw new Error(`Unexpected ${pathname}`);
+  });
+  const deps = { store, cacheRoot: cache, owner: () => actor, environment: () => connection().environment, enabled: () => true,
+    access: () => ({ assertAllowed: () => { if (actor !== owner) throw new Error('hidden'); } }), request,
+    recordArtifact: deliveries ? async (candidate: { filePath: string; messageId?: string; relationKind?: string }, _owner: RemoteOwner, assert: () => void, validate: (file: LibraryIndexedFile) => void) => {
+      assert();
+      const stat = fs.statSync(candidate.filePath);
+      const identity = `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`;
+      validate({ filePath: candidate.filePath, fileIdentity: identity, sizeBytes: stat.size, fileMtimeMs: Math.trunc(stat.mtimeMs) } as LibraryIndexedFile);
+      await recordHook?.();
+      assert();
+      const indexed = db.prepare('SELECT id FROM library_local_artifacts WHERE file_path=?').get(candidate.filePath) as { id: string } | undefined;
+      if (!indexed) return false;
+      db.prepare('UPDATE library_local_artifacts SET file_identity=?,size_bytes=?,updated_at=? WHERE id=?').run(identity, stat.size, Date.now(), indexed.id);
+      db.prepare('UPDATE library_artifact_sessions SET last_message_id=?,relation_kind=? WHERE artifact_id=?').run(candidate.messageId, candidate.relationKind ?? 'modified', indexed.id);
+      return true;
+    } : undefined,
+    // Simulates an engine that already sealed bytes before reporting its terminal event.
+    terminalSnapshot: sealedProducer ? (item: { run_id: string; id: string }) => {
+      const directory = remoteFileCacheDirectory(cache, owner); fs.mkdirSync(directory, { recursive: true });
+      const target = path.join(directory, randomUUID()); fs.copyFileSync(source, target);
+      const file = fs.statSync(target), original = fs.statSync(source);
+      const identity = (value: fs.Stats) => `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`;
+      return { runId: item.run_id, artifactId: item.id, producerRevision: `revision-${item.run_id}`,
+        snapshot: { path: target, sizeBytes: String(file.size), sha256: createHash('sha256').update(fs.readFileSync(target)).digest('hex'), identity: identity(original), cacheIdentity: identity(file) } };
+    } : undefined };
+  let sync = new RemoteFileSync(deps); sync.configure(true);
+  const ack = (): void => { store.snapshot('s'); db.prepare("UPDATE remote_sync SET device_id='pc',ack_seq=source_seq,needs_snapshot=0 WHERE local_id='s'").run(); };
+  const tick = async (): Promise<void> => { ack(); sync.tick(connection()); await sync.settled(); };
+  const nextRun = (number: number, text: string): void => {
+    fs.writeFileSync(source, text); store.beginRun('s', `run${number}`);
+    store.transaction(() => {
+      db.prepare("INSERT INTO cowork_messages VALUES(?,'s','assistant','report',?,1,?)").run(`m${number}`, JSON.stringify({ remoteRunId: `run${number}` }), number);
+      db.prepare("UPDATE library_artifact_sessions SET last_message_id=? WHERE artifact_id='local'").run(`m${number}`);
+      db.prepare("UPDATE library_local_artifacts SET updated_at=? WHERE id='local'").run(number);
+    });
+  };
+  return { store, db, source, cache, calls, bytes, references, uploads, tick, nextRun, health: () => sync.health(),
+    tickUnacknowledged: async () => { sync.tick(connection()); await sync.settled(); },
+    prepareDelivery: (validEpoch = () => true) => sync.prepareRun('s', [fs.realpathSync(directory)], validEpoch),
+    rotateConnection: () => { generation = String(Number(generation) + 1); },
+    changeRouteEpoch: () => { routeEpoch++; },
+    changeEnvironment: () => { environment = 'https://other.invalid'; },
+    changeDevice: () => { deviceId = 'other-device'; },
+    pause: () => sync.pause(),
+    recordHook: (hook?: () => Promise<void>) => { recordHook = hook; },
+    switchOwner: () => { actor = { userId: 'B', scopeKey: 'personal' }; },
+    hook: (hook?: typeof responseHook) => { responseHook = hook; },
+    loseVersionReceipt: () => { loseVersionReceipt = true; },
+    expireUpload: () => { const item = uploads.get('asset1'); item.status = 'deleted'; item.publicationStatus = 'deleted'; },
+    manifestOverride: (values: Record<string, unknown>) => { manifestOverrides = values; },
+    reconnect: () => { generation = String(Number(generation) + 1); sync = new RemoteFileSync(deps); sync.configure(true); },
+    jobs: () => store.entries<any>('fileOutput:').map(row => row.value) };
+}
+describe('remote files policy and immutable snapshots', () => {
+  it.each([false, true])('resumes a PDF once its server context arrives (legacy isolation=%s)', async legacy => {
+    const f = fixture(true, false, 'worksheet.pdf');
+    await f.tick();
+    f.hook(route => route === '/devices/pc/artifacts'
+      ? new Response(JSON.stringify({ code: 47100, data: { reason: RemoteFileContextRequired } }), { status: 403 }) : undefined);
+    f.store.updateRun('s', 'succeeded');
+    await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(f.jobs()[0].retry.phase).toBe(RemoteFileRetryPhase.Backoff);
+    if (legacy) {
+      const entry = f.store.entries<any>('fileOutput:')[0];
+      entry.value.retry = { ...entry.value.retry, phase: RemoteFileRetryPhase.Isolated, nextRetryAt: 0 };
+      f.store.put(entry.key, entry.value);
+      f.reconnect(); await f.tick();
+    }
+    const blocked = f.jobs()[0], requests = f.calls.length;
+    await f.tick(); expect(f.calls).toHaveLength(requests);
+    expect(f.jobs()[0].retry).toEqual(blocked.retry);
+    f.hook(undefined);
+    vi.spyOn(Date, 'now').mockReturnValue(blocked.retry.nextRetryAt);
+    await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.jobs()[0].queue).toHaveLength(0);
+    expect(f.jobs()[0].latest.artifactVersion).toBe('1');
+    await f.tick(); expect(f.uploads.size).toBe(1);
+  });
+  it('keeps a forbidden PDF isolated after reconnect instead of treating it as a missing context', async () => {
+    const f = fixture(true, false, 'worksheet.pdf'); await f.tick();
+    f.hook(route => route === '/devices/pc/artifacts'
+      ? new Response(JSON.stringify({ code: 47100, data: { reason: 'FILE_ACCESS_DENIED' } }), { status: 403 }) : undefined);
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.jobs()[0].retry.phase).toBe(RemoteFileRetryPhase.Isolated);
+    const attempts = () => f.calls.filter(call => call.pathname === '/devices/pc/artifacts').length;
+    const count = attempts(); f.reconnect(); await f.tick();
+    expect(attempts()).toBe(count); expect(f.uploads.size).toBe(0);
+  });
+  it('publishes a binary PDF through authenticated network IPC after a 401 retry', async () => {
+    const directory = folder(), worker = path.join(directory, 'network.cjs'), bootstrap = path.join(directory, 'bootstrap.cjs');
+    buildSync({ entryPoints: [path.join(__dirname, 'remoteNetworkWorker.ts')], outfile: worker, bundle: true, platform: 'node', format: 'cjs' });
+    fs.writeFileSync(bootstrap, `
+      const { createHash } = require('crypto');
+      let attempts = 0;
+      global.fetch = async (url, init) => {
+        if (!String(url).includes('/artifact-uploads/') || init.method !== 'PUT' || !Buffer.isBuffer(init.body)) throw new Error('Invalid part transport');
+        const headers = new Headers(init.headers), sha256 = createHash('sha256').update(init.body).digest('hex');
+        if (headers.get('content-type') !== 'application/octet-stream' || headers.get('x-content-sha256') !== sha256) throw new Error('Invalid part bytes');
+        attempts++;
+        if (headers.get('authorization') === 'Bearer access-old') return new Response(JSON.stringify({code:401}), {status:401});
+        if (headers.get('authorization') !== 'Bearer access-new') throw new Error('Missing refreshed auth');
+        return new Response(JSON.stringify({code:0,data:{bytes:init.body.length,sha256,attempts,workerPid:process.pid}}));
+      };
+      require(${JSON.stringify(worker)});
+    `);
+    const transport = new RemoteNetworkTransport(undefined, bootstrap);
+    disposable.push(() => transport.dispose());
+    let tokens = { accessToken: 'access-old', refreshToken: 'refresh' };
+    const refresh = vi.fn(async () => ok({ accessToken: 'access-new', refreshToken: 'refresh-new' }));
+    const auth = new AuthSessionManager({ getTokens: () => tokens, getSessionKey: () => 'same-owner', saveTokens: value => { tokens = value; },
+      fetch: refresh, getRefreshUrl: () => 'https://example.invalid/api/auth/refresh', buildRefreshRequestBody: token => JSON.stringify({ refreshToken: token }) });
+    const f = fixture(true, false, 'worksheet.pdf', 4194304, (pathname, init) =>
+      auth.fetchWithAuth(`https://example.invalid/api/remote/v1${pathname}`, init, transport.queuedFetch));
+    const pdf = Buffer.alloc(133604);
+    for (let index = 0; index < pdf.length; index++) pdf[index] = index % 256;
+    pdf.write('%PDF-1.7\n%'); fs.writeFileSync(f.source, pdf);
+    f.db.prepare('UPDATE library_local_artifacts SET size_bytes=? WHERE id=?').run(pdf.length, 'local');
+    await f.tick(); // Register the live run before its terminal snapshot boundary.
+    f.store.updateRun('s', 'succeeded');
+    await f.tick();
+    expect(f.jobs()[0]?.reason).toBeUndefined();
+    expect(f.bytes.get('asset1')).toEqual(pdf);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(f.uploads.get('asset1')).toMatchObject({ status: 'ready', publicationStatus: 'published', published: true });
+    expect(f.jobs()[0]).toMatchObject({ latest: { sizeBytes: String(pdf.length), sha256: createHash('sha256').update(pdf).digest('hex') }, queue: [] });
+    const steps = f.calls.map(call => call.pathname);
+    expect(steps.indexOf('/artifact-uploads/asset1/complete')).toBeGreaterThan(steps.indexOf('/artifact-uploads/asset1/parts/1'));
+    expect(steps.indexOf('/artifacts/remote/versions/1/publish')).toBeGreaterThan(steps.indexOf('/artifact-uploads/asset1/complete'));
+    expect(f.references).toHaveLength(1);
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    expect(message?.payload.message.blocks.at(-1)).toMatchObject({ name: 'worksheet.pdf', mimeType: 'application/pdf', availability: 'ready' });
+  });
+
+  it('publishes a nested MEDIA image through upload, complete and live projection without duplicating it', async () => {
+    const f = fixture(false, true, 'preview.png');
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    const nested = path.join(path.dirname(f.source), 'sealion06'); fs.mkdirSync(nested);
+    const source = path.join(nested, 'preview.png'); fs.renameSync(f.source, source);
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6SAAAAABJRU5ErkJggg==', 'base64');
+    fs.writeFileSync(source, png);
+    f.db.prepare("UPDATE library_local_artifacts SET file_path=?,size_bytes=? WHERE id='local'").run(source, png.length);
+    await f.tick(); await f.prepareDelivery();
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'").run(`MEDIA:${source}`));
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    try { f.store.updateRun('s', 'succeeded'); } finally { now.mockRestore(); }
+    await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(f.bytes.get('asset1')).toEqual(png);
+    expect(f.uploads.get('asset1')).toMatchObject({ publicationStatus: 'published', sha256: createHash('sha256').update(png).digest('hex') });
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.filter((block: { type: string }) => block.type === 'artifact')).toEqual([
+      expect.objectContaining({ name: 'preview.png', mimeType: 'image/png', availability: 'ready', artifactVersion: '1' }),
+    ]);
+    await f.tick(); expect(f.uploads.size).toBe(1);
+  });
+
+  it('publishes only explicitly sent unchanged PDFs and projects both files for legacy and live readers', async () => {
+    const f = fixture(false, true, '口算100题_2026-10-09.pdf');
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    const second = path.join(path.dirname(f.source), '口算练习题_100道.pdf');
+    fs.writeFileSync(second, '%PDF-existing-second');
+    const stat = fs.statSync(second);
+    f.db.prepare("INSERT INTO library_local_artifacts VALUES('local2',?,?,?,1,'pdf',?,'available')")
+      .run(second, path.basename(second), `${stat.dev}:${stat.ino}:${Math.trunc(stat.birthtimeMs)}`, stat.size);
+    f.db.prepare("INSERT INTO library_artifact_sessions VALUES('local2','s','m1','referenced')").run();
+    // Existing unrelated references before the target sort keys must not consume the exact-delivery lookup page.
+    for (let index = 0; index < 70; index++) {
+      const id = `aaa${index}`;
+      f.db.prepare("INSERT INTO library_local_artifacts VALUES(?,?,?,?,1,'pdf',1,'available')")
+        .run(id, path.join(path.dirname(f.source), `${id}.pdf`), `${id}.pdf`, 'unread');
+      f.db.prepare("INSERT INTO library_artifact_sessions VALUES(?,'s','m1','referenced')").run(id);
+    }
+    await f.tick(); await f.prepareDelivery();
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'")
+        .run(`Both files exist — sending them now:\n\nMEDIA:${f.source}\nMEDIA:${second}\n\n两个口算PDF。`);
+    });
+    f.store.updateRun('s', 'succeeded');
+    await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(2);
+    expect([...f.bytes.values()].map(value => value.toString()).sort()).toEqual(['%PDF-existing-second', 'first'].sort());
+    expect(f.jobs()).toHaveLength(2); expect(f.jobs().every(job => job.queue.length === 0 && job.latest)).toBe(true);
+    const records = f.store.snapshot('s').records;
+    const message = records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    const ready = (message?.payload.message.blocks || []).filter((block: any) => block.type === 'artifact' && block.availability === 'ready');
+    expect(ready.map((block: any) => block.name).sort()).toEqual([path.basename(f.source), path.basename(second)].sort());
+    expect(f.db.prepare("SELECT relation_kind FROM library_artifact_sessions WHERE artifact_id IN ('local','local2')").all())
+      .toEqual([{ relation_kind: 'referenced' }, { relation_kind: 'referenced' }]);
+    expect(f.references).toHaveLength(0); // A current delivery is not a fabricated historical terminal snapshot.
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.filter((block: any) => block.type === 'artifact' && block.availability === 'ready')).toHaveLength(2);
+  });
+
+  it('uploads an unchanged Word document declared after a sentence and replaces desktop-only cards with ready references', async () => {
+    const f = fixture(false, true, '工作简报.docx');
+    const document = Buffer.from(zipSync({
+      '[Content_Types].xml': strToU8('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+      '_rels/.rels': strToU8('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+      'word/document.xml': strToU8('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>工作简报</w:t></w:r></w:p></w:body></w:document>'),
+    }));
+    fs.writeFileSync(f.source, document);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); await f.prepareDelivery();
+    const before = f.store.snapshot('s').records.find(row => row.payload.message?.messageId === 'm1')!.payload.message;
+    expect(before.blocks).toContainEqual(expect.objectContaining({ name: '工作简报.docx', availability: 'desktop_only' }));
+    expect(f.uploads.size).toBe(0);
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'")
+        .run(`文件在下面，点开就能下载，然后在手机上用 WPS 或 Word 打开。 MEDIA:${f.source}`);
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    f.store.updateRun('s', 'succeeded'); clock.mockRestore();
+    await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(f.bytes.get('asset1')).toEqual(document);
+    expect(f.calls.map(call => call.pathname)).toEqual(expect.arrayContaining([
+      '/artifacts/remote/versions', '/artifact-uploads/asset1/parts/1', '/artifact-uploads/asset1/complete', '/artifacts/remote/versions/1/publish',
+    ]));
+    const message = f.store.snapshot('s').records.find(row => row.payload.message?.messageId === 'm1')!.payload.message;
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    for (const blocks of [message.blocks, live?.payload.blocks]) expect(blocks.filter((block: any) => block.type === 'artifact')).toEqual([
+      expect.objectContaining({ name: '工作简报.docx', availability: 'ready', assetId: 'asset1', assetVersion: '1', artifactVersion: '1', referenceMode: 'latest',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    ]);
+    expect(f.references).toHaveLength(0);
+  });
+
+  it('bounds a session artifact discovery and excludes oversized provenance metadata', async () => {
+    const oversized = fixture();
+    oversized.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='m1'").run(JSON.stringify({ remoteRunId: 'run1', padding: 'x'.repeat(32768) }));
+    await oversized.tickUnacknowledged(); expect(oversized.store.isTaskAdmitted('s')).toBe(true); expect(oversized.jobs()).toHaveLength(0);
+    const f = fixture(); await f.tick();
+    const original = f.db.prepare("SELECT * FROM library_local_artifacts WHERE id='local'").get() as any;
+    for (let index = 0; index < 80; index++) {
+      const id = `file${String(index).padStart(3, '0')}`;
+      f.db.prepare("INSERT INTO library_local_artifacts VALUES(?,?,?,?,1,'md',5,'available')")
+        .run(id, original.file_path, original.file_name, original.file_identity);
+      f.db.prepare("INSERT INTO library_artifact_sessions VALUES(?,'s','m1','created')").run(id);
+    }
+    await f.tickUnacknowledged(); expect(f.jobs()).toHaveLength(policy.limits.maxTaskArtifactCount + 1);
+    expect(f.jobs().every(job => job.messageId === 'm1')).toBe(true);
+  });
+  it.each(['row-size', 'row-count', 'archive-size'])('preserves unknown cache references when cleanup exceeds its %s budget while verified uploads continue', async budget => {
+    const f = fixture();
+    const directory = remoteFileCacheDirectory(f.cache, owner); fs.mkdirSync(directory, { recursive: true });
+    const retained = path.join(directory, randomUUID()); fs.writeFileSync(retained, 'old retained evidence');
+    const old = new Date(Date.now() - 2 * 86_400_000); fs.utimesSync(retained, old, old);
+    if (budget === 'archive-size') {
+      f.db.exec('CREATE TABLE IF NOT EXISTS remote_sync_target_archives(target_id TEXT,table_name TEXT,row_key INTEGER,row_json TEXT)');
+      f.db.prepare('INSERT INTO remote_sync_target_archives VALUES(?,?,?,?)').run('archived', 'remote_state', 1,
+        JSON.stringify({ value: JSON.stringify({ path: retained, padding: 'x'.repeat(256 * 1024) }) }));
+    } else {
+      const count = budget === 'row-count' ? 1025 : 1;
+      for (let index = 0; index < count; index++) f.store.put(`desktopInputRun:budget-${index}`, {
+        owner, attachments: [{ snapshot: { path: retained } }], padding: budget === 'row-size' ? 'x'.repeat(256 * 1024) : '',
+      });
+    }
+    await f.tick();
+    expect(fs.readFileSync(retained, 'utf8')).toBe('old retained evidence');
+    expect(f.health().degraded).toBe(false);
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(fs.existsSync(retained)).toBe(true);
+    await f.tick(); expect(f.health()).toEqual({ degraded: false, pending: 0 });
+  });
+  it('intersects server types and limits with local deny-by-default rules', () => {
+    expect(remoteFileRule(policy, 'report.md', '5242880', true)).toBeNull();
+    expect(remoteFileRule(policy, 'report.md', '5242881', true)).toBe(RemoteFileReason.Size);
+    expect(remoteFileRule(policy, 'index.html', '1', true)).toBe(RemoteFileReason.Type);
+    expect(remoteFileRule(policy, 'archive.zip', '1', false)).toBe(RemoteFileReason.Type);
+    expect(remoteFileRule(policy, 'video.mp4', '1', true)).toBe(RemoteFileReason.Type);
+  });
+  it('uses the immutable image bytes passed to the engine instead of a later mutable file version', async () => {
+    const root = folder(), source = path.join(root, 'input.txt'); fs.writeFileSync(source, 'original');
+    const input = await captureDesktopInput({ text: 'read', attachments: [] }, [{ name: 'input.png', mimeType: 'image/png', base64Data: Buffer.from('original').toString('base64') }],
+      { owner, cacheRoot: path.join(root, 'cache'), captureSnapshot: true, fallbackText: 'read', current: () => true, access: () => ({ assertAllowed: () => undefined }) });
+    fs.writeFileSync(source, 'modified');
+    expect(fs.readFileSync(input!.attachments[0].snapshot!.path, 'utf8')).toBe('original');
+  });
+  it('rejects symlinks, per-file excess, and account-cache overflow before upload', async () => {
+    const root = folder(), source = path.join(root, 'a.md'), cache = path.join(root, 'cache'); fs.writeFileSync(source, 'value');
+    const link = path.join(root, 'link'); fs.symlinkSync(source, link);
+    await expect(captureRemoteFileSnapshot(link, cache, owner, 10, () => undefined)).rejects.toThrow(RemoteFileReason.Source);
+    await expect(captureRemoteFileSnapshot(source, cache, owner, 4, () => undefined)).rejects.toThrow(RemoteFileReason.Size);
+    const bucket = remoteFileCacheDirectory(cache, owner); fs.mkdirSync(bucket, { recursive: true });
+    const full = fs.openSync(path.join(bucket, 'full'), 'w'); fs.ftruncateSync(full, 200 * 1024 * 1024); fs.closeSync(full);
+    await expect(captureRemoteFileSnapshot(source, cache, owner, 10, () => undefined)).rejects.toThrow(RemoteFileReason.Final);
+  });
+  it('bounds total private snapshots across accounts without deleting source files', async () => {
+    const root = folder(), cache = path.join(root, 'cache'), source = path.join(root, 'a.md'); fs.writeFileSync(source, 'value');
+    for (let index = 0; index < 6; index++) {
+      const bucket = remoteFileCacheDirectory(cache, { userId: `previous-${index}`, scopeKey: 'personal' }); fs.mkdirSync(bucket, { recursive: true });
+      const descriptor = fs.openSync(path.join(bucket, 'full'), 'w');
+      fs.ftruncateSync(descriptor, 180 * 1024 * 1024); fs.closeSync(descriptor);
+    }
+    await expect(captureRemoteFileSnapshot(source, cache, owner, 10, () => undefined)).rejects.toThrow(RemoteFileReason.Final);
+    expect(fs.readFileSync(source, 'utf8')).toBe('value');
+  });
+  it('detects snapshot corruption even when size stays unchanged', async () => {
+    const root = folder(), source = path.join(root, 'a.md'); fs.writeFileSync(source, 'first');
+    const copy = await captureRemoteFileSnapshot(source, path.join(root, 'cache'), owner, 10, () => undefined); fs.writeFileSync(copy.path, 'other');
+    await expect(verifyRemoteFileSnapshot(copy, () => true)).rejects.toThrow(RemoteFileReason.Source);
+  });
+  it('counts cached snapshots across spaces of the same account', async () => {
+    const root = folder(), cache = path.join(root, 'cache'), source = path.join(root, 'a.md'); fs.writeFileSync(source, 'value');
+    const bucket = remoteFileCacheDirectory(cache, { ...owner, scopeKey: 'team:2' }); fs.mkdirSync(bucket, { recursive: true });
+    const descriptor = fs.openSync(path.join(bucket, 'full'), 'w'); fs.ftruncateSync(descriptor, 200 * 1024 * 1024); fs.closeSync(descriptor);
+    await expect(captureRemoteFileSnapshot(source, cache, owner, 10, () => undefined)).rejects.toThrow(RemoteFileReason.Final);
+  });
+});
+describe('artifact sync durable boundaries and protocol', () => {
+  it.each([false, true])('publishes an exec-delivered Markdown reference through the existing HTTP protocol (relative=%s)', async relative => {
+    const f = fixture(false, true);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick();
+    await f.prepareDelivery();
+    fs.writeFileSync(f.source, '100 new arithmetic problems');
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'").run(`Delivered [report](${relative ? './report.md' : f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)").run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    f.store.updateRun('s', 'succeeded'); clock.mockRestore();
+    await f.tick(); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('100 new arithmetic problems');
+    expect(f.references).toHaveLength(0);
+    expect(f.jobs()[0].reason).toBeUndefined();
+    expect(f.jobs()[0].references.m1).toMatchObject({ pinned: false, latest: { artifactVersion: '1' } });
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    expect(message?.payload.message.blocks.at(-1)).toMatchObject({ availability: 'ready', referenceMode: 'latest' });
+  });
+  it.each([
+    { pinned: true, related: true, current: 'report.docx', snapshot: 'make_docx.js', visible: false },
+    { pinned: true, related: true, current: 'make_docx.js', snapshot: 'report.docx', visible: true },
+    { pinned: true, related: false, current: 'report.docx', snapshot: 'make_docx.js', visible: true },
+    { pinned: false, related: true, current: 'make_docx.js', snapshot: undefined, visible: false },
+    { pinned: false, related: false, current: 'make_docx.js', snapshot: undefined, visible: true },
+  ])('does not revive hidden versions or suppress unrelated fallback ($pinned/$related/$current)', async sample => {
+    const f = fixture(false);
+    await f.tick();
+    const entry = f.store.entries<any>('fileOutput:')[0], targetMessage = sample.related ? 'm1' : 'other';
+    const job = { ...entry.value, ...(sample.pinned ? { artifactId: 'remote' } : {}), name: sample.current, messageId: targetMessage,
+      reason: RemoteFileReason.Type, references: sample.pinned ? { [targetMessage]: { pinned: true, latest: {
+        artifactVersion: '1', assetId: 'asset1', assetVersion: '1', fileName: sample.snapshot,
+        mimeType: 'application/octet-stream', sizeBytes: '5', sha256: 'a'.repeat(64),
+      } } } : {} };
+    const original = structuredClone(job);
+    f.store.transaction(() => {
+      f.store.put(entry.key, job);
+      f.db.exec("UPDATE library_local_artifacts SET file_name='report.docx',extension='docx' WHERE id='local'");
+      f.store.markFilesDirty('s');
+    });
+    const history = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    for (const blocks of [history?.payload.message.blocks, live?.payload.blocks]) {
+      expect(blocks).not.toContain(null);
+      const cards = blocks.filter((block: any) => block.type === 'artifact');
+      expect(cards).toHaveLength(sample.visible ? 1 : 0);
+      if (sample.visible) expect(cards[0]).toMatchObject({ name: 'report.docx', availability: sample.related ? 'ready' : 'desktop_only' });
+    }
+    expect(f.store.get(entry.key)).toEqual(original);
+  });
+  it('omits code output cards from live library fallback while preserving user-selected code attachments', async () => {
+    const f = fixture(false, false, 'make_docx.js');
+    await f.tick();
+    f.store.updateRun('s', 'succeeded'); f.store.remove('fileTerminalBoundary:s:run1'); await f.tick();
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final); expect(f.uploads.size).toBe(0);
+    expect(f.health()).toEqual({ degraded: false, pending: 0 });
+    f.store.transaction(() => {
+      f.db.prepare("INSERT INTO library_local_artifacts VALUES ('document',?,'工作简报.docx','identity',1,'docx',42,'available')")
+        .run(path.join(path.dirname(f.source), '工作简报.docx'));
+      f.db.exec("INSERT INTO library_artifact_sessions VALUES ('document','s','m1','created')");
+      f.db.prepare("INSERT INTO cowork_messages VALUES('input','s','user','Analyze',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1' }));
+    });
+    f.store.put('desktopInputRun:run1', { owner, text: 'Analyze', attachments: [{ path: f.source,
+      fileName: 'make_docx.js', mimeType: 'text/javascript', sizeBytes: '5', intent: 'file' }] });
+    const project = (objectId: string) => {
+      const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id=?").get(objectId) as { revision: number };
+      return projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+        deviceId: 'pc', owner, objectId, revision: String(revision.revision), environment: 'https://example.invalid' });
+    };
+    expect(project('m1')?.payload.blocks.filter((block: any) => block.type === 'artifact')).toEqual([
+      expect.objectContaining({ artifactId: 'document', name: '工作简报.docx', availability: 'desktop_only' }),
+    ]);
+    expect(project('input')?.payload.blocks).toContainEqual(expect.objectContaining({ name: 'make_docx.js', availability: 'desktop_only' }));
+  });
+  it.each([
+    { fileName: 'make_docx.js', bytes: Buffer.from('console.log("document generated");'), mimeType: 'text/plain', image: false },
+    { fileName: 'result.json', bytes: Buffer.from('{"answer":42}'), mimeType: 'application/json', image: false },
+    { fileName: 'result.yaml', bytes: Buffer.from('answer: 42\n'), mimeType: 'text/plain', image: false },
+    { fileName: 'result.png', bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64'), mimeType: 'image/png', image: true },
+  ])('publishes $fileName as a ready version without reading a remote URL', async sample => {
+    const f = fixture(false, true, sample.fileName);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); await f.prepareDelivery();
+    fs.writeFileSync(f.source, sample.bytes);
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'")
+        .run(`Delivered ${sample.image ? '!' : ''}[result](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2);
+    f.store.updateRun('s', 'succeeded'); clock.mockRestore();
+    await f.tick(); await f.tick();
+    expect(f.bytes.get('asset1')).toEqual(sample.bytes);
+    expect(f.calls.find(call => call.pathname === '/artifacts/remote/versions')?.body).toMatchObject({ mimeType: sample.mimeType });
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    const cards = message?.payload.message.blocks.filter((block: any) => block.type === 'artifact');
+    if (sample.image) expect(cards).toEqual([expect.objectContaining({ name: sample.fileName, availability: 'ready', referenceMode: 'latest', mimeType: sample.mimeType })]);
+    else expect(cards).toEqual([]);
+    const revision = f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number };
+    const live = projectLiveMessage(f.db, { database: '', localId: 's', sessionId: f.store.sync('s')!.session_id,
+      deviceId: 'pc', owner, objectId: 'm1', revision: String(revision.revision), environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.filter((block: any) => block.type === 'artifact')).toHaveLength(sample.image ? 1 : 0);
+    expect(f.jobs()[0].latest).toMatchObject({ assetId: 'asset1', mimeType: sample.mimeType });
+    expect(JSON.stringify(f.calls)).not.toContain(f.source);
+  });
+  it('binds identical current bytes to a new message without fabricating terminal history', async () => {
+    const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    f.nextRun(2, 'first'); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(f.jobs()[0].references.m2).toMatchObject({ runId: 'run2', pinned: false, latest: { artifactVersion: '1' } });
+    expect(f.references).toHaveLength(0);
+  });
+  it('publishes a generated file despite stale history ACK and advances its live message revision', async () => {
+    const f = fixture(); await f.tick(); f.store.setIndependentControlReady(() => true); f.store.setTaskProjectionEligibility(() => false);
+    f.db.prepare("UPDATE remote_sync SET source_seq=100,ack_seq=0,needs_snapshot=1 WHERE local_id='s'").run();
+    const revision = (): number => (f.db.prepare("SELECT revision FROM remote_live_revisions WHERE session_id='s' AND object_id='m1'").get() as { revision: number }).revision;
+    const before = revision(); f.store.updateRun('s','succeeded'); await f.tickUnacknowledged();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first'); expect(revision()).toBeGreaterThan(before);
+    expect(f.store.sync('s')).toMatchObject({ source_seq: 100,ack_seq: 0,needs_snapshot: 1 });
+    const live = projectLiveMessage(f.db,{ database: f.db.name,localId: 's',sessionId: f.store.controlBinding('s')!.session_id,
+      deviceId: 'pc',owner,objectId: 'm1',revision: String(revision()),environment: 'https://example.invalid' });
+    expect(live?.payload.blocks.some((block: any) => block.type === 'artifact' && block.availability === 'ready')).toBe(true);
+  });
+  it('active control commits skip optional producer file work and keep the next run usable', async () => {
+    const f = fixture(); await f.tick(); f.store.setIndependentControlReady(() => true);
+    const before = f.jobs()[0].queue.length;
+    const copy = vi.spyOn(fs,'copyFileSync').mockImplementation(() => { throw new Error('optional producer IO unavailable'); });
+    expect(() => f.store.updateRun('s','succeeded')).not.toThrow();
+    expect(copy).not.toHaveBeenCalled(); expect(f.jobs()[0].queue).toHaveLength(before);
+    expect(() => f.nextRun(2,'next turn remains usable')).not.toThrow();
+    expect(f.store.run('s')?.runId).toBe('run2'); expect(f.references).toHaveLength(0);
+  });
+  it('does not pin a mutable file as the past terminal version or delay starting the next run', async () => {
+    const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded');
+    expect(f.jobs()[0].queue).toHaveLength(0);
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+    await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.references).toHaveLength(0);
+    expect(f.jobs()[0].references.m1.pinned).toBe(false);
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+    await f.tick(); expect(f.health()).toEqual({ degraded: false, pending: 0 });
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+  });
+  it('retains the file warning when the same message has a readable old version but its changed source cannot be captured', async () => {
+    const f = fixture(false), now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now); await f.tick();
+    vi.mocked(Date.now).mockReturnValue(now + 2100); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.jobs()[0].queue).toHaveLength(0); expect(f.jobs()[0].dirtyAt).toBeUndefined();
+    const published = structuredClone(f.jobs()[0].references.m1);
+
+    // Replacing the source invalidates its recorded identity; the old remote receipt remains valid only for v1.
+    fs.renameSync(f.source, `${f.source}.old`); fs.writeFileSync(f.source, 'second version');
+    vi.mocked(Date.now).mockReturnValue(now + 2200); f.store.updateRun('s', 'succeeded'); await f.tick();
+    const job = f.jobs()[0];
+    expect(job.reason).toBe(RemoteFileReason.Final); expect(job.dirtyAt).toBe(now + 2200);
+    expect(job.queue).toHaveLength(0); expect(job.references.m1).toEqual(published);
+    expect(f.uploads.size).toBe(1); expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.health()).toEqual({ degraded: true, pending: 0 });
+  });
+  it('never attributes the next run bytes to an uncaptured older run', async () => {
+    const f = fixture(false); await f.tick(); f.store.updateRun('s', 'succeeded');
+    f.nextRun(2, 'second'); await f.tick();
+    expect(f.references).toHaveLength(0);
+    expect(f.jobs()[0].queue.some((item: { runId: string }) => item.runId === 'run1')).toBe(false);
+  });
+
+  it('publishes producer-sealed final bytes, pins the actual run, and projects no local path', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first'); expect(f.references).toMatchObject([{ runId: 'run1', messageId: 'm1', kind: 'terminal', artifactVersion: '1' }]);
+    const record = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!;
+    expect(record.payload.message.blocks.at(-1)).toMatchObject({ artifactId: 'remote', availability: 'ready', artifactVersion: '1', referenceMode: 'pinned' });
+    expect(JSON.stringify(f.calls)).not.toContain(f.source); expect(f.jobs()[0].queue).toHaveLength(0);
+  });
+  it('uploads exact immutable artifact bytes without manually setting Content-Length', async () => {
+    const f = fixture(), original = Buffer.alloc(9327, ' '); Buffer.from('# 成语表格\n').copy(original);
+    fs.writeFileSync(f.source, original);
+    await f.tick(); f.store.updateRun('s', 'succeeded');
+    fs.writeFileSync(f.source, 'later edits must not replace the captured content');
+    await f.tick();
+    expect(f.bytes.get('asset1')).toEqual(original);
+    expect(f.uploads.get('asset1')).toMatchObject({ sizeBytes: '9327', sha256: createHash('sha256').update(original).digest('hex'), publicationStatus: 'published' });
+    expect(f.calls.filter(call => call.pathname === '/artifact-uploads/asset1/parts/1')).toHaveLength(1);
+    expect(f.references[0]).toMatchObject({ runId: 'run1', kind: 'terminal', artifactVersion: '1' });
+  });
+  it('does not let an unrelated corrupt artifact poison this task projection or upload', async () => {
+    const f = fixture(); await f.tick();
+    const key = f.store.entries('fileOutput:')[0].key.replace(/:s:local$/u, ':other:broken');
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run(key, '{broken');
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get(key)).toEqual({ value: '{broken' });
+    expect(f.db.prepare('SELECT value FROM remote_corrupt_state WHERE key=?').get(key)).toEqual({ value: '{broken' });
+  });
+  it('yields multipart artifacts after each new part and resumes the original publication after restart', async () => {
+    const f = fixture(true, false, 'report.md', 2);
+    await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    const original = f.jobs()[0].queue[0];
+    expect(f.calls.filter(call => call.pathname.includes('/parts/')).map(call => call.pathname)).toEqual(['/artifact-uploads/asset1/parts/1']);
+    expect(f.calls.some(call => call.pathname.endsWith('/complete'))).toBe(false);
+    f.reconnect(); await f.tick();
+    expect(f.calls.filter(call => call.pathname.includes('/parts/')).map(call => call.pathname)).toEqual([
+      '/artifact-uploads/asset1/parts/1', '/artifact-uploads/asset1/parts/2',
+    ]);
+    expect(f.jobs()[0].queue[0].publicationId).toBe(original.publicationId);
+    await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first');
+    expect(f.jobs()[0].queue).toHaveLength(0);
+    expect(f.uploads.size).toBe(1);
+  });
+  it('keeps two final snapshots in capture order while the later run overwrites the source', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); f.nextRun(2, 'second'); f.store.updateRun('s', 'succeeded');
+    expect(f.jobs()[0].queue).toHaveLength(2); await f.tick(); await f.tick();
+    expect([...f.bytes.values()].map(value => value.toString())).toEqual(['first', 'second']);
+    expect(f.references.map(item => item.runId)).toEqual(['run1', 'run2']);
+  });
+  it('does not lose a terminal snapshot captured while another upload is awaiting a response', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); let queued = false;
+    f.hook(pathname => { if (pathname.includes('/parts/') && !queued) { queued = true; f.nextRun(2, 'second'); f.store.updateRun('s', 'succeeded'); } });
+    await f.tick(); f.hook(); expect(f.jobs()[0].queue).toHaveLength(1); await f.tick();
+    expect(f.references.map(item => item.runId)).toEqual(['run1', 'run2']);
+  });
+  it('resumes the same publication on a new connection after a lost complete response', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); let failed = false;
+    f.hook(pathname => { if (pathname.endsWith('/complete') && !failed) { failed = true; throw new Error('offline'); } });
+    await f.tick(); const request = f.calls.find(item => item.pathname === '/artifacts/remote/versions')!.body;
+    expect(f.health()).toEqual({ degraded: true, pending: 1 });
+    f.hook(); f.reconnect(); vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000); await f.tick();
+    expect(f.calls.some(item => item.pathname === '/artifact-uploads/asset1/resume')).toBe(true);
+    expect(f.uploads.size).toBe(1); expect(f.references[0].requestId).toBe(request.publicationId);
+    await f.tick(); expect(f.health()).toEqual({ degraded: false, pending: 0 });
+  });
+  it('pins unchanged final content for a new run without allocating another content asset', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); await f.tick();
+    f.nextRun(2, 'first'); f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(1); expect(f.references.map(item => [item.runId, item.artifactVersion])).toEqual([['run1', '1'], ['run2', '1']]);
+  });
+  it('resumes an old-generation idempotent CREATE when the original allocation response was lost', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded'); f.loseVersionReceipt(); await f.tick();
+    expect(f.jobs()[0].queue[0].assetId).toBeUndefined(); expect(f.uploads.size).toBe(1);
+    f.reconnect(); vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000); await f.tick();
+    const resume = f.calls.findIndex(item => item.pathname === '/artifact-uploads/asset1/resume');
+    const part = f.calls.findIndex(item => item.pathname.includes('/parts/'));
+    expect(resume).toBeGreaterThan(-1); expect(part).toBeGreaterThan(resume);
+    expect(f.uploads.size).toBe(1); expect(f.references[0]).toMatchObject({ runId: 'run1', artifactVersion: '1' });
+  });
+  it.each([false, true])('replaces a confirmed expired upload using the original snapshot and CAS (lost CREATE receipt: %s)', async lostReceipt => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded');
+    if (lostReceipt) f.loseVersionReceipt(); else f.hook(pathname => { if (pathname.endsWith('/complete')) throw new Error('offline'); });
+    await f.tick(); const original = f.jobs()[0].queue[0]; f.hook(); f.expireUpload(); f.reconnect();
+    // A later task may change the source; only the already captured run1 bytes can be recovered.
+    f.nextRun(2, 'second'); vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 86_461_000); await f.tick();
+    const requests = f.calls.filter(item => item.pathname === '/artifacts/remote/versions').map(item => item.body);
+    expect(new Set(requests.map(item => item.publicationId)).size).toBe(2);
+    expect(requests.at(-1)).toMatchObject({ expectedLatestVersion: original.expectedLatestVersion, captureSequence: original.captureSequence,
+      messageId: original.messageId, runId: original.runId, sha256: original.snapshot.sha256 });
+    expect(f.bytes.get('asset2')?.toString()).toBe('first'); expect(f.references[0]).toMatchObject({ runId: 'run1', artifactVersion: '2' });
+    expect(f.jobs()[0].queue).toHaveLength(0); expect(f.jobs()[0].completedPublications).toContain(original.publicationId);
+    const oldState = f.calls.findLastIndex(item => item.pathname === '/artifact-uploads/asset1'
+      || item.pathname === '/artifacts/remote/versions' && item.body.publicationId === original.publicationId);
+    expect(f.calls.slice(oldState + 1).find(item => item.pathname.startsWith('/sessions/'))).toBeDefined();
+    expect(f.calls.some(item => item.pathname === '/artifact-uploads/asset1/resume')).toBe(false);
+  });
+  it.each(['pending', 'missing-pending', 'newer-latest', 'advanced-capture', 'unknown-state', 'unknown-manifest', 'different-receipt', 'published'])(
+    'does not replace an expired upload when reconciliation is unsafe: %s', async reason => {
+      const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded');
+      f.hook(pathname => { if (pathname.endsWith('/complete')) throw new Error('offline'); }); await f.tick();
+      const original = f.jobs()[0].queue[0]; f.hook(); f.expireUpload(); f.reconnect();
+      if (reason === 'different-receipt') f.uploads.get('asset1').sha256 = '0'.repeat(64);
+      if (reason === 'published') f.uploads.get('asset1').published = true;
+      let readOldState = false;
+      f.hook(pathname => {
+        if (pathname === '/artifact-uploads/asset1') {
+          if (reason === 'unknown-state') throw new Error('offline');
+          readOldState = true;
+          // Change only after the initial manifest was read: recovery must fetch a fresh manifest.
+          if (reason === 'pending') f.manifestOverride({ pendingArtifactVersion: '1' });
+          if (reason === 'missing-pending') f.manifestOverride({ pendingArtifactVersion: undefined });
+          if (reason === 'newer-latest') f.manifestOverride({ latestVersion: '9', latest: { artifactVersion: '9', sha256: 'other' } });
+          if (reason === 'advanced-capture') f.manifestOverride({ lastCaptureSequence: original.captureSequence });
+        }
+        if (reason === 'unknown-manifest' && readOldState && pathname.startsWith('/sessions/')) throw new Error('offline');
+      });
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 86_461_000); await f.tick();
+      expect(f.uploads.size).toBe(1); expect(f.references).toHaveLength(0);
+      expect(f.jobs()[0].queue[0]).toMatchObject({ publicationId: original.publicationId, captureSequence: original.captureSequence,
+        expectedLatestVersion: original.expectedLatestVersion, snapshot: original.snapshot });
+    });
+  it.each(['replaced-cache', 'changed-message-run', 'missing-run', 'account-switch'])(
+    'keeps an expired upload blocked when the local snapshot or context changed: %s', async reason => {
+      const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded');
+      f.hook(pathname => { if (pathname.endsWith('/complete')) throw new Error('offline'); }); await f.tick();
+      const original = f.jobs()[0].queue[0]; f.hook(); f.expireUpload(); f.reconnect();
+      if (reason === 'replaced-cache') { fs.renameSync(original.snapshot.path, `${original.snapshot.path}.old`); fs.writeFileSync(original.snapshot.path, 'first'); }
+      if (reason === 'changed-message-run') f.db.prepare("UPDATE cowork_messages SET metadata=? WHERE id='m1'").run(JSON.stringify({ remoteRunId: 'run2' }));
+      if (reason === 'missing-run') f.store.remove('runHistory:s:run1');
+      if (reason === 'account-switch') f.hook(pathname => { if (pathname === '/artifact-uploads/asset1') f.switchOwner(); });
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 86_461_000); await f.tick();
+      expect(f.uploads.size).toBe(1); expect(f.references).toHaveLength(0); expect(f.jobs()[0].queue[0].publicationId).toBe(original.publicationId);
+    });
+  it('stops the publish chain on account switch and preserves pending snapshots', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded');
+    f.hook(pathname => { if (pathname.includes('/parts/')) f.switchOwner(); }); await f.tick();
+    expect(f.calls.some(item => item.pathname.endsWith('/publish'))).toBe(false); expect(f.jobs()[0].queue).toHaveLength(1);
+  });
+  it('does not upload referenced-only files or substitute new bytes for a missed final boundary', async () => {
+    const f = fixture(); f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run(); await f.tick();
+    expect(f.jobs()).toHaveLength(0); f.store.updateRun('s', 'succeeded'); f.store.remove('fileTerminalBoundary:s:run1');
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='created'").run(); await f.tick();
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final); expect(f.uploads.size).toBe(0);
+    expect(f.health()).toEqual({ degraded: true, pending: 0 });
+  });
+  it('captures a late renderer registration only while the same admitted run remains terminal', async () => {
+    const f = fixture(); f.db.prepare("DELETE FROM library_artifact_sessions").run(); await f.tick(); f.store.updateRun('s', 'succeeded');
+    f.db.prepare("INSERT INTO library_artifact_sessions VALUES('local','s','m1','created')").run(); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('first'); expect(f.references[0]).toMatchObject({ runId: 'run1', kind: 'terminal' });
+  });
+  it('rejects late capture after file modification or a later persistent run ordinal', async () => {
+    for (const change of ['modified', 'ordinal', 'next-run']) {
+      const f = fixture(); f.db.prepare("DELETE FROM library_artifact_sessions").run(); await f.tick(); f.store.updateRun('s', 'succeeded');
+      if (change === 'modified') { const after = Date.parse(f.store.run('s')!.finishedAt!) / 1000 + 5; fs.writeFileSync(f.source, 'changed'); fs.utimesSync(f.source, after, after); }
+      if (change === 'ordinal') f.store.put('fileRunOrdinal:s', '2');
+      if (change === 'next-run') f.store.beginRun('s', 'run2');
+      f.db.prepare("INSERT INTO library_artifact_sessions VALUES('local','s','m1','created')").run(); await f.tick();
+      expect(f.uploads.size).toBe(0); expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+    }
+  });
+  it('keeps at most three protected final snapshots and never replaces them with a fourth run', async () => {
+    const f = fixture(); await f.tick(); f.store.updateRun('s', 'succeeded');
+    for (let i = 2; i <= 4; i++) { f.nextRun(i, `run${i}`); f.store.updateRun('s', 'succeeded'); }
+    expect(f.jobs()[0].queue.map((item: any) => item.runId)).toEqual(['run1', 'run2', 'run3']);
+    expect(f.jobs()[0].reason).toBe(RemoteFileReason.Final);
+  });
+  it('debounces ordinary writes and freezes a phase only after the delay', async () => {
+    const f = fixture(), now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now); await f.tick();
+    expect(f.uploads.size).toBe(0); vi.mocked(Date.now).mockReturnValue(now + 2100); await f.tick();
+    expect(f.uploads.size).toBe(1); expect(f.references).toHaveLength(0);
+    expect(f.jobs()[0].references.m1.pinned).toBe(false);
+  });
+  it('discovers capabilities with v1 even after the previous successful negotiation used v3', async () => {
+    const f = fixture(), requests: RequestInit[] = [];
+    const bridge: any = new RemoteBridge({ store: f.store, identity: { installationId: 'i', deviceKey: 'k', databaseId: 'd' },
+      files: { cacheRoot: f.cache, access: () => ({ assertAllowed: () => undefined }) },
+      getOwner: () => owner, getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.invalid', runSessionTransaction: fn => f.store.transaction(fn),
+      metadata: { name: 'pc', hostName: 'pc', instanceLabel: 'default', platform: 'macos', appVersion: '1' }, prepare: vi.fn(), execute: vi.fn(), onAccountChange: vi.fn(),
+      request: async (_owner, _pathname, init) => { requests.push(init); return ok({ enabled: true, protocolVersions: [1], projectionVersions: [1, 2, 3], capabilities: [RemoteCapability.SameAccountAccess, ...Object.values(RemoteFileCapability)] }); },
+    });
+    bridge.owner = owner; bridge.registration = { deviceId: 'pc', ...owner, metadataVersion: '1' }; bridge.targetId = RemoteEnvironment.Test;
+    await bridge.refreshCapabilities(); await bridge.refreshCapabilities();
+    expect(bridge.projectionVersion).toBe(3);
+    expect(requests.every(init => !new Headers(init.headers).has('X-Remote-Projection-Version'))).toBe(true);
+    // File sync can be enabled while the separate Agent/model-selection rollout remains off.
+    expect(bridge.inputCapabilities).toEqual([]);
+    f.store.put('inputRun:run1', { input: { text: 'Read the attachment', attachments: [{ assetId: 'input-asset', version: '1', fileName: 'input.txt', mimeType: 'text/plain', sizeBytes: '5', intent: 'file' }] }, inputModel: null });
+    f.store.transaction(() => f.db.prepare("INSERT INTO cowork_messages VALUES('input-message','s','user','Read',?,1,2)").run(JSON.stringify({ remoteRunId: 'run1' })));
+    const message = f.store.snapshot('s').records.find(record => record.eventType === 'message.upsert' && record.payload.message.messageId === 'input-message')!;
+    expect(message.payload.message.blocks[1]).toMatchObject({ type: 'attachment', assetId: 'input-asset', availability: 'ready' }); bridge.stop();
+  });
+});
+
+
+/** Run discovery must outlive transport churn without reviving authority or old run bytes. */
+describe('artifact delivery across transport reconnections', () => {
+  async function prepared(fileName = 'report.pptx') {
+    const f = fixture(false, true, fileName);
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); await f.prepareDelivery();
+    return f;
+  }
+  function complete(f: ReturnType<typeof fixture>) {
+    fs.writeFileSync(f.source, 'generated document bytes');
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=?,sequence=3 WHERE id='m1'").run(`Delivered [document](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,1)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolName: 'exec', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,2)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true, toolResultDetails: { exitCode: 0 } }));
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5);
+    try { f.store.updateRun('s', 'succeeded'); } finally { clock.mockRestore(); }
+  }
+  function card(f: ReturnType<typeof fixture>) {
+    const message = f.store.snapshot('s').records.find(row => row.eventType === 'message.upsert' && row.payload.message.messageId === 'm1');
+    return message?.payload.message.blocks.find((block: { type: string }) => block.type === 'artifact');
+  }
+
+  it.each(['report.pptx', 'report.pdf'])('publishes %s once after repeated generation changes', async fileName => {
+    const f = await prepared(fileName);
+    for (let i = 0; i < 3; i++) { f.rotateConnection(); await f.tick(); }
+    complete(f);
+    f.rotateConnection(); await f.tick(); await f.tick();
+    expect(f.bytes.get('asset1')?.toString()).toBe('generated document bytes');
+    expect(card(f)).toMatchObject({ availability: 'ready', referenceMode: 'latest' });
+    expect(f.jobs()[0].queue).toHaveLength(0);
+    expect(f.references).toHaveLength(0);
+    f.rotateConnection(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+  });
+
+  it('retains the pre-run baseline instead of treating an old unchanged link as a delivery', async () => {
+    const f = await prepared();
+    f.store.transaction(() => {
+      f.db.prepare("UPDATE cowork_messages SET content=? WHERE id='m1'").run(`Delivered [document](${f.source})`);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('tool','s','tool_use','',?,1,2)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolName: 'write', toolUseId: 't' }));
+      f.db.prepare("INSERT INTO cowork_messages VALUES('result','s','tool_result','',?,1,3)")
+        .run(JSON.stringify({ remoteRunId: 'run1', toolUseId: 't', isFinal: true }));
+    });
+    f.rotateConnection(); await f.tick();
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(card(f)?.availability).toBe('desktop_only');
+  });
+
+  it('retries with the new connection when it changes during file indexing', async () => {
+    const f = await prepared(); complete(f);
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    f.recordHook(async () => { entered(); await waiting; });
+    const oldCycle = f.tick(); await started;
+    f.rotateConnection(); const reboundCycle = f.tick();
+    release(); await Promise.all([oldCycle, reboundCycle]);
+    expect(f.uploads.size).toBe(0);
+    f.recordHook(); await f.tick(); await f.tick();
+    expect(f.uploads.size).toBe(1);
+    expect(card(f)?.availability).toBe('ready');
+    expect(f.calls.filter(call => call.pathname === '/devices/pc/artifacts').every(call => call.generation === '2')).toBe(true);
+  });
+
+  const invalidations = {
+    'route epoch': (f: ReturnType<typeof fixture>) => f.changeRouteEpoch(),
+    environment: (f: ReturnType<typeof fixture>) => f.changeEnvironment(),
+    device: (f: ReturnType<typeof fixture>) => f.changeDevice(),
+    pause: (f: ReturnType<typeof fixture>) => f.pause(),
+  };
+  for (const [name, invalidate] of Object.entries(invalidations)) it(`discards discovery on ${name} change`, async () => {
+    const f = await prepared();
+    invalidate(f); f.rotateConnection(); await f.tick();
+    complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(f.jobs()).toHaveLength(0);
+  });
+
+  it('does not reuse discovery after the caller revokes its account epoch', async () => {
+    const f = fixture(false, true, 'report.pptx');
+    f.db.prepare("UPDATE library_artifact_sessions SET relation_kind='referenced'").run();
+    await f.tick(); let allowed = true; await f.prepareDelivery(() => allowed);
+    allowed = false; f.rotateConnection(); complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+
+  it('does not revive discovery after task admission is revoked and restored', async () => {
+    const f = await prepared();
+    f.store.setTaskAdmission(() => false); f.rotateConnection(); await f.tick();
+    f.store.setTaskAdmission(() => true); complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+
+  it('rejects bytes changed after the original completion boundary following reconnect', async () => {
+    const f = await prepared(); complete(f);
+    // Set a later mtime deterministically without relying on filesystem timer resolution.
+    const later = new Date(Date.now() + 10_000);
+    fs.writeFileSync(f.source, 'replaced after completion'); fs.utimesSync(f.source, later, later);
+    f.rotateConnection(); await f.tick();
+    expect(f.uploads.size).toBe(0);
+    expect(card(f)?.availability).toBe('desktop_only');
+  });
+
+  it('clears discovery across an explicit pause even if the same scope reconnects', async () => {
+    const f = await prepared();
+    f.pause(); f.rotateConnection(); await f.tick(); complete(f); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+
+  it('does not reuse discovery from an earlier run', async () => {
+    const f = await prepared();
+    f.store.updateRun('s', 'succeeded');
+    f.nextRun(2, 'later run bytes'); f.rotateConnection(); await f.tick();
+    f.store.updateRun('s', 'succeeded'); await f.tick();
+    expect(f.uploads.size).toBe(0);
+  });
+});

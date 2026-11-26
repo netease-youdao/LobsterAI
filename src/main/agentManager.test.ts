@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { DefaultAgentAvatarIcon } from '../shared/agent/avatar';
-import { AgentId, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
+import { AgentId, AgentModelSelectionMode, AgentOwnerKind, AgentSource } from '../shared/agent/constants';
 import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { AgentManager } from './agentManager';
@@ -17,8 +17,11 @@ const refreshAvatar = vi.fn((id: string, icon: string) => {
 });
 const manager = new AgentManager({
   updatePresetAgentAvatar: refreshAvatar,
-  listAgents: () => [...agents.values()],
+  listVisibleAgents: () => [...agents.values()],
+  getVisibleAgent: (id: string) => agents.get(id) ?? null,
   getAgent: (id: string) => agents.get(id) ?? null,
+  assertAgentAccess: (id: string) => { if (!agents.has(id)) throw new Error('Unknown agent'); },
+  agentOwnership: { get: (id: string) => agents.has(id) ? { ownerKind: AgentOwnerKind.Anonymous, owner: null } : null },
   createAgent: (request: CreateAgentRequest) => {
     const agent = { ...request, id: request.id ?? 'generated-id', enabled: true } as Agent;
     agents.set(agent.id, agent);

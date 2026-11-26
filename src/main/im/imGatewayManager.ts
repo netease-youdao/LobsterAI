@@ -3,7 +3,6 @@
  * Unified manager for DingTalk, Feishu, NIM, Telegram, Discord, QQ, WeCom,
  * Weixin, POPO and NeteaseBee. Active channels run inside the DSH channels bundle.
  */
-
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -22,6 +21,7 @@ import {
 import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
+import { canUseAutomationSource, imAutomationSourceId } from '../remote/automationOwnership';
 import type { DshChannelsBridge, DshChannelStatusItem } from './dshChannelsBridge';
 import {
   FeishuAuth,
@@ -30,6 +30,7 @@ import {
   validateAppCredentials,
 } from './feishuInstallAuth';
 import { fetchJsonWithTimeout } from './http';
+import { assertImInstanceAccess, mergeVisibleImConfig, type MultiPlatform, newImInstances, visibleImConfig } from './imConfigOwnership';
 import { IMCoworkHandler } from './imCoworkHandler';
 import {
   buildDingTalkSendParamsFromRoute,
@@ -87,6 +88,8 @@ interface WeixinQrLoginWaitResult {
 }
 
 interface ActiveWeixinQrSession {
+  assertAccount: () => void;
+  bindNewAccount?: () => void;
   sessionKey: string;
   qrcode: string;
   currentBaseUrl: string;
@@ -276,8 +279,23 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   // ==================== Configuration ====================
+  canUseInstance = (platform: string, instanceId?: string): boolean =>
+    !this.coworkStore || canUseAutomationSource(this.coworkStore, imAutomationSourceId(platform, instanceId));
+
   getConfig(): IMGatewayConfig {
-    return this.imStore.getConfig();
+    const current = this.imStore.getConfig();
+    return this.coworkStore?.remote ? visibleImConfig(current, this.canUseInstance) : current;
+  }
+
+  saveInstanceConfig(platform: MultiPlatform, instanceId: string, patch: { instanceId?: unknown }, write: () => void): void {
+    assertImInstanceAccess(this.canUseInstance, platform, instanceId, patch);
+    const store = this.coworkStore;
+    if (!store?.remote) { write(); return; }
+    const existing = this.imStore.getConfig()[platform].instances.some(row => row.instanceId === instanceId);
+    store.remote.transaction(() => {
+      if (!existing) store.remote.bindSource(imAutomationSourceId(platform, instanceId), store.remoteCreationOwner());
+      write();
+    });
   }
 
   getIMStore(): IMStore {
@@ -289,7 +307,18 @@ export class IMGatewayManager extends EventEmitter {
     options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean },
   ): void {
     const previousConfig = this.imStore.getConfig();
-    this.imStore.setConfig(config);
+    const store = this.coworkStore;
+    if (store?.remote) {
+      const changes = mergeVisibleImConfig(previousConfig, config, this.canUseInstance);
+      store.remote.transaction(() => {
+        for (const [platform, id] of newImInstances(previousConfig, changes)) {
+          store.remote.bindSource(imAutomationSourceId(platform, id), store.remoteCreationOwner());
+        }
+        this.imStore.setConfig(changes);
+      });
+    } else {
+      this.imStore.setConfig(config);
+    }
     if (config.weixin?.enabled === false) this.cancelWeixinQrLoginSession();
 
     // Make sure the Cowork handler exists once IM settings are saved
@@ -1540,6 +1569,17 @@ export class IMGatewayManager extends EventEmitter {
   async weixinQrLoginStart(): Promise<WeixinQrLoginStartResult> {
     this.cancelWeixinQrLoginSession();
     const attemptSeq = ++this.weixinQrAttemptSeq;
+    const store = this.coworkStore;
+    const owner = store?.remoteCreationOwner?.() ?? null;
+    const assertAccount = () => {
+      const current = store?.remoteCreationOwner?.() ?? null;
+      if (!this.canUseInstance('weixin') || current?.userId !== owner?.userId || current?.scopeKey !== owner?.scopeKey) {
+        throw new Error(t('imWeixinQrSessionExpired'));
+      }
+    };
+    assertAccount();
+    const existing = this.getConfig().weixin;
+    const bind = store?.remote && !existing.accountId && !existing.botToken ? store.remote.prepareSourceBinding(owner) : undefined;
 
     try {
       await this.ensureOpenClawGatewayReady?.();
@@ -1552,6 +1592,7 @@ export class IMGatewayManager extends EventEmitter {
         throw new Error(t('imWeixinGatewayUnavailable'));
       }
 
+      assertAccount();
       const existingToken = this.getConfig().weixin?.botToken?.trim();
       const qr = await channelsBridge.weixinQrStart({
         baseUrl: WEIXIN_DEFAULT_BASE_URL,
@@ -1570,7 +1611,9 @@ export class IMGatewayManager extends EventEmitter {
 
       const sessionKey = randomUUID();
       const abortController = new AbortController();
+      assertAccount();
       const session: ActiveWeixinQrSession = {
+        assertAccount, bindNewAccount: bind ? () => bind(imAutomationSourceId('weixin')) : undefined,
         sessionKey,
         qrcode,
         currentBaseUrl: WEIXIN_DEFAULT_BASE_URL,
@@ -1609,6 +1652,7 @@ export class IMGatewayManager extends EventEmitter {
     }
 
     const assertCurrent = () => {
+      session.assertAccount();
       if (this.activeWeixinQrSession !== session || session.abortController.signal.aborted) {
         throw new Error(t('imWeixinQrSessionExpired'));
       }
@@ -1682,17 +1726,17 @@ export class IMGatewayManager extends EventEmitter {
                 ? [...currentAllowFrom, nextUserId]
                 : currentAllowFrom;
 
-            this.setConfig({
-              weixin: {
-                ...currentWeixin,
-                enabled: true,
-                accountId,
-                botToken,
-                baseUrl: nextBaseUrl,
-                ...(nextUserId ? { userId: nextUserId } : {}),
-                allowFrom: nextAllowFrom,
-              },
-            }, { syncGateway: false });
+            const save = () => {
+              session.bindNewAccount?.();
+              this.setConfig({
+                weixin: {
+                  ...currentWeixin, enabled: true, accountId, botToken, baseUrl: nextBaseUrl,
+                  ...(nextUserId ? { userId: nextUserId } : {}), allowFrom: nextAllowFrom,
+                },
+              }, { syncGateway: false });
+            };
+            if (this.coworkStore?.remote) this.coworkStore.remote.transaction(save);
+            else save();
 
             this.cancelWeixinQrLoginSession(session);
             console.log('[IMGatewayManager] Weixin QR login confirmed via DSH channels:', JSON.stringify({

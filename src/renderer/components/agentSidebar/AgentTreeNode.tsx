@@ -1,4 +1,5 @@
 import { ChevronRightIcon } from '@heroicons/react/24/outline';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
@@ -12,6 +13,8 @@ import EditIcon from '../icons/EditIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
+import { useOwnershipHover } from '../ownership/OwnershipHoverCard';
+import OwnershipMenuItems from '../ownership/OwnershipMenuItems';
 import AgentTaskRow from './AgentTaskRow';
 import { createSessionBatchKey } from './batchSelection';
 import ExpandAgentTasksRow from './ExpandAgentTasksRow';
@@ -63,7 +66,7 @@ interface AgentTreeNodeProps {
 
 const ACTION_MENU_VIEWPORT_PADDING = 8;
 const ACTION_MENU_VERTICAL_GAP = 4;
-const ACTION_MENU_HEIGHT = 104;
+const ACTION_MENU_HEIGHT = 168;
 const AGENT_TASKS_TRANSITION_MS = 200;
 
 export const AgentAvatar: React.FC<{
@@ -119,6 +122,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const previousExpandedRef = useRef(agent.isExpanded);
   const isMenuOpen = menuPosition !== null;
+  const ownershipHover = useOwnershipHover({ kind: OwnershipTargetKind.Agent, id: agent.id }, isMenuOpen || showConfirmDelete || isBatchMode);
   const isMainAgent = isDefaultAgentId(agent.id);
   const isBatchAgent = isBatchMode && batchAgentId === agent.id;
   const isOutsideBatchAgent = isBatchMode && batchAgentId !== null && batchAgentId !== agent.id;
@@ -297,10 +301,12 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
   return (
     <div className="group/agent-section space-y-0.5">
+      {ownershipHover.card}
       <div className={`group/agent-header sticky top-9 ${isMenuOpen ? 'z-50' : 'z-20'} -mx-2.5 h-[34px] bg-[var(--lobster-sidebar-bg)] px-2.5`}>
         <div className="relative flex h-full items-center gap-1 rounded-[10px] pr-14 transition-colors group-hover/agent-header:bg-[var(--lobster-sidebar-item-hover)]">
           <button
             type="button"
+            {...ownershipHover.handlers}
             ref={rowButton}
             onClick={handleAgentClick}
             className={`flex h-full min-w-0 items-center gap-2.5 rounded-[10px] pl-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors ${
@@ -390,6 +396,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
             style={{ top: menuPosition.top, right: menuPosition.right }}
             role="menu"
           >
+            <OwnershipMenuItems target={{ kind: OwnershipTargetKind.Agent, id: agent.id }} onAction={closeMenu} className={menuItemClassName} />
             <button
               type="button"
               onClick={handleEditAgent}

@@ -1,0 +1,254 @@
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { sameOwner, stableJson } from './canonical';
+import { admissionBudget, type AdmissionJob, controlPrefixes, invalidInboxSql, readRemoteAdmissionAssociatedStates, readRemoteSessionAdmission, readRemoteSessionPristine, RemoteSessionAdmission, RemoteSyncAdmissionBudgetError, stateIdentitySql, taskPrefixes } from './remoteDisplayHealthAdmission';
+import { remotePublicationPendingSql } from './remotePublicationOrigins';
+import { RemoteSyncStateError } from './remoteRetention';
+import type { RemoteStore, SyncRow } from './remoteStore';
+
+export { type AdmissionJob, AdmissionJobPhase, RemoteSessionAdmission, RemoteSyncAdmissionBudgetError } from './remoteDisplayHealthAdmission';
+type Store = Pick<RemoteStore, 'db'>;
+interface StateRow { key: string; value: string }
+const owned = "SELECT session_id FROM cowork_session_ownership WHERE owner_user_id=? AND owner_scope_key=? AND ownership_status='confirmed'";
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const parse = (raw: string): unknown => { try { return JSON.parse(raw); } catch { return undefined; } };
+const matchesSession = (key: string, id: string): boolean => taskPrefixes.some(prefix => key === `${prefix}:${id}` || key.startsWith(`${prefix}:${id}:`));
+
+/** Durable admission is separate from delivery ACKs and retry state. Original evidence is never overwritten. */
+export class RemoteSyncAdmissionStore {
+  constructor(private readonly store: Store) {
+    store.db.exec(`CREATE TABLE IF NOT EXISTS remote_sync_session_admissions(
+      target_id TEXT NOT NULL,owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,device_id TEXT NOT NULL,
+      local_session_id TEXT NOT NULL,remote_session_id TEXT NOT NULL,admission TEXT NOT NULL,
+      origin_environment TEXT,archive_id TEXT NOT NULL,PRIMARY KEY(target_id,local_session_id));
+      CREATE INDEX IF NOT EXISTS idx_remote_sync_admission_pending ON remote_sync_session_admissions(target_id,admission,local_session_id);
+      CREATE TABLE IF NOT EXISTS remote_sync_admission_evidence(
+      archive_id TEXT NOT NULL,table_name TEXT NOT NULL,row_key TEXT NOT NULL,row_json TEXT NOT NULL,
+      PRIMARY KEY(archive_id,table_name,row_key));
+      CREATE TABLE IF NOT EXISTS remote_sync_admission_control_barriers(
+      target_id TEXT NOT NULL,state_key TEXT NOT NULL,PRIMARY KEY(target_id,state_key));
+      CREATE TABLE IF NOT EXISTS remote_sync_admission_jobs(target_id TEXT PRIMARY KEY,device_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,owner_scope_key TEXT NOT NULL,phase TEXT NOT NULL,table_index INTEGER NOT NULL,
+        row_cursor INTEGER NOT NULL,task_cursor TEXT NOT NULL,previous_target TEXT,epoch INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_remote_admission_jobs_owner ON remote_sync_admission_jobs(owner_user_id,owner_scope_key,phase);`);
+    // These indexes contain derived lookup keys only. Original request, ACK and
+    // owner evidence stays in remote_state and is verified again before admission.
+    for (const field of ['localSessionId', 'remoteSessionId', 'sessionId']) store.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_remote_admission_${field} ON remote_state(${stateIdentitySql(field)},key)`);
+    store.db.exec(`CREATE INDEX IF NOT EXISTS idx_remote_admission_invalid_inbox ON remote_state(key)
+      WHERE key>='inbox:' AND key<'inbox;' AND ${invalidInboxSql}=1`);
+  }
+  job(targetId: string): AdmissionJob | null {
+    return (this.store.db.prepare('SELECT * FROM remote_sync_admission_jobs WHERE target_id=?').get(targetId) as AdmissionJob | undefined) || null;
+  }
+  ownerBlocked(owner: RemoteOwner): boolean {
+    return !!this.store.db.prepare("SELECT 1 FROM remote_sync_admission_jobs WHERE owner_user_id=? AND owner_scope_key=? AND phase<>'complete' LIMIT 1")
+      .get(owner.userId, owner.scopeKey);
+  }
+  startJob(owner: RemoteOwner, targetId: string, deviceId: string, previousTarget: string | null, epoch: number): AdmissionJob {
+    const other = this.store.db.prepare("SELECT target_id FROM remote_sync_admission_jobs WHERE owner_user_id=? AND owner_scope_key=? AND phase<>'complete' AND target_id<>? LIMIT 1").get(owner.userId, owner.scopeKey, targetId);
+    if (other) throw new RemoteSyncStateError('Unfinished admission prevents changing synchronization target');
+    this.store.db.prepare("INSERT OR IGNORE INTO remote_sync_admission_jobs VALUES(?,?,?,?,'archiving',0,0,'',?,?)")
+      .run(targetId, deviceId, owner.userId, owner.scopeKey, previousTarget, epoch);
+    const job = this.job(targetId)!;
+    if (job.device_id !== deviceId || job.owner_user_id !== owner.userId || job.owner_scope_key !== owner.scopeKey) throw new RemoteSyncStateError('Admission job identity changed');
+    return job;
+  }
+  /** One durable archive page. Original ACKs and unknown requests remain in their source tables. */
+  archivePage(job: AdmissionJob, tables: Readonly<Record<string, string>>): void {
+    const names = [...Object.entries(tables), ['remote_state', '']];
+    const entry = names[job.table_index];
+    if (!entry) {
+      this.store.db.prepare("UPDATE remote_sync_admission_jobs SET phase='validating',row_cursor=0 WHERE target_id=? AND phase='archiving'").run(job.target_id); return;
+    }
+    const [table, column] = entry;
+    this.store.db.transaction(() => {
+      const columns = (this.store.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string; type: string }>).filter(field => /TEXT|BLOB/iu.test(field.type));
+      const bytesSql = columns.map(field => `COALESCE(octet_length("${field.name}"),0)`).join('+') || '0';
+      const rows = this.store.db.prepare(`SELECT rowid AS evidence_rowid,${bytesSql} AS bytes,${column || 'key'} AS source_key FROM ${table}
+        WHERE rowid>? ${column ? `AND ${column} IN (${owned})` : ''} ORDER BY rowid LIMIT 32`)
+        .all(job.row_cursor, ...(column ? [job.owner_user_id, job.owner_scope_key] : [])) as Array<{ evidence_rowid: number; bytes: number; source_key: string }>;
+      if (!rows.length) { this.store.db.prepare('UPDATE remote_sync_admission_jobs SET table_index=table_index+1,row_cursor=0 WHERE target_id=?').run(job.target_id); return; }
+      let bytes = 0, cursor = job.row_cursor;
+      const owner = { userId: job.owner_user_id, scopeKey: job.owner_scope_key };
+      const targets = this.store.db.prepare('SELECT target_id,owner_user_id,owner_scope_key FROM remote_sync_targets').all() as Array<{ target_id: string; owner_user_id: string; owner_scope_key: string }>;
+      for (const header of rows) {
+        const { evidence_rowid, source_key } = header;
+        if (bytes && bytes + header.bytes > 256 * 1024) break;
+        const key = table === 'remote_sync' || table === 'remote_state' ? source_key : String(evidence_rowid);
+        const scopedTarget = table === 'remote_state' ? targets.find(target => key.endsWith(`:${target.target_id}`) || key.includes(`:${target.target_id}:`)) : null;
+        if (scopedTarget && (scopedTarget.owner_user_id !== owner.userId || scopedTarget.owner_scope_key !== owner.scopeKey)) { cursor = evidence_rowid; continue; }
+        if (header.bytes > admissionBudget.recordBytes) {
+          // Retain over-budget bytes in the original table. Their task stays quarantined; no serialized truncation is archived.
+          const local = column ? source_key : (this.store.db.prepare(`SELECT local_id FROM remote_sync WHERE local_id IN (${owned})
+            AND (?= 'run:'||local_id OR instr(?,':'||local_id||':')>0) LIMIT 1`).get(owner.userId, owner.scopeKey, key, key) as { local_id: string } | undefined)?.local_id;
+          if (local) this.store.db.prepare(`INSERT INTO remote_sync_session_admissions
+            SELECT ?,?,?,?,local_id,session_id,'quarantined',sync_environment,? FROM remote_sync WHERE local_id=?
+            ON CONFLICT(target_id,local_session_id) DO UPDATE SET admission='quarantined'`)
+            .run(job.target_id, owner.userId, owner.scopeKey, job.device_id, `admission:${job.target_id}`, local);
+          else if (table === 'remote_state' && controlPrefixes.some(prefix => key.startsWith(prefix)))
+            this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_control_barriers VALUES(?,?)').run(job.target_id, key);
+          cursor = evidence_rowid; continue;
+        }
+        const original = this.store.db.prepare(`SELECT * FROM ${table} WHERE rowid=?`).get(evidence_rowid) as Record<string, unknown> | undefined;
+        if (!original) { cursor = evidence_rowid; continue; }
+        const value = table === 'remote_state' ? parse(String(original.value)) : undefined;
+        const direct = table === 'remote_state' && !!this.store.db.prepare(`SELECT 1 FROM remote_sync WHERE local_id IN (${owned})
+          AND (instr(?,':'||local_id||':')>0 OR substr(?,-length(local_id)-1)=':'||local_id OR instr(?,':'||session_id||':')>0) LIMIT 1`)
+          .get(owner.userId, owner.scopeKey, key, key, key);
+        if (!direct && record(value) && record(value.owner) && !sameOwner(value.owner as unknown as RemoteOwner, owner)) { cursor = evidence_rowid; continue; }
+        const body = stableJson(original); bytes += Buffer.byteLength(body);
+        this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_evidence VALUES(?,?,?,?)').run(`admission:${job.target_id}`, table, key, body);
+        if (table === 'remote_sync') this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_session_admissions VALUES(?,?,?,?,?,?,?,?,?)')
+          .run(job.target_id, owner.userId, owner.scopeKey, job.device_id, original.local_id, original.session_id,
+            RemoteSessionAdmission.Unverified, original.sync_environment, `admission:${job.target_id}`);
+        if (table === 'remote_state' && controlPrefixes.some(prefix => key.startsWith(prefix))) {
+          const unmatchedInbox = key.startsWith('inbox:') && record(value) && record(value.owner) && sameOwner(value.owner as unknown as RemoteOwner, owner)
+            && !this.store.db.prepare(`SELECT 1 FROM remote_sync WHERE local_id=? AND session_id=? AND local_id IN (${owned})`)
+              .get(typeof value.localSessionId === 'string' ? value.localSessionId : null,
+                typeof value.remoteSessionId === 'string' ? value.remoteSessionId : record(value.command) && typeof value.command.sessionId === 'string' ? value.command.sessionId : null,
+                owner.userId, owner.scopeKey);
+          if (value === undefined || key.startsWith('inbox:') && (!record(value) || !record(value.owner)) || unmatchedInbox)
+            this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_control_barriers VALUES(?,?)').run(job.target_id, key);
+        }
+        cursor = evidence_rowid;
+      }
+      this.store.db.prepare('UPDATE remote_sync_admission_jobs SET row_cursor=? WHERE target_id=?').run(cursor, job.target_id);
+    })();
+  }
+  /** Check lengths in SQLite before transferring archived payloads into the main process. */
+  budget(owner: RemoteOwner, targetId: string, tables: Readonly<Record<string, string>>): () => void {
+    const started = performance.now();
+    const check = (): void => { if (performance.now() - started > admissionBudget.durationMs) throw new RemoteSyncAdmissionBudgetError(targetId); };
+    let rows = 0, bytes = 0;
+    for (const [table, column] of [...Object.entries(tables), ['remote_state', ''], ['cowork_messages', 'session_id']]) {
+      check();
+      const fields = (this.store.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string; type: string }>)
+        .filter(field => /TEXT|BLOB/iu.test(field.type) && (table !== 'cowork_messages' || field.name === 'metadata'));
+      const size = fields.map(field => `COALESCE(octet_length(${field.name}),0)`).join('+') || '0';
+      const page = this.store.db.prepare(`SELECT ${size} AS bytes FROM ${table}${column ? ` WHERE ${column} IN (${owned})` : ''} LIMIT ?`)
+        .all(...(column ? [owner.userId, owner.scopeKey] : []), admissionBudget.rows - rows + 1) as Array<{ bytes: number }>;
+      for (const row of page) {
+        rows++; bytes += row.bytes;
+        if (rows > admissionBudget.rows || row.bytes > admissionBudget.recordBytes || bytes > admissionBudget.bytes) throw new RemoteSyncAdmissionBudgetError(targetId);
+      }
+      check();
+    }
+    return check;
+  }
+  private *states(): Iterable<StateRow> {
+    let cursor = '';
+    while (true) {
+      const page = this.store.db.prepare('SELECT key,value FROM remote_state WHERE key>? ORDER BY key LIMIT 64').all(cursor) as StateRow[];
+      if (!page.length) return;
+      yield* page;
+      cursor = page[page.length - 1].key;
+    }
+  }
+  private ownsTarget(owner: RemoteOwner, targetId: string): boolean {
+    return !!this.store.db.prepare('SELECT 1 FROM remote_sync_targets WHERE target_id=? AND owner_user_id=? AND owner_scope_key=?')
+      .get(targetId, owner.userId, owner.scopeKey);
+  }
+  pending(owner: RemoteOwner, targetId: string): boolean {
+    return this.pendingIds(owner, targetId, '', 1).length > 0;
+  }
+  pendingIds(owner: RemoteOwner, targetId: string, after = '', limit = 50): string[] {
+    if (!this.ownsTarget(owner, targetId)) return [];
+    const size = Number.isFinite(limit) ? Math.min(50, Math.max(1, Math.floor(limit))) : 50;
+    const admission = remotePublicationPendingSql(this.store.db, owner, targetId, 'local_session_id');
+    const evidence = remotePublicationPendingSql(this.store.db, owner, targetId, 'e.row_key');
+    return (this.store.db.prepare(`SELECT local_session_id FROM remote_sync_session_admissions
+      WHERE target_id=? AND owner_user_id=? AND owner_scope_key=? AND admission<>? AND local_session_id>? AND ${admission.sql}
+      UNION SELECT e.row_key AS local_session_id FROM remote_sync_admission_evidence e
+      WHERE archive_id=? AND table_name='remote_sync' AND row_key>? AND ${evidence.sql}
+        AND NOT EXISTS(SELECT 1 FROM remote_sync_session_admissions a WHERE a.target_id=? AND a.local_session_id=e.row_key
+          AND a.owner_user_id=? AND a.owner_scope_key=? AND a.admission=?)
+      ORDER BY local_session_id LIMIT ?`).all(targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified, after, ...admission.params,
+      `admission:${targetId}`, after, ...evidence.params, targetId, owner.userId, owner.scopeKey, RemoteSessionAdmission.Verified, size) as Array<{ local_session_id: string }>).
+      map(row => row.local_session_id);
+  }
+
+  admitted(owner: RemoteOwner, deviceId: string, targetId: string, localSessionId: string): boolean {
+    return readRemoteSessionAdmission(this.store.db, owner, deviceId, targetId, localSessionId);
+  }
+  isPristine(row: SyncRow, targetId?: string): boolean {
+    return readRemoteSessionPristine(this.store.db, row, targetId);
+  }
+  controlBlocked(targetId: string): boolean {
+    return !!this.store.db.prepare('SELECT 1 FROM remote_sync_admission_control_barriers WHERE target_id=? LIMIT 1').get(targetId);
+  }
+  archive(owner: RemoteOwner, targetId: string, deviceId: string, rows: SyncRow[], tables: Readonly<Record<string, string>>): void {
+    const archiveId = `admission:${targetId}`;
+    const insert = this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_evidence VALUES (?,?,?,?)');
+    for (const [table, column] of Object.entries(tables)) {
+      let cursor = 0;
+      while (true) {
+        const page = this.store.db.prepare(`SELECT rowid AS evidence_rowid,* FROM ${table} WHERE ${column} IN (${owned}) AND rowid>? ORDER BY rowid LIMIT 64`)
+          .all(owner.userId, owner.scopeKey, cursor) as Array<Record<string, unknown> & { evidence_rowid: number }>;
+        if (!page.length) break;
+        for (const { evidence_rowid, ...original } of page) {
+          insert.run(archiveId, table, table === 'remote_sync' ? String(original.local_id) : String(evidence_rowid), stableJson(original)); cursor = evidence_rowid;
+        }
+      }
+    }
+    const ids = new Set(rows.flatMap(row => [row.local_id, row.session_id]));
+    const ownRuns = new Set<string>();
+    for (const row of this.states()) {
+      if (!rows.some(session => row.key === `run:${session.local_id}` || row.key.startsWith(`runHistory:${session.local_id}:`))) continue;
+      const value = parse(row.value); if (record(value) && typeof value.runId === 'string') ownRuns.add(value.runId);
+    }
+    const allIds = [...ids, ...ownRuns];
+    const knownTargets = this.store.db.prepare('SELECT target_id,owner_user_id,owner_scope_key FROM remote_sync_targets').all() as Array<{ target_id: string; owner_user_id: string; owner_scope_key: string }>;
+    const keyHas = (key: string, id: string): boolean => key.endsWith(`:${id}`) || key.includes(`:${id}:`);
+    // Preserve the owner's opaque safety records verbatim. Unattributable security facts remain guarded, never reassigned.
+    for (const row of this.states()) {
+      const value = parse(row.value);
+      const assetMessage = row.key.startsWith('desktopAsset:') ? row.key.slice('desktopAsset:'.length).split(':')[0] : null;
+      const direct = allIds.some(id => keyHas(row.key, id)) || !!assetMessage && !!this.store.db.prepare(`SELECT 1 FROM cowork_messages
+        WHERE id=? AND session_id IN (${owned})`).get(assetMessage, owner.userId, owner.scopeKey);
+      const scopedTarget = knownTargets.find(target => keyHas(row.key, target.target_id));
+      if (!direct && (record(value) && record(value.owner) && !sameOwner(value.owner as unknown as RemoteOwner, owner)
+        || scopedTarget && (scopedTarget.owner_user_id !== owner.userId || scopedTarget.owner_scope_key !== owner.scopeKey))) continue;
+      const associated = record(value) && (record(value.owner) && sameOwner(value.owner as unknown as RemoteOwner, owner)
+        || typeof value.localSessionId === 'string' && ids.has(value.localSessionId)
+        || typeof value.remoteSessionId === 'string' && ids.has(value.remoteSessionId));
+      const accountKey = row.key.includes(`${owner.userId}:${owner.scopeKey}`)
+        || row.key.includes(`${JSON.stringify(owner.userId)},${JSON.stringify(owner.scopeKey)}`);
+      if (!direct && !associated && !accountKey && !controlPrefixes.some(prefix => row.key.startsWith(prefix))) continue;
+      insert.run(archiveId, 'remote_state', row.key, stableJson(row));
+      if (!controlPrefixes.some(prefix => row.key.startsWith(prefix))) continue;
+      if (value === undefined || row.key.startsWith('inbox:') && (!record(value) || !record(value.owner)) || row.key.startsWith('inbox:') && record(value) && record(value.owner) && sameOwner(value.owner as unknown as RemoteOwner, owner)
+        && (!rows.some(session => session.local_id === value.localSessionId && session.session_id === (value.remoteSessionId || (record(value.command) && value.command.sessionId))))) {
+        this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_admission_control_barriers VALUES (?,?)').run(targetId, row.key);
+      }
+    }
+    for (const row of rows) this.store.db.prepare('INSERT OR IGNORE INTO remote_sync_session_admissions VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(targetId, owner.userId, owner.scopeKey, deviceId, row.local_id, row.session_id, RemoteSessionAdmission.Unverified, row.sync_environment, archiveId);
+  }
+  set(owner: RemoteOwner, targetId: string, deviceId: string, row: SyncRow, admission: RemoteSessionAdmission): void {
+    const changed = this.store.db.prepare(`UPDATE remote_sync_session_admissions SET admission=? WHERE target_id=? AND local_session_id=?
+      AND owner_user_id=? AND owner_scope_key=? AND device_id=? AND remote_session_id=?`)
+      .run(admission, targetId, row.local_id, owner.userId, owner.scopeKey, deviceId, row.session_id).changes;
+    if (changed !== 1) throw new RemoteSyncStateError('Synchronization admission identity changed');
+  }
+  validateAssociated(owner: RemoteOwner, deviceId: string, targetId: string, row: SyncRow, previousId?: string): void {
+    const runIds = new Set<string>();
+    for (const item of readRemoteAdmissionAssociatedStates(this.store.db, row, targetId)) {
+      const direct = matchesSession(item.key, row.local_id);
+      const value = parse(item.value);
+      if (direct && !record(value)) throw new RemoteSyncStateError('Task synchronization evidence is malformed');
+      const associated = direct || record(value) && (value.localSessionId === row.local_id || value.remoteSessionId === row.session_id);
+      if (!associated || !record(value)) continue;
+      if (item.key.startsWith('inbox:') && !record(value.owner)) throw new RemoteSyncStateError('Task synchronization command owner is missing');
+      if (value.owner && !sameOwner(value.owner as RemoteOwner, owner) || value.deviceId && value.deviceId !== deviceId
+        || value.remoteSessionId && value.remoteSessionId !== row.session_id || value.sessionId && value.sessionId !== row.session_id) {
+        throw new RemoteSyncStateError('Task synchronization evidence identity conflicts');
+      }
+      if (value.targetId && value.targetId !== targetId && value.targetId !== previousId) throw new RemoteSyncStateError('Task synchronization execution target conflicts');
+      if ((item.key === `run:${row.local_id}` || item.key.startsWith(`runHistory:${row.local_id}:`)) && typeof value.runId === 'string') runIds.add(value.runId);
+    }
+    for (const runId of runIds) {
+      const saved = this.store.db.prepare('SELECT value FROM remote_state WHERE key=?').get(`syncRunTarget:${runId}`) as { value: string } | undefined;
+      if (saved && parse(saved.value) !== targetId && parse(saved.value) !== previousId) throw new RemoteSyncStateError('Task synchronization run target conflicts');
+    }
+  }
+}

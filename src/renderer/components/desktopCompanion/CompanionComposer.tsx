@@ -1,4 +1,5 @@
 import type { CoworkBrowserAnnotationMessageBatch } from '@shared/cowork/browserAnnotations';
+import type { CoworkLocalInput } from '@shared/cowork/inputAttachments';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -209,6 +210,7 @@ export default function CompanionComposer() {
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
     browserAnnotations?: CoworkBrowserAnnotationMessageBatch[],
     collaborationMode: CoworkCollaborationMode = CoworkCollaborationMode.Default,
+    localInput?: CoworkLocalInput,
   ): Promise<boolean> => {
     if (submittingRef.current) return false;
     submittingRef.current = true;
@@ -249,14 +251,15 @@ export default function CompanionComposer() {
         modelPresetId: start.selectedModel?.presetId,
         thinkingLevel: start.thinkingLevel,
         imageAttachments,
+        localInput,
         mediaSelection,
         mediaReferences,
         selectedTextSnippets,
         browserAnnotations,
       });
       failureStage = CompanionTaskFailureStage.SessionStart;
-      const { session, error, code, engineStatus: rejectedStatus } = await coworkService.startSession(plan.options);
-      if (!session) {
+      const { success, session, error, code, engineStatus: rejectedStatus } = await coworkService.startSession(plan.options);
+      if (!success || !session) {
         finish(false, companionTaskFailure({ error, code, engineStatus: rejectedStatus }, failureStage));
         showToast(error ? t('coworkErrorSessionStartFailed').replace('{error}', error) : t('desktopCompanionRequestFailed'));
         return false;

@@ -26,13 +26,14 @@ const renderCard = (permission: CoworkPermissionRequest, props: Record<string, u
   renderToStaticMarkup(createElement(QuestionDockCard, { request: permissionDockRequest(permission)!, ...props }));
 
 describe('QuestionDockCard', () => {
-  test('keeps a short heading and puts the full request in the scrollable body', () => {
+  test('keeps the heading and controls fixed while long subtitles and the full request scroll', () => {
     const html = renderCard({ ...plugin, toolInput: { questions: [{
       title: 'Generate?', question: 'Full scene description', subtitle: '200 credits', options,
     }] } });
     expect(html).toContain('<h2>Generate?</h2>');
     expect(html).toContain('<p class="cowork-question-description">Full scene description</p>');
-    expect(html.indexOf('200 credits')).toBeLessThan(html.indexOf('class="cowork-question-page"'));
+    expect(html.indexOf('200 credits')).toBeGreaterThan(html.indexOf('class="cowork-question-page"'));
+    expect(html.indexOf('200 credits')).toBeLessThan(html.indexOf('Full scene description'));
   });
 
   test('shows the pricing subtitle in a video confirmation', () => {
@@ -53,6 +54,15 @@ describe('QuestionDockCard', () => {
     expect(html).toContain('<textarea');
     expect(html).toContain('cowork-question-skip');
     expect(html).toContain('coworkQuestionDockQueue');
+  });
+
+  test.each([true, false])('saved-login confirmation hides free text and respects allowSkip=%s', allowSkip => {
+    const html = renderCard({ ...plugin, toolInput: { questions: [{
+      question: 'Allow saved login?', options, isOther: false, allowSkip,
+    }] } });
+    expect(html).not.toContain('<textarea');
+    expect(html.includes('cowork-question-skip')).toBe(allowSkip);
+    expect(html.match(/class="cowork-question-option/g)).toHaveLength(2);
   });
 
   test('native questions cannot be skipped and only accept typed answers when allowed', () => {

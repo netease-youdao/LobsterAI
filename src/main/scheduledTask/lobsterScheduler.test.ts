@@ -9,6 +9,7 @@ import {
   TaskStatus,
   WakeMode,
 } from '../../scheduledTask/constants';
+import { RemoteStore } from '../remote/remoteStore';
 import {
   computeNextRunAtMs,
   LobsterScheduler,
@@ -324,6 +325,33 @@ const recurringJob = {
   wakeMode: WakeMode.Now,
   payload: { kind: 'agentTurn', message: 'Wait' },
 } as const;
+
+test('isolates owner-bound DSH tasks and run history without claiming imported tasks', async () => {
+  const db = createMemoryDb();
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER)`);
+  const remote = new RemoteStore(db, { restoreRuns: false });
+  const alice = { userId: 'alice', scopeKey: 'personal' };
+  const bob = { userId: 'bob', scopeKey: 'personal' };
+  let actor = alice;
+  const scheduler = new LobsterScheduler({ db, ownership: { remote, remoteCreationOwner: () => actor },
+    executor: async () => ({ summary: 'private summary' }) });
+  const task = scheduler.createTask(recurringJob);
+  scheduler.importLegacyJobs([{ id: 'legacy', input: recurringJob }]);
+  await scheduler.runNow(task.id);
+  expect(remote.sourceOwner(`cron:${task.id}`)).toEqual(alice);
+  expect(remote.sourceOwner('cron:legacy')).toBeNull();
+  actor = bob;
+  expect(scheduler.listTasks().map(entry => entry.id)).toEqual(['legacy']);
+  expect(scheduler.getTask(task.id)).toBeNull();
+  expect(scheduler.updateTask(task.id, { name: 'changed' })).toBeNull();
+  expect(scheduler.deleteTask(task.id)).toBe(false);
+  expect(scheduler.listAllRuns()).toEqual([]);
+  expect(scheduler.countRuns(task.id)).toBe(0);
+  await expect(scheduler.runNow(task.id)).rejects.toThrow();
+  actor = alice;
+  expect(scheduler.listRuns(task.id)[0]?.summary).toBe('private summary');
+});
 
 test('scheduler and chat stops both close the run, including late completion and duplicate run requests', async () => {
   const scheduler = new LobsterScheduler({

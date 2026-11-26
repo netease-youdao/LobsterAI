@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import { SubagentCollaborationMode } from '../../shared/agent';
+import { TrustedWriteContext, withTrustedMigrationWrite } from './remoteWriteContext';
 
 interface AgentCollaborationRow {
   id: string;
@@ -21,25 +22,6 @@ function readPeerIds(json: string, agentId: string): Set<string> {
     // A malformed legacy list contains no reliable selection.
   }
   return new Set();
-}
-
-// Remote-connect databases require an app-owned write context for migrations
-// that update agents. The caller's transaction covers both the flag and the rows.
-function withLegacyAgentWriteContext(db: Database.Database, write: () => void): void {
-  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_write_context'").get()) {
-    return write();
-  }
-  const trusted = db.prepare('SELECT trusted FROM agent_write_context WHERE id = 1').pluck().get();
-  if (trusted === 1) return write();
-  if (trusted !== 0) throw new Error('Invalid Agent write context');
-
-  const setTrusted = db.prepare('UPDATE agent_write_context SET trusted = ? WHERE id = 1');
-  setTrusted.run(1);
-  try {
-    write();
-  } finally {
-    setTrusted.run(0);
-  }
 }
 
 export function migrateAgentCollaboration(db: Database.Database): boolean {
@@ -78,7 +60,7 @@ export function migrateAgentCollaboration(db: Database.Database): boolean {
       SET subagent_collaboration_mode = ?, subagent_allow_agent_ids_snapshot = ?
       WHERE id = ?
     `);
-    withLegacyAgentWriteContext(db, () => {
+    withTrustedMigrationWrite(db, TrustedWriteContext.Agent, () => {
       for (const row of rows) {
         let mode = row.subagent_collaboration_mode;
         if (!preserveMode && mode === SubagentCollaborationMode.All) {

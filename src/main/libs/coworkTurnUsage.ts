@@ -53,6 +53,8 @@ export type CoworkTurnUsageServiceDeps = {
   /** Model requests the local token proxy forwarded for a trace. */
   getTraceStats: (traceId: string) => TurnTraceStats | null;
   emitTurnUsage: (event: CoworkTurnUsageEvent) => void;
+  /** Capture account/session access once; the fence must stay valid across awaits. */
+  captureSessionAccess?: (sessionId: string) => (() => boolean);
   /** Removes the traces and media tasks that IM/cron runs reported for these run ids. */
   claimNativeRunTurnUsage?: (runIds: string[]) => NativeRunTurnUsage | null;
   now?: () => number;
@@ -61,6 +63,7 @@ export type CoworkTurnUsageServiceDeps = {
 
 /** The ledger is written before each proxied stream ends; one retry covers a slow commit. */
 const PARTIAL_RETRY_DELAY_MS = 1_500;
+const SUMMARY_REQUEST_TIMEOUT_MS = 15_000;
 /** Cancellation can reach the ledger after the local stream has already closed. */
 const STOPPED_TURN_RETRY_DELAYS_MS = [PARTIAL_RETRY_DELAY_MS, 3_000, 5_000];
 /** Conversation tail searched for replies that follow the user message being bound. */
@@ -85,12 +88,15 @@ export class CoworkTurnUsageService {
     promise: Promise<CoworkTurnUsage | null>;
     rerun: boolean;
     mode: SettleMode;
+    isCurrent: () => boolean;
   }>();
 
   constructor(private readonly deps: CoworkTurnUsageServiceDeps) {}
 
   /** Runs when a turn completes or fails; turns without package-model requests are skipped. */
   async settleLatestTurn(sessionId: string, nativeRuns?: NativeTurnRuns): Promise<void> {
+    const isCurrent = this.deps.captureSessionAccess?.(sessionId) ?? (() => true);
+    if (!isCurrent()) return;
     if (nativeRuns?.runIds.length) this.bindNativeRunUsage(sessionId, nativeRuns);
     const message = this.deps.getStore().getLatestUserMessage(sessionId);
     await this.settleFinishedTurn(sessionId, message, { afterTurn: true });
@@ -167,6 +173,8 @@ export class CoworkTurnUsageService {
 
   /** Bind a generated task to the user message captured before the async tool request. */
   recordMediaTask(sessionId: string, userMessageId: string, taskId: unknown): void {
+    const isCurrent = this.deps.captureSessionAccess?.(sessionId) ?? (() => true);
+    if (!isCurrent()) return;
     const id = String(taskId ?? '');
     if (!/^[1-9]\d*$/.test(id)) return;
     const store = this.deps.getStore();
@@ -185,14 +193,15 @@ export class CoworkTurnUsageService {
 
   /** A background request can finish after a different user turn has started. */
   refreshExactTrace(origin: { traceId: string; sessionId: string; owner: string }): Promise<CoworkTurnUsage | null> {
-    if (this.deps.getSessionKey?.() !== origin.owner) return Promise.resolve(null);
+    const hasAccess = this.deps.captureSessionAccess?.(origin.sessionId) ?? (() => true);
+    if (!hasAccess() || this.deps.getSessionKey?.() !== origin.owner) return Promise.resolve(null);
     const target = this.deps.getStore().findUserMessageByTrace(origin.traceId, origin.sessionId);
     if (!target) return Promise.resolve(null);
     // Foreground steps get one summary at turn end. An already settled turn
     // remains refreshable even while a heartbeat or the next turn is running.
     if (!getCoworkTurnUsage(target.message.metadata)
       && this.deps.isTurnActive?.(origin.sessionId, target.message.id)
-      && !this.inFlight.has(JSON.stringify([origin.owner, origin.sessionId, origin.traceId]))) return Promise.resolve(null);
+      && !this.inFlight.get(JSON.stringify([origin.owner, origin.sessionId, origin.traceId]))?.isCurrent()) return Promise.resolve(null);
     return this.settle(origin.sessionId, target.message.id, { afterTurn: true, afterRequest: true }, origin.owner);
   }
 
@@ -202,42 +211,48 @@ export class CoworkTurnUsageService {
     mode: SettleMode,
     owner = this.deps.getSessionKey?.(),
   ): Promise<CoworkTurnUsage | null> {
+    const hasAccess = this.deps.captureSessionAccess?.(sessionId) ?? (() => true);
+    const isCurrent = () => hasAccess() && this.deps.getSessionKey?.() === owner;
+    if (!isCurrent()) return Promise.resolve(null);
     const trace = getCoworkLlmTrace(this.deps.getStore().getMessage(sessionId, messageId)?.metadata);
     if (!trace) return Promise.resolve(null);
     const key = JSON.stringify([owner, sessionId, trace.traceId]);
     const existing = this.inFlight.get(key);
-    if (existing) {
+    if (existing?.isCurrent()) {
       if (mode.afterRequest || mode.afterStop) {
         existing.rerun = true;
         existing.mode = { ...existing.mode, ...mode };
       }
       return existing.promise;
     }
-    const state = { promise: Promise.resolve<CoworkTurnUsage | null>(null), rerun: false, mode };
+    const state = { promise: Promise.resolve<CoworkTurnUsage | null>(null), rerun: false, mode, isCurrent };
     state.promise = (async () => {
       let result: CoworkTurnUsage | null;
       do {
         state.rerun = false;
+        if (!isCurrent()) return null;
         // Explicit manual refresh may target a fork copy. Only recovery of a
         // replaced message needs the stricter origin lookup used by callbacks.
         const store = this.deps.getStore();
         const original = store.getMessage(sessionId, messageId);
         const target = getCoworkLlmTrace(original?.metadata)?.traceId === trace.traceId ? original
           : store.findUserMessageByTrace(trace.traceId, sessionId)?.message;
-        if (!target || this.deps.getSessionKey?.() !== owner) return null;
-        result = await this.runSettle(sessionId, target.id, state.mode, owner);
-      } while (state.rerun && this.deps.getSessionKey?.() === owner);
+        if (!target || !isCurrent()) return null;
+        result = await this.runSettle(sessionId, target.id, state.mode, isCurrent);
+      } while (state.rerun && isCurrent());
       return result;
     })().finally(() => {
-      this.inFlight.delete(key);
+      // An account change may already have replaced this request.
+      if (this.inFlight.get(key) === state) this.inFlight.delete(key);
     });
     this.inFlight.set(key, state);
     return state.promise;
   }
 
   private async runSettle(
-    sessionId: string, messageId: string, mode: SettleMode, owner: string | null | undefined,
+    sessionId: string, messageId: string, mode: SettleMode, isCurrent: () => boolean,
   ): Promise<CoworkTurnUsage | null> {
+    if (!isCurrent()) return null;
     const message = this.deps.getStore().getMessage(sessionId, messageId);
     const trace = getCoworkLlmTrace(message?.metadata);
     if (!message || message.type !== 'user' || !trace) return null;
@@ -266,7 +281,7 @@ export class CoworkTurnUsageService {
     }
     if (mode.afterTurn && !previous) {
       const pending = this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Pending, observation);
-      if (observedRequests !== undefined) this.persist(sessionId, messageId, pending);
+      this.persist(sessionId, messageId, pending);
       this.deps.emitTurnUsage({
         sessionId,
         messageId,
@@ -275,8 +290,8 @@ export class CoworkTurnUsageService {
     }
 
     const mediaTaskIds = message.metadata?.turnMediaTaskIds ?? [];
-    let usage = await this.fetchUsage(trace, observation, mediaTaskIds, owner);
-    if (this.deps.getSessionKey?.() !== owner) return null;
+    let usage = await this.fetchUsage(trace, observation, mediaTaskIds, isCurrent);
+    if (!isCurrent()) return null;
     const retryDelays = mode.afterStop ? STOPPED_TURN_RETRY_DELAYS_MS : [PARTIAL_RETRY_DELAY_MS];
     for (const delay of mode.afterTurn ? retryDelays : []) {
       if (usage && usage.status !== CoworkTurnUsageStatus.Partial
@@ -287,11 +302,11 @@ export class CoworkTurnUsageService {
         this.deps.emitTurnUsage({ sessionId, messageId: resultMessageId, turnUsage: usage });
       }
       await this.sleep(delay);
-      if (this.deps.getSessionKey?.() !== owner) return null;
-      const refreshed = await this.fetchUsage(trace, observation, mediaTaskIds, owner);
+      if (!isCurrent()) return null;
+      const refreshed = await this.fetchUsage(trace, observation, mediaTaskIds, isCurrent);
       if (refreshed && (!usage || refreshed.requestCount >= usage.requestCount)) usage = refreshed;
     }
-    if (this.deps.getSessionKey?.() !== owner) return null;
+    if (!isCurrent()) return null;
 
     // Account switches and ledger delays must not replace a saved summary with fewer requests.
     const hasPreviousSummary = previous && previous.status !== CoworkTurnUsageStatus.Failed
@@ -301,8 +316,9 @@ export class CoworkTurnUsageService {
     }
     const result = usage
       ?? (hasPreviousSummary ? previous : this.buildEmptyUsage(trace, CoworkTurnUsageStatus.Failed, observation));
+    if (!isCurrent()) return null;
     const resultMessageId = this.persist(sessionId, messageId, result);
-    if (!resultMessageId) return null;
+    if (!resultMessageId || !isCurrent()) return null;
     this.deps.emitTurnUsage({ sessionId, messageId: resultMessageId, turnUsage: result });
     const logLine = `[TurnUsage] session ${sessionId} message ${resultMessageId} trace ${trace.traceId}:`
       + ` status=${result.status} requests=${result.requestCount}`
@@ -313,24 +329,25 @@ export class CoworkTurnUsageService {
     } else {
       console.warn(logLine);
     }
-    return result;
+    return isCurrent() ? result : null;
   }
 
   private async fetchUsage(
     trace: CoworkLlmTrace,
     observation: TurnUsageObservation,
     mediaTaskIds: string[],
-    owner: string | null | undefined,
+    isCurrent: () => boolean,
   ): Promise<CoworkTurnUsage | null> {
+    if (!isCurrent()) return null;
     if (!this.deps.hasAuthTokens()) {
       console.warn(`[TurnUsage] cannot fetch trace ${trace.traceId}: not signed in.`);
       return null;
     }
     const summaries: unknown[] = [];
     for (const [index, traceId] of getCoworkLlmTraceIds(trace).entries()) {
-      if (this.deps.getSessionKey?.() !== owner) return null;
+      if (!isCurrent()) return null;
       // Media costs are keyed by task, not trace; add them once.
-      const summary = await this.fetchTraceSummary(traceId, trace.startedAt, index === 0 ? mediaTaskIds : []);
+      const summary = await this.fetchTraceSummary(traceId, trace.startedAt, index === 0 ? mediaTaskIds : [], isCurrent);
       if (!summary) return null;
       summaries.push(summary.data);
     }
@@ -356,16 +373,23 @@ export class CoworkTurnUsageService {
     traceId: string,
     startedAt: number,
     mediaTaskIds: string[],
+    isCurrent: () => boolean,
   ): Promise<{ data: unknown } | null> {
+    if (!isCurrent()) return null;
     const params = new URLSearchParams({ since: String(Math.floor(startedAt)) });
     if (mediaTaskIds.length > 0) params.set('mediaTaskIds', mediaTaskIds.join(','));
     const url = this.deps.buildServerUrl(`${LLM_TRACE_USAGE_API_PATH}/${traceId}?${params}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SUMMARY_REQUEST_TIMEOUT_MS);
     try {
       const response = await this.deps.fetchWithAuth(url, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+        signal: controller.signal,
       });
+      if (!isCurrent()) return null;
       const body = await response.json() as { code?: number; message?: string; data?: unknown };
+      if (!isCurrent()) return null;
       if (!response.ok || body.code !== 0) {
         console.warn(
           `[TurnUsage] summary request for trace ${traceId} failed: http=${response.status} code=${body.code ?? 'none'}.`,
@@ -376,6 +400,9 @@ export class CoworkTurnUsageService {
     } catch (error) {
       console.warn(`[TurnUsage] summary request for trace ${traceId} errored.`, error);
       return null;
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
     }
   }
 

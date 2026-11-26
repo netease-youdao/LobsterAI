@@ -1,3 +1,6 @@
+import type { OwnershipApi } from '@shared/ownership/types';
+import type { RemoteSettingsApi } from '@shared/remote/constants';
+
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type { GenerateSessionTitleRequest } from '../../common/sessionTitle';
 import type { AccountMenuMoreBridge } from '../../shared/accountMenuMore/constants';
@@ -62,6 +65,7 @@ import type {
   AgentBrowserHostZoomRequest,
 } from '../../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
+import type { ApprovalDecisionOutcome, ApprovalState } from '../../shared/cowork/approval';
 import type {
   BrowserAnnotationRect,
   BrowserAnnotationScreenshotRef,
@@ -422,6 +426,7 @@ interface CoworkPermissionRequest {
   toolInput: Record<string, unknown>;
   requestId: string;
   toolUseId?: string | null;
+  approval?: ApprovalState;
 }
 
 type OpenClawEnginePhase = SharedOpenClawEnginePhase;
@@ -716,6 +721,8 @@ interface HtmlShareResult {
 }
 
 interface IElectronAPI {
+  ownership: OwnershipApi;
+  remote: RemoteSettingsApi;
   messageSpeech: MessageSpeechBridge;
   desktopCompanion: DesktopCompanionBridge;
   platform: string;
@@ -1082,6 +1089,7 @@ interface IElectronAPI {
       modelOverride?: string;
       modelPresetId?: ModelPresetId;
       thinkingLevel?: string;
+      localInput?: import('../../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection;
       mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
@@ -1112,6 +1120,7 @@ interface IElectronAPI {
       resolvedKitCapabilities?: ResolvedKitCapabilities;
       selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
+      localInput?: import('../../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection;
       mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
@@ -1355,10 +1364,14 @@ interface IElectronAPI {
       parentSessionId: string;
       runId: string;
     }) => Promise<{ success: boolean; deleted?: boolean; error?: string }>;
+    listPendingPermissions?: () => Promise<{ success: boolean; items: Array<{ sessionId: string; request: CoworkPermissionRequest }> }>;
     respondToPermission: (options: {
       requestId: string;
       result: CoworkPermissionResult;
-    }) => Promise<{ success: boolean; error?: string }>;
+      submissionId?: string;
+      expectedVersion?: string;
+      operationDigest?: string;
+    }) => Promise<{ success: boolean; outcome?: ApprovalDecisionOutcome | { kind: 'question_resolved' }; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
     getTempStorageUsage: () => Promise<CoworkTempStorageUsageResult>;
@@ -1452,6 +1465,7 @@ interface IElectronAPI {
     onStreamPermission: (
       callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void,
     ) => () => void;
+    onStreamPermissionState?: (callback: (data: { sessionId: string; state: ApprovalState }) => void) => () => void;
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => () => void;
     getPendingQuestions?: () => Promise<CoworkPermissionRequest[]>;
     mediaConfirmation?: (command: import('../../shared/media/confirmation').MediaConfirmationCommand) => Promise<{ success: boolean }>;

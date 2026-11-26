@@ -1,14 +1,15 @@
 import {
   type BrowserCredentialSummary,
+  BrowserCredentialTimeout,
   BrowserCredentialUseMode,
   type BrowserCredentialUseMode as BrowserCredentialUseModeValue,
 } from '../../shared/browserCredentials/constants';
-import type { AskUserRequest, AskUserResponse } from '../libs/mcpBridgeServer';
+import type { AskUserOptions, AskUserRequest, AskUserResponse } from '../libs/mcpBridgeServer';
 
-const APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_TASK_GRANTS = 1_000;
 
 export interface BrowserCredentialApprovalRequest {
+  signal?: AbortSignal;
   sessionId?: string;
   sessionKey?: string;
   origin: string;
@@ -27,7 +28,7 @@ export interface BrowserCredentialApprovalDeps {
   askUser: (
     questions: AskUserRequest['questions'],
     timeoutMs: number,
-    options: { sessionKey?: string },
+    options: AskUserOptions,
   ) => Promise<AskUserResponse | null>;
   translate: (key: string, params?: Record<string, string | number>) => string;
 }
@@ -42,7 +43,7 @@ export class BrowserCredentialApprovalService {
   async requestApproval(
     request: BrowserCredentialApprovalRequest,
   ): Promise<BrowserCredentialApprovalResult> {
-    if (request.useMode === BrowserCredentialUseMode.Disabled || request.candidates.length === 0) {
+    if (request.signal?.aborted || request.useMode === BrowserCredentialUseMode.Disabled || request.candidates.length === 0) {
       return { approved: false };
     }
 
@@ -59,10 +60,14 @@ export class BrowserCredentialApprovalService {
       : this.buildCredentialSelectionQuestion(request, candidates);
     const response = await this.deps.askUser(
       [question],
-      APPROVAL_TIMEOUT_MS,
-      { sessionKey: request.sessionKey },
+      BrowserCredentialTimeout.Approval,
+      {
+        sessionKey: request.sessionKey, signal: request.signal,
+        // Unbound requests and forms outside the remote option budget remain local.
+        localOnly: !request.sessionId?.trim() || !request.sessionKey?.trim() || question.options.length > 4,
+      },
     );
-    if (!response || response.behavior !== 'allow') {
+    if (request.signal?.aborted || !response || response.behavior !== 'allow') {
       return { approved: false };
     }
 
@@ -108,6 +113,8 @@ export class BrowserCredentialApprovalService {
     const reason = request.reason?.trim().slice(0, 240);
     return {
       question,
+      isOther: false,
+      allowSkip: true,
       header: this.deps.translate('browserCredentialApprovalHeader'),
       title: this.deps.translate('browserCredentialApprovalTitle'),
       subtitle: reason
@@ -132,6 +139,8 @@ export class BrowserCredentialApprovalService {
   ): AskUserRequest['questions'][number] {
     return {
       question: this.deps.translate('browserCredentialSelectionQuestion', { origin: request.origin }),
+      isOther: false,
+      allowSkip: true,
       header: this.deps.translate('browserCredentialApprovalHeader'),
       title: this.deps.translate('browserCredentialSelectionTitle'),
       subtitle: this.deps.translate('browserCredentialSelectionSubtitle'),

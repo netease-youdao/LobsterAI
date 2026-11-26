@@ -152,3 +152,31 @@ describe('normalizeAuthQuota', () => {
     });
   });
 });
+
+
+describe('temporarily unavailable quota during authenticated login', () => {
+  test('keeps unknown membership and complete balance distinct from free and zero', () => {
+    const quota = normalizeAuthQuota({ quotaUnavailable: true, freeCreditsTotal: 300, freeCreditsUsed: 20 }, {
+      ...labels, fallbackSubscriptionStatus: AuthSubscriptionStatus.Active, unavailablePlanName: 'Unavailable',
+    });
+    expect(quota).toMatchObject({ quotaUnavailable: true, planName: 'Unavailable',
+      subscriptionStatus: AuthSubscriptionStatus.Unavailable, creditsLimit: null, creditsUsed: null, creditsRemaining: null,
+      freeCreditsTotal: 300, freeCreditsUsed: 20 });
+    expect(authQuotaGateStateFromQuota(quota)).toEqual({ subscriptionStatus: AuthSubscriptionStatus.Unavailable, mediaGenerationEntitled: false });
+  });
+  test('does not turn partial or cached membership into media or publishing permission', () => {
+    const quota = normalizeAuthQuota({ quotaUnavailable: true, subscriptionStatus: AuthSubscriptionStatus.Active,
+      hasPaidCredits: false }, labels);
+    expect(quota).toMatchObject({ mediaGenerationEntitled: false, shareEntitled: false, deploymentEntitled: false });
+  });
+  test('accepts the existing explicit independent media entitlement but not a membership inference', () => {
+    expect(normalizeAuthQuota({ quotaUnavailable: true, hasPaidCredits: true }, labels).mediaGenerationEntitled).toBe(true);
+    expect(normalizeAuthQuota({ quotaUnavailable: true, hasPaidCredits: true, mediaGenerationEntitled: false }, labels).mediaGenerationEntitled).toBe(false);
+  });
+  test('preserves only independently confirmed explicit server entitlements', () => {
+    const quota = normalizeAuthQuota({ quotaUnavailable: true, subscriptionStatus: AuthSubscriptionStatus.Active,
+      hasPaidCredits: true, mediaGenerationEntitled: true, shareEntitled: true, deploymentEntitled: false }, labels);
+    expect(quota).toMatchObject({ subscriptionStatus: AuthSubscriptionStatus.Unavailable, creditsRemaining: null,
+      hasPaidCredits: true, mediaGenerationEntitled: true, shareEntitled: true, deploymentEntitled: false });
+  });
+});

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { CoworkTurnUsageStatus, getCoworkLlmTrace } from '../../shared/cowork/llmTurnUsage';
 import type { CoworkMessage } from '../coworkStore';
-import { type CoworkTurnUsageEvent, CoworkTurnUsageService } from './coworkTurnUsage';
+import { type CoworkTurnUsageEvent, CoworkTurnUsageService, type CoworkTurnUsageServiceDeps } from './coworkTurnUsage';
 import { clearLlmUsageContexts, getLlmUsageHeaders, LlmUsageHeader } from './llmUsageContext';
 import { claimNativeRunTurnUsage, clearNativeRunTurnUsage, type NativeRunTurnUsage, recordNativeRunLlmTrace } from './nativeRunTurnUsage';
 
@@ -28,6 +28,12 @@ const jsonResponse = (body: unknown, status = 200): Response => (
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 );
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 type Harness = {
   service: CoworkTurnUsageService;
   message: CoworkMessage;
@@ -35,6 +41,7 @@ type Harness = {
   events: CoworkTurnUsageEvent[];
   updateMessage: ReturnType<typeof vi.fn>;
   sleep: ReturnType<typeof vi.fn>;
+  getStore: ReturnType<typeof vi.fn>;
   stats: { requests: number; completed: number } | null;
   statsByTrace?: Record<string, { requests: number; completed: number }>;
   conversation?: CoworkMessage[];
@@ -45,7 +52,11 @@ type Harness = {
   claimNativeRunTurnUsage: ReturnType<typeof vi.fn<(runIds: string[]) => NativeRunTurnUsage | null>>;
 };
 
-const createHarness = (options: { metadata?: Record<string, unknown>; signedIn?: boolean } = {}): Harness => {
+const createHarness = (options: {
+  metadata?: Record<string, unknown>;
+  signedIn?: boolean;
+  captureSessionAccess?: CoworkTurnUsageServiceDeps['captureSessionAccess'];
+} = {}): Harness => {
   const message: CoworkMessage = {
     id: MESSAGE_ID,
     type: 'user',
@@ -59,6 +70,19 @@ const createHarness = (options: { metadata?: Record<string, unknown>; signedIn?:
   const events: CoworkTurnUsageEvent[] = [];
   const fetchWithAuth = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>();
   const sleep = vi.fn(async () => {});
+  const getStore = vi.fn(() => ({
+    getMessage: (sessionId: string, messageId: string) => (
+      sessionId === SESSION_ID && messageId === harness.message.id ? harness.message : null
+    ),
+    getLatestUserMessage: (sessionId: string) => (sessionId === SESSION_ID ? harness.latestMessage ?? harness.message : null),
+    findUserMessageByTrace: (traceId: string, sessionId?: string) => (
+      sessionId === SESSION_ID && !harness.isForkCopy && harness.message.type === 'user'
+        && getCoworkLlmTrace(harness.message.metadata)?.traceId === traceId
+        ? { sessionId, message: harness.message } : null
+    ),
+    getRecentConversationMessages: () => harness.conversation ?? [harness.message],
+    updateMessage,
+  }));
   const claimNativeRunTurnUsage = vi.fn<(runIds: string[]) => NativeRunTurnUsage | null>(() => null);
   const harness: Harness = {
     message,
@@ -66,25 +90,14 @@ const createHarness = (options: { metadata?: Record<string, unknown>; signedIn?:
     events,
     updateMessage,
     sleep,
+    getStore,
     stats: { requests: 3, completed: 3 },
     owner: 'account-a:1',
     claimNativeRunTurnUsage,
     service: undefined as unknown as CoworkTurnUsageService,
   };
   harness.service = new CoworkTurnUsageService({
-    getStore: () => ({
-      getMessage: (sessionId, messageId) => (
-        sessionId === SESSION_ID && messageId === harness.message.id ? harness.message : null
-      ),
-      getLatestUserMessage: sessionId => (sessionId === SESSION_ID ? harness.latestMessage ?? harness.message : null),
-      findUserMessageByTrace: (traceId, sessionId) => (
-        sessionId === SESSION_ID && !harness.isForkCopy && harness.message.type === 'user'
-          && getCoworkLlmTrace(harness.message.metadata)?.traceId === traceId
-          ? { sessionId, message: harness.message } : null
-      ),
-      getRecentConversationMessages: () => harness.conversation ?? [harness.message],
-      updateMessage,
-    }),
+    getStore,
     fetchWithAuth,
     hasAuthTokens: () => options.signedIn ?? true,
     getSessionKey: () => harness.owner,
@@ -92,6 +105,7 @@ const createHarness = (options: { metadata?: Record<string, unknown>; signedIn?:
     buildServerUrl: pathWithQuery => `https://server.test${pathWithQuery}&keyfrom=lobsterai`,
     getTraceStats: traceId => (harness.statsByTrace ? harness.statsByTrace[traceId] ?? null : harness.stats),
     emitTurnUsage: event => events.push(event),
+    captureSessionAccess: options.captureSessionAccess,
     claimNativeRunTurnUsage,
     now: () => 5_000,
     sleep,
@@ -139,6 +153,26 @@ describe('CoworkTurnUsageService', () => {
         observedCompletedRequests: 3,
       },
     });
+  });
+
+  test('times out a stalled summary body and allows a later refresh', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    harness.fetchWithAuth.mockImplementationOnce(async (_url, init) => new Response(new ReadableStream({
+      start: controller => init?.signal?.addEventListener('abort', () => controller.error(new Error('Aborted')), { once: true }),
+    })));
+    try {
+      const stalled = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(harness.fetchWithAuth.mock.calls[0][1]?.signal?.aborted).toBe(true);
+      expect((await stalled)?.status).toBe(CoworkTurnUsageStatus.Failed);
+      expect(vi.getTimerCount()).toBe(0);
+
+      harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+      expect((await harness.service.refresh(SESSION_ID, MESSAGE_ID))?.status).toBe(CoworkTurnUsageStatus.Settled);
+      expect(harness.fetchWithAuth).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 
   test('settles a stop during tool execution without another model completion', async () => {
@@ -574,6 +608,124 @@ describe('CoworkTurnUsageService', () => {
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
   });
 
+  test('rejects inaccessible sessions before reading messages or fetching usage', async () => {
+    const harness = createHarness({ captureSessionAccess: () => () => false });
+
+    await harness.service.settleLatestTurn(SESSION_ID);
+    await expect(harness.service.refresh(SESSION_ID, MESSAGE_ID)).resolves.toBeNull();
+    await expect(harness.service.refreshExactTrace({
+      traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner,
+    })).resolves.toBeNull();
+
+    expect(harness.getStore).not.toHaveBeenCalled();
+    expect(harness.fetchWithAuth).not.toHaveBeenCalled();
+    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
+  test('does not return a cached summary after access changes while fetching', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(3) }));
+    await harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    harness.updateMessage.mockClear();
+    harness.events.length = 0;
+    const response = deferred<Response>();
+    harness.fetchWithAuth.mockReturnValueOnce(response.promise);
+
+    const request = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    allowed = false;
+    response.resolve(jsonResponse({ code: 4000 }));
+
+    await expect(request).resolves.toBeNull();
+    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
+  test('drops a summary when access changes while reading the response body', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    const body = deferred<unknown>();
+    const reading = deferred<void>();
+    const response = jsonResponse(null);
+    vi.spyOn(response, 'json').mockImplementation(() => {
+      reading.resolve();
+      return body.promise;
+    });
+    harness.fetchWithAuth.mockResolvedValueOnce(response);
+
+    const request = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    await reading.promise;
+    allowed = false;
+    body.resolve({ code: 0, data: summary(3) });
+
+    await expect(request).resolves.toBeNull();
+    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
+  test('persists pending before access changes and never writes a result after access is revoked', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: summary(2) }));
+    harness.sleep.mockImplementationOnce(async () => { allowed = false; });
+
+    await harness.service.settleLatestTurn(SESSION_ID);
+
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage.mock.calls[0][2].metadata.turnUsage.status).toBe(CoworkTurnUsageStatus.Pending);
+    expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
+  });
+
+  test('media-only usage includes task ids and keeps the access fence during an empty-ledger retry', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    harness.stats = null;
+    harness.service.recordMediaTask(SESSION_ID, MESSAGE_ID, '123');
+    harness.updateMessage.mockClear();
+    harness.fetchWithAuth.mockResolvedValueOnce(jsonResponse({ code: 0, data: {
+      ...summary(0, 0), models: [], uncachedInputTokens: 0, cacheReadTokens: 0, outputTokens: 0,
+    } }));
+    harness.sleep.mockImplementationOnce(async () => { allowed = false; });
+
+    await harness.service.settleLatestTurn(SESSION_ID);
+
+    expect(new URL(harness.fetchWithAuth.mock.calls[0][0]).searchParams.get('mediaTaskIds')).toBe('123');
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage.mock.calls[0][2].metadata.turnUsage.status).toBe(CoworkTurnUsageStatus.Pending);
+    expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
+    harness.service.recordMediaTask(SESSION_ID, MESSAGE_ID, '456');
+    expect(harness.message.metadata?.turnMediaTaskIds).toEqual(['123']);
+  });
+
+  test('reentry after an account change does not share or remove a newer in-flight request', async () => {
+    let epoch = 0;
+    const harness = createHarness({ captureSessionAccess: () => {
+      const captured = epoch;
+      return () => captured === epoch;
+    } });
+    const oldResponse = deferred<Response>();
+    const currentResponse = deferred<Response>();
+    harness.fetchWithAuth.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(currentResponse.promise);
+
+    const oldRequest = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    epoch += 1;
+    const currentRequest = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    oldResponse.resolve(jsonResponse({ code: 0, data: summary(3, 100) }));
+    await expect(oldRequest).resolves.toBeNull();
+    const joinedRequest = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    expect(joinedRequest).toBe(currentRequest);
+    currentResponse.resolve(jsonResponse({ code: 0, data: summary(3, 20) }));
+
+    await expect(currentRequest).resolves.toMatchObject({ creditsUsed: 20 });
+    await expect(joinedRequest).resolves.toMatchObject({ creditsUsed: 20 });
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.events.map(event => event.turnUsage.creditsUsed)).toEqual([20]);
+  });
+
   test('ignores refresh requests for unknown or non-user messages', async () => {
     const harness = createHarness();
 
@@ -628,6 +780,26 @@ describe('CoworkTurnUsageService', () => {
     expect(harness.message.metadata?.turnUsage).toMatchObject({ requestCount: 5 });
   });
 
+  test('cancels a queued exact-trace refresh when session access is revoked', async () => {
+    let allowed = true;
+    const harness = createHarness({ captureSessionAccess: () => () => allowed });
+    const response = deferred<Response>();
+    harness.fetchWithAuth.mockReturnValueOnce(response.promise);
+
+    const first = harness.service.refresh(SESSION_ID, MESSAGE_ID);
+    const second = harness.service.refreshExactTrace({
+      traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner,
+    });
+    allowed = false;
+    response.resolve(jsonResponse({ code: 0, data: summary(3) }));
+
+    await expect(first).resolves.toBeNull();
+    await expect(second).resolves.toBeNull();
+    expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([]);
+  });
+
   test('discards a late summary when the account changes before its body is read', async () => {
     const harness = createHarness();
     const origin = { traceId: TRACE_ID, sessionId: SESSION_ID, owner: harness.owner };
@@ -641,8 +813,9 @@ describe('CoworkTurnUsageService', () => {
     await expect(harness.service.refreshExactTrace(origin)).resolves.toBeNull();
     await expect(harness.service.refreshExactTrace(origin)).resolves.toBeNull();
 
-    expect(harness.updateMessage).not.toHaveBeenCalled();
-    expect(harness.events.some(event => event.turnUsage.status === CoworkTurnUsageStatus.Settled)).toBe(false);
+    expect(harness.updateMessage).toHaveBeenCalledTimes(1);
+    expect(harness.updateMessage.mock.calls[0][2].metadata.turnUsage.status).toBe(CoworkTurnUsageStatus.Pending);
+    expect(harness.events.map(event => event.turnUsage.status)).toEqual([CoworkTurnUsageStatus.Pending]);
     expect(harness.fetchWithAuth).toHaveBeenCalledTimes(1);
   });
 });

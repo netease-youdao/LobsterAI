@@ -7,6 +7,8 @@ import { MainView } from '../types/navigation';
  *   lobsterai://view/<view>     switches the main view
  * They are handled in the renderer; the OS-level lobsterai:// protocol still only serves auth callbacks.
  */
+export const RemoteControlDeepLink = 'remoteControl' as const;
+
 export const AppDeepLinkEvent = {
   Navigate: 'app:deepLinkNavigate',
 } as const;
@@ -18,6 +20,7 @@ const MAIN_VIEWS: readonly MainView[] = Object.values(MainView).filter(
 );
 
 export type AppDeepLinkTarget =
+  | { kind: typeof RemoteControlDeepLink }
   | { kind: 'settings'; tab: SettingsTab }
   | { kind: 'view'; view: MainView };
 
@@ -30,6 +33,7 @@ const SETTINGS_TAB_LABEL_KEYS: Record<SettingsTab, string> = {
   [SettingsTabId.CoworkAgentEngine]: 'coworkAgentEngine',
   [SettingsTabId.Model]: 'settingsCustomModel',
   [SettingsTabId.Im]: 'imBot',
+  [SettingsTabId.RemoteDevices]: 'remoteDeviceManagement',
   [SettingsTabId.BrowserWebAccess]: 'browserWebAccessTab',
   [SettingsTabId.Email]: 'emailTab',
   [SettingsTabId.CoworkMemory]: 'coworkMemoryTitle',
@@ -60,6 +64,7 @@ export const describeAppDeepLinkTarget = (
   target: AppDeepLinkTarget,
   translate: (key: string) => string,
 ): string => {
+  if (target.kind === RemoteControlDeepLink) return translate('remoteTitle');
   if (target.kind === 'settings') {
     return `${translate(SETTINGS_LABEL_KEY)} · ${translate(SETTINGS_TAB_LABEL_KEYS[target.tab])}`;
   }
@@ -76,6 +81,7 @@ export const parseAppDeepLink = (url: string): AppDeepLinkTarget | null => {
   if (!match) return null;
   const [, kind, target] = match;
   if (kind === 'settings') {
+    if (target === RemoteControlDeepLink) return { kind: RemoteControlDeepLink };
     const tab = SETTINGS_TABS.find(item => item === target);
     return tab ? { kind: 'settings', tab: normalizeSettingsTab(tab) } : null;
   }

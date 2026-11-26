@@ -4,7 +4,6 @@
 // upgrades cleanly, persist directly in `lobsterai.sqlite`, support IANA
 // timezones and `skipMissedJobs` on wake, and execute turns via DSH + deliver
 // results to `[定时]` sessions or `@lobsterai/dsh-channels`.
-
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -30,6 +29,8 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from '../../scheduledTask/types';
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { type AutomationOwnershipPort, scheduledAutomationSourceId } from '../remote/automationOwnership';
 
 export interface LobsterSchedulerRunResult {
   stopped?: boolean;
@@ -49,6 +50,7 @@ export type LobsterSchedulerExecutor = (
 export interface LobsterSchedulerOptions {
   db: Database.Database;
   executor?: LobsterSchedulerExecutor;
+  ownership?: AutomationOwnershipPort;
   /** Poll tick interval in ms (default 15_000). */
   tickIntervalMs?: number;
   /** Clock provider override for deterministic unit tests. */
@@ -550,6 +552,8 @@ function defaultState(nextRunAtMs: number | null): TaskState {
 
 export class LobsterScheduler extends EventEmitter {
   private readonly db: Database.Database;
+  private readonly ownership?: AutomationOwnershipPort;
+  private toolContext?: { sessionId?: string; actor: RemoteOwner | null };
   private executor: LobsterSchedulerExecutor | null;
   private readonly tickIntervalMs: number;
   private readonly now: () => number;
@@ -561,6 +565,7 @@ export class LobsterScheduler extends EventEmitter {
   constructor(options: LobsterSchedulerOptions) {
     super();
     this.db = options.db;
+    this.ownership = options.ownership;
     this.executor = options.executor ?? null;
     this.tickIntervalMs = options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS;
     this.now = options.now ?? (() => Date.now());
@@ -703,14 +708,39 @@ export class LobsterScheduler extends EventEmitter {
     return skipped;
   }
 
+  private get actor(): RemoteOwner | null {
+    return this.toolContext ? this.toolContext.actor : this.ownership?.remoteCreationOwner?.() ?? null;
+  }
+
+  /** Host tools run with the calling Cowork session's authority, including anonymous legacy turns. */
+  withSessionAccess<T>(sessionId: string | undefined, operation: () => T): T {
+    const remote = this.ownership?.remote;
+    if (!remote) return operation();
+    if (sessionId) {
+      if (!this.db.prepare('SELECT 1 FROM cowork_sessions WHERE id = ?').get(sessionId)) throw new Error('Session is unavailable');
+      remote.assertActor(sessionId, this.ownership?.remoteCreationOwner?.() ?? null);
+    }
+    const previous = this.toolContext;
+    this.toolContext = { sessionId, actor: sessionId ? remote.owner(sessionId) : null };
+    try { return operation(); } finally { this.toolContext = previous; }
+  }
+
+  private canAccess(taskId: string): boolean {
+    return this.ownership?.remote?.canUseSource(scheduledAutomationSourceId(taskId), this.actor) ?? true;
+  }
+
   listTasks(): ScheduledTask[] {
     const rows = this.db
       .prepare('SELECT * FROM lobster_scheduled_tasks ORDER BY created_at DESC')
       .all() as TaskRow[];
-    return rows.map((row) => this.rowToTask(row));
+    return rows.filter(row => this.canAccess(row.id)).map((row) => this.rowToTask(row));
   }
 
   getTask(taskId: string): ScheduledTask | null {
+    return this.canAccess(taskId) ? this.readTask(taskId) : null;
+  }
+
+  private readTask(taskId: string): ScheduledTask | null {
     const row = this.db
       .prepare('SELECT * FROM lobster_scheduled_tasks WHERE id = ?')
       .get(taskId) as TaskRow | undefined;
@@ -725,29 +755,33 @@ export class LobsterScheduler extends EventEmitter {
     const nextRunAtMs = input.enabled ? computeNextRunAtMs(input.schedule, nowMs) : null;
     const state = defaultState(nextRunAtMs);
 
-    this.db
-      .prepare(`
-        INSERT INTO lobster_scheduled_tasks (
-          id, name, description, enabled, schedule_json, session_target, wake_mode,
-          payload_json, delivery_json, agent_id, session_key, state_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        id,
-        input.name,
-        input.description ?? '',
-        input.enabled ? 1 : 0,
-        JSON.stringify(input.schedule),
-        input.sessionTarget ?? SessionTarget.Isolated,
-        input.wakeMode ?? WakeMode.Now,
-        JSON.stringify(input.payload),
-        JSON.stringify(delivery),
-        input.agentId ?? null,
-        input.sessionKey ?? null,
-        JSON.stringify(state),
-        nowIso,
-        nowIso,
-      );
+    const bind = this.ownership?.remote?.prepareSourceBinding(this.actor, this.toolContext?.sessionId);
+    this.db.transaction(() => {
+      this.db
+        .prepare(`
+          INSERT INTO lobster_scheduled_tasks (
+            id, name, description, enabled, schedule_json, session_target, wake_mode,
+            payload_json, delivery_json, agent_id, session_key, state_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          id,
+          input.name,
+          input.description ?? '',
+          input.enabled ? 1 : 0,
+          JSON.stringify(input.schedule),
+          input.sessionTarget ?? SessionTarget.Isolated,
+          input.wakeMode ?? WakeMode.Now,
+          JSON.stringify(input.payload),
+          JSON.stringify(delivery),
+          input.agentId ?? null,
+          input.sessionKey ?? null,
+          JSON.stringify(state),
+          nowIso,
+          nowIso,
+        );
+      bind?.(scheduledAutomationSourceId(id));
+    })();
 
     return this.getTask(id)!;
   }
@@ -811,6 +845,7 @@ export class LobsterScheduler extends EventEmitter {
   }
 
   deleteTask(taskId: string): boolean {
+    if (!this.canAccess(taskId)) return false;
     const controller = this.runningControllers.get(taskId);
     if (controller) {
       controller.abort(new Error('Scheduled task deleted'));
@@ -820,6 +855,7 @@ export class LobsterScheduler extends EventEmitter {
   }
 
   stopTask(taskId: string): boolean {
+    if (!this.canAccess(taskId)) return false;
     const controller = this.runningControllers.get(taskId);
     if (!controller) return false;
     controller.abort(new Error('Scheduled task stopped by user'));
@@ -827,6 +863,7 @@ export class LobsterScheduler extends EventEmitter {
   }
 
   countRuns(taskId: string): number {
+    if (!this.canAccess(taskId)) return 0;
     const row = this.db
       .prepare('SELECT COUNT(*) AS count FROM lobster_scheduled_task_runs WHERE task_id = ?')
       .get(taskId) as { count?: number } | undefined;
@@ -834,6 +871,7 @@ export class LobsterScheduler extends EventEmitter {
   }
 
   listRuns(taskId: string, limit = 50, offset = 0, filter?: RunFilter): ScheduledTaskRun[] {
+    if (!this.canAccess(taskId)) return [];
     const clauses = ['task_id = ?'];
     const params: unknown[] = [taskId];
     if (filter?.status) {
@@ -875,6 +913,14 @@ export class LobsterScheduler extends EventEmitter {
       clauses.push('r.started_at <= ?');
       params.push(filter.endDate);
     }
+    if (this.ownership?.remote) {
+      clauses.push(`NOT EXISTS (SELECT 1 FROM remote_source_owner source WHERE source.source_id = 'cron:' || r.task_id
+        AND (json_extract(source.owner_json,'$.userId') IS NOT ? OR json_extract(source.owner_json,'$.scopeKey') IS NOT ?))`);
+      clauses.push(`NOT EXISTS (SELECT 1 FROM remote_publication_origins p LEFT JOIN remote_source_owner s ON s.source_id=p.local_id
+        WHERE p.kind='source' AND p.local_id='cron:' || r.task_id AND
+          (p.owner_user_id IS NOT json_extract(s.owner_json,'$.userId') OR p.owner_scope_key IS NOT json_extract(s.owner_json,'$.scopeKey')))`);
+      params.push(this.actor?.userId ?? null, this.actor?.scopeKey ?? null);
+    }
     const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     params.push(limit, offset);
     const rows = this.db
@@ -911,7 +957,7 @@ export class LobsterScheduler extends EventEmitter {
     let imported = 0;
     const importTx = this.db.transaction(() => {
       for (const item of jobs) {
-        if (item.id && this.getTask(item.id)) continue;
+        if (item.id && this.readTask(item.id)) continue;
         const id = item.id || randomUUID();
         const delivery: ScheduledTaskDelivery = item.input.delivery ?? { mode: DeliveryMode.None };
         let nextRunAtMs: number | null = null;
@@ -1230,7 +1276,7 @@ export class LobsterScheduler extends EventEmitter {
     // Scheduled one-shot `at` tasks disable automatically after firing; a manual
     // `runNow` before a future `at` timestamp preserves `enabled` and its future
     // `nextRunAtMs`. Recurring tasks compute the next slot after completion.
-    const latestTask = this.getTask(task.id);
+    const latestTask = this.readTask(task.id);
     if (!latestTask) return runRecord;
     let keepEnabled = latestTask.enabled;
     let nextRunAtMs: number | null = null;
@@ -1269,8 +1315,10 @@ export class LobsterScheduler extends EventEmitter {
       this.db.prepare('UPDATE lobster_scheduled_tasks SET enabled = ?, state_json = ?, updated_at = ? WHERE id = ?')
         .run(keepEnabled ? 1 : 0, JSON.stringify(updatedState), finishedIso, task.id);
     })();
-    this.emit('statusUpdate', { taskId: task.id, state: updatedState, enabled: keepEnabled });
-    this.emit('runUpdate', { run: { ...runRecord, taskName: latestTask.name } });
+    if (this.canAccess(task.id)) {
+      this.emit('statusUpdate', { taskId: task.id, state: updatedState, enabled: keepEnabled });
+      this.emit('runUpdate', { run: { ...runRecord, taskName: latestTask.name } });
+    }
     return runRecord;
   }
 

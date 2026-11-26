@@ -375,7 +375,18 @@ async function checkLiveBoot(env) {
         throw new Error(`Plugin "${key}" not ready: ${JSON.stringify(health.pluginsReady)}`);
       }
     }
-    log('All 8 LobsterAI Cordis plugins reported ready.');
+    if (health.remoteTurnEvidenceVersion !== 1) throw new Error('Missing correlated session evidence operations');
+    const receiptEndpoint = '$events/lobster-capabilities';
+    const receiptResponse = await httpRequest(`${origin}/api/${receiptEndpoint}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cookieHeader },
+      body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(),
+        method: receiptEndpoint, payload: { args: {} } }),
+    });
+    if (receiptResponse.status !== 200 || JSON.parse(receiptResponse.body).result?.value?.receipts !== 1) {
+      throw new Error('Authenticated DSH waterfall decision receipts unavailable');
+    }
+    log('All 8 LobsterAI Cordis plugins, correlated run evidence, and owner decision receipts verified.');
 
     // 4. Verify syncProviders hot-registers provider and exposes it via Typert session.modelCatalog.
     const syncProv = await callOps('syncProviders', {

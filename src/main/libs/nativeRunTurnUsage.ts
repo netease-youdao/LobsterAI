@@ -60,6 +60,12 @@ export function configureNativeUsageSessionTitleResolver(resolver: (sessionKey: 
   resolveSessionTitle = resolver;
 }
 
+/** Native ledger identities are not local Cowork session primary keys. */
+export function isNativeUsageSessionId(sessionId: string): boolean {
+  return /^cron:[a-zA-Z0-9_.-]{1,100}$/.test(sessionId)
+    || /^im:[a-z]+:[a-f0-9]{64}$/.test(sessionId);
+}
+
 function nativeSession(report: NativeRunLlmTraceReport): NativeRunUsage['session'] {
   if (typeof report.sessionKey !== 'string' || !report.sessionKey) return undefined;
   // Only initiator-owned metadata is eligible. Never parse the model prompt or

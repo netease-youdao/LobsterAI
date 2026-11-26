@@ -22,6 +22,7 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { isUserMcpToolDenied } from './mcp-tool-filter-helpers.mjs';
+import { remoteToolDenied } from './remote-tool-scope.mjs';
 import { getHostState, resolveSessionContext } from './shared-state.mjs';
 import {
   collectAdmittedCapabilitiesFromTools,
@@ -133,6 +134,9 @@ export function apply(ctx) {
       state.mcpToolFilters,
       state.mcpRegisteredServers,
     );
+    for (const name of restrictableNames) {
+      if (remoteToolDenied(bound, name) && !denyList.includes(name)) denyList.push(name);
+    }
     if (bound?.userQuestionsDisabled && restrictableNames.has(ASK_USER_QUESTION)) {
       denyList.push(ASK_USER_QUESTION);
     }

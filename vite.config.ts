@@ -5,6 +5,8 @@ import { defineConfig, type Plugin } from 'vite';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 
+import { remoteWorkerBuilds } from './remote-workers.config';
+
 // https://vitejs.dev/config/
 // PORT lets tooling (e.g. browser preview) assign a free port; electron:dev
 // pins 5175 via the --port CLI flag, which overrides server.port anyway.
@@ -199,6 +201,7 @@ export default defineConfig(({ command }) => {
         },
         onstart() {},
       },
+      ...remoteWorkerBuilds(),
     ]),
     renderer(),
     {

@@ -5,11 +5,13 @@ import path from 'node:path';
 import { BrowserWindow, ipcMain } from 'electron';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
+import { AgentAccessErrorCode } from '../../../shared/agent/constants';
 import { AgentId, AgentIpcChannel } from '../../../shared/agent/constants';
 import { AgentDraftErrorCode, AgentDraftMode } from '../../../shared/agent/draft';
 import { ExpertFixtureId } from '../../../shared/agent/expertCatalogFixture';
 import { ModelThinkingLevel } from '../../../shared/providers/modelThinking';
-import { type AgentHandlerDeps, registerAgentHandlers } from './handlers';
+import { AgentAccessError } from '../../agentOwnership';
+import { type AgentHandlerDeps, notifyAgentsChanged, registerAgentHandlers } from './handlers';
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: vi.fn() },
@@ -41,15 +43,17 @@ function setup(
   existingAgents: unknown[] = [],
 ) {
   const addPresetAgent = vi.fn().mockResolvedValue(agent);
+  const assertCurrentOwner = vi.fn();
+  const assertAgentAccess = vi.fn();
+  const sender = { id: 1, isDestroyed: () => false, send: vi.fn() };
   const resolveDefaultAgentModelRef = vi.fn(() => 'provider/model');
-  const sender = { id: 1, send: vi.fn() };
   const otherWindowSend = vi.fn();
   vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
     { isDestroyed: () => false, webContents: sender },
-    { isDestroyed: () => false, webContents: { id: 2, send: otherWindowSend } },
+    { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: otherWindowSend } },
   ] as unknown as BrowserWindow[]);
   registerAgentHandlers({
-    getAgentManager: () => ({ addPresetAgent, listAgents: () => existingAgents }),
+    getAgentManager: () => ({ addPresetAgent, listAgents: () => existingAgents, captureOwner: () => null, assertCurrentOwner, assertAgentAccess }),
     resolveAgentWorkspacePath,
     resolveDefaultAgentModelRef,
     syncOpenClawConfig,
@@ -58,6 +62,8 @@ function setup(
   return {
     invoke: (selection?: unknown) => handler({ sender } as unknown as Electron.IpcMainInvokeEvent, ExpertFixtureId.Data, selection),
     addPresetAgent,
+    assertCurrentOwner,
+    assertAgentAccess,
     resolveDefaultAgentModelRef,
     otherWindowSend,
     senderSend: sender.send,
@@ -211,6 +217,30 @@ test('creation failures preserve their cause in logs and never publish a success
   expect(BrowserWindow.getAllWindows).not.toHaveBeenCalled();
 });
 
+test('an account change during preset loading prevents synchronization and success', async () => {
+  const sync = vi.fn();
+  const { invoke, assertCurrentOwner, otherWindowSend } = setup(sync);
+  assertCurrentOwner.mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.AccountChanged); });
+
+  expect(await invoke()).toMatchObject({ success: false });
+  expect(sync).not.toHaveBeenCalled();
+  expect(otherWindowSend).not.toHaveBeenCalled();
+});
+
+test.each(['account', 'access'])('changed %s during config sync cannot return or broadcast a stale agent', async change => {
+  let resolveSync!: (result: { success: boolean; changed: boolean }) => void;
+  const sync = vi.fn(() => new Promise<{ success: boolean; changed: boolean }>(resolve => { resolveSync = resolve; }));
+  const { invoke, assertCurrentOwner, assertAgentAccess, otherWindowSend } = setup(sync);
+  const result = invoke();
+  await Promise.resolve();
+  const check = change === 'account' ? assertCurrentOwner : assertAgentAccess;
+  check.mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+  resolveSync({ success: true, changed: true });
+
+  expect(await result).toMatchObject({ success: false });
+  expect(otherWindowSend).not.toHaveBeenCalled();
+});
+
 test.each([
   [AgentIpcChannel.Presets, 'getPresetAgents'],
   [AgentIpcChannel.PresetTemplates, 'getAllPresetAgents'],
@@ -221,6 +251,42 @@ test.each([
   } as unknown as AgentHandlerDeps);
   const handler = vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === channel)![1];
   expect(await handler({} as Electron.IpcMainInvokeEvent)).toEqual({ success: false, error: 'Catalog unavailable' });
+});
+
+test('rejected Agent deletion never stops sessions, clears bindings or syncs configuration', async () => {
+  const stopSession = vi.fn();
+  const getIMGatewayManager = vi.fn();
+  const syncOpenClawConfig = vi.fn();
+  registerAgentHandlers({
+    getAgentManager: () => ({ getAgent: () => ({ id: 'agent' }), deleteAgent: () => {
+      throw new AgentAccessError(AgentAccessErrorCode.Busy);
+    } }),
+    getCoworkStore: () => ({ listSessionIdsByAgent: () => ['running-task'] }),
+    getCoworkEngineRouter: () => ({ stopSession, isSessionActive: () => false }),
+    getIMGatewayManager,
+    syncOpenClawConfig,
+  } as unknown as AgentHandlerDeps);
+  const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.Delete)![1];
+  await expect(handler({} as Electron.IpcMainInvokeEvent, 'agent')).resolves.toMatchObject({ success: false });
+  expect(stopSession).not.toHaveBeenCalled();
+  expect(getIMGatewayManager).not.toHaveBeenCalled();
+  expect(syncOpenClawConfig).not.toHaveBeenCalled();
+});
+
+
+test('active runtime evidence rejects deletion even when the persisted session is idle', async () => {
+  vi.mocked(ipcMain.handle).mockClear();
+  const deleteAgent = vi.fn();
+  const stopSession = vi.fn();
+  registerAgentHandlers({
+    getAgentManager: () => ({ getAgent: () => ({ id: 'agent' }), deleteAgent }),
+    getCoworkStore: () => ({ listSessionIdsByAgent: () => ['active-task'] }),
+    getCoworkEngineRouter: () => ({ stopSession, isSessionActive: () => true }),
+  } as unknown as AgentHandlerDeps);
+  const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === AgentIpcChannel.Delete)![1];
+  await expect(handler({} as Electron.IpcMainInvokeEvent, 'agent')).resolves.toMatchObject({ success: false });
+  expect(deleteAgent).not.toHaveBeenCalled();
+  expect(stopSession).not.toHaveBeenCalled();
 });
 
 test('working directory change hot-reloads OpenClaw config without restarting the gateway', async () => {
@@ -240,6 +306,51 @@ test('working directory change hot-reloads OpenClaw config without restarting th
   expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: 'agent-working-directory-updated' });
 });
 
+
+test('remote Agent changes notify every live window without an originating renderer', () => {
+  const mainSend = vi.fn();
+  const companionSend = vi.fn();
+  const destroyedSend = vi.fn();
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+    { isDestroyed: () => false, webContents: { id: 1, isDestroyed: () => false, send: mainSend } },
+    { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: companionSend } },
+    { isDestroyed: () => true, webContents: { id: 3, isDestroyed: () => false, send: destroyedSend } },
+  ] as unknown as BrowserWindow[]);
+  notifyAgentsChanged();
+  expect(mainSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+  expect(companionSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+  expect(destroyedSend).not.toHaveBeenCalled();
+});
+
+
+test('a destroyed renderer is skipped without preventing other windows from refreshing', () => {
+  const destroyedSend = vi.fn();
+  const liveSend = vi.fn();
+  vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+    { isDestroyed: () => false, webContents: { id: 1, isDestroyed: () => true, send: destroyedSend } },
+    { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: liveSend } },
+  ] as unknown as BrowserWindow[]);
+  notifyAgentsChanged();
+  expect(destroyedSend).not.toHaveBeenCalled();
+  expect(liveSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+});
+
+test('a window closing during notification cannot prevent the remaining windows from refreshing', () => {
+  const error = new Error('Object has been destroyed');
+  const failedSend = vi.fn(() => { throw error; });
+  const liveSend = vi.fn();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+      { isDestroyed: () => false, webContents: { id: 1, isDestroyed: () => false, send: failedSend } },
+      { isDestroyed: () => false, webContents: { id: 2, isDestroyed: () => false, send: liveSend } },
+    ] as unknown as BrowserWindow[]);
+    expect(() => notifyAgentsChanged()).not.toThrow();
+    expect(liveSend).toHaveBeenCalledExactlyOnceWith(AgentIpcChannel.Changed);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[Agents] Failed to notify a window of agent changes:', error);
+  } finally { warn.mockRestore(); }
+});
+
 function setupDeletion(deleteAgentWithRuntime: AgentHandlerDeps['deleteAgentWithRuntime']) {
   const deleteAgent = vi.fn(() => true);
   const syncOpenClawConfig = vi.fn().mockResolvedValue({ success: true, changed: true });
@@ -249,10 +360,10 @@ function setupDeletion(deleteAgentWithRuntime: AgentHandlerDeps['deleteAgentWith
   registerAgentHandlers({
     getAgentManager: () => ({
       getAgent: (id: string) => id === ExpertFixtureId.Data ? { id } : null,
-      deleteAgent,
+      deleteAgent, captureOwner: () => null, assertCurrentOwner: vi.fn(),
     }),
-    getCoworkStore: () => ({ listSessionIdsByAgent: () => ['expert-session'] }),
-    getCoworkEngineRouter: () => ({ stopSession, onSessionDeleted }),
+    getCoworkStore: () => ({ listSessionIdsByAgent: () => ['expert-session'], agentOwnership: { assertDeletable: vi.fn() } }),
+    getCoworkEngineRouter: () => ({ stopSession, onSessionDeleted, isSessionActive: () => false }),
     getIMGatewayManager: () => null,
     deleteAgentWithRuntime,
     syncOpenClawConfig,
@@ -274,7 +385,7 @@ test('deletion commits local records and syncs only after the runtime deletion s
   const { invoke, deleteAgent, syncOpenClawConfig, stopSession, onSessionDeleted } = setupDeletion(deleteAgentWithRuntime);
   const pending = invoke();
   await Promise.resolve();
-  expect(stopSession).toHaveBeenCalledExactlyOnceWith('expert-session');
+  expect(stopSession).not.toHaveBeenCalled();
   expect(deleteAgent).not.toHaveBeenCalled();
   expect(syncOpenClawConfig).not.toHaveBeenCalled();
   expect(onSessionDeleted).not.toHaveBeenCalled();

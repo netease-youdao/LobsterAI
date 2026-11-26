@@ -55,6 +55,18 @@ describe('permissionDockRequest', () => {
     ]);
   });
 
+  test('closed consent ignores stale free-text and skipped drafts while ordinary plugin answers remain available', () => {
+    const request = permissionDockRequest(pluginPermission([
+      { question: 'Allow saved login?', options, isOther: false, allowSkip: false },
+    ]))!;
+    const question = request.questions[0];
+    expect(question).toMatchObject({ allowFreeText: false, allowSkip: false });
+    const stale = { ...emptyQuestionDraft(), freeText: { [question.id]: 'unlisted' }, skipped: [question.id] };
+    expect(questionResolved(stale, question.id, question)).toBe(false);
+    expect(permissionDockAnswer(request, { ...stale, answers: { [question.id]: ['B'] } }))
+      .toMatchObject({ updatedInput: { answers: { 'Allow saved login?': 'B' }, skippedQuestionIds: [] } });
+  });
+
   test('maps native questions and only allows typed answers where the protocol does', () => {
     const request = permissionDockRequest(nativePermission([
       { questionId: 'style', header: 'Style', question: 'Which style?', options },

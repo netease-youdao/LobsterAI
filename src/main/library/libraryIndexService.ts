@@ -25,6 +25,7 @@ import type {
   LibraryRecordCandidatesData,
   LocalArtifactItem,
 } from '../../shared/library/types';
+import type { RemoteOwner } from '../../shared/remote/constants';
 import {
   buildArtifactFileClientSourceKey,
   buildHtmlShareClientSourceKey,
@@ -157,21 +158,22 @@ export class LibraryIndexService {
     this.itemPaths.clear();
   }
 
-  async recordCandidates(candidates: LibraryArtifactCandidate[]): Promise<LibraryRecordCandidatesData> {
+  async recordCandidates(candidates: LibraryArtifactCandidate[], actor?: RemoteOwner | null, assertCurrentOwner?: () => void, validateIndexed?: (indexed: LibraryIndexedFile) => void): Promise<LibraryRecordCandidatesData> {
     let recorded = 0;
     let ignored = 0;
     const changedIds: string[] = [];
     for (const candidate of candidates) {
-      if (!this.store.sessionExists(candidate.sessionId)) {
+      assertCurrentOwner?.();
+      if (!this.store.sessionExists(candidate.sessionId, actor)) {
         ignored += 1;
         continue;
       }
       try {
-        const item = await this.indexCandidate(candidate);
+        const item = await this.indexCandidate(candidate, actor, assertCurrentOwner, validateIndexed);
         if (!item) {
           ignored += 1;
           if (this.store.sessionExists(candidate.sessionId)) {
-            this.scheduleCandidateRetry(candidate, 0);
+            this.scheduleCandidateRetry(candidate, 0, actor, assertCurrentOwner, validateIndexed);
           }
           continue;
         }
@@ -180,7 +182,7 @@ export class LibraryIndexService {
       } catch (error) {
         if (isMissingError(error)) {
           ignored += 1;
-          this.scheduleCandidateRetry(candidate, 0);
+          this.scheduleCandidateRetry(candidate, 0, actor, assertCurrentOwner, validateIndexed);
           continue;
         }
         ignored += 1;
@@ -196,7 +198,7 @@ export class LibraryIndexService {
     return { recorded, ignored };
   }
 
-  async addLocalFiles(filePaths: string[]): Promise<LibraryAddLocalFilesData> {
+  async addLocalFiles(filePaths: string[], actor?: RemoteOwner | null, assertCurrentOwner?: () => void): Promise<LibraryAddLocalFilesData> {
     const items: LocalArtifactItem[] = [];
     const ignoredPaths: string[] = [];
     for (const filePath of filePaths) {
@@ -206,9 +208,10 @@ export class LibraryIndexService {
           ignoredPaths.push(filePath);
           continue;
         }
+        assertCurrentOwner?.();
         const storedItem = this.store.upsertFile(indexed);
         this.addWatch(storedItem.itemId, storedItem.filePath);
-        const visibleItem = this.store.getVisibleItem(storedItem.itemId);
+        const visibleItem = this.store.getVisibleItem(storedItem.itemId, actor);
         if (visibleItem) items.push(visibleItem);
       } catch {
         ignoredPaths.push(filePath);
@@ -312,7 +315,9 @@ export class LibraryIndexService {
     }
   }
 
-  private async indexCandidate(candidate: LibraryArtifactCandidate): Promise<LocalArtifactItem | null> {
+  private async indexCandidate(candidate: LibraryArtifactCandidate, actor?: RemoteOwner | null, assertCurrentOwner?: () => void, validateIndexed?: (indexed: LibraryIndexedFile) => void): Promise<LocalArtifactItem | null> {
+    assertCurrentOwner?.();
+    if (!this.store.sessionExists(candidate.sessionId, actor)) return null;
     const cwd = this.store.getSessionCwd(candidate.sessionId);
     if (!cwd) return null;
     const resolvedPath = path.isAbsolute(candidate.filePath)
@@ -323,6 +328,9 @@ export class LibraryIndexService {
       candidate.origin ?? LibraryOrigin.Conversation,
     );
     if (!indexed) return null;
+    assertCurrentOwner?.();
+    if (!this.store.sessionExists(candidate.sessionId, actor)) return null;
+    validateIndexed?.(indexed);
     const item = this.store.upsertFile(indexed, candidate);
     if (!item) return null;
     this.addWatch(item.itemId, item.filePath);
@@ -371,21 +379,21 @@ export class LibraryIndexService {
     return normalized === libraryCachePath || normalized.startsWith(`${libraryCachePath}${path.sep}`);
   }
 
-  private scheduleCandidateRetry(candidate: LibraryArtifactCandidate, attempt: number): void {
+  private scheduleCandidateRetry(candidate: LibraryArtifactCandidate, attempt: number, actor?: RemoteOwner | null, assertCurrentOwner?: () => void, validateIndexed?: (indexed: LibraryIndexedFile) => void): void {
     if (this.stopped || attempt >= RETRY_DELAYS_MS.length) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
-      if (this.stopped || !this.store.sessionExists(candidate.sessionId)) return;
-      void this.indexCandidate(candidate)
+      if (this.stopped || !this.store.sessionExists(candidate.sessionId, actor)) return;
+      void this.indexCandidate(candidate, actor, assertCurrentOwner, validateIndexed)
         .then(item => {
           if (item) {
             this.onChanged({ reason: 'recorded', itemIds: [item.itemId] });
           } else {
-            this.scheduleCandidateRetry(candidate, attempt + 1);
+            this.scheduleCandidateRetry(candidate, attempt + 1, actor, assertCurrentOwner, validateIndexed);
           }
         })
         .catch(error => {
-          if (isMissingError(error)) this.scheduleCandidateRetry(candidate, attempt + 1);
+          if (isMissingError(error)) this.scheduleCandidateRetry(candidate, attempt + 1, actor, assertCurrentOwner, validateIndexed);
         });
     }, RETRY_DELAYS_MS[attempt]);
     this.retryTimers.add(timer);

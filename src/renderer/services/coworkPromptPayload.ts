@@ -5,6 +5,7 @@ import {
   estimateBase64DecodedBytes,
   validateCoworkImageAttachmentSize,
 } from '../../shared/cowork/imageAttachments';
+import type { CoworkLocalInput } from '../../shared/cowork/inputAttachments';
 import {
   formatPastedTextAttachmentBlocks,
   isPastedTextAttachment,
@@ -29,6 +30,7 @@ export interface CoworkPromptAttachment {
 }
 
 export interface PreparedCoworkPromptPayload {
+  localInput?: CoworkLocalInput;
   finalPrompt: string;
   imageAttachments?: CoworkImageAttachmentPayload[];
   mediaReferences?: MediaAttachmentRef[];
@@ -277,6 +279,18 @@ export async function prepareCoworkPromptPayload(
   return {
     success: true,
     payload: {
+      localInput: {
+        text: basePrompt,
+        attachments: options.attachments.filter(attachment => (
+          !attachment.isDirectory
+          && !attachment.path.startsWith('inline:')
+          && !isPastedTextAttachment(attachment)
+        )).map(attachment => ({
+          path: attachment.path,
+          name: attachment.name,
+          intent: attachment.isImage && imageAttachmentPathsWithPayload.has(attachment.path) ? 'image' : 'file',
+        })),
+      },
       finalPrompt,
       imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
       mediaReferences: mediaReferences.length > 0 ? mediaReferences : undefined,

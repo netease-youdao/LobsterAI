@@ -49,6 +49,8 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
     ...(Array.isArray(p.allowedSkillIds) || p.allowedSkillIds === null
       ? { allowedSkillIds: p.allowedSkillIds }
       : {}),
+    ...(typeof p.remoteRequestId === 'string' || p.remoteRequestId === null ? { remoteRequestId: p.remoteRequestId } : {}),
+    ...(Array.isArray(p.remoteAllowedAgentIds) || p.remoteAllowedAgentIds === null ? { remoteAllowedAgentIds: p.remoteAllowedAgentIds } : {}),
     ...customSystemPromptPatch,
     ...(typeof p.officeAgentPrompt === 'string' && p.officeAgentPrompt.trim().length > 0
       ? { officeAgentPrompt: p.officeAgentPrompt }

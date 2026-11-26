@@ -238,6 +238,7 @@ function createBridgeTool(ctx, state, spec) {
         '/dsh-bridge/tool-execute',
         {
           toolName,
+          ...(Array.isArray(bound?.remoteAllowedAgentIds) ? { remoteRequestId: bound.remoteRequestId } : {}),
           args,
           callId: exec.callId,
           sessionId,

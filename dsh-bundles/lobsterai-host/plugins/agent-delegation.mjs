@@ -168,7 +168,9 @@ export function apply(ctx) {
     if (!agent) return [];
     const currentAgentId = getCurrentAgentId(ctx, state, agent);
     const ancestors = collectAncestorAgentIds(ctx, state, agent);
-    return resolveCollaborators(state.agents, state.agentOrder, currentAgentId, ancestors);
+    const collaborators = resolveCollaborators(state.agents, state.agentOrder, currentAgentId, ancestors);
+    const allowed = resolveSessionContext(ctx, state, resolveSessionId(agent))?.remoteAllowedAgentIds;
+    return Array.isArray(allowed) ? collaborators.filter(target => allowed.includes(target.id)) : collaborators;
   };
 
   const delegateTool = defineTool({
@@ -272,30 +274,41 @@ export function apply(ctx) {
         }
       }
 
+      const remoteScope = resolveSessionContext(ctx, state, resolveSessionId(parent));
+      if (Array.isArray(remoteScope?.remoteAllowedAgentIds) && explicitCwd) throw new Error('Remote delegation requires an authorized agent workspace.');
       const targetModelOptions = await resolveTargetAgentModelOptions(ctx, targetAgent, exec.signal);
       exec.signal.throwIfAborted();
 
       const parentSessionId = resolveSessionId(parent);
       const parentBound = resolveSessionContext(ctx, state, parentSessionId);
+      if (!getAvailableCollaboratorsForAgent(parent).some(target => target.id === targetAgent.id)) {
+        throw new Error('The delegated agent is no longer available.');
+      }
       const childId = randomUUID();
 
       state.delegatedChildAgents.set(childId, {
         targetAgentId: targetAgent.id,
+        ...(parentBound?.remoteRequestId ? { remoteRequestId: parentBound.remoteRequestId } : {}),
         ...(parentSessionId ? { parentDshSessionId: parentSessionId } : {}),
         ...(parentBound?.coworkSessionId ? { rootCoworkSessionId: parentBound.coworkSessionId } : {}),
         ...(resolvedCwd ? { workspaceDir: resolvedCwd } : {}),
       });
 
       const persistBinding = async (action) => {
+        const requireGuard = action === 'set' && Array.isArray(parentBound?.remoteAllowedAgentIds);
+        if (requireGuard && (!state.bridgeUrl || !parentSessionId || !parentBound?.coworkSessionId || !parentBound?.remoteRequestId)) {
+          throw new Error('Remote delegation guard unavailable.');
+        }
         if (!state.bridgeUrl || !parentSessionId || !parentBound?.coworkSessionId) return;
         try {
-          await callLobsterBridge(
+          const reply = await callLobsterBridge(
             state,
             SUBAGENT_BINDING_BRIDGE_PATH,
             action === 'delete'
               ? { action: 'delete', childSessionId: childId }
               : {
                   action: 'set',
+                  ...(requireGuard ? { remoteRequestId: parentBound.remoteRequestId } : {}),
                   childSessionId: childId,
                   parentDshSessionId: parentSessionId,
                   rootCoworkSessionId: parentBound.coworkSessionId,
@@ -303,14 +316,15 @@ export function apply(ctx) {
                 },
             action === 'delete' ? undefined : exec.signal,
           );
+          if (reply.error === 'SETTINGS_OPERATION_PENDING') throw new Error(reply.error);
+          if (requireGuard && (!reply.ok || reply.data?.ok !== true)) throw new Error('Remote delegation authorization failed.');
         } catch (error) {
+          if (requireGuard || error?.message === 'SETTINGS_OPERATION_PENDING') throw error;
           ctx.logger.warn(
             `[LobsterAI:AgentDelegation] failed to ${action} durable subagent binding for "${childId}": ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       };
-
-      await persistBinding('set');
 
       const startWithName = (candidateName) => ctx.subagents.startActivation({
         provider: 'spawn',
@@ -327,6 +341,11 @@ export function apply(ctx) {
       });
 
       try {
+        await persistBinding('set');
+        exec.signal.throwIfAborted();
+        if (!getAvailableCollaboratorsForAgent(parent).some(target => target.id === targetAgent.id)) {
+          throw new Error('The delegated agent is no longer available.');
+        }
         let started;
         try {
           started = await startWithName(nameResolution.name);

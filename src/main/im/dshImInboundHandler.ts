@@ -2,7 +2,6 @@
 // `/dsh-bridge/channel-event` by routing them through LobsterAI's
 // `CoworkStore` + `IMStore` + `DshRuntimeAdapter` pipeline, then sending the
 // assistant reply back via `DshChannelsBridge`.
-
 import {
   buildCoworkImageAttachmentPreviews,
   type CoworkImageAttachmentPayload,
@@ -14,9 +13,10 @@ import {
 import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../shared/im/feishuTopicRoute';
 import { buildWeixinSessionLabel } from '../../shared/im/sessionNaming';
 import { ImPeerKind } from '../../shared/platform';
-import type { CoworkMessage, CoworkSession } from '../coworkStore';
+import type { CoworkMessage, CoworkSession, CreateCoworkSessionOptions } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkLocalMediaAttachment, CoworkRuntime } from '../libs/agentEngine/types';
+import { type AutomationOwnershipPort, automationSessionOptions, canUseAutomationSource, imAutomationSourceId, prepareAutomationTurn } from '../remote/automationOwnership';
 import { isRetainedImPlatform } from './dshChannelsBridge';
 import type { FeishuTopicSessionRoute } from './feishuTopicSessionMapping';
 import { ImApprovalRelay } from './imApprovalRelay';
@@ -66,7 +66,7 @@ export interface DshImInboundEvent {
   cwd?: string;
 }
 
-export interface DshImInboundCoworkStorePort {
+export interface DshImInboundCoworkStorePort extends AutomationOwnershipPort {
   getSession(id: string): CoworkSession | null;
   createSession(
     title: string,
@@ -75,6 +75,8 @@ export interface DshImInboundCoworkStorePort {
     executionMode?: 'auto' | 'local' | 'sandbox',
     activeSkillIds?: string[],
     agentId?: string,
+    modelOverride?: string,
+    options?: CreateCoworkSessionOptions,
   ): CoworkSession;
 }
 
@@ -309,7 +311,9 @@ export class DshImInboundHandler {
     this.approvalRelay = typeof deps.runtime.respondToPermission === 'function'
       ? new ImApprovalRelay({
           runtime: deps.runtime as DshImInboundHandlerDeps['runtime'] & Pick<CoworkRuntime, 'respondToPermission'>,
-          sendReply: deps.sendReply,
+          sendReply: async (params) => {
+            if (canUseAutomationSource(deps.coworkStore, imAutomationSourceId(params.platform, params.instanceId))) return deps.sendReply(params);
+          },
           ...(deps.approvalTimeoutMs !== undefined ? { timeoutMs: deps.approvalTimeoutMs } : {}),
         })
       : null;
@@ -324,6 +328,7 @@ export class DshImInboundHandler {
     const instanceId = event.instanceId?.trim() || 'default';
     const agentId = event.agentId?.trim() || 'main';
 
+    if (!canUseAutomationSource(this.deps.coworkStore, imAutomationSourceId(platform, instanceId))) return Promise.resolve();
     if (event.messageId) {
       const dedupeKey = `${platform}:${instanceId}:${event.messageId}`;
       if (this.seenMessageIds.has(dedupeKey)) {
@@ -511,6 +516,7 @@ export class DshImInboundHandler {
     replyContext?: Record<string, unknown>,
   ): Promise<boolean> {
     try {
+      if (!canUseAutomationSource(this.deps.coworkStore, imAutomationSourceId(platform, instanceId))) return false;
       await this.deps.sendReply({
         platform,
         instanceId,
@@ -533,6 +539,9 @@ export class DshImInboundHandler {
 
     const instanceId = latestEvent.instanceId?.trim() || 'default';
     const agentId = latestEvent.agentId?.trim() || 'main';
+    const sourceId = imAutomationSourceId(platform, instanceId);
+    const store = this.deps.coworkStore;
+    if (!canUseAutomationSource(store, sourceId) || store.agentOwnership?.canView(agentId, store.remote?.sourceOwner(sourceId) ?? null) === false) return;
     const chatId = latestEvent.chatId.trim();
     if (!chatId) return;
 
@@ -607,7 +616,7 @@ export class DshImInboundHandler {
       }
     }
 
-    if (run.interrupted) return;
+    if (run.interrupted || !canUseAutomationSource(store, sourceId)) return;
 
     const userDisplayText = textParts.join('\n').trim();
     if (!userDisplayText && imageAttachments.length === 0) {
@@ -660,6 +669,7 @@ export class DshImInboundHandler {
         : null);
     const storedChatId = existingMapping?.imConversationId ?? conversationId;
     const storedPlatform = existingMapping?.platform ?? mappingPlatform;
+    if (existingMapping) store.remote?.assertActor(existingMapping.coworkSessionId, store.remote.sourceOwner(sourceId));
     let session = existingMapping
       ? this.deps.coworkStore.getSession(existingMapping.coworkSessionId)
       : null;
@@ -677,6 +687,7 @@ export class DshImInboundHandler {
             contactLabelPrefix: t('imWeixinContactSessionPrefix'),
           })
         : (senderName || chatId).slice(0, 32);
+      const ownershipArgs: [string?, CreateCoworkSessionOptions?] = store.remote ? [undefined, automationSessionOptions(store, sourceId)] : [];
       session = this.deps.coworkStore.createSession(
         `[${prefix}] ${label}${topic ? ` · ${topic.threadId}` : ''}`,
         resolvedCwd,
@@ -684,6 +695,7 @@ export class DshImInboundHandler {
         'auto',
         undefined,
         agentId,
+        ...ownershipArgs,
       );
       if (existingMapping) {
         this.deps.imStore.updateSessionMappingTarget(
@@ -757,6 +769,8 @@ export class DshImInboundHandler {
       `[DshImInbound] Dispatching ${platform}:${instanceId} chat=${chatId} session=${sessionId} existing=${isExistingSession} events=${batch.length} images=${resolvedImageAttachments.length} persistedLocalMedia=${localMediaAttachments.length}`,
     );
 
+    if (!canUseAutomationSource(store, sourceId)) return;
+    const turnOptions = prepareAutomationTurn(store, sessionId, sourceId);
     run.dispatchedToRuntime = true;
     this.approvalRelay?.registerActiveRoute({
       sessionId,
@@ -771,7 +785,7 @@ export class DshImInboundHandler {
     let outcome: { kind: 'complete' } | { kind: 'stopped' } | { kind: 'error'; error: string };
     try {
       outcome = await this.runTurnAndAwaitOutcome(sessionId, modelPrompt, {
-        isExistingSession,
+        turnOptions, isExistingSession,
         agentId,
         cwd: resolvedCwd,
         ...(resolvedImageAttachments.length > 0 ? { imageAttachments: resolvedImageAttachments } : {}),
@@ -782,6 +796,7 @@ export class DshImInboundHandler {
       this.approvalRelay?.unregisterActiveRoute(sessionId);
     }
 
+    if (!canUseAutomationSource(store, sourceId)) return;
     this.deps.notifySessionsChanged?.(sessionId);
 
     const effectiveReplyContext = run.latestReplyContext ?? latestReplyContext;
@@ -823,6 +838,7 @@ export class DshImInboundHandler {
     sessionId: string,
     prompt: string,
     options: {
+      turnOptions: ReturnType<typeof prepareAutomationTurn>;
       isExistingSession: boolean;
       agentId: string;
       cwd: string;
@@ -863,6 +879,7 @@ export class DshImInboundHandler {
       this.deps.runtime.on('sessionStopped', onStopped);
 
       const mediaOptions = {
+        ...options.turnOptions,
         ...(options.imageAttachments?.length ? { imageAttachments: options.imageAttachments } : {}),
         ...(options.localMediaAttachments?.length ? { localMediaAttachments: options.localMediaAttachments } : {}),
         ...(options.userMessageContent !== undefined ? { userMessageContent: options.userMessageContent } : {}),

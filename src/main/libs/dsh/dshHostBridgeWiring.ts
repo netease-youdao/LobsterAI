@@ -65,7 +65,7 @@ export type LobsterScheduleAction = typeof LobsterScheduleAction[keyof typeof Lo
 export type LobsterSchedulerBridgePort = Pick<
   LobsterScheduler,
   'listTasks' | 'getTask' | 'createTask' | 'updateTask' | 'toggleTask' | 'deleteTask'
->;
+> & Partial<Pick<LobsterScheduler, 'withSessionAccess'>>;
 
 export interface ApprovalAllowRulePort {
   isToolAllowedAlways(params: {
@@ -83,7 +83,7 @@ export interface HostToolProvider {
   execute(
     toolName: string,
     args: Record<string, unknown>,
-    context: { sessionId?: string; agentId: string; coworkSessionId?: string; callId?: string; signal?: AbortSignal },
+    context: { remoteRequestId?: string; sessionId?: string; agentId: string; coworkSessionId?: string; callId?: string; signal?: AbortSignal },
   ): Promise<unknown>;
 }
 
@@ -601,7 +601,8 @@ export function wireDshHostBridge(options: {
     if (!scheduler) {
       throw new Error('当前环境未启用 LobsterScheduler 定时任务服务');
     }
-    const result = executeLobsterScheduleTool(scheduler, req.args, req.agentId, req.workspaceDir);
+    const execute = () => executeLobsterScheduleTool(scheduler, req.args, req.agentId, req.workspaceDir);
+    const result = scheduler.withSessionAccess ? scheduler.withSessionAccess(req.coworkSessionId, execute) : execute();
     if (result.mutated) {
       onScheduleMutated?.();
     }
@@ -631,6 +632,7 @@ export function wireDshHostBridge(options: {
       throw new Error(`No native host tool provider registered for "${req.toolName}"`);
     }
     return provider.execute(req.toolName, req.args, {
+      ...(req.remoteRequestId ? { remoteRequestId: req.remoteRequestId } : {}),
       sessionId: req.sessionId,
       agentId: req.agentId,
       coworkSessionId: req.coworkSessionId,

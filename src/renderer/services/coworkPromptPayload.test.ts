@@ -57,6 +57,7 @@ describe('prepareCoworkPromptPayload', () => {
       success: true,
       payload: {
         finalPrompt: 'continue\n\nFile: /tmp/file.txt\nFolder: /tmp/folder',
+        localInput: { text: 'continue', attachments: [{ path: '/tmp/file.txt', name: 'file.txt', intent: 'file' }] },
       },
     });
   });
@@ -78,6 +79,7 @@ describe('prepareCoworkPromptPayload', () => {
       success: true,
       payload: {
         finalPrompt: 'continue\n\nFile: C:\\Users\\tester\\notes.txt\nFolder: D:\\workspace\\assets',
+        localInput: { text: 'continue', attachments: [{ path: 'C:\\Users\\tester\\notes.txt', name: 'notes.txt', intent: 'file' }] },
       },
     });
   });
@@ -102,6 +104,7 @@ describe('prepareCoworkPromptPayload', () => {
       success: true,
       payload: {
         finalPrompt: 'inspect',
+        localInput: { text: 'inspect', attachments: [{ path: '/tmp/image.png', name: 'image.png', intent: 'image' }] },
         imageAttachments: [{
           name: 'image.png',
           mimeType: 'image/png',
@@ -206,6 +209,7 @@ describe('prepareCoworkPromptPayload', () => {
       success: true,
       payload: {
         finalPrompt: 'inspect\n\nFile: /tmp/image.png',
+        localInput: { text: 'inspect', attachments: [{ path: '/tmp/image.png', name: 'image.png', intent: 'file' }] },
       },
     });
   });
@@ -229,6 +233,10 @@ describe('prepareCoworkPromptPayload', () => {
         finalPrompt: 'why does this fail?\n\n'
           + '<pasted_text id="p1">\nError: boom\nat main()\n</pasted_text id="p1">\n\n'
           + 'File: /tmp/app.log',
+        localInput: {
+          text: 'why does this fail?\n\n<pasted_text id="p1">\nError: boom\nat main()\n</pasted_text id="p1">',
+          attachments: [{ path: '/tmp/app.log', name: 'app.log', intent: 'file' }],
+        },
       },
     });
   });
@@ -244,5 +252,9 @@ describe('prepareCoworkPromptPayload', () => {
     });
 
     expect(result.success && result.payload.finalPrompt).toBe('<pasted_text id="p2">\nnotes\n</pasted_text id="p2">');
+    expect(result.success && result.payload.localInput).toEqual({
+      text: '<pasted_text id="p2">\nnotes\n</pasted_text id="p2">',
+      attachments: [],
+    });
   });
 });

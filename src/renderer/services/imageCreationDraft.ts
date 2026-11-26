@@ -1,5 +1,6 @@
 import { ImageCreation, type ImageExampleReference } from '../../shared/imageCreation/constants';
 import { store } from '../store';
+import { sameAccountContext } from '../store/accountSessionBoundary';
 import {
   setDraftAttachments, setDraftBrowserAnnotationBatches, setDraftCollaborationMode, setDraftKitIds,
   setDraftPrompt, setDraftSelectedTextSnippets, setDraftSkillIds,
@@ -63,7 +64,12 @@ export async function prepareImageCreationDraft(
   presetId: string, prompt: string, reference: ImageExampleReference | undefined, isCurrent: () => boolean,
 ): Promise<ImageCreationDraftBackup | null> {
   const backup = captureImageCreationDraft();
-  const agent = await agentService.addPreset(presetId);
+  const account = store.getState().auth;
+  const agent = await agentService.addPreset(presetId).catch(error => {
+    if (!sameAccountContext(account, store.getState().auth)) return null;
+    throw error;
+  });
+  if (!sameAccountContext(account, store.getState().auth)) return null;
   if (!agent) throw new Error('Image expert preparation failed');
   const staged = reference ? await stageImageCreationReference(reference, agent.workingDirectory) : undefined;
   // Installing an expert can take a while. Never overwrite a draft edited, sent,

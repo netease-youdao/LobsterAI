@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, type WebContents } from 'electron';
 
 import {
+  AgentAccessErrorCode,
   AgentId,
   AgentIpcChannel,
   type AgentLegacyIdentityCleanupResult,
@@ -18,6 +19,7 @@ import { parseAgentModelSelection } from '../../../shared/agent/modelSelection';
 import { ExpertUpgradeStatus } from '../../../shared/agent/presets';
 import { usageFailureCode, UsageOutcome, type UsageParams } from '../../../shared/analytics/usage';
 import type { AgentManager } from '../../agentManager';
+import { AgentAccessError } from '../../agentOwnership';
 import type { Agent, CoworkStore, CreateAgentRequest, UpdateAgentRequest } from '../../coworkStore';
 import { getLanguage } from '../../i18n';
 import type { IMGatewayManager } from '../../im';
@@ -25,6 +27,7 @@ import { createAgentDescriptionBackfiller } from '../../libs/agentDescriptionBac
 import type { CoworkEngineRouter } from '../../libs/agentEngine';
 import { pickChangedAgentPersona, writeAgentPersonaFiles } from '../../libs/agentPersonaFiles';
 import { cleanupLegacyAgentsMdIdentityBlockInWorkspace } from '../../libs/openclawAgentsMdIdentityMigration';
+import { ownershipOperationGate } from '../../ownershipOperationGate';
 import { isExpertBusy, upgradePreset } from './upgradePreset';
 
 type SyncOpenClawConfig = (options: {
@@ -72,15 +75,17 @@ async function cleanupLegacyIdentityBlockForAgent(
     'getAgentManager' | 'resolveAgentWorkspacePath' | 'syncOpenClawConfig'
   >,
 ): Promise<AgentLegacyIdentityCleanupResult> {
-  if (agentId !== AgentId.Main && deps.getAgentManager().getAgent(agentId) === null) {
-    return buildLegacyIdentityCleanupFailure(`Agent ${agentId} not found`);
-  }
+  const manager = deps.getAgentManager();
+  const owner = manager.captureOwner();
+  manager.assertAgentAccess(agentId);
 
   const syncResult = await deps.syncOpenClawConfig({ reason: 'agent-identity-cleanup-prereq' });
   if (!syncResult.success) {
     return buildLegacyIdentityCleanupFailure(syncResult.error || 'OpenClaw config sync failed before cleanup.');
   }
 
+  manager.assertCurrentOwner(owner);
+  manager.assertAgentAccess(agentId);
   const workspacePath = deps.resolveAgentWorkspacePath(agentId);
   const result = cleanupLegacyAgentsMdIdentityBlockInWorkspace(workspacePath);
   if (result.status === AgentLegacyIdentityCleanupStatus.Cleaned) {
@@ -112,10 +117,14 @@ function writeNewAgentPersonaFiles(
 }
 
 /** Lets renderer windows reload agents after a change; omit excludeSender to broadcast to all windows. */
-function notifyAgentsChanged(excludeSender?: WebContents): void {
+export function notifyAgentsChanged(excludeSender?: WebContents): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || (excludeSender && win.webContents.id === excludeSender.id)) continue;
-    win.webContents.send(AgentIpcChannel.Changed);
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed?.() || win.webContents.id === excludeSender?.id) continue;
+      win.webContents.send(AgentIpcChannel.Changed);
+    } catch (error) {
+      console.warn('[Agents] Failed to notify a window of agent changes:', error);
+    }
   }
 }
 
@@ -319,16 +328,27 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
   });
 
   ipcMain.handle(AgentIpcChannel.Delete, async (event, id: string) => {
+    let release: (() => void) | null = null;
     try {
+      const manager = getAgentManager();
+      const owner = manager.captureOwner();
       const agentExists = id !== AgentId.Main && getAgentManager().getAgent(id) !== null;
       if (!agentExists) return { success: true, deleted: false, deletedSessionIds: [] };
-      const deletedSessionIds = getCoworkStore().listSessionIdsByAgent(id);
+      const deletedSessionIds = agentExists ? getCoworkStore().listSessionIdsByAgent(id) : [];
+      release = ownershipOperationGate.beginOperation({ agentIds: [id], sessionIds: deletedSessionIds });
+      if (!release) throw new AgentAccessError(AgentAccessErrorCode.Busy);
+      // Runtime evidence can outlive a persisted status transition. Never stop work as part of deletion.
       const router = getCoworkEngineRouter();
-      for (const sessionId of deletedSessionIds) {
-        router.stopSession(sessionId);
+      if (deletedSessionIds.some(sessionId => router.isSessionActive(sessionId))) {
+        throw new AgentAccessError(AgentAccessErrorCode.Busy);
       }
 
-      const result = await deps.deleteAgentWithRuntime(id, () => getAgentManager().deleteAgent(id));
+      getCoworkStore().agentOwnership.assertDeletable(id, owner);
+      const result = await deps.deleteAgentWithRuntime(id, () => {
+        manager.assertCurrentOwner(owner);
+        return manager.deleteAgent(id);
+      });
+      if (!result) return { success: true, deleted: false, deletedSessionIds: [] };
       if (result) {
         descriptionBackfiller.cancel(id);
       }
@@ -381,7 +401,7 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete agent',
       };
-    }
+    } finally { release?.(); }
   });
 
   ipcMain.handle(AgentIpcChannel.Presets, async () => {
@@ -465,21 +485,27 @@ export function registerAgentHandlers(deps: AgentHandlerDeps): void {
       };
     };
     try {
-      const existing = getAgentManager().listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
+      const manager = getAgentManager();
+      const owner = manager.captureOwner();
+      const existing = manager.listAgents().find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
       prepareMode = existing ? existing.enabled ? PresetPreparationMode.Reuse : PresetPreparationMode.Reenable : PresetPreparationMode.Install;
       const modelSelection = parseAgentModelSelection(rawModelSelection);
-      const agent = await getAgentManager().addPresetAgent(
+      const agent = await manager.addPresetAgent(
         presetId,
         modelSelection ? modelSelection.model : resolveDefaultAgentModelRef(),
         modelSelection?.thinkingLevel,
       );
+      manager.assertCurrentOwner(owner);
       if (!agent) return fail(new Error(`Preset agent not found: ${presetId}`), 'preset_not_found');
       // A reused or re-enabled instance keeps the persona its workspace already has.
       if (prepareMode === PresetPreparationMode.Install) writeNewAgentPersonaFiles(agent, resolveAgentWorkspacePath);
+      manager.assertAgentAccess(agent.id);
       // The composer must not become ready before OpenClaw knows this agent.
       // If sync fails, a retry reuses the saved instance instead of duplicating it.
       failureStage = PresetPreparationStage.ConfigSync;
       const syncResult = await syncOpenClawConfig({ reason: 'agent-preset-added' });
+      manager.assertCurrentOwner(owner);
+      manager.assertAgentAccess(agent.id);
       if (!syncResult.success) {
         return fail(new Error(syncResult.error || 'Failed to sync preset agent'));
       }

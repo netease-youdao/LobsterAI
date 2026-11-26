@@ -120,6 +120,8 @@ export {
   migrateLegacyTavilyPluginToMcp,
 };
 
+import { TrustedWriteContext, withTrustedMigrationWrite } from './remoteWriteContext';
+
 export interface RunLegacyOpenClawMigrationOptions {
   /** Electron userData root directory. */
   userDataDir: string;
@@ -144,6 +146,7 @@ export interface LegacyOpenClawMigrationResult {
   rolledBack?: boolean;
   error?: string;
 }
+
 
 const RETIRED_IM_PLATFORMS: readonly string[] = [
   RetiredImPlatform.Nim,
@@ -2555,6 +2558,10 @@ function clearLegacyPendingMessageEditsOnce(db: Database.Database): void {
  *   restrictions or auto approvals survive upgrade without relying on stale `execution_mode`.
  */
 export function migrateLegacyPermissionPresets(db: Database.Database): void {
+  withTrustedMigrationWrite(db, TrustedWriteContext.Session, () => backfillLegacyPermissionPresets(db));
+}
+
+function backfillLegacyPermissionPresets(db: Database.Database): void {
   if (getKv(db, MIGRATION_V2_PERMISSION_PRESET_BACKFILL_KV_KEY)) return;
 
   let legacyConfigExecutionMode: string | null = null;

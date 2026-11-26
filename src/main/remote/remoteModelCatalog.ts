@@ -1,0 +1,173 @@
+import { randomUUID } from 'crypto';
+
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { RemoteInputReason, type RemoteModelItem, RemoteModelMetadata } from '../../shared/remote/input';
+import { payloadHash } from './canonical';
+import type { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
+
+export interface LocalRemoteModel {
+  identity: string; runtimeRef: string; source: 'subscription' | 'custom'; displayName: string; providerLabel: string;
+  modelId?: string;
+  available: boolean; unavailableReason?: RemoteModelItem['unavailableReason'];
+  image: boolean; toolCalling: boolean; thinking: RemoteModelItem['thinking'];
+  /** Never serialized into a public record. Includes credentials/routing to invalidate old selections. */
+  configuration: unknown;
+}
+interface Binding { identity: string; modelRef: string; version: string; fingerprint: string; removed: boolean }
+interface CatalogState { bindings: Binding[]; catalogVersion: string; modelDisplayId?: boolean; modelDisplayIdRetryAt?: number; pending?: { publicationId: string; expectedCatalogVersion: string; items: RemoteModelItem[] } }
+export class RemoteInputError extends Error {
+  constructor(readonly reason: string) { super(reason); }
+}
+const label = (value: string, fallback: string): string => {
+  const text = value.replace(/[\u0000-\u001f\u007f]/gu, '').trim();
+  return /(?:https?:\/\/|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|sk-[A-Za-z0-9])/iu.test(text) ? fallback : (text || fallback).slice(0, 120).replace(/[\uD800-\uDBFF]$/u, '');
+};
+const displayModelId = (value: unknown): string | undefined => typeof value === 'string'
+  && /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/u.test(value)
+  && !/(?::\/\/|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|sk-[A-Za-z0-9])/iu.test(value) ? value : undefined;
+const modelFingerprint = (model: LocalRemoteModel, modelId?: string): string => {
+  // Keep the original private configuration in the fingerprint, including credentials.
+  const { modelId: _displayId, ...privateModel } = model;
+  return payloadHash(modelId === undefined ? privateModel : { ...privateModel, modelId });
+};
+
+/** Persistent opaque identity; deletion never reassigns an old reference to a new model. */
+export class RemoteModelCatalog {
+  private publicationContext = '';
+  private checkedHash = '';
+  private checkedAt = 0;
+  private retryAt = 0;
+  private publicationEpoch = 0;
+  constructor(private readonly store: Pick<RemoteStore, 'get' | 'put'>, private readonly models: () => LocalRemoteModel[],
+    private readonly getTargetId?: () => string | null) {}
+  resetPublication(): void { this.publicationEpoch++; this.publicationContext = ''; this.checkedHash = ''; this.checkedAt = 0; this.retryAt = 0; }
+  private targetId(): string | undefined {
+    const targetId = this.getTargetId?.();
+    if (this.getTargetId && !targetId) throw new RemoteInputError(RemoteInputReason.Stale);
+    return targetId ?? undefined;
+  }
+  private key(owner: RemoteOwner, deviceId: string): string {
+    return `inputModels:${JSON.stringify([...(this.getTargetId ? [this.targetId()] : []), owner.userId, owner.scopeKey, deviceId])}`;
+  }
+  private state(owner: RemoteOwner, deviceId: string): CatalogState { return this.store.get<CatalogState>(this.key(owner, deviceId)) || { bindings: [], catalogVersion: '0' }; }
+  refresh(owner: RemoteOwner, deviceId: string): RemoteModelItem[] {
+    const state = this.state(owner, deviceId);
+    const models = this.models();
+    const seen = new Set<string>();
+    const items: RemoteModelItem[] = [];
+    for (const model of models) {
+      if (seen.has(model.identity)) throw new RemoteInputError(RemoteInputReason.ModelUnavailable);
+      seen.add(model.identity);
+      const modelId = state.modelDisplayId ? displayModelId(model.modelId) : undefined;
+      const fingerprint = modelFingerprint(model, modelId);
+      let binding = state.bindings.find(value => value.identity === model.identity && !value.removed);
+      if (!binding) { binding = { identity: model.identity, modelRef: randomUUID(), version: '1', fingerprint, removed: false }; state.bindings.push(binding); }
+      else if (binding.fingerprint !== fingerprint) { binding.version = String(BigInt(binding.version) + 1n); binding.fingerprint = fingerprint; }
+      items.push({ modelRef: binding.modelRef, version: binding.version, source: model.source,
+        ...(modelId === undefined ? {} : { modelId }),
+        displayName: label(model.displayName, 'Model'), providerLabel: label(model.providerLabel, model.source),
+        available: model.available, unavailableReason: model.available ? null : model.unavailableReason || RemoteInputReason.ModelUnavailable,
+        inputCapabilities: { text: true, image: model.image, toolCalling: model.toolCalling },
+        thinking: { options: [...model.thinking.options], default: model.thinking.default || null } });
+    }
+    for (const binding of state.bindings) if (!seen.has(binding.identity)) binding.removed = true;
+    this.store.put(this.key(owner, deviceId), state);
+    // Opaque references are identities, not display order. Preserve the desktop model order.
+    return items;
+  }
+  resolve(owner: RemoteOwner, deviceId: string, modelRef: string, version?: string): { item: RemoteModelItem; local: LocalRemoteModel } {
+    const item = this.refresh(owner, deviceId).find(value => value.modelRef === modelRef);
+    if (!item?.available) throw new RemoteInputError(RemoteInputReason.ModelUnavailable);
+    if (version !== undefined && item.version !== version) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    const state = this.state(owner, deviceId);
+    const binding = state.bindings.find(value => value.modelRef === modelRef && !value.removed)!;
+    const local = this.models().find(value => value.identity === binding.identity);
+    if (!local || modelFingerprint(local, state.modelDisplayId ? displayModelId(local.modelId) : undefined) !== binding.fingerprint) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    return { item, local };
+  }
+  resolveRuntime(owner: RemoteOwner, deviceId: string, runtimeRef: string): { item: RemoteModelItem; local: LocalRemoteModel } {
+    this.refresh(owner, deviceId);
+    const local = this.models().find(value => value.runtimeRef === runtimeRef);
+    const binding = local && this.state(owner, deviceId).bindings.find(value => value.identity === local.identity && !value.removed);
+    if (!binding) throw new RemoteInputError(RemoteInputReason.ModelUnavailable);
+    return this.resolve(owner, deviceId, binding.modelRef);
+  }
+  async publish(owner: RemoteOwner, deviceId: string, generation: string,
+    api: (path: string, method?: string, body?: unknown) => Promise<any>, current: () => boolean): Promise<boolean> {
+    const telemetry = captureRemoteTelemetry({ deviceId, remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
+      operationKind: SyncTelemetry.Kind.ModelCatalog, lane: 'background' });
+    try {
+    const targetId = this.targetId();
+    const isCurrent = () => current() && this.getTargetId?.() === targetId;
+    if (!isCurrent()) throw new RemoteInputError(RemoteInputReason.Account);
+    let items = this.refresh(owner, deviceId);
+    const context = JSON.stringify([targetId, owner, deviceId, generation]);
+    if (this.publicationContext !== context) { this.resetPublication(); this.publicationContext = context; }
+    const epoch = this.publicationEpoch;
+    let digest = payloadHash(items);
+    if (this.checkedHash === digest && Date.now() - this.checkedAt < 300000) return true;
+    if (Date.now() < this.retryAt) return false;
+    // Local configuration is checked frequently; unchanged catalogs only need a slow remote reconciliation.
+    this.retryAt = Date.now() + 60000;
+    const remote = await api(`/devices/${deviceId}/models`);
+    if (!isCurrent() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
+    let state = this.state(owner, deviceId);
+    if (state.pending && (remote.lastPublicationId === state.pending.publicationId || remote.catalogVersion !== state.pending.expectedCatalogVersion)) delete state.pending;
+    state.catalogVersion = remote.catalogVersion || '0';
+    state.modelDisplayId = Date.now() >= (state.modelDisplayIdRetryAt || 0)
+      && Array.isArray(remote.capabilities) && remote.capabilities.includes(RemoteModelMetadata.DisplayId);
+    // A downgrade cannot accept the enriched pending body. Retire its receipt;
+    // never rewrite a publication under the same ID, even if its response was lost.
+    if (!state.modelDisplayId && state.pending?.items.some(item => Object.hasOwn(item, 'modelId'))) delete state.pending;
+    this.store.put(this.key(owner, deviceId), state);
+    items = this.refresh(owner, deviceId);
+    if (items.length > 200 || Buffer.byteLength(JSON.stringify(items)) > 256 * 1024) throw new RemoteInputError(RemoteInputReason.Invalid);
+    digest = payloadHash(items);
+    state = this.state(owner, deviceId);
+    if (!state.pending && payloadHash(remote.items || []) === digest) {
+      this.store.put(this.key(owner, deviceId), state);
+      this.checkedHash = digest; this.checkedAt = Date.now(); this.retryAt = 0;
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Skipped,
+        catalogVersion: state.catalogVersion, recordCount: items.length });
+      return payloadHash(this.refresh(owner, deviceId)) === digest;
+    }
+    state.pending ||= { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion, items };
+    this.store.put(this.key(owner, deviceId), state);
+    const publishedHash = payloadHash(state.pending.items), publicationId = state.pending.publicationId;
+    let result;
+    try {
+      result = await api(`/devices/${deviceId}/models/publish`, 'POST', { ...state.pending, connectionGeneration: generation });
+    } catch (error) {
+      const rejection = error as { code?: number; httpStatus?: number; message?: string } | null;
+      if (rejection?.code === 47019 && rejection.httpStatus === 400 && rejection.message === 'Unknown request field'
+        && state.pending.items.some(item => Object.hasOwn(item, 'modelId'))) {
+        if (!isCurrent() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
+        const latest = this.state(owner, deviceId);
+        if (latest.pending?.publicationId === publicationId) {
+          // GET and POST may reach different rollout nodes. This explicit rejection
+          // is safe to retire; ambiguous failures retain the original pending body.
+          latest.modelDisplayId = false; latest.modelDisplayIdRetryAt = Date.now() + 300000;
+          delete latest.pending; this.store.put(this.key(owner, deviceId), latest);
+          this.checkedHash = ''; this.retryAt = 0;
+          return false;
+        }
+      }
+      throw error;
+    }
+    if (!isCurrent() || epoch !== this.publicationEpoch) throw new RemoteInputError(RemoteInputReason.Account);
+    const latest = this.state(owner, deviceId);
+    if (latest.pending?.publicationId !== state.pending.publicationId) return false;
+    latest.catalogVersion = result.catalogVersion; delete latest.pending; this.store.put(this.key(owner, deviceId), latest);
+    this.checkedHash = publishedHash; this.checkedAt = Date.now(); this.retryAt = 0;
+    telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Completed,
+      operationId: publicationId, catalogVersion: result.catalogVersion, recordCount: items.length, persistOutcome: 'success' });
+    return publishedHash === payloadHash(this.refresh(owner, deviceId));
+    } catch (error) {
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Failed,
+        reason: SyncTelemetry.Reason.RequestFailed });
+      throw error;
+    }
+  }
+}

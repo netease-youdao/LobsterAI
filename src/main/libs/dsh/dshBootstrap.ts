@@ -10,7 +10,6 @@
 // - `McpOAuthManager` (encrypted Remote MCP OAuth 2.1 PKCE token manager)
 // - `DshChannelsBridge` (retained IM platforms via `@lobsterai/dsh-channels`)
 // - Isolated Dual-Track DSH Ecosystem Web View (`BrowserWindow`)
-
 import type Database from 'better-sqlite3';
 import { app, BrowserWindow, safeStorage, session } from 'electron';
 import * as fs from 'fs';
@@ -38,6 +37,7 @@ import {
   OpenClawEngineErrorCode,
   OpenClawEnginePhase,
 } from '../../../shared/openclawEngine/constants';
+import type { CreateCoworkSessionOptions } from '../../coworkStore';
 import { t } from '../../i18n';
 import {
   type DshChannelInstanceConfig,
@@ -61,6 +61,7 @@ import {
   type LegacyOpenClawMigrationResult,
   runLegacyOpenClawMigration,
 } from '../../migration/legacyOpenClawMigrator';
+import type { AutomationOwnershipPort } from '../../remote/automationOwnership';
 import {
   LobsterScheduler,
   type LobsterSchedulerRunResult,
@@ -70,6 +71,7 @@ import {
   type DshModelSelection,
   DshRuntimeAdapter,
 } from '../agentEngine/dshRuntimeAdapter';
+import { assertAgentSettingsLocalWriteAllowed } from '../agentSettingsConversation/runtime';
 import { BrowserAnnotationAssetStore } from '../browserAnnotationAssetStore';
 import {
   ensureElectronNodeShim,
@@ -177,7 +179,7 @@ export interface DshBootstrapOptions {
   userDataDir: string;
   db: Database.Database;
   skillsDir: string;
-  coworkStore: DshCoworkStorePort & {
+  coworkStore: DshCoworkStorePort & AutomationOwnershipPort & {
     createSession?: (
       title: string,
       cwd: string,
@@ -186,7 +188,7 @@ export interface DshBootstrapOptions {
       activeSkillIds?: string[],
       agentId?: string,
       modelOverride?: string,
-      options?: { scheduledTaskId?: string | null },
+      options?: CreateCoworkSessionOptions,
     ) => { id: string };
   };
   getDefaultCwd: (agentId?: string) => string;
@@ -610,12 +612,18 @@ export class DshBootstrap {
 
     this.subagentSessions = new DshSubagentSessions(options.db, this.hostManager,
       id => options.coworkStore.getSession(id, Number.MAX_SAFE_INTEGER)?.messages ?? []);
+    this.hostManager.setRemoteToolGuard((sessionId, requestId, agentId) => this.runtimeAdapter.assertRemoteDelegation(sessionId, requestId, agentId));
     this.hostManager.setSubagentBindingHandler((request) => {
       if (request.action === 'delete') {
         this.subagentSessions.deleteAgentBinding(request.childSessionId);
         return;
       }
+      assertAgentSettingsLocalWriteAllowed(request.targetAgentId);
+      if (request.remoteRequestId) this.runtimeAdapter.assertRemoteDelegation(
+        request.rootCoworkSessionId, request.remoteRequestId, request.targetAgentId,
+      );
       this.subagentSessions.recordAgentBinding({
+        remoteRequestId: request.remoteRequestId,
         childSessionId: request.childSessionId,
         parentDshSessionId: request.parentDshSessionId,
         rootCoworkSessionId: request.rootCoworkSessionId,
@@ -661,6 +669,7 @@ export class DshBootstrap {
 
     this.scheduler = new LobsterScheduler({
       db: options.db,
+      ownership: options.coworkStore,
       executor: (task, signal) => this.executeScheduledTask(task, signal),
     });
 

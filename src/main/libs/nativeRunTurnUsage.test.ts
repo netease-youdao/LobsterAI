@@ -8,6 +8,7 @@ import {
   clearNativeRunTurnUsage,
   configureNativeUsageSessionTitleResolver,
   getNativeRunMediaUsageContext,
+  isNativeUsageSessionId,
   recordNativeRunLlmTrace,
   recordNativeRunMediaTask,
 } from './nativeRunTurnUsage';
@@ -164,4 +165,13 @@ describe('nativeRunTurnUsage', () => {
     expect(claimNativeRunTurnUsage(['oldest'])).toBeNull();
     expect(claimNativeRunTurnUsage(['run-255'])?.trace.traceId).toBe(TRACE_B);
   });
+});
+
+
+test('distinguishes native ledger IDs from local sessions and malformed remote identities', () => {
+  expect(isNativeUsageSessionId('cron:daily-report')).toBe(true);
+  expect(isNativeUsageSessionId(`im:feishu:${'a'.repeat(64)}`)).toBe(true);
+  for (const sessionId of ['local-session', 'cron:', 'cron:job/other', 'im:feishu:local-session']) {
+    expect(isNativeUsageSessionId(sessionId)).toBe(false);
+  }
 });

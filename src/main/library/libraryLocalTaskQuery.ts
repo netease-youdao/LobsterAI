@@ -31,6 +31,8 @@ import type {
   LibrarySessionRef,
   LocalArtifactItem,
 } from '../../shared/library/types';
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { sessionVisibilitySql } from '../agentOwnership';
 
 interface TaskRow {
   session_id: string;
@@ -146,12 +148,13 @@ export const normalizeLibraryTaskItemsOptions = (value: unknown): LibraryLocalTa
   };
 };
 
-const createFilter = (filters: LibraryLocalTaskFilters) => {
+const createFilter = (filters: LibraryLocalTaskFilters, actor: RemoteOwner | null | undefined) => {
+  const access = sessionVisibilitySql(actor);
   const where = [`EXISTS (
     SELECT 1 FROM library_artifact_sessions r
-    JOIN cowork_sessions s ON s.id = r.session_id WHERE r.artifact_id = a.id
+    JOIN cowork_sessions s ON s.id = r.session_id WHERE r.artifact_id = a.id AND (${access.sql})
   )`];
-  const params: Array<string | number> = [];
+  const params: Array<string | number> = [...access.parameters];
   if (filters.category && filters.category !== LibraryCategory.All) {
     where.push('a.category = ?');
     params.push(filters.category);
@@ -171,7 +174,7 @@ const createFilter = (filters: LibraryLocalTaskFilters) => {
 
 // The owner is chosen across every effective relation before any requested task
 // is selected. Filtering relations by session first would duplicate shared files.
-const ownedItemsCte = (where: string): string => `
+const ownedItemsCte = (where: string, access: string): string => `
   filtered_artifacts AS (
     SELECT a.id, a.sort_time_ms FROM library_local_artifacts a
     WHERE ${where} AND a.availability <> ?
@@ -183,6 +186,7 @@ const ownedItemsCte = (where: string): string => `
     FROM filtered_artifacts fa
     JOIN library_artifact_sessions r ON r.artifact_id = fa.id
     JOIN cowork_sessions s ON s.id = r.session_id
+    WHERE ${access}
   ), owned_items AS (SELECT * FROM ranked_relations WHERE owner_rank = 1)
 `;
 
@@ -219,9 +223,11 @@ export const listLibraryLocalTaskGroups = (
   db: Database.Database,
   options: LibraryLocalTaskGroupsOptions,
   hydrate: HydrateItems,
+  actor?: RemoteOwner | null,
 ): LibraryLocalTaskGroupsData => {
   const query = normalizeLibraryTaskGroupsOptions(options);
-  const filter = createFilter(query);
+  const filter = createFilter(query, actor);
+  const access = sessionVisibilitySql(actor);
   const cursor = query.taskCursor ? decodeLibraryGridTaskCursor(query.taskCursor, query) : undefined;
   const pageSize = query.taskPageSize!;
   return db.transaction(() => {
@@ -236,7 +242,7 @@ export const listLibraryLocalTaskGroups = (
       OR (session_updated_at = ? AND session_created_at = ? AND session_id COLLATE BINARY < ?)` : '';
     const afterParams = cursor ? [cursor.sessionUpdatedAt, cursor.sessionUpdatedAt,
       cursor.sessionCreatedAt, cursor.sessionUpdatedAt, cursor.sessionCreatedAt, cursor.sessionId] : [];
-    const rows = db.prepare(`WITH ${ownedItemsCte(filter.sql)}, task_groups AS (
+    const rows = db.prepare(`WITH ${ownedItemsCte(filter.sql, access.sql)}, task_groups AS (
       SELECT session_id, title, agent_id, session_created_at, session_updated_at,
         MAX(last_related_at) AS last_related_at, COUNT(*) AS matched_file_count
       FROM owned_items GROUP BY session_id
@@ -252,7 +258,7 @@ export const listLibraryLocalTaskGroups = (
     JOIN ranked_items ri ON ri.session_id = st.session_id AND ri.file_rank <= ?
     ORDER BY st.session_updated_at DESC, st.session_created_at DESC,
       st.session_id COLLATE BINARY DESC, ri.file_rank ASC
-    `).all(...filter.params, LibraryAvailability.Missing, ...afterParams, pageSize + 1, LibraryGridLimits.PreviewCount) as TaskPreviewRow[];
+    `).all(...filter.params, LibraryAvailability.Missing, ...access.parameters, ...afterParams, pageSize + 1, LibraryGridLimits.PreviewCount) as TaskPreviewRow[];
     const bySession = new Map<string, { row: TaskRow; ids: string[] }>();
     for (const row of rows) {
       toSession(row);
@@ -292,27 +298,29 @@ export const listLibraryLocalTaskItems = (
   db: Database.Database,
   options: LibraryLocalTaskItemsOptions,
   hydrate: HydrateItems,
+  actor?: RemoteOwner | null,
 ): LibraryLocalTaskItemsData => {
   const query = normalizeLibraryTaskItemsOptions(options);
-  const filter = createFilter(query);
+  const filter = createFilter(query, actor);
+  const access = sessionVisibilitySql(actor);
   const cursor = query.itemCursor ? decodeLibraryGridItemCursor(query.itemCursor, query, query.sessionId) : undefined;
   const pageSize = query.pageSize!;
   return db.transaction(() => {
-    const row = db.prepare(`WITH ${ownedItemsCte(filter.sql)}
+    const row = db.prepare(`WITH ${ownedItemsCte(filter.sql, access.sql)}
       SELECT s.id AS session_id, s.title, s.agent_id, s.created_at AS session_created_at,
         s.updated_at AS session_updated_at, COALESCE(MAX(oi.last_related_at), 0) AS last_related_at,
         COUNT(oi.id) AS matched_file_count
       FROM cowork_sessions s LEFT JOIN owned_items oi ON oi.session_id = s.id
-      WHERE s.id = ? GROUP BY s.id
-    `).get(...filter.params, LibraryAvailability.Missing, query.sessionId) as TaskRow | undefined;
+      WHERE s.id = ? AND (${access.sql}) GROUP BY s.id
+    `).get(...filter.params, LibraryAvailability.Missing, ...access.parameters, query.sessionId, ...access.parameters) as TaskRow | undefined;
     if (!row) throw new LibraryLocalDataError(LibraryErrorCode.NotFound, 'Library task was not found.');
     const session = toSession(row);
     const after = cursor ? 'AND (sort_time_ms < ? OR (sort_time_ms = ? AND id COLLATE BINARY < ?))' : '';
     const afterParams = cursor ? [cursor.artifactSortTime, cursor.artifactSortTime, cursor.itemId] : [];
-    const ids = db.prepare(`WITH ${ownedItemsCte(filter.sql)}
+    const ids = db.prepare(`WITH ${ownedItemsCte(filter.sql, access.sql)}
       SELECT id FROM owned_items WHERE session_id = ? ${after}
       ORDER BY sort_time_ms DESC, id COLLATE BINARY DESC LIMIT ?
-    `).all(...filter.params, LibraryAvailability.Missing, query.sessionId, ...afterParams, pageSize + 1) as Array<{ id: string }>;
+    `).all(...filter.params, LibraryAvailability.Missing, ...access.parameters, query.sessionId, ...afterParams, pageSize + 1) as Array<{ id: string }>;
     const hasMoreItems = ids.length > pageSize;
     const items = hydrateOrderedItems(ids.slice(0, pageSize).map(item => item.id), hydrate);
     const tail = items[items.length - 1];

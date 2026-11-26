@@ -1,4 +1,5 @@
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { stripGoalCommandPrefixForDisplay } from '../../../common/sessionTitle';
@@ -12,6 +13,8 @@ import ListChecksIcon from '../icons/ListChecksIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
+import { useOwnershipHover } from '../ownership/OwnershipHoverCard';
+import OwnershipMenuItems from '../ownership/OwnershipMenuItems';
 import {
   getIMSessionDisplayTitle,
   getIMSessionPlatformIconClassName,
@@ -116,6 +119,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const ignoreNextBlurRef = useRef(false);
+  const ownershipHover = useOwnershipHover({ kind: OwnershipTargetKind.Task, id: session.id }, isBatchMode || isRenaming || menuPosition !== null);
 
   useEffect(() => {
     if (!isRenaming) {
@@ -145,7 +149,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       closeMenu();
       return;
     }
-    const menuHeight = showBatchOption ? 156 : 120;
+    const menuHeight = showBatchOption ? 201 : 165;
     const position = calculateMenuPosition(menuHeight);
     if (position) {
       setMenuPosition(position);
@@ -243,7 +247,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
 
   useEffect(() => {
     if (!menuPosition) return;
-    const menuHeight = showConfirmDelete ? 112 : (showBatchOption ? 156 : 120);
+    const menuHeight = showConfirmDelete ? 112 : (showBatchOption ? 201 : 165);
     const position = calculateMenuPosition(menuHeight);
     if (position && (position.right !== menuPosition.right || position.y !== menuPosition.y)) {
       setMenuPosition(position);
@@ -295,6 +299,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
 
   return (
     <div
+      {...ownershipHover.handlers}
       onClick={() => {
         if (isRenaming) return;
         closeMenu();
@@ -432,32 +437,36 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       {menuPosition && (
         <div
           ref={menuRef}
-          className="fixed z-50 w-max min-w-[124px] max-w-[calc(100vw-16px)] rounded-xl border border-border bg-surface shadow-lg overflow-hidden"
+          className="fixed z-50 w-max min-w-[112px] max-w-[calc(100vw-16px)] rounded-xl border border-border bg-surface shadow-lg overflow-hidden"
           style={{ top: menuPosition.y, right: menuPosition.right }}
           role="menu"
         >
+          <OwnershipMenuItems target={{ kind: OwnershipTargetKind.Task, id: session.id }} onAction={closeMenu} className="w-full flex items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-surface-raised" />
           {menuItems.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={item.onClick}
-              className="w-full flex items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-surface-raised"
-            >
-              {item.key === 'batch' && <ListChecksIcon className="h-4 w-4" />}
-              {item.key === 'rename' && <PencilSquareIcon className="h-4 w-4" />}
-              {item.key === 'pin' && (
-                <PushPinIcon
-                  slashed={session.pinned}
-                  className={`h-4 w-4 ${session.pinned ? 'opacity-60' : ''}`}
-                />
-              )}
-              {item.key === 'delete' && <TrashIcon className="h-4 w-4" />}
-              {item.label}
-            </button>
+            <React.Fragment key={item.key}>
+              {item.key === 'delete' && <div role="separator" className="my-1 border-t border-border" />}
+              <button
+                type="button"
+                onClick={item.onClick}
+                className="w-full flex items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-surface-raised"
+              >
+                {item.key === 'batch' && <ListChecksIcon className="h-4 w-4" />}
+                {item.key === 'rename' && <PencilSquareIcon className="h-4 w-4" />}
+                {item.key === 'pin' && (
+                  <PushPinIcon
+                    slashed={session.pinned}
+                    className={`h-4 w-4 ${session.pinned ? 'opacity-60' : ''}`}
+                  />
+                )}
+                {item.key === 'delete' && <TrashIcon className="h-4 w-4" />}
+                {item.label}
+              </button>
+            </React.Fragment>
           ))}
         </div>
       )}
 
+      {ownershipHover.card}
       {/* Delete Confirmation Modal */}
       {showConfirmDelete && (
         <Modal onClose={handleCancelDelete} className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden">

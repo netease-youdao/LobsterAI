@@ -10,6 +10,7 @@ import {
 import { readSessionDiagnosticsData } from '../../sessionDiagnostics/repository';
 
 export interface SessionDiagnosticsHandlerDeps {
+  assertSessionAccess: (sessionId: string) => void;
   getDatabase: () => Database.Database;
   getAppVersion: () => string;
   getDownloadsPath: () => string;
@@ -36,6 +37,7 @@ export function registerSessionDiagnosticsHandlers(
           return { success: false, error: 'Session id is required' };
         }
 
+        deps.assertSessionAccess(sessionId);
         const diagnosticsData = readSessionDiagnosticsData(deps.getDatabase(), sessionId);
         if (!diagnosticsData) {
           return { success: false, error: 'Session not found' };
@@ -58,6 +60,7 @@ export function registerSessionDiagnosticsHandlers(
           return { success: true, canceled: true };
         }
 
+        deps.assertSessionAccess(sessionId);
         const outputPath = ensureZipFileName(saveResult.filePath);
         await exportSessionDiagnosticsZip(outputPath, {
           data: diagnosticsData,

@@ -11,6 +11,7 @@ import {
   DSH_PROFILE_NAME,
 } from '../../../shared/dshEngine/hostConstants';
 import { readInstalledProfilePlugins } from '../../ipcHandlers/dshHost/pluginOperations';
+import { TrustedWriteContext, withTrustedMigrationWrite } from '../../migration/remoteWriteContext';
 import { getSqliteTableColumns, sqliteTableExists } from './sqliteMigrationSnapshot';
 
 const DSH_CACHED_SHELL_PATH_KV_KEY = 'dsh_cached_shell_path_v1';
@@ -339,7 +340,8 @@ export const sanitizeRestoredStateSync = (
         notices.reauthRequiredMcpServers = reauthRequiredMcpServers;
       }
 
-      const dirNotices = sanitizeWorkingDirectories(db, options.defaultWorkingDirectory);
+      const database = db;
+      const dirNotices = withTrustedMigrationWrite(database, TrustedWriteContext.Agent, () => sanitizeWorkingDirectories(database, options.defaultWorkingDirectory));
       Object.assign(notices, dirNotices);
     } finally {
       db?.close();

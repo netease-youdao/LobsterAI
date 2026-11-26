@@ -72,6 +72,7 @@ import {
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
+import type { ApprovalState } from '../shared/cowork/approval';
 import type { CoworkBrowserAnnotationMessageBatch } from '../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortRequest,
@@ -124,6 +125,7 @@ import {
   type HtmlShareSourceType,
   type HtmlShareStatus,
 } from '../shared/htmlShare/constants';
+import { ImIpcChannel } from '../shared/im/constants';
 import { type ImageCreationCatalog, ImageCreationIpc, type ImageExampleReference } from '../shared/imageCreation/constants';
 import {
   KitIpcChannel,
@@ -164,6 +166,8 @@ import { NeteaseMailIpc } from '../shared/neteaseMail/constants';
 import type { NeteaseMailAuthorizationOptions, NeteaseMailBridge, NeteaseMailConfirmationReference, NeteaseMailConfirmationRequest } from '../shared/neteaseMail/types';
 import { OpenClawEngineIpc } from '../shared/openclawEngine/constants';
 import { OpenClawUserConfigIpc } from '../shared/openclawUserConfig/constants';
+import { OwnershipIpc } from '../shared/ownership/constants';
+import type { OwnershipCommitRequest, OwnershipTarget } from '../shared/ownership/types';
 import { PermissionIpcChannel } from '../shared/permissions/constants';
 import type { Platform } from '../shared/platform';
 import { type PptAssetRequest, type PptCatalog, PptCreationIpc, type PptPreparedFile } from '../shared/pptCreation/constants';
@@ -174,6 +178,10 @@ import {
   type ProviderModelDiscoveryRequest,
 } from '../shared/providers/modelDiscovery';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
+import type { RemoteConnectionOperationRequest, RemoteConnectionRemoveRequest, RemoteConnectionResumeRequest, RemoteConnectionsRequest } from '../shared/remote/connections';
+import { type RemoteConfigureRequest, RemoteIpc, type RemoteSettingsState } from '../shared/remote/constants';
+import { RemoteTelemetryIpc } from '../shared/remote/telemetry';
+import type { RemoteTelemetryUiInput } from '../shared/remote/telemetryUi';
 import {
   type ShareDeploymentAnalyzeProjectInput,
   type ShareDeploymentCreateNodeInput,
@@ -298,6 +306,32 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(DesktopCompanionIpc.QuickAnswerEvent, handler);
     },
   } satisfies DesktopCompanionBridge,
+  ownership: {
+    getDetail: (target: OwnershipTarget) => ipcRenderer.invoke(OwnershipIpc.GetDetail, target),
+    preview: (target: OwnershipTarget) => ipcRenderer.invoke(OwnershipIpc.Preview, target),
+    commit: (input: OwnershipCommitRequest) => ipcRenderer.invoke(OwnershipIpc.Commit, input),
+    getResult: (input: { requestId: string }) => ipcRenderer.invoke(OwnershipIpc.GetResult, input),
+    onChanged: (listener: () => void) => {
+      const handler = () => listener();
+      ipcRenderer.on(OwnershipIpc.Changed, handler);
+      return () => ipcRenderer.removeListener(OwnershipIpc.Changed, handler);
+    },
+  },
+  remote: {
+    telemetry: (input: RemoteTelemetryUiInput) => ipcRenderer.send(RemoteTelemetryIpc.Ui, input),
+    state: () => ipcRenderer.invoke(RemoteIpc.State),
+    queryConnections: (input: RemoteConnectionsRequest) => ipcRenderer.invoke(RemoteIpc.Connections, input),
+    removeConnection: (input: RemoteConnectionRemoveRequest) => ipcRenderer.invoke(RemoteIpc.RemoveConnection, input),
+    resumeCurrentConnection: (input: RemoteConnectionResumeRequest) => ipcRenderer.invoke(RemoteIpc.ResumeConnection, input),
+    queryConnectionOperation: (input: RemoteConnectionOperationRequest) => ipcRenderer.invoke(RemoteIpc.ConnectionOperation, input),
+    onChanged: (listener: (state: RemoteSettingsState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: RemoteSettingsState) => listener(state);
+      ipcRenderer.on(RemoteIpc.Changed, handler);
+      return () => ipcRenderer.removeListener(RemoteIpc.Changed, handler);
+    },
+    configure: (input: RemoteConfigureRequest) => ipcRenderer.invoke(RemoteIpc.Configure, input),
+    decide: (requestId: string, decision: 'approve' | 'deny') => ipcRenderer.invoke(RemoteIpc.Decide, requestId, decision),
+  },
   platform: process.platform,
   arch: process.arch,
   store: {
@@ -796,6 +830,7 @@ contextBridge.exposeInMainWorld('electron', {
       modelOverride?: string;
       modelPresetId?: ModelPresetId;
       thinkingLevel?: string;
+      localInput?: import('../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; dataUrl?: string; role?: string }>;
     }) => ipcRenderer.invoke(CoworkIpcChannel.SessionStart, options),
@@ -819,6 +854,7 @@ contextBridge.exposeInMainWorld('electron', {
       resolvedKitCapabilities?: ResolvedKitCapabilities;
       selectedTextSnippets?: Array<{ id: string; text: string; sourceMessageId?: string; sourceMessageType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceId?: string; sourceType?: 'assistant' | 'artifact_markdown' | 'artifact_text' | 'artifact_sheet' | 'artifact_word' | 'artifact_slides'; sourceTitle?: string; sourcePath?: string; artifactId?: string; createdAt: number; startOffset?: number; endOffset?: number }>;
       browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
+      localInput?: import('../shared/cowork/inputAttachments').CoworkLocalInput;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string; sizeBytes?: number; localPath?: string; previewMimeType?: string; previewBase64Data?: string }>;
       mediaSelection?: MediaSelection;
       mediaReferences?: Array<{
@@ -932,7 +968,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.CancelMediaTask, taskId),
 
     // Permission handling
-    respondToPermission: (options: { requestId: string; result: any }) =>
+    listPendingPermissions: () => ipcRenderer.invoke(CoworkIpcChannel.PermissionList),
+    respondToPermission: (options: { requestId: string; result: any; submissionId?: string; expectedVersion?: string; operationDigest?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.PermissionRespond, options),
 
     // Configuration
@@ -1077,6 +1114,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: { sessionId: string; request: any }) => callback(data);
       ipcRenderer.on('cowork:stream:permission', handler);
       return () => ipcRenderer.removeListener('cowork:stream:permission', handler);
+    },
+    onStreamPermissionState: (callback: (data: { sessionId: string; state: ApprovalState }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; state: ApprovalState }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.StreamPermissionState, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.StreamPermissionState, handler);
     },
     getPendingQuestions: () => ipcRenderer.invoke(CoworkIpcChannel.GetPendingQuestions),
     mediaConfirmation: (command: import('../shared/media/confirmation').MediaConfirmationCommand) =>
@@ -1465,141 +1507,141 @@ contextBridge.exposeInMainWorld('electron', {
   },
   im: {
     // Configuration
-    getConfig: () => ipcRenderer.invoke('im:config:get'),
+    getConfig: () => ipcRenderer.invoke(ImIpcChannel.ConfigGet),
     setConfig: (
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:config:set', config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.ConfigSet, config, options),
     syncConfig: () => ipcRenderer.invoke('im:config:sync'),
 
     // Gateway control
-    startGateway: (platform: Platform) => ipcRenderer.invoke('im:gateway:start', platform),
-    stopGateway: (platform: Platform) => ipcRenderer.invoke('im:gateway:stop', platform),
+    startGateway: (platform: Platform) => ipcRenderer.invoke(ImIpcChannel.GatewayStart, platform),
+    stopGateway: (platform: Platform) => ipcRenderer.invoke(ImIpcChannel.GatewayStop, platform),
     testGateway: (platform: Platform, configOverride?: any) =>
-      ipcRenderer.invoke('im:gateway:test', platform, configOverride),
+      ipcRenderer.invoke(ImIpcChannel.GatewayTest, platform, configOverride),
 
     // Status
-    getStatus: () => ipcRenderer.invoke('im:status:get'),
+    getStatus: () => ipcRenderer.invoke(ImIpcChannel.StatusGet),
     getLocalIp: () => ipcRenderer.invoke('im:getLocalIp') as Promise<string>,
     // OpenClaw config schema
     getOpenClawConfigSchema: () => ipcRenderer.invoke('im:openclaw:config-schema'),
 
     // Weixin QR login
-    weixinQrLoginStart: () => ipcRenderer.invoke('im:weixin:qr-login-start'),
+    weixinQrLoginStart: () => ipcRenderer.invoke(ImIpcChannel.WeixinQrLoginStart),
     weixinQrLoginWait: (sessionKey?: string) =>
-      ipcRenderer.invoke('im:weixin:qr-login-wait', sessionKey),
+      ipcRenderer.invoke(ImIpcChannel.WeixinQrLoginWait, sessionKey),
 
     // POPO QR login
-    popoQrLoginStart: () => ipcRenderer.invoke('im:popo:qr-login-start'),
-    popoQrLoginPoll: (taskToken: string) => ipcRenderer.invoke('im:popo:qr-login-poll', taskToken),
+    popoQrLoginStart: () => ipcRenderer.invoke(ImIpcChannel.PopoQrLoginStart),
+    popoQrLoginPoll: (taskToken: string) => ipcRenderer.invoke(ImIpcChannel.PopoQrLoginPoll, taskToken),
 
     // POPO Multi-Instance
-    addPopoInstance: (name: string) => ipcRenderer.invoke('im:popo:instance:add', name),
+    addPopoInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.PopoInstanceAdd, name),
     deletePopoInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:popo:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.PopoInstanceDelete, instanceId),
     setPopoInstanceConfig: (
       instanceId: string,
       config: Record<string, unknown>,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:popo:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.PopoInstanceConfigSet, instanceId, config, options),
 
     // Pairing
-    listPairingRequests: (platform: string) => ipcRenderer.invoke('im:pairing:list', platform),
+    listPairingRequests: (platform: string) => ipcRenderer.invoke(ImIpcChannel.PairingList, platform),
     approvePairingCode: (platform: string, code: string) =>
-      ipcRenderer.invoke('im:pairing:approve', platform, code),
+      ipcRenderer.invoke(ImIpcChannel.PairingApprove, platform, code),
     rejectPairingRequest: (platform: string, code: string) =>
-      ipcRenderer.invoke('im:pairing:reject', platform, code),
+      ipcRenderer.invoke(ImIpcChannel.PairingReject, platform, code),
 
     // DingTalk Multi-Instance
-    addDingTalkInstance: (name: string) => ipcRenderer.invoke('im:dingtalk:instance:add', name),
+    addDingTalkInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.DingTalkInstanceAdd, name),
     deleteDingTalkInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:dingtalk:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.DingTalkInstanceDelete, instanceId),
     setDingTalkInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:dingtalk:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.DingTalkInstanceConfigSet, instanceId, config, options),
 
     // NIM Multi-Instance
-    addNimInstance: (name: string) => ipcRenderer.invoke('im:nim:instance:add', name),
+    addNimInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.NimInstanceAdd, name),
     deleteNimInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:nim:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.NimInstanceDelete, instanceId),
     setNimInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) =>
-      ipcRenderer.invoke('im:nim:instance:config:set', instanceId, config, options),
+      ipcRenderer.invoke(ImIpcChannel.NimInstanceConfigSet, instanceId, config, options),
     nimQrLoginStart: () => ipcRenderer.invoke(NimQrLoginIpc.Start),
     nimQrLoginPoll: (uuid: string) => ipcRenderer.invoke(NimQrLoginIpc.Poll, uuid),
 
     // QQ Multi-Instance
-    addQQInstance: (name: string) => ipcRenderer.invoke('im:qq:instance:add', name),
+    addQQInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.QQInstanceAdd, name),
     deleteQQInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:qq:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.QQInstanceDelete, instanceId),
     setQQInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean }) =>
-      ipcRenderer.invoke('im:qq:instance:config:set', instanceId, config, options),
+      ipcRenderer.invoke(ImIpcChannel.QQInstanceConfigSet, instanceId, config, options),
 
     // Feishu Multi-Instance
-    addFeishuInstance: (name: string) => ipcRenderer.invoke('im:feishu:instance:add', name),
+    addFeishuInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.FeishuInstanceAdd, name),
     deleteFeishuInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:feishu:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.FeishuInstanceDelete, instanceId),
     setFeishuInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:feishu:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.FeishuInstanceConfigSet, instanceId, config, options),
 
     // Email Multi-Instance
-    addEmailInstance: (name: string) => ipcRenderer.invoke('im:email:instance:add', name),
+    addEmailInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.EmailInstanceAdd, name),
     deleteEmailInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:email:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.EmailInstanceDelete, instanceId),
     setEmailInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:email:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.EmailInstanceConfigSet, instanceId, config, options),
 
     // WeCom Multi-Instance
-    addWecomInstance: (name: string) => ipcRenderer.invoke('im:wecom:instance:add', name),
+    addWecomInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.WecomInstanceAdd, name),
     deleteWecomInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:wecom:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.WecomInstanceDelete, instanceId),
     setWecomInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:wecom:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.WecomInstanceConfigSet, instanceId, config, options),
 
     // Telegram Multi-Instance
-    addTelegramInstance: (name: string) => ipcRenderer.invoke('im:telegram:instance:add', name),
+    addTelegramInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.TelegramInstanceAdd, name),
     deleteTelegramInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:telegram:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.TelegramInstanceDelete, instanceId),
     setTelegramInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:telegram:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.TelegramInstanceConfigSet, instanceId, config, options),
 
     // Discord Multi-Instance
-    addDiscordInstance: (name: string) => ipcRenderer.invoke('im:discord:instance:add', name),
+    addDiscordInstance: (name: string) => ipcRenderer.invoke(ImIpcChannel.DiscordInstanceAdd, name),
     deleteDiscordInstance: (instanceId: string) =>
-      ipcRenderer.invoke('im:discord:instance:delete', instanceId),
+      ipcRenderer.invoke(ImIpcChannel.DiscordInstanceDelete, instanceId),
     setDiscordInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
-    ) => ipcRenderer.invoke('im:discord:instance:config:set', instanceId, config, options),
+    ) => ipcRenderer.invoke(ImIpcChannel.DiscordInstanceConfigSet, instanceId, config, options),
 
     // Event listeners
     onStatusChange: (callback: (status: any) => void) => {
       const handler = (_event: any, status: any) => callback(status);
-      ipcRenderer.on('im:status:change', handler);
-      return () => ipcRenderer.removeListener('im:status:change', handler);
+      ipcRenderer.on(ImIpcChannel.StatusChange, handler);
+      return () => ipcRenderer.removeListener(ImIpcChannel.StatusChange, handler);
     },
     onMessageReceived: (callback: (message: any) => void) => {
       const handler = (_event: any, message: any) => callback(message);
-      ipcRenderer.on('im:message:received', handler);
-      return () => ipcRenderer.removeListener('im:message:received', handler);
+      ipcRenderer.on(ImIpcChannel.MessageReceived, handler);
+      return () => ipcRenderer.removeListener(ImIpcChannel.MessageReceived, handler);
     },
   },
   scheduledTasks: {

@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
+
 import { EventEmitter } from 'events';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import { UsageOutcome } from '../../../shared/analytics/usage';
+import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import type {
   CoworkBtwAbortResponse,
   CoworkBtwSubmitResponse,
@@ -10,6 +13,8 @@ import type { CoworkGoal } from '../../../shared/cowork/goal';
 import type { CoworkMessageEditRequest, CoworkMessageVersionSwitchRequest } from '../../../shared/cowork/messageEdit';
 import { OpenClawQuestion } from '../../../shared/cowork/openclawQuestion';
 import type { CoworkSteerResponse } from '../../../shared/cowork/steer';
+import type { LocalQuestionState, QuestionAnswers, QuestionDecisionOptions, QuestionDecisionOutcome, QuestionStatus } from '../../../shared/remote/questions';
+import { type QuestionRegistration, RemoteQuestionError } from '../../remote/remoteQuestionService';
 import type { TaskUsageAnalytics } from '../usageAnalytics';
 import type {
   CoworkAgentEngine,
@@ -19,19 +24,23 @@ import type {
   CoworkRuntime,
   CoworkRuntimeEvents,
   CoworkSessionPatchResult,
+  CoworkSessionRecoverySnapshot,
   CoworkStartOptions,
+  PermissionRequest,
   PermissionResult,
 } from './types';
-import { ENGINE_SWITCHED_CODE } from './types';
+import { CoworkRuntimeDiagnosticEvent, CoworkRuntimeLifecycleEvent, ENGINE_SWITCHED_CODE } from './types';
 
 type RouterDeps = {
   getCurrentEngine: () => CoworkAgentEngine;
   dshRuntime: CoworkRuntime;
+  assertSessionAccess?: (sessionId: string) => void;
   analytics?: TaskUsageAnalytics;
 };
 
 export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   private readonly getCurrentEngine: () => CoworkAgentEngine;
+  private readonly assertSessionAccess: (sessionId: string) => void;
   private readonly runtime: CoworkRuntime;
   private readonly sessionEngine = new Map<string, CoworkAgentEngine>();
   private readonly requestEngine = new Map<string, CoworkAgentEngine>();
@@ -41,6 +50,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   constructor(deps: RouterDeps) {
     super();
+    this.assertSessionAccess = deps.assertSessionAccess ?? (() => undefined);
     this.analytics = deps.analytics;
     this.getCurrentEngine = deps.getCurrentEngine;
     this.runtime = deps.dshRuntime;
@@ -175,6 +185,12 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     return this.runtime.runGoalCommand(sessionId, command);
   }
 
+  async patchRemoteSession(sessionId: string, patch: OpenClawSessionPatch, beforeDispatch: () => void) {
+    this.assertSessionAccess(sessionId);
+    if (!this.runtime.patchRemoteSession) throw new Error('Confirmed model selection is unavailable.');
+    return this.runtime.patchRemoteSession(sessionId, patch, beforeDispatch);
+  }
+
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult | void> {
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
@@ -182,6 +198,24 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       throw new Error(`Session patch is not supported by engine: ${engine}`);
     }
     return this.runtime.patchSession(sessionId, patch);
+  }
+
+  getRecoveryGatewayBootId(): string { return this.runtime.getRecoveryGatewayBootId?.() || ''; }
+
+  getRecoveryGatewayProcessPid(): number | undefined { return this.runtime.getRecoveryGatewayProcessPid?.(); }
+
+  async querySessionRecovery(sessionId: string, gatewayRunId?: string, writerPid?: number, beforeApply?: () => void): Promise<CoworkSessionRecoverySnapshot | null> {
+    this.assertSessionAccess(sessionId);
+    return this.runtime.querySessionRecovery?.(sessionId, gatewayRunId, writerPid, () => {
+      this.assertSessionAccess(sessionId); beforeApply?.();
+    }) ?? null;
+  }
+
+  restoreSessionObservation(sessionId: string, remoteRunId: string, snapshot: CoworkSessionRecoverySnapshot, beforeApply?: () => void): boolean {
+    this.assertSessionAccess(sessionId);
+    return this.runtime.restoreSessionObservation?.(sessionId, remoteRunId, snapshot, () => {
+      this.assertSessionAccess(sessionId); beforeApply?.();
+    }) ?? false;
   }
 
   async getContextUsage(sessionId: string): Promise<CoworkContextUsage | null> {
@@ -207,6 +241,56 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     return this.runtime.getForkCompactionSummary(sessionId, beforeCreatedAt);
   }
 
+  async cancelSessionConfirmed(sessionId: string, timeoutMs?: number): Promise<boolean> {
+    this.assertSessionAccess(sessionId);
+    if (!this.runtime.cancelSessionConfirmed) return false;
+    return this.runtime.cancelSessionConfirmed(sessionId, timeoutMs);
+  }
+
+  async respondToPermissionConfirmed(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome> {
+    const sessionId = this.runtime.getPermissionState?.(requestId)?.sessionId ?? this.requestSession.get(requestId);
+    if (!sessionId) return { kind: 'known_not_applied', reason: 'APPROVAL_STALE' };
+    this.assertSessionAccess(sessionId);
+    if (!this.runtime.respondToPermissionConfirmed) throw new Error('Confirmed approval unavailable');
+    const actual = options ?? { submissionId: randomUUID(), source: 'desktop' as const };
+    return this.runtime.respondToPermissionConfirmed(requestId, result, { ...actual, beforeDispatch: async () => {
+      this.assertSessionAccess(sessionId);
+      await actual.beforeDispatch?.();
+      this.assertSessionAccess(sessionId);
+    }, onDispatch: () => {
+      actual.onDispatch?.();
+      this.analytics?.permissionResolved(sessionId, requestId, result.behavior);
+    } });
+  }
+
+  registerQuestion(input: QuestionRegistration): LocalQuestionState | null { return this.runtime.registerQuestion?.(input) ?? null; }
+  settleQuestion(id: string, result: { status: Exclude<QuestionStatus, 'pending'>; answers?: QuestionAnswers }): void { this.runtime.settleQuestion?.(id, result); }
+  getQuestionState(id: string): LocalQuestionState | null { return this.runtime.getQuestionState?.(id) ?? null; }
+  reconcileQuestionSubmission(id: string): Promise<QuestionDecisionOutcome | null> { return this.runtime.reconcileQuestionSubmission?.(id) ?? Promise.resolve(null); }
+  async respondToQuestionConfirmed(id: string, result: PermissionResult, options?: QuestionDecisionOptions): Promise<QuestionDecisionOutcome> {
+    const state = this.getQuestionState(id);
+    if (!state || !this.runtime.respondToQuestionConfirmed) return { kind: 'known_not_applied', reason: 'QUESTION_UNAVAILABLE' };
+    this.assertSessionAccess(state.sessionId);
+    const actual = options ?? { submissionId: randomUUID(), source: 'desktop' as const };
+    return this.runtime.respondToQuestionConfirmed(id, result, { ...actual, beforeDispatch: async () => {
+      this.assertSessionAccess(state.sessionId); await actual.beforeDispatch?.(); this.assertSessionAccess(state.sessionId);
+      this.analytics?.permissionResolved(state.sessionId, state.requestId, result.behavior);
+    } });
+  }
+
+  getPermissionState(id: string): ApprovalState | null { return this.runtime.getPermissionState?.(id) ?? null; }
+  getApprovalSubmission(id: string): ApprovalDecisionOutcome | null { return this.runtime.getApprovalSubmission?.(id) ?? null; }
+  reconcileApprovalSubmission(id: string, options?: ApprovalReconcileOptions): Promise<ApprovalDecisionOutcome | null> { return this.runtime.reconcileApprovalSubmission?.(id, options) ?? Promise.resolve(null); }
+  configureDualApproval(configuration: DualApprovalConfiguration): void { this.runtime.configureDualApproval?.(configuration); }
+  supportsRemoteTurns(): boolean { return this.runtime.supportsRemoteTurns?.() ?? false; }
+  supportsRemoteQuestions(): boolean { return this.runtime.supportsRemoteQuestions?.() ?? false; }
+  probeRemoteDecisions(): Promise<boolean> { return this.runtime.probeRemoteDecisions?.() ?? Promise.resolve(false); }
+  supportsDualApproval(): boolean { return this.runtime.supportsDualApproval?.() ?? false; }
+  expirePermissions(now?: number): void { this.runtime.expirePermissions?.(now); }
+  closeSessionPermissions(id: string, runId: string | null, status?: 'cancelled' | 'expired' | 'superseded'): void { this.runtime.closeSessionPermissions?.(id, runId, status); }
+  isLocalOnlyInteraction(id: string): boolean { return this.runtime.isLocalOnlyInteraction?.(id) === true; }
+  listPendingPermissions(): Array<{ sessionId: string; request: PermissionRequest }> { return this.runtime.listPendingPermissions?.() ?? []; }
+
   stopSession(sessionId: string): void {
     this.analytics?.end(sessionId, UsageOutcome.Cancelled);
     this.runtime.stopSession(sessionId);
@@ -223,7 +307,13 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   respondToPermission(requestId: string, result: PermissionResult): void | Promise<void> {
+    if (this.getQuestionState(requestId)) {
+      return this.respondToQuestionConfirmed(requestId, result).then(outcome => {
+        if (outcome.kind !== 'confirmed') throw new RemoteQuestionError(outcome);
+      });
+    }
     const analyticsSession = this.requestSession.get(requestId);
+    if (analyticsSession) this.assertSessionAccess(analyticsSession);
     if (analyticsSession) this.analytics?.permissionResolved(analyticsSession, requestId, result.behavior);
     if (requestId.startsWith(OpenClawQuestion.RequestIdPrefix)) {
       // Native answers must be acknowledged before the renderer dismisses the question.
@@ -292,6 +382,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   private bindRuntimeEvents(engine: CoworkAgentEngine, runtime: CoworkRuntime): void {
+    runtime.on(CoworkRuntimeDiagnosticEvent.RunReconciliationRequired, (id, requestId) => this.emit(CoworkRuntimeDiagnosticEvent.RunReconciliationRequired, id, requestId));
+    runtime.on(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, (id, requestId) => this.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, id, requestId));
+    runtime.on(CoworkRuntimeLifecycleEvent.GatewayReady, () => this.emit(CoworkRuntimeLifecycleEvent.GatewayReady));
+    runtime.on('permissionState', (id, state) => this.emit('permissionState', id, state));
+    runtime.on('runTermination', (id, requestId, status) => this.emit('runTermination', id, requestId, status));
     runtime.on('message', (sessionId, message, beforeMessageId) => {
       this.analytics?.message(sessionId, message);
       this.sessionEngine.set(sessionId, engine);

@@ -76,6 +76,7 @@ export interface CoworkStartRequestInput {
   modelPresetId?: CoworkStartOptions['modelPresetId'];
   thinkingLevel?: CoworkStartOptions['thinkingLevel'];
   imageAttachments?: CoworkImageAttachment[];
+  localInput?: CoworkStartOptions['localInput'];
   mediaSelection?: CoworkStartOptions['mediaSelection'];
   mediaReferences?: MediaAttachmentRef[];
   selectedTextSnippets?: CoworkSelectedTextSnippet[];
@@ -124,6 +125,7 @@ export function buildCoworkStartPlan(input: CoworkStartRequestInput): CoworkStar
       modelPresetId: input.modelPresetId,
       thinkingLevel: input.thinkingLevel,
       imageAttachments: input.imageAttachments,
+      localInput: input.localInput,
       mediaSelection: input.mediaSelection,
       mediaReferences: input.mediaReferences,
       selectedTextSnippets: input.selectedTextSnippets,

@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+import type { ApprovalState } from '../../../shared/cowork/approval';
 import type { CoworkBrowserAnnotationBatch } from '../../../shared/cowork/browserAnnotations';
 import {
   COWORK_BTW_EPHEMERAL_THREAD_LIMIT,
@@ -41,6 +42,7 @@ import {
   type CoworkSessionSummary,
 } from '../../types/cowork';
 import type { MediaGenerationSelection, MediaModel } from '../../types/mediaGeneration';
+import { resetAccountSessionData } from '../accountSessionBoundary';
 import { removeSessionFromState, removeSessionsFromState } from './coworkDeleteState';
 
 export interface DraftAttachment {
@@ -118,6 +120,7 @@ interface CoworkState {
   remoteManaged: boolean;
   isRepairingOpenClaw: boolean;
   pendingPermissions: CoworkPermissionRequest[];
+  permissionStates: Record<string, ApprovalState>;
   config: CoworkConfig;
   /** Media generation models fetched from server */
   mediaModels: { image: MediaModel[]; video: MediaModel[] };
@@ -126,6 +129,27 @@ interface CoworkState {
   /** Media generation mode selection per draft key */
   mediaSelection: Record<string, MediaGenerationSelection>;
   pendingMediaStatusUpdates: Record<string, Array<{ toolCallId: string; details: Record<string, unknown> }>>;
+}
+
+// State can arrive before its modal request or after a local IPC reply. Keep the
+// versioned terminal entry so a delayed pending request cannot reopen a dialog.
+function mergePermissionState(state: CoworkState, incoming: ApprovalState): void {
+  if (!/^[1-9]\d*$/u.test(incoming.approvalVersion)) return;
+  const previous = state.permissionStates[incoming.requestId];
+  if (previous && (previous.sessionId !== incoming.sessionId || previous.runId !== incoming.runId
+    || BigInt(previous.approvalVersion) >= BigInt(incoming.approvalVersion)
+    || previous.status !== 'pending' && previous.status !== incoming.status)) return;
+  state.permissionStates[incoming.requestId] = incoming;
+  if (incoming.status !== 'pending') {
+    state.pendingPermissions = state.pendingPermissions.filter(item => item.requestId !== incoming.requestId);
+    return;
+  }
+  const item = state.pendingPermissions.find(item => item.requestId === incoming.requestId);
+  if (item && item.sessionId === incoming.sessionId) {
+    item.approval = incoming;
+    item.submissionState = undefined;
+    item.submissionError = undefined;
+  }
 }
 
 const initialState: CoworkState = {
@@ -161,6 +185,7 @@ const initialState: CoworkState = {
   remoteManaged: false,
   isRepairingOpenClaw: false,
   pendingPermissions: [],
+  permissionStates: {},
   config: {
     workingDirectory: '',
     systemPrompt: '',
@@ -1329,6 +1354,9 @@ const coworkSlice = createSlice({
     },
 
     enqueuePendingPermission(state, action: PayloadAction<CoworkPermissionRequest>) {
+      if (action.payload.approval) mergePermissionState(state, action.payload.approval);
+      const latest = state.permissionStates[action.payload.requestId];
+      if (latest && (latest.status !== 'pending' || latest.sessionId !== action.payload.sessionId)) return;
       const index = state.pendingPermissions.findIndex(
         permission => permission.requestId === action.payload.requestId
       );
@@ -1336,10 +1364,24 @@ const coworkSlice = createSlice({
         const incoming = readMediaConfirmationState(action.payload.toolInput?.mediaConfirmation);
         const existing = readMediaConfirmationState(state.pendingPermissions[index].toolInput?.mediaConfirmation);
         // A reload snapshot must not replace a newer confirmation state.
-        if (incoming && (!existing || incoming.sequence > existing.sequence)) state.pendingPermissions[index] = action.payload;
+        if (incoming && (!existing || incoming.sequence > existing.sequence)) state.pendingPermissions[index] = { ...action.payload, approval: latest ?? action.payload.approval };
         return;
       }
-      state.pendingPermissions.push(action.payload);
+      state.pendingPermissions.push({ ...action.payload, approval: latest ?? action.payload.approval });
+    },
+
+    updatePendingPermissionState(state, action: PayloadAction<ApprovalState>) {
+      mergePermissionState(state, action.payload);
+    },
+
+    setPermissionSubmissionState(state, action: PayloadAction<{
+      requestId: string; phase?: 'submitting' | 'unknown'; error?: string;
+    }>) {
+      const item = state.pendingPermissions.find(item => item.requestId === action.payload.requestId);
+      if (item) {
+        item.submissionState = action.payload.phase;
+        item.submissionError = action.payload.error;
+      }
     },
 
     dequeuePendingPermission(state, action: PayloadAction<{ requestId?: string } | undefined>) {
@@ -1368,6 +1410,7 @@ const coworkSlice = createSlice({
 
     clearPendingPermissions(state) {
       state.pendingPermissions = [];
+      state.permissionStates = {};
     },
 
     setConfig(state, action: PayloadAction<CoworkConfig>) {
@@ -1581,6 +1624,9 @@ const coworkSlice = createSlice({
       state.rejectedSteers = {};
     },
   },
+  extraReducers: builder => {
+    builder.addCase(resetAccountSessionData, state => ({ ...initialState, config: state.config, isCoworkActive: state.isCoworkActive }));
+  },
 });
 
 export const {
@@ -1645,6 +1691,8 @@ export const {
   updateSessionTitle,
   updateCurrentSessionModelOverride,
   enqueuePendingPermission,
+  updatePendingPermissionState,
+  setPermissionSubmissionState,
   dequeuePendingPermission,
   clearPendingPermissions,
   setConfig,

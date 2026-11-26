@@ -100,7 +100,6 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
   const expandButton = useRef<HTMLButtonElement>(null);
   const focusNextQuestion = useRef(false);
   const focusExpandButton = useRef(false);
-  const canSkip = request.source !== QuestionSource.Native;
 
   useEffect(() => { saveInteractionDraft(storageKey, draft); }, [storageKey, draft]);
   useEffect(() => {
@@ -118,6 +117,7 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
 
   const index = Math.min(draft.step, request.questions.length - 1);
   const question = request.questions[index];
+  const canSkip = request.source !== QuestionSource.Native && question.allowSkip !== false;
   const recommendedIndex = question.options.findIndex((option) => isRecommendedOption(option.label));
   const lastStep = index === request.questions.length - 1;
   const freeText = draft.freeText[question.id] ?? '';
@@ -169,7 +169,7 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
   };
   const submit = async (value: QuestionDraft) => {
     if (flight.current || expired || (request.expiresAt !== undefined && request.expiresAt <= Date.now())) return;
-    if (!request.questions.every((item) => questionResolved(value, item.id))) return;
+    if (!request.questions.every((item) => questionResolved(value, item.id, item))) return;
     cancelAdvance();
     flight.current = true;
     setBusy(true);
@@ -194,7 +194,7 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
       update({ ...value, step: index + 1 });
       return;
     }
-    const unresolved = request.questions.findIndex((item) => !questionResolved(value, item.id));
+    const unresolved = request.questions.findIndex((item) => !questionResolved(value, item.id, item));
     if (unresolved >= 0) update({ ...value, step: unresolved });
     else void submit(value);
   };
@@ -229,6 +229,7 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
     });
   };
   const skip = () => {
+    if (!canSkip || flight.current || busy || expired) return;
     cancelAdvance();
     const next: QuestionDraft = {
       ...draft,
@@ -289,7 +290,7 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
     );
   }
 
-  const currentResolved = questionResolved(draft, question.id);
+  const currentResolved = questionResolved(draft, question.id, question);
   const showSubmit = question.multiSelect || Boolean(freeText.trim()) || failed;
   const showFooter = question.allowFreeText || showSubmit || canSkip;
   const status = expired
@@ -370,8 +371,8 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
           </button>
         </nav>
       </header>
-      {question.subtitle && <p className="cowork-question-hint cowork-question-subtitle">{question.subtitle}</p>}
       <div className="cowork-question-page" key={question.id}>
+        {question.subtitle && <p className="cowork-question-hint cowork-question-subtitle">{question.subtitle}</p>}
         {question.heading && <p className="cowork-question-description">{question.title}</p>}
         {question.multiSelect && <p className="cowork-question-hint">{t('coworkQuestionWizardMultiSelectHint')}</p>}
         <div role="group" aria-label={question.title}>

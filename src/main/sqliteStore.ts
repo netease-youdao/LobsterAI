@@ -18,10 +18,12 @@ import {
   OpenClawCronRunMetadataKey,
   parseOpenClawCronSessionKey,
 } from '../shared/cowork/openclawCronSessionKey';
+import { withTrustedAgentWrite } from './agentOwnership';
 import { DB_FILENAME } from './appConstants';
 import { initializeLibraryTables } from './library/libraryMigrations';
 import { repairForkedSessionToolUseIds } from './libs/coworkForkToolUseIds';
 import { migrateAgentCollaboration } from './migration/agentCollaborationMigration';
+import { TrustedWriteContext, withTrustedMigrationWrite } from './migration/remoteWriteContext';
 
 type ChangePayload<T = unknown> = {
   key: string;
@@ -55,9 +57,9 @@ const extractScheduledTaskIdFromMessageMetadata = (metadata: unknown): string | 
 const SQLITE_QUARANTINE_DIR_RELATIVE_PATH = path.join('backups', 'sqlite', 'quarantine');
 
 const applyRecommendedPragmas = (db: Database.Database): void => {
-  // WAL mode persists across connections. NORMAL sync is crash-safe under WAL.
+  // A server receipt can acknowledge an operation as soon as the local commit returns.
   db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  db.pragma('synchronous = FULL');
   db.pragma('cache_size = -8000'); // 8 MB; negative value = kibibytes
   db.pragma('wal_autocheckpoint = 1000'); // checkpoint every ~4 MB of WAL writes
 };
@@ -117,6 +119,8 @@ export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
   private emitter = new EventEmitter();
+  private criticalEmitter = new EventEmitter();
+  private pendingKvChanges: ChangePayload[] | null = null;
   /** Listener count per key; writes to unwatched keys skip reading the previous value. */
   private watchedKeys = new Map<string, number>();
   private didRunMigration = false;
@@ -132,7 +136,8 @@ export class SqliteStore {
 
     const db = openSqliteDatabase(basePath, dbPath);
     const store = new SqliteStore(db, dbPath);
-    store.initializeTables(basePath);
+    withTrustedMigrationWrite(db, TrustedWriteContext.Session, () =>
+      withTrustedMigrationWrite(db, TrustedWriteContext.Agent, () => store.initializeTables(basePath)));
     return store;
   }
 
@@ -770,13 +775,11 @@ export class SqliteStore {
     }
 
     try {
-      const pinnedAgentResult = this.db.prepare('UPDATE agents SET pinned = 0 WHERE pinned IS NULL;').run();
-      const pinOrderAgentResult = this.db
-        .prepare('UPDATE agents SET pin_order = updated_at WHERE pinned = 1 AND pin_order IS NULL;')
-        .run();
-      const unpinnedAgentResult = this.db
-        .prepare('UPDATE agents SET pin_order = NULL WHERE pinned = 0 AND pin_order IS NOT NULL;')
-        .run();
+      const [pinnedAgentResult, pinOrderAgentResult, unpinnedAgentResult] = withTrustedAgentWrite(this.db, () => [
+        this.db.prepare('UPDATE agents SET pinned = 0 WHERE pinned IS NULL;').run(),
+        this.db.prepare('UPDATE agents SET pin_order = updated_at WHERE pinned = 1 AND pin_order IS NULL;').run(),
+        this.db.prepare('UPDATE agents SET pin_order = NULL WHERE pinned = 0 AND pin_order IS NOT NULL;').run(),
+      ]);
       if (pinnedAgentResult.changes > 0 || pinOrderAgentResult.changes > 0 || unpinnedAgentResult.changes > 0) {
         this.didRunMigration = true;
       }
@@ -815,9 +818,9 @@ export class SqliteStore {
         const normalizedName = mainAgent.name.trim();
         const shouldUpgradeName = !normalizedName || normalizedName.toLowerCase() === LegacyAgentName.Main;
         if (shouldUpgradeName) {
-          this.db
+          withTrustedAgentWrite(this.db, () => this.db
             .prepare('UPDATE agents SET name = ?, updated_at = ? WHERE id = ?')
-            .run(DefaultAgentProfile.Name, Date.now(), AgentId.Main);
+            .run(DefaultAgentProfile.Name, Date.now(), AgentId.Main));
           this.didRunMigration = true;
         }
       }
@@ -845,7 +848,7 @@ export class SqliteStore {
             updateSortOrder.run(index + 1, agent.id);
           });
         });
-        backfillSortOrder(rows);
+        withTrustedAgentWrite(this.db, () => backfillSortOrder(rows));
         this.didRunMigration = true;
       }
     } catch (error) {
@@ -869,7 +872,7 @@ export class SqliteStore {
             updateIcon.run(agent.icon, now, agent.id);
           }
         });
-        migrateIcons(updates);
+        withTrustedAgentWrite(this.db, () => migrateIcons(updates));
         this.didRunMigration = true;
       }
     } catch (error) {
@@ -884,13 +887,13 @@ export class SqliteStore {
           .get() as { value: string } | undefined;
         const legacyWorkingDirectory = cwdRow?.value?.trim() || '';
         if (legacyWorkingDirectory) {
-          const result = this.db
+          const result = withTrustedAgentWrite(this.db, () => this.db
             .prepare(
               `UPDATE agents
                SET working_directory = ?, updated_at = ?
                WHERE TRIM(COALESCE(working_directory, '')) = ''`,
             )
-            .run(legacyWorkingDirectory, Date.now());
+            .run(legacyWorkingDirectory, Date.now()));
           if (result.changes > 0) {
             this.didRunMigration = true;
           }
@@ -940,6 +943,38 @@ export class SqliteStore {
     };
   }
 
+  /** Required account fences run before any best-effort observer sees committed credentials. */
+  onCriticalChange(key: string, callback: () => void): () => void {
+    const handler = (payload: ChangePayload) => { if (payload.key === key) callback(); };
+    this.criticalEmitter.on('change', handler);
+    return () => this.criticalEmitter.off('change', handler);
+  }
+
+  /** Account credentials and their scope must become visible to subscribers in the same commit. */
+  transactionWithChanges(write: () => void): void {
+    const parent = this.pendingKvChanges;
+    const changes: ChangePayload[] = [];
+    this.pendingKvChanges = changes;
+    try {
+      this.db.transaction(write)();
+    } finally {
+      this.pendingKvChanges = parent;
+    }
+    for (const change of changes) this.publishChange(change);
+  }
+
+  private publishChange(payload: ChangePayload): void {
+    if (this.pendingKvChanges) {
+      this.pendingKvChanges.push(payload);
+      return;
+    }
+    this.criticalEmitter.emit('change', payload);
+    for (const listener of this.emitter.listeners('change')) {
+      try { listener(payload); }
+      catch (error) { console.warn('[Store] Optional change observer failed', error); }
+    }
+  }
+
   get<T = unknown>(key: string): T | undefined {
     const row = this.db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as
       | { value: string }
@@ -969,14 +1004,14 @@ export class SqliteStore {
     `,
       )
       .run(key, JSON.stringify(value), now);
-    if (watched) this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
+    this.publishChange({ key, newValue: value, oldValue } as ChangePayload<T>);
   }
 
   delete(key: string): void {
     const watched = this.watchedKeys.has(key);
     const oldValue = watched ? this.get(key) : undefined;
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
-    if (watched) this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
+    this.publishChange({ key, newValue: undefined, oldValue } as ChangePayload);
   }
 
   getDatabase(): Database.Database {

@@ -1,0 +1,3276 @@
+import { randomUUID } from 'crypto';
+import { statSync } from 'fs';
+import { resolve } from 'path';
+
+import { AgentOwnerKind } from '../../shared/agent/constants';
+import type { ApprovalDecisionOutcome } from '../../shared/cowork/approval';
+import { OwnershipSyncState, OwnershipTargetKind } from '../../shared/ownership/constants';
+import type { OwnershipTarget, OwnershipTaskSync } from '../../shared/ownership/types';
+import { RemoteAgentSettings } from '../../shared/remote/agentSettings';
+import { REMOTE_CONNECTION_MANAGEMENT_CAPABILITY, RemoteConnectionReasonCode, type RemoteConnectionRemoveRequest, type RemoteConnectionResumeRequest, RemoteDeviceAdmissionState, type RemoteDeviceConnection, RemoteDeviceConnectionState } from '../../shared/remote/connections';
+import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, REMOTE_DEVICE_RETIRED_CODE, REMOTE_PROTOCOL_VERSION, REMOTE_TEXT_BYTES, type RemoteAgentCatalogItem, RemoteAgentIcon, RemoteCapability, RemoteCommandKind, RemoteConnectionReason, type RemoteConnectionReasonValue, RemoteConnectionStatus, type RemoteOwner, type RemoteSettingsState, RemoteSyncConflict, type RemoteSyncHealth, RemoteSyncHealthReason, RemoteSyncHealthStatus, RemoteSyncLaneStatus, RemoteSyncStatus, type RemoteWorkspace } from '../../shared/remote/constants';
+import { RemoteDeletion } from '../../shared/remote/deletions';
+import type { RemoteEnvironment } from '../../shared/remote/environment';
+import { RemoteFileCapability } from '../../shared/remote/files';
+import { RemoteInputCapability, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryPage, RemoteInputStatus, type RemotePreparationClaim } from '../../shared/remote/input';
+import { type QuestionDecisionOutcome, RemoteQuestion } from '../../shared/remote/questions';
+import { RemoteSyncRecoveryState } from '../../shared/remote/recovery';
+import { REMOTE_REPLY_PROJECTION_VERSION, REMOTE_REPLY_SYNC_DELAY_MS, RemoteReplyCapability,RemoteReplyModelLabelCapability } from '../../shared/remote/reply';
+import { RemoteImportValidation, RemoteRetention, type RetentionImport, type RetentionState } from '../../shared/remote/retention';
+import { parseRemoteSyncTarget, RemoteSyncTarget, remoteSyncTargetHeaders, type RemoteSyncTargetIdentity } from '../../shared/remote/syncTarget';
+import { RemoteTaskCredits } from '../../shared/remote/taskCredits';
+import { RemoteTelemetryEvent } from '../../shared/remote/telemetry';
+import type { AgentOwnerStore } from '../agentOwnership';
+import { OwnershipAssociationStore, type OwnershipClaimBlocks } from '../ownershipAssociationStore';
+import type { PublicationTarget } from '../ownershipPublication';
+import { payloadHash, remoteError, sameOwner, stableJson } from './canonical';
+import { type InputPreparationService,RemoteAttachmentError } from './inputPreparationService';
+import type { RemoteIdentity } from './installationIdentity';
+import { type AgentWorkspace, RemoteAgentCatalog, RemoteAgentError, type RemoteExpertAvatars } from './remoteAgentCatalog';
+import type { RemoteAgentSettingsConnection } from './remoteAgentSettingsAccess';
+import { type RemoteAgentSettingsDependencies,RemoteAgentSettingsProtocol } from './remoteAgentSettingsProtocol';
+import { approvalCommandError, RemoteApprovalError } from './remoteApproval';
+import { RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
+import { RemoteConnectionClient } from './remoteConnectionClient';
+import { matchesRemoteDeletionAdoption } from './remoteDeletionSyncState';
+import { remoteDiagnostics } from './remoteDiagnostics';
+import { type RemoteDisplayHealthInput, type RemoteDisplayHealthResult, RemoteDisplayHealthStatus } from './remoteDisplayHealth';
+import { RemoteDisplaySnapshot } from './remoteDisplaySnapshot';
+import { remoteFileDiagnostic } from './remoteFileDiagnostics';
+import { RemoteFileSync, type RemoteFileSyncDependencies } from './remoteFileSync';
+import { RemoteHistoryJob } from './remoteHistoryJob';
+import { LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX, RemoteImportSnapshotError, RemoteImportSnapshots } from './remoteImportSnapshots';
+import type { ImportPartIndex } from './remoteImportSnapshotWorker';
+import { RemoteLegacyRecovery } from './remoteLegacyRecovery';
+import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
+import type { RemoteSocket } from './remoteNetworkProtocol';
+import { remoteResponseJson } from './remoteNetworkTransport';
+import { RemoteOwnershipContentCache } from './remoteOwnershipContentCache';
+import { type OwnershipContentSyncSnapshot, unknownOwnershipContentSync } from './remoteOwnershipContentSync';
+import { remotePerformance, RemotePerformanceEvent, RemotePerformanceOutcome, RemotePerformanceReason, RemotePerformanceStage } from './remotePerformanceLog';
+import { isTransientProjectionFailure } from './remoteProjectionCoordinator';
+import { remotePublicationForeign, remotePublicationTargetSpace } from './remotePublicationOrigins';
+import { RemoteQuestionError } from './remoteQuestionService';
+import { isRecoveryDependencyFailure, RemoteRecoveryDependency } from './remoteRecoveryDependency';
+import type { RegistrationIdentities, RemoteRegistrationIdentity } from './remoteRegistrationIdentity';
+import { RemoteReplyTransport } from './remoteReplyTransport';
+import { RemoteSyncStateError, retentionSequence } from './remoteRetention';
+import { RemoteSessionDeletionClient, type SessionDeletionDependencies } from './remoteSessionDeletionClient';
+import { type ProjectionRecord, RemoteStore, type SyncRow } from './remoteStore';
+import { RemoteSyncAdmissionBudgetError } from './remoteSyncAdmission';
+import { REMOTE_SYNC_REQUEST_ID_HEADER, remoteDiagnosticLog, remoteDiagnosticRoute, RemoteInputDiagnostic, remoteLogMessage, remoteSyncErrorMetadata, remoteSyncRequestId, remoteSyncRequestMetadata, remoteSyncResultMetadata } from './remoteSyncLog';
+import { recoveryDisplay,RemoteRecoveryLimiter } from './remoteSyncRecoveryLedger';
+import { recoveryFailure } from './remoteSyncRecoveryPolicy';
+import { RemoteSyncTargetActivationKind, RemoteSyncTargetStore } from './remoteSyncTargetStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { classifyTaskSyncFailure, isSharedSyncFailure } from './remoteTaskSyncPolicy';
+import { RemoteTaskDataError, RemoteTaskSyncState, type TaskSyncContext } from './remoteTaskSyncState';
+import { captureRemoteTelemetry } from './remoteTelemetry';
+import { RemoteBridgeTelemetry, remoteRequestTelemetryFailureStage, remoteRequestTelemetryFields, remoteRequestTelemetryOutcome } from './remoteTelemetryBridge';
+import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
+import { RemoteWorkerFile, remoteWorkerPath } from './remoteWorkerPath';
+
+export interface RemoteCommand {
+  commandId: string; type: string; sessionId?: string; runId?: string; status: string; statusVersion: string;
+  detailState?: string; expiresAt: string; request: any; requestHash: string; claimId?: string; claimToken?: string; claimUntil?: string;
+}
+export interface InboxEntry {
+  targetId?: string;
+  command: RemoteCommand; owner: RemoteOwner; localSessionId: string | null; remoteSessionId: string | null;
+  runId: string | null; state: 'prepared' | 'executing' | 'applied' | 'rejected' | 'unknown'; result: any; preparationError?: any;
+}
+interface Registration { deviceId: string; userId: string; scopeKey: string; metadataVersion: string; syncTarget?: RemoteSyncTargetIdentity }
+class TaskFailurePersistenceError extends Error {
+  constructor(readonly storageError: unknown, readonly failure: ReturnType<typeof classifyTaskSyncFailure>) {
+    super('REMOTE_TASK_FAILURE_PERSISTENCE_UNAVAILABLE');
+  }
+}
+interface LocalSettings { createSessionAvailable?: boolean; enabled: boolean; name: string; workspaces: Array<RemoteWorkspace & { path: string }>; settingsVersion: string }
+interface ControlIntent { createSessionAvailable?: boolean; id: string; enabled: boolean; workspaces: RemoteWorkspace[] }
+interface SettingsChanges { reregister?: boolean; retrySessionId?: string; enabled?: boolean; name?: string; workspace?: { name: string; path: string }; removeWorkspaceId?: string; retry?: boolean }
+interface PendingConfiguration { route: string; changes: SettingsChanges[] }
+interface SavedImport extends RetentionImport { uploadCursor?: number; confirmedPartCount?: number; expiresAt?: string; absoluteExpiresAt?: string; reason?: string; projectionVersion?: number; replyProjection?: boolean; replyModelLabel?: boolean; importId: string; sessionId: string; baseSourceSeq: string; snapshotEpoch: number; expectedSourceSeq: string; expectedServerSeq: string; beginConfirmed?: boolean; beginAttempted?: boolean; fileSet?: string; manifest: any; parts: Array<ImportPartIndex & { payload?: { records: ProjectionRecord[] } }>; stateVersion?: string }
+export interface BridgeDependencies {
+  agentSettings?: RemoteAgentSettingsDependencies;
+  registrationIdentities?: RegistrationIdentities;
+  createSocket?(url: string): RemoteSocket;
+  deletion?: Pick<SessionDeletionDependencies, 'service' | 'runtime' | 'reconcileStop'>;
+  security?: { available(): Promise<void>; commit<T>(operationId: string, operation: unknown, apply: () => T): Promise<T> };
+  input?: { models: RemoteModelCatalog; preparations: InputPreparationService; refreshSessionModel?(sessionId: string): void };
+  files?: Pick<RemoteFileSyncDependencies, 'cacheRoot' | 'access' | 'recordArtifact'>;
+  getAgentDefaultInput?(owner: RemoteOwner, deviceId: string, agentId: string): RemoteAgentCatalogItem['defaultInput'];
+  expertAvatars?: RemoteExpertAvatars;
+  store: RemoteStore; identity: RemoteIdentity;
+  /** Session creation and inbox persistence share the outer commit/notification boundary. */
+  runSessionTransaction<T>(operation: () => T): T;
+  agentOwnership?: AgentOwnerStore;
+  /** Admission for new actions. Observing a previously accepted command remains possible. */
+  supportsCommand?(type: string): boolean;
+  supportsQuestions?(): boolean;
+  reconcileQuestion?(entry: InboxEntry): Promise<QuestionDecisionOutcome | null>;
+  supportsDualApproval?(): boolean;
+  configureDualApproval?(options: { enabled: boolean; projectionSupported: boolean }): void;
+  reconcileApproval?(entry: InboxEntry): Promise<ApprovalDecisionOutcome | null>;
+  getAgentWorkspace?(agentId: string): AgentWorkspace | Promise<AgentWorkspace>;
+  getDefaultWorkspace?(): { path: string; name: string; available?: boolean } | Promise<{ path: string; name: string; available?: boolean }>;
+  onStateChange?(): void;
+  getOwner(): RemoteOwner | null;
+  /** Memory-only account projection for display; operational admission always uses getOwner. */
+  getDisplayOwner?(): RemoteOwner | null;
+  /** Legacy compatibility only; client mode never decides synchronization admission. */
+  getEnvironment?(): RemoteEnvironment;
+  getApiBaseUrl(): string;
+  /** Monotonic local routing/auth context; independent of server connection generation. */
+  getRouteEpoch?(): number;
+  request(owner: RemoteOwner, pathname: string, init: RequestInit): Promise<Response>;
+  metadata: { name: string; hostName: string; instanceLabel: string; platform: string; appVersion: string };
+  prepare(command: RemoteCommand, owner: RemoteOwner, workspacePath: string | null): { localSessionId: string; remoteSessionId: string; runId: string | null };
+  execute(entry: InboxEntry, stillPermitted: () => boolean): Promise<any>;
+  onAccountChange(previous: RemoteOwner | null, current: RemoteOwner | null): void;
+}
+export class RemoteApiError extends Error {
+  constructor(readonly code: number, message: string, readonly data: any = null, readonly httpStatus: number = 0, readonly requestId: string | null = null, readonly retryAfterMs?: number) { super(message); }
+}
+const CommandCapability = {
+  [RemoteCommandKind.CreateSession]: RemoteCapability.CreateSession,
+  [RemoteCommandKind.SendMessage]: 'session.continue',
+  [RemoteCommandKind.CancelRun]: 'run.cancel',
+  [RemoteCommandKind.ApprovalResponse]: 'approval.respond',
+  [RemoteCommandKind.QuestionResponse]: RemoteQuestion.Capability,
+} as const satisfies Record<RemoteCommandKind, string>;
+const SocketFailureCode = { Transport: 1006, Protocol: 1002, PayloadTooLarge: 1009, HeartbeatTimeout: 4408 } as const;
+const CONNECTION_REMOVED_CODE = 47121;
+const IDLE_POLL_MS = 60000;
+const COMMAND_IDLE_POLL_MS = 30000;
+const ACTIVE_POLL_MS = 5000;
+const CATALOG_RECHECK_MS = 300000;
+const InputResultConflict = { Model: 47042, State: 47043 } as const;
+export class RemoteBridge {
+  private readonly agentSettings: RemoteAgentSettingsProtocol | null;
+  private agentSettingsCapability = false;
+  private readonly availability: RemoteAvailabilityPublisher;
+  private readonly deletions: RemoteSessionDeletionClient | null;
+  private deletionSupported = false;
+  private controlDeletionSupported = false;
+  private deletionAvailable = false;
+  private owner: RemoteOwner | null = null;
+  private accountGeneration = 0;
+  private accountRouteEpoch = 0;
+  private accountRoute: string;
+  private targetId: string | null = null;
+  private admissionDeferred = false;
+  private admissionRetryAt = 0;
+  private discoveredTarget: RemoteSyncTargetIdentity | null = null;
+  private readonly targets: RemoteSyncTargetStore;
+  private readonly taskSync: RemoteTaskSyncState;
+  private projectionWork: Promise<void> | null = null;
+  private importLaneBusy = false;
+  private readonly verifiedImports = new Map<string, any>();
+  private readonly telemetryRequestIds = new WeakMap<object, string>();
+  private readonly sessionChecks = new Set<string>();
+  private readonly taskMemoryBlocks = new Map<string, { context: TaskSyncContext; failure: ReturnType<typeof classifyTaskSyncFailure>; retryAt: number }>();
+  private registration: Registration | null = null;
+  private registrationPending: Promise<void> | null = null;
+  private socket: RemoteSocket | null = null;
+  private generation: string | null = null;
+  private stopped = false;
+  private legacyImportRecoveryCursor = '';
+  private readonly legacyImportRecoveryRetry = new Map<string, number>();
+  private shuttingDown = false;
+  private readonly quittingSessionIds = new Set<string>();
+  private readonly syncSkipReasons = new Map<string, string>();
+  private suspended = false;
+  private running = false;
+  private tickRequested = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private handshake: ReturnType<typeof setTimeout> | null = null;
+  private connectionAttempt = 0;
+  private telemetryConnectionAttemptId = randomUUID();
+  private lastPong = 0;
+  private heartbeatTimeout = 75000;
+  private error: string | undefined;
+  private errorCode: number | undefined;
+  private errorRequestKey: string | undefined;
+  private readonly requestErrorKeys = new WeakMap<object, string>();
+  private readonly displayJob = new RemoteHistoryJob();
+  private readonly displaySnapshot: RemoteDisplaySnapshot<RemoteDisplayHealthResult>;
+  private readonly contentJob = new RemoteHistoryJob();
+  private readonly contentSnapshot: RemoteOwnershipContentCache<OwnershipContentSyncSnapshot>;
+  private displaySettings: { key: string; value: LocalSettings } | null = null;
+  private sessionSyncFailed = false;
+  private historyWork: Promise<void> | null = null;
+  private historyRetryAt = 0;
+  private historyTransportFailures: Array<{ sessionId: string; at: number }> = [];
+  private historyCircuitDelay = 30000;
+  private historyCircuitProbe = false;
+  private connectionManagement = false;
+  private connectionManagementKnown = false;
+  private connectionManagementEnabled = false;
+  private connectionManagementClusterReady = false;
+  private connectionRemoved = false;
+  private quotaBlocked = false;
+  private connectionVersion = '0';
+  private connectionPolicyCheckAt = 0;
+  private receiptCursor: string | undefined;
+  private activityCursor: string | undefined;
+  private activityOffset = 0;
+  private unresolvedCursor: string | null = null;
+  private unresolvedContext = '';
+  private commandRecoveryFallbackUntil = 0;
+  private readonly runEvidenceScans = new Map<string, { cursor?: string; changes: number }>();
+  readonly connections: RemoteConnectionClient;
+  private connectionReason: RemoteConnectionReasonValue = RemoteConnectionReason.Connecting;
+  private backoff = 5000;
+  private accesses: RemoteSettingsState['accessRequests'] = [];
+  private scheduledAt = 0;
+  private settingsQueue: Promise<unknown> = Promise.resolve();
+  private retryAfter = 0;
+  private retryGeneration = 0;
+  private sameAccountAccess = false;
+  private workspaceUnavailable = false;
+  private readonly agentCatalog: RemoteAgentCatalog | null;
+  private readonly ownershipAssociations: OwnershipAssociationStore;
+  private ownershipClaimCapability: { environment: string; owner: RemoteOwner; enabled: boolean } | null = null;
+  private agentCapabilities: string[] = [];
+  private declaredDualApproval = false;
+  private declaredQuestions = false;
+  private declaredAgentCapabilities: string[] = [];
+  private agentCatalogRevision = 0;
+  private publishedCatalogRevision = -1;
+  private lastAgentCatalogCheck = 0;
+  private nextAgentSummaryCheck = 0;
+  private lastCatalogConnection: string | null = null;
+  private agentLimits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES };
+  private lastCapabilityCheck = 0;
+  private capabilitySnapshot: any = null;
+  private readonly recoveryDependency: RemoteRecoveryDependency;
+  private readonly recoveryLimiter = new RemoteRecoveryLimiter();
+  private readonly automaticRecovery: RemoteLegacyRecovery;
+  private inputCapabilities: string[] = [];
+  private lastInputPublish = 0;
+  private inputModelRefresh = { context: '', offset: 0 };
+  private inputWork: Promise<void> | null = null;
+  private inputRecoveryWork: Promise<void> | null = null;
+  private inputRecoveryAt = 0;
+  private inputRecoveryContext = '';
+  private inputRecoveryScope = '';
+  private inputRecoveryFallbackUntil = 0;
+  private inputRecoveryCursor: string | null = null;
+  private optionalPublishWork: Promise<void> | null = null;
+  private commandPollAt = 0;
+  private commandRetryAt = 0;
+  private reconcileWork: Promise<void> | null = null;
+  private reconcileRetryAt = 0;
+  private readonly commandTasks = new Map<string, Promise<void>>();
+  private readonly commandTaskRetryAt = new Map<string, number>();
+  private inputPollAt = 0;
+  private inputRetryAt = 0;
+  private agentCatalogRetryAt = 0;
+  private readonly files: RemoteFileSync | null;
+  private fileCapabilities: string[] = [];
+  private projectionVersion = 1;
+  private replySupported = false;
+  private taskCreditsSupported = false;
+  private replyModelLabelSupported = false;
+  private questionsSupported = false;
+  private retentionSupported = false;
+  private receiptsSupported = false;
+  private capabilitiesKnown = false;
+  private fenceCheckedAt = 0;
+  private readonly retentionVerifiedAt = new Map<string, number>();
+  private readonly replies = new RemoteReplyTransport();
+  private readonly importSnapshots: RemoteImportSnapshots;
+  private fileTimer: ReturnType<typeof setInterval> | null = null;
+  constructor(private readonly deps: BridgeDependencies) {
+    deps.store.publicationOrigins.setRouteProvider(deps.getApiBaseUrl);
+    deps.agentOwnership?.publicationOrigins?.setRouteProvider(deps.getApiBaseUrl);
+    const publicationTarget = () => {
+      const space = this.targetId && remotePublicationTargetSpace(deps.store.db, this.targetId);
+      return this.owner && this.registration && space && this.accountRoute === deps.getApiBaseUrl() && this.accountRouteEpoch === (deps.getRouteEpoch?.() ?? 0) && sameOwner(this.owner, deps.getOwner())
+        ? { owner: this.owner, route: this.accountRoute, dataSpaceId: space } : null;
+    };
+    deps.store.publicationOrigins.setCurrentTargetProvider(publicationTarget);
+    deps.agentOwnership?.publicationOrigins?.setCurrentTargetProvider(publicationTarget);
+    this.accountRoute = deps.getApiBaseUrl();
+    this.accountRouteEpoch = deps.getRouteEpoch?.() ?? 0;
+    this.agentSettings = deps.agentSettings ? new RemoteAgentSettingsProtocol({ ...deps.agentSettings,
+      connection: () => this.agentSettingsConnection(), request: (path, method, body) => this.api(path, method, body) }) : null;
+    this.displaySnapshot = new RemoteDisplaySnapshot({
+      retainUntilInvalidated: value => this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled
+        && value.status === RemoteDisplayHealthStatus.Known && value.settings?.enabled === false
+        && !value.pendingSettings && !value.pendingName,
+      produce: async (key, signal) => {
+        const input = this.displayInput();
+        if (!input || key !== this.displayKey() || signal.aborted || input.database === ':memory:') return null;
+        const cancel = (): void => this.displayJob.cancel();
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const result = await this.displayJob.run<RemoteDisplayHealthResult>(remoteWorkerPath(RemoteWorkerFile.DisplayHealth), input, {
+            timeoutMs: 5000, memoryMb: 96, resultLimitBytes: 64 * 1024, prefix: 'REMOTE_DISPLAY_HEALTH',
+            current: () => !signal.aborted && key === this.displayKey(),
+          });
+          if (result.status === 'unknown') remotePerformance.event(RemotePerformanceStage.DisplaySnapshot, RemotePerformanceEvent.Instant, { outcome: RemotePerformanceOutcome.Unknown, reason: RemotePerformanceReason.Unavailable });
+          return result;
+        } finally { signal.removeEventListener('abort', cancel); }
+      },
+      onChanged: () => this.changed(),
+    });
+    this.contentSnapshot = new RemoteOwnershipContentCache({
+      produce: async (key, contentTaskId, signal) => {
+        const input = this.displayInput();
+        if (!input || !contentTaskId || key !== this.displayKey() || signal.aborted || input.database === ':memory:') return null;
+        const cancel = (): void => this.contentJob.cancel();
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const value = await this.contentJob.run<OwnershipContentSyncSnapshot>(remoteWorkerPath(RemoteWorkerFile.DisplayHealth), { ...input, contentTaskId }, {
+            timeoutMs: 5000, memoryMb: 96, resultLimitBytes: 4096, prefix: 'REMOTE_DISPLAY_HEALTH',
+            current: () => !signal.aborted && key === this.displayKey(),
+          });
+          return value?.contentSync ? value : null;
+        } finally { signal.removeEventListener('abort', cancel); }
+      },
+      onChanged: () => this.changed(),
+    });
+    this.targets = new RemoteSyncTargetStore(deps.store);
+    this.taskSync = new RemoteTaskSyncState(deps.store.db, undefined, undefined, observer => deps.store.afterCommit(observer));
+    this.recoveryDependency = new RemoteRecoveryDependency(deps.store.db);
+    this.availability = new RemoteAvailabilityPublisher({
+      store: deps.store, recoveryLimiter: this.recoveryLimiter,
+      context: () => this.owner && this.targetId && this.registration && this.settings().enabled && !this.stopped
+        && !this.syncPaused() && !deps.store.needsSecurityRecovery() ? {
+        environment: this.remoteEnvironment(), targetId: this.targetId, scope: `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}`,
+        owner: this.owner, deviceId: this.registration.deviceId, generation: this.generation || '', routeEpoch: this.accountGeneration,
+        controlDeletionSupported: this.controlDeletionSupported, taskCreditsSupported: this.taskCreditsSupported, replyModelLabelSupported: this.replyModelLabelSupported,
+        recoveryDependencyEpoch: this.recoveryDependency.epoch(this.taskContext()!),
+        recoveryCapabilities: this.capabilitySnapshot?.capabilities ?? [],
+        historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
+        checkpointPagesSupported: this.capabilitySnapshot?.capabilities?.includes('control_checkpoint_pages_v1') === true,
+        publicationResolutionSupported: this.capabilitySnapshot?.capabilities?.includes('live_publication_resolution_v1') === true,
+        supported: !!this.generation && !!this.registration.syncTarget
+          && ['control_facts_v1', 'live_projections_v3'].every(value => this.capabilitySnapshot?.capabilities?.includes(value)),
+      } : null,
+      admitted: id => this.sessionAdmitted(id),
+      request: (path, method, body, version, timeoutMs) => this.api(path, method, body, true, version, undefined, timeoutMs),
+    });
+    deps.store.setIndependentControlReady(sessionId => this.availability.controlReady(sessionId));
+    deps.store.setTaskAdmission(sessionId => this.sessionAdmitted(sessionId));
+    deps.store.setControlAdmission(() => !this.targetId || !!this.owner && !this.targets.controlAdmissionBlocked(this.owner, this.targetId));
+    deps.store.setTaskProjectionEligibility(sessionId => {
+      const context = this.taskContext();
+      return this.availability.legacyHistoryAllowed(sessionId) && (!context || this.taskSync.projectionEligible(context, sessionId));
+    });
+    this.importSnapshots = new RemoteImportSnapshots(deps.store);
+    this.automaticRecovery = new RemoteLegacyRecovery({ store: deps.store, tasks: this.taskSync, limiter: this.recoveryLimiter,
+      dependencyEpoch: () => { const context = this.taskContext(); return context ? this.recoveryDependency.epoch(context) : null; },
+      capabilities: () => this.capabilitySnapshot,
+      admitted: id => {
+        const row = deps.store.sync(id), pending = deps.store.get<SavedImport>(`import:${id}`);
+        return !!row && row.device_id === this.registration?.deviceId && !row.migration_frozen
+          && (!row.sync_environment || this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment))
+          && (!pending?.owner || sameOwner(pending.owner, this.owner)) && (!pending?.deviceId || pending.deviceId === this.registration?.deviceId)
+          && (!pending?.environment || this.targets.matchesEnvironment(this.remoteEnvironment(), pending.environment))
+          && this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id) && !this.ownershipSyncBlocked(id);
+      },
+      readState: row => this.readSyncState(row, true), readImport: id => this.api(`/sync/imports/${encodeURIComponent(id)}`),
+      validateImport: (id, receipt) => this.assertImportIdentity(deps.store.get<SavedImport>(`import:${id}`)!, receipt),
+      partsAvailable: async id => { const saved = deps.store.get<SavedImport>(`import:${id}`); return !!saved && (!saved.fileSet || await this.importSnapshots.exists(saved.fileSet, saved.parts)); },
+    });
+    this.deletions = deps.deletion ? new RemoteSessionDeletionClient({ ...deps.deletion, store: deps.store, security: deps.security,
+      controlsAdmitted: () => deps.store.areControlsAdmitted(),
+      context: () => this.owner && this.registration && this.targetId && sameOwner(this.owner, deps.getOwner()) ? {
+        owner: this.owner, environment: this.remoteEnvironment(), deviceId: this.registration.deviceId, generation: this.generation, routeEpoch: this.accountGeneration,
+        enabled: this.settings().enabled && !this.stopped && !this.syncPaused(),
+      } : null,
+      request: (path, method, body) => this.api(path, method, body),
+    }) : null;
+    this.connections = new RemoteConnectionClient({
+      guard: () => {
+        this.ensureAccount();
+        const owner = this.owner, generation = this.accountGeneration, route = this.deps.getApiBaseUrl();
+        return () => {
+          if (generation !== this.accountGeneration || !sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())
+            || route !== this.deps.getApiBaseUrl()) throw new Error('Account changed during connection management');
+        };
+      },
+      ensure: async () => {
+        this.ensureAccount();
+        if (!this.owner) throw new Error('Sign in before managing connections');
+        await this.ensureRegistration();
+        if (Date.now() - this.lastCapabilityCheck > 45000) await this.refreshCapabilities();
+        return this.connectionManagement || this.connectionManagementKnown;
+      },
+      request: (path, method, body) => this.api(path, method, body, true, 2),
+      deviceId: () => this.registration?.deviceId,
+      observe: value => this.observeConnection(value),
+      retry: () => { if (!this.connectionRemoved) { this.retryAfter = 0; this.schedule(0); } },
+    });
+    this.files = deps.files ? new RemoteFileSync({ store: deps.store, ...deps.files, owner: deps.getOwner,
+      environment: () => this.remoteEnvironment(), enabled: () => this.accountRoute === deps.getApiBaseUrl()
+        && this.settings().enabled && !this.stopped && !this.syncPaused(),
+      request: async (connection, pathname, init) => {
+        const epoch = this.accountGeneration, route = deps.getApiBaseUrl();
+        if (route !== this.accountRoute || !this.registration || connection.deviceId !== this.registration.deviceId || connection.generation !== this.generation
+          || this.syncPaused() || !sameOwner(connection.owner, deps.getOwner()) || connection.environment !== this.remoteEnvironment() || !this.settings().enabled || this.stopped) throw new Error('FILE_WRITER_STALE');
+        const response = await deps.request(connection.owner, `/api/remote/v1${pathname}`, { ...init, headers: { ...init.headers,
+          ...remoteSyncTargetHeaders(this.registration.syncTarget ?? null),
+          'X-Remote-Device-Credential': `${connection.deviceId}.${this.registrationIdentity().deviceKey}`, 'X-Remote-Connection-Generation': connection.generation,
+          'X-Remote-Projection-Version': String(this.projectionVersion) } });
+        if (epoch !== this.accountGeneration || route !== deps.getApiBaseUrl()) throw new Error('FILE_WRITER_STALE');
+        return response;
+      } }) : null;
+    this.ownershipAssociations = new OwnershipAssociationStore(deps.store);
+    deps.store.setWake((urgent?: boolean) => { this.availability.wake(); this.schedule(urgent || this.shuttingDown ? 0 : this.replySupported ? REMOTE_REPLY_SYNC_DELAY_MS : 1000); });
+    this.agentCatalog = deps.agentOwnership && deps.getAgentWorkspace ? new RemoteAgentCatalog(deps.store, deps.agentOwnership, deps.getAgentWorkspace,
+      (owner, deviceId, agentId) => this.inputCapabilities.includes(RemoteInputCapability.Schema) ? deps.getAgentDefaultInput?.(owner, deviceId, agentId) : undefined,
+      () => this.accountRoute === deps.getApiBaseUrl() && this.accountRouteEpoch === (deps.getRouteEpoch?.() ?? 0)
+        ? this.getSyncTargetId() : null, deps.expertAvatars) : null;
+    deps.agentOwnership?.subscribe(() => this.agentCatalogChanged());
+  }
+  agentCatalogChanged(): void {
+    this.agentCatalogRevision++;
+    this.nextAgentSummaryCheck = 0;
+    this.schedule(300);
+  }
+  telemetryIdentity(): { ready: boolean; targetId: string | null; dataSpaceId?: string; dataGeneration?: string; connectionAttemptId: string } {
+    const target = this.registration?.syncTarget ?? this.discoveredTarget;
+    return { ready: this.capabilitiesKnown || Boolean(this.targetId), connectionAttemptId: this.telemetryConnectionAttemptId, targetId: this.targetId, dataSpaceId: target?.dataSpaceId, dataGeneration: target?.dataGeneration };
+  }
+  start(): void {
+    this.displaySnapshot.start(); this.contentSnapshot.start();
+    remoteDiagnostics.start(() => {
+      const observed = this.state();
+      const health = observed.syncHealth;
+      if (observed.enabled) captureRemoteTelemetry().emit(RemoteTelemetryEvent.Health, { pendingCount: health?.pendingSessions,
+        isolated: health?.isolatedSessions, retryingCount: health?.retryingSessions, filesQueue: health?.pendingFiles,
+        oldestPendingAgeMs: health?.oldestPendingAt ? Math.max(0, Date.now() - Date.parse(health.oldestPendingAt)) : undefined,
+        status: health?.status, reason: health?.reason, coverage: 'partial' });
+      remoteDiagnostics.gauge('pendingSessions', health?.pendingSessions ?? null);
+      remoteDiagnostics.gauge('oldestPendingAgeMs', health?.oldestPendingAt ? Math.max(0, Date.now() - Date.parse(health.oldestPendingAt)) : null);
+    });
+    this.stopped = false; this.availability.start(); this.deps.input?.preparations.startCleanup?.(); this.accountChanged();
+    if (this.files && !this.fileTimer) { this.fileTimer = setInterval(() => this.syncFiles(), 2000); this.fileTimer.unref?.(); }
+  }
+  private syncFiles(): void {
+    if (!this.deps.store.needsSecurityRecovery() && !this.syncPaused() && this.owner && this.registration && this.generation && this.projectionVersion >= 3) this.files?.tick({ owner: this.owner,
+      deviceId: this.registration.deviceId, generation: this.generation, environment: this.remoteEnvironment(), routeEpoch: this.accountGeneration });
+  }
+  async prepareFileRun(sessionId: string, roots: string[]): Promise<void> {
+    if (!this.canCaptureRemoteFiles()) { remoteFileDiagnostic('prepare_skipped', { sessionId, reason: 'FILE_CAPTURE_DISABLED' }); return; }
+    const epoch = this.accountGeneration;
+    await this.files?.prepareRun(sessionId, roots, () => epoch === this.accountGeneration && !this.deps.store.needsSecurityRecovery());
+  }
+  canCaptureRemoteFiles(): boolean { return !this.deps.store.needsSecurityRecovery() && this.files?.canCaptureInput() === true && this.settings().enabled; }
+  getInputAgentCatalog(): RemoteAgentCatalog | null { return this.agentCatalog; }
+  /** Keep publishers alive, but revoke admission even for commands already awaiting I/O. */
+  beginShutdown(): void { this.shuttingDown = true; }
+
+  /** Best effort during existing teardown; never wait for a remote acknowledgement. */
+  prioritizeRunUpdates(sessionIds: string[]): void {
+    if (!this.shuttingDown || !this.syncContext()()) return;
+    const previousCount = this.quittingSessionIds.size;
+    for (const id of sessionIds) {
+      const binding = this.deps.store.controlBinding(id);
+      if (binding?.session_id && binding.device_id === this.registration?.deviceId
+        && sameOwner(this.deps.store.owner(id), this.owner)) this.quittingSessionIds.add(id);
+    }
+    if (this.quittingSessionIds.size !== previousCount) remoteLogMessage('info', '[RemoteSync] Prioritizing quit run updates', {
+      sessionCount: this.quittingSessionIds.size, waitForReceipt: false,
+    });
+    this.deps.store.prioritizeProjections([...this.quittingSessionIds]);
+    this.availability.wake(); this.schedule(0);
+  }
+
+  private quittingSyncRows(context: TaskSyncContext): SyncRow[] {
+    const rows: SyncRow[] = [];
+    for (const id of this.quittingSessionIds) {
+      const row = this.deps.store.sync(id);
+      if (!row || row.device_id !== context.deviceId || !sameOwner(this.deps.store.owner(id), context.owner)) continue;
+      // Only remove a healthy local deferral. Server backoff, isolation and projection
+      // publication checks still apply inside the normal sync path.
+      this.taskSync.resumeLocalDeferral(context, id);
+      if (this.taskSync.eligible(context, id)) rows.push(row);
+    }
+    return rows;
+  }
+
+  stop(): void { this.quittingSessionIds.clear(); this.deps.store.prioritizeProjections([]); this.contentSnapshot.stop(); this.displaySnapshot.stop(); this.availability.stop(); this.importSnapshots.cancel(); remoteDiagnostics.stop(); this.deps.input?.preparations.stopCleanup?.(); this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null;
+    if (this.fileTimer) clearInterval(this.fileTimer); this.fileTimer = null; this.files?.pause(); this.disconnect(); }
+  accountChanged(): void { this.ensureAccount(); this.schedule(0); }
+  private changed(): void { try { remotePerformance.sync(RemotePerformanceStage.StateNotify, () => this.deps.onStateChange?.()); } catch { remoteLogMessage('warn', '[RemoteSync] State notification deferred', {}); } }
+  private targetKey(prefix: string): string { return `${prefix}:${this.targetId ? `${this.targetId}:` : ''}${this.owner?.userId}:${this.owner?.scopeKey}`; }
+  private settingsKey(): string { return this.targetKey('settings'); }
+  private controlKey(): string { return this.targetKey('controlQueue'); }
+  private nameKey(): string { return this.targetKey('namePending'); }
+  private pendingConfigurationKey(): string { return `pendingConfiguration:${this.owner?.userId}:${this.owner?.scopeKey}`; }
+  private catalogFailureKey(): string { return `${this.targetKey('agentCatalogFailure')}:${this.registration?.deviceId}`; }
+  private settings(): LocalSettings {
+    const saved = remotePerformance.sync(RemotePerformanceStage.SettingsPreferenceRead, () => this.owner ? this.deps.store.get<LocalSettings>(this.settingsKey()) : null);
+    const value: LocalSettings = { enabled: Boolean(this.owner), name: this.deps.metadata.hostName, workspaces: [], settingsVersion: '0', ...saved };
+    this.displaySettings = { key: this.displaySettingsKey(), value: { ...value, workspaces: value.workspaces.map(workspace => ({ ...workspace })) } };
+    return value;
+  }
+  private controls(): ControlIntent[] { return this.deps.store.get<ControlIntent[]>(this.controlKey()) || []; }
+  private displayOwner(): RemoteOwner | null { return this.deps.getDisplayOwner ? this.deps.getDisplayOwner() : this.deps.getOwner(); }
+  private displaySettingsKey(): string { return JSON.stringify([this.accountGeneration, this.accountRoute, this.settingsKey()]); }
+  private displayKey(): string | null {
+    try {
+      if (this.stopped || !this.owner || !sameOwner(this.owner, this.displayOwner()) || this.accountRoute !== this.deps.getApiBaseUrl()
+        || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
+    } catch { return null; }
+    return JSON.stringify([this.accountGeneration, this.accountRoute, this.owner, this.targetId, this.registration?.deviceId,
+      this.remoteEnvironment(), this.syncPaused(), this.deps.store.needsSecurityRecovery(),
+      this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value.enabled : null,
+      this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true]);
+  }
+  private displayInput(): RemoteDisplayHealthInput | null {
+    if (!this.displayKey() || !this.owner) return null;
+    const enabled = this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value.enabled : true;
+    return { database: this.deps.store.db.name, owner: this.owner, target: this.remoteEnvironment(), targetId: this.targetId,
+      deviceId: this.registration?.deviceId ?? null,
+      availabilityScope: this.targetId && this.registration && enabled && !this.syncPaused() && !this.deps.store.needsSecurityRecovery()
+        ? `${this.targetId}:${this.owner.userId}:${this.owner.scopeKey}:${this.registration.deviceId}` : null,
+      historySupported: this.capabilitySnapshot?.capabilities?.includes('sync_recovery_v3') === true,
+      settingsKey: this.settingsKey(), controlsKey: this.controlKey(), nameKey: this.nameKey(), catalogFailureKey: this.catalogFailureKey() };
+  }
+  state(): RemoteSettingsState {
+    return remotePerformance.sync(RemotePerformanceStage.RemoteState, () => {
+      // Display and diagnostic reads are memory-only. No SQLite, payload hashing or worker startup on the caller's stack.
+      let currentOwner: RemoteOwner | null = null, current = false;
+      try { currentOwner = this.displayOwner(); current = sameOwner(this.owner, currentOwner) && this.accountRoute === this.deps.getApiBaseUrl()
+        && this.accountRouteEpoch === (this.deps.getRouteEpoch?.() ?? 0); }
+      catch { /* Unknown account context cannot expose an earlier account's display data. */ }
+      const snapshot = this.displaySnapshot.read(this.displayKey());
+      const health = snapshot?.status === 'known' ? snapshot : null;
+      const saved = current && this.displaySettings?.key === this.displaySettingsKey() ? this.displaySettings.value : health?.settings;
+      const settings: LocalSettings = { enabled: Boolean(currentOwner), name: this.deps.metadata.hostName, workspaces: [], settingsVersion: '0', ...saved };
+      const connected = current && settings.enabled && this.generation !== null && Date.now() - this.lastPong < this.heartbeatTimeout;
+      const availabilityHealth = health?.availability;
+      const taskHealth = health?.taskHealth;
+      const transient = this.availability.displayTransientHealth(current ? this.displayInput()?.availabilityScope ?? null : null);
+      const lanes = { ...availabilityHealth?.lanes };
+      if (health?.pendingDeletions && (!lanes.deletion || lanes.deletion === RemoteSyncLaneStatus.Idle)) lanes.deletion = RemoteSyncLaneStatus.Pending;
+      if (transient.controlInFlight && (!lanes.control || lanes.control === RemoteSyncLaneStatus.Idle || lanes.control === RemoteSyncLaneStatus.Pending)) lanes.control = RemoteSyncLaneStatus.InFlight;
+      if (transient.controlBackoff && lanes.control !== RemoteSyncLaneStatus.Degraded && lanes.control !== RemoteSyncLaneStatus.Unknown) lanes.control = RemoteSyncLaneStatus.Backoff;
+      if (transient.liveBackoff && lanes.live !== RemoteSyncLaneStatus.Degraded && lanes.live !== RemoteSyncLaneStatus.Unknown) lanes.live = RemoteSyncLaneStatus.Backoff;
+      const oldestTimes = [health?.legacy.oldest, availabilityHealth?.oldest].filter((value): value is number => typeof value === 'number');
+      const pending = health ? Math.max(health.legacy.pendingSessions + (availabilityHealth?.pendingSessions ?? 0), health.pendingDeletions ?? 0, transient.pending ? 1 : 0) : null;
+      const recoveryRequired = this.deps.store.needsSecurityRecovery();
+      const filesHealth = current ? this.files?.health() : undefined;
+      const filesDegraded = filesHealth?.degraded === true;
+      const storagePending = current && [...this.taskMemoryBlocks.values()].some(item => sameOwner(item.context.owner, this.owner)
+        && item.context.target === this.remoteEnvironment() && item.context.deviceId === this.registration?.deviceId);
+      const syncFailed = Boolean(storagePending || transient.degraded || taskHealth?.failedSessions || taskHealth?.countsTruncated || availabilityHealth?.degraded || current && !availabilityHealth?.sessions && this.sessionSyncFailed);
+      const reason = recoveryRequired ? RemoteSyncHealthReason.LocalRecovery : current && this.connectionRemoved ? RemoteSyncHealthReason.Removed : current && this.quotaBlocked ? RemoteSyncHealthReason.Quota
+        : storagePending ? RemoteSyncHealthReason.StorageDependency : syncFailed ? RemoteSyncHealthReason.Projection : filesDegraded ? RemoteSyncHealthReason.Files
+          : !health && currentOwner && settings.enabled ? RemoteSyncHealthReason.StorageDependency : settings.enabled && !connected ? RemoteSyncHealthReason.Connection : undefined;
+      const syncHealth: RemoteSyncHealth = {
+        ...taskHealth, lanes, countsTruncated: taskHealth?.countsTruncated || availabilityHealth?.countsTruncated,
+        statisticsUnavailable: !health, pendingFiles: filesHealth?.pending ?? 0, admissionDeferred: current && this.admissionDeferred,
+        desktopOnlySessions: availabilityHealth?.desktopOnlySessions,
+        pendingDeletions: health?.pendingDeletions,
+        status: recoveryRequired || !currentOwner || !settings.enabled || current && (this.connectionRemoved || this.quotaBlocked) ? RemoteSyncHealthStatus.Paused
+          : syncFailed || filesDegraded || !health ? RemoteSyncHealthStatus.Degraded : (pending ?? 0) > 0 || (filesHealth?.pending || 0) > 0 ? RemoteSyncHealthStatus.Syncing : RemoteSyncHealthStatus.Idle,
+        ...(reason ? { reason } : {}), pendingSessions: pending, oldestPendingAt: oldestTimes.length ? new Date(Math.min(...oldestTimes)).toISOString() : null,
+        lastSuccessfulSyncAt: availabilityHealth?.sessions ? (availabilityHealth.lastSuccess ? new Date(availabilityHealth.lastSuccess).toISOString() : null) : health?.legacy.lastSuccess ?? null,
+        observedAt: new Date(snapshot?.observedAt ?? Date.now()).toISOString(),
+      };
+      return { syncHealth, enabled: settings.enabled, connected,
+        deviceConnectionManagementSupported: current && (this.capabilitiesKnown || this.connectionManagementKnown) ? this.connectionManagement || this.connectionManagementKnown : undefined,
+        deviceConnectionManagementEnabled: current && this.connectionManagementEnabled, deviceConnectionManagementClusterReady: current && this.connectionManagementClusterReady,
+        deviceId: current ? this.registration?.deviceId : undefined, name: settings.name, hostName: this.deps.metadata.hostName, owner: currentOwner,
+        connectionStatus: connected ? RemoteConnectionStatus.Online : RemoteConnectionStatus.Offline,
+        connectionReason: !currentOwner ? RemoteConnectionReason.SignedOut : !settings.enabled ? RemoteConnectionReason.Disabled : !current ? RemoteConnectionReason.Connecting : this.connectionRemoved ? RemoteConnectionReason.Removed : this.quotaBlocked ? RemoteConnectionReason.QuotaBlocked : this.workspaceUnavailable && !this.error ? RemoteConnectionReason.WorkspaceUnavailable : this.connectionReason,
+        settingsSyncStatus: !health || health.pendingSettings ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
+        nameSyncStatus: !health || health.pendingName ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
+        agentCatalogSyncStatus: !health ? RemoteSyncStatus.Pending : health.catalogFailed ? RemoteSyncStatus.Error : RemoteSyncStatus.Synced,
+        sessionSyncStatus: syncFailed ? RemoteSyncStatus.Error : !health ? RemoteSyncStatus.Pending : RemoteSyncStatus.Synced,
+        workspaces: settings.workspaces.map(({ path: _path, ...w }) => w), error: current ? this.error : undefined, errorCode: current ? this.errorCode : undefined,
+        accessRequests: current ? this.accesses : [] };
+    });
+  }
+  /** Task detail reads only the current readonly-worker snapshot; it never runs sessionHealth or grants admission. */
+  associationTaskSync(target: OwnershipTarget): OwnershipTaskSync {
+    if (target.kind !== OwnershipTargetKind.Task || typeof target.id !== 'string' || !target.id || target.id.length > 256) return unknownOwnershipContentSync();
+    const disabled = this.displaySettings?.key === this.displaySettingsKey() && !this.displaySettings.value.enabled;
+    const key = disabled ? null : this.displayKey(), snapshot = this.contentSnapshot.read(key, target.id);
+    if (!key || !snapshot || !Number.isSafeInteger(snapshot.observedAt) || Date.now() - snapshot.observedAt > 15000 || snapshot.observedAt > Date.now()) return unknownOwnershipContentSync();
+    return { syncState: snapshot.syncState, contentSync: { ...snapshot.contentSync,
+      retryable: snapshot.contentSync.retryable && !!this.generation && !this.syncPaused() && !this.connectionRemoved && !this.quotaBlocked } };
+  }
+  associationSyncState(target: OwnershipTarget): OwnershipSyncState {
+    return remotePerformance.sync(RemotePerformanceStage.RemoteState, () => {
+      const currentOwner = this.deps.getOwner();
+      if (!currentOwner) return OwnershipSyncState.Local;
+      if (target.kind === OwnershipTargetKind.Task) {
+        if (!sameOwner(this.deps.store.owner(target.id), currentOwner)) return OwnershipSyncState.Local;
+      } else {
+        const identity = this.deps.agentOwnership?.get(target.id);
+        if (identity?.ownerKind !== AgentOwnerKind.Owned || !sameOwner(identity.owner, currentOwner)) return OwnershipSyncState.Local;
+      }
+      if (!this.owner || !sameOwner(this.owner, currentOwner)) return OwnershipSyncState.Pending;
+      // A route switch invalidates the old admission even before the next bridge tick.
+      if (this.accountRoute !== this.deps.getApiBaseUrl() || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return OwnershipSyncState.Pending;
+      const pending = this.settings().enabled && (this.connectionReason === RemoteConnectionReason.ServerUnavailable
+        || this.connectionReason === RemoteConnectionReason.ServerUpgradeRequired) ? OwnershipSyncState.WaitingService : OwnershipSyncState.Pending;
+      if (!this.registration || !this.targetId) return pending;
+      // Reading UI state must not grant an operation its first durable remote admission.
+      const blocked = this.ownershipClaimBlocks(false);
+      const waiting = target.kind === OwnershipTargetKind.Agent ? blocked.blockedAgentIds.has(target.id) : this.ownershipSyncBlocked(target.id, blocked);
+      if (waiting) return !this.settings().enabled || this.canAdmitOwnershipClaim() ? OwnershipSyncState.Pending : OwnershipSyncState.WaitingService;
+      if (target.kind === OwnershipTargetKind.Agent) {
+        if (this.deps.store.get(this.catalogFailureKey())) return OwnershipSyncState.Failed;
+        return this.agentCatalog?.isSynced(this.owner, this.registration.deviceId, target.id) ? OwnershipSyncState.Synced : pending;
+      }
+      const row = this.deps.store.sync(target.id);
+      // Old-target ACKs/failures do not describe an unverified current target.
+      if (row?.sync_environment && !this.targets.matchesEnvironment(this.remoteEnvironment(), row.sync_environment)) return pending;
+      const independent = this.availability.sessionHealth(target.id);
+      if (independent) {
+        if (independent.degraded) return OwnershipSyncState.Failed;
+        return independent.ready && !independent.pending
+          ? independent.desktopOnly ? OwnershipSyncState.Partial : OwnershipSyncState.Synced : pending;
+      }
+      if (this.deps.store.get(`syncFailure:${target.id}`)
+        || this.deps.store.db.prepare('SELECT 1 FROM remote_projection_failures WHERE session_id=?').get(target.id)) return OwnershipSyncState.Failed;
+      const dirty = this.deps.store.db.prepare('SELECT session_id FROM remote_dirty WHERE session_id=?').get(target.id);
+      return row && row.device_id === this.registration.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
+        && !dirty && !this.deps.store.get(`import:${target.id}`) ? OwnershipSyncState.Synced : pending;
+    });
+  }
+  async configure(changes: SettingsChanges): Promise<RemoteSettingsState> {
+    this.ensureAccount();
+    if (!this.owner) throw new Error('Sign in before enabling remote control');
+    if (changes.reregister) {
+      if (this.errorCode !== REMOTE_DEVICE_RETIRED_CODE || !this.deps.registrationIdentities) throw new Error('Device registration recovery is unavailable');
+      const previousTarget = this.targets.active(this.owner);
+      // Registration may fail before targetId is restored after an application restart.
+      const previousSettings = previousTarget && stableJson(previousTarget.syncTarget) === stableJson(this.discoveredTarget)
+        ? this.deps.store.get<LocalSettings>(`settings:${previousTarget.targetId}:${this.owner.userId}:${this.owner.scopeKey}`) : null;
+      const settings = previousSettings ?? this.settings();
+      // Persist intent before the credential swap. A crash retries the same saved identity.
+      this.deps.store.put(this.pendingConfigurationKey(), { route: this.accountRoute,
+        changes: [{ enabled: settings.enabled, name: settings.name }] });
+      this.deps.store.put(`registrationSettings:${this.owner.userId}:${this.owner.scopeKey}`, {
+        route: this.accountRoute, previousInstallationId: this.registrationIdentity().installationId, settings,
+      });
+      const previousIdentity = this.registrationIdentity().installationId;
+      try { this.deps.registrationIdentities.replace(this.owner, this.registrationIdentityScope()); }
+      finally {
+        // A rename may have committed even if directory fsync failed. Never keep using the old device ID with its new key.
+        if (this.registrationIdentity().installationId !== previousIdentity) { this.accountRoute = ''; this.ensureAccount(); this.schedule(0); }
+      }
+      return this.state();
+    }
+    if (changes.retrySessionId) {
+      const id = changes.retrySessionId, context = this.taskContext();
+      if (!context || !sameOwner(this.deps.store.owner(id), context.owner) || !this.sessionAdmitted(id)) throw new Error('Task synchronization identity is not verified');
+      if (this.availability.ownsHistory(id)) {
+        if (!this.availability.retryLive(id)) throw new Error('Task synchronization retry is unavailable');
+        this.displaySnapshot.invalidate(); this.contentSnapshot.invalidate(id); this.changed(); return this.state();
+      }
+      if (!this.taskSync.manualRetry(context, id)) throw new Error('Task synchronization retry is unavailable');
+      this.deps.store.requestProjectionRecheck(id);
+      this.files?.retrySession(id); this.contentSnapshot.invalidate(id);
+      this.sessionChecks.delete(id); this.taskMemoryBlocks.delete(id);
+      this.changed(); this.schedule(0); return this.state();
+    }
+    const settings = this.settings();
+    const wasEnabled = settings.enabled;
+    if (changes.name !== undefined) {
+      const name = changes.name.trim();
+      if (!name || name.length > 100 || /[\u0000-\u001f\u007f-\u009f]/u.test(changes.name)) throw new Error('Invalid device name');
+      settings.name = name;
+    }
+    if (changes.enabled === false && settings.enabled) this.agentSettings?.fence();
+    if (changes.enabled !== undefined) settings.enabled = changes.enabled;
+    if (changes.workspace && !settings.workspaces.some(w => w.path === changes.workspace!.path)) settings.workspaces.push({ workspaceId: randomUUID(), ...changes.workspace, available: true });
+    // Keep IDs as tombstones: accepted commands must never be redirected to a different path.
+    if (changes.removeWorkspaceId) settings.workspaces = settings.workspaces.map(w => w.workspaceId === changes.removeWorkspaceId ? { ...w, available: false } : w);
+    this.deps.store.transaction(() => {
+      this.deps.store.put(this.settingsKey(), settings);
+      if (changes.name !== undefined) this.deps.store.put(this.nameKey(), { id: randomUUID(), name: settings.name });
+      if (changes.enabled !== undefined || changes.workspace || changes.removeWorkspaceId) this.queueControl(settings);
+      if (!this.targetId && (changes.enabled !== undefined || changes.name !== undefined || changes.workspace || changes.removeWorkspaceId)) {
+        const key = this.pendingConfigurationKey(), previous = this.deps.store.get<PendingConfiguration>(key);
+        const deferred: SettingsChanges = { ...(changes.enabled !== undefined ? { enabled: changes.enabled } : {}),
+          ...(changes.name !== undefined ? { name: changes.name } : {}), ...(changes.workspace ? { workspace: changes.workspace } : {}),
+          ...(changes.removeWorkspaceId ? { removeWorkspaceId: changes.removeWorkspaceId } : {}) };
+        this.deps.store.put(key, { route: this.accountRoute,
+          changes: [...(previous?.route === this.accountRoute ? previous.changes : []), deferred] });
+      }
+    });
+    this.displaySettings = { key: this.displaySettingsKey(), value: settings }; this.displaySnapshot.invalidate(); this.contentSnapshot.invalidate();
+    this.retryAfter = 0;
+    if (changes.retry || changes.enabled === true && !wasEnabled) {
+      this.retryGeneration++;
+      this.suspended = false; this.backoff = 5000;
+      this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+      this.connectionReason = RemoteConnectionReason.Reconnecting;
+      if (changes.retry) {
+        try { this.availability.retryLive(); }
+        catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'live', reason: 'STORAGE_UNAVAILABLE', error }, 'warn'); }
+        this.deps.store.transaction(() => {
+          this.deps.store.remove(this.catalogFailureKey());
+        });
+        this.publishedCatalogRevision = -1; this.lastAgentCatalogCheck = 0; this.lastCapabilityCheck = 0;
+        if (this.admissionDeferred) this.registration = null;
+        this.disconnect();
+      }
+    }
+    if (!settings.enabled) { this.deps.store.setEnabledOwner(null); this.disconnect(); }
+    this.changed(); this.schedule(0);
+    // A successful local save is independent of network availability. The durable queues retry in tick().
+    return this.state();
+  }
+  async decide(requestId: string, decision: 'approve' | 'deny'): Promise<RemoteSettingsState> {
+    const key = `decision:${requestId}`;
+    const saved = this.deps.store.get<any>(key) || { decisionId: randomUUID(), decision };
+    if (saved.decision !== decision) throw new Error('This access request already has a pending decision');
+    this.deps.store.put(key, saved);
+    await this.api(`/access-requests/${encodeURIComponent(requestId)}/decision`, 'POST', saved);
+    this.deps.store.remove(key);
+    await this.pollAccess(); this.changed();
+    return this.state();
+  }
+  private registrationIdentityScope(): string {
+    const target = this.registration?.syncTarget ?? this.discoveredTarget;
+    return target ? JSON.stringify([target.dataSpaceId, target.dataGeneration]) : this.accountRoute;
+  }
+  private registrationIdentity(): RemoteRegistrationIdentity {
+    return this.owner ? this.deps.registrationIdentities?.get(this.owner, this.registrationIdentityScope()) ?? this.deps.identity : this.deps.identity;
+  }
+  private ensureAccount(): void {
+    return remotePerformance.sync(RemotePerformanceStage.BridgeAccount, () => {
+      const current = this.deps.getOwner();
+      const route = this.deps.getApiBaseUrl();
+      const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
+      if (route === this.accountRoute && routeEpoch === this.accountRouteEpoch && ((current === null && this.owner === null) || sameOwner(current, this.owner))) return;
+      const previous = this.owner;
+      if (previous || this.accountGeneration > 0) this.agentSettings?.fence();
+      this.agentSettings?.configure(false); this.agentSettingsCapability = false;
+      this.accountRouteEpoch = routeEpoch;
+      this.availability.invalidateContext();
+      this.accountGeneration++; this.commandTaskRetryAt.clear(); this.reconcileRetryAt = 0; this.runEvidenceScans.clear(); this.unresolvedCursor = null; this.receiptCursor = undefined; this.activityCursor = undefined; this.activityOffset = 0; this.importSnapshots.cancel(); this.verifiedImports.clear(); this.sessionChecks.clear(); this.taskMemoryBlocks.clear();
+      this.admissionDeferred = false;
+      this.historyTransportFailures = []; this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyRetryAt = 0;
+      this.accountRoute = route; this.targetId = null; this.discoveredTarget = null;
+      this.agentCatalog?.reset(); this.deps.input?.preparations.reset?.();
+      this.connections.reset(); this.displaySettings = null; this.lastInputPublish = 0;
+      this.owner = current; this.registration = null; this.registrationPending = null;
+      this.retryAfter = 0; this.suspended = false; this.accesses = []; this.sessionSyncFailed = false;
+      this.agentCapabilities = []; this.declaredAgentCapabilities = []; this.lastCatalogConnection = null; this.publishedCatalogRevision = -1; this.lastCapabilityCheck = 0; this.deps.store.setAgentSummaryResolver(null);
+      this.inputCapabilities = [];
+      this.ownershipClaimCapability = null;
+      this.connectionManagementEnabled = false; this.connectionManagementClusterReady = false;
+      this.connectionManagement = false; this.connectionManagementKnown = current ? this.savedConnectionState<boolean>(':supported') === true : false; this.connectionRemoved = false; this.quotaBlocked = false; this.connectionVersion = '0'; this.connectionPolicyCheckAt = 0;
+      const connection = current ? this.savedConnectionState<{ state: string; version: string }>() : null;
+      if (connection) { this.connectionRemoved = connection.state === RemoteDeviceConnectionState.Removed; this.connectionVersion = connection.version; }
+      this.sameAccountAccess = false; this.workspaceUnavailable = false; this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+      this.connectionReason = RemoteConnectionReason.Connecting;
+      this.deps.store.setEnabledOwner(null); this.disconnect();
+      this.declaredDualApproval = false; this.deps.store.setApprovalProjectionSupported(false);
+      this.deletionSupported = false; this.controlDeletionSupported = false; this.deletionAvailable = false; this.deps.store.setDeletionProjectionSupported(false);
+      this.fileCapabilities = []; this.declaredQuestions = false; this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false); this.replySupported = false; this.taskCreditsSupported = false; this.replyModelLabelSupported = false; this.deps.store.setReplyModelLabelSupported(false); this.replies.clear(); this.projectionVersion = 1; this.files?.configure(false);
+      this.retentionSupported = false; this.receiptsSupported = false; this.capabilitiesKnown = false; this.fenceCheckedAt = 0; this.retentionVerifiedAt.clear();
+      this.deps.configureDualApproval?.({ enabled: false, projectionSupported: false });
+      this.deps.onAccountChange(previous, current); this.changed();
+    });
+  }
+  private connectionStateKey(): string { return `deviceConnection:${this.remoteEnvironment()}:${this.owner?.userId}:${this.owner?.scopeKey}`; }
+  private savedConnectionState<T>(suffix = ''): T | null {
+    return this.deps.store.get<T>(`${this.connectionStateKey()}${suffix}`);
+  }
+  private syncPaused(): boolean { return this.connectionRemoved || this.quotaBlocked; }
+  private observeConnection(value: Pick<RemoteDeviceConnection, 'deviceId' | 'connectionState' | 'connectionVersion'> & Partial<RemoteDeviceConnection>): void {
+    if (value.deviceId !== this.registration?.deviceId || !/^[1-9]\d*$/u.test(value.connectionVersion)
+      || BigInt(value.connectionVersion) < BigInt(this.connectionVersion)) return;
+    if (![RemoteDeviceConnectionState.Allowed, RemoteDeviceConnectionState.Removed].includes(value.connectionState)) throw new Error('Invalid device connection state');
+    const wasRemoved = this.connectionRemoved;
+    if (wasRemoved && value.connectionState === RemoteDeviceConnectionState.Allowed
+      && BigInt(value.connectionVersion) <= BigInt(this.connectionVersion)) return;
+    if (!wasRemoved && value.connectionState === RemoteDeviceConnectionState.Removed) this.agentSettings?.fence();
+    this.connectionVersion = value.connectionVersion;
+    this.connectionRemoved = value.connectionState === RemoteDeviceConnectionState.Removed;
+    this.deps.store.put(this.connectionStateKey(), { state: value.connectionState, version: value.connectionVersion });
+    if (this.connectionRemoved) {
+      this.connectionReason = RemoteConnectionReason.Removed; this.files?.pause(); this.disconnect();
+    } else {
+      if (wasRemoved) { this.suspended = false; this.retryAfter = 0; this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined; this.schedule(0); }
+      if (!this.generation && value.admissionState === RemoteDeviceAdmissionState.QuotaBlocked) {
+        this.quotaBlocked = true; this.connectionReason = RemoteConnectionReason.QuotaBlocked;
+      }
+    }
+    this.changed();
+  }
+  agentSettingsProtocol(): RemoteAgentSettingsProtocol | null { return this.agentSettings; }
+  private syncAgentSettingsCapability(): void {
+    const available = this.agentSettings?.available() === true;
+    if (available === this.agentSettingsCapability) return;
+    this.agentSettingsCapability = available;
+    if (this.registration) this.queueControl(this.settings());
+  }
+  private agentSettingsConnection(): RemoteAgentSettingsConnection | null {
+    const target = this.registration?.syncTarget;
+    if (!this.owner || !this.registration || !target || !sameOwner(this.owner, this.deps.getOwner())
+      || this.accountRoute !== this.deps.getApiBaseUrl() || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
+    return { owner: { ...this.owner }, dataSpaceId: target.dataSpaceId, dataGeneration: target.dataGeneration,
+      deviceId: this.registration.deviceId, route: this.accountRoute, connectionGeneration: this.generation,
+      active: !!this.generation && this.settings().enabled && !this.stopped && !this.shuttingDown && !this.syncPaused()
+        && !this.deps.store.needsSecurityRecovery() };
+  }
+  queryConnections() { return this.connections.query(); }
+  removeConnection(input: RemoteConnectionRemoveRequest) { return this.connections.remove(input); }
+  resumeCurrentConnection(input: RemoteConnectionResumeRequest) { return this.connections.resume(input); }
+  queryConnectionOperation(requestId: string) { return this.connections.operation(requestId); }
+  private queueControl(settings: LocalSettings): void {
+    const pending = this.controls();
+    const value = { createSessionAvailable: settings.createSessionAvailable !== false, enabled: settings.enabled, workspaces: settings.workspaces.map(({ path: _path, ...w }) => w) };
+    if (pending.length && stableJson({ createSessionAvailable: pending.at(-1)!.createSessionAvailable !== false, enabled: pending.at(-1)!.enabled, workspaces: pending.at(-1)!.workspaces }) === stableJson(value)) return;
+    pending.push({ id: randomUUID(), ...value });
+    this.deps.store.put(this.controlKey(), pending);
+    this.displaySnapshot.invalidate();
+  }
+  private async ensureDefaultWorkspace(): Promise<void> {
+    if (!this.deps.getDefaultWorkspace) return;
+    const owner = this.owner;
+    const accountGeneration = this.accountGeneration;
+    const directory = await this.deps.getDefaultWorkspace();
+    if (accountGeneration !== this.accountGeneration || !sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
+    const settings = this.settings();
+    const previous = stableJson(settings.workspaces);
+    const couldCreate = settings.createSessionAvailable !== false;
+    const normalized = resolve(directory.path);
+    let workspace = settings.workspaces.find(w => resolve(w.path) === normalized);
+    if (!workspace) {
+      if (settings.workspaces.length >= 50) {
+        this.workspaceUnavailable = true;
+        if (couldCreate) {
+          settings.createSessionAvailable = false;
+          this.deps.store.transaction(() => { this.deps.store.put(this.settingsKey(), settings); this.queueControl(settings); });
+          this.settings();
+        }
+        return;
+      }
+      workspace = { workspaceId: randomUUID(), name: directory.name, path: normalized, available: true };
+      settings.workspaces.push(workspace);
+    }
+    settings.createSessionAvailable = true;
+    for (const item of settings.workspaces) {
+      try { item.available = statSync(item.path).isDirectory(); } catch { item.available = false; }
+    }
+    if (directory.available === false) workspace.available = false;
+    this.workspaceUnavailable = !workspace.available;
+    workspace.name = directory.name;
+    settings.workspaces = [workspace, ...settings.workspaces.filter(w => w !== workspace)];
+    if (!couldCreate || stableJson(settings.workspaces) !== previous) {
+      this.deps.store.transaction(() => { this.deps.store.put(this.settingsKey(), settings); this.queueControl(settings); });
+      this.settings();
+    }
+  }
+  private schedule(delay: number): void {
+    if (this.stopped) return;
+    // Local writes cannot bypass a failed discovery/registration attempt's deadline.
+    if (!this.registration) delay = Math.max(delay, this.retryAfter - Date.now());
+    if (this.running && delay <= 1000) { this.tickRequested = true; return; }
+    const due = Date.now() + delay;
+    if (this.timer && this.scheduledAt <= due) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.scheduledAt = due;
+    this.timer = setTimeout(() => { this.timer = null; void this.tick(); }, delay);
+    this.timer.unref?.();
+  }
+  private startDeletionSync(): void {
+    // Without a verified context, poll() cannot advance its deadline and would wake every tick.
+    if (!this.owner || !this.registration || !this.targetId || !sameOwner(this.owner, this.deps.getOwner())) return;
+    const declared = this.deletionSupported || !!(this.owner && this.deps.store.get<boolean>(`deletionCapability:${this.remoteEnvironment()}:${this.owner.userId}:${this.owner.scopeKey}`));
+    if (this.deletions && declared) void this.deletions.poll(declared, this.deletionAvailable)
+      .catch((): void => undefined).finally(() => { if (!this.stopped) this.schedule(this.deletions!.retryDelay()); });
+  }
+  private async tick(): Promise<void> {
+    if (this.running || this.stopped) return;
+    this.running = true;
+    const finishTick = remotePerformance.begin(RemotePerformanceStage.RemoteLoop);
+    let tickOutcome: typeof RemotePerformanceOutcome[keyof typeof RemotePerformanceOutcome] = RemotePerformanceOutcome.Succeeded;
+    let owner = this.owner;
+    let accountGeneration = this.accountGeneration;
+    let retryGeneration = this.retryGeneration;
+    let nextPollDelay: number | undefined;
+    let pollCommands = false;
+    try {
+      this.ensureAccount(); owner = this.owner; accountGeneration = this.accountGeneration;
+      retryGeneration = this.retryGeneration;
+      this.startDeletionSync();
+      await this.agentSettings?.refreshAvailability();
+      this.syncAgentSettingsCapability();
+      this.agentSettings?.tick();
+      if (this.deps.security) await this.deps.security.available();
+      if (!owner || this.suspended && !this.connectionRemoved) { this.backoff = 5000; return; }
+      if (Date.now() < this.retryAfter) { if (this.syncPaused()) await this.reconcilePaused(); this.backoff = this.retryAfter - Date.now(); return; }
+      if (this.targetId && !this.settings().enabled && !this.controls().length && !this.deps.store.get(this.nameKey())) { this.backoff = 30000; return; }
+      await remotePerformance.async(RemotePerformanceStage.Registration, () => this.ensureRegistration());
+      if (this.settings().enabled) {
+        try { await remotePerformance.async(RemotePerformanceStage.WriteSettings, () => this.ensureDefaultWorkspace()); }
+        catch { this.workspaceUnavailable = true; }
+      }
+      if (Date.now() - this.lastCapabilityCheck > 45000) await remotePerformance.async(RemotePerformanceStage.Capabilities, () => this.refreshCapabilities());
+      await remotePerformance.async(RemotePerformanceStage.WriteSettings, () => this.writeSettings());
+      this.startDeletionSync();
+      if (this.connectionManagementKnown && !this.connectionRemoved && !this.generation && Date.now() >= this.connectionPolicyCheckAt) {
+        this.connectionPolicyCheckAt = Date.now() + 30000;
+        await remotePerformance.async(RemotePerformanceStage.RemoteConnections, () => this.connections.query());
+      }
+      if (this.connectionRemoved) { await this.reconcilePaused(); this.backoff = 30000; return; }
+      if (!sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
+      if (!this.settings().enabled) { this.backoff = 30000; return; }
+      if (!this.sameAccountAccess) throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
+      this.retryAfter = 0;
+      this.deps.store.setEnabledOwner(this.owner);
+      try { this.deps.store.expireApprovals(); }
+      catch (error) { remoteDiagnosticLog('remote.record.quarantined', { lane: 'control', reason: 'RECORD_INVALID', error }, 'warn'); }
+      // Housekeeping does not own the command lane; command execution still validates core evidence.
+      if (!this.socket) {
+        try { await remotePerformance.async(RemotePerformanceStage.Connect, () => this.connect()); }
+        catch (error) {
+          if (error instanceof RemoteApiError && ![47022, 47011].includes(error.code)) throw error;
+          this.recordConnectionFailure(error);
+        }
+      }
+      if (this.syncPaused()) { await this.reconcilePaused(); this.backoff = Math.max(30000, this.retryAfter - Date.now()); return; }
+      if (this.admissionDeferred) {
+        await this.resumeAdmission();
+        if (this.admissionDeferred) { this.backoff = Math.max(100, this.admissionRetryAt - Date.now()); return; }
+      }
+      if (this.connectionManagementKnown && !this.generation) { this.backoff = 5000; return; }
+      this.availability.wake();
+      if (Date.now() >= Math.max(this.commandPollAt, this.commandRetryAt)) {
+        pollCommands = true;
+        // Set the next deadline before awaiting: a notification during I/O must remain pending.
+        this.commandPollAt = Date.now() + (this.hasActiveWork() ? ACTIVE_POLL_MS : COMMAND_IDLE_POLL_MS);
+        // Shared execution evidence remains mandatory. Network recovery is independent
+        // of claiming unrelated tasks and never supplies permission to the claim path.
+        await remotePerformance.async(RemotePerformanceStage.CommandRecovery, () => this.deps.store.waitRunRecovery());
+        if (!await remotePerformance.async(RemotePerformanceStage.CommandRecovery, () => this.deps.store.verifyExecutionDatabaseHealth())) throw new Error('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
+        this.startCommandReconciliation();
+      }
+      if (pollCommands && this.generation) {
+        const generation = this.generation;
+        try { if (await remotePerformance.async(RemotePerformanceStage.CommandClaim, () => this.claim())) this.commandPollAt = 0; }
+        catch (error) {
+          if (accountGeneration === this.accountGeneration && generation === this.generation) this.commandRetryAt = Date.now() + IDLE_POLL_MS;
+          throw error;
+        }
+      }
+      this.startInputRecovery();
+      this.startOptionalPublications(owner, accountGeneration);
+      this.agentSettings?.tick();
+      this.startDeletionSync();
+      remotePerformance.sync(RemotePerformanceStage.BridgeDispatch, () => { this.startHistorySync(); this.syncFiles(); });
+      if (this.generation && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input) {
+        if (!this.inputWork && Date.now() >= Math.max(this.inputPollAt, this.inputRetryAt)) {
+          this.inputPollAt = Date.now() + IDLE_POLL_MS;
+          const generation = this.generation;
+          const current = (): boolean => accountGeneration === this.accountGeneration && generation === this.generation && sameOwner(owner, this.owner);
+          const work = this.prepareInputs().then(processed => {
+            if (processed && current()) this.inputPollAt = 0;
+          }).catch(() => {
+            if (current()) this.inputRetryAt = Date.now() + IDLE_POLL_MS;
+          }).finally(() => {
+            if (this.inputWork === work) this.inputWork = null;
+            // Only drain a known backlog/notification promptly; an empty poll must remain idle.
+            if (current()) this.schedule(Math.max(0, Math.max(this.inputPollAt, this.inputRetryAt) - Date.now()));
+          });
+          this.inputWork = work;
+        }
+      }
+      this.backoff = this.hasActiveWork() ? ACTIVE_POLL_MS : COMMAND_IDLE_POLL_MS;
+      this.commandPollAt = Math.min(this.commandPollAt, Date.now() + this.backoff);
+      nextPollDelay = Math.min(this.backoff, Math.max(0, Math.max(this.commandPollAt, this.commandRetryAt) - Date.now()));
+      if (this.generation && !this.inputWork && this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input)
+        nextPollDelay = Math.min(nextPollDelay, Math.max(0, Math.max(this.inputPollAt, this.inputRetryAt) - Date.now()));
+    } catch (error) {
+      tickOutcome = RemotePerformanceOutcome.Failed;
+      if (accountGeneration !== this.accountGeneration || retryGeneration !== this.retryGeneration
+        || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) return;
+      remoteLogMessage('warn', '[RemoteSync] Bridge cycle deferred', { deviceId: this.registration?.deviceId ?? null,
+        connectionGeneration: this.generation, ...remoteSyncErrorMetadata(error) });
+      this.recordConnectionFailure(error);
+      if (this.suspended) this.disconnect();
+      if (error instanceof RemoteApiError && [404, 47000].includes(error.code)) {
+        this.retryAfter = Date.now() + 60000; this.backoff = 60000;
+        if (!this.sameAccountAccess) this.registration = null;
+      } else {
+        this.backoff = Math.min(60000, this.backoff * 2);
+        if (!this.registration) this.retryAfter = Date.now() + this.backoff;
+      }
+    } finally {
+      finishTick(tickOutcome);
+      this.running = false; this.changed();
+      const accountChanged = accountGeneration !== this.accountGeneration || (owner === null ? this.owner !== null : !sameOwner(owner, this.owner));
+      const immediate = accountChanged || retryGeneration !== this.retryGeneration || this.tickRequested; this.tickRequested = false;
+      this.schedule(immediate ? 0 : (nextPollDelay ?? this.backoff) + Math.floor(Math.random() * 1000));
+    }
+  }
+  /** Optional discovery publication never owns the next command/stop polling deadline. */
+  private startOptionalPublications(owner: RemoteOwner, accountGeneration: number): void {
+    if (this.optionalPublishWork || !this.generation || !this.registration) return;
+    const connection = this.generation, targetId = this.targetId;
+    const current = (): boolean => targetId === this.targetId && !this.stopped && accountGeneration === this.accountGeneration && connection === this.generation
+      && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner());
+    const work = (async (): Promise<void> => {
+      // A server may support session summaries while its selectable Agent catalog is disabled.
+      if (this.deps.expertAvatars && this.agentCatalog && targetId && current()
+        && this.agentCapabilities.includes(RemoteCapability.SessionAgent) && !this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
+        && Date.now() >= this.nextAgentSummaryCheck) {
+        this.nextAgentSummaryCheck = Date.now() + CATALOG_RECHECK_MS;
+        this.agentCatalog.refreshSummaries(owner);
+      }
+      if (this.generation && this.agentCatalog && this.agentCapabilities.includes(RemoteCapability.AgentCatalog)
+        && Date.now() >= this.agentCatalogRetryAt
+        && (this.agentCatalogRevision !== this.publishedCatalogRevision || this.lastCatalogConnection !== this.generation || Date.now() - this.lastAgentCatalogCheck > CATALOG_RECHECK_MS)) {
+        const revision = this.agentCatalogRevision;
+        const connection = this.generation;
+        const environment = this.remoteEnvironment();
+        try { await this.agentCatalog.publish(owner, this.registration!.deviceId, this.generation,
+          (path, method, body) => this.api(path, method, body), () => accountGeneration === this.accountGeneration && connection === this.generation && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && environment === this.remoteEnvironment(), this.agentLimits,
+          agentId => !this.ownershipClaimBlocks().blockedAgentIds.has(agentId));
+          this.publishedCatalogRevision = revision; this.lastCatalogConnection = connection; this.lastAgentCatalogCheck = Date.now();
+          this.deps.store.remove(this.catalogFailureKey()); }
+        catch (error) {
+          if (accountGeneration !== this.accountGeneration || connection !== this.generation || !sameOwner(owner, this.deps.getOwner())) return;
+          this.agentCatalogRetryAt = Date.now() + IDLE_POLL_MS;
+          // Authentication failures still use the connection gate; catalog failures are independent of WS health.
+          if (error instanceof RemoteApiError && [401, 40100, 403, 47000, 47013, 47023].includes(error.code)) {
+            this.recordConnectionFailure(error); if (this.suspended) this.disconnect(); throw error;
+          }
+          const code = error instanceof RemoteApiError || error instanceof RemoteAgentError ? error.code : 47019;
+          this.deps.store.put(this.catalogFailureKey(), { code });
+          remoteLogMessage('warn', '[RemoteSync] Agent catalog synchronization failed', { deviceId: this.registration?.deviceId,
+            connectionGeneration: connection, ...remoteSyncErrorMetadata(error) });
+        }
+      }
+      if (!current()) return;
+      if (this.inputCapabilities.includes(RemoteInputCapability.Schema) && this.deps.input) {
+        if (Date.now() - this.lastInputPublish > 15000) {
+          const catalogConfirmed = await this.deps.input.models.publish(owner, this.registration!.deviceId, this.generation,
+            (pathname, method, body) => this.api(pathname, method, body), () => accountGeneration === this.accountGeneration && sameOwner(owner, this.deps.getOwner()));
+          if (!current()) return;
+          this.lastInputPublish = Date.now();
+          if (catalogConfirmed && this.deps.input.refreshSessionModel) {
+            const environment = this.remoteEnvironment(), deviceId = this.registration!.deviceId;
+            const key = JSON.stringify([owner, deviceId, environment, targetId, connection]);
+            if (this.inputModelRefresh.context !== key) this.inputModelRefresh = { context: key, offset: 0 };
+            const rows = this.deps.store.controlBindings(owner, 8, this.inputModelRefresh.offset);
+            this.inputModelRefresh.offset = rows.length < 8 ? 0 : this.inputModelRefresh.offset + rows.length;
+            for (const row of rows) {
+              if (!current() || environment !== this.remoteEnvironment()) return;
+              if (row.device_id === deviceId && row.sync_environment === environment && !row.migration_frozen
+                && this.sessionAdmitted(row.local_id) && !this.deps.store.isSyncClosed(row.local_id)
+                && !this.deps.store.get(`${RemoteDeletion.Fence}${row.local_id}`) && !this.deps.store.get(`localGcDeleted:${row.local_id}`)
+                && !this.deps.store.get(`inputFence:${row.local_id}`)) this.deps.input.refreshSessionModel(row.local_id);
+            }
+          }
+        }
+      }
+    })().catch(error => {
+      if (!current()) return;
+      this.lastInputPublish = Date.now();
+      if (error instanceof RemoteApiError && [401,40100,403,47000,47013,47023].includes(error.code)) {
+        this.recordConnectionFailure(error); if (this.suspended) this.disconnect();
+      }
+      remoteLogMessage('warn', '[RemoteSync] Optional publication deferred', remoteSyncErrorMetadata(error));
+    }).finally(() => { if (this.optionalPublishWork === work) this.optionalPublishWork = null; });
+    this.optionalPublishWork = work;
+  }
+  private hasActiveWork(): boolean {
+    try {
+      const page = this.deps.store.scanEntries<InboxEntry>('inbox:', { after: this.activityCursor, limit: 50,
+        validate: (value): value is InboxEntry => this.validInbox(value) });
+      this.activityCursor = page.nextCursor ?? undefined;
+      let active = page.rows.some(row => row.state === 'corrupt' || this.isEntryCurrent(row.value) && ['prepared', 'executing', 'unknown'].includes(row.value.state));
+      if (this.owner) {
+        const sessions = this.deps.store.controlBindings(this.owner, 50, this.activityOffset);
+        this.activityOffset = sessions.length < 50 ? 0 : this.activityOffset + sessions.length;
+        for (const row of sessions) {
+          try { const run = this.deps.store.run(row.local_id); if (run && !['succeeded', 'failed', 'cancelled', 'interrupted'].includes(run.status)) active = true; }
+          catch (error) { active = true; remoteDiagnosticLog('remote.record.quarantined', { localSessionId: row.local_id, lane: 'control', reason: 'RECORD_INVALID', error }, 'warn'); }
+        }
+      }
+      return active;
+    } catch (error) {
+      remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'control', reason: 'STORAGE_UNAVAILABLE', error }, 'warn');
+      return true; // Only selects a bounded polling interval; never grants execution permission.
+    }
+  }
+  private recordConnectionFailure(error: unknown): void {
+    this.errorRequestKey = error !== null && typeof error === 'object' ? this.requestErrorKeys.get(error) : undefined;
+    this.errorCode = error instanceof RemoteApiError ? error.code : undefined;
+    this.error = error instanceof RemoteApiError ? `${error.code}: ${error.message}` : 'Remote connection is temporarily unavailable';
+    if (error instanceof RemoteApiError && error.code === 47022) {
+      this.quotaBlocked = true; this.connectionReason = RemoteConnectionReason.QuotaBlocked;
+      this.retryAfter = Date.now() + Math.max(30000, Math.min(300000, Number(error.data?.retryAfterMs) || 30000)) + Math.floor(Math.random() * 10000);
+      this.files?.pause();
+    } else if (this.connectionRemoved) this.connectionReason = RemoteConnectionReason.Removed;
+    else if (this.connectionReason !== RemoteConnectionReason.ServerUpgradeRequired) this.connectionReason = RemoteConnectionReason.ServerUnavailable;
+    if (error instanceof RemoteApiError && [47013, 47023].includes(error.code)) {
+      this.suspended = true; this.connectionReason = RemoteConnectionReason.DeviceUnavailable;
+    }
+  }
+  private failSocket(code: number, message: string): void {
+    this.recordConnectionFailure(new RemoteApiError(code, message));
+    this.disconnect(); this.schedule(this.backoff);
+  }
+  private async api(pathname: string, method = 'GET', body?: unknown, registrationRequired = true, version = 1, encodedBody?: string, timeoutMs?: number): Promise<any> {
+    const telemetry = captureRemoteTelemetry({ deviceId: this.registration?.deviceId, remoteOwnerId: this.owner?.userId,
+      ownerScopeId: this.owner?.scopeKey, projectionVersion: String(this.projectionVersion),
+      ...remoteRequestTelemetryFields(pathname, method, body, version) }).request({ coverage: 'partial' });
+    try {
+      return await withRemoteTelemetryRequest(telemetry, () => this.apiRequest(telemetry, pathname, method, body, registrationRequired, version, encodedBody, timeoutMs));
+    } catch (error) {
+      telemetry.finish(remoteRequestTelemetryOutcome(error, 'prepare'), { ...remoteSyncErrorMetadata(error), failureStage: remoteRequestTelemetryFailureStage(error, 'before_send') });
+      throw error;
+    }
+  }
+  private async apiRequest(telemetry: ReturnType<ReturnType<typeof captureRemoteTelemetry>['request']>, pathname: string, method: string,
+    body: unknown, registrationRequired: boolean, version: number, encodedBody?: string, timeoutMs?: number): Promise<any> {
+    const owner = this.owner;
+    const accountGeneration = this.accountGeneration;
+    const environment = this.remoteEnvironment();
+    const route = this.deps.getApiBaseUrl();
+    const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
+    if (route !== this.accountRoute || routeEpoch !== this.accountRouteEpoch) { this.ensureAccount(); throw new Error('Remote route changed before request'); }
+    const dependencyContext = this.taskContext(), dependencyTarget = this.targetId, dependencyDevice = this.registration?.deviceId;
+    const dependencyCurrent = (): boolean => !!dependencyContext && !!dependencyTarget && dependencyTarget === this.targetId
+      && dependencyDevice === this.registration?.deviceId && accountGeneration === this.accountGeneration
+      && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0) && route === this.deps.getApiBaseUrl() && environment === this.remoteEnvironment()
+      && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && this.settings().enabled && !this.stopped;
+    const requestKey = `${version}:${method}:${pathname.split('?')[0]}`;
+    if (this.syncPaused() && (pathname.startsWith('/sync/') || /\/(?:agents|models|input-preparations)(?:\/|$)/u.test(pathname)
+      || pathname.includes('/reply-content/') || /\/sessions\/[^/]+\/contents(?:\/|$)/u.test(pathname) || pathname.endsWith('/commands/claim'))) throw new RemoteApiError(
+      this.connectionRemoved ? CONNECTION_REMOVED_CODE : 47022, 'Connection synchronization is paused');
+    if (!owner || !sameOwner(owner, this.deps.getOwner())) throw new Error('Account changed');
+    const sync = remoteSyncRequestMetadata(pathname, body);
+    const requestId = randomUUID();
+    const startedAt = performance.now();
+    let stage = 'prepare', httpStatus: number | null = null, responseRequestId: string | null = null;
+    let transportRequestedAt: string | null = null;
+    const context = { ...sync, requestId, requestStartedAt: new Date().toISOString(), deviceId: this.registration?.deviceId ?? null };
+    const diagnostic = { ...remoteRequestTelemetryFields(pathname, method, body, version), routeTemplate: remoteDiagnosticRoute(pathname),
+      routeEpoch: accountGeneration, targetId: this.targetId, deviceId: this.registration?.deviceId, apiVersion: version };
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json',
+        ...remoteSyncTargetHeaders(pathname === '/capabilities' ? null : this.registration?.syncTarget ?? this.discoveredTarget) };
+      headers[REMOTE_SYNC_REQUEST_ID_HEADER] = requestId;
+      if (this.capabilitySnapshot?.capabilities?.includes('sync_diagnostics_v1')) headers['X-Remote-Sync-Diagnostics'] = '1';
+      // Capability discovery always uses v1 so an older server can negotiate safely.
+      if (pathname !== '/capabilities' && this.projectionVersion > 1) headers['X-Remote-Projection-Version'] = String(this.projectionVersion);
+      if ((version === 2 && /\/devices\/[^/]+\/input-preparations(?:\?|$)/u.test(pathname)
+        || version === 4 && /\/devices\/[^/]+\/commands\/unresolved(?:\?|$)/u.test(pathname)) && this.generation)
+        headers['X-Remote-Connection-Generation'] = this.generation;
+      if (registrationRequired) {
+        if (!this.registration) throw new Error('Device is not registered');
+        headers['X-Remote-Device-Credential'] = `${this.registration.deviceId}.${this.registrationIdentity().deviceKey}`;
+      }
+      const encoded = encodedBody ?? (body === undefined ? undefined : stableJson(body));
+      // This is the transport submission time; the worker/auth layer may still queue the request.
+      transportRequestedAt = new Date().toISOString();
+      if (sync) remoteLogMessage('debug', '[RemoteSync] Request started', { ...context, transportRequestedAt, requestBytes: encoded ? Buffer.byteLength(encoded) : 0 });
+      stage = 'transport';
+      const response = await this.deps.request(owner, `/api/remote/v${version}${pathname}`, { method, headers, body: encoded, signal: AbortSignal.timeout(timeoutMs ?? (pathname.startsWith('/control/') || pathname.startsWith('/sync/live-') ? 10000 : 20000)) });
+      httpStatus = response.status;
+      const retryHeader = response.headers.get('Retry-After');
+      const retryAfterMs = retryHeader === null ? undefined : /^\d+$/u.test(retryHeader.trim()) ? Number(retryHeader) * 1000
+        : Number.isFinite(Date.parse(retryHeader)) ? Math.max(0, Date.parse(retryHeader) - Date.now()) : Number.NaN;
+      responseRequestId = remoteSyncRequestId(response.headers.get(REMOTE_SYNC_REQUEST_ID_HEADER));
+      if (accountGeneration !== this.accountGeneration || routeEpoch !== (this.deps.getRouteEpoch?.() ?? 0) || route !== this.deps.getApiBaseUrl() || environment !== this.remoteEnvironment() || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote request');
+      stage = 'response';
+      const text = await response.text();
+      if (accountGeneration !== this.accountGeneration || routeEpoch !== (this.deps.getRouteEpoch?.() ?? 0) || route !== this.deps.getApiBaseUrl() || environment !== this.remoteEnvironment() || !sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) throw new Error('Account changed during remote response');
+      if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error('Remote response is too large');
+      let result: any;
+      try { result = remoteResponseJson(response, text); } catch { throw new RemoteApiError(response.status, 'Invalid remote response', null, response.status, responseRequestId ?? requestId, retryAfterMs); }
+      if (!response.ok || result.code !== 0) throw new RemoteApiError(result.code || response.status, result.message || 'Remote request failed', result.data, response.status,
+        responseRequestId ?? remoteSyncRequestId(result.data?.requestId) ?? requestId, retryAfterMs);
+      if ((pathname === '/sync/batches' || pathname.startsWith('/sync/imports')) && this.historyCircuitProbe && Date.now() >= this.historyRetryAt) {
+        this.historyCircuitProbe = false; this.historyCircuitDelay = 30000; this.historyTransportFailures = [];
+      }
+      if (sync) remoteLogMessage('debug', '[RemoteSync] Request succeeded', { ...context, transportRequestedAt, responseRequestId, httpStatus,
+        elapsedMs: performance.now() - startedAt, result: remoteSyncResultMetadata(result.data) });
+      // Only the failed endpoint's successful retry proves HTTP recovery. A pong or unrelated request does not.
+      if (!this.suspended && pathname !== '/connection-tickets' && this.errorRequestKey === requestKey) {
+        this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+        if (this.connectionReason === RemoteConnectionReason.ServerUnavailable) this.connectionReason = RemoteConnectionReason.Connecting;
+      }
+      telemetry.finish('api_ok', { requestId, httpStatus, businessCode: 0, responseBytes: Buffer.byteLength(text), failureStage: 'none' });
+      remoteDiagnosticLog('remote.request.completed', { ...diagnostic, requestId, httpStatus, durationMs: performance.now() - startedAt, result: 'success' });
+      if (pathname !== '/capabilities' && dependencyCurrent()) this.observeRecoveryDependency(dependencyContext!, true);
+      if (result.data && typeof result.data === 'object') this.telemetryRequestIds.set(result.data, requestId);
+      return result.data;
+    } catch (error) {
+      const current = (): boolean => accountGeneration === this.accountGeneration && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0)
+        && route === this.deps.getApiBaseUrl() && environment === this.remoteEnvironment()
+        && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner());
+      if (current() && error instanceof RemoteApiError && error.code === RemoteSyncTarget.ChangedCode) {
+        this.accountRoute = '';
+        this.ensureAccount();
+      }
+      if (dependencyCurrent() && stage !== 'prepare' && isRecoveryDependencyFailure(error)) this.observeRecoveryDependency(dependencyContext!, false);
+      const addressedDevice = /^\/devices\/([^/]+)\//u.exec(pathname)?.[1];
+      if ((!addressedDevice || addressedDevice === encodeURIComponent(this.registration?.deviceId ?? ''))
+        && current()
+        && error instanceof RemoteApiError && error.code === REMOTE_DEVICE_RETIRED_CODE) {
+        this.recordConnectionFailure(error); this.disconnect(); this.changed();
+      }
+      if (current() && error instanceof RemoteApiError
+        && (error.code === CONNECTION_REMOVED_CODE || error.data?.reason === RemoteConnectionReasonCode.Removed)) {
+        if (!this.connectionRemoved) this.agentSettings?.fence();
+        this.connectionRemoved = true; this.connectionReason = RemoteConnectionReason.Removed;
+        const rejectedVersion = error.data?.connectionVersion;
+        if (typeof rejectedVersion === 'string' && /^[1-9]\d*$/u.test(rejectedVersion) && BigInt(rejectedVersion) > BigInt(this.connectionVersion)) this.connectionVersion = rejectedVersion;
+        this.deps.store.put(this.connectionStateKey(), { state: RemoteDeviceConnectionState.Removed, version: this.connectionVersion });
+        this.files?.pause(); this.disconnect();
+      }
+      telemetry.finish(remoteRequestTelemetryOutcome(error, stage), { requestId, httpStatus, ...remoteSyncErrorMetadata(error), failureStage: remoteRequestTelemetryFailureStage(error, stage) });
+      remoteDiagnosticLog('remote.request.completed', { ...diagnostic, requestId, httpStatus, stage, durationMs: performance.now() - startedAt, result: 'failed', error }, 'warn');
+      if (error !== null && typeof error === 'object') this.requestErrorKeys.set(error, requestKey);
+      if (sync) remoteLogMessage('debug', '[RemoteSync] Request failed', { ...context, transportRequestedAt, stage, responseRequestId, httpStatus,
+        elapsedMs: performance.now() - startedAt, error: remoteSyncErrorMetadata(error) });
+      throw error;
+    }
+  }
+  private observeRecoveryDependency(context: TaskSyncContext, success: boolean): void {
+    try { if (this.recoveryDependency.observe(context, success)) this.taskSync.wakeRecovery(context); }
+    catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'DEPENDENCY_EVIDENCE_UNAVAILABLE', error }, 'warn'); }
+  }
+  private supportsCommand(type: string): boolean {
+    return Object.hasOwn(CommandCapability, type) && (this.deps.supportsCommand?.(type) ?? true);
+  }
+  private advertisedCapabilities(createSessionAvailable = true): string[] {
+    const allowCreate = this.declaredAgentCapabilities.includes(RemoteCapability.AgentSelection)
+      || createSessionAvailable && this.settings().createSessionAvailable !== false;
+    const supported = ['session.read', ...Object.entries(CommandCapability)
+      .filter(([type]) => type !== RemoteQuestion.Command && this.supportsCommand(type) && (type !== 'create_session' || allowCreate))
+      .map(([, capability]) => capability)];
+    return [...(this.sameAccountAccess ? [...supported, RemoteCapability.SameAccountAccess] : supported), ...this.declaredAgentCapabilities, ...this.inputCapabilities, ...this.fileCapabilities, ...(this.replySupported ? [RemoteReplyCapability] : []), ...(this.taskCreditsSupported ? [RemoteTaskCredits.Capability] : []), ...(this.declaredQuestions ? [RemoteQuestion.Capability] : []), ...(this.retentionSupported ? [RemoteRetention.Capability] : []), ...(this.receiptsSupported ? [RemoteRetention.Receipts] : []), ...(this.declaredDualApproval ? [RemoteCapability.DualApproval] : []), ...(this.connectionManagementKnown ? [REMOTE_CONNECTION_MANAGEMENT_CAPABILITY] : []), ...(this.deletionSupported ? [RemoteDeletion.Capability] : []), ...(this.controlDeletionSupported ? [RemoteDeletion.ControlCapability] : []), ...(this.agentSettingsCapability ? [RemoteAgentSettings.Capability] : [])];
+  }
+  private async ensureRegistration(): Promise<void> {
+    if (this.registrationPending) return this.registrationPending;
+    if (this.registration) return;
+    const pending = this.register(); this.registrationPending = pending;
+    try { await pending; } finally { if (this.registrationPending === pending) this.registrationPending = null; }
+  }
+  private commandCapabilitySignature: string | null = null;
+  private async refreshCapabilities(confirmedSnapshot?: any): Promise<void> {
+    await this.agentSettings?.refreshAvailability();
+    const environment = this.remoteEnvironment();
+    const dependencyContextKey = this.taskContext() ? stableJson(this.taskContext()) : null, dependencyGeneration = this.accountGeneration;
+    const support = confirmedSnapshot ?? await this.api('/capabilities', 'GET', undefined, false);
+    if (environment !== this.remoteEnvironment()) throw new Error('Remote service environment changed');
+    if (!support.enabled || !support.protocolVersions?.includes(REMOTE_PROTOCOL_VERSION)) throw new RemoteApiError(47000, 'Remote control is unavailable');
+    this.sameAccountAccess = support.capabilities?.includes(RemoteCapability.SameAccountAccess) === true;
+    if (!this.sameAccountAccess) {
+      this.connectionReason = RemoteConnectionReason.ServerUpgradeRequired;
+      // Legacy servers still receive a saved disable; never announce an unsupported capability to them.
+      if (!this.controls().some(intent => !intent.enabled)) throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
+    }
+    const recoveryCapabilities = stableJson([this.capabilitySnapshot?.capabilities ?? [], this.capabilitySnapshot?.projectionVersions ?? [], this.capabilitySnapshot?.syncRetention ?? null]);
+    const previouslyKnown = this.capabilitiesKnown;
+    const previous = stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported, this.replyModelLabelSupported]);
+    const previousProjectionVersion = this.projectionVersion;
+    const supported = Array.isArray(support.capabilities) ? support.capabilities : [];
+    const target = parseRemoteSyncTarget(support.syncTarget);
+    if (supported.includes(RemoteSyncTarget.Capability) && !target) throw new RemoteSyncStateError('Invalid remote data identity');
+    if (this.registration?.syncTarget && stableJson(target) !== stableJson(this.registration.syncTarget)) {
+      this.accountRoute = ''; this.ensureAccount();
+      throw new RemoteSyncStateError('Remote data identity changed');
+    }
+    this.discoveredTarget = target;
+    this.capabilitySnapshot = support;
+    this.agentSettings?.configure(supported.includes(RemoteAgentSettings.Capability));
+    this.syncAgentSettingsCapability();
+    this.deletionSupported = !!this.deletions && supported.includes(RemoteDeletion.Capability);
+    this.controlDeletionSupported = this.deletionSupported && supported.includes(RemoteDeletion.ControlCapability);
+    this.deletionAvailable = this.deletionSupported && support.sessionDeletion?.available === true;
+    if (this.deletionSupported) this.deps.store.put(`deletionCapability:${environment}:${this.owner!.userId}:${this.owner!.scopeKey}`, true);
+    this.connectionManagement = supported.includes(REMOTE_CONNECTION_MANAGEMENT_CAPABILITY) && support.deviceConnectionPolicy?.version === 2;
+    if (support.deviceConnectionPolicy?.version === 2) { this.connectionManagementKnown = true; this.deps.store.put(`${this.connectionStateKey()}:supported`, true); }
+    this.connectionManagementEnabled = support.deviceConnectionPolicy?.enabled ?? this.connectionManagement;
+    this.connectionManagementClusterReady = support.deviceConnectionPolicy?.clusterReady ?? this.connectionManagement;
+    this.inputCapabilities = this.deps.input ? Object.values(RemoteInputCapability).filter(value => supported.includes(value)) : [];
+    this.fileCapabilities = this.files && support.projectionVersions?.includes(3) ? Object.values(RemoteFileCapability).filter(value => supported.includes(value)) : [];
+    const fileSupported = this.fileCapabilities.length === Object.values(RemoteFileCapability).length;
+    this.replySupported = support.projectionVersions?.includes(REMOTE_REPLY_PROJECTION_VERSION) === true && supported.includes(RemoteReplyCapability);
+    this.replyModelLabelSupported = this.replySupported && supported.includes(RemoteReplyModelLabelCapability);
+    this.taskCreditsSupported = this.replySupported && support.projectionVersions?.includes(RemoteTaskCredits.ReaderProjectionVersion) === true && supported.includes(RemoteTaskCredits.Capability);
+    this.questionsSupported = this.supportsCommand(RemoteQuestion.Command) && this.deps.supportsQuestions?.() === true && support.projectionVersions?.includes(RemoteQuestion.ProjectionVersion) === true && supported.includes(RemoteQuestion.Capability);
+    const questionKey = this.targetKey('questionCapability');
+    // Admission may close, but original accepted commands still require the protocol declaration.
+    this.declaredQuestions = this.deps.store.get<boolean>(questionKey) === true || this.questionsSupported;
+    if (this.declaredQuestions) this.deps.store.put(questionKey, true);
+    this.retentionSupported = supported.includes(RemoteRetention.Capability) && support.syncRetention?.version === RemoteRetention.Version
+      && support.syncRetention.eventIdAlgorithm === RemoteRetention.EventIdAlgorithm;
+    this.receiptsSupported = supported.includes(RemoteRetention.Receipts);
+    this.capabilitiesKnown = true;
+    this.projectionVersion = this.taskCreditsSupported ? RemoteTaskCredits.ReaderProjectionVersion : this.questionsSupported ? RemoteQuestion.ProjectionVersion : this.replySupported ? REMOTE_REPLY_PROJECTION_VERSION : fileSupported ? 3 : this.inputCapabilities.includes(RemoteInputCapability.Schema) ? 2 : 1;
+    this.files?.configure(fileSupported);
+    if (this.socket && previousProjectionVersion !== this.projectionVersion) this.disconnect();
+
+    this.agentCapabilities = this.agentCatalog && supported.includes(RemoteCapability.SessionAgent) ? [RemoteCapability.SessionAgent] : [];
+    this.ownershipClaimCapability = { environment, owner: { ...this.owner! },
+      enabled: this.agentCapabilities.includes(RemoteCapability.SessionAgent) && supported.includes(RemoteCapability.AgentOwnershipClaim) };
+    if (this.agentCapabilities.length && supported.includes(RemoteCapability.AgentCatalog)
+      && Number.isInteger(support.limits?.maxAgentCatalogItems) && Number.isInteger(support.limits?.maxAgentCatalogBytes)
+      && support.limits.maxAgentCatalogItems > 0 && support.limits.maxAgentCatalogBytes > 0) {
+      this.agentLimits = { items: Math.min(REMOTE_AGENT_CATALOG_ITEMS, support.limits.maxAgentCatalogItems), bytes: Math.min(REMOTE_AGENT_CATALOG_BYTES, support.limits.maxAgentCatalogBytes) };
+      this.agentCapabilities.push(RemoteCapability.AgentCatalog);
+      if (supported.includes(RemoteCapability.AgentSelection)) this.agentCapabilities.push(RemoteCapability.AgentSelection);
+    }
+
+    // Admission flags may turn off while accepted extended commands still need recovery.
+    // Device protocol support is persistent; only new production uses the current intersection.
+    const declarationKey = this.targetKey('agentCapabilities');
+    const saved = this.deps.store.get<string[]>(declarationKey) || [];
+    const implemented: string[] = [RemoteCapability.SessionAgent, RemoteCapability.AgentCatalog, RemoteCapability.AgentSelection];
+    this.declaredAgentCapabilities = this.agentCatalog ? [...new Set([...saved, ...this.agentCapabilities])].filter(value => implemented.includes(value)).sort() : [];
+    this.deps.store.put(declarationKey, this.declaredAgentCapabilities);
+    const dualKey = this.targetKey('dualApprovalCapability');
+    const dualEnabled = this.supportsCommand('approval_response') && this.deps.supportsDualApproval?.() === true && supported.includes(RemoteCapability.DualApproval);
+    // This is a protocol declaration, not an admission flag. Never erase in-flight extended state.
+    this.declaredDualApproval = this.deps.store.get<boolean>(dualKey) === true || dualEnabled;
+    if (this.declaredDualApproval) this.deps.store.put(dualKey, true);
+    this.deps.store.setApprovalProjectionSupported(this.declaredDualApproval);
+    this.deps.configureDualApproval?.({ enabled: dualEnabled, projectionSupported: this.declaredDualApproval });
+    if (!previouslyKnown || previousProjectionVersion !== this.projectionVersion || previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported, this.replyModelLabelSupported])) {
+      captureRemoteTelemetry({ remoteOwnerId: this.owner?.userId, ownerScopeId: this.owner?.scopeKey }).emit(RemoteBridgeTelemetry.Capability, {
+        domain: 'control', fromState: previouslyKnown ? 'ready' : 'unknown', toState: 'ready', reason: 'STATE_CHANGED', projectionVersion: this.projectionVersion,
+      });
+    }
+    this.lastCapabilityCheck = Date.now();
+    const recoveryContext = this.taskContext();
+    if (confirmedSnapshot === undefined && recoveryContext && dependencyContextKey === stableJson(recoveryContext) && dependencyGeneration === this.accountGeneration
+      && this.targetId && sameOwner(this.owner, this.deps.getOwner()) && this.settings().enabled && !this.stopped) this.observeRecoveryDependency(recoveryContext, true);
+    if (recoveryContext && recoveryCapabilities !== stableJson([support.capabilities ?? [], support.projectionVersions ?? [], support.syncRetention ?? null])) this.taskSync.wakeRecovery(recoveryContext);
+    if (this.registration && this.settings().enabled) this.ownershipClaimBlocks();
+    if (this.registration) this.applyProjectionCapabilities();
+    const commandSignature = stableJson(Object.keys(CommandCapability).filter(type => this.supportsCommand(type)));
+    const commandChanged = this.commandCapabilitySignature !== null && this.commandCapabilitySignature !== commandSignature;
+    this.commandCapabilitySignature = commandSignature;
+    if (this.registration && (commandChanged || previous !== stableJson([this.declaredAgentCapabilities, this.declaredDualApproval, this.fileCapabilities, this.replySupported, this.questionsSupported, this.declaredQuestions, this.retentionSupported, this.receiptsSupported, this.connectionManagementKnown, this.deletionSupported, this.controlDeletionSupported, this.agentSettingsCapability, this.taskCreditsSupported, this.replyModelLabelSupported]))) this.queueControl(this.settings());
+  }
+  private applyProjectionCapabilities(): void {
+    if (!this.capabilitiesKnown || !this.owner || !this.registration) return;
+    if (!this.targetId) return;
+    this.deps.store.setProjectionIdentity(this.remoteEnvironment(), this.owner, this.registration.deviceId);
+    this.agentCatalog?.configureIconKeys(this.owner, this.agentCapabilities.includes(RemoteCapability.SessionAgent)
+      && this.capabilitySnapshot?.capabilities?.includes(RemoteAgentIcon.Capability) === true);
+    this.deps.store.setDeletionProjectionSupported(this.deletionSupported);
+    this.deps.store.setReplyProjectionSupported(this.replySupported);
+    this.deps.store.setTaskCreditsProjectionSupported(this.taskCreditsSupported);
+    this.deps.store.setReplyModelLabelSupported(this.replyModelLabelSupported);
+    this.deps.store.setQuestionProjectionSupported(this.questionsSupported);
+    const fileSupported = this.fileCapabilities.length === Object.values(RemoteFileCapability).length;
+    this.deps.store.setFileProjectionSupported(fileSupported);
+    this.deps.store.setInputProjectionSupported(fileSupported || this.inputCapabilities.includes(RemoteInputCapability.Schema));
+    this.deps.store.setAgentSummaryResolver(this.agentCapabilities.includes(RemoteCapability.SessionAgent)
+      ? (sessionId, actor) => this.agentCatalog!.summary(sessionId, actor) : null);
+  }
+  private async register(): Promise<void> {
+    const epoch = this.accountGeneration;
+    await this.refreshCapabilities();
+    const result: Registration = await this.api('/devices/register', 'POST', { ...this.deps.metadata, name: this.settings().name,
+      installationId: this.registrationIdentity().installationId, deviceKey: this.registrationIdentity().deviceKey,
+      kind: 'desktop', protocolVersion: REMOTE_PROTOCOL_VERSION, capabilities: this.advertisedCapabilities() }, false, this.connectionManagement ? 2 : 1);
+    if (!sameOwner(this.owner, result)) throw new Error('Registration owner does not match the authenticated account');
+    const target = parseRemoteSyncTarget(result.syncTarget);
+    if (stableJson(target) !== stableJson(this.discoveredTarget)) throw new RemoteSyncStateError('Registration data identity does not match discovery');
+    if (target) result.syncTarget = target;
+    this.registration = result;
+    try {
+      const active = this.targets.active(this.owner!);
+      const sameTarget = target && active?.syncTarget && active.deviceId === result.deviceId && stableJson(target) === stableJson(active.syncTarget);
+      if (!sameTarget) await this.deps.store.pauseSyncTargetProjection();
+      const current = (): boolean => epoch === this.accountGeneration && this.accountRoute === this.deps.getApiBaseUrl()
+        && sameOwner(this.owner, this.deps.getOwner()) && this.registration === result;
+      if (!current()) throw new Error('Account changed during target negotiation');
+      this.deps.store.publicationOrigins.confirm(this.owner!, this.accountRoute, target, target ? undefined : `legacy:${payloadHash([this.owner!.userId, this.owner!.scopeKey, result.deviceId])}`);
+      const prior = this.targets.active(this.owner!);
+      const distinct = !!target && !!prior?.syncTarget && target.dataSpaceId !== prior.syncTarget.dataSpaceId;
+      const legacyStates: RetentionState[] = [];
+      if (!current()) throw new Error('Account changed during target negotiation');
+      const activated = target ? this.targets.activate({ owner: this.owner!, deviceId: result.deviceId,
+        syncTarget: target, registrationScope: this.registrationIdentity().registrationScope, bootstrap: distinct, legacyStates, allowPartialLegacy: true })
+        : this.targets.activateLegacy({ owner: this.owner!, deviceId: result.deviceId, registrationScope: this.registrationIdentity().registrationScope, legacyStates, allowPartialLegacy: true });
+      this.targetId = activated.targetId;
+      this.deps.store.publicationOrigins.confirm(this.owner!, this.accountRoute, target, activated.targetId);
+      const recoveryKey = `registrationSettings:${this.owner!.userId}:${this.owner!.scopeKey}`;
+      const recovery = this.deps.store.get<{ route: string; previousInstallationId: string; settings: LocalSettings }>(recoveryKey);
+      if (recovery?.route === this.accountRoute && recovery.previousInstallationId !== this.registrationIdentity().installationId) {
+        this.deps.store.transaction(() => {
+          this.deps.store.put(this.settingsKey(), { ...recovery.settings, settingsVersion: '0' });
+          this.deps.store.remove(recoveryKey);
+        });
+      }
+      this.admissionDeferred = false;
+      const pendingKey = this.pendingConfigurationKey(), pending = this.deps.store.get<PendingConfiguration>(pendingKey);
+      if (pending?.route === this.accountRoute) {
+        // The first legacy claim already copied the original durable control queue without changing its IDs.
+        if (prior || activated.kind !== RemoteSyncTargetActivationKind.Claimed) {
+          for (const changes of pending.changes) {
+            if (!current()) throw new Error('Account changed during target configuration');
+            await this.configure(changes);
+          }
+        }
+        this.deps.store.remove(pendingKey);
+      }
+      this.deps.store.setFileEnvironment(this.targetId);
+      this.connections.reset(); this.deps.input?.models.resetPublication();
+      this.agentCatalog?.reset(); this.deps.input?.preparations.reset?.();
+      const connection = this.savedConnectionState<{ state: string; version: string }>();
+      this.connectionRemoved = connection?.state === RemoteDeviceConnectionState.Removed;
+      this.connectionVersion = connection?.version || '0';
+      // Discovery ran before the target was bound; persist capability/cache state in its verified scope.
+      await this.refreshCapabilities(this.capabilitySnapshot);
+      this.sessionChecks.clear();
+
+    } catch (error) {
+      if (error instanceof RemoteSyncAdmissionBudgetError && epoch === this.accountGeneration && this.registration === result
+        && this.accountRoute === this.deps.getApiBaseUrl() && sameOwner(this.owner, this.deps.getOwner())) {
+        // Keep authenticated transport usable. No task or control is admitted into this unactivated target.
+        this.targetId = error.targetId; this.admissionDeferred = true; this.admissionRetryAt = 0; this.sessionSyncFailed = true;
+        await this.resumeAdmission();
+        this.changed(); return;
+      }
+      if (this.registration === result) this.registration = null;
+      throw error;
+    }
+    this.applyProjectionCapabilities();
+    if (this.sameAccountAccess) this.connectionReason = RemoteConnectionReason.Connecting;
+    if (!this.controls().length) this.queueControl(this.settings());
+    this.changed();
+  }
+  /** One durable admission page per turn; only the completed owner gate can bind the target. */
+  private async resumeAdmission(): Promise<void> {
+    const owner = this.owner, registration = this.registration, epoch = this.accountGeneration;
+    if (!this.admissionDeferred || !owner || !registration || Date.now() < this.admissionRetryAt || !this.settings().enabled) return;
+    const current = (): boolean => epoch === this.accountGeneration && this.registration === registration
+      && this.accountRoute === this.deps.getApiBaseUrl() && sameOwner(owner, this.deps.getOwner()) && this.settings().enabled;
+    try {
+      const activated = this.targets.resumeAdmission({ owner, deviceId: registration.deviceId, syncTarget: registration.syncTarget || null, registrationScope: this.registrationIdentity().registrationScope });
+      this.admissionRetryAt = Date.now() + 100;
+      if (!activated || !current()) return;
+      this.targetId = activated.targetId;
+      this.deps.store.setFileEnvironment(this.targetId);
+      this.connections.reset(); this.deps.input?.models.resetPublication();
+      this.agentCatalog?.reset(); this.deps.input?.preparations.reset?.();
+      const connection = this.savedConnectionState<{ state: string; version: string }>();
+      this.connectionRemoved = connection?.state === RemoteDeviceConnectionState.Removed;
+      this.connectionVersion = connection?.version || '0';
+      await this.refreshCapabilities(this.capabilitySnapshot);
+      if (!current()) return;
+      const pendingKey = this.pendingConfigurationKey(), pending = this.deps.store.get<PendingConfiguration>(pendingKey);
+      if (pending?.route === this.accountRoute) {
+        if (activated.epoch > 1) for (const changes of pending.changes) {
+          if (!current()) return;
+          await this.configure(changes);
+        }
+        if (!current()) return;
+        this.deps.store.remove(pendingKey);
+      }
+      if (!current()) return;
+      this.admissionDeferred = false; this.sessionSyncFailed = false;
+      this.sessionChecks.clear(); this.applyProjectionCapabilities();
+      if (this.sameAccountAccess) this.connectionReason = RemoteConnectionReason.Connecting;
+      if (!this.controls().length) this.queueControl(this.settings());
+      this.availability.wake(); this.changed();
+    } catch (error) {
+      this.admissionRetryAt = Date.now() + 30_000;
+      remoteDiagnosticLog('remote.admission.deferred', { lane: 'history', reason: 'ADMISSION_PENDING', error }, 'warn');
+    }
+  }
+  private async reconcileRegistrationImport(row: SyncRow): Promise<void> {
+    const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
+    if (!pending || pending.beginAttempted === false) return;
+    const telemetry = this.importTelemetry(row, pending);
+    let receipt: any;
+    try { receipt = await this.api(`/sync/imports/${pending.importId}`); }
+    catch (error) {
+      if (!(error instanceof RemoteApiError) || error.httpStatus !== 404 || error.code !== 47002) throw error;
+      // A begin rejected by a tombstone leaves a local attempt but no server import receipt.
+      // Only the authenticated, matching stream can prove this task must stop uploading.
+      if (pending.sessionId !== row.session_id || pending.owner && !sameOwner(pending.owner, this.owner)
+        || pending.deviceId && pending.deviceId !== this.registration!.deviceId) throw new RemoteSyncStateError('Saved import identity does not match its session');
+      const state = await this.readSyncState(row, true);
+      if (state?.deleted !== true || state.activeImport) throw new RemoteSyncStateError('Pending import has no verifiable terminal state');
+      // Keep the attempt, original ACK and local task. The normal state check isolates this tombstone.
+      const requestKey = this.requestErrorKeys.get(error);
+      if (requestKey && this.errorRequestKey === requestKey) {
+        this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+      }
+      remoteLogMessage('debug', '[RemoteSync] Missing import belongs to a deleted remote session', {
+        localSessionId: row.local_id, sessionId: row.session_id, importId: pending.importId,
+      });
+      return;
+    }
+    this.assertImportIdentity(pending, receipt, telemetry);
+    if (receipt.state === 'committed') {
+      if (receipt.targetStreamEpoch) pending.targetStreamEpoch ||= receipt.targetStreamEpoch;
+      this.completeImport(row, pending, receipt, telemetry);
+    }
+  }
+  private async writeSettings(): Promise<void> {
+    const owner = this.owner;
+    const pending = this.settingsQueue.catch((): void => undefined).then(async () => {
+      if (!sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner())) return;
+      await this.performWriteSettings();
+      if (sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner())) await this.writeName();
+    });
+    this.settingsQueue = pending;
+    await pending;
+  }
+  private async performWriteSettings(): Promise<void> {
+    if (!this.registration) return;
+    const owner = this.owner;
+    const path = `/devices/${this.registration.deviceId}/settings`;
+    const key = this.controlKey();
+    while (sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner())) {
+      const next = this.controls()[0];
+      if (!next) break;
+      if (!this.sameAccountAccess && next.enabled) {
+        if (this.controls().some(intent => !intent.enabled)) { this.deps.store.put(key, this.controls().slice(1)); continue; }
+        throw new RemoteApiError(47000, 'Server upgrade required for same-account remote access');
+      }
+      const server = await this.api(path);
+      const result = await this.api(path, 'PATCH', { expectedSettingsVersion: server.settingsVersion,
+        remoteEnabled: next.enabled, protocolVersion: REMOTE_PROTOCOL_VERSION, capabilities: this.advertisedCapabilities(next.createSessionAvailable !== false), workspaces: next.workspaces });
+      const latest = this.settings(); latest.settingsVersion = result.settingsVersion;
+      this.deps.store.transaction(() => {
+        this.deps.store.put(this.settingsKey(), latest);
+        this.deps.store.put(key, this.controls().filter(intent => intent.id !== next.id));
+      });
+      if (!this.error) this.connectionReason = RemoteConnectionReason.Reconnecting;
+      this.disconnect(); this.changed();
+    }
+  }
+  private async writeName(): Promise<void> {
+    if (!this.registration) return;
+    const key = this.nameKey();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const pending = this.deps.store.get<{ id: string; name: string }>(key);
+      if (!pending) return;
+      try {
+        const metadata = await this.api(`/devices/${this.registration.deviceId}/metadata`, 'PATCH', {
+          name: pending.name, expectedMetadataVersion: this.registration.metadataVersion,
+        });
+        this.registration.metadataVersion = metadata.metadataVersion;
+        if (this.deps.store.get<{ id: string }>(key)?.id === pending.id) this.deps.store.remove(key);
+        this.changed();
+      } catch (error) {
+        if (!(error instanceof RemoteApiError) || error.code !== 47020 || !error.data?.currentMetadataVersion || attempt === 2) throw error;
+        this.registration.metadataVersion = String(error.data.currentMetadataVersion);
+      }
+    }
+  }
+  private async connect(): Promise<void> {
+    const attempt = ++this.connectionAttempt;
+    this.telemetryConnectionAttemptId = randomUUID();
+    const owner = this.owner;
+    let ticket: any;
+    try { ticket = await this.api('/connection-tickets', 'POST', { protocolVersion: REMOTE_PROTOCOL_VERSION,
+      ...(this.projectionVersion > 1 ? { projectionVersion: this.projectionVersion } : {}) }); }
+    catch (error) { if (attempt !== this.connectionAttempt) return; throw error; }
+    if (attempt !== this.connectionAttempt || this.connectionRemoved || this.stopped || !sameOwner(owner, this.owner) || !sameOwner(owner, this.deps.getOwner()) || !this.settings().enabled) return;
+    const url = new URL(ticket.wsUrl);
+    const apiBase = new URL(this.deps.getApiBaseUrl());
+    if (url.protocol !== 'wss:' || url.host !== apiBase.host || !url.pathname.startsWith('/api/remote/v1/')) throw new Error('Remote ticket URL origin is not trusted');
+    const socket = this.deps.createSocket?.(url.toString()) ?? new WebSocket(url.toString());
+    this.handshake = setTimeout(() => { if (this.socket === socket && !this.generation) this.failSocket(SocketFailureCode.Transport, 'Remote WebSocket handshake timed out'); }, 15000);
+    this.handshake.unref?.();
+    this.socket = socket; this.changed();
+    socket.addEventListener('message', event => {
+      if (this.socket !== socket) return;
+      if (!sameOwner(owner, this.deps.getOwner()) || !sameOwner(owner, this.owner)) { this.accountChanged(); return; }
+      const data = String(event.data);
+      if (Buffer.byteLength(data) > 65536) { this.failSocket(SocketFailureCode.PayloadTooLarge, 'Remote WebSocket frame is too large'); return; }
+      try {
+        const frame = event.parsedFrame ?? JSON.parse(data);
+        if (frame.type === 'hello') {
+          if (frame.protocolVersion !== REMOTE_PROTOCOL_VERSION || !/^[1-9]\d*$/u.test(String(frame.connectionGeneration))) throw new Error('Invalid remote handshake');
+          if (this.projectionVersion > 1 && frame.projectionVersion !== this.projectionVersion) {
+            const negotiated = [1, 2, 3, REMOTE_REPLY_PROJECTION_VERSION, RemoteQuestion.ProjectionVersion, RemoteTaskCredits.ReaderProjectionVersion].includes(frame.projectionVersion) ? frame.projectionVersion : 1;
+            this.projectionVersion = Math.min(this.projectionVersion, negotiated);
+            if (this.projectionVersion < RemoteTaskCredits.ReaderProjectionVersion) {
+              this.taskCreditsSupported = false; this.deps.store.setTaskCreditsProjectionSupported(false);
+            }
+            if (this.projectionVersion < RemoteQuestion.ProjectionVersion) {
+              this.questionsSupported = false; this.deps.store.setQuestionProjectionSupported(false);
+            }
+            if (this.projectionVersion < REMOTE_REPLY_PROJECTION_VERSION) {
+              this.replySupported = false; this.replyModelLabelSupported = false; this.deps.store.setReplyModelLabelSupported(false); this.replies.clear(); this.deps.store.setReplyProjectionSupported(false);
+            }
+            if (this.projectionVersion < 3) { this.files?.configure(false); this.deps.store.setFileProjectionSupported(false); }
+          }
+          if (this.handshake) clearTimeout(this.handshake); this.handshake = null;
+          this.quotaBlocked = false; this.retryAfter = 0;
+          this.generation = String(frame.connectionGeneration); this.lastPong = Date.now();
+          this.commandPollAt = 0; this.commandRetryAt = 0; this.inputPollAt = 0; this.inputRetryAt = 0;
+          this.lastInputPublish = 0; this.agentCatalogRetryAt = 0;
+          this.heartbeatTimeout = Math.min(90000, Math.max(20000, (Number(frame.heartbeatTimeoutSeconds) || 75) * 1000));
+          this.error = undefined; this.errorCode = undefined; this.errorRequestKey = undefined;
+          this.connectionReason = RemoteConnectionReason.Connecting;
+          if (this.heartbeat) clearInterval(this.heartbeat);
+          this.heartbeat = setInterval(() => {
+            if (Date.now() - this.lastPong >= this.heartbeatTimeout) { this.failSocket(SocketFailureCode.HeartbeatTimeout, 'Remote WebSocket heartbeat timed out'); return; }
+            try { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping', id: randomUUID() })); }
+            catch { this.failSocket(SocketFailureCode.Transport, 'Remote WebSocket heartbeat failed'); }
+          }, Math.max(10000, Math.min(30000, (Number(frame.heartbeatIntervalSeconds) || 25) * 1000)));
+          this.heartbeat.unref?.(); this.changed(); this.schedule(0);
+        } else if (frame.type === 'pong' && this.generation) {
+          const wasConnected = Date.now() - this.lastPong < this.heartbeatTimeout;
+          this.lastPong = Date.now();
+          if (!wasConnected) this.changed();
+        }
+        else if (frame.type === 'reconnect.required' || frame.type === 'access.changed') {
+          if (!this.error) this.connectionReason = RemoteConnectionReason.Reconnecting;
+          this.disconnect(); this.schedule(0);
+        }
+        else if (frame.type === 'device.connection.changed' && this.connectionManagement) {
+          // An event is invalidation only. Fetch the authoritative version before changing state.
+          void this.connections.query().catch((): void => undefined);
+        }
+        else if (frame.type === RemoteDeletion.Available || frame.type === RemoteDeletion.Changed) { this.deletions?.wake(); this.startDeletionSync(); }
+        else if (frame.type === 'commands.available' || frame.type === 'access.requested') { this.commandPollAt = 0; this.schedule(0); }
+        else if (frame.type === 'input.preparations.available') { this.inputPollAt = 0; this.inputRetryAt = 0; this.schedule(0); }
+        else if (frame.type === 'input.preparation.updated') { this.inputPollAt = 0; this.schedule(0); }
+      } catch { this.failSocket(SocketFailureCode.Protocol, 'Invalid remote WebSocket message'); }
+    });
+    socket.addEventListener('close', event => {
+      if (this.socket !== socket) return;
+      const restarting = this.generation !== null && [1000, 1001, 1012].includes(event.code);
+      if (!restarting) this.recordConnectionFailure(new RemoteApiError(event.code, `Remote connection closed (${event.code})`));
+      else if (!this.error) this.connectionReason = RemoteConnectionReason.Reconnecting;
+      if ([4403, 4409, 4410].includes(event.code) && (this.connectionManagement || this.connectionManagementKnown)) void this.connections.query().catch((): void => undefined);
+      if ([4403, 4409, 4410].includes(event.code)) { this.suspended = true; this.error = `Remote connection closed (${event.code})`; this.errorCode = event.code; this.connectionReason = RemoteConnectionReason.DeviceUnavailable; }
+      this.disconnect();
+      this.changed(); this.schedule(this.backoff);
+    });
+    socket.addEventListener('error', () => {
+      if (this.socket === socket) this.failSocket(SocketFailureCode.Transport, 'Remote WebSocket connection failed');
+    });
+  }
+  private disconnect(): void {
+    this.connectionAttempt++;
+    this.commandPollAt = 0; this.commandRetryAt = 0; this.inputPollAt = 0; this.inputRetryAt = 0;
+    this.agentCatalogRetryAt = 0; this.lastInputPublish = 0;
+    this.deps.input?.models.resetPublication?.();
+    const socket = this.socket; this.socket = null; this.generation = null; this.lastPong = 0;
+    if (this.handshake) clearTimeout(this.handshake); this.handshake = null;
+    if (this.heartbeat) clearInterval(this.heartbeat); this.heartbeat = null;
+    if (socket) socket.close();
+    this.changed();
+  }
+  private transport(): Record<string, string> {
+    return this.generation ? { mode: 'online', connectionGeneration: this.generation } : { mode: 'recovery' };
+  }
+  private async pollAccess(): Promise<void> {
+    const items: RemoteSettingsState['accessRequests'] = [];
+    let cursor: string | null = null;
+    do {
+      const result = await this.api(`/devices/${this.registration!.deviceId}/access-requests?status=pending&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      items.push(...(result.items || [])); cursor = result.nextCursor || null;
+    } while (cursor);
+    this.accesses = items;
+  }
+  private logSyncSkipped(row: SyncRow, reason: string, retryAt: number | null = null): void {
+    const signature = `${reason}:${retryAt}`;
+    if (this.syncSkipReasons.get(row.local_id) === signature) return;
+    if (this.syncSkipReasons.size >= 1000) this.syncSkipReasons.delete(this.syncSkipReasons.keys().next().value!);
+    this.syncSkipReasons.set(row.local_id, signature);
+    remoteLogMessage('debug', '[RemoteSync] Session synchronization deferred', { localSessionId: row.local_id, sessionId: row.session_id,
+      deviceId: row.device_id, reason, retryAt, sourceSeq: row.source_seq, ackSourceSeq: row.ack_seq,
+      serverSeq: row.server_seq, needsSnapshot: Boolean(row.needs_snapshot) });
+  }
+  /** History HTTP/import uploads cannot occupy the command claim/reconcile lane. */
+  private startHistorySync(): void {
+    if (this.historyWork || Date.now() < this.historyRetryAt || !this.syncContext()()) return;
+    const current = this.syncContext();
+    const work = remotePerformance.async(RemotePerformanceStage.HistorySync, () => this.syncSessions(true)).catch(error => {
+      if (!current()) return;
+      this.sessionSyncFailed = true;
+      this.historyRetryAt = Date.now() + IDLE_POLL_MS;
+      remoteLogMessage('warn', '[RemoteSync] History lane deferred', remoteSyncErrorMetadata(error));
+      if (isSharedSyncFailure(error)) {
+        this.recordConnectionFailure(error);
+        if (this.suspended || error instanceof RemoteApiError && [401, 40100, 403, 47000].includes(error.code)) this.disconnect();
+      }
+    }).finally(() => {
+      if (this.historyWork === work) this.historyWork = null;
+      this.changed();
+      this.scheduleHistorySync(current);
+    });
+    this.historyWork = work;
+  }
+  private scheduleHistorySync(current: () => boolean): void {
+    try {
+      if (!current()) return;
+      const context = this.taskContext();
+      if (!context) return;
+      const now = Date.now();
+      const deadline = this.taskSync.candidates(context, 1).length ? now : this.taskSync.nextRetryAt(context);
+      if (deadline === null) return;
+      // Keep long server retry bounds intact without overflowing Node's timer range.
+      this.schedule(Math.min(2_147_483_647, Math.max(500, deadline - now, this.historyRetryAt - now)));
+    } catch (error) { remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'STORAGE_UNAVAILABLE', error }, 'warn'); }
+  }
+  private recordSuccessfulSync(): void {
+    if (this.owner) this.deps.store.put(`lastSuccessfulSync:${this.owner.userId}:${this.owner.scopeKey}`, new Date().toISOString());
+  }
+  private taskContext(): TaskSyncContext | null {
+    return this.owner && this.registration ? { owner: this.owner, target: this.remoteEnvironment(), deviceId: this.registration.deviceId } : null;
+  }
+  private sessionAdmitted(id: string): boolean {
+    if (this.deps.store.isRunIsolated(id)) return false;
+    if (!this.targetId || !this.owner || !this.registration) return this.targetId === null && !!this.registration;
+    return this.targets.isAdmitted(this.owner, this.registration.deviceId, this.targetId, id);
+  }
+  private async syncSessions(stepwise = false): Promise<void> {
+    const context = this.taskContext();
+    if (!context) return;
+    const current = this.syncContext();
+    if (!current()) return;
+    void this.automaticRecovery.tick(context, current).catch(error => remoteDiagnosticLog('remote.sync.task_deferred', { lane: 'history', reason: 'AUTO_RECOVERY_UNAVAILABLE', error }, 'warn'));
+    const takeoverRecovery = this.reconcileTakenOverImports(context, current);
+    if (takeoverRecovery) { await takeoverRecovery; if (!current()) return; }
+    // Failed diagnostic persistence is a bounded dependency, not a permanent process-local skip list.
+    for (const [id, pending] of this.taskMemoryBlocks) {
+      if (pending.retryAt > Date.now() || pending.context.target !== context.target || pending.context.deviceId !== context.deviceId
+        || !sameOwner(pending.context.owner, context.owner)) continue;
+      try {
+        this.deps.store.transaction(() => {
+          if (pending.failure.deferMs !== undefined) this.taskSync.defer(context, id, pending.failure.deferMs);
+          else {
+            const saved = this.taskSync.fail(context, id, pending.failure);
+            this.deps.store.put(`syncFailure:${id}`, { reason: pending.failure.reason,
+              blocked: ['isolated', 'closed'].includes(saved.phase), retryAt: saved.next_retry_at });
+          }
+        });
+        this.taskMemoryBlocks.delete(id);
+      } catch (error) {
+        pending.retryAt = Date.now() + 5000;
+        if (isSharedSyncFailure(error)) throw error;
+      }
+      break; // One persistence probe per turn, before any task resumes.
+    }
+    remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => this.taskSync.reconcileProjectionFailures(context, id => this.sessionAdmitted(id) && this.availability.legacyHistoryAllowed(id)));
+    // Older clients classified wrapped transport errors as permanent task failures.
+    // A one-time probe reuses the original mapping/receipt checks; it grants no ACK or execution permission.
+    const recovered = remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => this.taskSync.reconcileLegacyFailures(context, (row, reason) => this.availability.legacyHistoryAllowed(row.local_id)
+      && !this.deps.store.isSyncClosed(row.local_id)
+      && (!row.sync_environment || this.targets.matchesEnvironment(context.target, row.sync_environment))
+      && (reason !== RemoteImportValidation.Reason || this.emptyInitialImport(row, this.deps.store.get<SavedImport>(`import:${row.local_id}`)))));
+    if (recovered.promotedIds.length) remoteDiagnosticLog('remote.sync.task_deferred', {
+      lane: 'history', result: 'deferred', reason: 'STATE_CHANGED', count: recovered.promotedIds.length,
+    });
+    // Projection is an independent worker; a large/corrupt task cannot hold ready batches behind it.
+    if (!this.projectionWork) {
+      const work = this.deps.store.flushProjections().catch(error => {
+        remoteLogMessage('warn', '[RemoteSync] Projection scheduler deferred', remoteSyncErrorMetadata(error));
+      }).finally(() => {
+        if (this.projectionWork === work) this.projectionWork = null;
+        if (this.shuttingDown && current()) this.schedule(500);
+        else if (!this.historyWork) this.scheduleHistorySync(current);
+      });
+      this.projectionWork = work;
+    }
+    const rows = remotePerformance.sync(RemotePerformanceStage.HistoryPrepare, () => this.shuttingDown ? this.quittingSyncRows(context)
+      : stepwise ? this.prioritizeExpiringImports(this.taskSync.candidates(context)) : this.deps.store.sessions(context.owner));
+    let cursor = 0, sharedFailure = false;
+    const worker = async (): Promise<void> => {
+      while (cursor < rows.length && current() && !sharedFailure && (!stepwise || Date.now() >= this.historyRetryAt)) {
+        const row = rows[cursor++];
+        if (this.shuttingDown && !this.quittingSessionIds.has(row.local_id)) continue;
+        try {
+        if (!this.availability.legacyHistoryAllowed(row.local_id) || this.taskMemoryBlocks.has(row.local_id)) continue;
+        if (!this.taskSync.eligible(context, row.local_id)) {
+          const state = this.taskSync.get(context, row.local_id);
+          this.logSyncSkipped(row, state?.phase === 'backoff' ? 'retry_backoff' : 'task_isolated', state?.next_retry_at ?? null);
+          continue;
+        }
+          this.taskSync.served(context, row.local_id);
+          await this.syncSession(row, current, context, stepwise);
+        } catch (error) {
+          if (!current()) return;
+          try { await this.failSession(row, error, current, context); }
+          catch (recordError) {
+            const storageError = recordError instanceof TaskFailurePersistenceError ? recordError.storageError : recordError;
+            if (isSharedSyncFailure(storageError)) { sharedFailure = true; throw recordError; }
+            // A broken diagnostic write must not repeatedly execute this task in this process.
+            if (this.taskMemoryBlocks.size >= 1000 && !this.taskMemoryBlocks.has(row.local_id)) throw recordError;
+            this.taskMemoryBlocks.set(row.local_id, { context, failure: recordError instanceof TaskFailurePersistenceError ? recordError.failure : classifyTaskSyncFailure(error), retryAt: Date.now() + 5000 });
+            this.sessionSyncFailed = true;
+            remoteLogMessage('warn', '[RemoteSync] Task failure persistence unavailable', { localSessionId: row.local_id, ...remoteSyncErrorMetadata(recordError) });
+            if (isSharedSyncFailure(recordError)) { sharedFailure = true; throw recordError; }
+          }
+          if (isSharedSyncFailure(error)) { sharedFailure = true; throw error; }
+        }
+      }
+    };
+    const results = await Promise.allSettled(Array.from({ length: stepwise && !this.historyCircuitProbe ? 2 : 1 }, () => worker()));
+    for (const result of results) if (result.status === 'rejected') throw result.reason;
+    if (!current()) return;
+    await this.ensureRetentionFence();
+    if (!current()) return;
+    // Durable failure totals are collected by the display worker; completing a history turn must not rescan them on main.
+    this.sessionSyncFailed = this.taskMemoryBlocks.size > 0;
+  }
+  private async syncSession(row: SyncRow, current: () => boolean, context: TaskSyncContext, stepwise: boolean): Promise<void> {
+    const id = row.local_id;
+    if (remotePublicationForeign(this.deps.store.db, id, context.owner, context.target)) return;
+    const telemetry = captureRemoteTelemetry({ localSessionId: id, sessionId: row.session_id, deviceId: context.deviceId,
+      remoteOwnerId: context.owner.userId, ownerScopeId: context.owner.scopeKey, lane: 'history', publicationKind: 'legacy_batch', operationKind: 'legacy_batch' });
+    if (!this.availability.legacyHistoryAllowed(id)) return;
+    if (this.deps.store.isSyncClosed(id)) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
+    const previous = this.deps.store.get<any>(`syncFailure:${id}`);
+    const oldState = this.taskSync.get(context, id);
+    const automaticResuming = recoveryDisplay(oldState?.auto_probe_json ?? '{}', Date.now())?.state === RemoteSyncRecoveryState.Recovering;
+    if (previous && !oldState?.failure_count && oldState?.phase !== 'reconciling' && !automaticResuming) {
+      const complete = this.sessionAdmitted(id) && row.device_id === context.deviceId && !row.needs_snapshot && row.source_seq === row.ack_seq
+        && !this.deps.store.db.prepare('SELECT 1 FROM remote_dirty WHERE session_id=?').get(id)
+        && !this.deps.store.db.prepare('SELECT 1 FROM remote_outbox WHERE session_id=? LIMIT 1').get(id)
+        && !this.deps.store.get(`import:${id}`);
+      if (complete && !previous.blocked) { this.deps.store.remove(`syncFailure:${id}`); this.taskSync.progress(context, id, true); return; }
+      if (previous.blocked || previous.retryAt > Date.now()) {
+        this.taskSync.fail(context, id, { phase: previous.blocked ? 'isolated' : 'backoff', scope: 'session', reason: 'LEGACY_SYNC_FAILURE',
+          ...(previous.blocked ? {} : { retryAfterMs: previous.retryAt - Date.now() }) });
+        return;
+      }
+    }
+    if (!this.sessionAdmitted(id)) {
+      await this.reconcileRegistrationImport(row);
+      if (!current()) return;
+      const state = await this.readSyncState(row, true);
+      if (!current()) return;
+      if (!state || !this.targetId) throw new RemoteSyncStateError('Unverified legacy session has no original mapping');
+      this.targets.admitLegacySession(context.owner, context.deviceId, this.targetId, state);
+      if (state.deleted) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
+      if (stepwise) return;
+    }
+    if (this.ownershipSyncBlocked(id)) {
+      this.taskSync.defer(context, id, 5000);
+      this.logSyncSkipped(row, 'ownership_sync_blocked', this.taskSync.get(context, id)?.next_retry_at ?? null);
+      return;
+    }
+    const initialImport = this.deps.store.get<SavedImport>(`import:${id}`);
+    if (initialImport && this.emptyInitialImport(row, initialImport)) {
+      // Replaying the original immutable request supplies explicit pre-allocation
+      // rejection evidence. A missing receipt or a transport error cannot authorize cleanup.
+      try {
+        await this.api('/sync/imports', 'POST', this.importBeginRequest(row, initialImport));
+        throw new RemoteSyncStateError('Empty initial import was not rejected');
+      } catch (error) {
+        if (!current()) return;
+        if (!this.emptyImportRejection(error)) throw error;
+        this.discardImport(row, initialImport, undefined, undefined, error);
+        this.taskSync.defer(context, id, 1000);
+      }
+      return;
+    }
+    const projectionFailure = this.deps.store.db.prepare('SELECT reason,retry_at FROM remote_projection_failures WHERE session_id=?').get(id) as { reason: string; retry_at: number } | undefined;
+    if (projectionFailure) {
+      // The projection worker owns its retry deadline and clears this row after publication.
+      if (isTransientProjectionFailure(projectionFailure.reason) || ['REMOTE_PROJECTION_BUDGET','REMOTE_PROJECTION_PUBLICATION_INVALID'].includes(projectionFailure.reason)
+        && projectionFailure.retry_at < Number.MAX_SAFE_INTEGER) { this.taskSync.defer(context, id, 1000); return; }
+      throw new RemoteTaskDataError(projectionFailure.reason);
+    }
+    const publishing = this.deps.store.projectionPublishing(id);
+    if (publishing) {
+      this.taskSync.defer(context, id, this.quittingSessionIds.has(id) ? 500 : 5000);
+      this.logSyncSkipped(row, 'projection_publishing', this.taskSync.get(context, id)?.next_retry_at ?? null);
+      return;
+    }
+    const state = this.taskSync.get(context, id);
+    if (previous?.blocked && state?.phase !== 'reconciling' && !state?.failure_count && !automaticResuming) throw new RemoteSyncStateError('Persisted synchronization safety block requires task review');
+    if (!this.generation && !row.device_id) { this.taskSync.defer(context, id, 5000); return; }
+    if (row.device_id && row.device_id !== context.deviceId) throw new RemoteSyncStateError('Session belongs to another device');
+    if (row.sync_environment && !this.targets.matchesEnvironment(context.target, row.sync_environment)) throw new RemoteSyncStateError('Session has no verified binding to the active service');
+    if (!row.device_id) this.deps.store.bindRemote(id, row.session_id, context.deviceId);
+    if (state?.phase === 'reconciling' || stepwise && !this.sessionChecks.has(id) && (this.retentionSupported || row.stream_epoch) && (row.ack_seq || row.stream_epoch || this.deps.store.get(`import:${id}`))) {
+      await this.reconcileRegistrationImport(row);
+      if (!current()) return;
+      const remote = await this.readSyncState(this.deps.store.sync(id)!, true);
+      if (!current()) return;
+      if (remote?.deleted) { this.taskSync.fail(context, id, { phase: 'closed', scope: 'session', reason: 'SESSION_DELETED' }); return; }
+      if (this.sessionChecks.size >= 1024) this.sessionChecks.delete(this.sessionChecks.values().next().value!);
+      this.sessionChecks.add(id);
+      // Manual retry revalidates safety; it does not clear an unresolved corruption budget.
+      if (state?.phase === 'reconciling') {
+        if (recoveryDisplay(state.auto_probe_json, Date.now())?.state !== RemoteSyncRecoveryState.Recovering) this.deps.store.remove(`syncFailure:${id}`);
+        this.taskSync.resumeAfterVerification(context, id);
+      }
+      if (stepwise) return;
+    }
+    const saved = this.deps.store.get<SavedImport>(`import:${id}`);
+    if (row.needs_snapshot || saved || this.retentionSupported && row.sync_protocol_version < RemoteRetention.Version) {
+      if (stepwise && !saved && this.activeImportCount(context) >= 2) { this.taskSync.defer(context, id, 5000); return; }
+      if (stepwise && this.importLaneBusy) { this.taskSync.defer(context, id, 500); return; }
+      this.importLaneBusy = true;
+      try { await this.importSession(this.deps.store.sync(id)!, saved, stepwise); }
+      finally { this.importLaneBusy = false; }
+      return;
+    }
+    const events = this.deps.store.pending(id);
+    if (!events.length) {
+      if (row.source_seq === row.ack_seq && !this.deps.store.db.prepare('SELECT 1 FROM remote_dirty WHERE session_id=?').get(id)) {
+        this.deps.store.remove(`syncFailure:${id}`); this.taskSync.progress(context, id, true);
+      }
+      return;
+    }
+    // Keep sealed event bytes until the destination supports their optional display field again.
+    if (!this.replyModelLabelSupported && events.some(event => event.payload.message?.modelLabel !== undefined)) {
+      this.taskSync.defer(context, id, 5000); return;
+    }
+    const batchId = payloadHash(events);
+    telemetry.emit(RemoteTelemetryEvent.Sealed, { operationId: batchId, phase: 'sealed', businessStatus: 'prepared',
+      sourceSeq: events.at(-1)!.sourceSeq, recordCount: events.length, syncProtocolVersion: row.sync_protocol_version, streamEpoch: row.stream_epoch });
+    if (!await this.uploadReplyContents(id, row.session_id, events, stepwise ? batchId : undefined)) return;
+    if (!current()) return;
+    let result: any;
+    try {
+      result = await this.api('/sync/batches', 'POST', { batchId, deviceId: context.deviceId,
+        ...this.transport(), ...(row.sync_protocol_version === RemoteRetention.Version ? { syncProtocolVersion: RemoteRetention.Version, streamEpoch: row.stream_epoch } : {}), owner: context.owner, sessionId: row.session_id, localSessionId: id, events });
+    } catch (error) {
+      telemetry.emit(RemoteTelemetryEvent.PublicationUnknown, { operationId: batchId, phase: 'awaiting_receipt', businessStatus: 'unknown', reason: SyncTelemetry.Reason.RequestFailed });
+      throw error;
+    }
+    if (!current()) return;
+    let ackStage = 'validate';
+    try {
+      if (result.batchId !== batchId || result.deviceId !== context.deviceId || result.sessionId !== row.session_id) throw new RemoteTaskDataError('Remote batch ACK identity mismatch');
+      if (retentionSequence(result.committedSourceSeq) < retentionSequence(events.at(-1)!.sourceSeq)) throw new RemoteTaskDataError('Remote batch ACK did not cover the submitted events');
+      ackStage = SyncTelemetry.Stage.LocalAck;
+      this.deps.store.transaction(() => {
+        if (row.sync_protocol_version === RemoteRetention.Version) this.deps.store.applyRetentionAck(id, result);
+        this.deps.store.acknowledge(id, result.deviceId, result.sessionId, result.committedSourceSeq, result.committedSeq);
+        this.deps.store.remove(`syncFailure:${id}`); this.taskSync.progress(context, id, true);
+      });
+    } catch (error) {
+      const invalid = ackStage === 'validate' || error instanceof RemoteSyncStateError;
+      telemetry.emit(RemoteTelemetryEvent.SyncStage, { operationId: batchId, stage: invalid ? 'validate' : ackStage,
+        outcome: 'failed', reason: invalid ? SyncTelemetry.Reason.InvalidReceipt : SyncTelemetry.Reason.StorageUnavailable,
+        persistOutcome: invalid ? 'not_applicable' : 'failed' });
+      throw error;
+    }
+    this.recordSuccessfulSync();
+    this.syncSkipReasons.delete(id);
+    this.deps.store.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.Acknowledged, { operationId: batchId, phase: 'acknowledged', businessStatus: 'committed',
+      ackSourceSeq: result.committedSourceSeq, streamEpoch: row.stream_epoch, syncProtocolVersion: row.sync_protocol_version }));
+    remoteLogMessage('debug', '[RemoteSync] Batch acknowledged locally', { localSessionId: id, batchId,
+      requestId: this.telemetryRequestIds.get(result) ?? null, ...remoteSyncResultMetadata(result) });
+  }
+  private reconcileTakenOverImports(context: TaskSyncContext, current: () => boolean): Promise<void> | undefined {
+    // Isolated legacy tasks are absent from the normal candidates. Probe a bounded page
+    // independently, keeping unknown freezes out of every availability publication lane.
+    const rows = this.deps.store.db.prepare(`SELECT s.* FROM remote_sync s JOIN cowork_session_ownership o ON o.session_id=s.local_id
+      WHERE s.migration_frozen=1 AND o.ownership_status='confirmed' AND o.owner_user_id=? AND o.owner_scope_key=?
+      AND s.local_id>? ORDER BY s.local_id LIMIT 2`).all(context.owner.userId, context.owner.scopeKey, this.legacyImportRecoveryCursor) as SyncRow[];
+    this.legacyImportRecoveryCursor = rows.length === 2 ? rows[rows.length - 1].local_id : '';
+    if (!rows.length) return;
+    return (async () => {
+      for (const row of rows) {
+        if (!current()) return;
+        const key = `${context.target}:${context.owner.userId}:${context.owner.scopeKey}:${context.deviceId}:${row.local_id}`;
+        if ((this.legacyImportRecoveryRetry.get(key) || 0) > Date.now()) continue;
+        try { await this.releaseTakenOverImport(row, context, current); this.legacyImportRecoveryRetry.delete(key); }
+        catch (error) {
+          if (!current()) return;
+          if (this.legacyImportRecoveryRetry.size >= 128) this.legacyImportRecoveryRetry.delete(this.legacyImportRecoveryRetry.keys().next().value!);
+          this.legacyImportRecoveryRetry.set(key, Date.now() + 30000);
+          remoteDiagnosticLog('remote.sync.task_deferred', { localSessionId: row.local_id, lane: 'history',
+            reason: 'LEGACY_IMPORT_TAKEOVER_UNRESOLVED', retryAfterMs: 30000, error }, 'warn');
+          if (isSharedSyncFailure(error)) throw error;
+        }
+      }
+    })();
+  }
+  private async releaseTakenOverImport(row: SyncRow, context: TaskSyncContext, current: () => boolean): Promise<void> {
+    const writer = this.availability.legacyImportTakeover(row.local_id), saved = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
+    if (!writer || !saved || !saved.migration || saved.syncProtocolVersion !== RemoteRetention.Version || row.sync_protocol_version !== 1
+      || saved.reason !== 'protocol_upgrade' || !saved.manifest || !saved.parts?.length
+      || !row.migration_frozen || !row.needs_snapshot || saved.sessionId !== row.session_id || writer.sessionId !== row.session_id
+      || row.device_id !== context.deviceId || saved.deviceId !== context.deviceId || !sameOwner(saved.owner, context.owner)
+      || !saved.environment || !this.targets.matchesEnvironment(context.target, saved.environment)
+      || !row.sync_environment || !this.targets.matchesEnvironment(context.target, row.sync_environment)
+      || saved.expectedStreamEpoch !== row.stream_epoch || saved.beginConfirmed || saved.targetStreamEpoch || saved.stateVersion
+      || saved.confirmedPartCount || saved.uploadCursor || ![true, false].includes(saved.beginAttempted as boolean)) return;
+    if (typeof saved.importId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/u.test(saved.importId)
+      || saved.manifest.partCount !== saved.parts.length || saved.manifest.manifestHash !== payloadHash(saved.parts.map(({ partNo, payloadHash: hash, byteSize }) => ({ partNo, payloadHash: hash, byteSize })))
+      || retentionSequence(saved.expectedSourceSeq) > retentionSequence(saved.baseSourceSeq)
+      || retentionSequence(saved.baseSourceSeq) > BigInt(row.source_seq)) return;
+    const connectionGeneration = this.generation;
+    const originalRow = stableJson(row), originalImport = stableJson(saved), originalWriter = stableJson(writer);
+    const assertCurrent = (coreOnly = false): void => {
+      if (!current() || connectionGeneration !== this.generation || originalRow !== stableJson(this.deps.store.sync(row.local_id))
+        || originalImport !== stableJson(this.deps.store.get(`import:${row.local_id}`)) || !this.sessionAdmitted(row.local_id)
+        || !sameOwner(this.deps.store.owner(row.local_id), context.owner) || this.deps.store.isSyncClosed(row.local_id)
+        || this.deps.store.get(`${RemoteDeletion.Fence}${row.local_id}`) || this.deps.store.get(`localGcDeleted:${row.local_id}`)
+        || !matchesRemoteDeletionAdoption(this.deps.store, row.local_id, { owner: context.owner, targetId: context.target,
+          deviceId: context.deviceId, scope: writer.scope }, { ...writer, deviceId: context.deviceId })
+        || !coreOnly && originalWriter !== stableJson(this.availability.legacyImportTakeover(row.local_id)))
+        throw new RemoteSyncStateError('Legacy import takeover identity changed');
+    };
+    assertCurrent();
+    const query = new URLSearchParams({ deviceId: context.deviceId, sessionId: row.session_id, localSessionId: row.local_id,
+      writerGeneration: writer.writerGeneration, mode: 'online', connectionGeneration: connectionGeneration! });
+    let writerProof = 'active';
+    try {
+      const remote = await this.api(`/sync/state?${query}`, 'GET', undefined, true, 3, undefined, 1000);
+      assertCurrent();
+      if (remote.sessionId !== row.session_id || remote.writerGeneration !== writer.writerGeneration || remote.state !== 'active'
+        || remote.controlReady !== true || remote.controlEpoch !== writer.controlEpoch)
+        throw new RemoteSyncStateError('Legacy import takeover writer is unverified');
+    } catch (error) {
+      assertCurrent();
+      // This state endpoint checks owner, mapping and the exact writer BEFORE its
+      // readiness guard. Only that precise rejection proves a fenced original writer.
+      if (!(error instanceof RemoteApiError) || error.httpStatus !== 409 || error.code !== 47003
+        || error.data?.reason !== 'DEVICE_NOT_READY' || error.data?.reasonDetail !== 'CONTROL_BASELINE_REQUIRED') throw error;
+      writerProof = 'control_baseline_required';
+    }
+    const begin = this.importBeginRequest(row, saved);
+    let proof = 'never_sent';
+    if (saved.beginAttempted) {
+      try {
+        await this.api('/sync/imports', 'POST', begin, true, 1, undefined, 1000);
+        // Existing operations return their original receipt before the takeover guard.
+        // They retain the original migration/ACK recovery path, including committed imports.
+        throw new RemoteSyncStateError('Legacy import was allocated before writer takeover');
+      } catch (error) {
+        assertCurrent();
+        if (!(error instanceof RemoteApiError) || error.httpStatus !== 409 || error.code !== 47006
+          || error.data?.reason !== 'IDEMPOTENCY_CONFLICT' || error.data?.reasonDetail !== 'WRITER_TAKEOVER') throw error;
+        proof = 'begin_rejected_writer_takeover';
+      }
+    }
+    assertCurrent();
+    this.deps.store.db.transaction(() => {
+      assertCurrent(true);
+      const archiveKey = `${LEGACY_IMPORT_TAKEOVER_ARCHIVE_PREFIX}${saved.importId}`;
+      const archive = { localId: row.local_id, importId: saved.importId, manifestHash: saved.manifest.manifestHash,
+        savedImport: saved, beginRequest: begin, writer, writerProof, proof };
+      const previous = this.deps.store.get(archiveKey);
+      if (this.deps.store.db.prepare('SELECT 1 FROM remote_state WHERE key=?').get(archiveKey) && stableJson(previous) !== stableJson(archive)) throw new RemoteSyncStateError('Legacy import takeover archive changed');
+      this.deps.store.put(archiveKey, archive);
+      // Release only the active operation pointer; retain its immutable package and all ACK/protocol fields.
+      this.deps.store.remove(`import:${row.local_id}`);
+      this.deps.store.unfreezeMigration(row.local_id);
+    })();
+    this.availability.wake();
+  }
+  private async failSession(row: SyncRow, error: unknown, current: () => boolean, context: TaskSyncContext): Promise<void> {
+    if (isSharedSyncFailure(error)) throw error;
+    const id = row.local_id;
+    let failure = classifyTaskSyncFailure(error);
+    if (failure.deferMs !== undefined) {
+      if (!current()) return;
+      this.taskSync.defer(context, id, failure.deferMs);
+      remoteDiagnosticLog('remote.sync.task_deferred', { localSessionId: id, lane: 'history',
+        result: 'deferred', retryAfterMs: failure.deferMs, error });
+      return;
+    }
+    for (const [key, receipt] of this.verifiedImports) if (receipt.sessionId === row.session_id) this.verifiedImports.delete(key);
+    remoteLogMessage('warn', '[RemoteSync] Session synchronization failed', { localSessionId: id, sessionId: row.session_id,
+      deviceId: context.deviceId, phase: row.needs_snapshot ? 'snapshot' : 'batch', sourceSeq: row.source_seq, ackSourceSeq: row.ack_seq, serverSeq: row.server_seq, ...remoteSyncErrorMetadata(error) });
+    if (!isSharedSyncFailure(error)) {
+      try {
+        if (error instanceof RemoteApiError && error.code === 47025 && error.data?.currentImport) {
+          await this.recoverImportConflict(row, error.data.currentImport, current);
+          failure = { phase: 'backoff', scope: 'session', reason: 'IMPORT_RECONCILING' };
+        } else if (error instanceof RemoteApiError && (error.code === RemoteRetention.ResyncCode
+          || error.code === RemoteRetention.ProtocolCode && error.data?.reasonDetail === 'SYNC_RETENTION_REQUIRED')) {
+          await this.recoverSyncState(row, current);
+          failure = { phase: 'backoff', scope: 'session', reason: 'STREAM_RECONCILING' };
+        } else if (error instanceof RemoteApiError && error.code === 47006 && error.message === RemoteSyncConflict.RunMapping) {
+          if (!this.deps.store.get(`import:${id}`) && this.deps.store.transaction(() => {
+            if (!this.taskSync.reserveRepair(context, id, 'RUN_MAPPING')) return false;
+            this.deps.store.requireRunMappingSnapshot(id); return true;
+          })) {
+            failure = { phase: 'backoff', scope: 'session', reason: 'RUN_MAPPING_REPAIR' };
+          }
+        } else if (failure.repairable && this.taskSync.reserveRepair(context, id, failure.reason)) {
+          await this.recoverSyncState(row, current);
+          if (!current()) return;
+          this.deps.store.transaction(() => {
+            this.deps.store.requireSnapshot(id, 'task_data_repair');
+            this.deps.store.db.prepare('INSERT OR IGNORE INTO remote_dirty VALUES (?)').run(id);
+            this.deps.store.db.prepare('DELETE FROM remote_projection_failures WHERE session_id=?').run(id);
+          });
+          failure = { phase: 'backoff', scope: 'session', reason: 'TASK_DATA_REPAIR' };
+        }
+      } catch (recoveryError) {
+        if (!current()) return;
+        failure = classifyTaskSyncFailure(recoveryError);
+        if (isSharedSyncFailure(recoveryError)) throw recoveryError;
+      }
+    }
+    if (!current()) return;
+    if (failure.deferMs !== undefined) { this.taskSync.defer(context, id, failure.deferMs); return; }
+    let saved;
+    try {
+      saved = this.deps.store.transaction(() => {
+        const state = this.taskSync.fail(context, id, failure);
+        const automatic = recoveryFailure(error);
+        if (state.phase === 'isolated' && automatic) this.taskSync.scheduleRecovery(context, id);
+        this.deps.store.put(`syncFailure:${id}`, { ...remoteSyncErrorMetadata(error), code: error instanceof RemoteApiError ? error.code : 47019, reason: failure.reason,
+          blocked: ['isolated', 'closed'].includes(state.phase), retryAt: state.next_retry_at,
+          ...(automatic ? { syncDiagnostic: { version: 1, ...(automatic.cause ? { cause: automatic.cause } : {}), ...(automatic.requiredCapability ? { requiredCapability: automatic.requiredCapability } : {}) } } : {}) });
+        return state;
+      });
+    } catch (storageError) { throw new TaskFailurePersistenceError(storageError, failure); }
+    if (failure.scope === 'service') {
+      const now = Date.now();
+      this.historyTransportFailures = [...this.historyTransportFailures.filter(item => item.at > now - 30000), { sessionId: id, at: now }].slice(-20);
+      if (this.historyCircuitProbe || this.historyTransportFailures.length >= 3 && new Set(this.historyTransportFailures.map(item => item.sessionId)).size >= 2) {
+        this.historyRetryAt = now + this.historyCircuitDelay; this.historyCircuitDelay = Math.min(300000, this.historyCircuitDelay * 2);
+        this.historyCircuitProbe = true;
+      }
+    }
+    this.sessionSyncFailed = saved.phase !== 'closed';
+  }
+  private activeImportCount(context: TaskSyncContext): number {
+    // Isolated receipts retain all evidence but do not reserve an active scheduling slot forever.
+    return (this.deps.store.db.prepare(`SELECT COUNT(*) AS count FROM remote_state x
+      JOIN remote_sync s ON x.key='import:'||s.local_id JOIN cowork_session_ownership o ON o.session_id=s.local_id
+      LEFT JOIN remote_sync_task_state t ON t.local_session_id=s.local_id AND t.owner_user_id=? AND t.owner_scope_key=? AND t.target_key=? AND t.device_id=?
+      WHERE o.owner_user_id=? AND o.owner_scope_key=? AND s.device_id=? AND json_valid(x.value)
+        AND (t.phase IS NULL OR t.phase NOT IN ('isolated','closed','waiting_dependency','cooldown'))`).get(
+      context.owner.userId, context.owner.scopeKey, context.target, context.deviceId, context.owner.userId, context.owner.scopeKey, context.deviceId) as { count: number }).count;
+  }
+  /** One logical publication must not cross identity, environment or projection changes between HTTP calls. */
+  private syncContext(): () => boolean {
+    const owner = this.owner, deviceId = this.registration?.deviceId, generation = this.accountGeneration;
+    const route = this.deps.getApiBaseUrl();
+    const routeEpoch = this.deps.getRouteEpoch?.() ?? 0;
+    const environment = this.remoteEnvironment(), projection = this.projectionVersion, replyProjection = this.replySupported, modelLabel = this.replyModelLabelSupported;
+    return () => !this.admissionDeferred && !this.deps.store.needsSecurityRecovery() && !this.stopped && generation === this.accountGeneration && sameOwner(owner, this.owner)
+      && sameOwner(owner, this.deps.getOwner()) && routeEpoch === (this.deps.getRouteEpoch?.() ?? 0) && route === this.deps.getApiBaseUrl() && deviceId === this.registration?.deviceId
+      && environment === this.remoteEnvironment() && projection === this.projectionVersion && replyProjection === this.replySupported && modelLabel === this.replyModelLabelSupported && this.settings().enabled && !this.syncPaused()
+      && (!this.connectionManagementKnown || this.generation !== null);
+  }
+  /** A renderer preview can show the route, but never supplies the destination authority. */
+  associationPublicationTarget(): PublicationTarget | null {
+    if (!this.owner || !this.registration || !this.targetId || this.admissionDeferred || this.stopped || this.deps.store.needsSecurityRecovery()
+      || !sameOwner(this.owner, this.deps.getOwner()) || !this.settings().enabled
+      || this.accountRoute !== this.deps.getApiBaseUrl() || this.accountRouteEpoch !== (this.deps.getRouteEpoch?.() ?? 0)) return null;
+    const active = this.targets.active(this.owner);
+    if (!active?.syncTarget || active.targetId !== this.targetId || active.deviceId !== this.registration.deviceId) return null;
+    const url = new URL(this.accountRoute);
+    return { owner: { ...this.owner }, route: `${url.origin}${url.pathname.replace(/\/+$/u, '')}`,
+      targetId: active.targetId, dataSpaceId: active.syncTarget.dataSpaceId, deviceId: active.deviceId,
+      epoch: active.epoch, routeEpoch: this.accountRouteEpoch, accountGeneration: this.accountGeneration };
+  }
+  /** Called only inside the explicit publication confirmation transaction, after source binding. */
+  resumeAssociationPublication(ids: string[], target: PublicationTarget): void {
+    if (!this.deps.store.db.inTransaction || stableJson(this.associationPublicationTarget()) !== stableJson(target)) {
+      throw new RemoteSyncStateError('Association publication target changed');
+    }
+    for (const id of ids) {
+      const row = this.deps.store.sync(id);
+      if (!sameOwner(this.deps.store.owner(id), target.owner) || !row || row.migration_frozen
+        || this.deps.store.isSyncClosed(id) || this.deps.store.hasIndependentHistoryFence(id) || !this.sessionAdmitted(id)) {
+        throw new RemoteSyncStateError('Association publication admission changed');
+      }
+      const context = { owner: target.owner, target: target.targetId, deviceId: target.deviceId };
+      const failure = this.taskSync.get(context, id);
+      if (failure?.phase === 'isolated' && failure.reason === 'REMOTE_SYNC_STATE_CONFLICT') {
+        // Reuse the ordinary cooldown and valid-ledger checks; confirmation is not a publication ACK.
+        if (failure.scope !== 'session' || !this.taskSync.manualRetry(context, id)) {
+          throw new RemoteSyncStateError('Association publication retry is unavailable');
+        }
+        const previous = this.deps.store.get<{ reason?: string }>(`syncFailure:${id}`);
+        if (previous?.reason === 'REMOTE_SYNC_STATE_CONFLICT') this.deps.store.remove(`syncFailure:${id}`);
+      }
+    }
+  }
+  notifyAssociationChanged(ids: string[]): void {
+    for (const id of ids) { this.contentSnapshot.invalidate(id); this.sessionChecks.delete(id); }
+    this.displaySnapshot.invalidate(); this.changed(); this.schedule(0);
+  }
+  getSyncTargetId(): string | null { return this.targetId; }
+  private remoteEnvironment(): string { return this.targetId ?? this.deps.getEnvironment?.() ?? 'unresolved'; }
+  private canAdmitOwnershipClaim(): boolean {
+    const capability = this.ownershipClaimCapability;
+    return this.settings().enabled && capability?.enabled === true && capability.environment === this.remoteEnvironment() && sameOwner(capability.owner, this.owner);
+  }
+  private ownershipClaimBlocks(allowAdmission = true): OwnershipClaimBlocks {
+    if (!this.owner || !this.registration || !sameOwner(this.owner, this.deps.getOwner())) throw new Error('Account changed');
+    const environment = this.remoteEnvironment();
+    return this.ownershipAssociations.prepareRemoteAdmission({ owner: this.owner, environment, deviceId: this.registration.deviceId },
+      allowAdmission && this.canAdmitOwnershipClaim());
+  }
+  private ownershipSyncBlocked(sessionId: string, blocked = this.ownershipClaimBlocks()): boolean {
+    if (blocked.blockedSessionIds.has(sessionId)) return true;
+    if (!blocked.blockedAgentIds.size) return false;
+    const session = this.deps.store.db.prepare('SELECT agent_id FROM cowork_sessions WHERE id=?').get(sessionId) as { agent_id: string | null } | undefined;
+    return Boolean(session?.agent_id && blocked.blockedAgentIds.has(session.agent_id));
+  }
+  private async uploadReplyContents(localId: string, sessionId: string, records: ProjectionRecord[], publicationId?: string): Promise<boolean> {
+    if (!this.replySupported) return true;
+    const owner = this.owner, deviceId = this.registration?.deviceId, environment = this.remoteEnvironment();
+    const accountGeneration = this.accountGeneration;
+    if (!owner || !deviceId) throw new Error('Reply synchronization identity unavailable');
+    return this.replies.upload({ sessionId, deviceId, publicationId,
+      scope: JSON.stringify([environment, owner.userId, owner.scopeKey, deviceId]),
+      uploads: this.deps.store.replyContentUploads(localId, records), transport: () => this.transport(),
+      current: () => !this.stopped && this.replySupported && accountGeneration === this.accountGeneration && deviceId === this.registration?.deviceId
+        && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && environment === this.remoteEnvironment()
+        && this.settings().enabled,
+      api: (pathname, method, body) => this.api(pathname, method, body),
+    }, publicationId ? 1 : Number.POSITIVE_INFINITY);
+  }
+  private importProtocol(saved: SavedImport): Record<string, unknown> {
+    if (saved.syncProtocolVersion !== RemoteRetention.Version) return {};
+    if (!saved.targetStreamEpoch) throw new RemoteSyncStateError('Pending import epoch has not been persisted');
+    return { syncProtocolVersion: RemoteRetention.Version, streamEpoch: saved.targetStreamEpoch };
+  }
+  private importTelemetry(row: SyncRow, saved: SavedImport) {
+    return captureRemoteTelemetry({ remoteOwnerId: saved.owner?.userId, ownerScopeId: saved.owner?.scopeKey,
+      deviceId: saved.deviceId, operationId: saved.importId, publicationKind: 'legacy_import', operationKind: 'legacy_import',
+      localSessionId: row.local_id, sessionId: saved.sessionId, lane: 'history', syncProtocolVersion: saved.syncProtocolVersion ?? 1 });
+  }
+  private completeImport(row: SyncRow, saved: SavedImport, result: any, telemetry = this.importTelemetry(row, saved)): void {
+    let ackStage = 'validate';
+    try {
+      if (result.state !== 'committed' || result.sessionId !== saved.sessionId || result.importId && result.importId !== saved.importId
+        || result.manifestHash && result.manifestHash !== saved.manifest.manifestHash || result.committedSourceSeq !== saved.baseSourceSeq) throw new RemoteSyncStateError('Remote import receipt identity mismatch');
+      ackStage = SyncTelemetry.Stage.LocalAck;
+      this.deps.store.transaction(() => {
+        if (saved.syncProtocolVersion === RemoteRetention.Version) {
+          const epoch = result.targetStreamEpoch || result.streamEpoch;
+          if (result.state !== 'committed' || result.sessionId !== saved.sessionId || result.importId !== saved.importId
+            || result.manifestHash !== saved.manifest.manifestHash || result.syncProtocolVersion !== RemoteRetention.Version
+            || epoch !== saved.targetStreamEpoch || result.streamEpoch !== epoch
+            || result.committedSourceSeq !== saved.baseSourceSeq) throw new RemoteSyncStateError('Remote import receipt identity mismatch');
+          this.deps.store.applyRetentionAck(row.local_id, result, true);
+        }
+        this.deps.store.acknowledge(row.local_id, this.registration!.deviceId, saved.sessionId,
+          result.committedSourceSeq, result.committedSeq, true, saved.snapshotEpoch);
+        this.deps.store.remove(`import:${row.local_id}`);
+        this.deps.store.remove(`syncFailure:${row.local_id}`);
+        this.deps.store.unfreezeMigration(row.local_id);
+        this.recordSuccessfulSync();
+        if (this.taskContext()) this.taskSync.progress(this.taskContext()!, row.local_id, true);
+      });
+    } catch (error) {
+      const invalid = ackStage === 'validate' || error instanceof RemoteSyncStateError;
+      telemetry.emit(RemoteTelemetryEvent.SyncStage, { operationId: saved.importId, stage: invalid ? 'validate' : ackStage,
+        outcome: 'failed', reason: invalid ? SyncTelemetry.Reason.InvalidReceipt : SyncTelemetry.Reason.StorageUnavailable,
+        persistOutcome: invalid ? 'not_applicable' : 'failed' });
+      throw error;
+    }
+    this.deps.store.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.Acknowledged, { operationId: saved.importId, publicationKind: 'legacy_import',
+      lane: 'history', phase: 'acknowledged', businessStatus: 'committed', ackSourceSeq: result.committedSourceSeq, syncProtocolVersion: saved.syncProtocolVersion ?? 1 }));
+    this.verifiedImports.delete(saved.importId);
+    if (saved.fileSet) void this.importSnapshots.release(saved.fileSet).catch((): void => undefined);
+  }
+  private emptyInitialImport(row: SyncRow, saved: SavedImport | null): boolean {
+    const context = this.taskContext(), manifest = saved?.manifest, counts = manifest?.recordCounts;
+    if (!context || !saved || saved.beginAttempted !== true || saved.beginConfirmed || saved.targetStreamEpoch || saved.stateVersion
+      || saved.confirmedPartCount || saved.uploadCursor || saved.baseSourceSeq !== '0' || saved.expectedSourceSeq !== '0' || saved.expectedServerSeq !== '0'
+      || saved.expectedStreamEpoch != null || saved.syncProtocolVersion !== undefined && ![1, RemoteRetention.Version].includes(saved.syncProtocolVersion)
+      || row.ack_seq !== 0 || row.server_seq !== '0' || row.stream_epoch || row.sync_protocol_version !== 1 || !row.needs_snapshot
+      || saved.sessionId !== row.session_id || row.device_id !== context.deviceId || saved.deviceId !== context.deviceId
+      || !saved.owner || !sameOwner(saved.owner, context.owner) || !sameOwner(this.deps.store.owner(row.local_id), context.owner)
+      || !saved.environment || !this.targets.matchesEnvironment(context.target, saved.environment)
+      || row.sync_environment && !this.targets.matchesEnvironment(context.target, row.sync_environment)
+      || !this.sessionAdmitted(row.local_id) || this.deps.store.isSyncClosed(row.local_id)
+      || !counts || typeof counts !== 'object' || Array.isArray(counts) || Object.keys(counts).length !== 0
+      || manifest.partCount !== 1 || !Array.isArray(saved.parts) || saved.parts.length !== 1) return false;
+    const part = saved.parts[0];
+    return part?.partNo === 0 && part.byteSize === 14 && part.payloadHash === payloadHash({ records: [] })
+      && manifest.manifestHash === payloadHash([{ partNo: 0, byteSize: 14, payloadHash: part.payloadHash }]);
+  }
+  private emptyImportRejection(error: unknown): error is RemoteApiError {
+    return error instanceof RemoteApiError && error.httpStatus === 400 && error.code === RemoteImportValidation.Code
+      && error.data?.reason === RemoteImportValidation.Reason && error.message === RemoteImportValidation.MissingSummary;
+  }
+  private importBeginRequest(row: SyncRow, saved: SavedImport): Record<string, unknown> {
+    return { importId: saved.importId, deviceId: this.registration!.deviceId,
+      owner: this.owner, localSessionId: row.local_id, sessionId: saved.sessionId, baseSourceSeq: saved.baseSourceSeq,
+      expectedSourceSeq: saved.expectedSourceSeq, expectedServerSeq: saved.expectedServerSeq, manifest: saved.manifest,
+      ...(saved.syncProtocolVersion === RemoteRetention.Version ? { syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: saved.expectedStreamEpoch } : {}), ...this.transport() };
+  }
+  private discardImport(row: SyncRow, saved: SavedImport, terminalReceipt?: any, telemetry = this.importTelemetry(row, saved), rejectedBegin?: RemoteApiError): void {
+    // A timeout/404 is not permission to replace an operation. Old v1 receipts may omit
+    // the newer identity fields, but every field they do provide must still match.
+    const rejected = this.emptyImportRejection(rejectedBegin) && this.emptyInitialImport(this.deps.store.sync(row.local_id)!, saved);
+    if (terminalReceipt) {
+      this.assertImportIdentity(saved, terminalReceipt);
+      if (!['aborted', 'expired'].includes(terminalReceipt.state)) throw new RemoteSyncStateError('Import replacement has no terminal receipt');
+    } else if (!rejected && (saved.beginAttempted !== false || saved.beginConfirmed)) throw new RemoteSyncStateError('Import replacement has no never-sent evidence');
+    const context = this.taskContext();
+    if (!context) throw new RemoteSyncStateError('Import replacement identity unavailable');
+    this.deps.store.transaction(() => {
+      const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
+      if (rejected && this.ownershipSyncBlocked(row.local_id)) throw new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED');
+      if (!pending || pending.importId !== saved.importId || pending.sessionId !== saved.sessionId
+        || pending.manifest.manifestHash !== saved.manifest.manifestHash
+        || !terminalReceipt && !rejected && (pending.beginAttempted !== false || pending.beginConfirmed)
+        || rejected && (stableJson(pending) !== stableJson(saved) || !this.emptyInitialImport(this.deps.store.sync(row.local_id)!, pending))
+        || pending.owner && !sameOwner(pending.owner, context.owner) || pending.deviceId && pending.deviceId !== context.deviceId
+        || pending.environment && !this.targets.matchesEnvironment(context.target, pending.environment)) throw new RemoteSyncStateError('Import replacement evidence changed');
+      // Reserve before releasing any original evidence. Repeated expiry/missing-part
+      // loops retain their ID, manifest and spool when the durable budget is spent.
+      if (!this.taskSync.reserveRepair(context, row.local_id, 'IMPORT_REBUILD')) throw new RemoteTaskDataError('REMOTE_IMPORT_REBUILD_LIMIT');
+      this.deps.store.remove(`import:${row.local_id}`);
+      this.deps.store.requireSnapshot(row.local_id);
+      this.deps.store.unfreezeMigration(row.local_id);
+    });
+    this.deps.store.afterCommit(() => telemetry.emit(RemoteTelemetryEvent.SyncStage, { operationId: saved.importId, stage: 'cleanup', outcome: 'completed',
+      businessStatus: terminalReceipt?.state ?? (rejected ? 'rejected' : 'prepared'), reason: SyncTelemetry.Reason.None, persistOutcome: 'committed' }));
+    this.verifiedImports.delete(saved.importId);
+    if (saved.fileSet) void this.importSnapshots.release(saved.fileSet).catch((): void => undefined);
+  }
+  private async recoverImportConflict(row: SyncRow, remote: any, current: () => boolean): Promise<void> {
+    const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
+    if (!pending?.beginConfirmed || remote.importId !== pending.importId || !current()) return;
+    const telemetry = this.importTelemetry(row, pending);
+    this.assertImportIdentity(pending, remote, telemetry);
+    if (remote.state === 'committed') { this.completeImport(row, pending, remote, telemetry); return; }
+    if (remote.state !== 'uploading') {
+      if (['aborted', 'expired'].includes(remote.state)) this.discardImport(row, pending, remote, telemetry);
+      return;
+    }
+    // A changed server baseline invalidates the immutable package, not its local history.
+    // Only a confirmed abort permits rebuilding; uncertain/committed outcomes retain the original receipt.
+    const aborted = await this.api(`/sync/imports/${pending.importId}/abort`, 'POST', {
+      ...this.transport(), ...this.importProtocol(pending), expectedStateVersion: remote.stateVersion, reason: 'baseline_changed',
+    });
+    if (!current()) return;
+    this.assertImportIdentity(pending, aborted, telemetry);
+    if (aborted.state === 'committed') this.completeImport(row, pending, aborted, telemetry);
+    else if (['aborted', 'expired'].includes(aborted.state)) this.discardImport(row, pending, aborted, telemetry);
+  }
+  /** Promote at most one verified import; all remaining candidates keep their fair order. */
+  private prioritizeExpiringImports(rows: SyncRow[]): SyncRow[] {
+    const context = this.taskContext();
+    if (!context) return rows;
+    let urgent: SyncRow | undefined, nearest = Date.now() + 300000;
+    for (const row of rows) {
+      if (!this.taskSync.eligible(context, row.local_id)) continue;
+      for (const receipt of this.verifiedImports.values()) {
+        if (receipt.state !== 'uploading' || receipt.sessionId !== row.session_id) continue;
+        const deadlines = [receipt.expiresAt, receipt.absoluteExpiresAt].filter(value => typeof value === 'string').map(value => Date.parse(value)).filter(Number.isFinite);
+        const deadline = deadlines.length ? Math.min(...deadlines) : Number.POSITIVE_INFINITY;
+        if (deadline < nearest) { nearest = deadline; urgent = row; }
+      }
+    }
+    return urgent ? [urgent, ...rows.filter(row => row !== urgent)] : rows;
+  }
+  private async readSyncState(row: SyncRow, allowDeleted = false): Promise<RetentionState | null> {
+    try {
+      const state: RetentionState = await this.api(`/sync/state?localSessionId=${encodeURIComponent(row.local_id)}`);
+      if (state.deviceId !== this.registration!.deviceId || state.sessionId !== row.session_id || state.localSessionId !== row.local_id
+        || retentionSequence(state.lastSourceSeq) > BigInt(this.deps.store.sync(row.local_id)!.source_seq)
+        || retentionSequence(state.lastSourceSeq) < BigInt(row.ack_seq)
+        || retentionSequence(state.lastSeq) < retentionSequence(row.server_seq)
+        || (row.stream_epoch && row.stream_epoch !== state.streamEpoch)) throw new RemoteSyncStateError('Remote sync state conflicts with durable local history');
+      if (row.sync_protocol_version === RemoteRetention.Version && state.syncProtocolVersion !== RemoteRetention.Version) throw new RemoteSyncStateError('Server cannot restore the active synchronization protocol');
+      if (state.deleted && !allowDeleted) throw new RemoteSyncStateError('Remote session is deleted');
+      return state;
+    } catch (error) {
+      // Only a never-published session may be created after a verified missing mapping.
+      if (error instanceof RemoteApiError && error.httpStatus === 404 && error.code === RemoteRetention.StateMissingCode && row.ack_seq === 0
+        && row.server_seq === '0' && row.sync_protocol_version === 1 && !row.stream_epoch && !this.deps.store.get(`import:${row.local_id}`)) return null;
+      if (error instanceof RemoteApiError && (error.httpStatus === 404 || row.sync_protocol_version === RemoteRetention.Version && error.httpStatus === 426)) throw new RemoteSyncStateError('Server no longer supports this active synchronization protocol');
+      throw error;
+    }
+  }
+  private async recoverSyncState(row: SyncRow, current: () => boolean): Promise<void> {
+    // An in-flight import is the recovery authority; never manufacture an ACK from GET state.
+    const pending = this.deps.store.get<SavedImport>(`import:${row.local_id}`);
+    if (pending) {
+      const telemetry = this.importTelemetry(row, pending);
+      const status = await this.api(`/sync/imports/${pending.importId}`);
+      if (!current()) return;
+      if (status.state === 'committed') {
+        if (status.targetStreamEpoch) pending.targetStreamEpoch ||= status.targetStreamEpoch;
+        this.completeImport(row, pending, status, telemetry); return;
+      }
+      throw new RemoteSyncStateError('Pending import must be reconciled before changing the synchronization stream');
+    }
+    const state = await this.readSyncState(row);
+    if (!current()) return;
+    if (!state || state.activeImport || state.syncProtocolVersion !== row.sync_protocol_version || state.streamEpoch !== row.stream_epoch) throw new RemoteSyncStateError('Remote stream recovery needs its original import receipt');
+    this.deps.store.requireSnapshot(row.local_id);
+  }
+  private async importSession(row: SyncRow, saved: SavedImport | null, stepwise = false): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ localSessionId: row.local_id, sessionId: row.session_id, deviceId: this.registration?.deviceId,
+      remoteOwnerId: this.owner?.userId, ownerScopeId: this.owner?.scopeKey, lane: 'history', publicationKind: 'legacy_import', operationKind: 'legacy_import' });
+    if (this.ownershipSyncBlocked(row.local_id)) return;
+    const key = `import:${row.local_id}`;
+    const current = this.syncContext();
+    const assertCurrent = (): void => {
+      if (!current()) throw new Error('Reply synchronization context changed');
+      if (this.targetId && !this.availability.legacyHistoryAllowed(row.local_id)) throw new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED');
+    };
+    assertCurrent();
+    if (saved && (saved.owner && !sameOwner(saved.owner, this.owner) || saved.environment && !this.targets.matchesEnvironment(this.remoteEnvironment(), saved.environment)
+      || saved.deviceId && saved.deviceId !== this.registration!.deviceId)) throw new RemoteSyncStateError('Saved import belongs to a different synchronization identity');
+    const importHasReplies = saved?.replyProjection ?? (saved?.projectionVersion === REMOTE_REPLY_PROJECTION_VERSION
+      || saved?.parts.some(part => part.payload?.records.some((record: ProjectionRecord) => record.payload.message?.projectionVersion === REMOTE_REPLY_PROJECTION_VERSION)));
+    // Outer v5 may contain either legacy messages or v4 reply blocks. Never infer the inner
+    // format solely from the envelope. Legacy v5 manifests without this fact need one safe rebuild.
+    const unknownReplyProjection = saved?.replyProjection === undefined && (saved?.projectionVersion || 0) >= RemoteQuestion.ProjectionVersion;
+    const projectionChanged = Boolean(saved && (saved.projectionVersion !== undefined && saved.projectionVersion !== this.projectionVersion
+      || unknownReplyProjection || Boolean(importHasReplies) !== this.replySupported || saved.replyModelLabel === true && !this.replyModelLabelSupported));
+    const deleted = this.deps.store.db.prepare('SELECT id FROM cowork_sessions WHERE id=?').get(row.local_id) === undefined;
+    const missingParts = saved?.fileSet ? !await this.importSnapshots.exists(saved.fileSet, saved.parts) : false;
+    assertCurrent();
+    if (saved && (missingParts || projectionChanged || deleted && !saved.manifest.recordCounts['session.deleted'])) {
+      if (saved.beginAttempted === false) { this.discardImport(row, saved, undefined, telemetry); return; }
+      let terminalReceipt: any;
+      {
+        const old = await this.api(`/sync/imports/${saved.importId}`);
+        assertCurrent();
+        this.assertImportIdentity(saved, old, telemetry);
+        if (old.state === 'committed') {
+          if (old.targetStreamEpoch) saved.targetStreamEpoch ||= old.targetStreamEpoch;
+          this.completeImport(row, saved, old, telemetry);
+          this.deps.store.requireSnapshot(row.local_id);
+          return;
+        }
+        if (old.state === 'uploading') {
+          if (old.targetStreamEpoch) saved.targetStreamEpoch ||= old.targetStreamEpoch;
+          this.deps.store.put(key, saved);
+          const aborted = await this.api(`/sync/imports/${saved.importId}/abort`, 'POST', { ...this.transport(), ...this.importProtocol(saved),
+            expectedStateVersion: old.stateVersion, reason: missingParts ? 'parts_missing' : deleted ? 'session_deleted' : 'projection_changed' });
+          assertCurrent();
+          this.assertImportIdentity(saved, aborted, telemetry);
+          if (aborted.state === 'committed') { this.completeImport(row, saved, aborted, telemetry); this.deps.store.requireSnapshot(row.local_id); return; }
+          if (!['aborted', 'expired'].includes(aborted.state)) throw new RemoteSyncStateError('Import abortion is not confirmed');
+          terminalReceipt = aborted;
+        } else {
+          if (!['aborted', 'expired'].includes(old.state)) throw new RemoteSyncStateError('Unknown remote import state');
+          terminalReceipt = old;
+        }
+      }
+      assertCurrent();
+      this.discardImport(row, saved, terminalReceipt, telemetry); return;
+    }
+    if (!saved) {
+      const useV2 = this.retentionSupported || row.sync_protocol_version === RemoteRetention.Version;
+      const state = useV2 ? await this.readSyncState(row) : null;
+      assertCurrent();
+      if (state?.activeImport) throw new RemoteSyncStateError('Remote active import is missing from local durable state');
+      if (state && state.syncProtocolVersion !== row.sync_protocol_version) throw new RemoteSyncStateError('Remote protocol has no matching local activation receipt');
+      const migration = useV2 && row.sync_protocol_version < RemoteRetention.Version;
+      const importId = randomUUID();
+      let parts: SavedImport['parts'], manifest: SavedImport['manifest'], baseSourceSeq: string, snapshotEpoch: number, fileSet: string | undefined;
+      // Only legacy in-memory fixtures use the synchronous projector. Production never loads a whole snapshot into main.
+      if (this.deps.store.db.name === ':memory:') {
+        const snapshot = this.deps.store.snapshot(row.local_id);
+        const groups: ProjectionRecord[][] = [[]];
+        for (const record of snapshot.records) {
+          const group = groups[groups.length - 1];
+          if (group.length && (group.length >= 1000 || Buffer.byteLength(stableJson({ records: [...group, record] })) > 600 * 1024)) groups.push([record]);
+          else group.push(record);
+        }
+        parts = groups.map((records, partNo) => ({ partNo, payload: { records }, payloadHash: payloadHash({ records }), byteSize: Buffer.byteLength(stableJson({ records })) }));
+        const recordCounts: Record<string, number> = {};
+        for (const record of snapshot.records) recordCounts[record.eventType] = (recordCounts[record.eventType] || 0) + 1;
+        manifest = { partCount: parts.length, recordCounts, manifestHash: payloadHash(parts.map(({ partNo, payloadHash: hash, byteSize }) => ({ partNo, payloadHash: hash, byteSize }))) };
+        baseSourceSeq = snapshot.baseSourceSeq; snapshotEpoch = snapshot.snapshotEpoch;
+      } else {
+        const identity = this.importSnapshots.identity(row.local_id, this.owner!, this.registration!.deviceId, this.remoteEnvironment());
+        const packaged = await this.importSnapshots.create(importId, identity, current);
+        try {
+          assertCurrent();
+          if (!this.importSnapshots.matches(identity)) throw new RemoteImportSnapshotError('REMOTE_IMPORT_CONTEXT_CHANGED');
+        } catch (error) { await this.importSnapshots.release(packaged.fileSet); throw error; }
+        parts = packaged.parts; manifest = packaged.manifest; fileSet = packaged.fileSet;
+        baseSourceSeq = identity.sourceSeq; snapshotEpoch = identity.snapshotEpoch;
+      }
+      const prepared: SavedImport = { reason: migration ? 'protocol_upgrade' : this.deps.store.get<string>(`snapshotReason:${row.local_id}`) || 'initial_sync', projectionVersion: this.projectionVersion, replyProjection: this.replySupported, replyModelLabel: this.replyModelLabelSupported, importId, sessionId: row.session_id,
+        baseSourceSeq, snapshotEpoch, beginAttempted: false,
+        expectedSourceSeq: state?.lastSourceSeq || String(row.ack_seq), expectedServerSeq: state?.lastSeq || row.server_seq, parts, ...(fileSet ? { fileSet } : {}),
+        owner: { ...this.owner! }, environment: this.remoteEnvironment(), deviceId: this.registration!.deviceId,
+        ...(useV2 ? { syncProtocolVersion: RemoteRetention.Version, expectedStreamEpoch: row.stream_epoch, migration } : {}), manifest };
+      saved = this.deps.store.transaction(() => {
+        this.deps.store.put(key, prepared);
+        if (migration) this.deps.store.freezeMigration(row.local_id);
+        return prepared;
+      });
+      telemetry.emit(RemoteTelemetryEvent.Sealed, { operationId: prepared.importId, phase: 'sealed', businessStatus: 'prepared',
+        sourceSeq: prepared.baseSourceSeq, partCount: prepared.parts.length, syncProtocolVersion: prepared.syncProtocolVersion ?? 1 });
+    }
+    const checkedReceipt = stepwise ? this.verifiedImports.get(saved.importId) : null;
+    let begun: any = checkedReceipt;
+    const deadlines = [saved.expiresAt, saved.absoluteExpiresAt].filter(value => typeof value === 'string').map(value => Date.parse(value!)).filter(Number.isFinite);
+    if (begun && deadlines.some(deadline => deadline <= Date.now() + 300000) && Date.now() - begun.checkedAt >= 30000) begun = null;
+    const wasChecked = !!begun;
+    saved.beginAttempted = true; this.deps.store.put(key, saved);
+    try {
+      if (!begun) begun = await this.api('/sync/imports', 'POST', this.importBeginRequest(row, saved));
+    } catch (error) {
+      assertCurrent();
+      if (error instanceof RemoteApiError && error.code === 47025 && !saved.beginConfirmed
+        && !error.data?.currentImport && !error.data?.activeImportId && typeof error.data?.currentSourceSeq === 'string' && /^\d+$/.test(error.data.currentSourceSeq)
+        && typeof error.data?.currentServerSeq === 'string' && /^\d+$/.test(error.data.currentServerSeq)) {
+        const source = retentionSequence(error.data.currentSourceSeq), server = retentionSequence(error.data.currentServerSeq);
+        if (source >= BigInt(saved.expectedSourceSeq) && source <= BigInt(saved.baseSourceSeq)
+          && source <= BigInt(this.deps.store.sync(row.local_id)!.source_seq) && server >= BigInt(saved.expectedServerSeq)) {
+          // Rebase only a proven unallocated request. No durable source ACK is advanced.
+          saved.expectedSourceSeq = source.toString(); saved.expectedServerSeq = server.toString();
+          this.deps.store.put(key, saved); return;
+        }
+      }
+      throw error;
+    }
+    assertCurrent();
+    this.assertImportIdentity(saved, begun, wasChecked ? undefined : telemetry);
+    if (begun.sessionId !== saved.sessionId) throw new RemoteSyncStateError('Import changed the fixed remote session mapping');
+    if (saved.syncProtocolVersion === RemoteRetention.Version) {
+      if (begun.syncProtocolVersion !== RemoteRetention.Version || begun.importId !== saved.importId
+        || begun.manifestHash !== saved.manifest.manifestHash || !begun.targetStreamEpoch
+        || saved.targetStreamEpoch && saved.targetStreamEpoch !== begun.targetStreamEpoch
+        || saved.expectedStreamEpoch && saved.expectedStreamEpoch !== begun.targetStreamEpoch) throw new RemoteSyncStateError('Import changed its reserved synchronization epoch');
+      saved.targetStreamEpoch = begun.targetStreamEpoch;
+    }
+    saved.beginConfirmed = true;
+    if (typeof begun.stateVersion === 'string') saved.stateVersion = begun.stateVersion;
+    if (!wasChecked) {
+      if (typeof begun.expiresAt === 'string') saved.expiresAt = begun.expiresAt;
+      if (typeof begun.absoluteExpiresAt === 'string') saved.absoluteExpiresAt = begun.absoluteExpiresAt;
+      // On restart or an uncertain response, revalidate original immutable parts; a cursor is not a remote receipt.
+      if (!checkedReceipt) saved.uploadCursor = 0;
+    }
+    this.deps.store.put(key, saved);
+    if (stepwise) this.verifiedImports.set(saved.importId, { ...begun, checkedAt: wasChecked ? begun.checkedAt : Date.now() });
+    if (begun.state === 'aborted' || begun.state === 'expired') { this.discardImport(row, saved, begun, telemetry); return; }
+    if (stepwise && !wasChecked && begun.state === 'uploading') return;
+    let result = begun;
+    if (begun.state !== 'committed') {
+      if (begun.partsExpired) throw new RemoteSyncStateError('Uploading import lost its durable parts');
+      for (const part of saved.parts.slice(stepwise ? saved.uploadCursor || 0 : 0)) {
+        if (this.ownershipSyncBlocked(row.local_id)) return;
+        try {
+          const encodedPayload = saved.fileSet ? await this.importSnapshots.read(saved.fileSet, part, current) : stableJson(part.payload);
+          assertCurrent();
+          const payload = saved.fileSet ? JSON.parse(encodedPayload) as { records: ProjectionRecord[] } : part.payload!;
+          if (!await this.uploadReplyContents(row.local_id, saved.sessionId, payload.records, stepwise ? `${saved.importId}:${part.partNo}` : undefined)) return;
+          assertCurrent();
+          const metadata: Record<string, unknown> = { ...this.transport(), ...this.importProtocol(saved), payloadHash: part.payloadHash };
+          // Canonical payload was encoded/hash-checked in the worker; do not traverse it again to encode the HTTP envelope.
+          const envelope = `{${Object.keys({ ...metadata, payload: null }).sort().map(name => `${JSON.stringify(name)}:${name === 'payload' ? encodedPayload : stableJson(metadata[name])}`).join(',')}}`;
+          const partAck = await this.api(`/sync/imports/${saved.importId}/parts/${part.partNo}`, 'PUT', { ...metadata, payload }, true, 1, envelope);
+          assertCurrent();
+          if (stepwise && (partAck.partNo !== part.partNo || partAck.payloadHash !== part.payloadHash || partAck.byteSize !== part.byteSize)) throw new RemoteTaskDataError('Import part acknowledgement mismatch');
+          saved.uploadCursor = part.partNo + 1;
+          const progressed = saved.uploadCursor > (saved.confirmedPartCount || 0);
+          saved.confirmedPartCount = Math.max(saved.confirmedPartCount || 0, saved.uploadCursor);
+          this.deps.store.put(key, saved);
+          if (progressed && this.taskContext()) this.taskSync.progress(this.taskContext()!, row.local_id);
+        } catch (error) {
+          if (error instanceof RemoteImportSnapshotError && error.message === 'REMOTE_IMPORT_PART_UNAVAILABLE') {
+            await this.abortUnavailableImport(row, saved, current); return;
+          }
+          if (!(error instanceof RemoteApiError) || error.code !== 47025 || error.data?.reasonDetail !== 'IMPORT_PARTS_EXPIRED') throw error;
+          const status = await this.api(`/sync/imports/${saved.importId}`);
+          assertCurrent();
+          this.assertImportIdentity(saved, status, telemetry);
+          if (status.state === 'committed') { this.completeImport(row, saved, status, telemetry); return; }
+          if (['aborted', 'expired'].includes(status.state)) { this.discardImport(row, saved, status, telemetry); return; }
+          throw new RemoteSyncStateError('Import parts expired without a terminal receipt');
+        }
+        assertCurrent();
+        if (stepwise) return;
+      }
+      if (this.ownershipSyncBlocked(row.local_id)) return;
+      result = await this.api(`/sync/imports/${saved.importId}/commit`, 'POST', { ...this.transport(), ...this.importProtocol(saved),
+        expectedStateVersion: begun.stateVersion, manifestHash: saved.manifest.manifestHash });
+    }
+    assertCurrent();
+    this.completeImport(row, saved, result, telemetry);
+    remoteLogMessage('debug', '[RemoteSync] Snapshot acknowledged locally', { localSessionId: row.local_id, importId: saved.importId, ...remoteSyncResultMetadata(result),
+      sourceSeq: this.deps.store.sync(row.local_id)?.source_seq ?? null, needsSnapshot: Boolean(this.deps.store.sync(row.local_id)?.needs_snapshot) });
+  }
+  private assertImportIdentity(saved: SavedImport, receipt: any, telemetry?: ReturnType<typeof captureRemoteTelemetry>): void {
+    if (receipt.importId && receipt.importId !== saved.importId || receipt.sessionId && receipt.sessionId !== saved.sessionId
+      || receipt.manifestHash && receipt.manifestHash !== saved.manifest.manifestHash
+      || saved.syncProtocolVersion === RemoteRetention.Version && (receipt.importId !== saved.importId || receipt.sessionId !== saved.sessionId
+        || receipt.manifestHash !== saved.manifest.manifestHash || receipt.syncProtocolVersion !== RemoteRetention.Version
+        || saved.targetStreamEpoch && receipt.targetStreamEpoch !== saved.targetStreamEpoch)) throw new RemoteSyncStateError('Import receipt identity mismatch');
+    telemetry?.emit(RemoteTelemetryEvent.Reconciled, { operationId: saved.importId, stage: 'reconcile', outcome: 'confirmed_result',
+      phase: 'reconcile', businessStatus: receipt.state, receiptState: receipt.state, syncProtocolVersion: saved.syncProtocolVersion ?? 1 });
+  }
+  private async abortUnavailableImport(row: SyncRow, saved: SavedImport, current: () => boolean): Promise<void> {
+    const telemetry = this.importTelemetry(row, saved);
+    const status = await this.api(`/sync/imports/${saved.importId}`);
+    if (!current()) return;
+    this.assertImportIdentity(saved, status, telemetry);
+    if (status.state === 'committed') { this.completeImport(row, saved, status, telemetry); return; }
+    if (['aborted', 'expired'].includes(status.state)) { this.discardImport(row, saved, status, telemetry); return; }
+    if (status.state !== 'uploading' || status.importId !== saved.importId || status.sessionId !== saved.sessionId
+      || status.manifestHash !== saved.manifest.manifestHash) throw new RemoteSyncStateError('Import loss has no matching terminal receipt');
+    const aborted = await this.api(`/sync/imports/${saved.importId}/abort`, 'POST', { ...this.transport(), ...this.importProtocol(saved), expectedStateVersion: status.stateVersion, reason: 'parts_missing' });
+    if (!current()) return;
+    this.assertImportIdentity(saved, aborted, telemetry);
+    if (aborted.state === 'committed') this.completeImport(row, saved, aborted, telemetry);
+    else if (['aborted', 'expired'].includes(aborted.state)) this.discardImport(row, saved, aborted, telemetry);
+    else throw new RemoteSyncStateError('Import abortion is not confirmed');
+  }
+  private async ensureRetentionFence(): Promise<void> {
+    if (!this.owner || !this.registration || !this.retentionSupported || Date.now() - this.fenceCheckedAt < IDLE_POLL_MS) return;
+    if (this.targetId && this.targets.hasPendingAdmissions(this.owner, this.targetId)) return;
+    const rows = this.deps.store.sessions(this.owner);
+    if (rows.some(row => !this.sessionAdmitted(row.local_id) || row.sync_protocol_version !== RemoteRetention.Version || row.migration_frozen
+      || this.deps.store.db.prepare('SELECT 1 FROM remote_state WHERE key=?').get(`import:${row.local_id}`))) return;
+    const current = this.syncContext();
+    const path = `/devices/${this.registration.deviceId}/sync-retention/fence`;
+    const key = `retentionFence:${JSON.stringify([this.remoteEnvironment(), this.owner.userId, this.owner.scopeKey, this.registration.deviceId])}`;
+    this.fenceCheckedAt = Date.now();
+    try {
+      const state = await this.api(path);
+      if (!current()) return;
+      if (state.minSyncProtocolVersion >= RemoteRetention.Version) { this.deps.store.remove(key); return; }
+      // The server must also verify sessions unavailable in this local database.
+      if (state.blockers?.length) return;
+      const request = this.deps.store.get<any>(key) || { requestId: randomUUID(), expectedFenceVersion: state.syncProtocolFenceVersion, minSyncProtocolVersion: RemoteRetention.Version };
+      this.deps.store.put(key, request);
+      const result = await this.api(path, 'POST', { ...request, ...this.transport() });
+      if (!current()) return;
+      if (result.deviceId !== this.registration.deviceId || result.minSyncProtocolVersion !== RemoteRetention.Version) throw new RemoteSyncStateError('Invalid device protocol fence receipt');
+      this.deps.store.remove(key);
+    } catch (error) {
+      if (!(error instanceof RemoteApiError) || ![409, 426].includes(error.httpStatus)) throw error;
+      // Keep stable requestId across generation changes; blocked devices continue using per-session v2.
+    }
+  }
+  private isGlobalError(error: unknown): boolean {
+    if (error instanceof RemoteSyncStateError || error instanceof RemoteImportSnapshotError) return false;
+    return !(error instanceof RemoteApiError) || [401, 403, 47000, 47013, 47023].includes(error.code) || error.code >= 500 && error.code < 600;
+  }
+  private async reportCommandError(entry: InboxEntry, error: unknown): Promise<void> {
+    if (this.isGlobalError(error)) throw error;
+    const current = (error as RemoteApiError).data?.currentCommand;
+    if (current && BigInt(current.statusVersion) >= BigInt(entry.command.statusVersion)) {
+      entry.command = { ...entry.command, ...current };
+      if (['applied', 'rejected', 'expired'].includes(current.status)) entry.state = current.status === 'applied' ? 'applied' : 'rejected';
+      this.deps.store.put(this.inboxKey(entry), entry);
+    }
+    this.deps.store.put(`commandFailure:${entry.command.commandId}`, { code: (error as RemoteApiError).code });
+    this.deferCommandTask(entry.command);
+  }
+  private startInputRecovery(): void {
+    if (this.shuttingDown) return;
+    if (!this.generation || !this.deps.input || !this.inputCapabilities.includes(RemoteInputCapability.Schema)) return;
+    const scope = stableJson([this.accountGeneration, this.targetId, this.registration?.deviceId, this.generation, this.deps.getApiBaseUrl()]);
+    if (scope !== this.inputRecoveryScope) { this.inputRecoveryScope = scope; this.inputRecoveryFallbackUntil = 0; }
+    const version = this.capabilitySnapshot?.capabilities?.includes(RemoteInputRecovery.Capability) && Date.now() >= this.inputRecoveryFallbackUntil ? 2 : 1;
+    const context = stableJson([scope, version]);
+    if (context !== this.inputRecoveryContext) { this.inputRecoveryContext = context; this.inputRecoveryCursor = null; this.inputRecoveryAt = 0; }
+    if (this.inputRecoveryWork || Date.now() < this.inputRecoveryAt) return;
+    this.inputRecoveryAt = Date.now() + IDLE_POLL_MS;
+    const work = this.recoverInputs(context, version).catch(error => {
+      if (context !== this.inputRecoveryContext) return;
+      const unsupported = error instanceof RemoteApiError && (error.httpStatus === 404 || [404, 47017].includes(error.code));
+      if (version === 2 && unsupported) {
+        this.inputRecoveryFallbackUntil = Date.now() + 5 * IDLE_POLL_MS;
+        this.inputRecoveryAt = 0; return;
+      }
+      // Expired cursors restart enumeration; neither absence nor a failed page clears evidence.
+      if (error instanceof RemoteApiError && [47008, 47019].includes(error.code)) this.inputRecoveryCursor = null;
+      this.inputRecoveryAt = Date.now() + (unsupported ? 5 * IDLE_POLL_MS : IDLE_POLL_MS);
+    }).finally(() => {
+      if (this.inputRecoveryWork === work) this.inputRecoveryWork = null;
+      if (!this.stopped && context === this.inputRecoveryContext) this.schedule(Math.max(0, this.inputRecoveryAt - Date.now()));
+    });
+    this.inputRecoveryWork = work;
+  }
+  private async recoverInputs(context: string, version: 1 | 2): Promise<void> {
+    const owner = this.owner, deviceId = this.registration?.deviceId, generation = this.generation;
+    const preparations = this.deps.input?.preparations, epoch = this.accountGeneration, route = this.deps.getApiBaseUrl(), target = this.targetId;
+    if (!owner || !deviceId || !generation || !preparations) return;
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && generation === this.generation
+      && target === this.targetId && route === this.deps.getApiBaseUrl() && sameOwner(owner, this.owner)
+      && sameOwner(owner, this.deps.getOwner()) && context === this.inputRecoveryContext && this.settings().enabled;
+    const cursor = this.inputRecoveryCursor;
+    const page = await this.api(`/devices/${encodeURIComponent(deviceId)}/input-preparations?limit=${RemoteInputRecovery.Limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      'GET', undefined, true, version) as RemoteInputRecoveryPage;
+    // v1 is an atomic page. It does not have unresolvedItems or scanComplete.
+    if (version === 1 && page) { page.unresolvedItems = []; page.scanComplete = page.nextCursor === null; }
+    if (!current()) return;
+    const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(value);
+    if (!page || !Array.isArray(page.items) || !Array.isArray(page.unresolvedItems)
+      || page.items.length + page.unresolvedItems.length > RemoteInputRecovery.Limit
+      || ![true, false].includes(page.scanComplete) || !(page.nextCursor === null || typeof page.nextCursor === 'string' && page.nextCursor.length > 0 && page.nextCursor.length <= 8192)
+      || page.scanComplete !== (page.nextCursor === null) || page.nextCursor !== null && page.nextCursor === cursor
+      || page.items.some(item => !item || !id(item.preparationId))
+      || page.unresolvedItems.some(item => !item || !id(item.preparationId) || item.diagnostic?.kind !== RemoteInputRecovery.Unavailable))
+      throw new Error('REMOTE_INPUT_RECOVERY_PAGE_INVALID');
+    const ids = [...page.items, ...page.unresolvedItems].map(item => item.preparationId);
+    if (new Set(ids).size !== ids.length) throw new Error('REMOTE_INPUT_RECOVERY_PAGE_INVALID');
+    for (const item of page.items) preparations.recoverReceipt(item, owner, deviceId);
+    for (const item of page.unresolvedItems) preparations.retainRecoveryDiagnostic(item.preparationId, owner, deviceId);
+    if (!current()) return;
+    this.inputRecoveryCursor = page.nextCursor;
+    // One bounded page per turn; page completion does not enumerate a set to delete locally.
+    this.inputRecoveryAt = Date.now() + (page.scanComplete ? IDLE_POLL_MS : 250);
+  }
+  private async prepareInputs(): Promise<boolean> {
+    const input = this.deps.input;
+    const owner = this.owner;
+    const deviceId = this.registration?.deviceId;
+    const generation = this.generation;
+    const epoch = this.accountGeneration;
+    const route = this.deps.getApiBaseUrl(), targetId = this.targetId;
+    const targetHeaders = remoteSyncTargetHeaders(this.registration?.syncTarget ?? null);
+    if (!input || !owner || !deviceId || !generation
+      || !this.supportsCommand('create_session') && !this.supportsCommand('send_message')) return false;
+    const current = (): boolean => epoch === this.accountGeneration && this.generation === generation
+      && route === this.deps.getApiBaseUrl() && targetId === this.targetId
+      && sameOwner(owner, this.owner) && sameOwner(owner, this.deps.getOwner()) && this.settings().enabled && !this.stopped;
+    const response = await this.api(`/devices/${deviceId}/input-preparations/claim`, 'POST', { connectionGeneration: generation, limit: 1 });
+    const items = Array.isArray(response) ? response : response.items || [];
+    for (const raw of items) {
+      if (!current()) return false;
+      let claim: RemotePreparationClaim = { ...raw };
+      let renewal: Promise<void> | null = null;
+      let leaseFailed = false;
+      let readySent = false;
+      let readyStartedAt = 0;
+      let readyStage = 'server_ready';
+      const proof = (): Record<string, unknown> => ({ connectionGeneration: generation, claimId: claim.claimId, claimToken: claim.claimToken,
+        expectedStatusVersion: claim.statusVersion, ...(claim.grantVersion ? { grantVersion: claim.grantVersion } : {}) });
+      const timer = setInterval(() => {
+        if (renewal || !current() || leaseFailed) return;
+        renewal = this.api(`/input-preparations/${claim.preparationId}/renew`, 'POST', proof())
+          .then(value => { claim = { ...claim, ...value }; })
+          .catch(() => { leaseFailed = true; })
+          .finally(() => { renewal = null; });
+      }, 10000);
+      const permitted = (): boolean => current() && this.supportsCommand(claim.request?.purpose) && !leaseFailed && Date.now() < Date.parse(claim.claimUntil);
+      try {
+        if (!this.supportsCommand(claim.request?.purpose)) throw new RemoteInputError(RemoteInputReason.Invalid);
+        const prepared = await input.preparations.prepare(owner, deviceId, claim, async (assetId, requestId) => {
+          if (!permitted()) throw new RemoteInputError(RemoteInputReason.Account);
+          const result = await this.deps.request(owner,
+          `/api/remote/v1/input-assets/${encodeURIComponent(assetId)}/content?preparationId=${encodeURIComponent(claim.preparationId)}`, {
+            method: 'GET', redirect: 'error', signal: AbortSignal.timeout(120000), headers: { ...targetHeaders,
+              'X-Remote-Device-Credential': `${deviceId}.${this.registrationIdentity().deviceKey}`,
+              'X-Remote-Input-Claim-Id': claim.claimId, 'X-Remote-Input-Claim-Token': claim.claimToken,
+              'X-Remote-Connection-Generation': generation, [REMOTE_SYNC_REQUEST_ID_HEADER]: requestId,
+            },
+          });
+          if (!permitted()) {
+            try { await result.body?.cancel(); } catch { /* Context revocation retains precedence. */ }
+            throw new RemoteInputError(RemoteInputReason.Account);
+          }
+          return result;
+        }, permitted);
+        clearInterval(timer); if (renewal) await renewal;
+        if (!permitted()) return false;
+        readySent = true; readyStartedAt = Date.now();
+        const receipt = await this.api(`/input-preparations/${claim.preparationId}/result`, 'POST', { ...proof(), status: RemoteInputStatus.Ready,
+          resolvedInput: prepared.resolvedInput, inputDigest: prepared.inputDigest });
+        remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, stage: 'server_ready', result: 'success',
+          elapsedMs: Date.now() - readyStartedAt, transportRequestId: this.telemetryRequestIds.get(receipt) });
+        if (current() && receipt.readyExpiresAt) {
+          readyStage = 'local_commit';
+          input.preparations.confirmReady(prepared.preparationId, owner, deviceId, receipt.readyExpiresAt);
+          captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, deviceId }).emit(RemoteTelemetryEvent.Preparation, {
+            preparationId: prepared.preparationId, direction: 'input_download', phase: 'server_ready', outcome: 'confirmed' });
+        }
+      } catch (error) {
+        clearInterval(timer); if (renewal) await renewal;
+        if (readySent) {
+          remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, stage: readyStage, result: 'failed',
+            reason: readyStage === 'server_ready' ? 'REQUEST_FAILED' : 'STORAGE_UNAVAILABLE', elapsedMs: Date.now() - readyStartedAt, error }, 'warn');
+          if (readyStage !== 'server_ready' || !(error instanceof RemoteApiError) || error.httpStatus !== 409) throw error;
+          if (!current()) return false;
+          let rejection: unknown = error;
+          if (error.code === InputResultConflict.Model
+            && [RemoteInputReason.ModelChanged, RemoteInputReason.ModelUnavailable].includes(error.data?.reason)) {
+            if (!permitted()) return false;
+            try {
+              // A definitive refusal cannot have accepted ready. Older servers need an explicit failure report.
+              await this.api(`/input-preparations/${claim.preparationId}/result`, 'POST', {
+                ...proof(), status: RemoteInputStatus.Failed, reason: error.data.reason,
+              });
+              if (!current()) return false;
+              continue;
+            } catch (failure) { rejection = failure; }
+          }
+          if (rejection instanceof RemoteApiError && rejection.httpStatus === 409 && rejection.code === InputResultConflict.State) {
+            if (!current()) return false;
+            // Newer servers can commit failed while rejecting ready; never infer that state from a conflict alone.
+            const receipt = await this.api(`/input-preparations/${claim.preparationId}`);
+            if (!current()) return false;
+            if (receipt.preparationId === claim.preparationId && receipt.targetSummary?.deviceId === deviceId
+              && receipt.status === RemoteInputStatus.Failed) continue;
+          }
+          throw rejection;
+        }
+        if (!permitted()) return false;
+        const allowed = new Set<string>([RemoteInputReason.ModelUnavailable, RemoteInputReason.ModelChanged, RemoteInputReason.AgentUnavailable, RemoteInputReason.Workspace, RemoteInputReason.Version]);
+        const reason = error instanceof RemoteAttachmentError ? 'ATTACHMENT_INVALID'
+          : error instanceof RemoteInputError && error.reason === RemoteInputReason.Asset ? 'ASSET_UNAVAILABLE'
+          : error instanceof RemoteInputError && allowed.has(error.reason) ? error.reason : 'PREPARATION_FAILED';
+        await this.api(`/input-preparations/${claim.preparationId}/result`, 'POST', { ...proof(), status: RemoteInputStatus.Failed, reason });
+      } finally { clearInterval(timer); }
+    }
+    return items.length > 0;
+  }
+  private commandWorkspace(command: RemoteCommand): string | null {
+    if (command.request?.inputSchemaVersion === 2) {
+      if (!this.deps.input) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const prepared = this.deps.input.preparations.read(command.request.payload?.inputPreparationId, this.owner!, this.registration!.deviceId);
+      if (command.request.payload.inputDigest !== prepared.inputDigest || payloadHash(command.request.payload.resolvedInput) !== prepared.inputDigest) throw new RemoteInputError(RemoteInputReason.Stale);
+      this.deps.input.preparations.validate(prepared, this.owner!, this.registration!.deviceId, true);
+      return command.type === 'create_session' ? prepared.cwd : null;
+    }
+    if (command.type !== 'create_session') return null;
+    const payload = command.request?.payload;
+    const explicit = payload?.agentId !== undefined || payload?.expectedAgentVersion !== undefined;
+    if (explicit) {
+      if (!this.agentCatalog || typeof payload.agentId !== 'string' || !/^[1-9]\d*$/u.test(payload.expectedAgentVersion)
+        || typeof payload.workspaceId !== 'string') throw new RemoteAgentError(47019, 'COMMAND_INVALID', 'INVALID_AGENT_TARGET');
+      // Already accepted extended commands remain recoverable when admission flags are disabled.
+      return this.agentCatalog.resolve(this.owner!, this.registration!.deviceId, payload.agentId, payload.expectedAgentVersion, payload.workspaceId);
+    }
+    const settings = this.settings();
+    if (settings.createSessionAvailable === false) throw new Error('Workspace unavailable');
+    const workspace = payload?.workspaceId ? settings.workspaces.find(w => w.workspaceId === payload.workspaceId) : settings.workspaces[0];
+    if (!workspace?.available) throw new Error('Workspace unavailable');
+    return workspace.path;
+  }
+  private validInbox(value: unknown): value is InboxEntry {
+    if (!value || typeof value !== 'object') return false;
+    const entry = value as InboxEntry;
+    return !!entry.owner && typeof entry.owner.userId === 'string' && typeof entry.owner.scopeKey === 'string'
+      && !!entry.command && typeof entry.command.commandId === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(entry.command.commandId)
+      && ['prepared','executing','unknown','applied','rejected'].includes(entry.state);
+  }
+  private isEntryCurrent(entry: InboxEntry): boolean {
+    return this.validInbox(entry) && !!entry.owner && sameOwner(entry.owner, this.owner) && (entry.targetId === this.targetId || !entry.targetId && !this.targetId);
+  }
+  private inboxKey(entry: InboxEntry): string {
+    const legacyKey = `inbox:${entry.command.commandId}`;
+    const legacy = this.deps.store.get<InboxEntry>(legacyKey);
+    return !entry.targetId || legacy?.targetId === entry.targetId ? legacyKey : `inbox:${entry.targetId}:${entry.command.commandId}`;
+  }
+  private readInbox(commandId: string): InboxEntry | null {
+    const current = this.targetId ? this.deps.store.get<InboxEntry>(`inbox:${this.targetId}:${commandId}`) : null;
+    const entry = current ?? this.deps.store.get<InboxEntry>(`inbox:${commandId}`);
+    if (entry && !this.validInbox(entry)) throw new Error('REMOTE_INBOX_RECORD_INVALID');
+    return entry && this.isEntryCurrent(entry) ? entry : null;
+  }
+  private commandAdmitted(command: RemoteCommand, localSessionId?: string | null): boolean {
+    const store = this.deps.store;
+    if (this.shuttingDown || !this.supportsCommand(command.type) || !store.areControlsAdmitted()) return false;
+    const boundSessionId = command.sessionId ? store.localSessionId(command.sessionId) : null;
+    if (boundSessionId && store.isRunIsolated(boundSessionId) || localSessionId && store.isRunIsolated(localSessionId)) return false;
+    return (!boundSessionId || store.isTaskAdmitted(boundSessionId)) && (!localSessionId || store.isTaskAdmitted(localSessionId));
+  }
+  private startCommandReconciliation(): void {
+    if (this.reconcileWork || Date.now() < this.reconcileRetryAt) return;
+    const epoch = this.accountGeneration, generation = this.generation, target = this.targetId, route = this.deps.getApiBaseUrl();
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && generation === this.generation
+      && target === this.targetId && route === this.deps.getApiBaseUrl();
+    const work = this.reconcile().catch(error => {
+      if (!current()) return;
+      this.reconcileRetryAt = Date.now() + IDLE_POLL_MS;
+      if (this.sharedCommandFailure(error)) {
+        this.commandRetryAt = this.reconcileRetryAt;
+        this.recordConnectionFailure(error); this.disconnect();
+      }
+      remoteLogMessage('warn', '[RemoteSync] Command recovery deferred', remoteSyncErrorMetadata(error));
+    }).finally(() => {
+      if (this.reconcileWork === work) this.reconcileWork = null;
+      if (current() && this.unresolvedCursor) this.schedule(Math.max(0, this.reconcileRetryAt - Date.now()));
+    });
+    this.reconcileWork = work;
+  }
+  private sharedCommandFailure(error: unknown): boolean {
+    return isSharedSyncFailure(error) || error instanceof RemoteApiError
+      && [403, 47011, 47022, CONNECTION_REMOVED_CODE].includes(error.code);
+  }
+  private commandTaskKey(envelope: any): string {
+    const command = { ...envelope?.command, ...envelope };
+    return stableJson([this.accountGeneration, this.targetId, this.deps.getApiBaseUrl(),
+      command.sessionId || command.request?.payload?.sessionId || command.commandId || 'invalid']);
+  }
+  private deferCommandTask(command: RemoteCommand): void {
+    const key = this.commandTaskKey(command);
+    if (this.commandTaskRetryAt.size >= 512 && !this.commandTaskRetryAt.has(key))
+      this.commandTaskRetryAt.delete(this.commandTaskRetryAt.keys().next().value!);
+    this.commandTaskRetryAt.set(key, Date.now() + IDLE_POLL_MS);
+  }
+  /** Two distinct tasks progress per batch; claim and recovery serialize the same task. */
+  private async commandBatch(items: any[], apply: (envelope: any) => Promise<void>, recovery = false): Promise<void> {
+    const epoch = this.accountGeneration, generation = this.generation, route = this.deps.getApiBaseUrl();
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && generation === this.generation
+      && route === this.deps.getApiBaseUrl() && !this.syncPaused();
+    const groups = new Map<string, any[]>();
+    for (const item of items) {
+      const key = this.commandTaskKey(item);
+      const group = groups.get(key) || []; group.push(item); groups.set(key, group);
+    }
+    const queued = [...groups.entries()]; let offset = 0; let failed = false; let failure: unknown;
+    const worker = async (): Promise<void> => {
+      while (!failed && current() && offset < queued.length) {
+        const [key, group] = queued[offset++];
+        const previous = this.commandTasks.get(key);
+        const work = (previous || Promise.resolve()).catch((): void => undefined).then(async () => {
+          for (const item of group) {
+            if (failed || !current()) return;
+            if (recovery && (this.commandTaskRetryAt.get(key) || 0) > Date.now()) continue;
+            try { await apply(item); }
+            catch (error) {
+              if (!current()) return;
+              if (this.sharedCommandFailure(error)) {
+                failed = true; failure = error;
+                this.recordConnectionFailure(error); this.disconnect(); return;
+              }
+              this.deferCommandTask({ ...item?.command, ...item });
+              remoteDiagnosticLog('desktop.command.unknown', { commandId: item?.commandId ?? item?.command?.commandId,
+                reason: 'EXECUTION_UNKNOWN', error }, 'warn');
+            }
+          }
+        });
+        this.commandTasks.set(key, work);
+        try { await work; }
+        finally { if (this.commandTasks.get(key) === work) this.commandTasks.delete(key); }
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    if (failed) throw failure;
+  }
+  private async claim(): Promise<boolean> {
+    const generation = this.generation;
+    if (this.shuttingDown || !generation || this.syncPaused() || !this.deps.store.areControlsAdmitted()
+      || !Object.keys(CommandCapability).some(type => this.supportsCommand(type))) return false;
+    const result = await this.api(`/devices/${this.registration!.deviceId}/commands/claim`, 'POST', { connectionGeneration: generation, limit: 10 });
+    const items = (Array.isArray(result) ? result : result.items || []).slice(0, 10);
+    await this.commandBatch(items, async envelope => {
+      try {
+      const command: RemoteCommand = { ...envelope.command, ...envelope };
+      delete (command as any).command;
+      const existing = this.readInbox(command.commandId);
+      if (this.syncPaused() || generation !== this.generation) return;
+      if (existing) { this.commandTelemetry(existing).emit(RemoteBridgeTelemetry.CommandDuplicate, { phase: 'prepared', persistOutcome: 'committed' }); remoteDiagnosticLog('desktop.command.duplicate', { commandId: command.commandId, runId: command.runId }); return; } // Reconciliation alone may authorize another attempt.
+      if (!this.commandAdmitted(command)) {
+        // Preserve the original claim without inferring never-started from unverified history.
+        const deferred: InboxEntry = { ...(this.targetId ? { targetId: this.targetId } : {}), command, owner: this.owner!,
+          localSessionId: command.sessionId ? this.deps.store.localSessionId(command.sessionId) : null,
+          remoteSessionId: command.sessionId || null, runId: command.runId || null, state: 'unknown', result: null };
+        this.deps.store.put(this.inboxKey(deferred), deferred);
+        this.commandTelemetry(deferred).emit(RemoteBridgeTelemetry.CommandUnknown, { phase: 'prepared', persistOutcome: 'committed', businessStatus: 'unknown' });
+        return;
+      }
+      let entry: InboxEntry;
+      try {
+        const request = command.request;
+        if (!request || request.commandId !== command.commandId || request.type !== command.type || payloadHash(request) !== command.requestHash) throw new Error('Invalid claimed command');
+        const text = request.inputSchemaVersion === 2 ? request.payload?.resolvedInput?.text : request.payload?.text;
+        if (['create_session', 'send_message'].includes(command.type) && (typeof text !== 'string' || (!text.trim() && !(request.inputSchemaVersion === 2 && request.payload?.resolvedInput?.attachments?.length)) || Buffer.byteLength(text) > REMOTE_TEXT_BYTES)) throw new Error('Invalid remote text');
+        const workspace = this.commandWorkspace(command);
+        entry = this.deps.runSessionTransaction(() => {
+          const prepared = this.deps.prepare(command, this.owner!, workspace);
+          this.deps.store.bindRemote(prepared.localSessionId, prepared.remoteSessionId, this.registration!.deviceId);
+          const value: InboxEntry = { ...(this.targetId ? { targetId: this.targetId } : {}), command, owner: this.owner!, ...prepared, state: 'prepared', result: null };
+          this.deps.store.put(this.inboxKey(value), value);
+          return value;
+        });
+      } catch (error) {
+        entry = { ...(this.targetId ? { targetId: this.targetId } : {}), command, owner: this.owner!, localSessionId: null, remoteSessionId: command.sessionId || null,
+          runId: command.runId || null, state: 'rejected', result: error instanceof RemoteAgentError ? { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } : remoteError(47019, 'COMMAND_INVALID', error instanceof Error ? error.message : 'Invalid command') };
+        this.deps.store.put(this.inboxKey(entry), entry);
+      }
+      this.commandTelemetry(entry).emit(RemoteBridgeTelemetry.CommandPrepared, { phase: 'prepared', persistOutcome: 'committed', businessStatus: entry.state });
+      remoteDiagnosticLog('desktop.command.prepared', { commandId: command.commandId, localSessionId: entry.localSessionId, runId: entry.runId, status: entry.state }, 'info');
+      try { await this.applyEntry(entry, generation); } catch (error) { await this.reportCommandError(entry, error); }
+      } catch (error) {
+        if (this.syncPaused() || generation !== this.generation) return;
+        throw error;
+      }
+    });
+    return items.length >= 10;
+  }
+  private commandTelemetry(entry: InboxEntry) {
+    return captureRemoteTelemetry({ remoteOwnerId: entry.owner.userId, ownerScopeId: entry.owner.scopeKey,
+      commandId: entry.command.commandId, commandType: entry.command.type, runId: entry.runId,
+      localSessionId: entry.localSessionId, sessionId: entry.remoteSessionId, lane: 'control', origin: 'remote' });
+  }
+  private commandReceipt(entry: InboxEntry, receipt: any, response = receipt, telemetry = this.commandTelemetry(entry)): void {
+    if (!receipt || typeof receipt !== 'object' || !/^[1-9]\d*$/u.test(String(receipt.statusVersion))
+      || receipt.commandId !== undefined && receipt.commandId !== entry.command.commandId) return;
+    const requestId = this.telemetryRequestIds.get(response);
+    if (!requestId) return;
+    this.deps.store.afterCommit(() => telemetry.emit(RemoteBridgeTelemetry.CommandReceipt, { requestId, serverStatusVersion: String(receipt.statusVersion),
+      phase: 'server_confirmed', businessStatus: receipt.status, persistOutcome: 'committed' }));
+  }
+  private async ack(entry: InboxEntry, status: string): Promise<any> {
+    if (!this.isEntryCurrent(entry)) throw new Error('Command belongs to another synchronization target');
+    return this.api(`/commands/${entry.command.commandId}/ack`, 'POST', { ...this.transport(),
+      claimId: entry.command.claimId, claimToken: entry.command.claimToken, expectedStatusVersion: entry.command.statusVersion,
+      status, sessionId: entry.remoteSessionId, runId: entry.runId,
+      result: status === 'applied' ? entry.result : null, error: status === 'rejected' ? entry.result : null });
+  }
+  private async applyEntry(entry: InboxEntry, generation: string): Promise<void> {
+    if (!this.isEntryCurrent(entry)) return;
+    const telemetry = this.commandTelemetry(entry);
+    const accountGeneration = this.accountGeneration;
+    const route = this.deps.getApiBaseUrl();
+    if (entry.state === 'rejected') { const result = await this.ack(entry, 'rejected'); entry.command = { ...entry.command, ...result }; this.deps.store.put(this.inboxKey(entry), entry); this.commandReceipt(entry, result, result, telemetry); return; }
+    if (entry.state !== 'prepared' || this.syncPaused() || generation !== this.generation
+      || !entry.localSessionId || !this.commandAdmitted(entry.command, entry.localSessionId)) return;
+    const receipt = await this.ack(entry, 'received');
+    entry.command = { ...entry.command, ...receipt };
+    if (receipt.status !== 'received') {
+      entry.state = receipt.status === 'applied' ? 'applied' : ['rejected', 'expired'].includes(receipt.status) ? 'rejected' : 'unknown';
+      entry.result = receipt.result || receipt.error || null;
+      this.deps.store.put(this.inboxKey(entry), entry); this.commandReceipt(entry, receipt, receipt, telemetry); return;
+    }
+    this.deps.store.put(this.inboxKey(entry), entry);
+    this.commandReceipt(entry, receipt, receipt, telemetry);
+    if (!this.commandAdmitted(entry.command, entry.localSessionId) || this.syncPaused() || accountGeneration !== this.accountGeneration || this.generation !== generation || !sameOwner(entry.owner, this.deps.getOwner())
+      || Date.now() + 1000 >= Date.parse(entry.command.claimUntil || '') || Date.now() >= Date.parse(entry.command.expiresAt)) return;
+    // COMMIT before invoking any runner. A crash from this point is unknown, never auto-replayed.
+    const commitExecuting = (): void => { entry.state = 'executing'; this.deps.store.put(this.inboxKey(entry), entry); };
+    if (this.deps.security) await this.deps.security.commit(entry.command.commandId, {
+      owner: entry.owner, commandId: entry.command.commandId, requestHash: entry.command.requestHash,
+      sessionId: entry.localSessionId, runId: entry.runId, phase: 'executing', inboxKey: this.inboxKey(entry),
+    }, commitExecuting);
+    else commitExecuting();
+    // Disk finalization may outlive a claim, switch, disable or remove. Never execute on the old permit.
+    if (!this.commandAdmitted(entry.command, entry.localSessionId) || this.syncPaused() || accountGeneration !== this.accountGeneration || this.generation !== generation || !sameOwner(entry.owner, this.deps.getOwner())
+      || !this.settings().enabled || Date.now() + 250 >= Date.parse(entry.command.claimUntil || '') || Date.now() >= Date.parse(entry.command.expiresAt)) return;
+    try { entry.result = await this.deps.execute(entry, () => accountGeneration === this.accountGeneration && this.generation === generation
+      && route === this.deps.getApiBaseUrl() && this.isEntryCurrent(entry)
+      && this.commandAdmitted(entry.command, entry.localSessionId)
+      && sameOwner(entry.owner, this.deps.getOwner()) && this.settings().enabled && !this.syncPaused()
+      && Date.now() + 250 < Date.parse(entry.command.claimUntil || '') && Date.now() < Date.parse(entry.command.expiresAt)); entry.state = 'applied'; }
+    catch (error) {
+      entry.state = error instanceof RemoteAgentError || error instanceof RemoteInputError ? 'rejected' : 'unknown';
+      entry.result = error instanceof RemoteInputError ? remoteError(47019, error.reason, error.reason)
+        : error instanceof RemoteAgentError ? { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } : null;
+      if (error instanceof RemoteApprovalError) this.mergeApprovalOutcome(entry, error.outcome);
+      if (error instanceof RemoteQuestionError) this.mergeQuestionOutcome(entry, error.outcome);
+      if (['create_session', 'send_message'].includes(entry.command.type) && entry.state === 'rejected' && entry.localSessionId && entry.runId
+        && this.deps.store.get<boolean>(`runPublished:${entry.runId}`) === false) this.deps.store.updateRun(entry.localSessionId, 'failed');
+    }
+    this.deps.store.put(this.inboxKey(entry), entry);
+    if (accountGeneration !== this.accountGeneration || !this.isEntryCurrent(entry)) return;
+    if (entry.state === 'applied' || entry.state === 'rejected') { const result = await this.ack(entry, entry.state); entry.command = { ...entry.command, ...result }; this.deps.store.put(this.inboxKey(entry), entry); this.commandReceipt(entry, result, result, telemetry); }
+  }
+  private mergeApprovalOutcome(entry: InboxEntry, outcome: ApprovalDecisionOutcome): void {
+    if (outcome.kind === 'confirmed') {
+      entry.state = 'applied'; entry.result = { outcome: 'approval_applied' };
+    } else if (outcome.kind === 'known_not_applied') {
+      entry.state = 'rejected'; entry.result = approvalCommandError(outcome.reason);
+    } else if (!['applied', 'rejected'].includes(entry.state)) {
+      entry.state = 'unknown'; entry.result = null;
+    }
+  }
+  private mergeQuestionOutcome(entry: InboxEntry, outcome: QuestionDecisionOutcome): void {
+    if (outcome.kind === 'confirmed' && outcome.status === (entry.command.request.payload.action === 'answer' ? 'answered' : 'cancelled')) {
+      entry.state = 'applied'; entry.result = { outcome: 'question_applied' };
+    } else if (outcome.kind === 'known_not_applied') {
+      const detail = outcome.reason || 'QUESTION_CHANGED';
+      const code = /EXPIRED/u.test(detail) ? 47018 : /UNAVAILABLE|UNSUPPORTED|LOCAL_ONLY/u.test(detail) ? 47017 : /INVALID/u.test(detail) ? 47019 : 47024;
+      const reason = code === 47018 ? 'COMMAND_EXPIRED' : code === 47017 ? 'CAPABILITY_UNSUPPORTED' : code === 47019 ? 'INVALID_REQUEST' : 'COMMAND_STATE_CONFLICT';
+      entry.state = 'rejected'; entry.result = { ...remoteError(code, reason, 'Question is no longer available for this submission'), reasonDetail: detail };
+    } else if (!['applied', 'rejected'].includes(entry.state)) {
+      entry.state = 'unknown'; entry.result = null;
+    }
+  }
+  private async reconcilePaused(): Promise<void> {
+    if (!this.registration || !this.owner) return;
+    const epoch = this.accountGeneration, targetId = this.targetId, route = this.deps.getApiBaseUrl();
+    const current = (): boolean => epoch === this.accountGeneration && targetId === this.targetId && route === this.deps.getApiBaseUrl();
+    const page = this.deps.store.scanEntries<InboxEntry>('inbox:', { after: this.receiptCursor, limit: 20,
+      validate: (value): value is InboxEntry => this.validInbox(value) });
+    this.receiptCursor = page.nextCursor ?? undefined;
+    const selected = page.rows.flatMap(row => {
+      if (row.state === 'corrupt') {
+        remoteDiagnosticLog('remote.record.quarantined', { commandId: row.key.split(':').at(-1), lane: 'control', reason: 'RECORD_INVALID' }, 'warn');
+        return [];
+      }
+      return this.isEntryCurrent(row.value) && row.value.command.claimId && !['applied','rejected','expired'].includes(row.value.command.status) ? [row] : [];
+    });
+    for (const { key, value: entry } of selected) {
+      if (!current() || !this.isEntryCurrent(entry) || !sameOwner(entry.owner, this.deps.getOwner()) || !this.syncPaused()) return;
+      const telemetry = this.commandTelemetry(entry);
+      try {
+        if (entry.command.type === RemoteQuestion.Command && this.deps.reconcileQuestion && !['applied', 'rejected'].includes(entry.state)) {
+          const outcome = await this.deps.reconcileQuestion(entry);
+          if (!current() || !this.isEntryCurrent(entry) || !sameOwner(entry.owner, this.deps.getOwner()) || !this.syncPaused()) return;
+          if (outcome) { this.mergeQuestionOutcome(entry, outcome); this.deps.store.put(key, entry); }
+        }
+        const result = await this.api(`/commands/${entry.command.commandId}/reconcile`, 'POST', { mode: 'recovery',
+          expectedStatusVersion: entry.command.statusVersion, claimId: entry.command.claimId,
+          ...(entry.command.claimToken ? { claimToken: entry.command.claimToken } : {}), sessionId: entry.remoteSessionId, runId: entry.runId,
+          observedExecution: entry.state === 'applied' ? 'applied' : entry.state === 'rejected' ? 'not_applied' : 'unknown',
+          result: entry.state === 'applied' ? entry.result : null, error: entry.state === 'rejected' ? entry.result : null,
+          requestExecutionPermit: false });
+        entry.command = { ...entry.command, ...result.command };
+        if (['applied', 'rejected', 'expired'].includes(entry.command.status)) {
+          entry.state = entry.command.status === 'applied' ? 'applied' : 'rejected';
+          entry.result = result.command.result || result.command.error || entry.result;
+        }
+        this.deps.store.put(key, entry);
+        this.commandReceipt(entry, result.command, result, telemetry);
+      } catch (error) {
+        if (!current()) return;
+        const command = error instanceof RemoteApiError && error.code === 47024 ? error.data?.currentCommand : null;
+        if (command?.commandId === entry.command.commandId && command.sessionId === entry.remoteSessionId && command.runId === entry.runId
+          && typeof command.statusVersion === 'string' && /^[1-9]\d*$/u.test(command.statusVersion)) {
+          entry.command = { ...entry.command, ...command };
+          this.deps.store.put(key, entry);
+          continue;
+        }
+        remoteDiagnosticLog('desktop.command.unknown', { commandId: entry.command.commandId, localSessionId: entry.localSessionId, reason: 'EXECUTION_UNKNOWN', error }, 'warn');
+      }
+    }
+  }
+  private noMatchingRunEvidence(runId: string | undefined): boolean {
+    if (!runId) return false;
+    // Resume only while the core connection has had no intervening writes. Never infer absence from a partial scan.
+    const changes = (this.deps.store.db.prepare('SELECT total_changes() AS changes').get() as { changes: number }).changes;
+    const previous = this.runEvidenceScans.get(runId);
+    const page = this.deps.store.scanEntries<{ runId: string }>('run:', { limit: 100, after: previous?.changes === changes ? previous.cursor : undefined,
+      validate: (value): value is { runId: string } => !!value && typeof value === 'object' && typeof (value as { runId?: unknown }).runId === 'string' });
+    const clear = page.rows.every(row => row.state === 'valid' && row.value.runId !== runId);
+    if (clear && page.nextCursor) {
+      if (this.runEvidenceScans.size >= 512 && !this.runEvidenceScans.has(runId)) this.runEvidenceScans.delete(this.runEvidenceScans.keys().next().value!);
+      this.runEvidenceScans.set(runId, { cursor: page.nextCursor, changes });
+    } else this.runEvidenceScans.delete(runId);
+    return clear && !page.nextCursor;
+  }
+  private async reconcile(): Promise<void> {
+    const epoch = this.accountGeneration, targetId = this.targetId, route = this.deps.getApiBaseUrl(), generation = this.generation;
+    const current = (): boolean => !this.stopped && epoch === this.accountGeneration && targetId === this.targetId
+      && route === this.deps.getApiBaseUrl() && generation === this.generation;
+    await this.deps.store.waitRunRecovery();
+    if (!current()) return;
+    if (!await this.deps.store.verifyExecutionDatabaseHealth()) throw new Error('REMOTE_EXECUTION_DATABASE_UNHEALTHY');
+    if (!current()) return;
+    const version = this.capabilitySnapshot?.capabilities?.includes(RemoteCapability.IsolatedCommandRecovery)
+      && Date.now() >= this.commandRecoveryFallbackUntil ? 4 : 1;
+    const context = stableJson([epoch, targetId, route, generation, this.registration!.deviceId, version]);
+    if (context !== this.unresolvedContext) { this.unresolvedContext = context; this.unresolvedCursor = null; }
+    const cursor = this.unresolvedCursor;
+    const pathname = `/devices/${this.registration!.deviceId}/commands${version === 4 ? '/unresolved?limit=20' : '?state=unresolved&limit=20'}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+    let result: any;
+    try { result = await this.api(pathname, 'GET', undefined, true, version); }
+    catch (error) {
+      if (current() && context === this.unresolvedContext && error instanceof RemoteApiError) {
+        if ([47008, 47019].includes(error.code)) this.unresolvedCursor = null;
+        if (version === 4 && (error.httpStatus === 404 || [404, 47017].includes(error.code)))
+          this.commandRecoveryFallbackUntil = Date.now() + 5 * IDLE_POLL_MS;
+      }
+      throw error;
+    }
+    if (!current()) return;
+    if (version === 4 && (!result || !Array.isArray(result.items) || !Array.isArray(result.unresolvedItems)
+      || result.items.length + result.unresolvedItems.length > 20 || typeof result.scanComplete !== 'boolean'
+      || !(result.nextCursor === null || typeof result.nextCursor === 'string' && result.nextCursor.length > 0 && result.nextCursor.length <= 8192)
+      || result.scanComplete !== (result.nextCursor === null) || result.nextCursor !== null && result.nextCursor === cursor))
+      throw new Error('REMOTE_COMMAND_RECOVERY_PAGE_INVALID');
+    // Unreadable rows are diagnostics only: never replace inbox evidence, infer completion, or grant a permit.
+
+      await this.commandBatch((result.items || []).slice(0, 20), async envelope => {
+        if (!current() || this.syncPaused()) return;
+        try {
+        const command: RemoteCommand = { ...envelope.command, ...envelope };
+        delete (command as any).command;
+        if (command.detailState === RemoteRetention.Compacted) {
+          if (!['applied', 'rejected', 'expired'].includes(command.status)) throw new Error('A nonterminal command cannot be compacted');
+          const retained = this.readInbox(command.commandId);
+          if (retained && sameOwner(retained.owner, this.owner)) {
+            retained.command = { ...retained.command, ...command };
+            retained.state = command.status === 'applied' ? 'applied' : 'rejected';
+            retained.result = envelope.result || envelope.error || retained.result;
+            this.deps.store.put(this.inboxKey(retained), retained);
+          }
+          return;
+        }
+        let entry = this.readInbox(command.commandId);
+        if (entry && !this.isEntryCurrent(entry)) return;
+        if (!entry && this.commandAdmitted(command) && !['approval_response', RemoteQuestion.Command].includes(command.type) && envelope.currentClaimId && this.deps.store.hasCompleteExecutionHistory()
+          && payloadHash(command.request) === command.requestHash
+          && this.noMatchingRunEvidence(command.runId)) {
+          try {
+            const workspace = this.commandWorkspace(command);
+            entry = this.deps.runSessionTransaction(() => {
+              const prepared = this.deps.prepare(command, this.owner!, workspace);
+              this.deps.store.bindRemote(prepared.localSessionId, prepared.remoteSessionId, this.registration!.deviceId);
+              const value: InboxEntry = { ...(this.targetId ? { targetId: this.targetId } : {}), owner: this.owner!, command: { ...command, claimId: envelope.currentClaimId }, ...prepared, state: 'prepared', result: null };
+              this.deps.store.put(this.inboxKey(value), value); return value;
+            });
+          } catch (error) {
+            if (error instanceof RemoteAgentError) {
+              // Complete local history and no matching run prove this lost claim never started.
+              // Persist not-started evidence without inventing the lost claim token. A fresh
+              // permit is needed to ACK local rejection if the server still considers it valid.
+              entry = { ...(this.targetId ? { targetId: this.targetId } : {}), owner: this.owner!, command: { ...command, claimId: envelope.currentClaimId }, localSessionId: null,
+                remoteSessionId: command.sessionId || null, runId: command.runId || null, state: 'prepared', result: null,
+                preparationError: { ...remoteError(error.code, error.reason, error.message), reasonDetail: error.reasonDetail } };
+              this.deps.store.put(this.inboxKey(entry), entry);
+            }
+          }
+        }
+        if (!entry) {
+          if (command.status !== 'accepted') await this.api(`/commands/${command.commandId}/reconcile`, 'POST', {
+            ...this.transport(), expectedStatusVersion: command.statusVersion, sessionId: command.sessionId || null,
+            runId: command.runId || null, observedExecution: 'unknown', result: null, error: null, requestExecutionPermit: false,
+          });
+          return;
+        }
+        const telemetry = this.commandTelemetry(entry);
+        try {
+        if (entry.command.type === 'approval_response' && this.deps.reconcileApproval) {
+          const outcome = await this.deps.reconcileApproval(entry);
+          if (!current()) return;
+          if (outcome) { this.mergeApprovalOutcome(entry, outcome); this.deps.store.put(this.inboxKey(entry), entry); }
+        }
+        if (entry.command.type === RemoteQuestion.Command && this.deps.reconcileQuestion) {
+          const outcome = await this.deps.reconcileQuestion(entry);
+          if (!current()) return;
+          if (outcome) { this.mergeQuestionOutcome(entry, outcome); this.deps.store.put(this.inboxKey(entry), entry); }
+        }
+        const observedExecution = entry.state === 'applied' ? 'applied' : entry.state === 'rejected' ? 'not_applied'
+          : this.commandAdmitted(entry.command, entry.localSessionId) && !['approval_response', RemoteQuestion.Command].includes(entry.command.type) && entry.state === 'prepared' && this.deps.store.hasCompleteExecutionHistory()
+            && (!entry.runId || this.deps.store.get<boolean>(`runPublished:${entry.runId}`) !== true) ? 'not_started' : 'unknown';
+        const reconciled = await this.api(`/commands/${command.commandId}/reconcile`, 'POST', { ...this.transport(),
+          expectedStatusVersion: command.statusVersion, claimId: entry.command.claimId, ...(entry.command.claimToken ? { claimToken: entry.command.claimToken } : {}),
+          sessionId: entry.remoteSessionId, runId: entry.runId, observedExecution, result: entry.state === 'applied' ? entry.result : null,
+          error: entry.state === 'rejected' ? entry.result : null,
+          localEvidence: observedExecution === 'not_started' ? { databaseHealthy: this.deps.store.hasCompleteExecutionHistory(), historyComplete: this.deps.store.hasCompleteExecutionHistory(), inboxPersisted: true, executionNeverStarted: true } : null, requestExecutionPermit: observedExecution === 'not_started' && !!this.generation });
+        if (!current()) return;
+        entry.command = { ...entry.command, ...reconciled.command };
+        if (['applied', 'rejected', 'expired'].includes(entry.command.status)) {
+          entry.state = entry.command.status === 'applied' ? 'applied' : 'rejected';
+          entry.result = reconciled.command.result || reconciled.command.error || entry.result;
+          if (['create_session', 'send_message'].includes(entry.command.type) && entry.state === 'rejected' && entry.localSessionId && entry.runId
+            && this.deps.store.get<boolean>(`runPublished:${entry.runId}`) === false) this.deps.store.updateRun(entry.localSessionId, 'failed');
+        }
+        if (reconciled.executionPermit) entry.command = { ...entry.command, ...reconciled.executionPermit };
+        this.deps.store.put(this.inboxKey(entry), entry);
+        this.commandReceipt(entry, reconciled.command, reconciled, telemetry);
+        if (this.commandAdmitted(entry.command, entry.localSessionId) && !['approval_response', RemoteQuestion.Command].includes(entry.command.type) && reconciled.executionPermit && this.generation && !['applied', 'rejected', 'expired'].includes(entry.command.status)) {
+          if (entry.preparationError) { entry.state = 'rejected'; entry.result = entry.preparationError; this.deps.store.put(this.inboxKey(entry), entry); }
+          await this.applyEntry(entry, this.generation);
+        }
+        } catch (error) { await this.reportCommandError(entry, error); }
+        } catch (error) {
+          if (!current() || this.syncPaused()) return;
+          throw error;
+        }
+      }, true);
+    if (!current()) return;
+    this.unresolvedCursor = result.nextCursor || null;
+    if (this.unresolvedCursor) this.commandPollAt = 0;
+
+  }
+}

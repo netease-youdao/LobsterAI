@@ -128,6 +128,8 @@ export interface ScheduledTaskHandlerDeps {
       coworkSessionId: string,
     ) => Promise<void>;
   } | null;
+  canViewSession?: (sessionId: string) => boolean;
+  canUseImInstance?: (platform: string, instanceId?: string) => boolean;
   getCoworkSessionTitle: (sessionId: string) => string | null;
   getCoworkSession?: (sessionId: string) => unknown | null;
   sendProactiveImMessage?: (params: {
@@ -140,7 +142,7 @@ export interface ScheduledTaskHandlerDeps {
 
 function applyLocalAnnounceDeliveryNormalization(
   normalizedInput: Record<string, any>,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager'>,
+  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager' | 'canViewSession' | 'canUseImInstance'>,
 ): AnnounceNormalizationContext | null {
   const { getIMGatewayManager } = deps;
   const delivery = normalizedInput.delivery;
@@ -150,9 +152,10 @@ function applyLocalAnnounceDeliveryNormalization(
   const platform = PlatformRegistry.platformOfChannel(delivery.channel);
   if (!platform) return null;
   const imStore = getIMGatewayManager()?.getIMStore();
-  const mappings = (platform === RetainedImPlatform.Feishu && delivery.accountId
+  if (deps.canUseImInstance?.(platform, delivery.accountId) === false) throw new Error('Delivery channel is unavailable');
+  const mappings = ((platform === RetainedImPlatform.Feishu && delivery.accountId
     ? imStore?.listSessionMappings(platform, delivery.accountId)
-    : imStore?.listSessionMappings(platform)) ?? [];
+    : imStore?.listSessionMappings(platform)) ?? []).filter(m => deps.canViewSession?.(m.coworkSessionId) !== false);
   const imSettings = imStore?.getIMSettings?.();
 
   normalizedInput.sessionTarget = STSessionTarget.Isolated;
@@ -208,7 +211,7 @@ function stableJson(value: unknown): string {
 
 function buildAnnounceNormalizationPatch(
   task: ScheduledTask,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager'>,
+  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager' | 'canViewSession' | 'canUseImInstance'>,
 ): Partial<ScheduledTaskInput> | null {
   const normalizedInput: Record<string, any> = {
     sessionTarget: task.sessionTarget,
@@ -247,7 +250,7 @@ function buildAnnounceNormalizationPatch(
 }
 
 export async function migrateScheduledTaskAnnounceJobs(
-  deps: Pick<ScheduledTaskHandlerDeps, 'getCronJobService' | 'getIMGatewayManager'>,
+  deps: Pick<ScheduledTaskHandlerDeps, 'getCronJobService' | 'getIMGatewayManager' | 'canViewSession' | 'canUseImInstance'>,
 ): Promise<{ checked: number; updated: number }> {
   const tasks = await deps.getCronJobService().listJobs();
   let updated = 0;
@@ -277,9 +280,11 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       if (!sendProactiveImMessage) {
         throw new Error('IM channels delivery bridge is not available');
       }
+      const platform = String(params.channel ?? 'weixin');
+      const account = typeof params.accountId === 'string' ? params.accountId : undefined;
+      if (deps.canUseImInstance?.(platform, account) === false) throw new Error('Delivery channel is unavailable');
       return sendProactiveImMessage({
-        platform: String(params.channel ?? 'weixin'),
-        instanceId: typeof params.accountId === 'string' ? params.accountId : undefined,
+        platform, instanceId: account,
         chatId: String(params.to ?? ''),
         text: String(params.message ?? ''),
       });
@@ -322,7 +327,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      applyLocalAnnounceDeliveryNormalization(normalizedInput, { getIMGatewayManager });
+      applyLocalAnnounceDeliveryNormalization(normalizedInput, deps);
       const task = await getCronJobService().addJob(normalizedInput as ScheduledTaskInput);
       return { success: true, task };
     } catch (error) {
@@ -336,7 +341,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      applyLocalAnnounceDeliveryNormalization(normalizedInput, { getIMGatewayManager });
+      applyLocalAnnounceDeliveryNormalization(normalizedInput, deps);
       const task = await getCronJobService().updateJob(id, normalizedInput as Partial<ScheduledTaskInput>);
       return { success: true, task };
     } catch (error) {
@@ -375,7 +380,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     try {
       const existing = await getCronJobService().getJob(id);
       if (existing) {
-        const patch = buildAnnounceNormalizationPatch(existing, { getIMGatewayManager });
+        const patch = buildAnnounceNormalizationPatch(existing, deps);
         if (patch) {
           await getCronJobService().updateJob(id, patch);
         }
@@ -448,7 +453,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     async (_event, input: string | { sessionId?: string | null; sessionKey?: string | null }) => {
       try {
         const sessionId = typeof input === 'string' ? input : (input.sessionId ?? input.sessionKey ?? null);
-        if (!sessionId || !getCoworkSession) return { success: true, session: null };
+        if (!sessionId || !getCoworkSession || deps.canViewSession?.(sessionId) === false) return { success: true, session: null };
         const session = getCoworkSession(sessionId);
         return { success: true, session: session ?? null };
       } catch (error) {
@@ -480,11 +485,12 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
         const imStore = getIMGatewayManager()?.getIMStore();
         if (!imStore) return { success: true, conversations: [] };
         const selectedAccountId = filterAccountId ?? accountId;
+        if (deps.canUseImInstance?.(platform, selectedAccountId) === false) return { success: true, conversations: [] };
         const imSettings = imStore.getIMSettings?.();
         const platformAgentBindings = imSettings
           ? (imSettings.platformAgentBindings ?? {})
           : undefined;
-        const rawMappings = imStore.listSessionMappings(platform, selectedAccountId);
+        const rawMappings = imStore.listSessionMappings(platform, selectedAccountId).filter(m => deps.canViewSession?.(m.coworkSessionId) !== false);
         const filteredMappings = filterConversationMappingsForSelectedAccount(
           rawMappings,
           platform,

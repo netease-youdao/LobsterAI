@@ -35,14 +35,20 @@ import {
   CoworkForkMode,
 } from '../shared/cowork/constants';
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../shared/cowork/llmTurnUsage';
+import { getMessageModelLabel } from '../shared/cowork/messageModelLabel';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import { DshPermissionPreset } from '../shared/dshEngine/hostConstants';
 import { ModelPresetId } from '../shared/modelPresets/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
+import { RemoteDeletion } from '../shared/remote/deletions';
 import { CoworkStore } from './coworkStore';
+import { setLanguage, t } from './i18n';
 import { buildCoworkContinuityCapsule, ContinuityCapsuleSource } from './libs/agentEngine/coworkContinuityCapsule';
 import { deriveForkToolUseId } from './libs/coworkForkToolUseIds';
 import type { SessionProjectionChanges } from './libs/sessionProjectionNotifications';
+import { ownershipOperationGate } from './ownershipOperationGate';
+import { replyInputModel } from './remote/remoteReplyModel';
+import { configureRemoteTelemetry, shutdownRemoteTelemetry } from './remote/remoteTelemetry';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1366,6 +1372,62 @@ test('updateMessage preserves the session updated time', () => {
   expect(session?.messages[0]?.content).toBe('final');
 });
 
+test('updateMessage keeps rendered tool details and cannot replace remote attribution', () => {
+  const sid = 'sess-display-patch';
+  insertSession(sid);
+  insertMessage('result-patch', sid, 'tool_result', 'partial', JSON.stringify({
+    toolUseId: 'call', toolName: 'Read', isStreaming: true, remoteRunId: 'run', remoteCommandId: 'command',
+    toolResultDetails: { assets: ['image'], pollCount: 4, status: 'running' },
+  }), 1);
+  store.updateMessage(sid, 'result-patch', { content: 'final', metadata: {
+    isStreaming: false, isFinal: true, remoteRunId: 'forged',
+    toolResultDetails: { pollCount: 2, status: 'succeeded' },
+  } });
+  const row = db.prepare('SELECT metadata FROM cowork_messages WHERE id=?').get('result-patch') as { metadata: string };
+  expect(JSON.parse(row.metadata)).toEqual({ toolUseId: 'call', toolName: 'Read', isStreaming: false, isFinal: true,
+    remoteRunId: 'run', remoteCommandId: 'command', toolResultDetails: { assets: ['image'], pollCount: 4, status: 'succeeded' } });
+});
+
+test('message patches preserve model preset provenance alongside remote attribution', () => {
+  const sid = 'sess-preset-attribution';
+  insertSession(sid);
+  insertMessage('preset-message', sid, 'assistant', 'partial', JSON.stringify({
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    remoteRunId: 'original-run', remoteCommandId: 'original-command',
+  }), 1);
+
+  store.updateMessage(sid, 'preset-message', { metadata: {
+    modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'replacement-model',
+    remoteRunId: 'replacement-run', remoteCommandId: 'replacement-command', isFinal: true,
+  } });
+
+  expect(store.getMessage(sid, 'preset-message')?.metadata).toEqual({
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    remoteRunId: 'original-run', remoteCommandId: 'original-command', isFinal: true,
+  });
+});
+
+test('media compaction preserves remote attribution and frozen model provenance when patching messages', () => {
+  const sid = 'sess-media-remote';
+  insertSession(sid);
+  insertMessage('media-remote', sid, 'tool_result', 'partial', JSON.stringify({
+    remoteRunId: 'run', remoteCommandId: 'command',
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    toolResultDetails: { mediaType: 'image', assets: [{ filePath: '/tmp/image.png', url: 'data:image/png;base64,AAAA' }] },
+  }), 1);
+  store.updateMessage(sid, 'media-remote', { metadata: {
+    remoteRunId: 'forged', remoteCommandId: 'forged', modelPresetId: ModelPresetId.Ultimate,
+    resolvedModelId: 'replacement', toolResultDetails: { status: 'succeeded' },
+  } });
+  const metadata = store.getMessage(sid, 'media-remote')?.metadata;
+  expect(metadata).toMatchObject({
+    remoteRunId: 'run', remoteCommandId: 'command',
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'original-model',
+    toolResultDetails: { status: 'succeeded', assets: [{ filePath: '/tmp/image.png', url: 'file:///tmp/image.png' }] },
+  });
+  expect(JSON.stringify(metadata)).not.toContain('data:image');
+});
+
 test('addMessage refreshes the session updated time only for user messages', () => {
   const sid = 'sess-add-message-time';
   insertSession(sid);
@@ -1788,11 +1850,11 @@ test('deleteAgent removes its task history before an agent with the same name is
   expect(messageCount.count).toBe(0);
 
   const recreated = store.createAgent({ name: 'Docs Agent' });
-  expect(recreated.id).toBe(agent.id);
+  expect(recreated.id).not.toBe(agent.id);
   expect(store.listSessions(20, 0, recreated.id)).toEqual([]);
 });
 
-test('createAgent clears orphaned task history left by legacy agent deletion', () => {
+test('createAgent preserves orphaned task history left by legacy agent deletion', () => {
   const agent = store.createAgent({ name: 'Legacy Deleted Agent' });
   const session = store.createSession('Legacy Orphan Task', '/tmp/docs-project', '', 'local', [], agent.id);
   insertMessage('msg-legacy-orphan', session.id, 'assistant', 'legacy result', '{}', 1);
@@ -1800,12 +1862,14 @@ test('createAgent clears orphaned task history left by legacy agent deletion', (
 
   const recreated = store.createAgent({ name: 'Legacy Deleted Agent' });
 
-  expect(recreated.id).toBe(agent.id);
+  expect(recreated.id).not.toBe(agent.id);
   expect(store.listSessions(20, 0, recreated.id)).toEqual([]);
   const messageCount = db
     .prepare('SELECT COUNT(*) AS count FROM cowork_messages WHERE session_id = ?')
     .get(session.id) as { count: number };
-  expect(messageCount.count).toBe(0);
+  expect(messageCount.count).toBe(1);
+  expect(store.getSession(session.id)).not.toBeNull();
+  expect(() => store.createAgent({ id: agent.id, name: 'Reuse' })).toThrow();
 });
 
 test('agent CRUD normalizes legacy icons to the default svg avatar', () => {
@@ -1846,19 +1910,33 @@ test('preset avatar refresh respects persisted user ownership and leaves other s
   expect(store.updatePresetAgentAvatar(agent.id, icon)?.icon).toBe(DefaultAgentAvatarIcon);
 });
 
+test('preset avatar refresh keeps agent ownership and rejects another account', () => {
+  const owner = { userId: 'avatar-owner', scopeKey: 'personal' };
+  const other = { userId: 'other-owner', scopeKey: 'personal' };
+  const agent = store.createAgent({ name: 'Preset', source: AgentSource.Preset, presetId: 'office-expert' }, owner);
+  const icon = 'https://ydhardwarecommon.nosdn.127.net/category-office.webp';
+
+  expect(() => store.updatePresetAgentAvatar(agent.id, icon, other)).toThrow();
+  expect(store.getVisibleAgent(agent.id, owner)?.icon).toBe(agent.icon);
+  expect(store.updatePresetAgentAvatar(agent.id, icon, owner)?.icon).toBe(icon);
+  expect(store.getVisibleAgent(agent.id, owner)?.icon).toBe(icon);
+  expect(store.getVisibleAgent(agent.id, other)).toBeNull();
+});
+
 test('legacy defaults migrate conservatively and main/custom agents never receive catalog avatars', () => {
   const original = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Data });
   const agent = store.createAgent({ id: 'renamed-preset', name: 'Old expert', source: AgentSource.Preset,
     presetId: 'data-advisor', icon: original });
-  db.prepare('UPDATE agents SET icon_customized = NULL WHERE id = ?').run(agent.id);
+  store.agentOwnership.transaction(() => db.prepare('UPDATE agents SET icon_customized = NULL WHERE id = ?').run(agent.id));
   expect(store.getAgent(agent.id)?.iconCustomized).toBe(false);
   const edited = encodeAgentAvatarIcon({ svg: AgentAvatarSvg.Creation });
-  db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(edited, agent.id);
+  store.agentOwnership.transaction(() => db.prepare('UPDATE agents SET icon = ? WHERE id = ?').run(edited, agent.id));
   expect(store.getAgent(agent.id)?.iconCustomized).toBe(true);
   const icon = 'https://ydhardwarecommon.nosdn.127.net/category-research.webp';
   expect(store.updatePresetAgentAvatar(agent.id, icon)?.icon).toBe(edited);
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
   for (const protectedAgent of [
-    store.createAgent({ id: AgentId.Main, name: 'Main', source: AgentSource.Preset }),
+    store.getAgent(AgentId.Main)!,
     store.createAgent({ id: 'user-agent', name: 'User agent', icon: original }),
   ]) {
     expect(store.updatePresetAgentAvatar(protectedAgent.id, icon)?.icon).toBe(protectedAgent.icon);
@@ -2080,6 +2158,7 @@ test('resetRunningSessions batches changed projections and leaves no-op reset si
 });
 
 test('subagent upsert notifies creation and actual repeated running timestamp writes', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
   insertSession('parent-projection');
   const listener = vi.fn();
   store.onSessionProjectionChanges(listener);
@@ -2097,7 +2176,28 @@ test('subagent upsert notifies creation and actual repeated running timestamp wr
   expect(listener.mock.calls.map(call => call[0].changedSessionIds)).toEqual([[options.id], [options.id]]);
 });
 
+test('subagent materialization refuses an anonymously running parent after its target becomes private', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  insertSession('anonymous-parent');
+  const agent = store.createAgent({ name: 'Target' });
+  store.agentOwnership.transaction(() => store.agentOwnership.associateHistorical(agent.id, { userId: '1001', scopeKey: 'personal' }, Date.now()));
+  expect(() => store.upsertSubagentChildSession({ id: 'blocked-child', parentSessionId: 'anonymous-parent', childSessionKey: 'child-key', title: 'Child', agentId: agent.id })).toThrow();
+  expect(store.getSession('blocked-child')).toBeNull();
+});
+
+test('subagent materialization cannot pass an exclusive parent ownership reservation', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
+  insertSession('reserved-parent');
+  const release = ownershipOperationGate.tryAcquire({ agentIds: [], sessionIds: ['reserved-parent'] });
+  expect(release).not.toBeNull();
+  try {
+    expect(() => store.upsertSubagentChildSession({ id: 'blocked-child', parentSessionId: 'reserved-parent', childSessionKey: 'child-key', title: 'Child', agentId: 'main' })).toThrow();
+    expect(store.getSession('blocked-child')).toBeNull();
+  } finally { release?.(); }
+});
+
 test('subagent upsert seeds the spawn task as the first user message once', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
   insertSession('parent-task');
   const options = {
     id: 'child-task',
@@ -2120,6 +2220,7 @@ test('subagent upsert seeds the spawn task as the first user message once', () =
 });
 
 test('subagent upsert without a task leaves the child transcript empty', () => {
+  db.prepare("INSERT INTO agents (id,name,created_at,updated_at) VALUES ('main','Main',1,1)").run();
   insertSession('parent-no-task');
   store.upsertSubagentChildSession({
     id: 'child-no-task',
@@ -2174,19 +2275,18 @@ test.each([false, true])('single and batch deletions publish unique artifact/ses
   });
 });
 
-test.each([false, true])('agent transaction preserves deleted artifact IDs (orphan cleanup=%s)', orphanCleanup => {
-  if (!orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
+test('agent transaction preserves deleted artifact IDs after commit', () => {
+  store.createAgent({ id: 'projection-agent', name: 'Agent' });
   insertSession('agent-session', 'projection-agent');
   db.prepare('INSERT INTO library_artifact_sessions (artifact_id, session_id) VALUES (?, ?)').run('agent-file', 'agent-session');
   const listener = vi.fn(changes => {
     expect(db.inTransaction).toBe(false);
     expect(store.getSession('agent-session')).toBeNull();
-    expect(Boolean(store.getAgent('projection-agent'))).toBe(orphanCleanup);
+    expect(store.getAgent('projection-agent')).toBeNull();
     return changes;
   });
   store.onSessionProjectionChanges(listener);
-  if (orphanCleanup) store.createAgent({ id: 'projection-agent', name: 'Agent' });
-  else expect(store.deleteAgent('projection-agent')).toBe(true);
+  expect(store.deleteAgent('projection-agent')).toBe(true);
   expect(listener).toHaveBeenCalledTimes(1);
   expect(listener.mock.calls[0][0]).toEqual({
     changedSessionIds: [],
@@ -2195,6 +2295,44 @@ test.each([false, true])('agent transaction preserves deleted artifact IDs (orph
   });
 });
 
+
+test('session visibility is applied before pagination, counts, search and recent directories', () => {
+  const owner = { userId: 'a', scopeKey: 'personal' };
+  insertSession('anonymous', 'main', 'query anonymous', 1);
+  insertSession('mine', 'main', 'query mine', 2);
+  insertSession('other', 'main', 'query other', 3);
+  insertSession('quarantined', 'main', 'query quarantine', 4);
+  store.remote.transaction(() => {
+    store.remote.assignNew('mine', owner, 'local_create');
+    store.remote.assignNew('other', { userId: 'b', scopeKey: 'personal' }, 'local_create');
+    store.remote.assignNew('quarantined', owner, 'local_create');
+  });
+  db.prepare("UPDATE cowork_session_ownership SET ownership_status='quarantined' WHERE session_id='quarantined'").run();
+  expect(store.countSessions(undefined, owner)).toBe(2);
+  expect(store.countSessions(undefined, null)).toBe(1);
+  expect(store.countSessions()).toBe(4);
+  expect(store.listSessions(1, 0, undefined, owner).map(row => row.id)).toEqual(['mine']);
+  expect(store.listSessions(1, 1, undefined, owner).map(row => row.id)).toEqual(['anonymous']);
+  expect(store.countSearchSessions({ query: 'query' }, owner)).toBe(2);
+  expect(store.searchSessions({ query: 'query', limit: 1 }, owner).map(row => row.id)).toEqual(['mine']);
+  store.remote.transaction(() => {
+    for (const id of ['anonymous', 'mine', 'other', 'quarantined']) {
+      insertMessage(`${id}-message`, id, 'user', `query ${id}`, null, 1, 100);
+    }
+  });
+  expect(store.searchSessionContent({ query: 'query', limit: 1 }, owner).map(row => row.session.id)).toEqual(['mine']);
+  expect(store.searchSessionContent({ query: 'query' }, null).map(row => row.session.id)).toEqual(['anonymous']);
+  expect(store.searchSessionContent({ query: 'query' }, { userId: 'a', scopeKey: 'enterprise:42' }).map(row => row.session.id)).toEqual(['anonymous']);
+  expect(store.listFilteredSessions({ statuses: ['idle'], limit: 1 }, owner).map(row => row.id)).toEqual(['mine']);
+  expect(store.listFilteredSessions({ sessionIds: ['mine', 'other', 'quarantined'] }, owner).map(row => row.id)).toEqual(['mine']);
+  expect(store.listFilteredSessions({}, null).map(row => row.id)).toEqual(['anonymous']);
+  store.remote.transaction(() => {
+    db.prepare("UPDATE cowork_sessions SET cwd='/mine' WHERE id='mine'").run();
+    db.prepare("UPDATE cowork_sessions SET cwd='/private' WHERE id='other'").run();
+  });
+  expect(store.listRecentCwds(8, owner)).toEqual(['/mine', '/tmp']);
+  expect(store.canReadSession('quarantined', owner)).toBe(false);
+});
 
 test('sidebar hides historical self-spawns while preserving expert work, forks and direct access', () => {
   const parent = store.createSession('parent', '/tmp', '', 'local', [], 'main');
@@ -2216,6 +2354,169 @@ test('sidebar hides historical self-spawns while preserving expert work, forks a
   expect(store.countSearchSessions({ query: 'child' })).toBe(2);
   expect(store.countSearchSessions({ query: 'child', agentId: 'main' })).toBe(1);
   expect(store.getSession(self.id)?.id).toBe(self.id);
+
+  const owner = { userId: 'a', scopeKey: 'personal' };
+  store.remote.transaction(() => {
+    for (const session of [parent, self, expert]) {
+      store.remote.assignNew(session.id, owner, 'local_create');
+    }
+    store.remote.assignNew(fork.id, { userId: 'b', scopeKey: 'personal' }, 'local_create');
+  });
+  expect(store.countSessions(undefined, owner)).toBe(2);
+  expect(store.countSessions('main', owner)).toBe(1);
+  expect(store.countSessions(undefined, null)).toBe(0);
+  expect(store.searchSessions({ query: 'child', limit: 1 }, owner).map(session => session.id)).toEqual([expert.id]);
+  expect(store.countSearchSessions({ query: 'child' }, owner)).toBe(1);
+  expect(store.canReadSession(self.id, owner)).toBe(true);
+  expect(store.canReadSession(fork.id, owner)).toBe(false);
+});
+
+
+test('final-message telemetry observes the committed outer transaction and drops rolled-back writes', async () => {
+  const owner = { userId: 'telemetry-owner', scopeKey: 'personal' }; store.remoteCreationOwner = () => owner;
+  const session = store.createSession('private title', '/tmp', '', 'local', [], 'main', '', { owner });
+  const uploaded: string[] = [];
+  const reporter = configureRemoteTelemetry({ context: { epoch: 'test', enabled: true, appVersion: '1', installationId: 'installation',
+    environment: 'test', remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey },
+    autoStart: false, fetch: async url => { uploaded.push(url); return { ok: true, status: 200 }; } })!;
+  try {
+    expect(() => store.runSessionTransaction(() => {
+      store.addMessage(session.id, { type: 'assistant', content: 'private answer', metadata: { isFinal: true } });
+      expect(reporter.snapshot().queued).toBe(0); throw new Error('rollback');
+    })).toThrow('rollback');
+    expect(reporter.snapshot().queued).toBe(0);
+    store.addMessage(session.id, { type: 'assistant', content: 'private answer', metadata: { isFinal: true } });
+    expect(reporter.snapshot().queued).toBe(1); await reporter.pump();
+    expect(new URL(uploaded[0]).searchParams.get('event_name')).toBe('desktop.message.final_persisted');
+    expect(uploaded[0]).not.toContain('private');
+  } finally { await shutdownRemoteTelemetry(); }
+});
+
+
+test.each(['zh', 'en'] as const)('retains a local admission failure atomically in %s without creating a run', language => {
+  setLanguage(language);
+  try {
+    const owner = { userId: 'owner', scopeKey: 'personal' };
+    const session = store.createSession('Task', '/work', '', 'local', [], 'main', '', { owner });
+    const assertCurrent = vi.fn();
+    const input = { content: 'Original input', metadata: { skillIds: ['skill'] }, timestamp: session.createdAt };
+    const retained = store.recordLocalStartFailure(session.id, owner, input, assertCurrent);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(retained?.status).toBe('error');
+    expect(retained?.messages.map(message => [message.type, message.content])).toEqual([
+      ['user', input.content], ['system', t('coworkSessionAdmissionFailed')],
+    ]);
+    expect(retained?.messages[0].metadata?.skillIds).toEqual(['skill']);
+    expect(retained?.messages[0].timestamp).toBe(input.timestamp);
+    expect(retained?.messages.every(message => !message.metadata?.remoteRunId)).toBe(true);
+    expect(store.remote.run(session.id)).toBeNull();
+    expect(store.recordLocalStartFailure(session.id, owner, input, assertCurrent)).toBeNull();
+    expect(store.countSessionMessages(session.id)).toBe(2);
+  } finally { setLanguage('zh'); }
+});
+
+test.each(['message', 'run', 'running', 'deleted'] as const)('does not retain a failure over existing %s state', existing => {
+  const session = store.createSession('Task', '/work');
+  if (existing === 'message') store.addMessage(session.id, { type: 'user', content: 'Existing input' });
+  if (existing === 'run') store.remote.beginRun(session.id);
+  if (existing === 'running') store.updateSession(session.id, { status: 'running' });
+  if (existing === 'deleted') store.deleteSession(session.id);
+  const before = store.getSession(session.id);
+  expect(store.recordLocalStartFailure(session.id, null, { content: 'Rejected input', timestamp: 1 }, () => {})).toBeNull();
+  expect(store.getSession(session.id)).toEqual(before);
+});
+
+test.each(['account', 'owner', 'deletion'] as const)('rejects a changed %s before saving a failed input', change => {
+  const owner = { userId: 'owner', scopeKey: 'personal' };
+  const session = store.createSession('Task', '/work', '', 'local', [], 'main', '', { owner });
+  if (change === 'deletion') store.remote.put(`${RemoteDeletion.Closed}${session.id}`, true);
+  const actor = change === 'owner' ? { userId: 'other', scopeKey: 'personal' } : owner;
+  expect(() => store.recordLocalStartFailure(session.id, actor, { content: 'Private input', timestamp: 1 }, () => {
+    if (change === 'account') throw new Error('Account epoch changed');
+  })).toThrow();
+  expect(store.countSessionMessages(session.id)).toBe(0);
+  expect(store.getSession(session.id)?.status).toBe('idle');
+});
+
+test('rolls back the user message when persisting the fixed failure message fails', () => {
+  const session = store.createSession('Task', '/work');
+  const add = store.addMessage.bind(store);
+  const spy = vi.spyOn(store, 'addMessage').mockImplementation((...args) => {
+    if (args[1].type === 'system') throw new Error('Storage unavailable');
+    return add(...args);
+  });
+  try {
+    expect(() => store.recordLocalStartFailure(session.id, null, { content: 'Private input', timestamp: 1 }, () => {}))
+      .toThrow('Storage unavailable');
+    expect(store.countSessionMessages(session.id)).toBe(0);
+    expect(store.getSession(session.id)?.status).toBe('idle');
+  } finally { spy.mockRestore(); }
+});
+
+
+test.each([ModelPresetId.Balanced, ModelPresetId.Ultimate])('mobile messages retain the frozen tier in desktop and phone labels: %s', modelPresetId => {
+  const sid = 'mobile-preset-message'; insertSession(sid);
+  const binding = vi.spyOn(store.remote, 'messageRunBinding').mockReturnValue({ runId: 'mobile-run', commandId: 'mobile-command' });
+  try {
+    store.remote.put('inputRun:mobile-run', { modelPresetId });
+    const user = store.addMessage(sid, { type: 'user', content: 'weather' });
+    const reply = store.addMessage(sid, { type: 'assistant', content: '', metadata: { model: 'yd-fast', isStreaming: true } });
+    expect(user.metadata?.modelPresetId).toBe(modelPresetId);
+    expect(reply.metadata?.modelPresetId).toBe(modelPresetId);
+    // Later session changes must not relabel this run's reply.
+    db.prepare('UPDATE cowork_sessions SET model_preset_id=?, model_override=? WHERE id=?')
+      .run(ModelPresetId.Ultimate, 'provider/later-model', sid);
+    store.updateMessage(sid, reply.id, { content: 'sunny', metadata: {
+      resolvedModelId: 'provider/deepseek-flash-YoudaoInner', isStreaming: false, isFinal: true,
+      modelPresetId: modelPresetId === ModelPresetId.Balanced ? ModelPresetId.Ultimate : ModelPresetId.Balanced,
+    } });
+    const updated = store.getMessage(sid, reply.id)!;
+    expect(updated.metadata?.modelPresetId).toBe(modelPresetId);
+    const expected = `${modelPresetId === ModelPresetId.Balanced ? '快速' : '旗舰'}（deepseek-flash）`;
+    expect(getMessageModelLabel(updated.metadata, id => id === ModelPresetId.Balanced ? '快速' : '旗舰')).toBe(expected);
+    expect(replyInputModel('assistant', updated.metadata ?? {}, { displayName: 'old' },
+      { balanced: '快速', ultimate: '旗舰' })).toMatchObject({ displayName: expected });
+    store.updateMessage(sid, reply.id, { metadata: { resolvedModelId: 'provider/later-model' } });
+    expect(store.getMessage(sid, reply.id)?.metadata?.resolvedModelId).toBe('provider/deepseek-flash-YoudaoInner');
+    const tool = store.addMessage(sid, { type: 'tool_result', content: 'result' });
+    expect(tool.metadata?.modelPresetId).toBeUndefined();
+  } finally { binding.mockRestore(); }
+});
+
+
+test.each([undefined, 'yd-fast', 'desktop-model'])('desktop model provenance remains immutable: %s', resolvedModelId => {
+  const sid = 'desktop-provenance'; insertSession(sid);
+  insertMessage('desktop-reply', sid, 'assistant', 'partial', JSON.stringify({
+    modelPresetId: ModelPresetId.Balanced, resolvedModelId,
+  }), 1);
+  store.updateMessage(sid, 'desktop-reply', { metadata: {
+    modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'replacement', isFinal: true,
+  } });
+  expect(store.getMessage(sid, 'desktop-reply')?.metadata).toMatchObject({ modelPresetId: ModelPresetId.Balanced });
+  expect(store.getMessage(sid, 'desktop-reply')?.metadata?.resolvedModelId).toBe(resolvedModelId);
+});
+
+test('desktop sends retain their own preset after a mobile run', () => {
+  const sid = 'desktop-after-mobile'; insertSession(sid);
+  store.remote.beginRun(sid, 'earlier-mobile', 'mobile-command');
+  store.remote.put('inputRun:earlier-mobile', { modelPresetId: ModelPresetId.Balanced });
+  store.remote.updateRun(sid, 'succeeded');
+  store.remote.beginRun(sid, 'next-desktop');
+  db.prepare('UPDATE cowork_sessions SET model_preset_id=?, model_override=? WHERE id=?')
+    .run(ModelPresetId.Ultimate, 'provider/desktop-model', sid);
+  const reply = store.addMessage(sid, { type: 'assistant', content: 'reply' });
+  expect(reply.metadata).toMatchObject({ modelPresetId: ModelPresetId.Ultimate, resolvedModelId: 'desktop-model', remoteRunId: 'next-desktop' });
+});
+
+test('an explicit mobile non-preset selection does not inherit the desktop session tier', () => {
+  const sid = 'mobile-custom-model'; insertSession(sid);
+  store.remote.beginRun(sid, 'custom-run', 'command');
+  store.remote.put('inputRun:custom-run', { modelPresetId: null });
+  db.prepare('UPDATE cowork_sessions SET model_preset_id=?, model_override=? WHERE id=?')
+    .run(ModelPresetId.Balanced, 'provider/actual', sid);
+  const reply = store.addMessage(sid, { type: 'assistant', content: 'reply', metadata: { model: 'provider/actual' } });
+  expect(reply.metadata?.modelPresetId).toBeUndefined();
+  expect(getMessageModelLabel(reply.metadata, () => '快速')).toBe('actual');
 });
 
 test('agent CRUD persists subagentCollaborationMode and defaults new agents to all', () => {

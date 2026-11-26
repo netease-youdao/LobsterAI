@@ -1,6 +1,50 @@
 import fs from 'fs';
 import path from 'path';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
+
+import type { ArtifactFileAccess } from '../shared/artifactPreview/types';
+
+type CaptureFileAccess = (
+  filePath: string,
+  access?: ArtifactFileAccess,
+) => { assertAllowed: (filePath?: string) => void };
+
+const activeStreams = new Map<Transform, () => void>();
+
+export function revalidateLocalFileProtocolStreams(): void {
+  for (const [stream, assertAllowed] of activeStreams) {
+    try {
+      assertAllowed();
+    } catch {
+      stream.destroy(new Error('Not found'));
+    }
+  }
+}
+
+function createCheckedFileStream(filePath: string, range: ByteRange | null, assertAllowed: () => void): BodyInit {
+  const stream = fs.createReadStream(filePath, range ?? undefined);
+  const checkedStream = new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        assertAllowed();
+        callback(null, chunk);
+      } catch {
+        callback(new Error('Not found'));
+      }
+    },
+  });
+  activeStreams.set(checkedStream, assertAllowed);
+  stream.on('error', error => checkedStream.destroy(error));
+  checkedStream.once('close', () => {
+    activeStreams.delete(checkedStream);
+    stream.destroy();
+  });
+  return Readable.toWeb(stream.pipe(checkedStream)) as BodyInit;
+}
+
+function notFoundResponse(): Response {
+  return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+}
 
 import { ArtifactPreviewHost } from '../shared/artifactPreview/constants';
 import {
@@ -179,6 +223,7 @@ function buildLocalFileBaseHeaders(filePath: string, size: number, mimeType: str
 }
 
 export interface LocalFileProtocolOptions {
+  captureAccess?: CaptureFileAccess;
   /** A downscaled copy to serve for a `thumb` request, or null to serve the file itself. */
   resolveThumbnail?: (filePath: string, stat: fs.Stats, edge: number, fit: LocalFileThumbnailFit) => Promise<string | null>;
 }
@@ -215,9 +260,15 @@ export async function createLocalFileProtocolResponse(
       console.warn('[ArtifactPreview] refused local file request: not a served media file on a local disk');
       return new Response('Forbidden', { status: 403 });
     }
+    const serialized = new URL(request.url).searchParams.get('access');
+    const access = serialized === null ? undefined : JSON.parse(serialized) as ArtifactFileAccess;
+    const captured = options?.captureAccess?.(sourcePath, access);
+    const assertAllowed = (): void => { captured?.assertAllowed(sourcePath); };
+    assertAllowed();
     const sourceStat = await fs.promises.stat(sourcePath);
+    assertAllowed();
     if (!sourceStat.isFile()) {
-      return new Response('Not found', { status: 404 });
+      return notFoundResponse();
     }
     const sourceMime = extensionMime ?? await sniffExtensionlessLocalImageMimeType(sourcePath);
     if (!sourceMime) {
@@ -225,6 +276,8 @@ export async function createLocalFileProtocolResponse(
       return new Response('Forbidden', { status: 403 });
     }
     const { filePath, stat } = await resolveThumbnailFile(request.url, sourcePath, sourceStat, options);
+    // Thumbnails inherit the original file grant, including revocation during generation or streaming.
+    assertAllowed();
 
     const mimeType = getLocalFileMimeType(filePath)
       ?? (filePath === sourcePath ? sourceMime : await sniffExtensionlessLocalImageMimeType(filePath));
@@ -251,7 +304,7 @@ export async function createLocalFileProtocolResponse(
       return new Response(
         request.method === 'HEAD'
           ? null
-          : Readable.toWeb(fs.createReadStream(filePath, { start: range.start, end: range.end })) as BodyInit,
+          : createCheckedFileStream(filePath, range, assertAllowed),
         {
           status: 206,
           headers: {
@@ -266,7 +319,7 @@ export async function createLocalFileProtocolResponse(
     return new Response(
       request.method === 'HEAD'
         ? null
-        : Readable.toWeb(fs.createReadStream(filePath)) as BodyInit,
+        : createCheckedFileStream(filePath, null, assertAllowed),
       {
         status: 200,
         headers: baseHeaders,
@@ -274,6 +327,6 @@ export async function createLocalFileProtocolResponse(
     );
   } catch (error) {
     console.warn('[ArtifactPreview] local file request failed:', error);
-    return new Response('Not found', { status: 404 });
+    return notFoundResponse();
   }
 }

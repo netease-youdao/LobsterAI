@@ -116,5 +116,5 @@ test('an account change prevents both late preparation and restoring the previou
   finish(expert);
   expect(await pending).toBeNull();
   expect(restoreImageCreationDraft(backup)).toBe(false);
-  expect(store.getState().cowork.draftPrompts[key]).toBe(backup.prompt);
+  expect(store.getState().cowork.draftPrompts[key]).toBeUndefined();
 });

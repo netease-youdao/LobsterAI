@@ -160,6 +160,7 @@ export interface DshHostAgentSpec {
 }
 
 export interface DshSubagentAgentBinding {
+  remoteRequestId?: string;
   childSessionId: string;
   parentDshSessionId: string;
   rootCoworkSessionId: string;
@@ -171,6 +172,7 @@ export interface DshSubagentAgentBinding {
 export type DshBridgeSubagentBindingRequest =
   | {
     action: 'set';
+    remoteRequestId?: string;
     childSessionId: string;
     parentDshSessionId: string;
     rootCoworkSessionId: string;
@@ -186,6 +188,8 @@ export type DshBridgeSubagentBindingHandler = (
 ) => Promise<void> | void;
 
 export interface DshHostSessionContext {
+  remoteAllowedAgentIds?: readonly string[] | null;
+  remoteRequestId?: string | null;
   sessionId: string;
   userQuestionsDisabled?: boolean;
   agentId?: string;
@@ -206,6 +210,7 @@ export interface DshHostSessionContext {
 }
 
 export interface DshBridgeToolExecuteRequest {
+  remoteRequestId?: string;
   signal?: AbortSignal;
   toolName: string;
   args: Record<string, unknown>;
@@ -236,6 +241,8 @@ export interface DshBridgeApprovalEvaluateRequest {
 }
 
 export interface DshApprovalCallContext {
+  nativeSessionId?: string;
+  coworkSessionId?: string;
   toolName: string;
   args: Record<string, unknown>;
   permissionPreset?: DshPermissionPreset;
@@ -707,6 +714,12 @@ export class DshHostManager extends EventEmitter {
 
   setChannelEventHandler(handler: DshBridgeChannelEventHandler | null): void {
     this.channelEventHandler = handler;
+  }
+
+  private remoteToolGuard?: (sessionId: string, requestId: string, agentId: string) => void;
+
+  setRemoteToolGuard(guard: (sessionId: string, requestId: string, agentId: string) => void): void {
+    this.remoteToolGuard = guard;
   }
 
   setSubagentBindingHandler(handler: DshBridgeSubagentBindingHandler | null): void {
@@ -1326,6 +1339,10 @@ export class DshHostManager extends EventEmitter {
 
     const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
     try {
+      if (typeof body.remoteRequestId === 'string' && (pathname === '/dsh-bridge/tool-execute' || pathname === '/dsh-bridge/approval-evaluate')) {
+        if (!this.remoteToolGuard || !body.coworkSessionId || !body.agentId) throw new Error('Remote tool authorization unavailable');
+        this.remoteToolGuard(String(body.coworkSessionId), body.remoteRequestId, String(body.agentId));
+      }
       if (pathname === '/dsh-bridge/tool-execute') {
         if (typeof body?.toolName !== 'string' || !body.toolName.trim()) {
           res.writeHead(400, { 'content-type': 'application/json' });
@@ -1333,6 +1350,7 @@ export class DshHostManager extends EventEmitter {
           return;
         }
         const request: DshBridgeToolExecuteRequest = {
+          remoteRequestId: typeof body.remoteRequestId === 'string' ? body.remoteRequestId : undefined,
           toolName: body.toolName,
           args: (body.args && typeof body.args === 'object' ? body.args : {}) as Record<string, unknown>,
           callId: typeof body.callId === 'string' ? body.callId : undefined,
@@ -1384,6 +1402,8 @@ export class DshHostManager extends EventEmitter {
             : undefined;
         if (callId) {
           this.recordApprovalCallContext(callId, {
+            nativeSessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+            coworkSessionId: typeof body.coworkSessionId === 'string' ? body.coworkSessionId : undefined,
             toolName,
             args: (body.args && typeof body.args === 'object' && !Array.isArray(body.args)
               ? body.args
@@ -1442,21 +1462,18 @@ export class DshHostManager extends EventEmitter {
           res.end(JSON.stringify({ error: 'parentDshSessionId, rootCoworkSessionId, and targetAgentId are required' }));
           return;
         }
+        const remoteRequestId = typeof body.remoteRequestId === 'string' && body.remoteRequestId || undefined;
+        if (remoteRequestId && !this.subagentBindingHandler) throw new Error('Remote delegation guard unavailable');
         const binding: DshSubagentAgentBinding = {
+          remoteRequestId,
           childSessionId,
           parentDshSessionId,
           rootCoworkSessionId,
           targetAgentId,
           createdAt: Date.now(),
         };
+        await this.subagentBindingHandler?.({ action: 'set', ...binding });
         this.lastSubagentBindings.set(childSessionId, binding);
-        await this.subagentBindingHandler?.({
-          action: 'set',
-          childSessionId,
-          parentDshSessionId,
-          rootCoworkSessionId,
-          targetAgentId,
-        });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
         return;

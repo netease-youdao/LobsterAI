@@ -3,10 +3,12 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
 import { COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS } from '../../shared/computerUse/constants';
+import { CoworkIpcChannel } from '../../shared/cowork/constants';
 import { ASK_USER_QUESTION_TOOL_NAME, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpAuthMode } from '../../shared/mcp/auth';
 import { McpIpcChannel, McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
+import type { MediaConfirmationResponse } from '../../shared/media/confirmation';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
 import { NeteaseMail } from '../../shared/neteaseMail/constants';
 import { getNeteaseMailNativeTools, getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
@@ -17,11 +19,14 @@ import {
 } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
+import type { CoworkRuntime } from '../libs/agentEngine/types';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
 import {
+  type AgentSettingsToolHandler,
   type AskUserOptions,
   type AskUserRequest,
   type AskUserResponse,
+  AskUserResponseReason,
   type BrowserToolRequest,
   type BrowserToolResponse,
   type DecisionToolHandler,
@@ -90,7 +95,23 @@ function buildGatewayChildPath(): string {
   return [nodeShimDir, env.PATH].filter(Boolean).join(path.delimiter);
 }
 
+function questionStatus(response: AskUserResponse): 'answered' | 'cancelled' | 'expired' | 'unavailable' {
+  if (response.reason === AskUserResponseReason.Timeout) return 'expired';
+  if (response.reason === AskUserResponseReason.Unavailable) return 'unavailable';
+  return response.behavior === 'allow' ? 'answered' : 'cancelled';
+}
+
+function questionAnswers(request: AskUserRequest, response: AskUserResponse): Record<string, string[]> {
+  return Object.fromEntries(request.questions.map((question, index) => {
+    const value = response.answers?.[question.question];
+    return [`q_${index}`, typeof value !== 'string' || !value ? []
+      : question.multiSelect ? value.split('|||').map(item => item.trim()).filter(Boolean) : [value]];
+  }));
+}
+
 export interface McpRuntimeDeps {
+  permissionSessions?: Map<string, string>;
+  captureAccountSnapshot?: () => () => boolean;
   getMailToken?: (serverId: string) => McpOAuthTokenRecord | null;
   getStore: () => SqliteStore;
   syncOpenClawConfig: (options: {
@@ -103,6 +124,8 @@ export interface McpRuntimeDeps {
   onAskUserRequested?: (sessionId: string, request: { requestId: string; toolName: string }) => void;
   /** Fired when a pending AskUserQuestion request is dismissed upstream. */
   onAskUserDismissed?: (requestId: string) => void;
+  registerQuestion?: NonNullable<CoworkRuntime['registerQuestion']>;
+  settleQuestion?: NonNullable<CoworkRuntime['settleQuestion']>;
   /** Persisted bridge secret; openclaw.json must stay stable across launches. */
   bridgeSecret?: string;
   /** Callback-server port from the previous launch. */
@@ -111,11 +134,24 @@ export interface McpRuntimeDeps {
 }
 
 export class McpRuntime {
+  private agentSettingsToolHandler: AgentSettingsToolHandler | null = null;
+  setAgentSettingsToolHandler(handler: AgentSettingsToolHandler): void {
+    this.agentSettingsToolHandler = handler;
+    this.bridgeServer?.onAgentSettingsTool(handler);
+  }
+  getAgentSettingsCallbackUrl(): string | null { return this.bridgeServer?.agentSettingsCallbackUrl ?? null; }
+
   private mcpStore: McpStore | null = null;
   private launchResolverManager: McpLaunchResolverManager | null = null;
   private readonly launchConnections = new Map<string, ManagedLaunchConnection>();
   private bridgeServer: McpBridgeServer | null = null;
   private readonly bridgeSecret: string;
+  private readonly remoteQuestions = new Map<string, { request: AskUserRequest; terminal?: AskUserResponse }>();
+  private readonly localQuestionAccess = new Map<string, {
+    sessionId: string;
+    expiresAt: number;
+    isCurrentAccount: () => boolean;
+  }>();
   private resolvedServersCache: ResolvedMcpServer[] = [];
   private mediaGenerationHandler:
     | ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>)
@@ -326,12 +362,30 @@ export class McpRuntime {
         this.resolveAskUser(request.requestId, { behavior: 'deny' });
         return;
       }
+      this.deps.permissionSessions?.set(request.requestId, sessionId);
+      try {
+        const isCurrentAccount = this.deps.captureAccountSnapshot?.();
+        if (!isCurrentAccount || !isCurrentAccount()) {
+          console.warn('[AskUser] Request account is unavailable', { requestId: request.requestId });
+          this.resolveAskUser(request.requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+          return;
+        }
+        this.localQuestionAccess.set(request.requestId, { sessionId, expiresAt: request.expiresAt, isCurrentAccount });
+      } catch (error) {
+        console.error('[AskUser] Failed to capture request account', { requestId: request.requestId }, error);
+        this.resolveAskUser(request.requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+        return;
+      }
+      console.debug('[AskUser] Registered desktop question', {
+        requestId: request.requestId, sessionId, localOnly: request.localOnly === true, expiresAt: request.expiresAt,
+      });
+      this.registerQuestion(sessionId, request);
       const windows = BrowserWindow.getAllWindows();
       let delivered = false;
       windows.forEach(win => {
         if (win.isDestroyed()) return;
         try {
-          win.webContents.send('cowork:stream:permission', {
+          win.webContents.send(CoworkIpcChannel.StreamPermission, {
             sessionId,
             request: {
               requestId: request.requestId,
@@ -358,12 +412,26 @@ export class McpRuntime {
       });
     });
 
+    this.bridgeServer.onAskUserSettled((requestId, response) => {
+      const pending = this.remoteQuestions.get(requestId);
+      if (!pending) return;
+      pending.terminal = response;
+      this.remoteQuestions.delete(requestId);
+      this.deps.settleQuestion?.(requestId, {
+        status: questionStatus(response),
+        ...(response.behavior === 'allow' ? { answers: questionAnswers(pending.request, response) } : {}),
+      });
+    });
+
     this.bridgeServer.onAskUserDismiss(requestId => {
+      this.localQuestionAccess.delete(requestId);
+      this.deps.permissionSessions?.delete(requestId);
+      console.debug('[AskUser] Dismissed desktop question', { requestId });
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (win.isDestroyed()) return;
         try {
-          win.webContents.send('cowork:stream:permissionDismiss', { requestId });
+          win.webContents.send(CoworkIpcChannel.StreamPermissionDismiss, { requestId });
         } catch {
           // ignore
         }
@@ -373,6 +441,7 @@ export class McpRuntime {
 
     this.bridgeServer.onMediaGeneration(request => this.executeMediaGeneration(request));
 
+    if (this.agentSettingsToolHandler) this.bridgeServer.onAgentSettingsTool(this.agentSettingsToolHandler);
     this.bridgeServer.onDecisionTool(async (request, signal) => {
       if (!this.decisionToolHandler) {
         return {
@@ -391,6 +460,77 @@ export class McpRuntime {
     }
   }
 
+  /** Only a verified desktop session may publish a legacy form to remote control. */
+  private registerQuestion(sessionId: string, request: AskUserRequest): void {
+    // Recoverable paid-media consent requires its revision-aware desktop protocol.
+    if (request.localOnly || request.mediaConfirmation || !this.deps.registerQuestion || !request.sessionKey
+      || sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID) return;
+    try {
+      // Do not discard a secret marker while adapting the ordinary form contract.
+      if (request.questions.some(question => {
+        const raw = question as unknown as Record<string, unknown>;
+        return raw.isSecret === true || raw.secretStore !== undefined;
+      })) return;
+      // Legacy answers use the question text as their key; duplicate keys cannot round-trip.
+      if (new Set(request.questions.map(question => question.question)).size !== request.questions.length) return;
+      const snapshot: AskUserRequest = { ...request, questions: request.questions.map(question => ({
+        ...question, options: question.options.map(option => ({ ...option })),
+      })) };
+      const pending: { request: AskUserRequest; terminal?: AskUserResponse } = { request: snapshot };
+      this.remoteQuestions.set(request.requestId, pending);
+      const registered = this.deps.registerQuestion({
+        requestId: request.requestId, sessionId, kind: 'legacy',
+        createdAt: request.createdAt, expiresAt: request.expiresAt,
+        questions: snapshot.questions.map((question, index) => ({
+          questionId: `q_${index}`, header: question.header ?? '', question: question.question,
+          options: question.options, multiSelect: question.multiSelect === true,
+          isOther: question.isOther ?? true, allowSkip: question.allowSkip ?? true,
+        })),
+        resolve: response => {
+          if (!this.canAccessLocalQuestion(request.requestId)) {
+            const applied = this.resolveAskUser(request.requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+            return { kind: 'known_not_applied', reason: 'QUESTION_UNAVAILABLE',
+              ...(applied && pending.terminal ? { status: questionStatus(pending.terminal) } : {}) };
+          }
+          const answers: Record<string, string> = Object.create(null);
+          const skippedQuestionIds: string[] = [];
+          if (response.action === 'answer') snapshot.questions.forEach((question, index) => {
+            const values = response.answers[`q_${index}`] ?? [];
+            if (values.length) answers[question.question] = question.multiSelect ? values.join('|||') : values[0];
+            else skippedQuestionIds.push(question.id ?? `question-${index + 1}`);
+          });
+          const applied = this.resolveAskUser(request.requestId, response.action === 'answer'
+            ? { behavior: 'allow', answers, ...(skippedQuestionIds.length ? { skippedQuestionIds } : {}) }
+            : { behavior: 'deny' });
+          if (!applied || !pending.terminal) return { kind: 'known_not_applied', reason: 'QUESTION_UNAVAILABLE' };
+          if (pending.terminal.reason) return { kind: 'known_not_applied', status: questionStatus(pending.terminal), reason: 'QUESTION_UNAVAILABLE' };
+          return { kind: 'confirmed', status: questionStatus(pending.terminal),
+            ...(pending.terminal.behavior === 'allow' ? { answers: questionAnswers(snapshot, pending.terminal) } : {}) };
+        },
+      });
+      if (!registered) this.remoteQuestions.delete(request.requestId);
+    } catch (error) {
+      this.remoteQuestions.delete(request.requestId);
+      console.warn('[AskUser] remote question registration unavailable; local form remains usable', error instanceof Error ? error.name : 'Error');
+    }
+  }
+
+  canAccessLocalQuestion(requestId: string): boolean {
+    const access = this.localQuestionAccess.get(requestId);
+    return !!access && this.deps.permissionSessions?.get(requestId) === access.sessionId
+      && Date.now() < access.expiresAt && access.isCurrentAccount();
+  }
+
+  async askUserInternal(
+    questions: AskUserRequest['questions'],
+    timeoutMs: number,
+    options: AskUserOptions & { recoverableMedia: NonNullable<AskUserOptions['recoverableMedia']> },
+  ): Promise<MediaConfirmationResponse | null>;
+  async askUserInternal(
+    questions: AskUserRequest['questions'],
+    timeoutMs?: number,
+    options?: AskUserOptions,
+  ): Promise<AskUserResponse | null>;
   async askUserInternal(
     questions: AskUserRequest['questions'],
     timeoutMs?: number,
@@ -415,8 +555,8 @@ export class McpRuntime {
     return this.bridgeServer?.actOnMediaConfirmation(command) ?? Promise.resolve(false);
   }
 
-  resolveAskUser(requestId: string, response: AskUserResponse): void {
-    this.bridgeServer?.resolveAskUser(requestId, response);
+  resolveAskUser(requestId: string, response: AskUserResponse): boolean {
+    return this.bridgeServer?.resolveAskUser(requestId, response) ?? false;
   }
 
   broadcastServersChanged(): void {

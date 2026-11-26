@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { APP_NAME } from '../../appConstants';
+import { TrustedWriteContext, withTrustedMigrationWrite } from '../../migration/remoteWriteContext';
 import { REWRITABLE_USER_DATA_SUBDIRS } from './archiveWhitelist';
 
 export { REWRITABLE_USER_DATA_SUBDIRS };
@@ -689,7 +690,8 @@ export const rewriteRestoredUserDataPathsInSqliteSync = (
   let db: Database.Database | null = null;
   try {
     db = new Database(dbPath);
-    const updatedMessageRows = rewriteCoworkMessagesTable(db, options);
+    const database = db;
+    const updatedMessageRows = withTrustedMigrationWrite(database, TrustedWriteContext.Session, () => rewriteCoworkMessagesTable(database, options));
     const updatedVersionRows = rewriteCoworkMessageVersionsTable(db, options);
     const updatedEditRows = rewriteCoworkMessageEditsTable(db, options);
     const updatedLibraryArtifactRows = rewriteLibraryLocalArtifactsTable(db, options);

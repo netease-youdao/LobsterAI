@@ -1,0 +1,1695 @@
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { remoteConnectionFailure, remoteTaskContentSummary } from '../../renderer/components/settings/remoteControlState';
+import { RemoteExpertAvatar } from '../../shared/agent/avatar';
+import { RemoteSyncHealthStatus, RemoteSyncLaneStatus } from '../../shared/remote/constants';
+import { RemoteEnvironment } from '../../shared/remote/environment';
+import { remoteTelemetryHasRequired, sanitizeRemoteTelemetryFields } from '../../shared/remote/telemetry';
+import { AgentOwnerStore } from '../agentOwnership';
+import { payloadHash } from './canonical';
+import { RemoteAgentCatalog, type RemoteExpertAvatars } from './remoteAgentCatalog';
+import { RemoteAnnotationDisplayVersion } from './remoteAnnotationText';
+import { type AvailabilityContext,RemoteAvailabilityPublisher } from './remoteAvailabilityPublisher';
+import { ReplyModelDisplayVersion } from './remoteAvailabilityStore';
+import { RemoteBridge } from './remoteBridge';
+import { RemoteDisplayHealthStatus } from './remoteDisplayHealth';
+import { RemoteLiveEncoderVersion } from './remoteLiveMetadata';
+import { recordRemoteSessionDeletion } from './remoteLocalGc';
+import { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+
+const telemetryEvents = vi.hoisted(() => [] as Array<{ event: string; fields: Record<string, unknown> }>);
+vi.mock('./remoteTelemetry', () => ({
+  captureRemoteTelemetry: (base: Record<string, unknown> = {}) => ({
+    emit: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields: { ...base, ...fields } }),
+  }),
+  remoteTelemetryEvent: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields }),
+}));
+
+
+vi.mock('./remoteLogSink', () => ({ enqueueRemoteLog: (level: 'debug' | 'warn' | 'error' | 'info', message: string, fields: Record<string, unknown>) => console[level](message, fields) }));
+
+const cleanup: Array<() => void> = [];
+afterEach(() => { telemetryEvents.length = 0; cleanup.splice(0).reverse().forEach(dispose => dispose()); vi.restoreAllMocks(); });
+function fixture() {
+  const db = new Database(':memory:'); cleanup.push(() => db.close());
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
+  const store = new RemoteStore(db, { deferredProjection: true, restoreRuns: false }); store.setWake(() => {});
+  const owner = { userId: '1', scopeKey: 'personal' };
+  let context: AvailabilityContext | null = { scope: 'target:1:personal:desktop', owner, deviceId: 'desktop', generation: '1', supported: true, historySupported: true };
+  store.transaction(() => {
+    db.prepare('INSERT INTO cowork_sessions VALUES(?,?,1,1,?,NULL,NULL)').run('local', 'Task', 'idle');
+    store.assignNew('local', owner, 'local_create');
+    db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,1)').run('message', 'local', 'assistant', 'Hello', '{}');
+  });
+  store.bindRemote('local', store.sync('local')!.session_id, 'desktop');
+  const bootstraps = new Map<string, any>();
+  const request = vi.fn(async (pathname: string, _method: string, body: any) => {
+    if (pathname === '/sync/mode-activations') return { writerGeneration: body.writerGeneration, state: 'fenced', pendingCommandIds: [], pendingCommands: [] };
+    if (pathname === '/control/bootstrap' || pathname === '/control/bootstrap/paged') {
+      bootstraps.set(body.operationId, body);
+      return { state: 'uploading', operationId: body.operationId, sessionId: body.sessionId, writerGeneration: body.writerGeneration };
+    }
+    if (/\/parts\/\d+$/u.test(pathname)) return { state: 'accepted' };
+    if (pathname.endsWith('/commit')) {
+      const operationId = pathname.split('/')[3], begin = bootstraps.get(operationId);
+      return { state: 'committed', controlReady: true, operationId, sessionId: body.sessionId, writerGeneration: body.writerGeneration,
+        controlEpoch: body.controlEpoch, manifestHash: begin?.manifestHash, coreCheckpointId: begin?.coreCheckpointId,
+        throughFactSeq: begin?.throughFactSeq,
+        ...(begin?.sourceManifestHash ? { sourceManifestHash: begin.sourceManifestHash, frozenThroughSourceSeq: begin.frozenThroughSourceSeq, expectedResolvedSourceSeq: begin.expectedResolvedSourceSeq } : {}) };
+    }
+    if (pathname === '/control/facts/batches') return { state: 'committed', lastFactSeq: body.lastFactSeq };
+    if (pathname === '/sync/live-projections') return { publicationId: body.publicationId, sessionId: body.sessionId, writerGeneration: body.writerGeneration, objectKind: body.objectKind, objectId: body.objectId, sourceObjectRevision: body.sourceObjectRevision, state: 'accepted', projectionRevision: '900', committedSeq: '10' };
+    throw Object.assign(new Error('unknown operation'), { httpStatus: 404 });
+  });
+  const publisher = new RemoteAvailabilityPublisher({ store, context: () => context, admitted: () => true, request });
+  store.setIndependentControlReady(id => publisher.controlReady(id));
+  cleanup.push(() => store.history.close());
+  cleanup.push(() => publisher.dispose());
+  const controls = (): Promise<void> => (publisher as any).controls(context);
+  const live = (): Promise<void> => (publisher as any).live(context);
+  return { db, store, owner, context: context!, setContext: (value: AvailabilityContext | null) => { context = value; }, request, publisher, controls, live };
+}
+
+describe('task credits capability downgrade', () => {
+  it('backfills user usage outside the newest 64 messages and removes it after capability downgrade', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true;
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,0)').run('a-old-user', 'local', 'user', 'Old input', JSON.stringify({
+        turnUsage: { traceId: 'a'.repeat(32), status: 'settled', billingScope: 'personal', requestCount: 1, failedRequestCount: 0,
+          creditsUsed: 4.84, displayCreditsUsed: 4.84, updatedAt: 3 },
+      }));
+      for (let index = 0; index < 80; index++) f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(`z-tail-${String(index).padStart(3, '0')}`, 'local', 'assistant', `Reply ${index}`, '{}', index + 10, index + 10);
+    });
+    // Pre-upgrade historical messages may not have a live source index row yet.
+    f.db.prepare("DELETE FROM remote_live_revisions WHERE object_id='a-old-user'").run();
+    f.store.setTaskCreditsProjectionSupported(true); await f.controls();
+    await f.live();
+    const first = f.request.mock.calls.find(call => call[0] === '/sync/live-projections' && call[2].objectId === 'a-old-user')?.[2];
+    expect(first?.payload.turnUsage.displayCreditsUsed).toBe('4.84');
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockClear();
+    for (let pass = 0; pass < 8; pass++) { (f.publisher as any).liveScan.clear(); await f.live(); }
+    const replacement = f.request.mock.calls.find(call => call[0] === '/sync/live-projections' && call[2].objectId === 'a-old-user')?.[2];
+    expect(replacement).toBeDefined();
+    expect(replacement.payload).not.toHaveProperty('turnUsage');
+    expect(BigInt(replacement.sourceObjectRevision)).toBeGreaterThan(BigInt(first.sourceObjectRevision));
+  });
+
+  it('bounds sparse history backfill to 64 index headers per page and checks the active owner', () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.store.setTaskCreditsProjectionSupported(true);
+    f.store.transaction(() => {
+      for (let index = 0; index < 130; index++) f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(`a-${String(index).padStart(3, '0')}`, 'local', 'assistant', 'Text', '{}', index + 10, index + 10);
+      f.db.prepare("INSERT INTO cowork_messages VALUES('z-history-user','local','user','Old input','{}',1,0)").run();
+    });
+    const candidates = () => (f.publisher as any).taskCreditsCandidates(f.context, 'local');
+    expect(candidates()).toEqual([]); expect(candidates()).toEqual([]);
+    expect(candidates()).toEqual([expect.objectContaining({ object_id: 'z-history-user', kind: 'message' })]);
+    f.store.setEnabledOwner({ userId: 'other', scopeKey: 'personal' });
+    expect(candidates()).toEqual([]);
+  });
+
+  it('covers immutable unknown facts with a compatible checkpoint before replaying their original bytes', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Changed task' WHERE id='local'").run());
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('receipt lost');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.pending(f.context.scope, 'control', 'local').find(item => item.pathname === '/control/facts/batches')!;
+    expect(original.body.facts.some((fact: any) => fact.payload.session?.taskUsage)).toBe(true);
+    const originalBytes = JSON.stringify(original.body);
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    let baseline = 0n;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/commit')) {
+        const result = await ordinary(...args); baseline = BigInt(result.throughFactSeq); return result;
+      }
+      if (/\/parts\/\d+$/u.test(args[0])) {
+        expect(args[2].records.every((record: any) => !record.payload.session?.taskUsage)).toBe(true);
+      }
+      if (args[0] === '/control/facts/batches') {
+        if (baseline === 0n) throw Object.assign(new Error('Unknown taskUsage field'), { code: 47019, httpStatus: 400 });
+        expect(baseline).toBeGreaterThanOrEqual(BigInt(args[2].lastFactSeq));
+        expect(args[2].batchId).toBe(original.body.batchId);
+        const { connectionGeneration: _generation, ...body } = args[2];
+        const { coreRevision: _revision, ackCoreRevision: _ack, knownCheckpointId: _checkpoint, controlReconciliation: _reconciliation, ...saved } = original.body;
+        expect(body).toEqual(saved);
+        return { state: 'covered_by_checkpoint', lastFactSeq: baseline.toString() };
+      }
+      return ordinary(...args);
+    });
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(JSON.stringify(f.publisher.ledger.request(original.key)?.body)).toBe(originalBytes);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.taskCreditsRecoveryBatchId).toBe(original.key);
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.request(original.key)).toBeNull();
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.taskCreditsRecoveryBatchId).toBeUndefined();
+    expect(f.publisher.controlReady('local')).toBe(true);
+  });
+
+  it('keeps an unknown fact operation unchanged when its receipt cannot be queried', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Next task' WHERE id='local'").run());
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('unknown write result');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.pending(f.context.scope, 'control', 'local').find(item => item.pathname === '/control/facts/batches')!;
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockClear(); f.request.mockRejectedValue(new Error('receipt service unavailable'));
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.request(original.key)).toEqual(original);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.taskCreditsRecoveryBatchId).toBeUndefined();
+    expect(f.request.mock.calls.every(call => call[1] === 'GET')).toBe(true);
+  });
+
+  it('drains compatible sealed facts without a replacement checkpoint when only advertisement is disabled', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_sessions SET title='Updated task' WHERE id='local'").run());
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('unknown write result');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.pending(f.context.scope, 'control', 'local').find(item => item.pathname === '/control/facts/batches')!;
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockClear(); f.request.mockImplementation(ordinary);
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.request(original.key)).toBeNull();
+    expect(f.request.mock.calls.some(call => call[0] === '/control/bootstrap' || call[0] === '/control/bootstrap/paged')).toBe(false);
+    expect(f.publisher.controlReady('local')).toBe(true);
+  });
+
+  it('aborts an incompatible sealed bootstrap and rebuilds under a different operation ID', async () => {
+    const f = fixture(); f.store.setEnabledOwner(f.owner); f.context.taskCreditsSupported = true; f.store.setTaskCreditsProjectionSupported(true);
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (/\/parts\/\d+$/u.test(args[0])) throw new Error('part delivery unknown');
+      return ordinary(...args);
+    });
+    await f.controls();
+    const original = f.publisher.ledger.session(f.context.scope, 'local')!;
+    expect(original.phase).toBe('bootstrap');
+    expect(f.publisher.ledger.request(`${original.operationId}:checkpoint`)).not.toBeNull();
+    f.context.taskCreditsSupported = false; f.store.setTaskCreditsProjectionSupported(false);
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/abort')) return { state: 'aborted', operationId: original.operationId,
+        sessionId: original.sessionId, writerGeneration: original.writerGeneration, requestHash: args[2].beginRequestHash };
+      if (/\/parts\/\d+$/u.test(args[0])) expect(args[2].records.every((record: any) => !record.payload.session?.taskUsage)).toBe(true);
+      return ordinary(...args);
+    });
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.ledger.operationReceipt(original.operationId)?.state).toBe('aborted');
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.operationId).not.toBe(original.operationId);
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+  });
+
+  it.each(['sealed_unpublished', 'original_terminal'])('resolves a sealed live usage publication as %s without rewriting it', async resultState => {
+    const f = fixture(); f.context.taskCreditsSupported = false; f.context.publicationResolutionSupported = true;
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const publicationId = 'usage-publication';
+    const original = f.publisher.ledger.saveRequest({ key: publicationId, scope: f.context.scope, localId: 'local', lane: 'live',
+      body: { objectKind: 'message', objectId: 'message', publicationId, sessionId: state.sessionId, deviceId: 'desktop',
+        writerGeneration: state.writerGeneration, sourceObjectRevision: '1', payload: { turnUsage: { displayCreditsUsed: '4.84' } } },
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true });
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/resolve')) {
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: resultState, publicationId, sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          ...(resultState === 'sealed_unpublished'
+            ? { sealId: 'seal', resolutionRequestHash: payloadHash({ ...business, publicationId }) }
+            : { originalRequestHash: 'a'.repeat(64), receipt: { publicationId, state: 'accepted' } }) };
+      }
+      return ordinary(...args);
+    });
+    await f.live();
+    expect(f.publisher.ledger.request(publicationId)?.body).toEqual(original.body);
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(false);
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].publicationId === publicationId)).toBe(false);
+    expect(f.publisher.ledger.db.prepare('SELECT resolution_receipt FROM availability_requests WHERE key=?').get(publicationId))
+      .toMatchObject({ resolution_receipt: expect.stringContaining(resultState) });
+  });
+});
+
+describe('publisher transient lanes reach device UI', () => {
+  function display(f: ReturnType<typeof fixture>): any {
+    const bridge: any = new RemoteBridge({ store: f.store, identity: { installationId: 'instance', deviceKey: 'key', databaseId: 'db' },
+      runSessionTransaction: operation => f.store.transaction(operation), getOwner: () => f.owner,
+      getEnvironment: () => RemoteEnvironment.Test, getApiBaseUrl: () => 'https://example.com', request: async () => new Response(),
+      metadata: { name: 'Desktop', hostName: 'host', platform: 'macos', appVersion: '1', instanceLabel: 'default' },
+      prepare: () => { throw new Error('not used'); }, execute: async () => ({ outcome: 'started' }), onAccountChange: vi.fn(),
+    });
+    bridge.availability.dispose(); bridge.availability = f.publisher;
+    bridge.owner = f.owner; bridge.targetId = 'target'; bridge.registration = { deviceId: 'desktop', ...f.owner, metadataVersion: '1' };
+    bridge.generation = '1'; bridge.lastPong = Date.now();
+    vi.spyOn(bridge.displaySnapshot, 'read').mockReturnValue({ status: RemoteDisplayHealthStatus.Known, observedAt: Date.now(), settings: null,
+      pendingSettings: false, pendingName: false, catalogFailed: false,
+      legacy: { pendingSessions: 0, oldest: null, lastSuccess: null }, availability: null });
+    cleanup.push(() => bridge.stop());
+    return bridge;
+  }
+
+  it('keeps a real control request failure near the device and removes it after successful replay', async () => {
+    const f = fixture(), now = Date.now();
+    f.request.mockRejectedValueOnce(new Error('control request unavailable'));
+    await f.controls();
+    expect(f.request).toHaveBeenCalled();
+    const bridge = display(f), failed = bridge.state();
+    expect(failed.syncHealth.lanes).toEqual({ control: RemoteSyncLaneStatus.Backoff });
+    expect(failed.syncHealth.status).toBe(RemoteSyncHealthStatus.Degraded);
+    expect(remoteConnectionFailure(failed)).toBe('remoteControlSyncFailed');
+    expect(remoteTaskContentSummary(failed)).toBeNull();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 2000);
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(bridge.state().syncHealth.lanes).toEqual({});
+    expect(remoteConnectionFailure(bridge.state())).toBeNull();
+  });
+
+  it('keeps live publication failure separate from control failure, including simultaneous failures', async () => {
+    const f = fixture(); await f.controls();
+    const normal = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') throw new Error('live request unavailable');
+      return normal(...args);
+    });
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    const bridge = display(f), failed = bridge.state();
+    expect(failed.syncHealth.lanes).toEqual({ live: RemoteSyncLaneStatus.Backoff });
+    expect(remoteConnectionFailure(failed)).toBeNull();
+    expect(remoteTaskContentSummary(failed)?.key).toBe('remoteTaskContentUnknown');
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_sessions SET title=? WHERE id=?').run('Changed', 'local'));
+    f.request.mockRejectedValueOnce(new Error('control request unavailable'));
+    await f.controls();
+    const both = bridge.state();
+    expect(both.syncHealth.lanes).toEqual({ live: RemoteSyncLaneStatus.Backoff, control: RemoteSyncLaneStatus.Backoff });
+    expect(remoteConnectionFailure(both)).toBe('remoteControlSyncFailed');
+    expect(remoteTaskContentSummary(both)?.key).toBe('remoteTaskContentUnknown');
+    expect(f.publisher.displayTransientHealth(null)).toMatchObject({ pending: false, controlBackoff: false, liveBackoff: false });
+    expect(f.publisher.displayTransientHealth('another-scope')).toMatchObject({ pending: false, controlBackoff: false, liveBackoff: false });
+  });
+
+  it.each(['control', 'live'] as const)('keeps a top-level %s failure until its eligible successful turn', async lane => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(), publisher = f.publisher as any;
+      const method = lane === 'control' ? 'controls' : 'live';
+      const run = vi.spyOn(publisher, method).mockRejectedValueOnce(new Error('lane unavailable')).mockResolvedValue(undefined);
+      vi.spyOn(publisher, lane === 'control' ? 'live' : 'controls').mockResolvedValue(undefined);
+      vi.spyOn(publisher, 'history').mockResolvedValue(undefined);
+      publisher.tick(); await vi.advanceTimersByTimeAsync(0);
+      expect(f.publisher.displayTransientHealth(f.context.scope)).toMatchObject({ [`${lane}Backoff`]: true });
+      await vi.advanceTimersByTimeAsync(999); expect(run).toHaveBeenCalledTimes(1);
+      expect(f.publisher.displayTransientHealth(f.context.scope).degraded).toBe(true);
+      await vi.advanceTimersByTimeAsync(1); expect(run).toHaveBeenCalledTimes(2);
+      expect(f.publisher.displayTransientHealth(f.context.scope)).toMatchObject({ degraded: false, controlBackoff: false, liveBackoff: false });
+      f.publisher.stop();
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('September reliability protocols', () => {
+  it('never turns a missing current identity into an unowned legacy writer', () => {
+    const f = fixture(); f.setContext(null);
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unavailable', dependency: 'context' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(false);
+    f.setContext({ ...f.context, supported: false });
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unowned' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(true);
+  });
+  it('archives a superseded commit and automatically seals a new checkpoint ID', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    let supersede = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/commit') && supersede) { supersede = false; return { state: 'superseded', controlReady: false, operationId: args[0].split('/')[3], sessionId: args[2].sessionId }; }
+      return ordinary(...args);
+    });
+    await f.controls(); expect(f.publisher.controlReady('local')).toBe(false);
+    await f.controls(); expect(f.publisher.controlReady('local')).toBe(true);
+    const checkpoints = f.request.mock.calls.filter(call => call[0] === '/control/bootstrap').map(call => call[2].operationId);
+    expect(checkpoints).toHaveLength(2); expect(new Set(checkpoints).size).toBe(2);
+  });
+  it('retains terminal history payload while checkpoint references exist and never re-executes a completed operation', async () => {
+    const f = fixture(); await f.controls();
+    const publisher = f.publisher as any, state = publisher.ledger.session(f.context.scope,'local');
+    const context = { scope: f.context.scope, localId: 'local', sessionId: state.sessionId, writerGeneration: state.writerGeneration, owner: f.owner, deviceId: 'desktop' };
+    f.store.history.prepare(context);
+    f.store.history.sealOperation({ id: 'history-proof', context, kind: 'recovery', request: {
+      checkpointState: { operationId: 'checkpoint-proof' }, snapshot: { records: ['x'.repeat(10000)] }, begin: { frozenThroughSourceSeq: '1' },
+    } });
+    f.store.history.completeOperation(context,'history-proof',{ state: 'committed', recoveryId: 'history-proof' },{ historyGeneration: '1', resolvedSourceSeq: '1' });
+    const operation = f.store.history.operation(context,'history-proof')!;
+    publisher.releaseHistoryPayload(f.context,operation);
+    expect(f.store.history.operation(context,'history-proof')!.request).toHaveProperty('snapshot');
+    publisher.ledger.db.prepare('INSERT INTO availability_receipts VALUES(?,?)').run('checkpoint-proof',JSON.stringify({ state: 'committed' }));
+    publisher.ledger.saveRequest({ key: 'checkpoint-proof:part:0', scope: f.context.scope, localId: 'local', lane: 'control', method: 'PUT',
+      pathname: '/control/bootstrap/checkpoint-proof/parts/0', version: 1, body: {}, lookup: null, lookupVersion: 1, createdAt: Date.now(), attempted: true });
+    publisher.releaseHistoryPayload(f.context,operation);
+    expect(f.store.history.operation(context,'history-proof')!.request).toHaveProperty('snapshot');
+    publisher.ledger.archiveBootstrap(f.context.scope,'local','checkpoint-proof',{ state: 'committed' });
+    publisher.releaseHistoryPayload(f.context,operation);
+    expect(f.store.history.operation(context,'history-proof')!.request).not.toHaveProperty('snapshot');
+    f.request.mockClear(); await publisher.recoverHistory(f.context,operation);
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('drains an unchanged bounded dirty page before publishing later facts', async () => {
+    const f = fixture(); f.store.beginRun('local', 'long-run');
+    for (let index = 0; index < 30; index++) f.store.put(`approval:local:a-${index}`, {
+      approvalId: `a-${index}`, runId: 'long-run', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    await f.controls();
+    for (let index = 0; index < 5; index++) await f.controls();
+    for (let index = 0; index < 20; index++) f.store.put(`approval:local:a-${index}`, f.store.get(`approval:local:a-${index}`));
+    f.store.put('approval:local:z-new', { approvalId: 'z-new', runId: 'long-run', approvalVersion: '2', status: 'approved', operationDigest: 'digest' });
+    for (let index = 0; index < 5; index++) await f.controls();
+    expect(f.request.mock.calls.some(call => call[0] === '/control/facts/batches' && call[2].facts.some((fact: any) => fact.payload.approval?.approvalId === 'z-new'))).toBe(true);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 0 });
+  });
+  it('keeps a normal run with a hundred closed decisions controllable through bounded facts', async () => {
+    const f = fixture(); f.store.beginRun('local', 'long-run');
+    for (let index = 0; index < 100; index++) f.store.put(`approval:local:a-${index}`, {
+      approvalId: `a-${index}`, runId: 'long-run', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    for (let index = 0; index < 10; index++) await f.controls();
+    const batches = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches');
+    expect(batches.every(call => call[2].facts.length <= 16)).toBe(true);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 0 });
+  });
+  it('freezes a negotiated complete baseline beyond 64 records and validates each original page receipt', async () => {
+    const f = fixture(); f.context.checkpointPagesSupported = true;
+    for (let index = 0; index < 80; index++) f.store.transaction(() => {
+      const id = `gone-${index}`;
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,?)').run(id, 'local', 'assistant', 'gone', '{}', index + 2);
+      f.db.prepare('DELETE FROM cowork_messages WHERE id=?').run(id);
+    });
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (/\/parts\/\d+$/u.test(args[0])) return { partNo: Number(args[0].split('/').at(-1)), payloadHash: args[2].payloadHash, recordCount: args[2].records.length };
+      return ordinary(...args);
+    });
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    const begin = f.request.mock.calls.find(call => call[0] === '/control/bootstrap/paged')![2];
+    expect(begin.totalRecords).toBe(81); expect(begin.pageManifest).toHaveLength(2);
+    expect(begin).not.toHaveProperty('pendingCommandIds');
+    expect(begin.manifestHash).toBe(payloadHash({ checkpointFormat: begin.checkpointFormat, captureControlRevision: begin.captureControlRevision,
+      totalRecords: begin.totalRecords, totalBytes: begin.totalBytes, pageManifest: begin.pageManifest, requiredSets: begin.requiredSets }));
+    expect(f.request.mock.calls.filter(call => /\/parts\/\d+$/u.test(call[0])).every(call => Buffer.byteLength(JSON.stringify(call[2])) <= 65536)).toBe(true);
+  });
+  it('keeps unknown live bytes until an original-ID seal proof is durable, then allows new objects', async () => {
+    const f = fixture(); f.context.publicationResolutionSupported = true; await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.publisher.ledger.saveRequest({ key: 'unknown-publication', scope: f.context.scope, localId: 'local', lane: 'live',
+      body: { objectKind: 'message', objectId: 'message', publicationId: 'unknown-publication', writerGeneration: state.writerGeneration },
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true });
+    f.publisher.ledger.db.prepare("UPDATE availability_requests SET body='{',object_id=NULL,object_kind=NULL WHERE key='unknown-publication'").run();
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'fresh')).toBe(true);
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/resolve')) {
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: 'sealed_unpublished', publicationId: 'unknown-publication', sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          sealId: 'seal', resolutionRequestHash: payloadHash({ ...business, publicationId: 'unknown-publication' }), sealedAt: 'now' };
+      }
+      return ordinary(...args);
+    });
+    await f.live();
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'fresh')).toBe(false);
+    expect(f.publisher.ledger.db.prepare("SELECT body FROM availability_requests WHERE key='unknown-publication'").get()).toEqual({ body: '{' });
+    await f.live(); expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    expect(f.store.sync('local')?.ack_seq).toBe(0);
+  });
+  it('never permits a legacy writer when the ownership ledger is unavailable', () => {
+    const f = fixture(); vi.spyOn(f.publisher.ledger, 'hasSession').mockImplementation(() => { throw new Error('ledger missing'); });
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unavailable', dependency: 'control_ledger' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(false);
+  });
+});
+
+describe('availability-first control and current messages', () => {
+  it('publishes controls and live content past a poisoned historical outbox without advancing its ACK', async () => {
+    const f = fixture();
+    f.db.prepare('INSERT INTO remote_outbox VALUES(?,?,?)').run('local', 160, '{');
+    f.db.prepare('UPDATE remote_sync SET source_seq=332,ack_seq=159 WHERE local_id=?').run('local');
+    await f.controls(); await f.live();
+    expect(f.publisher.ownsHistory('local')).toBe(true);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.phase).toBe('active');
+    const live = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(live.payload.blocks[0].text).toBe('Hello'); expect(live.payload).not.toHaveProperty('revision');
+    expect(f.store.sync('local')).toMatchObject({ source_seq: 332, ack_seq: 159 });
+    expect(f.db.prepare('SELECT event_json FROM remote_outbox').get()).toEqual({ event_json: '{' });
+  });
+  it('clears the exact live failure after an automatic replay receives a valid ACK', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let failOnce = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && failOnce) { failOnce = false; throw new TypeError('fetch failed'); }
+      return ordinary(...args);
+    });
+    await f.live();
+    const original = f.publisher.ledger.pending(f.context.scope, 'live', 'local')[0];
+    expect(original).toBeDefined();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+    now += 1001;
+    await f.live();
+    expect(f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').map(call => call[2].publicationId))
+      .toEqual([original.key, original.key]);
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toEqual([]);
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: false, degraded: false });
+  });
+  it('clears a recovered task scan failure only after a successful scan', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    vi.spyOn(f.publisher.ledger, 'scanPending').mockImplementationOnce(() => { throw new Error('Temporary ledger read failure'); });
+    await f.live();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+    now += 1001;
+    await f.live();
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.state).toBe('accepted');
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: false, degraded: false });
+  });
+  it.each(['invalid receipt', 'changed connection'])('retains a live failure after replay with %s', async failure => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let first = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') {
+        if (first) { first = false; throw new TypeError('fetch failed'); }
+        if (failure === 'invalid receipt') return { publicationId: 'wrong-publication', state: 'accepted' };
+        f.setContext({ ...f.context, generation: '2' });
+      }
+      return ordinary(...args);
+    });
+    await f.live(); now += 1001; await f.live();
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')).toBeNull();
+    expect((f.publisher as any).failures.has(`${f.context.scope}:live:local:message:message`)).toBe(true);
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+  });
+  it('keeps other object, task and persisted faults when a live replay succeeds', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let first = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && first) { first = false; throw new TypeError('fetch failed'); }
+      return ordinary(...args);
+    });
+    await f.live();
+    const publisher = f.publisher as any;
+    const otherKeys = [`${f.context.scope}:live:local:message:other`, `${f.context.scope}:live:other-task`, `${f.context.scope}:control:local`];
+    for (const key of otherKeys) publisher.fail(key, new TypeError('fetch failed'));
+    f.publisher.ledger.objectFault(f.context.scope, 'local', 'message:other', 'other-fault');
+    now += 1001; await f.live();
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toEqual([]);
+    expect(publisher.failures.has(`${f.context.scope}:live:local:message:message`)).toBe(false);
+    for (const key of otherKeys) expect(publisher.failures.has(key)).toBe(true);
+    expect(f.publisher.ledger.db.prepare('SELECT object_key FROM availability_faults WHERE scope=? AND local_id=?').get(f.context.scope, 'local'))
+      .toEqual({ object_key: 'message:other' });
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+  });
+  it('keeps a fault persistence failure recorded after the task scan succeeds', async () => {
+    const f = fixture(); await f.controls();
+    vi.spyOn((f.publisher as any).encoder, 'project').mockRejectedValueOnce(new Error('Invalid object encoding'));
+    vi.spyOn(f.publisher.ledger, 'objectFault').mockImplementationOnce(() => { throw new Error('Fault ledger write unavailable'); });
+    await f.live();
+    expect((f.publisher as any).failures.has(`${f.context.scope}:live:local`)).toBe(true);
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ degraded: true });
+  });
+  it('replays a lost live response with the original ID and body before publishing a newer core revision', async () => {
+    const f = fixture(); await f.controls();
+    const ordinary = f.request.getMockImplementation()!; let first = true;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && first) { first = false; throw new TypeError('lost response'); }
+      return ordinary(...args);
+    });
+    await f.live();
+    const initial = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('Hello again', 'message'));
+    (f.publisher as any).failures.clear();
+    await f.live();
+    const publications = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(publications[1][2]).toEqual(initial);
+    expect(f.request.mock.calls.some(call => call[0].startsWith('/sync/live-projections/') && call[1] === 'GET')).toBe(true);
+    (f.publisher as any).liveScan.clear(); await f.live();
+    const latest = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
+    expect(latest.publicationId).not.toBe(initial.publicationId); expect(latest.sourceObjectRevision).toBe('2');
+  });
+  it.each(['BUSY', 'BUDGET', 'CONTEXT_CHANGED', 'WORKER_EXIT'])('retries a transient encoder %s without persisting a corrupt-object fault', async reason => {
+    const f = fixture(); await f.controls();
+    vi.spyOn((f.publisher as any).encoder, 'project').mockRejectedValueOnce(new Error(`REMOTE_LIVE_ENCODER_${reason}`));
+    await f.live();
+    expect(f.publisher.ledger.db.prepare('SELECT * FROM availability_faults').all()).toEqual([]);
+    const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now + 600000);
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'message')).toBe(true);
+  });
+  it('keeps deterministic rejection local to one display object', async () => {
+    const f = fixture();
+    f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,3,2)').run('bad', 'local', 'assistant', 'bad', '{'));
+    await f.controls(); await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'message')).toBe(true);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.phase).toBe('active');
+  });
+  it('does not perform network requests for unchanged idle controls or acknowledged live objects', async () => {
+    const f = fixture(); await f.controls(); await f.live(); f.request.mockClear();
+    await f.controls(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('carries terminal run changes through the independent fact stream', async () => {
+    const f = fixture(); f.store.beginRun('local', 'run'); f.store.updateRun('local', 'running');
+    await f.controls(); f.request.mockClear();
+    f.store.updateRun('local', 'succeeded'); await f.controls();
+    const body = f.request.mock.calls.find(call => call[0] === '/control/facts/batches')![2];
+    expect(body.facts.some((fact: any) => fact.payload.run?.status === 'succeeded')).toBe(true);
+    expect(f.store.sync('local')!.ack_seq).toBe(0);
+  });
+  it('increments per-object revision in the core transaction and rolls it back with failed mutations', async () => {
+    const f = fixture();
+    expect(() => f.store.transaction(() => {
+      f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('rolled back', 'message'); throw new Error('fail');
+    })).toThrow('fail');
+    expect(f.db.prepare('SELECT revision FROM remote_live_revisions WHERE object_id=?').get('message')).toEqual({ revision: 1 });
+  });
+  it('fences legacy history before the activation response is known', async () => {
+    const f = fixture(); f.request.mockRejectedValue(new TypeError('offline'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await f.controls(); expect(f.publisher.ownsHistory('local')).toBe(true);
+    expect(f.publisher.ledger.session(f.context.scope, 'local')?.phase).toBe('activating');
+  });
+  it('does not replace a missing sidecar writer or fall back to legacy after core adoption', async () => {
+    const f = fixture(); f.context.targetId = 'target'; f.context.environment = 'target';
+    f.db.prepare("UPDATE remote_sync SET sync_environment='target' WHERE local_id='local'").run();
+    await f.controls();
+    f.publisher.ledger.db.prepare('DELETE FROM availability_sessions WHERE scope=? AND local_id=?').run(f.context.scope, 'local');
+    expect(f.publisher.historyOwnership('local')).toMatchObject({ state: 'unavailable', dependency: 'control_ledger' });
+    expect(f.publisher.legacyHistoryAllowed('local')).toBe(false);
+    f.request.mockClear(); await f.controls();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.hasSession(f.context.scope, 'local')).toBe(false);
+    expect(f.publisher.displayTransientHealth(f.context.scope).controlBackoff).toBe(true);
+  });
+  it('publishes a deletion as a protected source revision rather than reviving its old live body', async () => {
+    const f = fixture(); await f.controls(); await f.live(); f.request.mockClear();
+    f.store.transaction(() => f.db.prepare('DELETE FROM cowork_messages WHERE id=?').run('message'));
+    await f.controls(); await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/control/facts/batches')![2];
+    expect(body.facts.some((fact: any) => fact.eventType === 'message.deleted' && fact.payload.sourceObjectRevision === '2')).toBe(true);
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(false);
+  });
+});
+
+describe('durable control transitions and capability retirement', () => {
+  it('does not advance past required deletions omitted from the first bounded wire batch', async () => {
+    const f = fixture(); await f.controls();
+    const pending = Array.from({ length: 16 }, (_, index) => `a-${String(index).padStart(2, '0')}`);
+    const required = Array.from({ length: 4 }, (_, index) => `z-${index}`);
+    for (const id of [...pending, ...required]) f.db.prepare("INSERT INTO remote_live_revisions VALUES('local',?,7,1)").run(id);
+    f.db.prepare("UPDATE remote_control_revisions SET revision=revision+1 WHERE session_id='local'").run();
+    const revision = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    for (const id of pending) f.db.prepare("INSERT INTO remote_control_pending VALUES('local',?,?)").run(`message.deleted:${id}`, revision);
+    const publisher: any = f.publisher, state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    publisher.reconciliation.next(f.store, state, `${publisher.reconciliationId}:0:${publisher.timerEpoch}`);
+    // Earlier pages were already scanned, but another target left smaller IDs in the shared queue.
+    f.publisher.ledger.db.prepare("UPDATE availability_control_reconcile SET phase='deleted_message',cursor='m' WHERE scope=? AND local_id='local'")
+      .run(f.context.scope);
+    const cursor = () => f.publisher.ledger.db.prepare("SELECT phase,cursor FROM availability_control_reconcile WHERE scope=? AND local_id='local'").get(f.context.scope);
+    f.request.mockClear(); await f.controls();
+    expect(f.request.mock.calls[0][2].facts).toHaveLength(16);
+    expect(cursor()).toEqual({ phase: 'deleted_message', cursor: 'm' });
+    expect(required.every(id => !Object.hasOwn(f.publisher.ledger.session(f.context.scope, 'local')!.records, `message.deleted:${id}`))).toBe(true);
+    await f.controls();
+    expect(cursor()).toEqual({ phase: 'deleted_message', cursor: 'z-3' });
+    expect(required.every(id => Object.hasOwn(f.publisher.ledger.session(f.context.scope, 'local')!.records, `message.deleted:${id}`))).toBe(true);
+    await f.controls(); expect(cursor()).toEqual({ phase: 'complete', cursor: '' });
+    expect(f.publisher.ledger.session(f.context.scope, 'local')!.controlRevision).toBe(String(revision));
+    const deleted = f.request.mock.calls.flatMap(call => call[2].facts).filter(fact => fact.eventType === 'message.deleted').map(fact => fact.payload.messageId);
+    expect(deleted).toEqual([...pending, ...required]);
+  });
+
+  it('drains only proven foreign control hints and finishes reconciliation with more than one foreign page', async () => {
+    const f = fixture(); f.store.beginRun('local', 'run-a'); await f.controls();
+    f.store.updateRun('local', 'succeeded'); f.store.beginRun('local', 'run-b');
+    for (let index = 0; index < 20; index++) f.store.put(`approval:local:foreign-${index}`, {
+      approvalId: `foreign-${index}`, runId: 'run-b', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    f.store.put('question:local:foreign-question', { questionId: 'foreign-question', runId: 'run-b', questionVersion: '2', status: 'cancelled' });
+    f.store.put('syncTargetHistory:local', { targetId: 'target', runIds: ['run-b'] });
+    f.request.mockClear();
+    for (let turn = 0; turn < 24; turn++) await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-b' || fact.payload.approval?.runId === 'run-b'
+      || fact.payload.question?.runId === 'run-b')).toBe(false);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-a' && fact.payload.run.status === 'succeeded')).toBe(true);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 0 });
+    const revision = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    expect(f.publisher.ledger.session(f.context.scope, 'local')!.controlRevision).toBe(String(revision));
+    f.request.mockClear(); await f.controls(); await f.controls(); expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('preserves foreign-looking pending objects when their original evidence is missing', async () => {
+    const f = fixture(); await f.controls();
+    f.store.put('syncTargetHistory:local', { targetId: 'target', runIds: ['missing-run'] });
+    f.store.put('control:local', '2');
+    f.db.prepare("INSERT INTO remote_control_pending VALUES('local','run.updated:missing-run',1)").run();
+    f.db.prepare("INSERT INTO remote_control_pending VALUES('local','approval.updated:missing-decision',1)").run();
+    for (let turn = 0; turn < 12; turn++) await f.controls();
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE session_id='local'").get()).toEqual({ count: 2 });
+    expect(f.publisher.ledger.session(f.context.scope, 'local')!.controlRevision).toBe('0');
+  });
+
+  it('reconciles the original target after another target consumed every shared control pending entry', async () => {
+    const f = fixture();
+    f.store.beginRun('local', 'run-a'); f.store.updateRun('local', 'running');
+    f.store.put('approval:local:decision-a', { approvalId: 'decision-a', runId: 'run-a', approvalVersion: '1', status: 'pending', operationDigest: 'digest' });
+    await f.controls();
+    const original = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const other = { ...f.context, scope: 'other:1:personal:desktop', routeEpoch: 2 };
+    f.setContext(other); f.publisher.invalidateContext();
+    f.store.updateRun('local', 'succeeded');
+    f.store.put('approval:local:decision-a', { approvalId: 'decision-a', runId: 'run-a', approvalVersion: '2', status: 'approved', operationDigest: 'digest' });
+    f.store.beginRun('local', 'run-b'); f.store.updateRun('local', 'running');
+    f.store.put('syncTargetHistory:local', { targetId: 'other', runIds: ['run-a'] });
+    // Another target can consume this derived queue. The original target's receipt baseline is untouched.
+    f.db.prepare('DELETE FROM remote_control_pending WHERE session_id=?').run('local');
+    f.publisher.ledger.saveSession({ ...original, scope: other.scope, writerGeneration: 'other-writer', controlEpoch: 'other-epoch', records: {} });
+    f.setContext({ ...f.context, routeEpoch: 3 }); f.publisher.invalidateContext();
+    f.store.put('syncTargetHistory:local', { targetId: 'target', runIds: ['run-b'] });
+    f.request.mockClear();
+    for (let turn = 0; turn < 16; turn++) await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-a' && fact.payload.run.status === 'succeeded')).toBe(true);
+    expect(facts.some(fact => fact.payload.approval?.approvalId === 'decision-a' && fact.payload.approval.status === 'approved')).toBe(true);
+    expect(facts.some(fact => fact.payload.run?.runId === 'run-b')).toBe(false);
+    expect(f.publisher.ledger.session(other.scope, 'local')!.factSeq).toBe(original.factSeq);
+    expect(f.request.mock.calls.every(call => call[0] === '/control/facts/batches')).toBe(true);
+    expect(f.request.mock.calls.every(call => !Object.hasOwn(call[2], 'controlReconciliation'))).toBe(true);
+    expect(f.publisher.ledger.db.prepare('SELECT phase FROM availability_control_reconcile WHERE scope=? AND local_id=?')
+      .get(f.context.scope, 'local')).toEqual({ phase: 'complete' });
+  });
+
+  it('scans closed decisions beyond the bounded receipt hash cache even when the global queue is empty', async () => {
+    const f = fixture(); f.store.beginRun('local', 'run'); await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    for (let index = 0; index < 18; index++) f.store.put(`approval:local:closed-${String(index).padStart(2, '0')}`, {
+      approvalId: `closed-${String(index).padStart(2, '0')}`, runId: 'run', approvalVersion: '2', status: 'approved', operationDigest: 'digest',
+    });
+    f.db.prepare('DELETE FROM remote_control_pending WHERE session_id=?').run('local');
+    // None of these historical decisions is in this target's suppression cache.
+    expect(Object.keys(state.records).some(key => key.startsWith('approval.updated:'))).toBe(false);
+    f.request.mockClear();
+    for (let turn = 0; turn < 24; turn++) await f.controls();
+    const approvals = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches')
+      .flatMap(call => call[2].facts).flatMap(fact => fact.payload.approval ? [fact.payload.approval.approvalId] : []);
+    expect(new Set(approvals).size).toBe(18);
+    expect(f.request.mock.calls.every(call => call[2].facts.length <= 16)).toBe(true);
+    f.request.mockClear(); await f.controls(); expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('publishes the previous terminal run even if another run started before the next scan', async () => {
+    const f = fixture(); f.store.beginRun('local', 'first'); f.store.updateRun('local', 'running'); await f.controls();
+    f.store.updateRun('local', 'succeeded'); f.store.beginRun('local', 'second'); f.store.updateRun('local', 'running');
+    f.request.mockClear(); await f.controls();
+    const facts = f.request.mock.calls.find(call => call[0] === '/control/facts/batches')![2].facts;
+    expect(facts.some((fact: any) => fact.payload.run?.runId === 'first' && fact.payload.run.status === 'succeeded')).toBe(true);
+    expect(facts.some((fact: any) => fact.payload.run?.runId === 'second' && fact.payload.run.status === 'running')).toBe(true);
+  });
+  it('continues an active writer after capabilities stop admitting new writers', async () => {
+    const f = fixture(); await f.controls(); f.setContext({ ...f.context, supported: false });
+    f.store.beginRun('local', 'new-run'); f.request.mockClear(); await f.controls(); await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/control/facts/batches')).toBe(true);
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+  });
+  it('does not fence a previously legacy session when capabilities are absent', async () => {
+    const f = fixture(); f.setContext({ ...f.context, supported: false }); await f.controls();
+    expect(f.publisher.ownsHistory('local')).toBe(false); expect(f.request).not.toHaveBeenCalled();
+  });
+  it('keeps a rejected full publication terminal and schedules a new explicit desktop-only fallback', async () => {
+    const f = fixture(); await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections' && args[2].representation === 'complete'
+      ? { publicationId: args[2].publicationId, state: 'rejected', reason: 'INVALID_REMOTE_REQUEST' } : ordinary(...args));
+    await f.live(); const original = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    await f.live(); const fallback = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
+    expect(fallback.publicationId).not.toBe(original.publicationId); expect(fallback.sourceObjectRevision).toBe(original.sourceObjectRevision);
+    expect(fallback.payload).toMatchObject({ contentState: 'desktop_only', blocks: [], contentUnavailableReason: 'CONTENT_UNAVAILABLE' });
+  });
+});
+
+
+describe('explicit historical gaps', () => {
+  it('seals a known bad display event as a gap while preserving old exact ACK and original bytes', async () => {
+    const f = fixture();
+    const original = JSON.stringify({ sourceSeq: '1',eventId: 'legacy-display',eventType: 'message.upsert',occurredAt: new Date().toISOString(),payload: { message: { invalid: true } } });
+    f.db.prepare('INSERT INTO remote_outbox VALUES(?,?,?)').run('local',1,original);
+    f.db.prepare("UPDATE remote_sync SET source_seq=1,ack_seq=0 WHERE local_id='local'").run();
+    const normal = f.request.getMockImplementation()!; let recovery: any;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/mode-activations') return { writerGeneration: args[2].writerGeneration,state: recovery ? 'active' : f.publisher.controlReady('local') ? 'active' : 'fenced',pendingCommandIds: [],pendingCommands: [] };
+      if (args[0].startsWith('/sync/state?')) return { historyGeneration: '0',historyResolvedSourceSeq: '0',streamEpoch: 'stream' };
+      if (args[0] === '/sync/recoveries') { recovery = args[2]; return { state: 'preparing' }; }
+      if (args[0].startsWith('/sync/recoveries/') && args[0].endsWith('/commit')) return { state: 'committed',recoveryId: recovery.recoveryId,historyGeneration: '1',resolvedSourceSeq: '1',exactSourcePrefix: '0' };
+      return normal(...args);
+    });
+    await f.controls(); await (f.publisher as any).history(f.context);
+    expect(recovery.sourceManifest).toEqual([{ sourceSeq: '1',eventId: 'legacy-display',eventType: 'message.upsert',payloadHash: expect.any(String) }]);
+    const activationIds = f.request.mock.calls.filter(call => call[0] === '/sync/mode-activations').map(call => call[2].operationId);
+    expect(activationIds).not.toContain(recovery.recoveryId);
+    const checkpoint = f.request.mock.calls.filter(call => call[0] === '/control/bootstrap').at(-1)![2];
+    expect(checkpoint.sourceManifestHash).toBeDefined(); expect(checkpoint.frozenThroughSourceSeq).toBe('1');
+    expect(f.store.sync('local')).toMatchObject({ source_seq: 1,ack_seq: 0 });
+    expect(f.db.prepare('SELECT event_json FROM remote_outbox').get()).toEqual({ event_json: original });
+    const state = f.publisher.ledger.session(f.context.scope,'local')!;
+    const historyContext = { scope: f.context.scope,localId: 'local',sessionId: state.sessionId,writerGeneration: state.writerGeneration,owner: f.owner,deviceId: 'desktop' };
+    expect(f.store.history.session(historyContext)).toMatchObject({ resolvedSourceSeq: '1',historyGeneration: '1' });
+    await f.live(); expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+  });
+  it('refuses protected history without actual core execution evidence while current messages continue', async () => {
+    const f = fixture(); vi.spyOn(console,'warn').mockImplementation(() => {});
+    f.db.prepare('INSERT INTO remote_outbox VALUES(?,?,?)').run('local',1,JSON.stringify({ sourceSeq: '1',eventId: 'missing-core',eventType: 'run.updated',payload: { run: { runId: 'unknown',status: 'running',statusVersion: '2' } } }));
+    f.db.prepare("UPDATE remote_sync SET source_seq=1 WHERE local_id='local'").run();
+    const normal = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0].startsWith('/sync/state?')) return { historyGeneration: '0',historyResolvedSourceSeq: '0',streamEpoch: 'stream' };
+      if (args[0] === '/sync/mode-activations' && f.publisher.controlReady('local')) return { writerGeneration: args[2].writerGeneration,state: 'active',pendingCommandIds: [],pendingCommands: [] };
+      return normal(...args);
+    });
+    await f.controls(); await (f.publisher as any).history(f.context); await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/recoveries')).toBe(false);
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    expect(f.publisher.controlReady('local')).toBe(true); expect(f.store.sync('local')!.ack_seq).toBe(0);
+  });
+});
+
+describe('independent fact reconciliation invariants', () => {
+  it('does not regress a newer checkpoint when an older unknown batch receipt arrives', async () => {
+    const f = fixture(); await f.controls();
+    const current = f.publisher.ledger.session(f.context.scope,'local')!;
+    const previous = { ...current, factSeq: '10', controlRevision: '1', records: {} };
+    const request = (f.publisher as any).save(f.context,previous,'old-batch','control','/control/facts/batches',{
+      batchId: 'old-batch',controlEpoch: current.controlEpoch,firstFactSeq: '11',lastFactSeq: '11',coreRevision: '2',ackCoreRevision: '2',
+      facts: [{ eventType: 'run.updated',eventId: 'old-event',factSeq: '11',payload: { run: { runId: 'old',status: 'running' } } }],
+    },1,'/control/operations/old-batch');
+    f.publisher.ledger.attempted(request);
+    current.factSeq = '1000'; current.controlRevision = '500'; current.records = { latest: 'preserve' }; f.publisher.ledger.saveSession(current);
+    f.request.mockResolvedValue({ state: 'committed',lastFactSeq: '11' });
+    await (f.publisher as any).facts(f.context,previous);
+    expect(f.publisher.ledger.session(f.context.scope,'local')).toMatchObject({ factSeq: '1000',controlRevision: '500',records: { latest: 'preserve' } });
+    expect(f.publisher.ledger.request('old-batch')).toBeNull();
+  });
+  it('keeps distinct message tombstones and chunks a large control change without losing the remainder', async () => {
+    const f = fixture(); await f.controls();
+    f.store.transaction(() => {
+      for (let index=0; index<20; index++) {
+        const id = `deleted-${index}`;
+        f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,?)').run(id,'local','assistant','gone','{}',index+2);
+        f.db.prepare('DELETE FROM cowork_messages WHERE id=?').run(id);
+      }
+    });
+    await f.controls(); await f.controls();
+    const batches = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches');
+    expect(batches.length).toBe(2); expect(batches.every(call => call[2].facts.length<=16)).toBe(true);
+    const ids = batches.flatMap(call => call[2].facts.filter((fact:any) => fact.eventType==='message.deleted').map((fact:any) => fact.payload.messageId));
+    expect(new Set(ids).size).toBe(20);
+  });
+  it('publishes the authentic locally resolved approval requested by server activation', async () => {
+    const f = fixture(); f.store.beginRun('local','old-run'); f.store.updateRun('local','succeeded'); f.store.beginRun('local','current-run');
+    f.store.put('approval:local:approval', { approvalId: 'approval',runId: 'old-run',approvalVersion: '2',status: 'approved',operationDigest: 'digest' });
+    const normal = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/mode-activations'
+      ? { writerGeneration: args[2].writerGeneration,state:'fenced',pendingCommandIds: [],pendingRunIds:['old-run'],pendingApprovalIds:['approval'] }
+      : normal(...args));
+    await f.controls();
+    const records = f.request.mock.calls.filter(call => /\/parts\/\d+$/u.test(call[0])).flatMap(call => call[2].records || []);
+    expect(records.some((record:any) => record.payload.approval?.approvalId==='approval' && record.payload.approval?.status==='approved')).toBe(true);
+    expect(records.some((record:any) => record.payload.run?.runId==='old-run' && record.payload.run?.status==='succeeded')).toBe(true);
+  });
+});
+
+it('does not let accumulated acknowledged tombstones block later controls', async () => {
+  const f = fixture(); await f.controls();
+  for (let index=0; index<80; index++) f.store.transaction(() => {
+    const id=`gone-${index}`;
+    f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,2,?)').run(id,'local','assistant','gone','{}',index+2);
+    f.db.prepare('DELETE FROM cowork_messages WHERE id=?').run(id);
+  });
+  for (let batch=0; batch<8; batch++) await f.controls();
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM remote_control_pending WHERE object_key LIKE 'message.deleted:%'").get()).toEqual({ count:0 });
+  f.store.beginRun('local','after-deletes'); f.request.mockClear(); await f.controls();
+  expect(f.request.mock.calls.some(call => call[0]==='/control/facts/batches' && call[2].facts.some((fact:any)=>fact.payload.run?.runId==='after-deletes'))).toBe(true);
+});
+it('yields an optional checkpoint as soon as a new core control appears during its network await', async () => {
+  const f = fixture(); await f.controls();
+  const state=f.publisher.ledger.session(f.context.scope,'local')!;
+  const request=(f.publisher as any).save(f.context,state,'yield-operation','control','/control/bootstrap',{ operationId:'yield-operation' },1,null);
+  f.request.mockImplementation(async () => { f.store.beginRun('local','new-control'); return { state:'uploading' }; });
+  await expect((f.publisher as any).serialControl(f.context,async () => {
+    (f.publisher as any).checkpointRevision={ localId:'local',revision:String((f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as any).revision) };
+    await (f.publisher as any).send(f.context,request);
+  })).rejects.toThrow('REMOTE_HISTORY_CHECKPOINT_YIELDED');
+  expect((f.publisher as any).controlWork).toBeNull(); expect(f.publisher.ledger.request('yield-operation')?.attempted).toBe(true);
+  expect((f.request.mock.calls.at(-1) as any[])[4]).toBeLessThanOrEqual(3000);
+});
+
+it('keeps current messages independent of an expired history control checkpoint budget', async () => {
+  const f=fixture(); await f.controls();
+  (f.publisher as any).checkpointDeadline=Date.now()-1;
+  (f.publisher as any).checkpointRevision={ localId:'local',revision:'invalid' };
+  await f.live();
+  const call=f.request.mock.calls.find(item=>item[0]==='/sync/live-projections');
+  expect(call).toBeDefined(); expect((call as any[])[4]).toBeUndefined();
+});
+it('reconciles a superseded saved checkpoint by aborting the original recovery before sealing a replacement', async () => {
+  const f=fixture(); await f.controls();
+  const state=f.publisher.ledger.session(f.context.scope,'local')!;
+  const historyContext={ scope:f.context.scope,localId:'local',sessionId:state.sessionId,writerGeneration:state.writerGeneration,owner:f.owner,deviceId:'desktop' };
+  f.store.history.prepare(historyContext);
+  const checkpoint={ ...state,operationId:'old-checkpoint' };
+  const operation=f.store.history.sealOperation({ id:'old-recovery',context:historyContext,kind:'recovery',request:{
+    checkpointState:checkpoint,snapshot:{ revision:'1',hash:'',records:[] },extra:{},
+    begin:{ deviceId:'desktop',owner:f.owner,sessionId:state.sessionId,localSessionId:'local',writerGeneration:state.writerGeneration,mode:'online',recoveryId:'old-recovery' },
+  } });
+  const begin=(f.publisher as any).save(f.context,checkpoint,'old-checkpoint:begin','control','/control/bootstrap',{
+    operationId:'old-checkpoint',controlEpoch:state.controlEpoch,throughFactSeq:'1' },1,'/control/operations/old-checkpoint');
+  f.publisher.ledger.attempted(begin);
+  f.request.mockImplementation(async (...args) => {
+    if(args[0]==='/control/bootstrap/old-checkpoint/abort')return{ state:'aborted' };
+    if(args[0]==='/sync/recoveries/old-recovery/abort')return{ state:'aborted',recoveryId:'old-recovery' };
+    throw new Error('unexpected request');
+  });
+  await (f.publisher as any).abortRecovery(f.context,operation);
+  expect(f.store.history.operation(historyContext,'old-recovery')?.state).toBe('complete');
+  expect(f.store.history.pending(historyContext)).toEqual([]);
+  expect(f.publisher.controlReady('local')).toBe(true);
+});
+
+it('reconciles an expired initial baseline and activates a new immutable checkpoint', async () => {
+  const f=fixture(); vi.spyOn(console,'warn').mockImplementation(() => {});
+  const normal=f.request.getMockImplementation()!; let lose=true;
+  f.request.mockImplementation(async (...args) => {
+    if(lose && /\/parts\/\d+$/u.test(args[0]))throw new TypeError('lost part response');
+    return normal(...args);
+  });
+  await f.controls(); const old=f.publisher.ledger.session(f.context.scope,'local')!.operationId;
+  expect(f.publisher.controlReady('local')).toBe(false);
+  lose=false; (f.publisher as any).failures.clear();
+  f.request.mockImplementation(async (...args) => args[0]===`/control/operations/${old}` ? { state:'expired',operationId:old,sessionId:f.store.sync('local')!.session_id } : normal(...args));
+  await f.controls(); expect(f.publisher.ledger.session(f.context.scope,'local')?.phase).toBe('activating');
+  expect(f.publisher.ledger.db.prepare('SELECT 1 FROM availability_receipts WHERE operation_id=?').get(old)).toBeDefined();
+  await f.controls(); expect(f.publisher.controlReady('local')).toBe(true);
+  const begins=f.request.mock.calls.filter(call=>call[0]==='/control/bootstrap').map(call=>call[2].operationId);
+  expect(new Set(begins).size).toBe(2);
+});
+
+describe('task and object fault boundaries', () => {
+  function addTask(f: ReturnType<typeof fixture>, localId: string, messageId: string): void {
+    f.store.transaction(() => {
+      f.db.prepare('INSERT INTO cowork_sessions VALUES(?,?,1,1,?,NULL,NULL)').run(localId, 'Task', 'idle');
+      f.store.assignNew(localId, f.owner, 'local_create');
+      f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,3,2)').run(messageId, localId, 'assistant', 'Healthy reply', '{}');
+    });
+    f.store.bindRemote(localId, f.store.sync(localId)!.session_id, 'desktop');
+  }
+  it('does not let an invalid session ledger stop healthy live tasks or reactivate the legacy writer', async () => {
+    const f = fixture(); addTask(f, 'second', 'second-message'); await f.controls();
+    f.publisher.ledger.db.prepare("UPDATE availability_sessions SET body='{' WHERE local_id='local'").run();
+    expect(f.publisher.ownsHistory('local')).toBe(true);
+    expect(f.publisher.controlReady('local')).toBe(false);
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'second-message')).toBe(true);
+    expect(f.publisher.ledger.db.prepare("SELECT body FROM availability_sessions WHERE local_id='local'").get()).toEqual({ body: '{' });
+  });
+  it('keeps the original corrupt pending object blocked while publishing another object in the same session', async () => {
+    const f = fixture(); await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.publisher.ledger.saveRequest({ key: 'original-publication', scope: f.context.scope, localId: 'local', lane: 'live',
+      body: { objectKind: 'message', objectId: 'message', publicationId: 'original-publication', writerGeneration: state.writerGeneration },
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: null, lookupVersion: 3, createdAt: 1, attempted: true });
+    f.publisher.ledger.db.prepare("UPDATE availability_requests SET body='{' WHERE key='original-publication'").run();
+    f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,3,2)').run('new-message','local','assistant','New reply','{}'));
+    await f.live();
+    const objects = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').map(call => call[2].objectId);
+    expect(objects).toContain('new-message'); expect(objects).not.toContain('message');
+    expect(f.publisher.ledger.db.prepare("SELECT body FROM availability_requests WHERE key='original-publication'").get()).toEqual({ body: '{' });
+  });
+  it('does not retry bad encoding after a scheduler reset and probes repaired revision independently', async () => {
+    const f = fixture();
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET metadata=? WHERE id=?').run('{','message'));
+    await f.controls(); await f.live();
+    const before = f.publisher.ledger.db.prepare("SELECT attempts FROM availability_faults WHERE object_key='message:message'").get();
+    expect(before).toEqual({ attempts: 1 });
+    (f.publisher as any).failures.clear(); (f.publisher as any).liveScan.clear();
+    await f.live(); expect(f.publisher.ledger.db.prepare("SELECT attempts FROM availability_faults WHERE object_key='message:message'").get()).toEqual(before);
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET metadata=? WHERE id=?').run('{}','message'));
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections' && call[2].objectId === 'message')).toBe(true);
+    expect(f.publisher.ledger.db.prepare("SELECT 1 FROM availability_faults WHERE object_key='message:message'").get()).toBeUndefined();
+  });
+  it('keeps control and live publishing safe when the diagnostic sink throws', async () => {
+    const f = fixture(); vi.spyOn(console,'debug').mockImplementation(() => { throw new Error('logger unavailable'); });
+    vi.spyOn(console,'warn').mockImplementation(() => { throw new Error('logger unavailable'); });
+    await f.controls(); await f.live();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(f.publisher.ledger.pending(f.context.scope,'live','local')).toEqual([]);
+  });
+});
+
+
+describe('synchronization telemetry evidence', () => {
+  it('reports a rejected complete body and the separately accepted placeholder without calling both complete content', async () => {
+    const f = fixture(); await f.controls(); telemetryEvents.length = 0;
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections' && args[2].representation === 'complete'
+      ? { publicationId: args[2].publicationId, state: 'rejected' } : ordinary(...args));
+    await f.live(); await f.live();
+    const acknowledged = telemetryEvents.filter(item => item.event === SyncTelemetry.Event.Acknowledged);
+    expect(acknowledged.map(item => [item.fields.businessStatus, item.fields.representation])).toEqual([
+      ['rejected', 'complete'], ['accepted', 'desktop_only'],
+    ]);
+    expect(acknowledged[0].fields.operationId).not.toBe(acknowledged[1].fields.operationId);
+    expect(telemetryEvents.filter(item => !remoteTelemetryHasRequired(item.event, sanitizeRemoteTelemetryFields(item.fields)))).toEqual([]);
+    expect(telemetryEvents.some(item => item.event === SyncTelemetry.Event.Content && item.fields.outcome === SyncTelemetry.Outcome.Degraded)).toBe(true);
+  });
+  it('announces content recovery only after the complete replacement is accepted and committed locally', async () => {
+    const f = fixture(); await f.controls();
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections' && args[2].representation === 'complete'
+      ? { publicationId: args[2].publicationId, state: 'rejected' } : ordinary(...args));
+    await f.live(); await f.live();
+    telemetryEvents.length = 0;
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('New healthy reply', 'message'));
+    (f.publisher as any).liveScan.clear();
+    f.request.mockImplementation(ordinary);
+    await f.live();
+    const recovered = telemetryEvents.filter(item => item.event === SyncTelemetry.Event.Content);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].fields).toMatchObject({ outcome: SyncTelemetry.Outcome.Recovered,
+      stage: SyncTelemetry.Stage.LocalAck, representation: 'complete', businessStatus: 'accepted' });
+  });
+  it('does not announce an ACK when its local commit fails after HTTP success', async () => {
+    const f = fixture(); await f.controls(); telemetryEvents.length = 0;
+    vi.spyOn(f.publisher.ledger, 'completeObject').mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+    await f.live();
+    expect(f.request.mock.calls.some(call => call[0] === '/sync/live-projections')).toBe(true);
+    expect(telemetryEvents.some(item => item.event === SyncTelemetry.Event.Acknowledged)).toBe(false);
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
+  });
+  it('retains an invalid remote receipt without announcing synchronization success', async () => {
+    const f = fixture(); await f.controls(); telemetryEvents.length = 0;
+    const ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => args[0] === '/sync/live-projections'
+      ? { publicationId: 'wrong-publication', state: 'accepted' } : ordinary(...args));
+    await f.live();
+    expect(telemetryEvents.some(item => item.event === SyncTelemetry.Event.Acknowledged)).toBe(false);
+    expect(telemetryEvents.some(item => item.fields.reason === SyncTelemetry.Reason.InvalidReceipt)).toBe(true);
+    expect(f.publisher.ledger.pending(f.context.scope, 'live', 'local')).toHaveLength(1);
+  });
+});
+
+
+it('rebuilds optional tool membership from recent core messages without resetting durable tool revisions', async () => {
+  const f = fixture();
+  const metadata = JSON.stringify({ toolCallId: 'call', toolName: 'Read' });
+  f.store.transaction(() => f.db.prepare("INSERT INTO cowork_messages VALUES('tool-message','local','tool_use','read',?,3,2)").run(metadata));
+  expect(f.db.prepare("SELECT 1 FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toBeUndefined();
+  await f.controls(); await f.live();
+  expect(f.db.prepare("SELECT tool_id FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toEqual({ tool_id: 'call' });
+  f.db.prepare("DELETE FROM remote_live_tool_sources WHERE message_id='tool-message'").run();
+  f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content='read again' WHERE id='tool-message'").run());
+  const revision = f.db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='local' AND tool_id='call'").get();
+  await f.live();
+  expect(f.db.prepare("SELECT tool_id FROM remote_live_tool_sources WHERE message_id='tool-message'").get()).toEqual({ tool_id: 'call' });
+  expect(f.db.prepare("SELECT revision FROM remote_live_tools WHERE session_id='local' AND tool_id='call'").get()).toEqual(revision);
+  expect(revision).toEqual({ revision: 2 });
+});
+
+
+describe('persistent control progress and desktop deletions', () => {
+  it('settles a verified legacy tombstone before activation and clears only its own control retry', async () => {
+    const f = fixture(); f.context.environment = 'test'; f.context.targetId = 'test'; f.context.scope = 'test:1:personal:desktop';
+    f.db.prepare("UPDATE remote_sync SET sync_environment='test' WHERE local_id='local'").run();
+    f.store.transaction(() => {
+      recordRemoteSessionDeletion(f.store, 'local');
+      f.db.prepare("DELETE FROM cowork_sessions WHERE id='local'").run();
+      f.store.project('local');
+    });
+    const sync = f.store.sync('local')!;
+    f.store.acknowledge('local', 'desktop', sync.session_id, String(sync.source_seq), '1', true);
+    f.db.prepare("UPDATE remote_sync SET needs_snapshot=1 WHERE local_id='local'").run();
+    const failures: Map<string, { count: number; retryAt: number }> = (f.publisher as any).failures;
+    const key = `${f.context.scope}:control:local`, otherKey = `${f.context.scope}:control:local-other`;
+    failures.set(key, { count: 3, retryAt: Date.now() + 60_000 }); failures.set(otherKey, { count: 3, retryAt: Date.now() + 60_000 });
+    await f.controls();
+    expect(f.request).not.toHaveBeenCalled(); expect(f.publisher.ownsHistory('local')).toBe(false);
+    expect(failures.has(key)).toBe(false); expect(failures.has(otherKey)).toBe(true);
+    expect(f.store.sync('local')).toMatchObject({ source_seq: sync.source_seq, ack_seq: sync.source_seq });
+    expect(f.store.get('deletionClosed:local')).toBeNull();
+    expect(f.db.prepare('SELECT state FROM remote_session_deletion_sync WHERE local_session_id=?').get('local')).toEqual({ state: 'acknowledged' });
+  });
+
+  it('finishes a nonpaged bootstrap across 600ms round trips without restarting confirmed parts', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    let now = Date.now(); vi.spyOn(Date, 'now').mockImplementation(() => now);
+    f.request.mockImplementation(async (...args) => { now += 600; return ordinary(...args); });
+    for (let turn = 0; turn < 5 && !f.publisher.controlReady('local'); turn++) await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(f.request.mock.calls.filter(call => call[0] === '/control/bootstrap')).toHaveLength(1);
+    expect(f.request.mock.calls.filter(call => /\/parts\/0$/u.test(call[0]))).toHaveLength(1);
+    expect(f.request.mock.calls.some(call => call[0].endsWith('/commit'))).toBe(true);
+    expect((f.publisher as any).failures.size).toBe(0);
+  });
+  it('lets a healthy task activate while a different bootstrap request awaits I/O', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    f.store.transaction(() => {
+      f.db.prepare("INSERT INTO cowork_sessions VALUES('second','Other',1,1,'idle',NULL,NULL)").run();
+      f.store.assignNew('second', f.owner, 'local_create');
+    });
+    f.store.bindRemote('second', f.store.sync('second')!.session_id, 'desktop');
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/mode-activations' && args[2].localSessionId === 'local') await blocked;
+      return ordinary(...args);
+    });
+    const work = f.controls();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(f.publisher.controlReady('second')).toBe(true);
+    release(); await work;
+  });
+  async function deletionFixture() {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    f.context.environment = 'test'; f.context.targetId = 'test'; f.context.scope = 'test:1:personal:desktop';
+    f.db.prepare("UPDATE remote_sync SET sync_environment='test' WHERE local_id='local'").run();
+    const receipts = new Map<string, any>();
+    f.request.mockImplementation(async (...args) => {
+      const [pathname, , body] = args;
+      if (pathname.startsWith('/control/operations/') && receipts.has(pathname.split('/').at(-1)!)) return receipts.get(pathname.split('/').at(-1)!);
+      if (pathname.endsWith('/commit')) return { ...await ordinary(...args), operationId: pathname.split('/')[3],
+        sessionId: body.sessionId, writerGeneration: body.writerGeneration, controlEpoch: body.controlEpoch };
+      if (pathname === '/control/facts/batches' && body.facts[0].eventType === 'session.deleted') {
+        const { mode: _mode, connectionGeneration: _generation, ...business } = body;
+        const fact = body.facts[0];
+        const receipt = { operationId: body.batchId, batchId: body.batchId, sessionId: body.sessionId,
+          writerGeneration: body.writerGeneration, controlEpoch: body.controlEpoch, requestHash: payloadHash(business),
+          state: 'committed', firstFactSeq: body.firstFactSeq, lastFactSeq: body.lastFactSeq, committedSeq: '42',
+          deletionReceipts: [{ eventId: fact.eventId, factSeq: fact.factSeq, deletedAt: fact.payload.deletedAt, serverSeq: '42' }] };
+        receipts.set(body.batchId, receipt); return receipt;
+      }
+      return ordinary(...args);
+    });
+    await f.controls();
+    const remove = () => f.store.transaction(() => {
+      recordRemoteSessionDeletion(f.store, 'local');
+      f.db.prepare("DELETE FROM cowork_messages WHERE session_id='local'").run();
+      f.db.prepare("DELETE FROM cowork_sessions WHERE id='local'").run();
+    });
+    return { ...f, receipts, remove };
+  }
+  it('commits a local deletion with the optional sidecar unavailable, then confirms only the v3 ACK', async () => {
+    const f = await deletionFixture(), before = f.store.sync('local')!;
+    const unavailable = vi.spyOn(f.publisher.ledger, 'db', 'get').mockImplementation(() => { throw new Error('SQLITE_BUSY'); });
+    f.remove(); expect(f.db.prepare("SELECT 1 FROM cowork_sessions WHERE id='local'").get()).toBeUndefined();
+    unavailable.mockRestore(); await f.controls();
+    const tombstone = f.store.get<any>('localGcDeleted:local');
+    expect(tombstone.availabilityAck).toMatchObject({ protocol: 'control_facts_v1', eventId: tombstone.deleteEventId, serverSeq: '42' });
+    expect(tombstone.ackAt).not.toBeNull(); expect(tombstone.ackSourceSeq).toBeNull();
+    expect(f.store.sync('local')).toMatchObject({ source_seq: before.source_seq, ack_seq: before.ack_seq });
+    f.request.mockClear(); await f.controls(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('reconciles the same deletion fact after a successful server commit loses its response', async () => {
+    const f = await deletionFixture(), ordinary = f.request.getMockImplementation()!;
+    let lost = false;
+    f.request.mockImplementation(async (...args) => {
+      const response = await ordinary(...args);
+      if (args[0] === '/control/facts/batches' && !lost) { lost = true; throw new TypeError('response lost'); }
+      return response;
+    });
+    f.remove(); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+    (f.publisher as any).failures.clear(); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
+    expect(f.receipts.size).toBe(1);
+    expect(f.request.mock.calls.filter(call => call[0] === '/control/facts/batches')).toHaveLength(1);
+  });
+  it('finishes the sealed deletion request when its core ACK committed before sidecar cleanup failed', async () => {
+    const f = await deletionFixture(); f.remove();
+    const complete = vi.spyOn(f.publisher.ledger, 'complete').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
+    await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
+    expect(f.store.isSyncClosed('local')).toBe(true);
+    const request = f.publisher.ledger.pending(f.context.scope, 'control', 'local')[0];
+    expect(f.publisher.ledger.stepReceipt(request)?.state).toBe('committed');
+    complete.mockRestore(); f.request.mockClear();
+    await f.controls();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.pending(f.context.scope, 'control', 'local')).toEqual([]);
+    expect(f.publisher.displayTransientHealth(f.context.scope).controlBackoff).toBe(false);
+  });
+  it('repairs an old tombstone only from its frozen writer manifest and original checkpoint', async () => {
+    const f = await deletionFixture(), state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.store.history.prepare({ scope: f.context.scope, localId: 'local', sessionId: state.sessionId,
+      writerGeneration: state.writerGeneration, owner: f.owner, deviceId: 'desktop' });
+    f.remove(); const old = f.store.get<any>('localGcDeleted:local'); delete old.deleteEventId; delete old.availabilityBinding;
+    f.store.put('localGcDeleted:local', old); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').availabilityAck).toBeDefined();
+  });
+  it('keeps a deletion pending when an old server has no event proof or a proof has the wrong epoch', async () => {
+    const f = await deletionFixture(), ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await ordinary(...args);
+      return args[0] === '/control/facts/batches' ? { ...result, controlEpoch: 'different-epoch' } : result;
+    });
+    f.remove(); await f.controls();
+    expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+    expect(f.publisher.ledger.pending(f.context.scope, 'control', 'local')).toHaveLength(1);
+    expect(f.publisher.ledger.stepReceipt(f.publisher.ledger.pending(f.context.scope, 'control', 'local')[0])).toBeNull();
+  });
+  it('reports source changes before a request exists and keeps history health separate from control readiness', async () => {
+    const f = fixture(); f.context.historySupported = false;
+    await f.controls();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: true, lanes: { live: 'pending' } });
+    await f.live();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: false });
+    expect(f.publisher.health()?.lastSuccess).toEqual(expect.any(Number));
+    f.db.prepare("UPDATE cowork_messages SET content='Changed' WHERE id='message'").run();
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, pending: true, lanes: { live: 'pending' } });
+    f.context.historySupported = true;
+    expect(f.publisher.sessionHealth('local')).toMatchObject({ ready: true, lanes: { history: 'unknown' } });
+  });
+  it('does not turn a recreated local ID or a changed remote target into a deletion proof', async () => {
+    const f = await deletionFixture(); f.remove();
+    f.db.prepare("UPDATE remote_sync SET session_id='another-task' WHERE local_id='local'").run();
+    f.request.mockClear(); await f.controls();
+    expect(f.request).not.toHaveBeenCalled(); expect(f.store.get<any>('localGcDeleted:local').ackAt).toBeNull();
+  });
+});
+
+describe('bootstrap receipt authority', () => {
+  it.each(['operationId', 'sessionId', 'writerGeneration'])('does not persist a begin receipt with mismatched %s', async field => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await ordinary(...args);
+      return args[0] === '/control/bootstrap' ? { ...result, [field]: 'wrong-context' } : result;
+    });
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const begin = f.publisher.ledger.request(`${state.operationId}:begin`)!;
+    expect(f.publisher.ledger.stepReceipt(begin)).toBeNull();
+    expect(f.publisher.controlReady('local')).toBe(false);
+    expect(f.request.mock.calls.some(call => call[0].includes('/parts/'))).toBe(false);
+  });
+  it.each(['operationId', 'sessionId', 'writerGeneration', 'controlEpoch', 'manifestHash', 'coreCheckpointId', 'throughFactSeq'])(
+    'does not activate or archive a committed receipt with mismatched %s', async field => {
+      const f = fixture(), ordinary = f.request.getMockImplementation()!;
+      f.request.mockImplementation(async (...args) => {
+        const result = await ordinary(...args);
+        return args[0].endsWith('/commit') ? { ...result, [field]: 'wrong-proof' } : result;
+      });
+      await f.controls();
+      const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+      expect(state.phase).toBe('bootstrap');
+      expect(f.publisher.ledger.operationReceipt(state.operationId)).toBeNull();
+      expect(f.publisher.ledger.request(`${state.operationId}:commit`)).not.toBeNull();
+      expect(f.publisher.controlReady('local')).toBe(false);
+    });
+  it('keeps a late response unresolved after connection context changes and recovers the same request', async () => {
+    const f = fixture(), ordinary = f.request.getMockImplementation()!;
+    let change = true;
+    f.request.mockImplementation(async (...args) => {
+      const result = await ordinary(...args);
+      if (change && args[0] === '/control/bootstrap') { change = false; f.setContext({ ...f.context, generation: '2' }); }
+      return result;
+    });
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const begin = f.publisher.ledger.request(`${state.operationId}:begin`)!;
+    expect(f.publisher.ledger.stepReceipt(begin)).toBeNull();
+    expect(state.phase).toBe('bootstrap');
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    expect(f.request.mock.calls.filter(call => call[0] === '/control/bootstrap').map(call => call[2].operationId))
+      .toEqual([state.operationId, state.operationId]);
+  });
+});
+
+describe('acknowledged reply model display repair', () => {
+  const model = { modelRef: 'preset-balanced', version: '3', displayName: '快速', providerName: 'Youdao' };
+  const prepare = async (metadata: Record<string, unknown> = { model: 'deepseek-flash' }) => {
+    const f = fixture(); f.context.publicationResolutionSupported = true;
+    f.store.beginRun('local', 'run');
+    f.store.put('inputRun:run', { input: { text: 'Question', attachments: [] }, inputModel: model });
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET metadata=? WHERE id=?')
+      .run(JSON.stringify({ remoteRunId: 'run', ...metadata }), 'message'));
+    await f.controls();
+    const revision = String((f.db.prepare('SELECT revision FROM remote_live_revisions WHERE object_id=?').get('message') as { revision: number }).revision);
+    f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)')
+      .run(f.context.scope, 'local', 'message:message', revision, JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete' }));
+    f.request.mockClear();
+    return { ...f, revision };
+  };
+
+  it('repairs a same-source acknowledged label with a new publication and keeps local evidence off the wire', async () => {
+    const f = await prepare(), source = f.store.sync('local')!.source_seq;
+    await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(body).toMatchObject({ representation: 'repair', sourceObjectRevision: f.revision, expectedProjectionRevision: '41',
+      payload: { inputModel: { ...model, displayName: 'deepseek-flash' } } });
+    expect(body).not.toHaveProperty('resolvedModelLabel');
+    expect(body).not.toHaveProperty('replyModelDisplayVersion');
+    expect(body.payloadHash).toBe(payloadHash(body.payload));
+    expect(f.db.prepare('SELECT representation FROM remote_availability_health_acks WHERE object_key=?').get('message:message')).toEqual({ representation: 'complete' });
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.replyModelDisplayVersion).toBe(ReplyModelDisplayVersion);
+    expect(f.store.sync('local')!.source_seq).toBe(source);
+    expect(f.db.prepare('SELECT revision FROM remote_live_revisions WHERE object_id=?').get('message')).toEqual({ revision: Number(f.revision) });
+    (f.publisher as any).liveScan.clear(); f.request.mockClear(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('repairs an acknowledged scheduled reply without inventing an input selection', async () => {
+    const f = await prepare(); f.store.remove('inputRun:run'); f.context.replyModelLabelSupported = true;
+    f.publisher.ledger.markReplyModelDisplayChecked(f.context.scope, 'local', 'message:message', f.revision);
+    await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(body).toMatchObject({ representation: 'repair', sourceObjectRevision: f.revision,
+      expectedProjectionRevision: '41', payload: { modelLabel: 'deepseek-flash' } });
+    expect(body.payload).not.toHaveProperty('inputModel');
+    expect(body).not.toHaveProperty('replyModelLabelChecked');
+    expect(body).not.toHaveProperty('resolvedModelLabel');
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.replyModelLabelChecked).toBe(true);
+    (f.publisher as any).liveScan.clear(); f.request.mockClear(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('defers display-only repair until capability negotiation without consuming its check', async () => {
+    const f = await prepare(); f.store.remove('inputRun:run'); f.context.replyModelLabelSupported = false;
+    await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.replyModelLabelChecked).toBeUndefined();
+    f.context.replyModelLabelSupported = true; (f.publisher as any).liveScan.clear();
+    await f.live();
+    expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2].payload.modelLabel).toBe('deepseek-flash');
+  });
+
+  it('retains a sealed label publication when rollback offers no resolution capability', async () => {
+    const f = await prepare(); f.context.replyModelLabelSupported = false; f.context.publicationResolutionSupported = false;
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const body = { publicationId: 'pending-label', objectKind: 'message', objectId: 'message', sourceObjectRevision: f.revision,
+      writerGeneration: state.writerGeneration, sessionId: state.sessionId, representation: 'complete', payload: { modelLabel: 'deepseek-flash' } };
+    f.publisher.ledger.saveRequest({ key: body.publicationId, lane: 'live', scope: f.context.scope, localId: 'local',
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: '/sync/live-projections/pending-label', lookupVersion: 3,
+      attempted: true, createdAt: 1, body, replyModelLabelChecked: true });
+    await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.request(body.publicationId)?.body).toEqual(body);
+    f.context.replyModelLabelSupported = true;
+    await f.live();
+    expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2]).toEqual({ ...body, connectionGeneration: f.context.generation });
+  });
+
+  it('does not republish a frozen preset name without an actual recorded model', async () => {
+    const f = await prepare({ model: 'yd-fast' }), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(encode).toHaveBeenCalledTimes(1);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).toMatchObject({
+      state: 'accepted', projectionRevision: '41', replyModelDisplayVersion: ReplyModelDisplayVersion,
+    });
+    (f.publisher as any).liveScan.clear(); await f.live();
+    expect(encode).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes an older immutable pending publication before sealing its label repair', async () => {
+    const f = await prepare(), state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const body = { publicationId: 'older-publication', objectKind: 'message', objectId: 'message', sourceObjectRevision: f.revision,
+      writerGeneration: state.writerGeneration, sessionId: state.sessionId, representation: 'complete', payload: { inputModel: model } };
+    f.publisher.ledger.saveRequest({ key: body.publicationId, lane: 'live', scope: f.context.scope, localId: 'local',
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: '/sync/live-projections/older-publication', lookupVersion: 3,
+      attempted: true, createdAt: 1, body });
+    await f.live();
+    const initial = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(initial).toHaveLength(1);
+    expect(initial[0][2]).toEqual({ ...body, connectionGeneration: f.context.generation });
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('replyModelDisplayVersion');
+    await f.live();
+    const repair = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
+    expect(repair).toMatchObject({ representation: 'repair', expectedProjectionRevision: '900' });
+    expect(repair.publicationId).not.toBe(body.publicationId);
+  });
+
+  it('keeps a conflicting repair immutable for reconciliation instead of changing its CAS revision', async () => {
+    const f = await prepare(), ordinary = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') throw Object.assign(new Error('Projection revision changed'), { httpStatus: 409 });
+      return ordinary(...args);
+    });
+    await f.live();
+    const first = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    const saved = f.publisher.ledger.request(first.publicationId)!;
+    expect(saved.body.expectedProjectionRevision).toBe('41');
+    (f.publisher as any).failures.clear(); (f.publisher as any).liveScan.clear(); await f.live();
+    const attempts = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1][2]).toEqual(first);
+    expect(f.publisher.ledger.request(first.publicationId)).toEqual(saved);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('replyModelDisplayVersion');
+  });
+
+  it('requires original-publication resolution support before attempting automatic same-source repair', async () => {
+    const f = await prepare(); f.context.publicationResolutionSupported = false;
+    const encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    await f.live(); expect(f.request).not.toHaveBeenCalled(); expect(encode).not.toHaveBeenCalled();
+  });
+
+  it('seals a conflicting repair without changing its bytes and allows the next source revision', async () => {
+    const f = await prepare(), ordinary = f.request.getMockImplementation()!, state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && args[2].representation === 'repair')
+        throw Object.assign(new Error('Projection revision changed'), { httpStatus: 409 });
+      if (args[0].endsWith('/resolve')) {
+        const publicationId = args[0].split('/')[3];
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: 'sealed_unpublished', publicationId, sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          sealId: 'seal', resolutionRequestHash: payloadHash({ ...business, publicationId }) };
+      }
+      return ordinary(...args);
+    });
+    await f.live();
+    const repair = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    const { connectionGeneration: _generation, ...originalBody } = repair;
+    expect(f.publisher.ledger.request(repair.publicationId)?.body).toEqual(originalBody);
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(false);
+    expect(f.publisher.ledger.db.prepare('SELECT resolution_receipt FROM availability_requests WHERE key=?').get(repair.publicationId)).toMatchObject({
+      resolution_receipt: expect.stringContaining('sealed_unpublished'),
+    });
+    f.request.mockClear(); (f.publisher as any).liveScan.clear(); await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    f.store.transaction(() => f.db.prepare('UPDATE cowork_messages SET content=? WHERE id=?').run('New reply', 'message'));
+    await f.live();
+    const next = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(next.publicationId).not.toBe(repair.publicationId);
+    expect(next).toMatchObject({ representation: 'complete', sourceObjectRevision: String(Number(f.revision) + 1) });
+    expect(next).not.toHaveProperty('expectedProjectionRevision');
+  });
+
+  it('bounds repair inspection and remembers no-label checks so older recent candidates can progress', async () => {
+    const f = await prepare(), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    for (let index = 2; index <= 7; index++) {
+      const id = `unresolved-${index}`;
+      f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(id, 'local', 'assistant', 'Reply', JSON.stringify({ remoteRunId: 'run', model: 'yd-fast' }), index, index));
+      f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)')
+        .run(f.context.scope, 'local', `message:${id}`, '1', JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete' }));
+    }
+    await f.live();
+    expect(encode).toHaveBeenCalledTimes(4);
+    expect(f.request).not.toHaveBeenCalled();
+    await f.live();
+    expect(encode).toHaveBeenCalledTimes(7);
+    expect(f.request.mock.calls.filter(call => call[0] === '/sync/live-projections')).toHaveLength(1);
+    expect(f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2].objectId).toBe('message');
+  });
+});
+
+describe('acknowledged annotation display repair', () => {
+  const metadata = { browserAnnotations: [{ pageTitle: 'index.html', annotations: [{ comment: '改成点我' }] }] };
+  const prepare = async (annotation: Record<string, unknown> = metadata) => {
+    const f = fixture(); f.context.publicationResolutionSupported = true;
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET type='user',content='',metadata=? WHERE id='message'").run(JSON.stringify(annotation)));
+    await f.controls();
+    const revision = String((f.db.prepare("SELECT revision FROM remote_live_revisions WHERE object_id='message'").get() as { revision: number }).revision);
+    f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)').run(f.context.scope, 'local', 'message:message', revision,
+      JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete', replyModelDisplayVersion: ReplyModelDisplayVersion }));
+    f.request.mockClear();
+    return { ...f, revision };
+  };
+
+  it('repairs an acknowledged empty message with CAS without changing source identity or leaking local evidence', async () => {
+    const f = await prepare(), source = f.store.sync('local')!.source_seq;
+    await f.live();
+    const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(body).toMatchObject({ representation: 'repair', objectId: 'message', sourceObjectRevision: f.revision, expectedProjectionRevision: '41' });
+    expect(body.payload.blocks[0].text).toContain('改成点我');
+    expect(body).not.toHaveProperty('hasAnnotationText');
+    expect(body).not.toHaveProperty('annotationDisplayVersion');
+    expect(body).not.toHaveProperty('annotationRepair');
+    expect(body.payload).not.toHaveProperty('revision');
+    expect(body.payloadHash).toBe(payloadHash(body.payload));
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result.annotationDisplayVersion).toBe(RemoteAnnotationDisplayVersion);
+    expect(f.store.sync('local')!.source_seq).toBe(source);
+    expect(f.db.prepare("SELECT revision FROM remote_live_revisions WHERE object_id='message'").get()).toEqual({ revision: Number(f.revision) });
+    f.request.mockClear(); (f.publisher as any).liveScan.clear();
+    for (let turn = 0; turn < 4; turn++) await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('finds acknowledged annotations beyond the recent window with bounded encoding', async () => {
+    const f = await prepare();
+    for (let index = 0; index < 80; index++) {
+      const id = `a-${String(index).padStart(3, '0')}`;
+      f.store.transaction(() => f.db.prepare('INSERT INTO cowork_messages VALUES(?,?,?,?,?,?,?)')
+        .run(id, 'local', 'assistant', 'Reply', '{}', index + 3, index + 2));
+      f.publisher.ledger.db.prepare('INSERT INTO availability_objects VALUES(?,?,?,?,?)').run(f.context.scope, 'local', `message:${id}`, '1',
+        JSON.stringify({ state: 'accepted', projectionRevision: '41', replyModelDisplayVersion: ReplyModelDisplayVersion }));
+    }
+    const encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    for (let turn = 0; turn < 8; turn++) await f.live();
+    expect(encode).toHaveBeenCalledTimes(1);
+    const bodies = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').map(call => call[2]);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ objectId: 'message', representation: 'repair', sourceObjectRevision: f.revision });
+  });
+
+  it('records no-annotation inspections without republishing ordinary messages', async () => {
+    const f = await prepare({}), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    for (let turn = 0; turn < 6; turn++) { (f.publisher as any).liveScan.clear(); await f.live(); }
+    expect(encode).toHaveBeenCalledTimes(1);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).toMatchObject({
+      state: 'accepted', projectionRevision: '41', annotationDisplayVersion: RemoteAnnotationDisplayVersion,
+    });
+  });
+
+  it('requires publication resolution support and current session ownership', async () => {
+    const f = await prepare(), encode = vi.spyOn((f.publisher as any).encoder, 'project');
+    f.context.publicationResolutionSupported = false;
+    await f.live();
+    f.context.publicationResolutionSupported = true;
+    f.db.prepare("UPDATE cowork_session_ownership SET owner_user_id='different' WHERE session_id='local'").run();
+    await f.live();
+    expect(encode).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('resolves the original pending publication before sealing a new repair', async () => {
+    const f = await prepare(), state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const body = { publicationId: 'old-annotation', objectKind: 'message', objectId: 'message', sourceObjectRevision: f.revision,
+      writerGeneration: state.writerGeneration, sessionId: state.sessionId, representation: 'complete', payload: { blocks: [] } };
+    f.publisher.ledger.saveRequest({ key: body.publicationId, lane: 'live', scope: f.context.scope, localId: 'local',
+      pathname: '/sync/live-projections', method: 'POST', version: 3, lookup: '/sync/live-projections/old-annotation', lookupVersion: 3,
+      attempted: true, createdAt: 1, body });
+    await f.live();
+    const first = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(first).toHaveLength(1); expect(first[0][2]).toEqual({ ...body, connectionGeneration: f.context.generation });
+    for (let turn = 0; turn < 5; turn++) await f.live();
+    const repaired = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections').at(-1)![2];
+    expect(repaired).toMatchObject({ representation: 'repair', expectedProjectionRevision: '900' });
+    expect(repaired.publicationId).not.toBe(body.publicationId);
+  });
+
+  it.each(['sessionId', 'writerGeneration', 'objectKind', 'objectId', 'sourceObjectRevision'] as const)(
+    'rejects an incomplete %s receipt when model inspection discovers annotations', async missing => {
+      const f = await prepare(), original = f.request.getMockImplementation()!;
+      // Force the ordinary recent-message turn: annotation discovery happens after model encoding,
+      // without a history annotation candidate or pre-existing recovery fault.
+      (f.publisher as any).recoveryFirst = true;
+      f.publisher.ledger.db.prepare('UPDATE availability_objects SET result=? WHERE scope=? AND local_id=? AND object_id=?')
+        .run(JSON.stringify({ state: 'accepted', projectionRevision: '41', representation: 'complete' }), f.context.scope, 'local', 'message:message');
+      f.request.mockImplementation(async (...args) => {
+        const result = await original(...args);
+        if (args[0] !== '/sync/live-projections') return result;
+        const incomplete = { ...result }; delete incomplete[missing];
+        return incomplete;
+      });
+      await f.live();
+      const body = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+      expect(body).toMatchObject({ representation: 'repair', expectedProjectionRevision: '41' });
+      expect(f.publisher.ledger.request(body.publicationId)).toMatchObject({
+        annotationRepair: true, liveEncoderVersion: RemoteLiveEncoderVersion,
+      });
+      expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(true);
+      expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).toMatchObject({
+        state: 'accepted', projectionRevision: '41',
+      });
+      expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
+    },
+  );
+
+  it('backs off a sealed annotation conflict by source revision while allowing a real subsequent edit', async () => {
+    const f = await prepare(), original = f.request.getMockImplementation()!, state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections' && args[2].representation === 'repair')
+        throw Object.assign(new Error('Projection changed'), { httpStatus: 409 });
+      if (args[0].endsWith('/resolve')) {
+        const publicationId = args[0].split('/')[3];
+        const { mode: _mode, connectionGeneration: _generation, ...business } = args[2];
+        return { state: 'sealed_unpublished', publicationId, sessionId: state.sessionId, writerGeneration: state.writerGeneration,
+          sealId: 'annotation-seal', resolutionRequestHash: payloadHash({ ...business, publicationId }) };
+      }
+      return original(...args);
+    });
+    await f.live();
+    const repair = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(f.publisher.ledger.hasPendingObject(f.context.scope, 'local', 'message', 'message')).toBe(false);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
+    expect(f.publisher.ledger.db.prepare("SELECT 1 FROM availability_faults WHERE object_key='message:message'").get()).toBeDefined();
+    f.request.mockClear(); (f.publisher as any).liveScan.clear();
+    for (let turn = 0; turn < 4; turn++) await f.live();
+    expect(f.request).not.toHaveBeenCalled();
+    f.store.transaction(() => f.db.prepare("UPDATE cowork_messages SET content='Additional request' WHERE id='message'").run());
+    await f.live();
+    const next = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    expect(next).toMatchObject({ representation: 'complete', sourceObjectRevision: String(Number(f.revision) + 1) });
+    expect(next.publicationId).not.toBe(repair.publicationId);
+    expect(next).not.toHaveProperty('expectedProjectionRevision');
+  });
+
+  it('retains an unknown conflicting repair without marking its annotation display recovered', async () => {
+    const f = await prepare(), original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/sync/live-projections') throw Object.assign(new Error('Projection changed'), { httpStatus: 409 });
+      return original(...args);
+    });
+    await f.live();
+    const first = f.request.mock.calls.find(call => call[0] === '/sync/live-projections')![2];
+    const saved = f.publisher.ledger.request(first.publicationId)!;
+    (f.publisher as any).failures.clear(); (f.publisher as any).liveScan.clear(); await f.live();
+    const attempts = f.request.mock.calls.filter(call => call[0] === '/sync/live-projections');
+    expect(attempts).toHaveLength(2); expect(attempts[1][2]).toEqual(first);
+    expect(f.publisher.ledger.request(first.publicationId)).toEqual(saved);
+    expect(f.publisher.ledger.object(f.context.scope, 'local', 'message:message')?.result).not.toHaveProperty('annotationDisplayVersion');
+  });
+});
+
+
+describe('Agent icon availability facts', () => {
+  function iconFixture(supported: boolean, expertAvatars?: RemoteExpertAvatars) {
+    const f = fixture();
+    f.db.exec(`ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT '${expertAvatars ? 'expert' : 'main'}';
+      CREATE TABLE agents(id TEXT PRIMARY KEY,name TEXT,icon TEXT,enabled INTEGER,created_at INTEGER,updated_at INTEGER);
+      INSERT INTO agents VALUES('main','Main','agent-avatar-svg:code',1,1,1);`);
+    if (expertAvatars) f.db.exec(`ALTER TABLE agents ADD COLUMN source TEXT;
+      ALTER TABLE agents ADD COLUMN preset_id TEXT; ALTER TABLE agents ADD COLUMN icon_customized INTEGER;`);
+    const ownership = new AgentOwnerStore(f.db);
+    if (expertAvatars) ownership.transaction(() => {
+      f.db.prepare("INSERT INTO agents VALUES('expert','Expert','https://shared.ydstatic.com/expert.webp',1,1,1,'preset','template',0)").run();
+      ownership.assignNew('expert', f.owner);
+    });
+    const catalog = new RemoteAgentCatalog(f.store, ownership, () => ({ path: '/tmp', name: 'Workspace' }), undefined, undefined, expertAvatars);
+    catalog.configureIconKeys(f.owner, supported);
+    f.store.setAgentSummaryResolver((sessionId, actor) => catalog.summary(sessionId, actor));
+    return { ...f, ownership, catalog };
+  }
+
+  it('publishes a directory-only expert icon update as a new fact on an already active session', async () => {
+    const resolveIcon = vi.fn((_url: string): string | null => null);
+    const f = iconFixture(false, { getEndpoint: () => 'test', resolveIcon });
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    const previous = f.catalog.summary('local', f.owner)!;
+    expect(previous.icon).toBe(RemoteExpertAvatar.Default);
+    const key = RemoteExpertAvatar.UrlPrefix + 'b'.repeat(64);
+    resolveIcon.mockReturnValue(key);
+    await f.catalog.refresh(f.owner, 'desktop', () => true);
+    await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.find((fact: any) => fact.eventType === 'session.upsert')?.payload.session.agent)
+      .toMatchObject({ agentId: 'expert', icon: key, version: String(BigInt(previous.version) + 1n) });
+  });
+
+  it('publishes a later avatar edit without relying on Agent directory refresh', async () => {
+    const f = iconFixture(true);
+    await f.controls();
+    expect(f.publisher.controlReady('local')).toBe(true);
+    const before = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    f.ownership.transaction(() => f.db.prepare("UPDATE agents SET icon='agent-avatar-svg:repair' WHERE id='main'").run());
+    const version = f.ownership.get('main')!.version;
+    await f.controls();
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.find((fact: any) => fact.eventType === 'session.upsert')?.payload.session.agent)
+      .toMatchObject({ agentId: 'main', icon: 'agent-avatar-svg:repair', version });
+    const after = (f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision;
+    expect(after).toBeGreaterThan(before);
+    f.catalog.configureIconKeys(f.owner, true);
+    await f.controls();
+    expect(f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get()).toEqual({ revision: after });
+  });
+
+  it('includes an icon migration discovered inside a reconciliation snapshot', async () => {
+    const f = iconFixture(false);
+    // Publication admission can arrive after capability negotiation without editing the Agent itself.
+    const admission = vi.spyOn(f.catalog as any, 'canPublishHere').mockReturnValue(false);
+    f.catalog.configureIconKeys(f.owner, true);
+    await f.controls();
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    expect(state.controlRevision).toBe(String((f.db.prepare("SELECT revision FROM remote_control_revisions WHERE session_id='local'").get() as { revision: number }).revision));
+    admission.mockReturnValue(true);
+    const reconnected = { ...f.context, routeEpoch: 1 };
+    f.setContext(reconnected);
+    await (f.publisher as any).facts(reconnected, state);
+    const facts = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').flatMap(call => call[2].facts);
+    expect(facts.find((fact: any) => fact.eventType === 'session.upsert')?.payload.session.agent)
+      .toMatchObject({ agentId: 'main', icon: 'agent-avatar-svg:code' });
+  });
+
+  it('keeps a sealed facts batch unchanged across capability changes and follows it with the new display', async () => {
+    const f = iconFixture(false);
+    await f.controls();
+    f.catalog.configureIconKeys(f.owner, true);
+    const state = f.publisher.ledger.session(f.context.scope, 'local')!;
+    const normal = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === '/control/facts/batches') throw new Error('Offline');
+      return normal(...args);
+    });
+    await expect((f.publisher as any).facts(f.context, state)).rejects.toThrow('Offline');
+    const pending = structuredClone(f.publisher.ledger.pending(f.context.scope, 'control', 'local')
+      .find(request => request.pathname === '/control/facts/batches')!);
+    const pendingAgent = pending.body.facts.find((fact: any) => fact.eventType === 'session.upsert').payload.session.agent;
+    expect(pendingAgent.icon).toBe('agent-avatar-svg:code');
+    f.catalog.configureIconKeys(f.owner, false);
+    expect(f.publisher.ledger.request(pending.key)?.body).toEqual(pending.body);
+    f.request.mockImplementation(normal);
+    await (f.publisher as any).facts(f.context, state);
+    const retried = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').at(-1)![2];
+    expect(retried).toMatchObject({ batchId: pending.body.batchId, facts: pending.body.facts });
+    await (f.publisher as any).facts(f.context, f.publisher.ledger.session(f.context.scope, 'local')!);
+    const latest = f.request.mock.calls.filter(call => call[0] === '/control/facts/batches').at(-1)![2];
+    const agent = latest.facts.find((fact: any) => fact.eventType === 'session.upsert').payload.session.agent;
+    expect(latest.batchId).not.toBe(pending.body.batchId);
+    expect(agent.icon).toBeNull();
+    expect(BigInt(agent.version)).toBeGreaterThan(BigInt(pendingAgent.version));
+  });
+});

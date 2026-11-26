@@ -753,7 +753,9 @@ class AuthService {
       if (result.success && result.user) {
         writeAuthRendererLog('info', 'login callback exchange succeeded');
         this.cancelAuthRecovery();
-        store.dispatch(invalidateAuthAccountContext());
+        // The first login advances the generation in setLoggedIn. Reauthorizing an
+        // already-signed-in account also invalidates responses from before the callback.
+        if (store.getState().auth.ownerAccountKey !== null) store.dispatch(invalidateAuthAccountContext());
         store.dispatch(clearMediaAccountState());
         this.applyAuthenticatedState(
           result.user,

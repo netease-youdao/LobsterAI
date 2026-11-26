@@ -20,6 +20,11 @@ describe('app deep links', () => {
     expect(parseAppDeepLink('lobsterai://view/skills')).toEqual({ kind: 'view', view: 'skills' });
   });
 
+  test('restores links to both the sidebar remote control and device settings', () => {
+    expect(parseAppDeepLink('lobsterai://settings/remoteControl')).toEqual({ kind: 'remoteControl' });
+    expect(parseAppDeepLink('lobsterai://settings/remoteDevices')).toEqual({ kind: 'settings', tab: SettingsTabId.RemoteDevices });
+  });
+
   test('normalizes retired settings tabs to general while keeping email active', () => {
     expect(parseAppDeepLink('lobsterai://settings/email')).toEqual({ kind: 'settings', tab: 'email' });
     expect(parseAppDeepLink('lobsterai://settings/coworkAgentEngine')).toEqual({

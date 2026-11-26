@@ -28,6 +28,7 @@ import { clearCurrentSession } from '../store/slices/coworkSlice';
 import { clearAgentSelectedModel } from '../store/slices/modelSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
+import { accountBoundRequest } from './accountBoundRequest';
 import { removeAgentOnboardingMeta } from './agentOnboarding';
 import { i18nService } from './i18n';
 import { captureExpertModelSelection } from './newTaskModelSelection';
@@ -86,7 +87,7 @@ class AgentService {
     }
     store.dispatch(setLoading(true));
     try {
-      const agents = await window.electron?.agents?.list();
+      const agents = await accountBoundRequest(async () => window.electron?.agents?.list());
       if (agents) {
         const mappedAgents = agents.map((a) => ({
           id: a.id,
@@ -136,7 +137,7 @@ class AgentService {
     subagentAllowAgentIds?: string[];
   }): Promise<Agent | null> {
     try {
-      const agent = await window.electron?.agents?.create(request);
+      const agent = await accountBoundRequest(async () => window.electron?.agents?.create(request));
       if (agent) {
         store.dispatch(addAgent({
           id: agent.id,
@@ -191,11 +192,11 @@ class AgentService {
     try {
       const effectiveUpdates = updates.modelSelectionMode === AgentModelSelectionMode.Inherit
         ? { ...updates, ...captureExpertModelSelection(store.getState(), id) } : updates;
-      const agent = await window.electron?.agents?.update(id, effectiveUpdates);
+      const agent = await accountBoundRequest(async () => window.electron?.agents?.update(id, effectiveUpdates));
       if (agent) {
         if (effectiveUpdates.model !== undefined) {
           // Agent.model is now authoritative for virtual models too.
-          const cleared = await window.electron.modelPresets.setPreference(id, null);
+          const cleared = await accountBoundRequest(() => window.electron.modelPresets.setPreference(id, null));
           if (!cleared.success) throw new Error(cleared.error || i18nService.t('agentSaveFailed'));
           store.dispatch(clearAgentSelectedModel(id));
         }
@@ -239,7 +240,7 @@ class AgentService {
 
   async reorderAgents(agentIds: string[]): Promise<boolean> {
     try {
-      const agents = await window.electron?.agents?.reorder(agentIds);
+      const agents = await accountBoundRequest(async () => window.electron?.agents?.reorder(agentIds));
       if (!agents) return false;
       const mappedAgents = agents.map((agent) => ({
         id: agent.id,
@@ -350,7 +351,7 @@ class AgentService {
   async deleteAgent(id: string): Promise<boolean> {
     try {
       const wasCurrentAgent = store.getState().agent.currentAgentId === id;
-      const deleted = await window.electron?.agents?.delete(id);
+      const deleted = await accountBoundRequest(async () => window.electron?.agents?.delete(id));
       if (!deleted) {
         return false;
       }
@@ -371,7 +372,7 @@ class AgentService {
 
   async getPresets(): Promise<PresetAgent[]> {
     try {
-      const presets = await window.electron?.agents?.presets();
+      const presets = await accountBoundRequest(async () => window.electron?.agents?.presets());
       return presets ?? [];
     } catch (error) {
       console.error('Failed to get presets:', error);
@@ -381,7 +382,7 @@ class AgentService {
 
   async getPresetTemplates(): Promise<PresetAgent[]> {
     try {
-      const presets = await window.electron?.agents?.presetTemplates();
+      const presets = await accountBoundRequest(async () => window.electron?.agents?.presetTemplates());
       return presets ?? [];
     } catch (error) {
       console.error('Failed to get preset agent templates:', error);
@@ -395,7 +396,7 @@ class AgentService {
       const state = store.getState();
       const existing = state.agent.agents.find(agent => agent.source === AgentSource.Preset && agent.presetId === presetId);
       const modelSelection = captureExpertModelSelection(state, existing?.id);
-      const agent = await window.electron?.agents?.addPreset(presetId, modelSelection);
+      const agent = await accountBoundRequest(async () => window.electron?.agents?.addPreset(presetId, modelSelection));
       if (agent) {
         if (usesInheritedAgentModel(agent)) {
           const cleared = await window.electron.modelPresets?.setPreference(agent.id, null);
@@ -436,6 +437,7 @@ class AgentService {
   }
 
   switchAgent(agentId: string, options: SwitchAgentOptions = {}): void {
+    if (agentId !== AgentId.Main && !store.getState().agent.agents.some(agent => agent.id === agentId)) return;
     resetDraftAnalytics();
     store.dispatch(setCurrentAgentId(agentId));
     store.dispatch(clearCurrentSession(options.targetSessionId

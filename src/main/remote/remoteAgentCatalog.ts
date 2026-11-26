@@ -1,0 +1,359 @@
+import { randomUUID } from 'crypto';
+import { statSync } from 'fs';
+import { resolve } from 'path';
+
+import { isRemoteExpertImageKey, parseAgentAvatarIcon, RemoteExpertAvatar } from '../../shared/agent/avatar';
+import { AgentId, AgentOwnerKind, AgentSource } from '../../shared/agent/constants';
+import { usesManagedPresetAvatar } from '../../shared/agent/presetAvatar';
+import { REMOTE_AGENT_CATALOG_BYTES, REMOTE_AGENT_CATALOG_ITEMS, type RemoteAgentCatalogItem, RemoteAgentReason, RemoteAgentState, type RemoteAgentSummary, type RemoteOwner } from '../../shared/remote/constants';
+import type { AgentOwnerStore } from '../agentOwnership';
+import { payloadHash, sameOwner } from './canonical';
+import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
+import type { RemoteStore } from './remoteStore';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { captureRemoteTelemetry } from './remoteTelemetry';
+
+interface AgentRow {
+  id: string; name: string; icon: string; enabled: number;
+  source?: AgentSource; presetId?: string; iconCustomized?: number | null;
+}
+interface IconProjection {
+  sourceIcon: string | null; icon: string | null; version: string; supported: boolean;
+  expertIcon?: string; registeredUrl?: string; registeredEndpoint?: string; useLegacyIcon?: boolean;
+}
+interface WorkspaceBinding { agentId: string; workspaceId: string; path: string; available: boolean }
+interface Publication { publicationId: string; expectedCatalogVersion: string; items: RemoteAgentCatalogItem[] }
+const AGENT_VERSION_CONFLICT = 47029;
+interface CatalogState { catalogVersion: string; syncedHash: string | null; syncedItems?: RemoteAgentCatalogItem[]; pending: Publication | null }
+export interface RemoteExpertAvatars {
+  getEndpoint(): string;
+  resolveIcon(sourceUrl: string): string | null;
+}
+export interface AgentWorkspace { path: string; name: string; available?: boolean }
+export class RemoteAgentError extends Error {
+  constructor(readonly code: number, readonly reason: string, readonly reasonDetail: string) { super(reason); }
+}
+const safeName = (name: string): string => Array.from(name.replace(/[\u0000-\u001f\u007f-\u009f]/gu, '').trim()).slice(0, 128).join('') || 'Agent';
+const emojiBase = (cp: number): boolean => cp >= 0x1f000 && cp <= 0x1faff || cp >= 0x2190 && cp <= 0x23ff
+  || cp >= 0x2600 && cp <= 0x27bf || cp >= 0x2b00 && cp <= 0x2bff
+  || [0xa9, 0xae, 0x20e3, 0x2122, 0x2139, 0x3030, 0x303d, 0x3297, 0x3299].includes(cp);
+const reservedExpertIcon = (icon: string | null | undefined): boolean =>
+  !!icon && (icon === RemoteExpertAvatar.Default || isRemoteExpertImageKey(icon));
+const safeIcon = (icon: string, iconKeysSupported = false): string | null => {
+  if (!icon || Buffer.byteLength(icon) > 128 || reservedExpertIcon(icon)) return null;
+  if (iconKeysSupported && parseAgentAvatarIcon(icon) && icon === icon.trim()) return icon;
+  if (/^[A-Za-z0-9_-]+$/u.test(icon)) return icon;
+  const points = Array.from(icon, char => char.codePointAt(0)!);
+  return points.some(emojiBase) && points.every(cp => emojiBase(cp) || cp >= 0xe0020 && cp <= 0xe007f
+    || cp >= 0x30 && cp <= 0x39 || [0x23, 0x2a, 0x200d, 0xfe0e, 0xfe0f].includes(cp)) ? icon : null;
+};
+export const remoteAgentFailure = (detail: string): RemoteAgentError => new RemoteAgentError(47028, 'AGENT_UNAVAILABLE', detail);
+
+/** A device publishes one bounded, durable snapshot; workspace aliases are never repointed. */
+export class RemoteAgentCatalog {
+  private operationEpoch = 0;
+  private iconContext: { key: string; supported: boolean } | null = null;
+  constructor(private readonly store: RemoteStore, private readonly ownership: AgentOwnerStore,
+    private readonly getWorkspace: (agentId: string) => Promise<AgentWorkspace> | AgentWorkspace,
+    private readonly getDefaultInput?: (owner: RemoteOwner, deviceId: string, agentId: string) => RemoteAgentCatalogItem['defaultInput'],
+    private readonly getTargetId?: () => string | null,
+    private readonly expertAvatars?: RemoteExpertAvatars) {}
+  reset(): void { this.operationEpoch++; this.iconContext = null; }
+  private targetId(): string | undefined {
+    const targetId = this.getTargetId?.();
+    if (this.getTargetId && !targetId) throw new Error('Remote target is not ready');
+    return targetId ?? undefined;
+  }
+  private scope(parts: string[]): string { return JSON.stringify([...(this.getTargetId ? [this.targetId()] : []), ...parts]); }
+  private key(owner: RemoteOwner, deviceId: string): string { return `agentCatalog:${this.scope([owner.userId, owner.scopeKey, deviceId])}`; }
+  private workspaceKey(owner: RemoteOwner, deviceId: string, agentId: string): string { return `agentWorkspaces:${this.scope([owner.userId, owner.scopeKey, deviceId, agentId])}`; }
+  private canPublishHere(agentId: string, owner: RemoteOwner): boolean {
+    const targetId = this.getTargetId?.();
+    return !this.getTargetId || !!targetId && remotePublicationAllowed(this.store.db, RemotePublicationKind.Agent, agentId, owner, targetId);
+  }
+  private row(agentId: string): AgentRow | undefined {
+    const columns = this.expertAvatars ? ',source,preset_id AS presetId,icon_customized AS iconCustomized' : '';
+    return this.store.db.prepare(`SELECT id,name,icon,enabled${columns} FROM agents WHERE id=?`).get(agentId) as AgentRow | undefined;
+  }
+  private iconProjectionKey(actor: RemoteOwner, agentId: string): string {
+    return `agentIconProjection:${this.scope([actor.userId, actor.scopeKey, agentId])}`;
+  }
+  private expertProjection(row: AgentRow, previous: IconProjection | null): Pick<IconProjection, 'expertIcon' | 'registeredUrl' | 'registeredEndpoint'> {
+    if (!this.expertAvatars || row.id === AgentId.Main || row.source !== AgentSource.Preset) return {};
+    const url = row.icon?.trim() ?? '';
+    const endpoint = this.expertAvatars.getEndpoint();
+    const registered = this.expertAvatars.resolveIcon(url);
+    if (registered && isRemoteExpertImageKey(registered)) return { expertIcon: registered, registeredUrl: url, registeredEndpoint: endpoint };
+    // Offline or delisted: retain proof only for the very same installed source and target.
+    if (url && previous?.registeredEndpoint === endpoint && previous.registeredUrl === url && previous.expertIcon && isRemoteExpertImageKey(previous.expertIcon)) {
+      return { expertIcon: previous.expertIcon, registeredUrl: url, registeredEndpoint: endpoint };
+    }
+    return usesManagedPresetAvatar({ ...row, iconCustomized: row.iconCustomized == null ? undefined : Boolean(row.iconCustomized) })
+      ? { expertIcon: RemoteExpertAvatar.Default } : {};
+  }
+  summary(sessionId: string, actor: RemoteOwner): RemoteAgentSummary | null {
+    if (!sameOwner(this.store.owner(sessionId), actor)) return null;
+    const session = this.store.db.prepare('SELECT agent_id FROM cowork_sessions WHERE id=?').get(sessionId) as { agent_id: string } | undefined;
+    if (!session) return null;
+    return this.agentSummary(session.agent_id || AgentId.Main, actor);
+  }
+  /** Configure only after the service target is verified; changed summaries dirty their existing sessions. */
+  configureIconKeys(actor: RemoteOwner, supported: boolean): void {
+    const key = this.scope([actor.userId, actor.scopeKey]);
+    if (this.iconContext?.key === key && this.iconContext.supported === supported) return;
+    const previous = this.iconContext;
+    this.iconContext = { key, supported };
+    try {
+      this.refreshSummaries(actor);
+    } catch (error) { this.iconContext = previous; throw error; }
+  }
+  refreshSummaries(actor: RemoteOwner): void {
+    this.ownership.transaction(() => {
+      for (const identity of this.ownership.list()) this.agentSummary(identity.agentId, actor);
+    });
+  }
+  private agentSummary(agentId: string, actor: RemoteOwner): RemoteAgentSummary | null {
+    if (!this.canPublishHere(agentId, actor)) return null;
+    const identity = this.ownership.get(agentId);
+    if (!identity || identity.ownerKind === AgentOwnerKind.Quarantined
+      || identity.ownerKind === AgentOwnerKind.Owned && !sameOwner(identity.owner, actor)) return null;
+    const row = this.row(agentId);
+    const cached = this.store.get<RemoteAgentSummary>(`agentSummary:${agentId}`);
+    if (!row && !cached) return null;
+    const projectionKey = this.iconProjectionKey(actor, agentId);
+    const previous = this.store.get<IconProjection>(projectionKey);
+    const context = this.iconContext?.key === this.scope([actor.userId, actor.scopeKey]) ? this.iconContext : null;
+    // Unknown negotiation state retains this target's last confirmed format; reset is not a downgrade.
+    const supported = context?.supported ?? previous?.supported ?? false;
+    // A newer legacy cache may represent an avatar edit made by an older desktop binary.
+    const latestScoped = previous && (!cached || BigInt(previous.version) >= BigInt(cached.version));
+    const cachedSource = latestScoped ? previous.sourceIcon : cached?.icon;
+    const sourceIcon = safeIcon((row ? row.icon : cachedSource) ?? '', true);
+    const legacyIcon = safeIcon(sourceIcon ?? '', supported);
+    let expert: Pick<IconProjection, 'expertIcon' | 'registeredUrl' | 'registeredEndpoint'> = {};
+    if (row && (context || previous)) expert = this.expertProjection(row, previous);
+    else if (!row && latestScoped && previous.expertIcon === RemoteExpertAvatar.Default) expert = { expertIcon: previous.expertIcon };
+    else if (!row && latestScoped && previous.expertIcon && previous.registeredUrl && previous.registeredEndpoint
+      && previous.registeredEndpoint === this.expertAvatars?.getEndpoint() && isRemoteExpertImageKey(previous.expertIcon)) {
+      expert = { expertIcon: previous.expertIcon, registeredUrl: previous.registeredUrl, registeredEndpoint: previous.registeredEndpoint };
+    }
+    const useLegacyIcon = previous?.useLegacyIcon === true;
+    let icon = useLegacyIcon ? legacyIcon : expert.expertIcon ?? legacyIcon;
+    if (!context && !previous && cached?.version === identity.version && !reservedExpertIcon(cached.icon)) icon = cached.icon;
+    let version = identity.version;
+    const kind = identity.ownerKind;
+    return this.ownership.transaction(() => {
+      if (context || previous || reservedExpertIcon(cached?.icon)) {
+        if ([previous, cached].some(prior => prior && prior.version === version && prior.icon !== icon)
+          || !previous && !cached && icon !== safeIcon(sourceIcon ?? '')) {
+          // Include tombstones only for display migration; ownership and deletion state stay unchanged.
+          this.ownership.touch(agentId, true);
+          version = this.ownership.get(agentId)!.version;
+        }
+        this.store.put(projectionKey, { sourceIcon, icon, version, supported, ...expert, ...(useLegacyIcon ? { useLegacyIcon } : {}) });
+      }
+      const summary: RemoteAgentSummary = row
+        ? { agentId, name: safeName(row.name), icon, kind, version,
+          state: row.enabled ? RemoteAgentState.Available : RemoteAgentState.Disabled }
+        : { ...cached!, icon, version, state: identity.deletedAt ? RemoteAgentState.Deleted : RemoteAgentState.Unknown };
+      this.store.put(`agentSummary:${agentId}`, summary);
+      return summary;
+    });
+  }
+  async refresh(owner: RemoteOwner, deviceId: string, stillCurrent: () => boolean,
+    canPublishAgent: (agentId: string) => boolean = () => true): Promise<RemoteAgentCatalogItem[]> {
+    const targetId = this.targetId(), epoch = this.operationEpoch;
+    const isCurrent = () => stillCurrent() && this.getTargetId?.() === targetId && this.operationEpoch === epoch;
+    if (!isCurrent()) throw new Error('Account changed');
+    const items: RemoteAgentCatalogItem[] = [];
+    for (const identity of this.ownership.list()) {
+      if (!this.ownership.canView(identity.agentId, owner)) continue;
+      this.agentSummary(identity.agentId, owner);
+      if (!this.ownership.canPublish(identity.agentId, owner) || !this.canPublishHere(identity.agentId, owner) || !canPublishAgent(identity.agentId)) continue;
+      const beforeVersion = this.ownership.get(identity.agentId)!.version;
+      let workspace: AgentWorkspace | null = null;
+      try { workspace = await this.getWorkspace(identity.agentId); } catch { /* Publish unavailability, never substitute another Agent's path. */ }
+      if (!isCurrent()) throw new Error('Account changed');
+      if (!canPublishAgent(identity.agentId)) throw new Error('Agent ownership synchronization is waiting for server support');
+      if (!this.ownership.canPublish(identity.agentId, owner) || this.ownership.get(identity.agentId)!.version !== beforeVersion) throw new Error('Agent changed while resolving its workspace');
+      const path: string | null = workspace?.path ? resolve(workspace.path) : null;
+      let available = false;
+      try { available = Boolean(path && workspace?.available !== false && statSync(path).isDirectory()); } catch { available = false; }
+      const stateKey = `agentWorkspaceState:${this.getTargetId ? this.scope([identity.agentId]) : identity.agentId}`;
+      const defaultInput = this.getDefaultInput?.(owner, deviceId, identity.agentId);
+      const fingerprint = payloadHash({ path, available, defaultInput: defaultInput || null });
+      const previous = this.store.get<string>(stateKey);
+      const workspaceKey = this.workspaceKey(owner, deviceId, identity.agentId);
+      const bindings = this.store.get<WorkspaceBinding[]>(workspaceKey) || [];
+      let binding = path && bindings.at(-1)?.path === path ? bindings.at(-1) : undefined;
+      this.store.transaction(() => {
+        if (path && !binding) { binding = { agentId: identity.agentId, workspaceId: randomUUID(), path, available }; bindings.push(binding); }
+        if (binding) binding.available = available;
+        this.store.put(workspaceKey, bindings);
+        this.store.put(stateKey, fingerprint);
+        if (previous !== null && previous !== fingerprint) this.ownership.touch(identity.agentId);
+      });
+      const summary = this.agentSummary(identity.agentId, owner)!;
+      const row = this.row(identity.agentId)!;
+      items.push({ agentId: summary.agentId, name: summary.name, icon: summary.icon, kind: summary.kind as 'default' | 'owned', version: summary.version,
+        ...(defaultInput ? { defaultInput } : {}),
+        enabled: Boolean(row.enabled), defaultWorkspaceId: binding?.workspaceId || null, workspaceAvailable: available,
+        unavailableReason: !row.enabled ? RemoteAgentReason.Disabled : !available ? RemoteAgentReason.WorkspaceUnavailable : null });
+    }
+    return items.sort((a, b) => a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0);
+  }
+  /** Choose one display per Agent before sealing. A budget downgrade must also reach its sessions. */
+  private fitExpertIcons(owner: RemoteOwner, publication: Publication, generation: string, maxBytes: number): void {
+    const size = (items: RemoteAgentCatalogItem[]) =>
+      Buffer.byteLength(JSON.stringify({ ...publication, items, connectionGeneration: generation }));
+    const projections = new Map<string, IconProjection>();
+    if (this.expertAvatars) for (const item of publication.items) {
+      const projection = this.store.get<IconProjection>(this.iconProjectionKey(owner, item.agentId));
+      if (projection?.expertIcon) projections.set(item.agentId, projection);
+    }
+    const preview = (useLegacy: boolean) => publication.items.map(item => {
+      const projection = projections.get(item.agentId);
+      if (!projection) return item;
+      if (projection.version !== item.version) throw new Error('Agent changed while sizing the catalog');
+      const icon = useLegacy ? safeIcon(projection.sourceIcon ?? '', projection.supported) : projection.expertIcon!;
+      return icon === item.icon ? item : { ...item, icon, version: String(BigInt(item.version) + 1n) };
+    });
+    let chosen = preview(false);
+    const useLegacy = size(chosen) > maxBytes;
+    if (useLegacy) {
+      chosen = preview(true);
+      if (size(chosen) > maxBytes) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+    }
+    const changes = chosen.filter((item, index) => item !== publication.items[index]);
+    if (!changes.length) return;
+    this.ownership.transaction(() => {
+      for (const item of changes) {
+        const key = this.iconProjectionKey(owner, item.agentId);
+        this.store.put(key, { ...projections.get(item.agentId)!, useLegacyIcon: useLegacy });
+        const summary = this.agentSummary(item.agentId, owner);
+        if (summary?.icon !== item.icon || summary?.version !== item.version) throw new Error('Agent changed while sizing the catalog');
+      }
+    });
+    publication.items = chosen;
+  }
+  resolve(owner: RemoteOwner, deviceId: string, agentId: string, version: string, workspaceId: string): string {
+    if (!this.ownership.canPublish(agentId, owner) || !this.canPublishHere(agentId, owner)) throw remoteAgentFailure('NOT_SELECTABLE');
+    const identity = this.ownership.get(agentId)!;
+    if (identity.version !== version) throw new RemoteAgentError(AGENT_VERSION_CONFLICT, 'AGENT_VERSION_CONFLICT', 'VERSION_CHANGED');
+    if (!this.row(agentId)?.enabled) throw remoteAgentFailure('DISABLED');
+    const bindings = this.store.get<WorkspaceBinding[]>(this.workspaceKey(owner, deviceId, agentId)) || [];
+    const binding = bindings.find(item => item.workspaceId === workspaceId);
+    if (!binding || binding.agentId !== agentId) throw remoteAgentFailure('BINDING_MISMATCH');
+    try { if (!binding.available || !statSync(binding.path).isDirectory()) throw remoteAgentFailure('WORKSPACE_UNAVAILABLE'); }
+    catch { throw remoteAgentFailure('WORKSPACE_UNAVAILABLE'); }
+    return binding.path;
+  }
+  isSynced(owner: RemoteOwner, deviceId: string, agentId: string): boolean {
+    const state = this.store.get<CatalogState>(this.key(owner, deviceId));
+    if (!state?.syncedItems || state.syncedHash !== payloadHash(state.syncedItems)) return false;
+    const identity = this.ownership.get(agentId);
+    const item = state.syncedItems.find(value => value.agentId === agentId);
+    return this.ownership.canPublish(agentId, owner) && this.canPublishHere(agentId, owner) && Boolean(item && item.version === identity?.version && item.kind === identity.ownerKind);
+  }
+  private retireRejectedPublication(owner: RemoteOwner, deviceId: string, state: CatalogState,
+    current: { deviceId: string; catalogVersion: string; items: RemoteAgentCatalogItem[] }): void {
+    const pending = state.pending!;
+    if (current.deviceId !== deviceId || current.catalogVersion !== pending.expectedCatalogVersion || !Array.isArray(current.items)) return;
+    const known = new Map(current.items.map(item => [item.agentId, item]));
+    const changed: string[] = [];
+    let versionReused = false;
+    for (const item of pending.items) {
+      const before = known.get(item.agentId);
+      if (!before) continue;
+      const identity = this.ownership.get(item.agentId);
+      // Only repair a reused version. A rollback, changed identity, or lost ownership needs investigation.
+      if (!identity || !this.ownership.canPublish(item.agentId, owner) || identity.ownerKind !== item.kind
+        || before.kind !== item.kind || BigInt(item.version) < BigInt(before.version)
+        || BigInt(identity.version) < BigInt(item.version)) return;
+      if (item.version === before.version && payloadHash(item) !== payloadHash(before)) {
+        versionReused = true;
+        if (identity.version === before.version) changed.push(item.agentId);
+      }
+    }
+    if (!versionReused) return;
+    this.store.transaction(() => {
+      for (const agentId of changed) this.ownership.touch(agentId);
+      // The server explicitly rejected this immutable publication; the next tick builds a new ID and snapshot.
+      this.store.put(this.key(owner, deviceId), { catalogVersion: current.catalogVersion, syncedHash: null, pending: null });
+    });
+  }
+  async publish(owner: RemoteOwner, deviceId: string, generation: string, api: (path: string, method?: string, body?: unknown) => Promise<any>,
+    stillCurrent: () => boolean, limits = { items: REMOTE_AGENT_CATALOG_ITEMS, bytes: REMOTE_AGENT_CATALOG_BYTES },
+    canPublishAgent: (agentId: string) => boolean = () => true): Promise<void> {
+    const telemetry = captureRemoteTelemetry({ deviceId, remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
+      operationKind: SyncTelemetry.Kind.AgentCatalog, publicationKind: SyncTelemetry.Kind.AgentCatalog, lane: 'background' });
+    try {
+    const targetId = this.targetId(), epoch = this.operationEpoch;
+    const isCurrent = () => stillCurrent() && this.getTargetId?.() === targetId && this.operationEpoch === epoch;
+    if (!isCurrent()) throw new Error('Account changed');
+    this.store.publicationOrigins.inferLegacy(owner);
+    const key = this.key(owner, deviceId);
+    const path = `/devices/${deviceId}/agents`;
+    let state = this.store.get<CatalogState>(key) || { catalogVersion: '0', syncedHash: null, pending: null };
+    // GET first proves whether a previous uncertain PUT committed, including after WS reconnect.
+    const current = await api(path);
+    if (!isCurrent()) throw new Error('Account changed');
+    if (targetId && current.deviceId === deviceId && Array.isArray(current.items)) this.store.publicationOrigins.claimLegacyAgents(owner, deviceId, targetId, current.items);
+    if (state.pending && current.lastPublicationId === state.pending.publicationId) {
+      const operationId = state.pending.publicationId;
+      state = { catalogVersion: current.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null };
+      this.store.put(key, state);
+      telemetry.emit(SyncTelemetry.Event.Reconciled, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Confirmed,
+        operationId, catalogVersion: current.catalogVersion, persistOutcome: 'success', reconcileTrigger: 'receipt_missing' });
+    } else if (state.pending && current.catalogVersion !== state.pending.expectedCatalogVersion) {
+      state = { catalogVersion: current.catalogVersion, syncedHash: null, pending: null };
+      this.store.put(key, state);
+    } else if (!state.pending) state.catalogVersion = current.catalogVersion;
+    if (!state.pending) {
+      const publication = { publicationId: randomUUID(), expectedCatalogVersion: state.catalogVersion,
+        items: await this.refresh(owner, deviceId, isCurrent, canPublishAgent) };
+      if (!isCurrent()) throw new Error('Account changed');
+      if (publication.items.length > limits.items || !publication.items.some(item => item.agentId === AgentId.Main && item.kind === AgentOwnerKind.Default)) throw new RemoteAgentError(47012, 'PAYLOAD_TOO_LARGE', 'CATALOG_LIMIT');
+      this.fitExpertIcons(owner, publication, generation, limits.bytes);
+      const items = publication.items;
+      if (state.syncedHash === payloadHash(items) && current.syncStatus === 'ready' && payloadHash(current.items) === state.syncedHash) {
+        this.store.put(key, { ...state, syncedItems: items });
+        telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Skipped, recordCount: items.length });
+        return;
+      }
+      state.pending = publication;
+      this.store.put(key, state);
+      telemetry.emit(SyncTelemetry.Event.Sealed, { operationId: state.pending.publicationId, stage: SyncTelemetry.Stage.Sealed,
+        phase: SyncTelemetry.Stage.Sealed, outcome: SyncTelemetry.Outcome.Completed, businessStatus: 'pending', recordCount: items.length });
+    }
+    // Pending content is immutable. A different admission context may delay it, never filter/rewrite its ID.
+    if (state.pending.items.some(item => !this.canPublishHere(item.agentId, owner) || !canPublishAgent(item.agentId))) throw new Error('Agent ownership synchronization is waiting for server support');
+    let result;
+    try { result = await api(path, 'PUT', { ...state.pending, connectionGeneration: generation }); }
+    catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === AGENT_VERSION_CONFLICT && isCurrent()) {
+        const latest = await api(path);
+        if (!isCurrent()) throw new Error('Account changed');
+        if (latest.deviceId === deviceId && latest.lastPublicationId === state.pending.publicationId) {
+          this.store.put(key, { catalogVersion: latest.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
+          telemetry.emit(SyncTelemetry.Event.Reconciled, { operationId: state.pending.publicationId, stage: SyncTelemetry.Stage.Catalog,
+            outcome: SyncTelemetry.Outcome.Confirmed, catalogVersion: latest.catalogVersion, persistOutcome: 'success', reconcileTrigger: 'receipt_missing' });
+          return;
+        }
+        this.retireRejectedPublication(owner, deviceId, state, latest);
+      }
+      throw error;
+    }
+    if (!isCurrent()) throw new Error('Account changed');
+    if (result.publicationId !== state.pending.publicationId || result.deviceId !== deviceId) throw new Error('Agent catalog ACK identity mismatch');
+    this.store.put(key, { catalogVersion: result.catalogVersion, syncedHash: payloadHash(state.pending.items), syncedItems: state.pending.items, pending: null });
+    telemetry.emit(SyncTelemetry.Event.Acknowledged, { operationId: state.pending.publicationId,
+      stage: SyncTelemetry.Stage.LocalAck, phase: SyncTelemetry.Stage.LocalAck, outcome: SyncTelemetry.Outcome.Completed,
+      catalogVersion: result.catalogVersion, businessStatus: 'unknown', persistOutcome: 'success', recordCount: state.pending.items.length });
+    } catch (error) {
+      telemetry.emit(SyncTelemetry.Event.Stage, { stage: SyncTelemetry.Stage.Catalog, outcome: SyncTelemetry.Outcome.Failed,
+        reason: SyncTelemetry.Reason.RequestFailed });
+      throw error;
+    }
+  }
+}

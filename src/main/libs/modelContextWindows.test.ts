@@ -15,6 +15,7 @@ vi.mock('./claudeSettings', () => ({ getServerModelMetadata: (id: string) => met
 
 const createHarness = () => {
   let owner: string | null = 'server:personal:account-a';
+  let accountEpoch = 0;
   const values = new Map<string, unknown>();
   const set = vi.fn((key: string, value: unknown) => { values.set(key, value); });
   const store = { get: <T>(key: string): T | undefined => values.get(key) as T | undefined,
@@ -24,15 +25,22 @@ const createHarness = () => {
     contextWindowOwnerKey: null } as CoworkSession;
   const sessions = { getSession: () => session, updateSession: vi.fn((_id: string, update: Partial<CoworkSession>) => Object.assign(session, update)) } as unknown as CoworkStore;
   const patchSession = vi.fn(async () => ({}));
+  const assertSessionAccess = vi.fn();
+  const ensureModelsReady = vi.fn(async () => undefined);
   const runtime = { patchSession, isSessionActive: () => false } as unknown as CoworkRuntime;
   const handlers = new Map<string, (_event: unknown, ...args: unknown[]) => Promise<unknown>>();
   const manager = registerModelContextWindowIpc({
     ipcMain: { handle: (key: string, handler: (_event: unknown, ...args: unknown[]) => Promise<unknown>) => handlers.set(key, handler) } as unknown as Electron.IpcMain,
     getStore: () => store, getSessions: () => sessions, getRuntime: () => runtime,
-    ownerKey: () => owner, ensureModelsReady: async () => undefined, t: key => key,
+    assertSessionAccess, patchSession, isAccountCurrent: () => {
+      const epoch = accountEpoch;
+      return () => epoch === accountEpoch;
+    },
+    ownerKey: () => owner, ensureModelsReady, t: key => key,
   });
   const invoke = (channel: string, request = { modelId: 'model-a', sessionId: session.id }, tokens?: number | null) => handlers.get(channel)!(null, request, tokens);
-  return { manager, session, set, values, patchSession, invoke, setOwner: (value: string | null) => { owner = value; } };
+  return { manager, session, set, values, patchSession, assertSessionAccess, ensureModelsReady, invoke,
+    setOwner: (value: string | null) => { owner = value; accountEpoch += 1; } };
 };
 
 beforeEach(() => {
@@ -41,6 +49,37 @@ beforeEach(() => {
 });
 
 describe('explicit context window intent', () => {
+  test.each([ModelContextWindowIpc.Get, ModelContextWindowIpc.Set])('rejects foreign sessions for %s', async channel => {
+    const harness = createHarness();
+    harness.assertSessionAccess.mockImplementation(() => { throw new Error('Access denied'); });
+    expect(await harness.invoke(channel, undefined, 1_000_000)).toMatchObject({ success: false, error: 'Access denied' });
+    expect(harness.patchSession).not.toHaveBeenCalled();
+    expect(harness.set).not.toHaveBeenCalled();
+    expect(harness.session.contextWindowOverride).toBeNull();
+  });
+
+  test.each(['models', 'patch'] as const)('rejects an account round trip during %s before persisting', async stage => {
+    const harness = createHarness();
+    const switchAccounts = () => {
+      harness.setOwner('server:personal:account-b');
+      harness.setOwner('server:personal:account-a');
+    };
+    if (stage === 'models') harness.ensureModelsReady.mockImplementationOnce(async () => { switchAccounts(); });
+    else harness.patchSession.mockImplementationOnce(async () => { switchAccounts(); return {}; });
+    expect(await harness.invoke(ModelContextWindowIpc.Set, undefined, 1_000_000)).toMatchObject({ success: false, error: 'authAccountChanged' });
+    if (stage === 'models') expect(harness.patchSession).not.toHaveBeenCalled();
+    expect(harness.set).not.toHaveBeenCalled();
+    expect(harness.session.contextWindowOverride).toBeNull();
+  });
+
+  test('preserves context preferences when the remote execution gate rejects the patch', async () => {
+    const harness = createHarness();
+    harness.patchSession.mockRejectedValueOnce(new Error('REMOTE_SESSION_BUSY'));
+    expect(await harness.invoke(ModelContextWindowIpc.Set, undefined, 1_000_000)).toMatchObject({ success: false, error: 'REMOTE_SESSION_BUSY' });
+    expect(harness.session.contextWindowOverride).toBeNull();
+    expect(harness.set).not.toHaveBeenCalled();
+  });
+
   test.each([600_000, 800_000])('retains an explicit %s budget through default changes until reset', async (tokens) => {
     const harness = createHarness();
     const model = metadata.get('model-a')!;

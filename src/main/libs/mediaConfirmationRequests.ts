@@ -77,6 +77,8 @@ export class MediaConfirmationRequests {
       const entry: Pending = {
         request: {
           requestId: randomUUID(),
+          createdAt: startedAt,
+          expiresAt: startedAt + MediaConfirmationPolicy.RetentionMs,
           questions,
           sessionKey,
           mediaConfirmation: {

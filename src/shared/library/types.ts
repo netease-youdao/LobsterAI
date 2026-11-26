@@ -1,3 +1,4 @@
+import type { ArtifactFileAccess } from '../artifactPreview/types';
 import type {
   HtmlShareAccessMode,
   HtmlShareDisabledSource,
@@ -38,6 +39,11 @@ export interface LibraryFailure {
 }
 
 export type LibraryResult<T> = LibrarySuccess<T> | LibraryFailure;
+
+export interface LibraryLocalAccessData {
+  filePath: string;
+  access: ArtifactFileAccess;
+}
 
 export interface LibrarySessionRef {
   sessionId: string;

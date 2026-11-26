@@ -14,6 +14,7 @@ import {
 } from '../../shared/cowork/imageAttachments';
 import { CoworkImageOriginalStore } from '../libs/coworkImageOriginalStore';
 import { inferImageExtensionFromBytes } from '../libs/mediaAssetPersistence';
+import { TrustedWriteContext, withTrustedMigrationWrite } from './remoteWriteContext';
 
 const HISTORY_IMAGES_KEY = 'migration.dsh.conversationImages.v1';
 type StoredImage = CoworkImageAttachmentPreview | CoworkImageAttachmentPayload;
@@ -58,7 +59,7 @@ export function migrateLegacyConversationImages(db: Database.Database, userDataD
   const columns = (db.pragma('table_info(cowork_messages)') as { name: string }[]).map(c => c.name);
   if (!['id', 'session_id', 'type', 'metadata'].every(c => columns.includes(c))) return;
   const store = new CoworkImageOriginalStore(path.join(userDataDir, 'cowork-image-originals'));
-  db.transaction(() => {
+  withTrustedMigrationWrite(db, TrustedWriteContext.Session, db.transaction(() => {
     // Keep only IDs in memory, decoding one message's image payload at a time.
     const ids = db.prepare(
       'SELECT id FROM cowork_messages WHERE type = ? AND metadata LIKE ?',
@@ -78,5 +79,5 @@ export function migrateLegacyConversationImages(db: Database.Database, userDataD
       }
     }
     db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(HISTORY_IMAGES_KEY, 'true', Date.now());
-  })();
+  }));
 }

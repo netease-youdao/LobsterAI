@@ -6,14 +6,16 @@ export type NormalizeAuthQuotaLabels = {
   freePlanName: string;
   standardPlanName: string;
   fallbackSubscriptionStatus?: string;
+  unavailablePlanName?: string;
 };
 
 export type NormalizedAuthQuota = Record<string, unknown> & {
   planName: string;
   subscriptionStatus: string;
-  creditsLimit: number;
-  creditsUsed: number;
-  creditsRemaining: number;
+  creditsLimit: number | null;
+  creditsUsed: number | null;
+  creditsRemaining: number | null;
+  quotaUnavailable?: boolean;
   hasPaidCredits: boolean;
   mediaGenerationEntitled: boolean;
   shareEntitled: boolean;
@@ -34,6 +36,8 @@ const readString = (value: unknown, fallback: string): string => (
 );
 
 export const hasMediaGenerationEntitlement = (quota: Record<string, unknown>): boolean => {
+  if (quota.quotaUnavailable === true) return typeof quota.mediaGenerationEntitled === 'boolean'
+    ? quota.mediaGenerationEntitled : quota.hasPaidCredits === true;
   if (typeof quota.mediaGenerationEntitled === 'boolean') {
     return quota.mediaGenerationEntitled;
   }
@@ -50,6 +54,7 @@ export const hasPublishingEntitlement = (
   quota: Record<string, unknown>,
   field: 'shareEntitled' | 'deploymentEntitled',
 ): boolean => {
+  if (quota.quotaUnavailable === true) return quota[field] === true;
   if (typeof quota[field] === 'boolean') {
     return quota[field] as boolean;
   }
@@ -81,6 +86,14 @@ export const normalizeAuthQuota = (
   raw: Record<string, unknown>,
   labels: NormalizeAuthQuotaLabels,
 ): NormalizedAuthQuota => {
+  if (raw.quotaUnavailable === true) {
+    // Partial components never prove a total balance; only explicit server entitlements survive.
+    return { ...raw, quotaUnavailable: true,
+      planName: labels.unavailablePlanName ?? '—', subscriptionStatus: AuthSubscriptionStatus.Unavailable,
+      creditsLimit: null, creditsUsed: null, creditsRemaining: null,
+      hasPaidCredits: raw.hasPaidCredits === true, mediaGenerationEntitled: hasMediaGenerationEntitlement(raw),
+      shareEntitled: hasPublishingEntitlement(raw, 'shareEntitled'), deploymentEntitled: hasPublishingEntitlement(raw, 'deploymentEntitled') };
+  }
   let creditsLimit = 0;
   let creditsUsed = 0;
   let planName = labels.freePlanName;

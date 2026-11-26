@@ -29,11 +29,13 @@ export class DshAdmissionUnconfirmedError extends Error {}
 /** A lost HTTP response leaves admission unknown. The Host journals this requestId. */
 export async function admitDshPrompt(
   client: DshTypertClient, params: Parameters<DshTypertClient['promptSession']>[0],
-  ready: ReadyClient, signal: AbortSignal, checkAccount?: () => void,
+  ready: ReadyClient, signal: AbortSignal, checkAccount?: () => void, beforeDispatch?: () => void,
+  confirmAcceptance?: (client: DshTypertClient) => Promise<boolean>,
 ): ReturnType<DshTypertClient['promptSession']> {
   for (let attempt = 0; ; attempt++) {
     signal.throwIfAborted();
     checkAccount?.();
+    beforeDispatch?.();
     try {
       return await client.promptSession(params);
     } catch (error) {
@@ -43,6 +45,10 @@ export async function admitDshPrompt(
         try {
           client = await ready();
           checkAccount?.();
+          if (confirmAcceptance) {
+            if (await confirmAcceptance(client)) return { accepted: true };
+            break;
+          }
           const page = await client.getSessionEvents(params.sessionId, { maxMessages: 8 });
           if (!Array.isArray(page.records)) throw new Error('Missing session event records');
           const frames = await readGap(page, client, params.sessionId, undefined, params.requestId, signal);

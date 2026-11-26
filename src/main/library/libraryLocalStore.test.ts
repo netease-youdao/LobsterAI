@@ -15,6 +15,7 @@ import {
 } from '../../shared/library/constants';
 import { compareLibraryLocalItems, getLibraryLocalOrderKey } from '../../shared/library/localOrdering';
 import type { LibraryArtifactCandidate, LocalArtifactItem } from '../../shared/library/types';
+import type { RemoteOwner } from '../../shared/remote/constants';
 import { decodeLibraryLocalCursor, encodeLibraryLocalCursor, LibraryLocalStore } from './libraryLocalStore';
 import { initializeLibraryTables } from './libraryMigrations';
 
@@ -430,5 +431,103 @@ describe('LibraryLocalStore', () => {
       expect(decodeLibraryLocalCursor(cursor)).toBeNull();
       expect(() => store.list({ cursor })).toThrow(expect.objectContaining({ code: LibraryErrorCode.InvalidCursor }));
     }
+  });
+
+  describe('file access', () => {
+    const accountA = { userId: 'account-a', scopeKey: 'personal' };
+    const accountB = { userId: 'account-b', scopeKey: 'personal' };
+    const otherSpace = { ...accountA, scopeKey: 'team' };
+    const actors = [null, accountA, accountB, otherSpace];
+
+    beforeEach(() => {
+      db.exec(`CREATE TABLE cowork_session_ownership (
+        session_id TEXT PRIMARY KEY,
+        owner_user_id TEXT,
+        owner_scope_key TEXT,
+        ownership_status TEXT
+      )`);
+    });
+
+    const associate = (sessionId: string, owner: RemoteOwner) => {
+      db.prepare('INSERT INTO cowork_session_ownership VALUES (?, ?, ?, ?)')
+        .run(sessionId, owner.userId, owner.scopeKey, 'confirmed');
+    };
+
+    test('allows anonymous task files for every account and signed-out users', () => {
+      insertSession('session-1', 'Anonymous task', 100);
+      upsertLinkedFile();
+
+      for (const actor of actors) {
+        expect(store.getFileAccess('/workspace/report.pdf', actor)).toEqual({ tracked: true, visible: true });
+      }
+    });
+
+    test('requires both the user and space of an owned task', () => {
+      insertSession('session-1', 'Private task', 100);
+      upsertLinkedFile();
+      associate('session-1', accountA);
+
+      expect(store.getFileAccess('/workspace/report.pdf', accountA)).toEqual({ tracked: true, visible: true });
+      for (const actor of [null, accountB, otherSpace]) {
+        expect(store.getFileAccess('/workspace/report.pdf', actor)).toEqual({ tracked: true, visible: false });
+      }
+    });
+
+    test('applies association immediately without reindexing the file', () => {
+      insertSession('session-1', 'Historical task', 100);
+      const item = upsertLinkedFile();
+      expect(store.getFileAccess(item.filePath, accountB).visible).toBe(true);
+
+      associate('session-1', accountA);
+
+      expect(store.getFileAccess(item.filePath, accountA).visible).toBe(true);
+      expect(store.getFileAccess(item.filePath, accountB).visible).toBe(false);
+      expect(store.getFileAccess(item.filePath, null).visible).toBe(false);
+      expect(store.getDetail(item.itemId, accountB)).toBeNull();
+      expect(store.getVisibleItems([item.itemId], accountB)).toEqual({ items: [], unavailableItemIds: [item.itemId] });
+    });
+
+    test('keeps shared anonymous files visible without disclosing private relations', () => {
+      insertSession('anonymous', 'Anonymous task', 100);
+      insertSession('private', 'Private task title', 200);
+      const item = upsertLinkedFile(indexedFile(100), candidate('anonymous', 100));
+      upsertLinkedFile(indexedFile(200), candidate('private', 200));
+      associate('private', accountA);
+
+      for (const actor of actors) {
+        expect(store.getFileAccess(item.filePath, actor)).toEqual({ tracked: true, visible: true });
+      }
+      const detail = store.getDetail(item.itemId, accountB);
+      expect(detail?.sessions.map(session => session.sessionId)).toEqual(['anonymous']);
+      expect(detail?.item).toMatchObject({ latestSession: { sessionId: 'anonymous' }, relatedSessionCount: 1 });
+      expect(JSON.stringify(detail)).not.toContain('Private task title');
+      expect(store.getDetail(item.itemId, accountA)?.item.relatedSessionCount).toBe(2);
+    });
+
+    test('denies tracked missing, unlinked and quarantined files', () => {
+      insertSession('session-1', 'Task', 100);
+      const item = upsertLinkedFile();
+      associate('session-1', accountA);
+      db.prepare("UPDATE cowork_session_ownership SET ownership_status = 'quarantined'").run();
+      expect(store.getFileAccess(item.filePath, accountA)).toEqual({ tracked: true, visible: false });
+
+      db.prepare("UPDATE cowork_session_ownership SET ownership_status = 'confirmed'").run();
+      store.markMissing(item.itemId, 200);
+      expect(store.getFileAccess(item.filePath, accountA)).toEqual({ tracked: true, visible: false });
+
+      upsertLinkedFile();
+      deleteSession('session-1');
+      expect(store.getFileAccess(item.filePath, accountA)).toEqual({ tracked: true, visible: false });
+    });
+
+    test('normalizes indexed paths and distinguishes untracked files from denied files', () => {
+      insertSession('session-1', 'Task', 100);
+      upsertLinkedFile();
+      associate('session-1', accountA);
+
+      expect(store.getFileAccess('/workspace/child/../report.pdf', accountA)).toEqual({ tracked: true, visible: true });
+      expect(store.getFileAccess('/workspace/child/../report.pdf', accountB)).toEqual({ tracked: true, visible: false });
+      expect(store.getFileAccess('/workspace/untracked.pdf', accountB)).toEqual({ tracked: false, visible: false });
+    });
   });
 });

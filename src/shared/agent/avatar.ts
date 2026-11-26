@@ -10,6 +10,16 @@ export const AgentAvatarIconSeparator = {
   Value: ':',
 } as const;
 
+export const RemoteExpertAvatar = {
+  Default: 'expert_default_v1',
+  UrlPrefix: 'expert_url_v1_',
+} as const;
+
+export function isRemoteExpertImageKey(value: string): boolean {
+  return value.startsWith(RemoteExpertAvatar.UrlPrefix)
+    && /^[0-9a-f]{64}$/u.test(value.slice(RemoteExpertAvatar.UrlPrefix.length));
+}
+
 export const AgentAvatarSvg = {
   Lobster: 'lobster',
   Code: 'code',

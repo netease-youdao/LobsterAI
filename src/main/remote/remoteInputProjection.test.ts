@@ -1,0 +1,230 @@
+import Database from 'better-sqlite3';
+import { afterEach, expect, it } from 'vitest';
+
+import { ModelPresetId } from '../../shared/modelPresets/constants';
+import { RemoteFileReason } from '../../shared/remote/files';
+import { payloadHash } from './canonical';
+import { availabilityControlSnapshot } from './remoteAvailabilitySource';
+import { RemoteStore } from './remoteStore';
+
+const owner = { userId: 'A', scopeKey: 'personal' };
+const databases: Database.Database[] = [];
+afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+function fixture(presetId?: ModelPresetId | null): RemoteStore {
+  const db = new Database(':memory:'); databases.push(db);
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT,created_at INTEGER,updated_at INTEGER,status TEXT,model_override TEXT,thinking_level TEXT);
+    CREATE TABLE cowork_messages(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,content TEXT,metadata TEXT,created_at INTEGER,sequence INTEGER);`);
+  if (presetId !== undefined) db.exec('ALTER TABLE cowork_sessions ADD COLUMN model_preset_id TEXT');
+  const store = new RemoteStore(db); store.setEnabledOwner(owner); store.setInputProjectionSupported(true);
+  store.transaction(() => {
+    db.exec("INSERT INTO cowork_sessions(id,title,created_at,updated_at,status,model_override,thinking_level) VALUES('s','Task',1,1,'idle','provider/model','low')");
+    if (presetId !== undefined) db.prepare("UPDATE cowork_sessions SET model_preset_id=? WHERE id='s'").run(presetId);
+    store.assignNew('s', owner, 'local_create');
+  });
+  return store;
+}
+function userMessage(store: RemoteStore): void {
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('m','s','user',?, ?,2,1)").run('Analyze\nFile: /private/secret/report.txt', JSON.stringify({ remoteRunId: 'run' })));
+}
+it.each([false, true])('projects annotations through the legacy/v4 path (reply=%s)', reply => {
+  const store = fixture(); store.setReplyProjectionSupported(reply);
+  store.put('desktopInputRun:run', { owner, text: '', attachments: [] });
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('m','s','user',?,?,2,1)").run('engine-only prompt',
+    JSON.stringify({ remoteRunId: 'run', browserAnnotations: [{ pageTitle: 'index.html', annotations: [{ comment: '改成点我' }] }] })));
+  const message = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(message.blocks[0].type).toBe('text'); expect(message.blocks[0].text).toContain('改成点我');
+  expect(message.preview).toContain('改成点我'); expect(JSON.stringify(message)).not.toContain('engine-only prompt');
+  expect(reply ? message.blocks[0].blockId : undefined).toEqual(reply ? expect.stringMatching(/^[a-f0-9]{32}$/u) : undefined);
+});
+
+it('projects mobile attachment references and original text without generated local file paths', () => {
+  const store = fixture();
+  store.put('inputRun:run', { input: { text: 'Analyze', attachments: [{ assetId: 'asset', version: '1', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file' }] }, inputModel: null });
+  userMessage(store);
+  const projection = store.snapshot('s');
+  expect(JSON.stringify(projection)).not.toContain('/private/secret');
+  expect(projection.records.find(row => row.eventType === 'message.upsert')?.payload.message.blocks[1]).toMatchObject({ type: 'attachment', assetId: 'asset', availability: 'ready' });
+});
+it.each(['report.txt', 'make_docx.js'])('keeps selected %s as a stable desktop placeholder and ready input attachment', fileName => {
+  const store = fixture();
+  store.put('desktopInputRun:run', { owner, text: 'Analyze', attachments: [{ path: `/private/secret/${fileName}`, fileName, mimeType: 'text/plain', sizeBytes: '12', intent: 'file' }] });
+  userMessage(store);
+  const before = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(before.blocks[1]).toMatchObject({ type: 'artifact', name: fileName, availability: 'desktop_only' });
+  const job = store.get<any>('desktopAsset:m:0');
+  store.put('desktopAsset:m:0', { ...job, availability: 'ready', uploadedAsset: { assetId: 'asset', version: '1', fileName, mimeType: 'application/octet-stream', sizeBytes: '12', intent: 'file' } });
+  const after = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(after.blocks[1]).toMatchObject({ type: 'attachment', name: fileName, mimeType: 'application/octet-stream' });
+  expect(BigInt(after.revision)).toBeGreaterThan(BigInt(before.revision));
+  expect(store.entries('desktopAsset:')).toHaveLength(1);
+  expect(JSON.stringify(after)).not.toContain('/private/secret');
+});
+it('does not expose attachment metadata from a different account run', () => {
+  const store = fixture();
+  store.put('desktopInputRun:run', { owner: { userId: 'B', scopeKey: 'personal' }, text: 'private text', attachments: [{ path: '/b', fileName: 'private.txt' }] });
+  userMessage(store);
+  const projection = store.snapshot('s');
+  expect(JSON.stringify(projection)).not.toContain('private.txt'); expect(store.entries('desktopAsset:')).toHaveLength(0);
+});
+
+it.each([
+  { jobReason: RemoteFileReason.Size, snapshot: true, expected: RemoteFileReason.Size },
+  { jobReason: 'ASSET_MISSING', snapshot: true, expected: 'FILE_MISSING' },
+  { jobReason: 'ASSET_FILE_CHANGED', snapshot: true, expected: RemoteFileReason.Source },
+  { jobReason: 'https://private.example/upload?token=secret', snapshot: true, expected: RemoteFileReason.Transfer },
+  { jobReason: undefined, snapshot: true, expected: RemoteFileReason.Transfer },
+  { jobReason: undefined, snapshot: false, expected: RemoteFileReason.Source },
+])('projects only compatible safe pending input reasons ($jobReason/$snapshot)', ({ jobReason, snapshot, expected }) => {
+  const store = fixture(); store.setFileProjectionSupported(true);
+  store.put('desktopInputRun:run', { owner, text: 'Analyze', attachments: [{ path: '/private/secret/report.txt', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file', ...(snapshot ? { snapshot: { path: '/private/snapshot/report.txt' } } : {}) }] });
+  userMessage(store);
+  const before = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  const job = store.get<any>('desktopAsset:m:0');
+  store.put('desktopAsset:m:0', { ...job, ...(jobReason ? { reason: jobReason } : {}) });
+  const message = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(message.blocks[1]).toMatchObject({ type: 'artifact', availability: 'desktop_only', reason: expected });
+  expect(message.blocks[1]).not.toHaveProperty('assetId');
+  expect(message.blocks[1].artifactId).toBe(before.blocks[1].artifactId);
+  if (expected !== before.blocks[1].reason) expect(BigInt(message.revision)).toBeGreaterThan(BigInt(before.revision));
+  expect(JSON.stringify(message)).not.toContain('/private/');
+  expect(JSON.stringify(message)).not.toContain('token=secret');
+});
+
+it('keeps safe capture failure diagnostics and removes them when an input becomes ready', () => {
+  const store = fixture(); store.setFileProjectionSupported(true);
+  store.put('desktopInputRun:run', { owner, text: 'Analyze', attachments: [{ path: '/private/report.txt', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file', captureReason: RemoteFileReason.Type }] });
+  userMessage(store);
+  const before = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(before.blocks[1].reason).toBe(RemoteFileReason.Type);
+  const job = store.get<any>('desktopAsset:m:0');
+  store.put('desktopAsset:m:0', { ...job, reason: RemoteFileReason.Size });
+  expect(store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message.blocks[1].reason).toBe(RemoteFileReason.Size);
+  store.put('desktopAsset:m:0', { ...job, availability: 'ready', uploadedAsset: { assetId: 'asset', version: '1', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file' } });
+  const ready = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(ready.blocks[1]).toMatchObject({ type: 'attachment', availability: 'ready', assetId: 'asset' });
+  expect(ready.blocks[1]).not.toHaveProperty('reason');
+});
+
+it('does not add reasons to legacy file projections or expose another account capture failure', () => {
+  const store = fixture();
+  store.put('desktopInputRun:run', { owner, text: 'Analyze', attachments: [{ path: '/private/report.txt', fileName: 'report.txt', mimeType: 'text/plain', sizeBytes: '12', intent: 'file', captureReason: RemoteFileReason.Size }] });
+  userMessage(store);
+  const legacy = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(legacy.blocks[1]).not.toHaveProperty('reason');
+  store.setFileProjectionSupported(true);
+  store.put('desktopInputRun:run', { owner: { userId: 'B', scopeKey: 'personal' }, text: 'private text', attachments: [{ path: '/b', fileName: 'private.txt', captureReason: RemoteFileReason.Size }] });
+  const changed = store.snapshot('s').records.find(row => row.eventType === 'message.upsert')!.payload.message;
+  expect(changed.blocks).toHaveLength(1);
+  expect(JSON.stringify(changed)).not.toContain(RemoteFileReason.Size);
+  expect(JSON.stringify(changed)).not.toContain('private.txt');
+});
+
+
+it('advances model metadata versions without rewriting already sealed history events', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4', source: 'subscription', displayName: 'Chat', providerLabel: 'LobsterAI', thinkingLevel: 'low' };
+  expect(store.setInputModel('s', model)).toBe('1');
+  const sealed = store.pending('s');
+  expect(store.setInputModel('s', { ...model, version: '5' })).toBe('2');
+  expect(store.get('inputModel:s')).toEqual({ ...model, version: '5' });
+  expect(store.pending('s').slice(0, sealed.length)).toEqual(sealed);
+  const latest = store.snapshot('s').records.find(record => record.eventType === 'session.upsert')!.payload.session;
+  expect(latest).toMatchObject({ inputVersion: '2', inputModel: { version: '5' } });
+  expect(store.setInputModel('s', { ...model, version: '5' })).toBe('2');
+  expect(store.inputVersion('s')).toBe('2');
+});
+
+it('commits a configuration change and its model summary under one input version', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4', thinkingLevel: 'low' };
+  store.setInputModel('s', model);
+  store.transaction(() => {
+    store.db.prepare('UPDATE cowork_sessions SET thinking_level=? WHERE id=?').run('high', 's');
+    expect(store.setInputModel('s', { ...model, thinkingLevel: 'high' })).toBe('2');
+  });
+  expect(store.inputVersion('s')).toBe('2');
+  expect(store.get('inputModel:s')).toEqual({ ...model, thinkingLevel: 'high' });
+});
+
+it('rolls back both input version and summary when persisting the model fails', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4' };
+  store.setInputModel('s', model);
+  const sealed = store.pending('s');
+  store.db.exec("CREATE TRIGGER reject_model BEFORE INSERT ON remote_state WHEN NEW.key='inputModel:s' BEGIN SELECT RAISE(ABORT, 'model write failed'); END");
+  expect(() => store.setInputModel('s', { ...model, version: '5' })).toThrow('model write failed');
+  expect(store.inputVersion('s')).toBe('1');
+  expect(store.get('inputModel:s')).toEqual(model);
+  expect(store.pending('s')).toEqual(sealed);
+});
+
+
+it('keeps configuration signature, version and previous model together when version refresh fails', () => {
+  const store = fixture();
+  const model = { modelRef: 'model', version: '4', thinkingLevel: 'low' };
+  store.setInputModel('s', model);
+  const signature = store.get('inputSignature:s');
+  store.db.prepare('UPDATE cowork_sessions SET thinking_level=? WHERE id=?').run('high', 's');
+  store.db.exec("CREATE TRIGGER reject_version BEFORE INSERT ON remote_state WHEN NEW.key='inputVersion:s' BEGIN SELECT RAISE(ABORT, 'version write failed'); END");
+  expect(() => store.inputVersion('s')).toThrow('version write failed');
+  expect(store.get('inputVersion:s')).toBe('1');
+  expect(store.get('inputSignature:s')).toBe(signature);
+  expect(store.get('inputModel:s')).toEqual(model);
+  store.db.exec('DROP TRIGGER reject_version');
+  expect(store.inputVersion('s')).toBe('2');
+  expect(store.get('inputModel:s')).toBeNull();
+});
+
+it.each([ModelPresetId.Ultimate, null])('advances input version when only the preset changes from balanced to %s', presetId => {
+  const store = fixture(ModelPresetId.Balanced);
+  const previous = { modelRef: 'fast-preset', version: '1', thinkingLevel: null };
+  expect(store.setInputModel('s', previous)).toBe('1');
+  store.transaction(() => store.db.prepare("UPDATE cowork_sessions SET model_preset_id=? WHERE id='s'").run(presetId));
+  expect(store.inputVersion('s')).toBe('2');
+  expect(store.get('inputModel:s')).toBeNull();
+  expect(store.db.prepare("SELECT model_override,thinking_level FROM cowork_sessions WHERE id='s'").get())
+    .toEqual({ model_override: 'provider/model', thinking_level: 'low' });
+  expect(store.inputVersion('s')).toBe('2');
+});
+
+it.each([undefined, null])('preserves legacy non-preset signatures with preset column value %s', presetId => {
+  const store = fixture(presetId);
+  const previous = { modelRef: 'physical-model', version: '3', thinkingLevel: 'low' };
+  const signature = payloadHash({ model_override: 'provider/model', thinking_level: 'low' });
+  store.transaction(() => {
+    store.put('inputSignature:s', signature);
+    store.put('inputVersion:s', '7');
+    store.put('inputModel:s', previous);
+  });
+  expect(store.inputVersion('s')).toBe('7');
+  expect(store.get('inputSignature:s')).toBe(signature);
+  expect(store.get('inputModel:s')).toEqual(previous);
+  expect(availabilityControlSnapshot(store, 's').records[0].payload.session).toMatchObject({ inputVersion: '7', inputModel: previous });
+});
+
+it('projects a preset alias consistently while preserving frozen historical message selection', () => {
+  const store = fixture(ModelPresetId.Balanced);
+  const previous = { modelRef: 'physical-model', version: '3', source: 'subscription', displayName: 'Physical model',
+    providerLabel: 'LobsterAI', thinkingLevel: 'low' };
+  store.setInputModel('s', previous);
+  const frozenInput = { owner, text: 'Previous question', attachments: [], inputModel: previous };
+  store.put('desktopInputRun:run', frozenInput);
+  const metadata = JSON.stringify({ remoteRunId: 'run', modelPresetId: ModelPresetId.Balanced, resolvedModelId: 'physical-model' });
+  store.transaction(() => store.db.prepare("INSERT INTO cowork_messages VALUES('reply','s','assistant','Previous reply',?,2,1)").run(metadata));
+  const oldMessage = store.snapshot('s').records.find(record => record.eventType === 'message.upsert')!.payload.message;
+  const alias = { ...previous, modelRef: 'ultra-preset', displayName: 'Flagship', thinkingLevel: null };
+  store.transaction(() => {
+    store.db.prepare("UPDATE cowork_sessions SET model_preset_id=? WHERE id='s'").run(ModelPresetId.Ultimate);
+    store.setInputModel('s', alias);
+    store.project('s');
+  });
+  const projection = store.snapshot('s');
+  const summary = projection.records.find(record => record.eventType === 'session.upsert')!.payload.session;
+  const control = availabilityControlSnapshot(store, 's').records[0].payload.session;
+  expect(summary).toMatchObject({ inputVersion: '2', inputModel: alias });
+  expect(control).toMatchObject({ inputVersion: summary.inputVersion, inputModel: alias });
+  expect(projection.records.find(record => record.eventType === 'message.upsert')!.payload.message).toEqual(oldMessage);
+  expect(oldMessage.inputModel).toMatchObject({ modelRef: previous.modelRef, version: previous.version, thinkingLevel: previous.thinkingLevel });
+  expect(store.get('desktopInputRun:run')).toEqual(frozenInput);
+  expect(store.db.prepare("SELECT metadata FROM cowork_messages WHERE id='reply'").get()).toEqual({ metadata });
+});

@@ -177,6 +177,25 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   hidden = false,
 }) => {
   const toolInput = useMemo(() => permission.toolInput ?? {}, [permission.toolInput]);
+  const [deadlineReached, setDeadlineReached] = useState(false);
+  const expiresAt = permission.approval?.expiresAt;
+  useEffect(() => {
+    if (!expiresAt) { setDeadlineReached(false); return; }
+    const remaining = Date.parse(expiresAt) - Date.now();
+    setDeadlineReached(remaining <= 0);
+    if (remaining <= 0 || !Number.isFinite(remaining)) return;
+    const timer = window.setTimeout(() => setDeadlineReached(true), Math.min(remaining, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [expiresAt, permission.requestId]);
+  const phase = permission.approval?.resolution.phase;
+  const decisionDisabled = Boolean(permission.submissionState || deadlineReached
+    || permission.approval && (permission.approval.status !== 'pending' || phase !== 'idle'));
+  const phaseMessage = phase === 'unknown' || permission.submissionState === 'unknown'
+    ? i18nService.t('coworkApprovalUnknown')
+    : phase === 'submitting' || permission.submissionState === 'submitting'
+      ? i18nService.t('coworkApprovalSubmitting')
+      : deadlineReached ? i18nService.t('coworkApprovalExpired') : permission.submissionError;
+
 
   const questions = useMemo<QuestionItem[]>(() => {
     if (permission.toolName !== ASK_USER_QUESTION_TOOL_NAME) return [];
@@ -368,16 +387,21 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   const denyButtonLabel = isQuestionTool && !isConfirmMode
     ? i18nService.t('coworkDenyRequest')
     : i18nService.t('coworkDeny');
+  const allowedDecisions = toolInput && typeof toolInput === 'object'
+    ? (toolInput as Record<string, unknown>).allowedDecisions : null;
+  const allowsOnlyPersistent = Array.isArray(allowedDecisions)
+    && !allowedDecisions.includes('allow-once') && allowedDecisions.includes('allow-always');
   const approveButtonLabel = isQuestionTool && !isConfirmMode
     ? i18nService.t('coworkConfirmSelection')
-    : i18nService.t('coworkApprove');
+    : i18nService.t(allowsOnlyPersistent ? 'coworkApproveAlways' : permission.approval ? 'coworkApproveOnce' : 'coworkApprove');
 
   const handleConfirmModeSelect = (optionLabel: string) => {
-    if (!isConfirmMode) return;
+    if (!isConfirmMode || decisionDisabled) return;
     onRespond(buildQuestionAnswerResult(questions[0].question, optionLabel));
   };
 
   const handleApprove = () => {
+    if (decisionDisabled) return;
     if (isConfirmMode) {
       handleConfirmModeSelect(confirmModeButtons?.primary.label ?? questions[0].options[0].label);
       return;
@@ -402,6 +426,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   const handleAllowForSession = () => {
+    if (decisionDisabled) return;
     onRespond({
       behavior: 'allow',
       updatedInput: toolInput && typeof toolInput === 'object' ? toolInput : {},
@@ -415,6 +440,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   const handleSwitchFullAccess = () => {
+    if (decisionDisabled) return;
     const { eventDetail, response } = buildSwitchFullAccessAction(permission.sessionId, toolInput);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(DSH_PERMISSION_PRESET_CHANGED_EVENT, {
@@ -425,6 +451,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   const handleDeny = () => {
+    if (decisionDisabled) return;
     onRespond({
       behavior: 'deny',
       message: 'Permission denied',
@@ -476,6 +503,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           <button
             type="button"
             onClick={handleDeny}
+            disabled={decisionDisabled}
             className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
             aria-label={i18nService.t('coworkPermissionCancel')}
             title={i18nService.t('coworkPermissionCancel')}
@@ -626,6 +654,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                 <div className="pt-1">
                   <button
                     type="button"
+                    disabled={decisionDisabled}
                     onClick={() => setConfirmFullAccessOpen(true)}
                     className="inline-flex items-center gap-1.5 text-xs text-secondary hover:text-primary transition-colors"
                   >
@@ -666,6 +695,12 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           </div>
         )}
 
+        {phaseMessage && (
+          <p role="status" aria-live="polite" className="mx-6 my-3 text-sm text-secondary">
+            {phaseMessage}
+          </p>
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-border">
           <div>
@@ -673,6 +708,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
               <button
                 type="button"
                 onClick={handleAllowForSession}
+                disabled={decisionDisabled}
                 className="px-3 py-2 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('coworkApprovalAllowSession')}
@@ -682,6 +718,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           <div className="flex items-center gap-3">
             <button
               type="button"
+              disabled={decisionDisabled}
               onClick={isConfirmMode && confirmModeButtons ? () => handleConfirmModeSelect(confirmModeButtons.secondary.label) : handleDeny}
               className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             >
@@ -690,7 +727,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             <button
               type="button"
               onClick={handleApprove}
-              disabled={!isComplete}
+              disabled={!isComplete || decisionDisabled}
               className="px-4 py-2 text-sm font-medium rounded-lg bg-action hover:bg-action-hover text-action-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.primary.label) : approveButtonLabel}
@@ -699,7 +736,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
         </div>
       </div>
       <FullAccessConfirmDialog
-        isOpen={confirmFullAccessOpen && !hidden}
+        isOpen={confirmFullAccessOpen && !hidden && !decisionDisabled}
         onCancel={() => setConfirmFullAccessOpen(false)}
         onConfirm={() => {
           setConfirmFullAccessOpen(false);

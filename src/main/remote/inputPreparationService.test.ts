@@ -1,0 +1,658 @@
+import Database from 'better-sqlite3';
+import { createHash } from 'crypto';
+import { EventEmitter } from 'events';
+import { existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+
+import { AgentAccessErrorCode } from '../../shared/agent/constants';
+import { buildCoworkImageAttachmentPreviews } from '../../shared/cowork/imageAttachments';
+import { ModelPresetId, modelPresetModelId } from '../../shared/modelPresets/constants';
+import { OpenClawProviderId } from '../../shared/providers/constants';
+import type { RemoteOwner } from '../../shared/remote/constants';
+import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, type RemotePreparationClaim } from '../../shared/remote/input';
+import { AgentAccessError } from '../agentOwnership';
+import type { CoworkStore } from '../coworkStore';
+import type { CoworkRuntime } from '../libs/agentEngine/types';
+import { payloadHash } from './canonical';
+import { InputPreparationService, type LocalPreparedInput,RemoteAttachmentError } from './inputPreparationService';
+import type { RemoteAgentCatalog } from './remoteAgentCatalog';
+import { RemoteFileTelemetry as Telemetry } from './remoteFileTelemetry';
+import { RemoteModelCatalog } from './remoteModelCatalog';
+import { RemotePublicationKind, RemotePublicationOrigins } from './remotePublicationOrigins';
+import * as syncLog from './remoteSyncLog';
+import * as telemetryApi from './remoteTelemetry';
+import { SessionCommandService } from './sessionCommandService';
+
+const emitted: Array<{ event: string; fields: Record<string, unknown> }> = [];
+const diagnostics: Array<Record<string, unknown>> = [];
+const requests: Array<{ fields: Record<string, unknown>; result?: string }> = [];
+beforeEach(() => {
+  emitted.length = 0; requests.length = 0; diagnostics.length = 0;
+  vi.spyOn(syncLog, 'remoteDiagnosticLog').mockImplementation((event, fields) => { diagnostics.push({ event, ...fields }); });
+  vi.spyOn(telemetryApi, 'captureRemoteTelemetry').mockImplementation((base = {}) => ({
+    emit: (event, fields = {}) => { emitted.push({ event, fields: { ...base, ...fields } }); },
+    request: fields => {
+      const request: typeof requests[number] = { fields: { ...base, ...fields } }; requests.push(request);
+      return { logicalAttemptId: 'attempt', transportStarted: () => undefined,
+        finish: (result, extra = {}) => { if (!request.result) { request.result = result; Object.assign(request.fields, extra); } } };
+    },
+  }));
+});
+afterEach(() => { vi.restoreAllMocks(); });
+
+const Target = { First: 'space-a-generation-7', Second: 'space-b-generation-4' } as const;
+const owner = { userId: 'A', scopeKey: 'personal' };
+const folders: string[] = [];
+afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
+function fixture(getTargetId?: () => string | null, presetId?: ModelPresetId, customThinking = true) {
+  const folder = mkdtempSync(path.join(tmpdir(), 'remote-input-')); folders.push(folder);
+  const cwd = path.join(folder, 'cwd'); mkdirSync(cwd);
+  const values = new Map<string, unknown>();
+  let actor: RemoteOwner | null = owner;
+  let version = '1'; let session: any = null; let enabled = true;
+  const remote = { get: <T>(key: string): T | null => values.get(key) as T ?? null,
+    put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+    remove: (key: string) => values.delete(key),
+    countKeys: (prefix: string, limit: number) => Math.min(limit, [...values.keys()].filter(key => key.startsWith(prefix)).length),
+    entries: (prefix: string, after = '', limit = 50) => [...values.entries()].filter(([key]) => key.startsWith(prefix) && key > after).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([key, value]) => ({ key, value })),
+    setApprovalLifecycle: vi.fn(),
+    isTaskAdmitted: () => true,
+    setInputModel: (id: string, model: unknown) => { values.set(`inputModel:${id}`, model); return '0'; },
+    owner: () => owner, localSessionId: () => session?.id, inputVersion: () => '0', controlVersion: () => '4' };
+  const store = { remote, assertAgentAccess: vi.fn(), getAgent: () => ({ model: 'provider/model', thinkingLevel: 'high', enabled }),
+    getSession: () => session, agentOwnership: { get: () => ({ version }), canPublish: () => !session } } as unknown as CoworkStore;
+  const catalog = { refresh: vi.fn(async () => [{ agentId: 'main', version, defaultWorkspaceId: 'ws', workspaceAvailable: true }]), resolve: () => cwd } as unknown as RemoteAgentCatalog;
+  const models = new RemoteModelCatalog(store.remote, () => [{ identity: 'configured-model', runtimeRef: 'provider/model', source: 'custom', displayName: 'Chat', providerLabel: 'Custom',
+    available: true, image: true, toolCalling: true, thinking: customThinking ? { options: ['low', 'high'], default: 'low' } : { options: [] }, configuration: {} },
+    ...(presetId ? [{ identity: presetId, runtimeRef: `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`,
+      source: 'subscription' as const, displayName: presetId, providerLabel: 'LobsterAI', available: true,
+      image: true, toolCalling: true, thinking: { options: [] }, configuration: {} }] : [])], getTargetId);
+  const deps = { store, models, cacheRoot: path.join(folder, 'cache'), getOwner: () => actor, getTargetId, getDefaultModel: () => 'provider/model', getAgentCatalog: () => catalog };
+  const service = new InputPreparationService(deps);
+  const claim: RemotePreparationClaim = { preparationId: 'prep', claimId: 'claim', claimToken: 'token', claimUntil: new Date(Date.now() + 60_000).toISOString(), statusVersion: '1',
+    request: { preparationId: 'prep', inputSchemaVersion: 2, purpose: 'create_session', draftId: 'draft',
+      input: { text: ' hello ', agent: { agentId: 'main', expectedVersion: '1' }, model: { mode: RemoteInputMode.Agent } } } };
+  const attach = (body: string, intent: 'file' | 'image' = RemoteInputIntent.File): void => {
+    claim.request.input.text = '';
+    claim.request.input.attachments = [{ kind: 'uploaded_asset', assetId: 'asset', version: '1', intent }];
+    claim.attachments = [{ assetId: 'asset', version: '1', intent, sha256: createHash('sha256').update(body).digest('hex'), sizeBytes: String(Buffer.byteLength(body)), mimeType: intent === RemoteInputIntent.File ? 'text/plain' : 'image/png', fileName: 'report.txt' }];
+  };
+  return { service, deps, claim, attach, cwd, values, catalog,
+    setActor: (next: RemoteOwner | null) => { actor = next; }, changeVersion: () => { version = '2'; }, disable: () => { enabled = false; },
+    continueAnonymous: () => { session = { id: 'local', agentId: 'anon', cwd, modelOverride: 'provider/model', thinkingLevel: 'low', modelPresetId: presetId };
+      claim.request = { ...claim.request, purpose: 'send_message', sessionId: 'remote', expectedInputVersion: '0', expectedControlVersion: '4',
+        input: { text: 'continue', model: { mode: RemoteInputMode.Session } } }; } };
+}
+it('rejects preparation while the current target has not been verified', async () => {
+  const { service, claim, values } = fixture(() => null);
+  const download = vi.fn();
+  await expect(service.prepare(owner, 'pc', claim, download, () => true)).rejects.toThrow(RemoteInputReason.Stale);
+  expect(download).not.toHaveBeenCalled();
+  expect(values.size).toBe(0);
+});
+it('isolates preparations and cached files across targets with identical preparation IDs', async () => {
+  let targetId: string | null = Target.First;
+  const { service, deps, claim, attach } = fixture(() => targetId); attach('hello');
+  const first = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  expect(first.targetId).toBe(Target.First);
+  targetId = Target.Second;
+  expect(() => service.read('prep', owner, 'pc')).toThrow(RemoteInputReason.Stale);
+  expect(() => service.validate(first, owner, 'pc', true)).toThrow(RemoteInputReason.Stale);
+  expect(() => service.bind(first, 'command')).toThrow(RemoteInputReason.Stale);
+  await expect(service.executionOptions(first, () => undefined)).rejects.toThrow(RemoteInputReason.Stale);
+  const second = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  expect(second.targetId).toBe(Target.Second);
+  expect(second.cacheDirectory).not.toBe(first.cacheDirectory);
+  targetId = Target.First;
+  expect(new InputPreparationService(deps).read('prep', owner, 'pc')).toEqual(first);
+  expect(await service.cleanupExpired(first.expiresAt + 25 * 60 * 60_000)).toBe(2);
+  expect(existsSync(second.cacheDirectory!)).toBe(false);
+  expect(existsSync(first.cacheDirectory!)).toBe(false);
+});
+it('rejects old downloads after a target round trip without consuming their ready input', async () => {
+  let targetId: string | null = Target.First;
+  const { service, claim, attach, values } = fixture(() => targetId); attach('hello');
+  const download = async () => {
+    targetId = Target.Second; service.reset();
+    targetId = Target.First; service.reset();
+    return new Response('hello');
+  };
+  await expect(service.prepare(owner, 'pc', claim, download, () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toEqual([]);
+});
+it('does not return a cached text preparation if its route changes while validation yields', async () => {
+  const { service, claim } = fixture(() => Target.First);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  const pending = service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  service.reset();
+  await expect(pending).rejects.toThrow(RemoteInputReason.Account);
+  expect(service.read('prep', owner, 'pc')).toEqual(prepared);
+});
+it('rejects an attachment response if the target changes during download', async () => {
+  let targetId: string | null = Target.First;
+  const { service, claim, attach, values } = fixture(() => targetId); attach('hello');
+  const download = async () => { targetId = Target.Second; return new Response('hello'); };
+  await expect(service.prepare(owner, 'pc', claim, download, () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toEqual([]);
+});
+it('freezes Agent model, thinking and cwd without creating a run', async () => {
+  const { service, claim, cwd, values } = fixture();
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(prepared.cwd).toBe(cwd);
+  expect(prepared.resolvedInput.options).toEqual({ thinkingLevel: 'high' });
+  expect(prepared.resolvedInput.text).toBe(' hello ');
+  expect(prepared.inputDigest).toBe(payloadHash(prepared.resolvedInput));
+  expect([...values.keys()].some(key => key.startsWith('run:'))).toBe(false);
+  expect(JSON.stringify(prepared.resolvedInput)).not.toContain(cwd);
+});
+it('downloads an attachment only to a generated local path and reuses durable preparation', async () => {
+  const { service, deps, claim, attach } = fixture(); attach('hello');
+  const download = vi.fn(async () => new Response('hello'));
+  const prepared = await service.prepare(owner, 'pc', claim, download, () => true);
+  expect(readFileSync(prepared.files[0].path, 'utf8')).toBe('hello');
+  const restarted = new InputPreparationService(deps);
+  expect(await restarted.prepare(owner, 'pc', claim, download, () => true)).toEqual(prepared);
+  expect(download).toHaveBeenCalledTimes(1);
+  restarted.bind(prepared, 'cmd'); expect(() => restarted.bind(prepared, 'other')).toThrow(RemoteInputReason.Stale);
+});
+it('rejects changed content and does not save a ready manifest', async () => {
+  const { service, claim, attach, values } = fixture(); attach('hello');
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('other'), () => true)).rejects.toThrow(RemoteInputReason.Asset);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+});
+it('fences an account change during download including an old session generation', async () => {
+  const { service, claim, attach, setActor } = fixture(); attach('hello'); let generation = 1;
+  await expect(service.prepare(owner, 'pc', claim, async () => { setActor({ userId: 'B', scopeKey: 'personal' }); setActor(owner); generation++; return new Response('hello'); }, () => generation === 1)).rejects.toThrow(RemoteInputReason.Account);
+});
+it('keeps original cwd and allows an anonymous Agent for an owned continuation', async () => {
+  const { service, claim, continueAnonymous, catalog, cwd, changeVersion } = fixture(); continueAnonymous();
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(prepared.cwd).toBe(cwd); expect(prepared.resolvedInput.agentId).toBe('anon');
+  expect(prepared.resolvedInput.options.thinkingLevel).toBe('low'); expect(catalog.refresh).not.toHaveBeenCalled();
+  changeVersion(); expect(() => service.validate(prepared, owner, 'pc', false)).not.toThrow();
+});
+it('invalidates a new preparation after default context changes without rebinding cwd', async () => {
+  const { service, claim, changeVersion } = fixture();
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true); changeVersion();
+  expect(() => service.validate(prepared, owner, 'pc', false)).toThrow(RemoteInputReason.AgentChanged);
+});
+it('refuses altered local assets and wrong device or identity at execution', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  expect(() => service.read('prep', owner, 'other')).toThrow(RemoteInputReason.Stale);
+  expect(() => service.read('prep', { ...owner, scopeKey: 'team' }, 'pc')).toThrow(RemoteInputReason.Stale);
+  writeFileSync(prepared.files[0].path, 'other');
+  await expect(service.executionOptions(prepared, () => undefined)).rejects.toThrow(RemoteInputReason.Stale);
+});
+
+it('reclaims expired never-bound inputs after the delivery grace period, without a server', async () => {
+  const { service, claim, attach, values } = fixture(); attach('hello');
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  expect(await service.cleanupExpired(prepared.expiresAt + 60_000)).toBe(0);
+  expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(1);
+  expect(existsSync(prepared.cacheDirectory!)).toBe(false); expect(values.has('inputPreparation:prep')).toBe(false);
+});
+it('never removes bound task inputs, and supports expired legacy file records', async () => {
+  const { service, claim, attach, values } = fixture(); attach('hello');
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  service.bind(prepared, 'command');
+  expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(0);
+  expect(readFileSync(prepared.files[0].path, 'utf8')).toBe('hello');
+  values.set('inputPreparation:prep', { ...prepared, boundCommandId: null, cacheDirectory: undefined });
+  expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(1);
+});
+it('blocks a stale in-memory bind after cleanup claims the record and retries deletion after restart', async () => {
+  const { service, deps, claim, attach, values } = fixture(); attach('hello');
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const remove = vi.spyOn(fs, 'rm').mockRejectedValueOnce(new Error('busy'));
+  const cleanup = service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000);
+  expect(() => service.bind(prepared, 'command')).toThrow(RemoteInputReason.Stale);
+  expect(() => service.read('prep', owner, 'pc')).toThrow(RemoteInputReason.Stale);
+  expect(await cleanup).toBe(0); expect(values.get('inputPreparation:prep')).toMatchObject({ cacheCleanup: 'deleting' });
+  remove.mockRestore(); warning.mockRestore();
+  const restarted = new InputPreparationService(deps);
+  expect(await restarted.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(1);
+});
+it('does not follow a symlink or remove a path outside its owned cache', async () => {
+  const { service, claim, attach, values, cwd } = fixture(); attach('hello');
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+  const safeFile = path.join(cwd, 'keep.txt'); writeFileSync(safeFile, 'keep');
+  rmSync(prepared.cacheDirectory!, { recursive: true }); symlinkSync(cwd, prepared.cacheDirectory!, 'dir');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(0);
+    expect(readFileSync(safeFile, 'utf8')).toBe('keep');
+    values.set('inputPreparation:prep', { ...prepared, cacheDirectory: cwd });
+    expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(0);
+    expect(readFileSync(safeFile, 'utf8')).toBe('keep');
+  } finally { warning.mockRestore(); }
+});
+it('advances a bounded cleanup scan past live and bound records', async () => {
+  const { service, claim, values } = fixture();
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  values.delete('inputPreparation:prep');
+  for (let i = 0; i < 55; i++) values.set(`inputPreparation:${String(i).padStart(3, '0')}`, { ...prepared, preparationId: String(i), boundCommandId: i < 50 ? 'command' : null, cacheDirectory: undefined, files: [] } as LocalPreparedInput);
+  expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(0);
+  expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(5);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toHaveLength(50);
+});
+
+it('finishes cleanup when the cache root or account directory is already absent', async () => {
+  for (const removeRoot of [false, true]) {
+    const { service, deps, claim, attach, values } = fixture(); attach('hello');
+    const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true);
+    rmSync(removeRoot ? deps.cacheRoot : path.dirname(prepared.cacheDirectory!), { recursive: true });
+    expect(await service.cleanupExpired(prepared.expiresAt + 25 * 60 * 60_000)).toBe(1);
+    expect(values.has('inputPreparation:prep')).toBe(false);
+  }
+});
+
+it('passes the remaining image frame byte allowance to the image converter before it writes PNG output', async () => {
+  const { deps, claim, attach } = fixture(); attach('image', RemoteInputIntent.Image);
+  const convertImage = vi.fn(async (_source: string, _mimeType: string, _target: string, maximumBytes: number): Promise<{ path: string; mimeType: string }> => {
+    expect(maximumBytes).toBe(Math.floor((29_500_000 - 64 * 1024) / 4) * 3);
+    throw new Error('INPUT_UNSUPPORTED');
+  });
+  const service = new InputPreparationService({ ...deps, convertImage });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toThrow();
+  expect(convertImage).toHaveBeenCalledOnce();
+});
+it('keeps a bounded desktop thumbnail for large mobile images without persisting original image bytes', async () => {
+  const { deps, claim, attach } = fixture();
+  const original = 'x'.repeat(600 * 1024); attach(original, RemoteInputIntent.Image);
+  claim.attachments![0].fileName = 'mobile.png';
+  const preview = { mimeType: 'image/jpeg', base64Data: Buffer.from('small thumbnail').toString('base64') };
+  const createImagePreview = vi.fn(async () => preview);
+  const service = new InputPreparationService({ ...deps, createImagePreview });
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response(original), () => true);
+  expect(JSON.stringify(prepared)).not.toContain(Buffer.from(original).toString('base64'));
+  const options = await service.executionOptions(prepared, () => undefined);
+  expect(options.imageAttachments[0].base64Data).toBe(Buffer.from(original).toString('base64'));
+  expect(buildCoworkImageAttachmentPreviews(options.imageAttachments)).toMatchObject([{ name: 'mobile.png', mimeType: 'image/jpeg', base64Data: preview.base64Data }]);
+  expect(options.prompt).toBe(' ');
+  expect(createImagePreview).toHaveBeenCalledTimes(1);
+});
+it('adds desktop previews when executing a preparation saved by an older client', async () => {
+  const { deps, service, claim, attach } = fixture(); const original = 'x'.repeat(600 * 1024); attach(original, RemoteInputIntent.Image);
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response(original), () => true);
+  delete prepared.files[0].preview; // Legacy durable records predate the preview field.
+  const createImagePreview = vi.fn(async () => ({ mimeType: 'image/jpeg', base64Data: 'cHJldmlldw==' }));
+  const restarted = new InputPreparationService({ ...deps, createImagePreview });
+  const options = await restarted.executionOptions(prepared, () => undefined);
+  expect(options.imageAttachments[0].previewBase64Data).toBe('cHJldmlldw==');
+  expect(createImagePreview).toHaveBeenCalledWith(prepared.files[0].imagePath, expect.objectContaining({ current: expect.any(Function), signal: expect.any(AbortSignal) }));
+});
+it('retains visible filenames and original model images when thumbnail generation fails or exceeds its budget', async () => {
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    for (const createImagePreview of [
+      async () => { throw new Error('thumbnail unsupported'); },
+      async () => ({ mimeType: 'image/jpeg', base64Data: Buffer.alloc(128 * 1024 + 1).toString('base64') }),
+    ]) {
+      const { deps, claim, attach } = fixture(); const original = 'x'.repeat(600 * 1024); attach(original, RemoteInputIntent.Image);
+      claim.attachments![0].fileName = 'mobile.png';
+      const service = new InputPreparationService({ ...deps, createImagePreview });
+      const prepared = await service.prepare(owner, 'pc', claim, async () => new Response(original), () => true);
+      const options = await service.executionOptions(prepared, () => undefined);
+      expect(options.imageAttachments[0].base64Data).toBe(Buffer.from(original).toString('base64'));
+      expect(options.imageAttachments[0].previewBase64Data).toBeUndefined();
+      expect(options.prompt).toBe('[File: "mobile.png"]');
+      expect(options.prompt).not.toContain(prepared.cacheDirectory);
+    }
+  } finally { warning.mockRestore(); }
+});
+it('rechecks the account after an asynchronous thumbnail before accepting a preparation', async () => {
+  const { deps, claim, attach, setActor, values } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, createImagePreview: async () => {
+    setActor({ userId: 'B', scopeKey: 'personal' });
+    return { mimeType: 'image/jpeg', base64Data: 'cHJldmlldw==' };
+  } });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+});
+
+it('times out optional thumbnails without blocking a mobile image command', async () => {
+  const { deps, service, claim, attach } = fixture(); const original = 'x'.repeat(600 * 1024); attach(original, RemoteInputIntent.Image);
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response(original), () => true);
+  delete prepared.files[0].preview;
+  let previewStarted!: () => void;
+  const started = new Promise<void>(resolve => { previewStarted = resolve; });
+  const resumed = new InputPreparationService({ ...deps, createImagePreview: async () => {
+    previewStarted(); return new Promise<undefined>(() => undefined);
+  } });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const executing = resumed.executionOptions(prepared, () => undefined);
+    await started;
+    await vi.advanceTimersByTimeAsync(2500);
+    const options = await executing;
+    expect(options.imageAttachments).toHaveLength(1);
+    expect(options.prompt).toContain('report.txt');
+    expect(options.prompt).not.toContain(prepared.cacheDirectory);
+  } finally { vi.useRealTimers(); }
+});
+it('does not swallow a revoked execution permit while a legacy thumbnail is being generated', async () => {
+  const { deps, service, claim, attach } = fixture(); attach('image', RemoteInputIntent.Image);
+  const prepared = await service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true);
+  delete prepared.files[0].preview;
+  let permitted = true;
+  const resumed = new InputPreparationService({ ...deps, createImagePreview: async () => {
+    permitted = false; throw new Error('thumbnail failed');
+  } });
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    await expect(resumed.executionOptions(prepared, () => { if (!permitted) throw new Error('permit revoked'); })).rejects.toThrow('permit revoked');
+  } finally { warning.mockRestore(); }
+});
+
+it('reports completed download separately from failed integrity validation without ready or private data', async () => {
+  const { service, claim, attach, values, cwd } = fixture(); attach('hello');
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('other'), () => true)).rejects.toThrow(RemoteInputReason.Asset);
+  expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['transfer_http_ok']);
+  expect(emitted).toContainEqual(expect.objectContaining({ event: Telemetry.Input,
+    fields: expect.objectContaining({ phase: Telemetry.Validate, outcome: Telemetry.Failed, reason: RemoteInputReason.Asset }) }));
+  expect(emitted.some(item => item.event === Telemetry.Input && item.fields.phase === Telemetry.LocalReady)).toBe(false);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+  const logged = JSON.stringify({ emitted, requests });
+  for (const secret of ['hello', 'other', 'report.txt', 'claimToken', cwd, claim.attachments![0].sha256]) expect(logged).not.toContain(secret);
+});
+it('classifies download cache write failure as local processing while preserving the original error', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  const failure = Object.assign(new Error('private path and details'), { code: 'ENOSPC' });
+  const open = vi.spyOn(fs, 'open').mockRejectedValueOnce(failure);
+  try { await expect(service.prepare(owner, 'pc', claim, async () => new Response('hello'), () => true)).rejects.toBe(failure); }
+  finally { open.mockRestore(); }
+  expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['local_processing_failed']);
+  expect(emitted).toContainEqual(expect.objectContaining({ fields: expect.objectContaining({ phase: Telemetry.Write, reason: Telemetry.LocalIo }) }));
+  expect(JSON.stringify(emitted)).not.toContain('private path');
+});
+it('counts a failed body stream once and never reports a completed transfer', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response(new ReadableStream({
+    pull(controller) { controller.error(new Error('stream disconnected')); },
+  })), () => true)).rejects.toThrow('stream disconnected');
+  expect(requests.filter(request => request.fields.operation === 'input_asset_content').map(request => request.result)).toEqual(['transport_failed']);
+});
+
+
+it('preserves account cancellation when required image decoding also fails', async () => {
+  const { deps, claim, attach, setActor, values } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, convertImage: async () => {
+    setActor({ userId: 'B', scopeKey: 'personal' }); throw new Error('INPUT_UNSUPPORTED');
+  } });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toThrow(RemoteInputReason.Account);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+});
+
+it('retains unresolved input diagnostics across restart and clears only a matching ready receipt', async () => {
+  const { service, deps, claim, values } = fixture(() => Target.First);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  service.retainRecoveryDiagnostic('prep', owner, 'pc');
+  const diagnosticKeys = () => [...values.keys()].filter(key => key.startsWith('inputRecoveryDiagnostic:'));
+  const reopened = new InputPreparationService(deps);
+  const receipt = { preparationId: 'prep', status: 'ready', inputDigest: prepared.inputDigest,
+    readyExpiresAt: new Date(prepared.expiresAt).toISOString(), boundCommandId: null,
+    targetSummary: { deviceId: 'pc', resolvedInput: prepared.resolvedInput } };
+  expect(reopened.recoverReceipt({ ...receipt, inputDigest: 'wrong' }, owner, 'pc')).toBe(false);
+  expect(diagnosticKeys()).toHaveLength(1);
+  expect(reopened.recoverReceipt({ ...receipt, boundCommandId: 'unknown-command' }, owner, 'pc')).toBe(false);
+  expect(diagnosticKeys()).toHaveLength(1);
+  expect(reopened.recoverReceipt(receipt, owner, 'pc')).toBe(true);
+  expect(diagnosticKeys()).toHaveLength(0);
+  expect(reopened.read('prep', owner, 'pc').boundCommandId).toBeNull();
+  expect(reopened.read('prep', owner, 'pc').inputDigest).toBe(prepared.inputDigest);
+});
+it('never clears diagnostics for absent or terminal preparations and never recreates manifests from receipts', () => {
+  const { service, values } = fixture(() => Target.First);
+  service.retainRecoveryDiagnostic('missing', owner, 'pc');
+  expect(service.recoverReceipt({ preparationId: 'missing', status: 'failed' }, owner, 'pc')).toBe(false);
+  expect([...values.keys()].filter(key => key.startsWith('inputRecoveryDiagnostic:'))).toHaveLength(1);
+  expect([...values.keys()].filter(key => key.startsWith('inputPreparation:'))).toHaveLength(0);
+});
+
+it('isolates a malformed local ready manifest without hiding shared storage errors', async () => {
+  const { service, deps, claim, values } = fixture();
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  values.set('inputPreparation:bad', { ...prepared, preparationId: 'bad', resolvedInput: undefined });
+  const receipt = { preparationId: 'bad', status: 'ready', inputDigest: prepared.inputDigest,
+    readyExpiresAt: new Date(prepared.expiresAt).toISOString(), targetSummary: { deviceId: 'pc', resolvedInput: prepared.resolvedInput } };
+  expect(service.recoverReceipt(receipt, owner, 'pc')).toBe(false);
+  expect(service.recoverReceipt({ ...receipt, preparationId: 'prep' }, owner, 'pc')).toBe(true);
+  expect(values.get('inputPreparation:bad')).toMatchObject({ preparationId: 'bad' });
+  vi.spyOn(deps.store.remote, 'get').mockImplementation(() => { throw new Error('SQLITE_IOERR'); });
+  expect(() => service.recoverReceipt(receipt, owner, 'pc')).toThrow('SQLITE_IOERR');
+});
+
+
+it.each(['other', 'shorter-content'])('records local integrity diagnostics with the actual request ID and no private payload for %s', async body => {
+  const { service, claim, attach, cwd } = fixture(); attach('hello');
+  let requestId: string | undefined;
+  await expect(service.prepare(owner, 'pc', claim, async (_asset, id) => { requestId = id; return new Response(body); }, () => true)).rejects.toThrow(RemoteInputReason.Asset);
+  expect(syncLog.remoteSyncRequestId(requestId)).toBe(requestId);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ event: syncLog.RemoteInputDiagnostic.Event,
+    preparationId: 'prep', assetId: 'asset', transportRequestId: requestId, stage: 'validate', result: 'failed',
+    actualBytes: Buffer.byteLength(body), expectedBytes: 5,
+    reason: body.length === 5 ? syncLog.RemoteInputDiagnostic.HashMismatch : syncLog.RemoteInputDiagnostic.SizeMismatch,
+    elapsedMs: expect.any(Number) }));
+  const logged = JSON.stringify(diagnostics);
+  for (const secret of ['hello', body, cwd, 'report.txt', claim.claimToken, claim.attachments![0].sha256]) expect(logged).not.toContain(secret);
+});
+it.each(['context', 'status', 'open'])('cancels an unconsumed asset body on %s failure', async failure => {
+  const { service, claim, attach, setActor, values } = fixture(); attach('hello');
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({ cancel });
+  const error = Object.assign(new Error('private cache path'), { code: 'ENOSPC' });
+  if (failure === 'open') vi.spyOn(fs, 'open').mockRejectedValueOnce(error);
+  const result = service.prepare(owner, 'pc', claim, async () => {
+    if (failure === 'context') setActor(null);
+    return new Response(stream, { status: failure === 'status' ? 503 : 200 });
+  }, () => true);
+  if (failure === 'open') await expect(result).rejects.toBe(error);
+  else await expect(result).rejects.toThrow(failure === 'context' ? RemoteInputReason.Account : RemoteInputReason.Asset);
+  expect(cancel).toHaveBeenCalledOnce(); expect(stream.locked).toBe(false);
+  expect(values.has('inputPreparation:prep')).toBe(false);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: failure === 'open' ? 'write' : 'download', result: 'failed',
+    reason: failure === 'context' ? RemoteInputReason.Account : failure === 'open' ? 'LOCAL_IO_FAILED' : syncLog.RemoteInputDiagnostic.DownloadRejected }));
+});
+it('preserves the preparation error when an unconsumed body rejects cancellation', async () => {
+  const { service, claim, attach } = fixture(); attach('hello');
+  const error = Object.assign(new Error('private cache path'), { code: 'ENOSPC' });
+  vi.spyOn(fs, 'open').mockRejectedValueOnce(error);
+  const cancel = vi.fn(async () => { throw new Error('private cancel failure'); });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response(new ReadableStream({ cancel })), () => true)).rejects.toBe(error);
+  expect(cancel).toHaveBeenCalledOnce();
+});
+it('distinguishes attachment decoder rejection from other invalid input and logs the decode stage locally', async () => {
+  const { deps, claim, attach, values } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, convertImage: async () => { throw new Error(RemoteInputReason.Invalid); } });
+  await expect(service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true)).rejects.toBeInstanceOf(RemoteAttachmentError);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ preparationId: 'prep', assetId: 'asset', stage: 'decode',
+    result: 'failed', reason: syncLog.RemoteInputDiagnostic.ImageInvalid, actualBytes: 5, expectedBytes: 5 }));
+  expect(values.has('inputPreparation:prep')).toBe(false);
+  diagnostics.length = 0;
+  claim.request.input.options = { thinkingLevel: 'invalid-thinking-level' };
+  const failure = await service.prepare(owner, 'pc', claim, vi.fn(), () => true).catch(error => error);
+  expect(failure.message).toBe(RemoteInputReason.Invalid); expect(failure).not.toBeInstanceOf(RemoteAttachmentError);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'validate', result: 'failed', reason: RemoteInputReason.Invalid }));
+});
+it('records successful download, validation, image decode and local commit as separate checkpoints', async () => {
+  const { deps, claim, attach } = fixture(); attach('image', RemoteInputIntent.Image);
+  const service = new InputPreparationService({ ...deps, convertImage: async source => ({ path: source, mimeType: 'image/png' }) });
+  await service.prepare(owner, 'pc', claim, async () => new Response('image'), () => true);
+  expect(diagnostics.map(value => [value.stage, value.result])).toEqual([
+    ['download', 'success'], ['validate', 'success'], ['decode', 'success'], ['local_commit', 'success'],
+  ]);
+});
+
+
+it.each([undefined, ModelPresetId.Balanced, ModelPresetId.Ultimate])(
+  'keeps the published session model consistent with continuation preparation (%s)', async presetId => {
+    const f = fixture(undefined, presetId);
+    f.continueAnonymous();
+    const commands = new SessionCommandService(f.deps.store, new EventEmitter() as CoworkRuntime, () => owner);
+    commands.configureInput({ preparations: f.service, models: f.deps.models, getDeviceId: () => 'pc' });
+    const summary = commands.recordCurrentInputModel('local');
+    expect(summary).not.toBeNull();
+    const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+    // The server freezes this published identity for keep_session and rejects a different model.
+    expect(prepared.resolvedInput.model).toEqual({ modelRef: summary!.modelRef, version: summary!.version });
+    expect(prepared.resolvedInput.options.thinkingLevel ?? null).toBe(summary!.thinkingLevel);
+    const published = f.deps.models.resolve(owner, 'pc', summary!.modelRef as string, summary!.version as string);
+    if (summary!.thinkingLevel) expect(published.item.thinking.options).toContain(summary!.thinkingLevel);
+    expect(published.local.runtimeRef).toBe(presetId ? `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}` : 'provider/model');
+    const options = await f.service.executionOptions(prepared, () => undefined);
+    expect(options).toMatchObject({ modelOverride: 'provider/model', thinkingLevel: 'low' });
+    expect(f.deps.store.getSession('local', 0)?.modelPresetId).toBe(presetId);
+  },
+);
+
+
+it('rejects a cached preparation selecting a foreign-origin Agent before model or execution admission', async () => {
+  const { service, deps, claim } = fixture(() => Target.Second);
+  const db = new Database(':memory:');
+  try {
+    db.exec('CREATE TABLE remote_sync_targets(target_id TEXT PRIMARY KEY,sync_target_json TEXT); CREATE TABLE cowork_session_ownership(session_id TEXT,owner_user_id TEXT,owner_scope_key TEXT,ownership_status TEXT)');
+    db.prepare('INSERT INTO remote_sync_targets VALUES (?,?)').run(Target.Second, JSON.stringify({ version: 1, dataSpaceId: 'production-space', dataGeneration: '1' }));
+    const origins = new RemotePublicationOrigins(db);
+    origins.setRouteProvider(() => 'https://test.example');
+    origins.capture(RemotePublicationKind.Agent, 'test-agent', owner);
+    origins.confirm(owner, 'https://test.example', { version: 1, dataSpaceId: 'test-space', dataGeneration: '1' });
+    Object.assign(deps.store.remote, { db });
+    const main = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+    expect(() => service.validate(main, owner, 'pc', true)).not.toThrow();
+    // Represents a pre-fix production preparation that already selected the test Agent.
+    const cached = structuredClone(main);
+    cached.resolvedInput.agentId = 'test-agent';
+    cached.inputDigest = payloadHash(cached.resolvedInput);
+    const resolve = vi.spyOn(deps.models, 'resolve');
+    expect(() => service.validate(cached, owner, 'pc', true)).toThrow(RemoteInputReason.AgentUnavailable);
+    expect(resolve).not.toHaveBeenCalled();
+  } finally { db.close(); }
+});
+
+it.each([false, true])('preserves local custom thinking for inherited input (continuation=%s)', async continuation => {
+  const { service, claim, deps, continueAnonymous } = fixture(undefined, undefined, false);
+  if (continuation) continueAnonymous();
+  const level = continuation ? 'low' : 'high';
+  const agentBefore = structuredClone(deps.store.getAgent('main'));
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(prepared.resolvedInput.options).toEqual({});
+  expect(prepared.inheritedThinking).toBe(level);
+  expect((await service.executionOptions(prepared, () => {})).thinkingLevel).toBe(level);
+  expect(deps.store.getAgent('main')).toEqual(agentBefore);
+  const resumed = new InputPreparationService(deps).read(prepared.preparationId, owner, 'pc');
+  expect((await service.executionOptions(resumed, () => {})).thinkingLevel).toBe(level);
+});
+it('does not accept an explicit custom thinking override absent from the published catalog', async () => {
+  const { service, claim } = fixture(undefined, undefined, false);
+  claim.request.input.options = { thinkingLevel: 'high' };
+  await expect(service.prepare(owner, 'pc', claim, vi.fn(), () => true)).rejects.toThrow(RemoteInputReason.Invalid);
+});
+it('does not inherit the old Agent thinking when explicitly selecting a custom model', async () => {
+  const { service, claim, deps } = fixture(undefined, undefined, false);
+  const model = deps.models.refresh(owner, 'pc')[0];
+  claim.request.input.model = { mode: RemoteInputMode.Selected, modelRef: model.modelRef, expectedVersion: model.version };
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(prepared.inheritedThinking).toBeUndefined();
+  expect((await service.executionOptions(prepared, () => {})).thinkingLevel).toBeUndefined();
+});
+it('invalidates a prepared inherited setting if the desktop configuration changes before execution', async () => {
+  const { service, claim, deps } = fixture(undefined, undefined, false);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  vi.spyOn(deps.store, 'getAgent').mockReturnValue({ enabled: true, model: 'provider/model', thinkingLevel: 'low' } as any);
+  expect(() => service.validate(prepared, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
+  await expect(service.executionOptions(prepared, () => {})).rejects.toThrow(RemoteInputReason.ModelChanged);
+});
+it('rejects tampering with the private inherited setting or adding a public override', async () => {
+  const { service, claim } = fixture(undefined, undefined, false);
+  const prepared = await service.prepare(owner, 'pc', claim, vi.fn(), () => true);
+  expect(() => service.validate({ ...prepared, inheritedThinking: 'low' }, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
+  const resolvedInput = { ...prepared.resolvedInput, options: { thinkingLevel: 'high' } };
+  expect(() => service.validate({ ...prepared, resolvedInput, inputDigest: payloadHash(resolvedInput) }, owner, 'pc', true)).toThrow(RemoteInputReason.ModelChanged);
+});
+
+it('reports an inaccessible continuation Agent without downloading or committing prepared input', async () => {
+  const f = fixture(); f.continueAnonymous(); f.attach('private attachment');
+  vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+  const download = vi.fn();
+  await expect(f.service.prepare(owner, 'pc', f.claim, download, () => true)).rejects.toThrow(RemoteInputReason.AgentUnavailable);
+  expect(download).not.toHaveBeenCalled();
+  expect([...f.values.keys()].some(key => key.startsWith('inputPreparation:'))).toBe(false);
+  expect(diagnostics).toContainEqual(expect.objectContaining({ stage: 'validate', result: 'failed', reason: RemoteInputReason.AgentUnavailable }));
+  expect(emitted).toContainEqual(expect.objectContaining({ fields: expect.objectContaining({ phase: Telemetry.Validate, reason: RemoteInputReason.AgentUnavailable }) }));
+});
+
+it('rejects cached preparation and final validation after Agent access is revoked', async () => {
+  const f = fixture(); f.continueAnonymous();
+  const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+  vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+  await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toThrow(RemoteInputReason.AgentUnavailable);
+  expect(() => f.service.validate(prepared, owner, 'pc', false)).toThrow(RemoteInputReason.AgentUnavailable);
+  expect(() => f.service.validate(prepared, owner, 'pc', true)).toThrow(RemoteInputReason.AgentUnavailable);
+});
+
+it('does not disguise unexpected store failures as unavailable Agents', async () => {
+  const f = fixture();
+  const failure = new Error('unexpected storage failure');
+  vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw failure; });
+  await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toBe(failure);
+});
+
+
+function publishedContinuationFixture() {
+  const f = fixture(() => Target.First);
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE remote_sync_targets(target_id TEXT PRIMARY KEY,sync_target_json TEXT)');
+  db.prepare('INSERT INTO remote_sync_targets VALUES (?,?)').run(Target.First, JSON.stringify({ version: 1, dataSpaceId: 'task-space', dataGeneration: '1' }));
+  const origins = new RemotePublicationOrigins(db);
+  origins.setRouteProvider(() => 'https://task.example');
+  origins.setCurrentTargetProvider(() => ({ owner, route: 'https://task.example', dataSpaceId: 'task-space' }));
+  origins.capture(RemotePublicationKind.Agent, 'anon', null);
+  origins.capture(RemotePublicationKind.Session, 'local', owner);
+  Object.assign(f.deps.store.remote, { db });
+  f.continueAnonymous();
+  return { ...f, db };
+}
+
+it('prepares and revalidates a published owned task without publishing its anonymous Agent', async () => {
+  const f = publishedContinuationFixture();
+  try {
+    const origin = f.db.prepare("SELECT * FROM remote_publication_origins WHERE kind='agent'").get();
+    const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+    expect(prepared.sessionId).toBe('local');
+    expect(prepared.resolvedInput.agentId).toBe('anon');
+    expect(() => f.service.validate(prepared, owner, 'pc', true)).not.toThrow();
+    expect(f.catalog.refresh).not.toHaveBeenCalled();
+    expect(f.db.prepare("SELECT * FROM remote_publication_origins WHERE kind='agent'").get()).toEqual(origin);
+  } finally { f.db.close(); }
+});
+
+it.each(['admission', 'owner', 'source', 'access', 'disabled'] as const)(
+  'rechecks %s before a cached anonymous-Agent continuation can execute', async boundary => {
+    const f = publishedContinuationFixture();
+    try {
+      const prepared = await f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true);
+      if (boundary === 'admission') vi.spyOn(f.deps.store.remote, 'isTaskAdmitted').mockReturnValue(false);
+      if (boundary === 'owner') vi.spyOn(f.deps.store.remote, 'owner').mockReturnValue({ userId: 'other', scopeKey: owner.scopeKey });
+      if (boundary === 'source') f.db.prepare("UPDATE remote_publication_origins SET data_space_id='other-space' WHERE kind='session'").run();
+      if (boundary === 'access') vi.mocked(f.deps.store.assertAgentAccess).mockImplementation(() => { throw new AgentAccessError(AgentAccessErrorCode.Unavailable); });
+      if (boundary === 'disabled') f.disable();
+      const reason = boundary === 'access' || boundary === 'disabled' ? RemoteInputReason.AgentUnavailable : RemoteInputReason.Stale;
+      expect(() => f.service.validate(prepared, owner, 'pc', true)).toThrow(reason);
+      await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toThrow(reason);
+    } finally { f.db.close(); }
+  },
+);
+
+it('does not turn an owned task into Agent-wide permission for a new task', async () => {
+  const f = publishedContinuationFixture();
+  try {
+    f.claim.request = { preparationId: 'prep', inputSchemaVersion: 2, purpose: 'create_session', draftId: 'draft',
+      input: { text: 'new task', agent: { agentId: 'anon', expectedVersion: '1' }, model: { mode: RemoteInputMode.Agent } } };
+    await expect(f.service.prepare(owner, 'pc', f.claim, vi.fn(), () => true)).rejects.toThrow(RemoteInputReason.AgentUnavailable);
+    expect(f.catalog.refresh).not.toHaveBeenCalled();
+  } finally { f.db.close(); }
+});

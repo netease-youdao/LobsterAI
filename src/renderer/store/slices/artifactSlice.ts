@@ -14,6 +14,7 @@ import {
   shouldPreferArtifactForDisplay,
 } from '../../services/artifactParser';
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
+import { resetAccountSessionData } from '../accountSessionBoundary';
 import type { RootState } from '../index';
 
 const DEFAULT_PANEL_WIDTH = 560;
@@ -531,6 +532,9 @@ const artifactSlice = createSlice({
       delete state.panelOpenBySession[action.payload];
       state.selectedArtifactId = null;
     },
+  },
+  extraReducers: builder => {
+    builder.addCase(resetAccountSessionData, state => ({ ...initialState, panelWidth: state.panelWidth }));
   },
 });
 

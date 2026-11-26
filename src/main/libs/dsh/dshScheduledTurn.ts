@@ -7,6 +7,8 @@ import {
   RunDeliveryStatus,
 } from '../../../scheduledTask/constants';
 import type { ScheduledTask } from '../../../scheduledTask/types';
+import type { CreateCoworkSessionOptions } from '../../coworkStore';
+import { type AutomationOwnershipPort, automationSessionOptions, canUseAutomationSource, imAutomationSourceId, prepareAutomationTurn, scheduledAutomationSourceId } from '../../remote/automationOwnership';
 import type { LobsterSchedulerRunResult } from '../../scheduledTask/lobsterScheduler';
 import type { DshCoworkStorePort, DshRuntimeAdapter } from '../agentEngine/dshRuntimeAdapter';
 
@@ -18,7 +20,7 @@ export interface ExecuteDshScheduledTaskDeps {
     start(): Promise<void>;
   };
   runtimeAdapter: ScheduledRuntime;
-  coworkStore: Pick<DshCoworkStorePort, 'getSession'> & {
+  coworkStore: Pick<DshCoworkStorePort, 'getSession'> & AutomationOwnershipPort & {
     createSession?: (
       title: string,
       cwd: string,
@@ -27,7 +29,7 @@ export interface ExecuteDshScheduledTaskDeps {
       activeSkillIds?: string[],
       agentId?: string,
       modelOverride?: string,
-      options?: { scheduledTaskId?: string | null },
+      options?: CreateCoworkSessionOptions,
     ) => { id: string };
   };
   getDefaultCwd: (agentId?: string) => string;
@@ -44,6 +46,7 @@ export interface ExecuteDshScheduledTaskDeps {
 }
 
 export interface RunScheduledTurnOptions {
+  turnOptions?: ReturnType<typeof prepareAutomationTurn>;
   timeoutSeconds?: number;
   timeoutMs?: number;
 }
@@ -156,7 +159,7 @@ export async function runScheduledTurn(
       }, timeoutMs);
     }
 
-    void runtime.startSession(sessionId, prompt, { agentId, autoApprove: true }).catch(error => {
+    void runtime.startSession(sessionId, prompt, { agentId, autoApprove: true, ...options?.turnOptions }).catch(error => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -256,6 +259,12 @@ export async function executeDshScheduledTask(
   }
   signal.throwIfAborted();
 
+  const store = deps.coworkStore;
+  const sourceId = scheduledAutomationSourceId(task.id);
+  const creationOptions = automationSessionOptions(store, sourceId);
+  if (store.agentOwnership?.canView(task.agentId || 'main', creationOptions.owner) === false) {
+    throw new Error('Scheduled task agent is unavailable');
+  }
   const { payload } = task;
   const promptText = payload.kind === PayloadKind.AgentTurn ? payload.message : payload.text;
   const modelOverride =
@@ -298,10 +307,11 @@ export async function executeDshScheduledTask(
     undefined,
     agentId,
     modelOverride,
-    { scheduledTaskId: task.id },
+    { scheduledTaskId: task.id, ...(store.remote ? creationOptions : {}) },
   ).id;
   if (!sessionId) throw new Error('Unable to create a Cowork session for the scheduled task.');
 
+  const turnOptions = prepareAutomationTurn(store, sessionId, sourceId);
   let stopped = false;
   try {
     stopped = await runScheduledTurn(
@@ -310,7 +320,7 @@ export async function executeDshScheduledTask(
       agentId,
       promptText,
       signal,
-      { timeoutSeconds },
+      { timeoutSeconds, turnOptions },
     );
   } catch (error) {
     if (signal.aborted) {
@@ -322,7 +332,7 @@ export async function executeDshScheduledTask(
       deliveryStatus: RunDeliveryStatus.NotRequested,
     };
   }
-  if (stopped || signal.aborted) {
+  if (stopped || signal.aborted || !canUseAutomationSource(store, sourceId)) {
     return { sessionId, stopped: true, deliveryStatus: RunDeliveryStatus.NotRequested };
   }
 
@@ -342,6 +352,7 @@ export async function executeDshScheduledTask(
     && deps.channelsBridge
   ) {
     try {
+      if (!canUseAutomationSource(store, imAutomationSourceId(task.delivery.channel, task.delivery.accountId))) throw new Error('Delivery channel belongs to another account');
       await deps.channelsBridge.sendProactiveMessage({
         platform: task.delivery.channel,
         instanceId: task.delivery.accountId,

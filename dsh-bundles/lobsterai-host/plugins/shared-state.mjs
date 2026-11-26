@@ -169,6 +169,12 @@ export function resolveSessionContext(ctx, state, sessionId) {
         || ancestor?.workspaceDir;
       return {
         agentId: binding.targetAgentId,
+        ...(binding.remoteRequestId ? {
+          remoteRequestId: binding.remoteRequestId,
+          remoteAllowedAgentIds: ancestor?.remoteRequestId === binding.remoteRequestId
+            && Array.isArray(ancestor?.remoteAllowedAgentIds) ? ancestor.remoteAllowedAgentIds : [],
+        } : Array.isArray(ancestor?.remoteAllowedAgentIds)
+          ? { remoteRequestId: ancestor.remoteRequestId, remoteAllowedAgentIds: ancestor.remoteAllowedAgentIds } : {}),
         ...(coworkSessionId ? { coworkSessionId } : {}),
         ...(ancestor?.traceId ? { traceId: ancestor.traceId } : {}),
         ...(workspaceDir ? { workspaceDir } : {}),

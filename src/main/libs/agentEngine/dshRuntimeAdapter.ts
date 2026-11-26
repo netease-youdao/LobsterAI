@@ -13,6 +13,7 @@ import {
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import type { ApprovalDecisionOptions, ApprovalReconcileOptions, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import {
   BrowserAnnotationScreenshotStatus,
   buildBrowserAnnotationPromptSection,
@@ -46,6 +47,7 @@ import {
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
   DshDeliveryOutcome,
+  DshOpsAction,
   DshPermissionPreset,
   DshProgressiveCapability,
   DshRecoveryPhase,
@@ -69,7 +71,11 @@ import {
   parseModelThinkingLevel,
 } from '../../../shared/providers';
 import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/modelContextWindow';
+import type { QuestionAnswers, QuestionDecisionOptions, QuestionStatus } from '../../../shared/remote/questions';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
+import type { QuestionRegistration } from '../../remote/remoteQuestionService';
+import type { RemoteStore } from '../../remote/remoteStore';
+import { assertAgentSettingsLocalWriteAllowed } from '../agentSettingsConversation/runtime';
 import { getCommandDangerLevel } from '../commandSafety';
 import type { CoworkMessageEditStore } from '../coworkMessageEditStore';
 import type { CoworkMessageVersionStore } from '../coworkMessageVersionStore';
@@ -78,10 +84,15 @@ import {
   extractShellCommandFromArgs,
 } from '../dsh/dshHostBridgeWiring';
 import type {
+  DshApprovalCallContext,
   DshHostManager,
   DshHostSessionContext,
 } from '../dsh/dshHostManager';
 import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
+import { DshRemoteInteractions } from '../dsh/dshRemoteInteractions';
+import { applyDshTranscriptPage } from '../dsh/dshRemoteTranscript';
+import { DshRemoteTurnEvidence, DshRemoteTurnStatus } from '../dsh/dshRemoteTurnEvidence';
+import { publicDshEventData } from '../dsh/dshSettingsToolPrivacy';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
 import { admitDshPrompt, DshAdmissionUnconfirmedError, followDshTurn, isDshTransportError, untilAborted } from '../dsh/dshTurnRecovery';
@@ -107,11 +118,13 @@ import type {
   CoworkRuntime,
   CoworkRuntimeEvents,
   CoworkSessionPatchResult,
+  CoworkSessionRecoverySnapshot,
   CoworkStartOptions,
   CoworkStoppedTurn,
   PermissionRequest,
   PermissionResult,
 } from './types';
+import { CoworkRuntimeDiagnosticEvent, CoworkRuntimeLifecycleEvent } from './types';
 
 export interface DshAdapterSessionRecord {
   id: string;
@@ -134,6 +147,7 @@ export interface DshAdapterSessionRecord {
 }
 
 export interface DshCoworkStorePort {
+  remote?: RemoteStore;
   messageEdits?: CoworkMessageEditStore;
   messageVersions?: CoworkMessageVersionStore;
   getSession(sessionId: string, messageLimit?: number): DshAdapterSessionRecord | null | undefined;
@@ -185,7 +199,7 @@ export type DshReadBrowserAnnotationAsset = (identity: {
 
 export interface DshRuntimeAdapterDeps {
   subagentSessions?: Pick<DshSubagentSessions, 'observeCatalog' | 'observeNotice' | 'getOwningSessionId' | 'setTask'>
-    & Partial<Pick<DshSubagentSessions, 'setDelegatedAgent'>>;
+    & Partial<Pick<DshSubagentSessions, 'setDelegatedAgent' | 'getRemoteBinding'>>;
   hostManager: Pick<
     DshHostManager,
     'start' | 'isReady' | 'getClient' | 'bindSessionContext' | 'deleteSessionFiles'
@@ -238,6 +252,8 @@ export interface TranslatedDshGoalCommand {
 }
 
 interface ActiveTurnState {
+  privateSettingsCalls: Set<string>;
+  assertDelegate?: (targetAgentId: string) => void;
   subagentIdsByName: Map<string, string>;
   subagentTasksByCall: Map<string, string>;
   pendingSubagentResults: Set<string>;
@@ -292,6 +308,7 @@ interface CancelledTurnRecord {
 const CANCEL_GRACE_WINDOW_MS = 30_000;
 
 interface PendingInteraction {
+  localOnly: boolean;
   requestId: string;
   coworkSessionId: string;
   dshSessionId: string;
@@ -837,6 +854,22 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly sessionPermissionPresets = new Map<string, DshPermissionPreset>();
   private readonly sessionUnlockedCapabilities = new Map<string, Set<DshProgressiveCapability>>();
   private readonly sessionThinkingLevels = new Map<string, string>();
+  private receiptCapable = false;
+  private turnEvidenceCapable = false;
+  private decisions?: DshRemoteInteractions;
+  private dualConfiguration: DualApprovalConfiguration = { enabled: false, projectionSupported: false };
+  private readonly remoteEvidence = new DshRemoteTurnEvidence(
+    () => this.store.remote, () => this.hostManager.isReady() ? this.hostManager.getClient() : null,
+    (id, nativeId, requestId, events) => {
+      if (this.activeTurns.has(id)) throw new Error('DSH session already has a live observer');
+      applyDshTranscriptPage(this.store, id, formatStoredDshSessionId(nativeId), requestId, events, (message, replaced) => {
+        this.store.remote?.afterCommit(() => {
+          if (replaced) this.emit('messageUpdate', id, message.id, message.content, message.metadata);
+          else this.emit('message', id, message);
+        });
+      });
+    },
+  );
   private readonly sessionContextWindows = new Map<string, string | null>();
   private readonly sessionResolvedContextTokens = new Map<string, number>();
   private wiredClient: DshTypertClient | null = null;
@@ -942,6 +975,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     await this.runTurn(sessionId, prompt, {
       isContinue: false,
       retryContext: this.retryContext(options),
+      remoteTurn: options.remoteTurn,
+      localTurnEvidence: options.localTurnEvidence,
       checkAccount: options.checkAccount,
       requestId: options.requestId,
       skipInitialUserMessage: options.skipInitialUserMessage,
@@ -970,6 +1005,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     await this.runTurn(sessionId, prompt, {
       isContinue: true,
       retryContext: this.retryContext(options),
+      remoteTurn: options.remoteTurn,
+      localTurnEvidence: options.localTurnEvidence,
       checkAccount: options.checkAccount,
       requestId: options.requestId,
       onAccepted: options.onAccepted,
@@ -1145,6 +1182,39 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       dshSessionId: res.sessionId,
       storedSessionId: formatStoredDshSessionId(res.sessionId),
     };
+  }
+
+  async patchRemoteSession(sessionId: string, patch: OpenClawSessionPatch, beforeDispatch: () => void): Promise<CoworkSessionPatchResult> {
+    const nativeId = this.resolveExistingDshSessionId(sessionId);
+    if (!nativeId || !this.hostManager.isReady()) throw new Error('DSH session is unavailable for model selection.');
+    const model = typeof patch.model === 'string' ? patch.model.trim() : '';
+    const thinking = typeof patch.thinkingLevel === 'string' ? patch.thinkingLevel.trim() : null;
+    const session = this.store.getSession(sessionId, 0);
+    const selection = this.resolveModelSelection
+      ? await this.resolveModelSelection(sessionId, model || session?.modelOverride, thinking)
+      : parseProviderModelRef(model || session?.modelOverride || '');
+    if (!selection) throw new Error('Could not resolve the requested model.');
+    const provider = canonicalizeDshProviderId(selection.provider);
+    const effort = selection.reasoningEffort ?? ((this.resolveModelSelection?.length ?? 0) >= 3 ? undefined : thinking || undefined);
+    if (patch.contextWindow !== undefined) {
+      beforeDispatch();
+      const value = typeof patch.contextWindow === 'string' ? patch.contextWindow : null;
+      await this.hostManager.bindSessionContext({
+        sessionId: nativeId, coworkSessionId: sessionId, contextWindowSelection: value,
+        contextWindowOverride: parseContextWindowSelectionTokens(value),
+      });
+      this.sessionContextWindows.set(sessionId, value);
+    }
+    beforeDispatch();
+    const { selected } = await this.hostManager.getClient().selectModel({
+      sessionId: nativeId, provider, model: selection.model, ...(effort ? { reasoningEffort: effort } : {}),
+    });
+    if (selected?.provider !== provider || selected.model !== selection.model || (selected.reasoningEffort ?? undefined) !== effort) {
+      throw new Error('DSH did not confirm the requested model and reasoning effort.');
+    }
+    if (thinking) this.sessionThinkingLevels.set(sessionId, thinking);
+    else this.sessionThinkingLevels.delete(sessionId);
+    return { modelOverride: model, resolvedModelRef: `${provider}/${selection.model}`, thinkingLevel: thinking ?? '' };
   }
 
   async patchSession(
@@ -1355,6 +1425,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     if (!session) {
       throw new Error(`Cowork session "${sessionId}" not found`);
     }
+    assertAgentSettingsLocalWriteAllowed(session.agentId || 'main');
 
     const pendingCancel = this.pendingCancels.get(sessionId);
     const hadPriorCancel = Boolean(pendingCancel);
@@ -1503,6 +1574,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       let execution: Awaited<ReturnType<DshTypertClient['executeCommand']>>;
       try {
+        assertAgentSettingsLocalWriteAllowed(session.agentId || 'main');
         execution = await client.executeCommand({
           agentId: dshSessionId,
           line: translated.line,
@@ -1530,6 +1602,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       return goal;
     }
 
+    assertAgentSettingsLocalWriteAllowed(session.agentId || 'main');
     const execution = await client.executeCommand({
       agentId: dshSessionId,
       line: translated.line,
@@ -1664,6 +1737,95 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     return { success: true, aborted: false, runId };
   }
 
+  private remoteDecisions(): DshRemoteInteractions | undefined {
+    if (!this.decisions && this.store.remote && this.receiptCapable) {
+      this.decisions = new DshRemoteInteractions({
+        remote: this.store.remote, getSession: id => this.store.getSession(id, 0),
+        evidence: this.remoteEvidence, ready: () => this.supportsDualApproval(),
+        client: () => this.hostManager.isReady() ? this.hostManager.getClient() : null,
+        emit: (event, ...args) => this.emit(event, ...args),
+      });
+      this.decisions.configure(this.dualConfiguration);
+    }
+    return this.decisions;
+  }
+
+  assertRemoteDelegation(sessionId: string, requestId: string, targetAgentId: string): void {
+    const turn = this.activeTurns.get(sessionId);
+    if (!turn?.assertDelegate || turn.requestId !== requestId || turn.abortController.signal.aborted
+      || !this.remoteEvidence.binding(sessionId, requestId)) throw new Error('Remote delegation is no longer authorized');
+    turn.assertDelegate(targetAgentId);
+  }
+
+  supportsRemoteTurns(): boolean { return this.turnEvidenceCapable && this.hostManager.isReady(); }
+  async probeRemoteDecisions(): Promise<boolean> {
+    if (!this.hostManager.isReady()) return false;
+    const client = await this.ensureReadyClient();
+    const [health, supported] = await Promise.all([
+      client.callOps(DshOpsAction.Health, undefined, AbortSignal.timeout(3_000)).catch((): null => null),
+      client.supportsWaterfallReceipts().catch(() => false),
+    ]);
+    if (this.wiredClient === client) {
+      this.turnEvidenceCapable = health?.remoteTurnEvidenceVersion === 1;
+      this.receiptCapable = supported;
+    }
+    return this.supportsDualApproval();
+  }
+  supportsDualApproval(): boolean { return this.receiptCapable && this.hostManager.isReady(); }
+  supportsRemoteQuestions(): boolean { return this.supportsDualApproval(); }
+  configureDualApproval(configuration: DualApprovalConfiguration): void {
+    this.dualConfiguration = configuration;
+    this.decisions?.configure(configuration);
+  }
+  registerQuestion(input: QuestionRegistration) { return this.remoteDecisions()?.registerQuestion(input) ?? null; }
+  settleQuestion(id: string, result: { status: Exclude<QuestionStatus, 'pending'>; answers?: QuestionAnswers }) { this.decisions?.settleQuestion(id, result); }
+  getQuestionState(id: string) { return this.decisions?.questions.getState(id) ?? null; }
+  async reconcileQuestionSubmission(id: string) {
+    const decisions = this.remoteDecisions();
+    return decisions?.questions.reconcile(id, requestId => decisions.reconcileReceipt(requestId)) ?? null;
+  }
+  async respondToQuestionConfirmed(id: string, result: PermissionResult, options?: QuestionDecisionOptions) {
+    return this.remoteDecisions()?.submitQuestion(id, result, options) ?? { kind: 'known_not_applied' as const, reason: 'QUESTION_UNAVAILABLE' };
+  }
+  getPermissionState(id: string) { return this.decisions?.approvals.getState(id) ?? null; }
+  getApprovalSubmission(id: string) { return this.decisions?.approvals.getSubmission(id) ?? null; }
+  async reconcileApprovalSubmission(id: string, options?: ApprovalReconcileOptions) { return this.remoteDecisions()?.reconcileApproval(id, options) ?? null; }
+  async respondToPermissionConfirmed(id: string, result: PermissionResult, options?: ApprovalDecisionOptions) {
+    const pending = this.pendingInteractions.get(id);
+    const outcome = await this.remoteDecisions()?.submitApproval(id, result, options);
+    if (outcome?.kind === 'confirmed' && options?.source !== 'mobile' && pending && result.behavior === 'allow' && result.updatedPermissions?.length) {
+      await options?.beforeDispatch?.();
+      await this.applyApprovalPolicy(pending, result, options?.beforeDispatch);
+    }
+    return outcome ?? { kind: 'known_not_applied' as const, reason: 'APPROVAL_STALE' };
+  }
+  expirePermissions(now?: number) { this.decisions?.expire(now); }
+  closeSessionPermissions(id: string, runId: string | null, status?: 'cancelled' | 'expired' | 'superseded') {
+    this.decisions?.approvals.closeSession(id, runId, status);
+    this.decisions?.questions.closeSession(id, runId);
+  }
+  isLocalOnlyInteraction(id: string): boolean { return this.pendingInteractions.get(id)?.localOnly === true; }
+  listPendingPermissions() { return this.decisions?.approvals.listPending() ?? []; }
+
+  restoreSessionObservation(sessionId: string, remoteRunId: string, snapshot: CoworkSessionRecoverySnapshot, beforeApply?: () => void): boolean {
+    const active = this.activeTurns.get(sessionId);
+    if (active) return !!snapshot.runId && active.requestId === snapshot.runId && active.dshSessionId === snapshot.sessionKey;
+    return this.remoteEvidence.observe(sessionId, remoteRunId, snapshot, status => {
+      const local = status === DshRemoteTurnStatus.Succeeded ? 'completed' : status === DshRemoteTurnStatus.Failed ? 'error' : 'idle';
+      this.store.updateSession(sessionId, { status: local });
+      this.emit('sessionStatus', sessionId, local);
+      this.emit('runTermination', sessionId, snapshot.runId!, status);
+    }, () => this.emit(CoworkRuntimeDiagnosticEvent.RunReconciliationRequired, sessionId, snapshot.runId!), beforeApply);
+  }
+
+  querySessionRecovery(sessionId: string, requestId?: string, _writerPid?: number, beforeApply?: () => void) {
+    return this.remoteEvidence.query(sessionId, requestId, this.activeTurns.has(sessionId) ? undefined : beforeApply);
+  }
+
+  cancelSessionConfirmed(sessionId: string, timeoutMs?: number): Promise<boolean> {
+    return this.remoteEvidence.cancel(sessionId, timeoutMs).catch(() => false);
+  }
+
   stopSession(sessionId: string): void {
     const starting = this.startingTurns.get(sessionId);
     if (starting) {
@@ -1736,56 +1898,70 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     await client.cancelSession(turn.dshSessionId);
   }
 
-  async respondToPermission(requestId: string, result: PermissionResult): Promise<void> {
-    const pending = this.pendingInteractions.get(requestId);
-    if (!pending) return;
-    this.pendingInteractions.delete(requestId);
-
-    if (pending.kind === 'approval') {
-      if (result.behavior === 'allow' && Array.isArray(result.updatedPermissions)) {
-        for (const entry of result.updatedPermissions) {
-          if (!entry || typeof entry !== 'object') continue;
-          const record = entry as Record<string, unknown>;
-          if (record.type === DshApprovalPermissionAction.AllowSession) {
-            const scope = typeof record.scope === 'string' && record.scope.trim()
-              ? record.scope.trim()
-              : typeof pending.request.toolInput?.approvalScopeKey === 'string'
-                ? pending.request.toolInput.approvalScopeKey
-                : '';
-            if (scope) {
-              let set = this.sessionAllowedScopes.get(pending.coworkSessionId);
-              if (!set) {
-                set = new Set<string>();
-                this.sessionAllowedScopes.set(pending.coworkSessionId, set);
-              }
-              set.add(scope);
+  private async applyApprovalPolicy(pending: PendingInteraction, result: PermissionResult, recheck?: () => void | Promise<void>): Promise<void> {
+    if (result.behavior === 'allow' && Array.isArray(result.updatedPermissions)) {
+      for (const entry of result.updatedPermissions) {
+        if (!entry || typeof entry !== 'object') continue;
+        const record = entry as Record<string, unknown>;
+        if (record.type === DshApprovalPermissionAction.AllowSession) {
+          const scope = typeof record.scope === 'string' && record.scope.trim()
+            ? record.scope.trim()
+            : typeof pending.request.toolInput?.approvalScopeKey === 'string'
+              ? pending.request.toolInput.approvalScopeKey
+              : '';
+          if (scope) {
+            let set = this.sessionAllowedScopes.get(pending.coworkSessionId);
+            if (!set) {
+              set = new Set<string>();
+              this.sessionAllowedScopes.set(pending.coworkSessionId, set);
             }
-          } else if (record.type === DshApprovalPermissionAction.SetPermissionPreset) {
-            const preset = parseDshPermissionPreset(record.preset);
-            if (preset) {
-              const explicitSessionId = typeof record.sessionId === 'string' && record.sessionId.trim()
-                ? record.sessionId.trim()
-                : undefined;
-              const targetSessionId = record.global === true
-                ? undefined
-                : (explicitSessionId ?? pending.coworkSessionId);
-              // Await preset persistence & host RPC BEFORE resolving the pending
-              // approval so sibling/parallel tool calls in the same turn observe
-              // the upgraded preset without racing.
-              try {
-                await this.setSessionPermissionPreset(preset, targetSessionId);
-              } catch (error) {
-                console.warn('[DshRuntimeAdapter] Failed to apply permission preset from approval response:', error);
-              }
-              try {
-                await this.onPermissionPresetChanged?.(preset, targetSessionId);
-              } catch (error) {
-                console.warn('[DshRuntimeAdapter] Failed to notify permission preset change:', error);
-              }
+            set.add(scope);
+          }
+        } else if (record.type === DshApprovalPermissionAction.SetPermissionPreset) {
+          const preset = parseDshPermissionPreset(record.preset);
+          if (preset) {
+            const explicitSessionId = typeof record.sessionId === 'string' && record.sessionId.trim()
+              ? record.sessionId.trim()
+              : undefined;
+            if (explicitSessionId && explicitSessionId !== pending.coworkSessionId) throw new Error('Approval target session changed');
+            const targetSessionId = record.global === true
+              ? undefined
+              : (explicitSessionId ?? pending.coworkSessionId);
+            try {
+              await this.setSessionPermissionPreset(preset, targetSessionId);
+            } catch (error) {
+              console.warn('[DshRuntimeAdapter] Failed to apply permission preset from approval response:', error);
+            }
+            try {
+              await recheck?.();
+              await this.onPermissionPresetChanged?.(preset, targetSessionId);
+            } catch (error) {
+              console.warn('[DshRuntimeAdapter] Failed to notify permission preset change:', error);
             }
           }
         }
       }
+    }
+  }
+
+  async respondToPermission(requestId: string, result: PermissionResult): Promise<void> {
+    if (this.getQuestionState(requestId)) {
+      const outcome = await this.respondToQuestionConfirmed(requestId, result);
+      if (outcome.kind !== 'confirmed') throw new Error(outcome.reason ?? 'Question outcome is unconfirmed.');
+      return;
+    }
+    if (this.getPermissionState(requestId)) {
+      const outcome = await this.respondToPermissionConfirmed(requestId, result);
+      if (outcome.kind !== 'confirmed') throw new Error(outcome.reason ?? 'Approval outcome is unconfirmed.');
+      return;
+    }
+    const pending = this.pendingInteractions.get(requestId);
+    if (!pending) return;
+    if (!pending.localOnly) throw new Error('Could not verify the original decision record.');
+    this.pendingInteractions.delete(requestId);
+
+    if (pending.kind === 'approval') {
+      await this.applyApprovalPolicy(pending, result);
       const outcomeValue = result.behavior === 'allow' ? 'allowed-once' : 'rejected';
       pending.resolve({ kind: 'result', value: outcomeValue });
     } else if (result.behavior !== 'allow') {
@@ -1824,6 +2000,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 
   onSessionDeleted(sessionId: string): void {
+    this.remoteEvidence.stopObservation(sessionId);
     this.stopSession(sessionId);
     this.lastCancelledTurnBySession.delete(sessionId);
     this.sessionAllowedScopes.delete(sessionId);
@@ -1886,6 +2063,17 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     for (const unwire of this.unwireClientHandlers) unwire();
     this.unwireClientHandlers = [];
     this.wiredClient = client;
+    this.turnEvidenceCapable = false;
+    this.receiptCapable = false;
+    this.emit(CoworkRuntimeLifecycleEvent.GatewayReady);
+    if (typeof client.supportsWaterfallReceipts === 'function') {
+      void client.supportsWaterfallReceipts().then(supported => {
+        if (this.wiredClient !== client) return;
+        this.receiptCapable = supported;
+        this.decisions?.configure(this.dualConfiguration);
+        this.emit(CoworkRuntimeLifecycleEvent.GatewayReady);
+      }).catch((): void => undefined);
+    }
 
     this.unwireClientHandlers.push(
       client.onWaterfall('approval/request', (evt) => this.handleHostWaterfall('approval', evt)),
@@ -1945,11 +2133,12 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       ? String(evt.request.toolName ?? 'tool')
       : ASK_USER_QUESTION_TOOL_NAME;
     const callId = typeof evt.request.callId === 'string' ? evt.request.callId : null;
+    const nativeApproval = kind === 'approval' && callId ? this.hostManager.consumeApprovalCallContext?.(callId) : undefined;
     const toolInput = kind === 'approval'
       ? this.enrichApprovalToolInput(
           toolName,
           evt.request,
-          callId,
+          nativeApproval,
           coworkSessionId,
         )
       : evt.request;
@@ -1962,6 +2151,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
     return new Promise<DshWaterfallOutcome>((resolve) => {
       const pending: PendingInteraction = {
+        localOnly: false,
         requestId,
         coworkSessionId,
         dshSessionId: evt.agentId,
@@ -1970,8 +2160,24 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         resolve,
       };
       this.pendingInteractions.set(requestId, pending);
+      const turn = this.activeTurns.get(coworkSessionId);
+      const register = (): boolean => this.remoteDecisions()?.register({
+        request: permissionRequest, event: evt, sessionId: coworkSessionId, nativeApproval,
+        resolve: outcome => {
+          if (!this.pendingInteractions.delete(requestId)) return;
+          pending.resolve(outcome);
+          this.emit('permissionResolved', coworkSessionId, requestId);
+        },
+      }, kind, turn?.requestId) ?? false;
+      const offer = (owned: boolean) => {
+        if (evt.signal.aborted || this.pendingInteractions.get(requestId) !== pending) return;
+        try { pending.localOnly = !(owned && register()); }
+        catch (error) { console.warn('[DSH] Could not register remote interaction', error); }
+        this.emit('permissionRequest', coworkSessionId, permissionRequest);
+      };
 
       const onAbort = () => {
+        this.decisions?.forget(requestId);
         if (this.pendingInteractions.delete(requestId)) {
           resolve(cancelledInteraction(kind));
           this.emit('permissionResolved', coworkSessionId, requestId);
@@ -1979,17 +2185,22 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       };
       evt.signal.addEventListener('abort', onAbort, { once: true });
 
-      this.emit('permissionRequest', coworkSessionId, permissionRequest);
+      if (!this.supportsDualApproval() || !this.dualConfiguration.enabled || !turn?.requestId) { offer(false); return; }
+      const child = evt.agentId !== turn.dshSessionId ? this.subagentSessions?.getRemoteBinding?.(evt.agentId) : undefined;
+      if (evt.agentId !== turn.dshSessionId && (child?.remoteRequestId !== turn.requestId || child.rootCoworkSessionId !== coworkSessionId)) {
+        offer(false); return;
+      }
+      void this.remoteEvidence.ownsInteraction(coworkSessionId, turn.requestId, evt.agentId, kind === 'user-questions' ? 'ask_user_question' : toolName, callId)
+        .then(owned => offer(owned && this.activeTurns.get(coworkSessionId) === turn), () => offer(false));
     });
   }
 
   private enrichApprovalToolInput(
     toolName: string,
     rawRequest: Record<string, unknown>,
-    callId: string | null,
+    cached: DshApprovalCallContext | null | undefined,
     coworkSessionId: string,
   ): Record<string, unknown> {
-    const cached = callId ? this.hostManager.consumeApprovalCallContext?.(callId) ?? null : null;
     const rawArgs = cached?.args ?? {};
     const rawReason = typeof rawRequest.reason === 'string' ? rawRequest.reason.trim() : '';
 
@@ -2091,6 +2302,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     prompt: string,
     params: {
       isContinue: boolean;
+      remoteTurn?: CoworkStartOptions['remoteTurn'];
+      localTurnEvidence?: CoworkStartOptions['localTurnEvidence'];
       retryContext?: Record<string, unknown>;
       requestId?: string;
       onAccepted?: () => void;
@@ -2112,12 +2325,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       workspaceRoot?: string;
     },
   ): Promise<void> {
+    if (params.remoteTurn && (!params.requestId || isGoalCommandPrompt(prompt))) {
+      throw new Error('This command cannot be admitted as a remote prompt.');
+    }
     this.messageEditing?.assertCanSend(sessionId, params.requestId);
     const requestId = params.requestId || randomUUID();
     const session = this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Cowork session "${sessionId}" not found`);
     }
+    assertAgentSettingsLocalWriteAllowed(session.agentId || 'main');
 
     const abortController = new AbortController();
     const previous = this.startingTurns.get(sessionId);
@@ -2373,6 +2590,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         coworkSessionId: sessionId,
         traceId: llmTrace.traceId,
         workspaceDir: params.workspaceRoot || session.cwd,
+        remoteAllowedAgentIds: params.remoteTurn?.allowedAgentIds ?? null,
+        remoteRequestId: params.remoteTurn ? requestId : null,
         userQuestionsDisabled: session.userQuestionsDisabled,
         allowedSkillIds,
         customSystemPrompt: boundCustomSystemPrompt,
@@ -2435,6 +2654,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
         if (!startsGoalTurn) {
           clearStartingAbort();
+          assertAgentSettingsLocalWriteAllowed(agentId);
           const execution = await client.executeCommand({
             agentId: dshSessionId,
             line: translated.line,
@@ -2488,6 +2708,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const streamTask = this.consumeFollowStream(turn, followStream);
 
         try {
+          assertAgentSettingsLocalWriteAllowed(agentId);
           const execution = await client.executeCommand({
             agentId: dshSessionId,
             line: translated.line,
@@ -2571,6 +2792,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       ].filter(Boolean).join('\n\n');
       const contentParts = buildPromptContentParts(prompt, turnPrefix, preparedBrowser.imageAttachments);
       const streamTask = this.consumeFollowStream(turn, followStream);
+      turn.assertDelegate = params.remoteTurn?.assertDelegate;
+      const submissionEvidence = params.remoteTurn ?? params.localTurnEvidence;
 
       const clientTimeZone = resolveLocalTimeZone();
       try {
@@ -2580,7 +2803,15 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           content: contentParts,
           mode: 'queue',
           ...(clientTimeZone ? { clientTimeZone } : {}),
-        }, () => this.ensureReadyClient(abortController.signal), abortController.signal, params.checkAccount);
+        }, () => this.ensureReadyClient(abortController.signal), abortController.signal, params.checkAccount, () => {
+          assertAgentSettingsLocalWriteAllowed(agentId);
+          submissionEvidence?.beforeDispatch(dshSessionId, requestId);
+        }, submissionEvidence && this.supportsRemoteTurns() ? async owner => {
+          const proof = await owner.callOps(DshOpsAction.InspectRemoteTurn,
+            { sessionId: dshSessionId, requestId }, abortController.signal);
+          if (typeof proof.accepted !== 'boolean') throw new DshAdmissionUnconfirmedError('Missing session-local admission proof');
+          return proof.accepted;
+        } : undefined);
         const admission = await turn.admission;
         if (abortController.signal.aborted) return;
         turn.admission = undefined;
@@ -2592,12 +2823,19 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           this.emit('sessionStopped', sessionId, { runIds: [], startedAt: turn.startedAt });
           return;
         }
+        if (submissionEvidence && admission.accepted === true) {
+          submissionEvidence.onAccepted(dshSessionId, requestId);
+          this.emit(CoworkRuntimeDiagnosticEvent.ExecutionAccepted, sessionId, requestId);
+        }
         if (params.onAccepted && admission.accepted !== true) throw new Error('The DSH host did not accept the replacement message.');
         params.onAccepted?.();
       } catch (error) {
         if (abortController.signal.aborted) return;
         abortController.abort(error);
         this.activeTurns.delete(sessionId);
+        if (submissionEvidence && this.remoteEvidence.binding(sessionId, requestId)) {
+          this.emit(CoworkRuntimeDiagnosticEvent.RunReconciliationRequired, sessionId, requestId);
+        }
         if (error instanceof DshAdmissionUnconfirmedError
           && this.setDeliveryOutcome(sessionId, turn.userMessageId, DshDeliveryOutcome.Unconfirmed)) {
           console.warn('[DSH] Prompt admission could not be verified:', error);
@@ -2614,6 +2852,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       await streamTask;
+      if (submissionEvidence) {
+        const evidence = await this.remoteEvidence.query(sessionId, requestId).catch((): null => null);
+        if (evidence?.status === DshRemoteTurnStatus.Succeeded || evidence?.status === DshRemoteTurnStatus.Failed
+          || evidence?.status === DshRemoteTurnStatus.Cancelled) {
+          this.emit('runTermination', sessionId, requestId, evidence.status);
+        } else this.emit(CoworkRuntimeDiagnosticEvent.RunReconciliationRequired, sessionId, requestId);
+      }
     } catch (error) {
       if (this.startingTurns.get(sessionId) === starting && (waitingForOwner || isDshTransportError(error))
         && this.setDeliveryOutcome(sessionId, starting.messageId, DshDeliveryOutcome.Unsent)) {
@@ -2670,6 +2915,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       toolCallMessageIds: new Map(),
       subagentIdsByName: new Map(),
       subagentTasksByCall: new Map(),
+      privateSettingsCalls: new Set(),
       pendingSubagentResults: new Set(),
       currentDshTurnNumber: null,
       cancelledDshTurnNumber: params.cancelledDshTurnNumber,
@@ -2913,7 +3159,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       const ev = (frame.type === 'event' ? frame.event : frame) as Record<string, unknown> | undefined;
       if (!ev || typeof ev !== 'object') return false;
       const evType = typeof ev.type === 'string' ? ev.type : '';
-      const data = (ev.data as Record<string, unknown> | undefined) ?? {};
+      const data = publicDshEventData(evType, ev.data, turn.privateSettingsCalls);
       const eventTurnNumber = typeof data.turn === 'number' ? data.turn : null;
 
       if (evType === 'goal/change') {

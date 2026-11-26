@@ -52,6 +52,9 @@ export function registerModelContextWindowIpc(dependencies: {
   getStore: () => SqliteStore;
   getSessions: () => CoworkStore;
   getRuntime: () => CoworkRuntime;
+  assertSessionAccess: (sessionId: string) => void;
+  patchSession: CoworkRuntime['patchSession'];
+  isAccountCurrent: () => () => boolean;
   ownerKey: () => string | null;
   resolveSessionModel?: (session: CoworkSession) => string;
   ensureModelsReady: () => Promise<unknown>;
@@ -71,6 +74,7 @@ export function registerModelContextWindowIpc(dependencies: {
       || (request.sessionId !== undefined && typeof request.sessionId !== 'string')) {
       throw new Error(t('modelContextWindowUnavailable'));
     }
+    if (request.sessionId) dependencies.assertSessionAccess(request.sessionId);
     const session = request.sessionId ? getSessions().getSession(request.sessionId) : null;
     if (request.sessionId && (!session || !isManualContextWindowSession(session))) throw new Error(t('modelContextWindowUnavailable'));
     const sameModel = session && contextWindowPreferenceModelKey(modelIdForSession(session), session.modelPresetId ?? undefined)
@@ -92,6 +96,7 @@ export function registerModelContextWindowIpc(dependencies: {
     };
   };
   const restoreForSession = (sessionId: string) => {
+    dependencies.assertSessionAccess(sessionId);
     const session = getSessions().getSession(sessionId);
     if (!session || !isManualContextWindowSession(session)) return;
     const modelId = modelIdForSession(session);
@@ -105,10 +110,11 @@ export function registerModelContextWindowIpc(dependencies: {
   };
   dependencies.ipcMain.handle(ModelContextWindowIpc.Get, (_event, input: unknown) => result(async () => get(input)));
   dependencies.ipcMain.handle(ModelContextWindowIpc.Set, (_event, input: unknown, tokens: unknown) => result(async () => {
+    const isCurrent = dependencies.isAccountCurrent();
     const owner = ownerKey();
     if (!owner) throw new Error(t('modelPresetLoginRequired'));
     await dependencies.ensureModelsReady();
-    if (owner !== ownerKey()) throw new Error(t('authAccountChanged'));
+    if (!isCurrent() || owner !== ownerKey()) throw new Error(t('authAccountChanged'));
     const { request, presetId, session, model } = resolveRequest(input);
     if (request.sessionId && !session) throw new Error(t('modelContextWindowUnavailable'));
     if (tokens !== null && (typeof tokens !== 'number' || !selectableContextWindows(model, presetId).includes(tokens))) {
@@ -116,12 +122,11 @@ export function registerModelContextWindowIpc(dependencies: {
     }
     if (session) {
       if (session.status === CoworkSessionStatusValue.Running || getRuntime().isSessionActive(session.id)) throw new Error(t('modelPresetSessionBusy'));
-      const runtime = getRuntime();
-      if (!runtime.patchSession) throw new Error(t('modelContextWindowUnavailable'));
-      await runtime.patchSession(session.id, {
+      await dependencies.patchSession(session.id, {
         contextWindow: tokens === null ? presetContextWindowSelection(model, presetId) : userContextWindowSelection(tokens as number, presetId),
       });
-      if (owner !== ownerKey()) throw new Error(t('authAccountChanged'));
+      if (!isCurrent() || owner !== ownerKey()) throw new Error(t('authAccountChanged'));
+      dependencies.assertSessionAccess(session.id);
       const latest = getSessions().getSession(session.id);
       if (latest?.modelOverride !== session.modelOverride || latest.modelPresetId !== session.modelPresetId) throw new Error(t('modelContextWindowUnavailable'));
       getSessions().updateSession(session.id, { contextWindowOverride: tokens as number | null, contextWindowOwnerKey: tokens ? owner : null }, { touchUpdatedAt: false });

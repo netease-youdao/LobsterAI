@@ -1,6 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 
 import enterpriseAccountReducer from '../features/enterpriseAccount/enterpriseAccountSlice';
+import { accountSessionBoundary } from './accountSessionBoundary';
 import { libraryArtifactListener } from './libraryArtifactListener';
 import agentReducer from './slices/agentSlice';
 import artifactReducer from './slices/artifactSlice';
@@ -34,7 +35,7 @@ export const store = configureStore({
     kit: kitReducer,
   },
   middleware: getDefaultMiddleware => (
-    getDefaultMiddleware().prepend(libraryArtifactListener.middleware)
+    getDefaultMiddleware().prepend(accountSessionBoundary, libraryArtifactListener.middleware)
   ),
 });
 

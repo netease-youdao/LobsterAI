@@ -1,5 +1,6 @@
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type { UsageContext } from '../../../shared/analytics/usage';
+import type { ApprovalDecisionOptions, ApprovalDecisionOutcome, ApprovalReconcileOptions, ApprovalState, DualApprovalConfiguration } from '../../../shared/cowork/approval';
 import type { CoworkBrowserAnnotationMessageBatch } from '../../../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortResponse,
@@ -16,8 +17,10 @@ import type {
   ResolvedKitCapabilities,
 } from '../../../shared/kit/constants';
 import type { MediaSelection } from '../../../shared/media/defaultPolicy';
+import type { LocalQuestionState, QuestionAnswers, QuestionDecisionOptions, QuestionDecisionOutcome, QuestionStatus } from '../../../shared/remote/questions';
 import type { SkinWorkflowKind } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
+import type { QuestionRegistration } from '../../remote/remoteQuestionService';
 
 export type CoworkAgentEngine = 'dsh';
 
@@ -42,7 +45,12 @@ export interface PermissionRequest {
   toolName: string;
   toolInput: Record<string, unknown>;
   toolUseId?: string | null;
+  approval?: ApprovalState;
 }
+
+export const CoworkRuntimeDiagnosticEvent = { ExecutionAccepted: 'executionAccepted', RunReconciliationRequired: 'runReconciliationRequired' } as const;
+
+export const CoworkRuntimeLifecycleEvent = { GatewayReady: 'gatewayReady' } as const;
 
 /** Captured before stop clears the active turn and its gateway run ids. */
 export type CoworkStoppedTurn = {
@@ -53,6 +61,9 @@ export type CoworkStoppedTurn = {
 };
 
 export interface CoworkRuntimeEvents {
+  [CoworkRuntimeLifecycleEvent.GatewayReady]: () => void;
+  [CoworkRuntimeDiagnosticEvent.RunReconciliationRequired]: (sessionId: string, nativeRequestId: string) => void;
+  [CoworkRuntimeDiagnosticEvent.ExecutionAccepted]: (sessionId: string, gatewayRunId: string) => void;
   message: (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => void;
   sessionStatus: (sessionId: string, status: CoworkSessionStatus) => void;
@@ -62,6 +73,8 @@ export interface CoworkRuntimeEvents {
   contextMaintenance: (sessionId: string, active: boolean) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
   permissionResolved: (sessionId: string, requestId: string) => void;
+  permissionState: (sessionId: string, state: ApprovalState) => void;
+  runTermination: (sessionId: string, requestId: string, status: 'succeeded' | 'failed' | 'cancelled') => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
   sessionStopped: (sessionId: string, turn?: CoworkStoppedTurn) => void;
@@ -117,7 +130,17 @@ export type CoworkMediaAttachmentRef = {
 
 export type CoworkMediaSelection = MediaSelection;
 
+/** Internal DSH dispatch hooks installed only by the desktop command service. */
+export interface CoworkRemoteTurnOptions {
+  readonly beforeDispatch: (nativeSessionId: string, requestId: string) => void;
+  readonly onAccepted: (nativeSessionId: string, requestId: string) => void;
+  readonly assertDelegate: (targetAgentId: string) => void;
+  readonly allowedAgentIds: readonly string[];
+}
+
 export type CoworkStartOptions = {
+  remoteTurn?: CoworkRemoteTurnOptions;
+  localTurnEvidence?: Pick<CoworkRemoteTurnOptions, 'beforeDispatch' | 'onAccepted'>;
   submissionOwner?: string;
   requestId?: string;
   checkAccount?: () => void;
@@ -145,6 +168,8 @@ export type CoworkStartOptions = {
 };
 
 export type CoworkContinueOptions = {
+  remoteTurn?: CoworkRemoteTurnOptions;
+  localTurnEvidence?: Pick<CoworkRemoteTurnOptions, 'beforeDispatch' | 'onAccepted'>;
   submissionOwner?: string;
   checkAccount?: () => void;
   /** The edit operation and acceptance callback belong to the main process. */
@@ -176,6 +201,17 @@ export interface CoworkSessionPatchResult {
   thinkingLevel?: string;
 }
 
+export interface CoworkSessionRecoverySnapshot {
+  gatewayBootId: string;
+  gatewayProcessPid?: number;
+  previousWriterStopped?: boolean;
+  sessionKey: string;
+  runId?: string;
+  hasActiveRun?: boolean;
+  status: 'unknown' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  configuration?: { modelOverride: string; thinkingLevel: string };
+}
+
 export interface CoworkRuntime {
   on<U extends keyof CoworkRuntimeEvents>(
     event: U,
@@ -202,13 +238,37 @@ export interface CoworkRuntime {
   abortBtw?(sessionId: string, runId: string): Promise<CoworkBtwAbortResponse>;
   submitSteer?(sessionId: string, text: string, clientSteerId: string): Promise<CoworkSteerResponse>;
   runGoalCommand?(sessionId: string, command: string): Promise<CoworkGoal | null>;
+  patchRemoteSession?(sessionId: string, patch: OpenClawSessionPatch, beforeDispatch: () => void): Promise<CoworkSessionPatchResult>;
   patchSession?(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSessionPatchResult | void>;
+  getRecoveryGatewayBootId?(): string;
+  getRecoveryGatewayProcessPid?(): number | undefined;
+  querySessionRecovery?(sessionId: string, gatewayRunId?: string, writerPid?: number, beforeApply?: () => void): Promise<CoworkSessionRecoverySnapshot | null>;
+  restoreSessionObservation?(sessionId: string, remoteRunId: string, snapshot: CoworkSessionRecoverySnapshot, beforeApply?: () => void): boolean;
   getContextUsage?(sessionId: string): Promise<CoworkContextUsage | null>;
   compactContext?(sessionId: string): Promise<{ compacted: boolean; reason?: string; usage?: CoworkContextUsage | null }>;
   getForkCompactionSummary?(sessionId: string, beforeCreatedAt?: number): Promise<CoworkForkCompactionSummary | null>;
   stopSession(sessionId: string): void;
+  cancelSessionConfirmed?(sessionId: string, timeoutMs?: number): Promise<boolean>;
+  respondToPermissionConfirmed?(requestId: string, result: PermissionResult, options?: ApprovalDecisionOptions): Promise<ApprovalDecisionOutcome>;
+  getPermissionState?(requestId: string): ApprovalState | null;
+  isLocalOnlyInteraction?(id: string): boolean;
+  listPendingPermissions?(): Array<{ sessionId: string; request: PermissionRequest }>;
+  getApprovalSubmission?(submissionId: string): ApprovalDecisionOutcome | null;
+  reconcileApprovalSubmission?(submissionId: string, options?: ApprovalReconcileOptions): Promise<ApprovalDecisionOutcome | null>;
+  configureDualApproval?(configuration: DualApprovalConfiguration): void;
+  supportsDualApproval?(): boolean;
+  supportsRemoteTurns?(): boolean;
+  supportsRemoteQuestions?(): boolean;
+  probeRemoteDecisions?(): Promise<boolean>;
+  expirePermissions?(now?: number): void;
+  closeSessionPermissions?(sessionId: string, runId: string | null, status?: 'cancelled' | 'expired' | 'superseded'): void;
   stopAllSessions(): void;
   respondToPermission(requestId: string, result: PermissionResult): void | Promise<void>;
+  registerQuestion?(input: QuestionRegistration): LocalQuestionState | null;
+  settleQuestion?(requestId: string, result: { status: Exclude<QuestionStatus, 'pending'>; answers?: QuestionAnswers }): void;
+  getQuestionState?(requestId: string): LocalQuestionState | null;
+  respondToQuestionConfirmed?(requestId: string, result: PermissionResult, options?: QuestionDecisionOptions): Promise<QuestionDecisionOutcome>;
+  reconcileQuestionSubmission?(submissionId: string): Promise<QuestionDecisionOutcome | null>;
   getPendingQuestions?(): Array<PermissionRequest & { sessionId: string }>;
   isSessionActive(sessionId: string): boolean;
   /** OpenClaw run ids of the session's current turn; empty when no turn is active. */

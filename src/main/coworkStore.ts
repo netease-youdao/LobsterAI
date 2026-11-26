@@ -15,6 +15,7 @@ import {
   normalizeSubagentCollaborationMode,
   SubagentCollaborationMode,
 } from '../shared/agent';
+import { AgentAccessErrorCode } from '../shared/agent/constants';
 import { usesManagedPresetAvatar } from '../shared/agent/presetAvatar';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
@@ -40,6 +41,7 @@ import {
   getCoworkTurnUsage,
   isValidLlmTraceId,
 } from '../shared/cowork/llmTurnUsage';
+import { mergeCoworkMessageMetadata } from '../shared/cowork/messageMetadata';
 import type { CoworkModelChange } from '../shared/cowork/modelChange';
 import { OpenClawCronRunMetadataKey } from '../shared/cowork/openclawCronSessionKey';
 import {
@@ -72,7 +74,7 @@ import type {
   KitReference,
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
-import { type ModelPresetId, parseModelPresetId } from '../shared/modelPresets/constants';
+import { type ModelPresetId, parseModelPresetId, parseModelPresetModelId } from '../shared/modelPresets/constants';
 import {
   type Platform,
   PlatformRegistry,
@@ -81,6 +83,10 @@ import {
   type ModelThinkingLevel,
   parseModelThinkingLevel,
 } from '../shared/providers/modelThinking';
+import type { RemoteOwner } from '../shared/remote/constants';
+import { RemoteTelemetryEvent } from '../shared/remote/telemetry';
+import { AgentAccessError, AgentOwnerStore, sessionVisibilitySql } from './agentOwnership';
+import { t } from './i18n';
 import {
   buildCoworkContinuityCapsule,
   ContinuityCapsuleSource,
@@ -97,6 +103,12 @@ import {
   SessionProjectionNotifications,
 } from './libs/sessionProjectionNotifications';
 import { parseStoredMessageMetadata } from './libs/storedMessageMetadata';
+import { ownershipOperationGate } from './ownershipOperationGate';
+import { sameOwner } from './remote/canonical';
+import { recordRemoteSessionDeletion } from './remote/remoteLocalGc';
+import { RemoteStore } from './remote/remoteStore';
+import { remoteDiagnosticLog } from './remote/remoteSyncLog';
+import { captureRemoteTelemetry } from './remote/remoteTelemetry';
 
 
 /**
@@ -912,6 +924,11 @@ export interface CoworkSessionContentSearchResult {
 const COWORK_SESSION_CONTENT_SEARCH_LIMIT = 50;
 
 export interface CreateCoworkSessionOptions {
+  /** Only explicit authenticated creation/bound automation may provide an owner. */
+  owner?: RemoteOwner | null;
+  ownershipSource?: string;
+  publicationSourceId?: string;
+  id?: string;
   scheduledTaskId?: string | null;
   thinkingLevel?: ModelThinkingLevel | '';
   permissionPreset?: DshPermissionPreset | null;
@@ -919,16 +936,25 @@ export interface CreateCoworkSessionOptions {
 
 export class CoworkStore {
   private db: Database.Database;
+  readonly remote: RemoteStore;
+  readonly agentOwnership: AgentOwnerStore;
+  remoteCreationOwner: () => RemoteOwner | null = () => null;
   readonly messageEdits: CoworkMessageEditStore;
   readonly messageVersions: CoworkMessageVersionStore;
   private readonly sessionProjectionNotifications: SessionProjectionNotifications;
   private readonly knownIMPlatforms = new Set<string>(PlatformRegistry.platforms);
   private coworkSessionColumnsCache: Set<string> | null = null;
 
-  constructor(db: Database.Database) {
+  constructor(db: Database.Database, options: { deferRemoteSynchronization?: boolean } = {}) {
     this.db = db;
+    this.remote = new RemoteStore(db, { deferredProjection: true, deferSynchronization: true });
+    this.agentOwnership = new AgentOwnerStore(db);
+    if (!options.deferRemoteSynchronization) {
+      try { this.remote.initializeSynchronization(); }
+      catch (error) { console.warn('[CoworkStore] Optional remote synchronization unavailable', error); }
+    }
     this.sessionProjectionNotifications = new SessionProjectionNotifications({
-      runTransaction: operation => this.db.transaction(operation)(),
+      runTransaction: operation => this.remote.transaction(operation),
       isInTransaction: () => this.db.inTransaction,
       readProjection: sessionId => this.getOne<SessionProjection>(
         `SELECT title, agent_id AS agentId,
@@ -1106,7 +1132,7 @@ export class CoworkStore {
     modelOverride: string = '',
     options: CreateCoworkSessionOptions = {},
   ): CoworkSession {
-    const id = uuidv4();
+    const id = options.id || uuidv4();
     const now = Date.now();
     const scheduledTaskId = options.scheduledTaskId?.trim() || null;
     const thinkingLevel = options.thinkingLevel ?? '';
@@ -1135,6 +1161,7 @@ export class CoworkStore {
           now,
           now,
         );
+      this.remote.assignNew(id, options.owner ?? null, options.ownershipSource || 'local_create', undefined, options.publicationSourceId);
     });
 
     return {
@@ -1168,6 +1195,32 @@ export class CoworkStore {
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  /** Only the creator may retain a failed admission before any input or run exists. */
+  recordLocalStartFailure(
+    sessionId: string,
+    owner: RemoteOwner | null,
+    input: { content: string; metadata?: CoworkMessageMetadata; timestamp: number },
+    assertCurrent: () => void,
+  ): CoworkSession | null {
+    return this.runSessionTransaction(() => {
+      assertCurrent();
+      const session = this.getSession(sessionId, 0);
+      if (!session || session.status !== 'idle' || session.claudeSessionId
+        || this.countSessionMessages(sessionId) > 0 || this.remote.run(sessionId)
+        || this.remote.messageRunBinding(sessionId)) return null;
+      this.remote.assertActor(sessionId, owner);
+      const actualOwner = this.remote.owner(sessionId);
+      if (owner === null ? actualOwner !== null : !sameOwner(owner, actualOwner)) {
+        throw new Error('Session owner changed');
+      }
+      this.remote.assertNoDeletionEffect(sessionId);
+      this.addMessage(sessionId, { type: 'user', content: input.content, metadata: input.metadata }, input.timestamp);
+      this.addMessage(sessionId, { type: 'system', content: t('coworkSessionAdmissionFailed') });
+      this.updateSession(sessionId, { status: 'error' });
+      return this.getSession(sessionId);
+    });
   }
 
   /** Existence check for polling loops; getSession also loads a page of messages. */
@@ -1463,6 +1516,7 @@ export class CoworkStore {
     );
 
     this.writeSessionProjections([id], () => {
+      this.remote.inheritNew(id, options.sourceSessionId);
       insertSession.run(
         id,
         title,
@@ -1870,6 +1924,7 @@ export class CoworkStore {
   private deleteSessionRows(ids: string[]): string[] {
     if (ids.length === 0) return [];
     this.sessionProjectionNotifications.capture(ids);
+    for (const id of ids) recordRemoteSessionDeletion(this.remote, id);
     const placeholders = ids.map(() => '?').join(',');
     const affectedArtifactRows = this.getAll<{ artifact_id: string }>(
       `SELECT DISTINCT artifact_id
@@ -1929,6 +1984,7 @@ export class CoworkStore {
   }
 
   setSessionPinned(id: string, pinned: boolean): number | null {
+    return this.remote.transaction(() => {
     if (!pinned) {
       this.db.prepare('UPDATE cowork_sessions SET pinned = 0, pin_order = NULL WHERE id = ?').run(id);
       return null;
@@ -1957,16 +2013,17 @@ export class CoworkStore {
       .prepare('UPDATE cowork_sessions SET pinned = 1, pin_order = ? WHERE id = ?')
       .run(pinOrder, id);
     return pinOrder;
+    });
   }
 
-  reorderPinnedSessions(sessionIds: string[]): CoworkSessionSummary[] {
+  reorderPinnedSessions(sessionIds: string[], actor = this.remoteCreationOwner()): CoworkSessionSummary[] {
     const normalizedIds = Array.from(
       new Set(sessionIds.map((id) => id.trim()).filter(Boolean)),
     );
     const existingPinned = this.listFilteredSessions({
       pinnedOnly: true,
       limit: COWORK_SESSION_FILTER_MAX_LIMIT,
-    });
+    }, actor);
     if (normalizedIds.length === 0 || existingPinned.length === 0) {
       return existingPinned;
     }
@@ -1994,150 +2051,70 @@ export class CoworkStore {
     const updatePinOrder = this.db.prepare(
       'UPDATE cowork_sessions SET pin_order = ? WHERE id = ? AND pinned = 1',
     );
-    const reorder = this.db.transaction((ids: string[]) => {
-      ids.forEach((id, index) => {
+    this.runSessionTransaction(() => {
+      finalIds.forEach((id, index) => {
         updatePinOrder.run(baseOrder - index, id);
       });
     });
-    reorder(finalIds);
 
     return this.listFilteredSessions({
       pinnedOnly: true,
       limit: COWORK_SESSION_FILTER_MAX_LIMIT,
-    });
+    }, actor);
   }
 
-  countSessions(agentId?: string): number {
+  private sessionListFilter(agentId: string | undefined, actor: RemoteOwner | null | undefined, query?: string): {
+    sql: string; parameters: string[];
+  } {
+    const access = sessionVisibilitySql(actor);
+    const clauses = [access.sql, VISIBLE_COWORK_SESSION_SQL];
+    const parameters = [...access.parameters];
     if (agentId) {
-      const row = this.db
-        .prepare(`SELECT COUNT(*) as count FROM cowork_sessions s WHERE COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ? AND ${VISIBLE_COWORK_SESSION_SQL}`)
-        .get(agentId) as { count: number } | undefined;
-      return row?.count || 0;
+      clauses.push("COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?");
+      parameters.push(agentId);
     }
-    const row = this.db.prepare(`SELECT COUNT(*) as count FROM cowork_sessions s WHERE ${VISIBLE_COWORK_SESSION_SQL}`).get() as
-      | { count: number }
-      | undefined;
-    return row?.count || 0;
+    if (query) {
+      clauses.push("s.title LIKE ? ESCAPE '\\'");
+      parameters.push(`%${this.escapeLikePattern(query)}%`);
+    }
+    return { sql: clauses.join(' AND '), parameters };
   }
 
-  listSessions(
-    limit = COWORK_SESSION_PAGE_SIZE,
-    offset = 0,
-    agentId?: string,
-    options?: { pinnedFirst?: boolean },
-  ): CoworkSessionSummary[] {
-    let rows: CoworkSessionSummaryRow[];
-    const summaryColumns = this.getSessionSummaryColumns();
-    const pinnedFirst = options?.pinnedFirst ?? true;
-    const orderByClause = pinnedFirst
-      ? `ORDER BY s.pinned DESC,
-          CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
-          CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
-          s.updated_at DESC`
-      : 'ORDER BY s.updated_at DESC, s.created_at DESC';
-    if (agentId) {
-      rows = this.getAll<CoworkSessionSummaryRow>(
-        `
-        SELECT ${summaryColumns}
-        FROM cowork_sessions s
-        WHERE COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
-          AND ${VISIBLE_COWORK_SESSION_SQL}
-        ${orderByClause}
-        LIMIT ? OFFSET ?
-      `,
-        [agentId, limit, offset],
-      );
-    } else {
-      rows = this.getAll<CoworkSessionSummaryRow>(
-        `
-        SELECT ${summaryColumns}
-        FROM cowork_sessions s
-        WHERE ${VISIBLE_COWORK_SESSION_SQL}
-        ${orderByClause}
-        LIMIT ? OFFSET ?
-      `,
-        [limit, offset],
-      );
-    }
-
-    return rows.map(row => this.mapSessionSummaryRow(row));
+  canReadSession(sessionId: string, actor: RemoteOwner | null): boolean {
+    const filter = sessionVisibilitySql(actor);
+    return Boolean(this.db.prepare(`SELECT 1 FROM cowork_sessions s WHERE s.id=? AND (${filter.sql})`)
+      .get(sessionId, ...filter.parameters));
   }
 
-  countSearchSessions(options: CoworkSessionSearchOptions): number {
-    const query = options.query.trim();
-    if (!query) return this.countSessions(options.agentId);
-
-    const pattern = `%${this.escapeLikePattern(query)}%`;
-    if (options.agentId) {
-      const row = this.db
-        .prepare(
-          `
-          SELECT COUNT(*) as count
-          FROM cowork_sessions s
-          WHERE s.title LIKE ? ESCAPE '\\'
-          AND ${VISIBLE_COWORK_SESSION_SQL}
-            AND COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
-        `,
-        )
-        .get(pattern, options.agentId) as { count: number } | undefined;
-      return row?.count || 0;
-    }
-
-    const row = this.db
-      .prepare(
-        `
-        SELECT COUNT(*) as count
-        FROM cowork_sessions s
-        WHERE s.title LIKE ? ESCAPE '\\'
-          AND ${VISIBLE_COWORK_SESSION_SQL}
-      `,
-      )
-      .get(pattern) as { count: number } | undefined;
-    return row?.count || 0;
+  countSessions(agentId?: string, actor?: RemoteOwner | null): number {
+    const filter = this.sessionListFilter(agentId, actor);
+    return (this.db.prepare(`SELECT COUNT(*) AS count FROM cowork_sessions s WHERE ${filter.sql}`)
+      .get(...filter.parameters) as { count: number }).count;
   }
 
-  searchSessions(options: CoworkSessionSearchOptions): CoworkSessionSummary[] {
-    const query = options.query.trim();
-    const limit = options.limit ?? COWORK_SESSION_PAGE_SIZE;
-    const offset = options.offset ?? 0;
-    if (!query) return this.listSessions(limit, offset, options.agentId);
+  listSessions(limit = COWORK_SESSION_PAGE_SIZE, offset = 0, agentId?: string, ownerOrOptions?: RemoteOwner | { pinnedFirst?: boolean } | null, actor?: RemoteOwner | null): CoworkSessionSummary[] {
+    const options = ownerOrOptions && !('userId' in ownerOrOptions) ? ownerOrOptions : undefined;
+    const owner = ownerOrOptions === null ? null : ownerOrOptions && 'userId' in ownerOrOptions ? ownerOrOptions : actor;
+    return this.searchSessions({ query: '', limit, offset, agentId }, owner, options?.pinnedFirst);
+  }
 
-    const pattern = `%${this.escapeLikePattern(query)}%`;
-    let rows: CoworkSessionSummaryRow[];
-    const summaryColumns = this.getSessionSummaryColumns();
-    if (options.agentId) {
-      rows = this.getAll<CoworkSessionSummaryRow>(
-        `
-        SELECT ${summaryColumns}
-        FROM cowork_sessions s
-        WHERE s.title LIKE ? ESCAPE '\\'
-          AND ${VISIBLE_COWORK_SESSION_SQL}
-          AND COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?
-        ORDER BY s.pinned DESC,
-          CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
-          CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
-          s.updated_at DESC
-        LIMIT ? OFFSET ?
-      `,
-        [pattern, options.agentId, limit, offset],
-      );
-    } else {
-      rows = this.getAll<CoworkSessionSummaryRow>(
-        `
-        SELECT ${summaryColumns}
-        FROM cowork_sessions s
-        WHERE s.title LIKE ? ESCAPE '\\'
-          AND ${VISIBLE_COWORK_SESSION_SQL}
-        ORDER BY s.pinned DESC,
-          CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
-          CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
-          s.updated_at DESC
-        LIMIT ? OFFSET ?
-      `,
-        [pattern, limit, offset],
-      );
-    }
+  countSearchSessions(options: CoworkSessionSearchOptions, actor?: RemoteOwner | null): number {
+    const filter = this.sessionListFilter(options.agentId, actor, options.query.trim());
+    return (this.db.prepare(`SELECT COUNT(*) AS count FROM cowork_sessions s WHERE ${filter.sql}`)
+      .get(...filter.parameters) as { count: number }).count;
+  }
 
+  searchSessions(options: CoworkSessionSearchOptions, actor?: RemoteOwner | null, pinnedFirst = true): CoworkSessionSummary[] {
+    const filter = this.sessionListFilter(options.agentId, actor, options.query.trim());
+    const rows = this.getAll<CoworkSessionSummaryRow>(`
+      SELECT ${this.getSessionSummaryColumns()} FROM cowork_sessions s
+      WHERE ${filter.sql}
+      ${pinnedFirst ? `ORDER BY s.pinned DESC,
+        CASE WHEN s.pinned = 1 THEN COALESCE(s.pin_order, s.updated_at, s.created_at) END ASC,
+        CASE WHEN s.pinned = 0 THEN s.updated_at END DESC,
+        s.updated_at DESC` : 'ORDER BY s.updated_at DESC, s.created_at DESC'}
+      LIMIT ? OFFSET ?
+    `, [...filter.parameters, options.limit ?? COWORK_SESSION_PAGE_SIZE, options.offset ?? 0]);
     return rows.map(row => this.mapSessionSummaryRow(row));
   }
 
@@ -2146,14 +2123,12 @@ export class CoworkStore {
    * query. Returns one entry per session, built from its most recent matching
    * message, ordered like the session list.
    */
-  searchSessionContent(options: CoworkSessionContentSearchOptions): CoworkSessionContentSearchResult[] {
+  searchSessionContent(options: CoworkSessionContentSearchOptions, actor?: RemoteOwner | null): CoworkSessionContentSearchResult[] {
     const query = options.query.trim();
     if (!query) return [];
     const limit = options.limit ?? COWORK_SESSION_CONTENT_SEARCH_LIMIT;
     const pattern = `%${this.escapeLikePattern(query)}%`;
-    const agentFilter = options.agentId
-      ? "AND COALESCE(NULLIF(TRIM(s.agent_id), ''), 'main') = ?"
-      : '';
+    const filter = this.sessionListFilter(options.agentId, actor);
     type ContentMatchRow = CoworkSessionSummaryRow & {
       match_message_id: string;
       match_message_type: 'user' | 'assistant';
@@ -2194,12 +2169,11 @@ export class CoworkStore {
       FROM matched
       JOIN cowork_sessions s ON s.id = matched.session_id
       WHERE matched.match_rank = 1
-        AND ${VISIBLE_COWORK_SESSION_SQL}
-        ${agentFilter}
+        AND ${filter.sql}
       ORDER BY s.updated_at DESC
       LIMIT ?
     `,
-      options.agentId ? [pattern, options.agentId, limit] : [pattern, limit],
+      [pattern, ...filter.parameters, limit],
     );
 
     return rows.map(row => {
@@ -2224,13 +2198,14 @@ export class CoworkStore {
    * Sessions for the sidebar status/time filter, newest first. Reads the whole
    * table rather than the paged sidebar list so older matches are not missed.
    */
-  listFilteredSessions(query: CoworkSessionFilterQuery): CoworkSessionSummary[] {
+  listFilteredSessions(query: CoworkSessionFilterQuery, actor?: RemoteOwner | null): CoworkSessionSummary[] {
     const requestedLimit = query.limit ?? COWORK_SESSION_FILTER_DEFAULT_LIMIT;
     const limit = Number.isFinite(requestedLimit)
       ? Math.max(1, Math.min(COWORK_SESSION_FILTER_MAX_LIMIT, Math.floor(requestedLimit)))
       : COWORK_SESSION_FILTER_DEFAULT_LIMIT;
-    const conditions: string[] = [VISIBLE_COWORK_SESSION_SQL];
-    const params: (string | number)[] = [];
+    const filter = this.sessionListFilter(undefined, actor);
+    const conditions: string[] = [filter.sql];
+    const params: (string | number)[] = [...filter.parameters];
 
     if (query.statuses) {
       const statuses = query.statuses.filter(status => typeof status === 'string' && status);
@@ -2294,7 +2269,8 @@ export class CoworkStore {
     });
   }
 
-  listRecentCwds(limit: number = 8): string[] {
+  listRecentCwds(limit: number = 8, actor?: RemoteOwner | null): string[] {
+    const filter = sessionVisibilitySql(actor);
     interface CwdRow {
       cwd: string;
       updated_at: number;
@@ -2303,12 +2279,12 @@ export class CoworkStore {
     const rows = this.getAll<CwdRow>(
       `
       SELECT cwd, updated_at
-      FROM cowork_sessions
-      WHERE cwd IS NOT NULL AND TRIM(cwd) != ''
+      FROM cowork_sessions s
+      WHERE cwd IS NOT NULL AND TRIM(cwd) != '' AND (${filter.sql})
       ORDER BY updated_at DESC
       LIMIT ?
     `,
-      [Math.max(limit * 8, limit)],
+      [...filter.parameters, Math.max(limit * 8, limit)],
     );
 
     const deduped: string[] = [];
@@ -2744,12 +2720,22 @@ export class CoworkStore {
   addMessage(sessionId: string, message: Omit<CoworkMessage, 'id' | 'timestamp'>, timestamp?: number): CoworkMessage {
     const id = uuidv4();
     const now = timestamp ?? Date.now();
+    const run = this.remote.messageRunBinding(sessionId);
+    if (run) message = { ...message, metadata: { ...message.metadata, remoteRunId: run.runId,
+      remoteCommandId: message.type === 'user' ? run.commandId : null } };
 
     if (message.type === 'user' || message.type === 'assistant') {
       const selection = this.db.prepare('SELECT model_preset_id, model_override FROM cowork_sessions WHERE id = ?')
         .get(sessionId) as { model_preset_id?: string; model_override?: string } | undefined;
       const modelPresetId = parseModelPresetId(selection?.model_preset_id);
-      if (modelPresetId && selection?.model_override) {
+      const mobileInput = run ? this.remote.get<{ modelPresetId?: unknown }>(`inputRun:${run.runId}`) : null;
+      const mobilePresetId = parseModelPresetId(mobileInput?.modelPresetId);
+      if (mobilePresetId) {
+        // Mobile execution resolves a virtual route without setting the desktop session preset.
+        // Stamp the run's frozen tier on the source message so both UIs share the provenance.
+        message = { ...message, metadata: { ...message.metadata, modelPresetId: mobilePresetId } };
+      } else if (!Object.prototype.hasOwnProperty.call(mobileInput ?? {}, 'modelPresetId')
+        && modelPresetId && selection?.model_override) {
         message = { ...message, metadata: { ...message.metadata, modelPresetId,
           resolvedModelId: selection.model_override.split('/').slice(1).join('/') } };
       }
@@ -2763,7 +2749,11 @@ export class CoworkStore {
       .get(sessionId) as { next_seq: number } | undefined;
     const sequence = seqRow?.next_seq ?? 1;
 
-    this.writeSessionProjections([sessionId], () => {
+    let telemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
+    try { const owner = this.remote.owner(sessionId); if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey,
+      localSessionId: sessionId, runId: run?.runId, commandId: run?.commandId }); } catch { /* No trusted telemetry identity. */ }
+    try { this.writeSessionProjections([sessionId], () => {
+      if (message.type === 'user') this.remote.advanceDeletionGuard(sessionId);
       this.db
         .prepare(
           `
@@ -2781,11 +2771,25 @@ export class CoworkStore {
           sequence,
         );
 
+      this.remote.afterCommit(() => telemetry?.emit(message.metadata?.isFinal === true ? RemoteTelemetryEvent.FinalPersisted : RemoteTelemetryEvent.MessagePersisted, {
+        messageId: id, writeKind: 'insert', persistOutcome: 'committed', phase: 'local_commit',
+      }));
+
+      if (message.type === 'user') this.remote.afterCommit(() => this.remote.markFilesDirty(sessionId));
+
       // updated_at drives session list ordering: only user messages may move it,
       // otherwise concurrent streaming runs keep reordering the list.
       if (message.type === 'user') {
         this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
       }
+    }); } catch (error) {
+      telemetry?.emit(RemoteTelemetryEvent.PersistFailed, { writeKind: 'insert', persistOutcome: 'failed', reason: 'STORAGE_UNAVAILABLE' });
+      remoteDiagnosticLog('desktop.message.persist_failed', { localSessionId: sessionId, runId: run?.runId,
+        commandId: run?.commandId, reason: 'STORAGE_UNAVAILABLE' }, 'error');
+      throw error;
+    }
+    if (!this.db.inTransaction) remoteDiagnosticLog(RemoteTelemetryEvent.MessagePersisted, {
+      localSessionId: sessionId, runId: run?.runId, commandId: run?.commandId, result: 'success',
     });
 
     return {
@@ -2866,10 +2870,12 @@ export class CoworkStore {
    * Used by reconciliation to remove duplicate or spurious messages.
    */
   deleteMessage(sessionId: string, messageId: string): boolean {
+    return this.remote.transaction(() => {
     const result = this.db
       .prepare('DELETE FROM cowork_messages WHERE id = ? AND session_id = ?')
       .run(messageId, sessionId);
     return result.changes > 0;
+    });
   }
 
   /**
@@ -2884,6 +2890,7 @@ export class CoworkStore {
     const now = Date.now();
 
     this.writeSessionProjections([sessionId], () => {
+      this.remote.advanceDeletionGuard(sessionId);
       const existingRows = this.db
         .prepare(
           `
@@ -2972,6 +2979,7 @@ export class CoworkStore {
     const now = Date.now();
 
     this.writeSessionProjections([sessionId], () => {
+      this.remote.advanceDeletionGuard(sessionId);
       this.db
         .prepare(
           "DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant', 'tool_use', 'tool_result')",
@@ -3048,6 +3056,11 @@ export class CoworkStore {
     messageId: string,
     updates: { content?: string; metadata?: CoworkMessageMetadata },
   ): void {
+    let telemetry: ReturnType<typeof captureRemoteTelemetry> | null = null;
+    if (updates.metadata?.isFinal === true) {
+      try { const owner = this.remote.owner(sessionId); if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, localSessionId: sessionId, messageId }); } catch { /* No trusted telemetry identity. */ }
+    }
+    try { return this.remote.transaction(() => {
     const setClauses: string[] = [];
     const values: (string | number | null)[] = [];
 
@@ -3056,16 +3069,29 @@ export class CoworkStore {
       values.push(updates.content);
     }
     if (updates.metadata !== undefined) {
-      const existing = this.getMessage(sessionId, messageId)?.metadata;
-      if (existing?.turnOutcome && updates.metadata.turnOutcome === undefined) {
-        updates = { ...updates, metadata: { ...updates.metadata, turnOutcome: existing.turnOutcome } };
+      const original = this.db.prepare('SELECT metadata FROM cowork_messages WHERE id=? AND session_id=?').get(messageId, sessionId) as { metadata?: string } | undefined;
+      let metadata: Record<string, unknown> = {};
+      try { metadata = JSON.parse(original?.metadata || '{}') || {}; } catch { /* Keep malformed legacy attribution unowned. */ }
+      if (metadata.turnOutcome && updates.metadata.turnOutcome === undefined) {
+        updates = { ...updates, metadata: { ...updates.metadata, turnOutcome: metadata.turnOutcome as CoworkMessageMetadata['turnOutcome'] } };
       }
-      if (existing?.modelPresetId) {
-        updates = { ...updates, metadata: { ...updates.metadata,
-          modelPresetId: existing.modelPresetId, resolvedModelId: existing.resolvedModelId } };
+      const merged = mergeCoworkMessageMetadata(metadata, updates.metadata);
+      // Attribution is owned by the local session transaction, never a runtime patch.
+      merged.remoteRunId = metadata.remoteRunId;
+      merged.remoteCommandId = metadata.remoteCommandId;
+      if (metadata.modelPresetId) {
+        merged.modelPresetId = metadata.modelPresetId;
+        const mobileInput = typeof metadata.remoteRunId === 'string'
+          ? this.remote.get<{ modelPresetId?: unknown }>(`inputRun:${metadata.remoteRunId}`) : null;
+        const isMobilePreset = parseModelPresetId(mobileInput?.modelPresetId) === metadata.modelPresetId;
+        const hasResolvedModel = typeof metadata.resolvedModelId === 'string' && metadata.resolvedModelId.trim()
+          && !parseModelPresetModelId(metadata.resolvedModelId);
+        // Only a verified mobile preset may acquire its concrete model during streaming.
+        // Desktop provenance keeps its existing immutable behavior, including legacy values.
+        if (!isMobilePreset || hasResolvedModel) merged.resolvedModelId = metadata.resolvedModelId;
       }
       setClauses.push('metadata = ?');
-      values.push(serializeMessageMetadata(updates.metadata));
+      values.push(serializeMessageMetadata(merged));
     }
 
     if (setClauses.length === 0) return;
@@ -3074,7 +3100,7 @@ export class CoworkStore {
     values.push(sessionId);
     // Intentionally leaves session updated_at untouched: this runs for every
     // streaming delta and would make concurrent runs fight over list order.
-    this.db
+    const result = this.db
       .prepare(
         `
       UPDATE cowork_messages
@@ -3083,6 +3109,15 @@ export class CoworkStore {
     `,
       )
       .run(...values);
+    if (result.changes > 0 && telemetry) this.remote.afterCommit(() => telemetry?.emit(updates.metadata?.isFinal === true
+      ? RemoteTelemetryEvent.FinalPersisted : RemoteTelemetryEvent.MessagePersisted, { writeKind: 'update', persistOutcome: 'committed', phase: 'local_commit' }));
+    }); } catch (error) {
+      if (!telemetry) {
+        try { const owner = this.remote.owner(sessionId); if (owner) telemetry = captureRemoteTelemetry({ remoteOwnerId: owner.userId, ownerScopeId: owner.scopeKey, localSessionId: sessionId, messageId }); } catch { /* Failed storage may also prevent diagnostic attribution. */ }
+      }
+      telemetry?.emit(RemoteTelemetryEvent.PersistFailed, { writeKind: 'update', persistOutcome: 'failed', reason: 'STORAGE_UNAVAILABLE' });
+      throw error;
+    }
   }
 
   // Config operations
@@ -3890,28 +3925,29 @@ export class CoworkStore {
     return this.mapAgentRow(row);
   }
 
-  createAgent(request: CreateAgentRequest): Agent {
-    const id =
-      request.id ||
-      request.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '') ||
-      uuidv4();
+  listVisibleAgents(actor: RemoteOwner | null): Agent[] {
+    return this.listAgents().filter(agent => this.agentOwnership.canView(agent.id, actor));
+  }
+
+  getVisibleAgent(id: string, actor: RemoteOwner | null): Agent | null {
+    return this.agentOwnership.canView(id, actor) ? this.getAgent(id) : null;
+  }
+
+  assertAgentAccess(id: string, actor: RemoteOwner | null): void {
+    this.agentOwnership.assertAccess(id, actor);
+    if (!this.getAgent(id)) throw new AgentAccessError(AgentAccessErrorCode.Unavailable);
+  }
+
+  createAgent(request: CreateAgentRequest, owner: RemoteOwner | null = this.remoteCreationOwner()): Agent {
+    const id = request.id || uuidv4();
     const now = Date.now();
-
-    // Ensure no duplicate ID
-    const existing = this.getAgent(id);
-    if (existing) {
-      // Append timestamp to make unique
-      return this.createAgent({ ...request, id: `${id}-${Date.now()}` });
+    if (id === AgentId.Main || this.getAgent(id) || this.agentOwnership.get(id)
+      || this.listSessionIdsByAgent(id).length > 0) {
+      throw new AgentAccessError(AgentAccessErrorCode.IdentityReused);
     }
-
-    let removedOrphanSessionCount = 0;
     const collaborationAllowlist = JSON.stringify(normalizeStringIdList(request.subagentAllowAgentIds));
-    this.runSessionTransaction(() => {
-      removedOrphanSessionCount = this.deleteSessionsForAgent(id).length;
 
+    this.agentOwnership.transaction(() => {
       this.db
         .prepare(
           `
@@ -3942,11 +3978,8 @@ export class CoworkStore {
           now,
           now,
         );
+      this.agentOwnership.assignNew(id, owner);
     });
-    if (removedOrphanSessionCount > 0) {
-      this.markOrphanImplicitMemoriesStale();
-    }
-
     return this.getAgent(id)!;
   }
 
@@ -3954,14 +3987,15 @@ export class CoworkStore {
     const normalizedModelId = modelId.trim();
     if (!normalizedModelId) return 0;
 
-    const result = this.db
+    const result = this.agentOwnership.transaction(() => this.db
       .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = '' AND model_selection_mode != ?")
-      .run(normalizedModelId, Date.now(), AgentModelSelectionMode.Inherit);
+      .run(normalizedModelId, Date.now(), AgentModelSelectionMode.Inherit));
 
     return result.changes;
   }
 
-  updateAgent(id: string, updates: UpdateAgentRequest): Agent | null {
+  updateAgent(id: string, updates: UpdateAgentRequest, actor?: RemoteOwner | null): Agent | null {
+    if (actor !== undefined) this.assertAgentAccess(id, actor);
     const existing = this.getAgent(id);
     if (!existing) return null;
 
@@ -4041,7 +4075,10 @@ export class CoworkStore {
     }
 
     values.push(id);
-    this.db.prepare(`UPDATE agents SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    this.agentOwnership.transaction(() => this.remote.transaction(() => {
+      if (actor !== undefined) this.assertAgentAccess(id, actor);
+      this.db.prepare(`UPDATE agents SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    }));
     return this.getAgent(id);
   }
 
@@ -4057,46 +4094,52 @@ export class CoworkStore {
   /** Replace only the fields owned by the official expert, keeping its instance and sessions. */
   saveExpertDefaults(agent: Pick<Agent, 'id' | 'name' | 'description' | 'systemPrompt' | 'identity' | 'icon'
     | 'iconCustomized' | 'skillIds' | 'presetRevision'>): void {
-    this.db.prepare(`UPDATE agents SET name = ?, description = ?, system_prompt = ?, identity = ?,
+    this.agentOwnership.transaction(() => this.db.prepare(`UPDATE agents SET name = ?, description = ?, system_prompt = ?, identity = ?,
       icon = ?, icon_customized = ?, skill_ids = ?, preset_revision = ?, updated_at = ?
       WHERE id = ? AND source = ?`).run(agent.name, agent.description, agent.systemPrompt, agent.identity,
       agent.icon, agent.iconCustomized ? 1 : 0, JSON.stringify(agent.skillIds), agent.presetRevision ?? null,
-      Date.now(), agent.id, AgentSource.Preset);
+      Date.now(), agent.id, AgentSource.Preset));
   }
 
   dismissPresetUpdate(agentId: string, revision: number): boolean {
     if (!Number.isSafeInteger(revision) || revision <= 0) return false;
-    return this.db.prepare(`UPDATE agents SET dismissed_preset_revision = ?
+    return this.agentOwnership.transaction(() => this.db.prepare(`UPDATE agents SET dismissed_preset_revision = ?
       WHERE id = ? AND source = ? AND COALESCE(preset_revision, 0) < ?
       AND COALESCE(dismissed_preset_revision, 0) <= ?`)
-      .run(revision, agentId, AgentSource.Preset, revision, revision).changes > 0;
+      .run(revision, agentId, AgentSource.Preset, revision, revision).changes > 0);
   }
 
   setExpertRevision(agentId: string, revision: number): boolean {
-    return this.db.prepare('UPDATE agents SET preset_revision = ? WHERE id = ? AND source = ?')
-      .run(revision, agentId, AgentSource.Preset).changes > 0;
+    return this.agentOwnership.transaction(() => this.db.prepare('UPDATE agents SET preset_revision = ? WHERE id = ? AND source = ?')
+      .run(revision, agentId, AgentSource.Preset).changes > 0);
   }
 
   /** Cosmetic catalog refresh: never overwrite a user-owned avatar. */
-  updatePresetAgentAvatar(id: string, icon: string): Agent | null {
+  updatePresetAgentAvatar(id: string, icon: string, actor?: RemoteOwner | null): Agent | null {
+    if (actor !== undefined) this.assertAgentAccess(id, actor);
     const existing = this.getAgent(id);
     if (!usesManagedPresetAvatar(existing)) return existing;
     const normalized = normalizeAgentAvatarIcon(icon);
     if (existing?.icon !== normalized) {
-      this.db.prepare('UPDATE agents SET icon = ?, icon_customized = 0, updated_at = ? WHERE id = ?')
-        .run(normalized, Date.now(), id);
+      this.agentOwnership.transaction(() => {
+        if (actor !== undefined) this.assertAgentAccess(id, actor);
+        this.db.prepare('UPDATE agents SET icon = ?, icon_customized = 0, updated_at = ? WHERE id = ?')
+          .run(normalized, Date.now(), id);
+      });
     }
     return this.getAgent(id);
   }
 
-  reorderAgents(agentIds: string[]): Agent[] {
+  reorderAgents(agentIds: string[], actor?: RemoteOwner | null): Agent[] {
+    const visible = () => actor === undefined ? this.listAgents() : this.listVisibleAgents(actor);
+    if (actor !== undefined) agentIds.forEach(id => this.assertAgentAccess(id, actor));
     const normalizedIds = Array.from(new Set(agentIds.map(id => id.trim()).filter(Boolean)));
-    if (normalizedIds.length === 0) return this.listAgents();
+    if (normalizedIds.length === 0) return visible();
 
-    const existingAgents = this.listAgents();
+    const existingAgents = visible();
     const existingIds = new Set(existingAgents.map(agent => agent.id));
     const orderedIds = normalizedIds.filter(id => existingIds.has(id));
-    if (orderedIds.length === 0) return this.listAgents();
+    if (orderedIds.length === 0) return visible();
     const orderedIdSet = new Set(orderedIds);
     const finalIds = [
       ...orderedIds,
@@ -4112,14 +4155,16 @@ export class CoworkStore {
         updateSortOrder.run(index + 1, now, id);
       });
     });
-    reorder(finalIds);
-    return this.listAgents();
+    this.agentOwnership.transaction(() => reorder(finalIds));
+    return visible();
   }
 
-  deleteAgent(id: string): boolean {
+  deleteAgent(id: string, actor: RemoteOwner | null = this.remoteCreationOwner()): boolean {
     if (id === AgentId.Main) return false; // Cannot delete default agent
 
-    const deleted = this.runSessionTransaction((): boolean => {
+    if (!this.getAgent(id)) return false;
+    const deleted = this.runSessionTransaction(() => this.agentOwnership.transaction((): boolean => {
+      this.agentOwnership.assertDeletable(id, actor);
       const result = this.db.prepare('DELETE FROM agents WHERE id = ? AND is_default = 0').run(id);
       if (result.changes === 0) {
         return false;
@@ -4127,9 +4172,10 @@ export class CoworkStore {
 
       this.deleteSessionsForAgent(id);
       return true;
-    });
+    }));
 
     if (deleted) {
+      this.agentOwnership.flushChanges();
       this.markOrphanImplicitMemoriesStale();
     }
     return deleted;
@@ -4229,6 +4275,23 @@ export class CoworkStore {
   upsertSubagentChildSession(options: UpsertSubagentChildSessionOptions): CoworkSession {
     const existing = this.getSession(options.id, 0);
     const parent = this.getSession(options.parentSessionId, 0);
+    if (!parent) throw new AgentAccessError(AgentAccessErrorCode.Unavailable);
+    const actor = this.remote.owner(parent.id);
+    this.remote.assertActor(parent.id, actor);
+    this.assertAgentAccess(parent.agentId || AgentId.Main, actor);
+    this.assertAgentAccess(options.agentId, actor);
+    if (existing) {
+      const childOwner = this.remote.owner(existing.id);
+      this.remote.assertActor(existing.id, actor);
+      if (existing.parentSessionId !== parent.id || existing.agentId !== options.agentId
+        || !(actor === null && childOwner === null) && !sameOwner(actor, childOwner)) {
+        throw new AgentAccessError(AgentAccessErrorCode.Unavailable);
+      }
+    }
+    // This method does not yield between the gate check and its transactional write.
+    if (ownershipOperationGate.isAssociating({ agentIds: [parent.agentId || AgentId.Main, options.agentId], sessionIds: [parent.id, options.id] })) {
+      throw new AgentAccessError(AgentAccessErrorCode.Busy);
+    }
     const agent = this.getAgent(options.agentId);
     const now = Date.now();
     const createdAt = options.createdAt ?? existing?.createdAt ?? now;
@@ -4244,6 +4307,7 @@ export class CoworkStore {
     const status = options.status ?? 'running';
 
     this.writeSessionProjections([options.id], () => {
+      if (!existing) this.remote.inheritNew(options.id, options.parentSessionId);
       if (existing) {
         this.db
           .prepare(

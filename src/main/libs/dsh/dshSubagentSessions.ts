@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 
 import { AgentId } from '../../../shared/agent/constants';
 import { DSH_DELEGATE_MAX_DEPTH, DSH_SESSION_ID_PREFIX } from '../../../shared/dshEngine/hostConstants';
+import type { RemoteOwner } from '../../../shared/remote/constants';
 import type { CoworkMessage } from '../../coworkStore';
 import { SubagentMessageStore } from '../../subagentMessageStore';
 import { type SubagentRun, SubagentRunStore } from '../../subagentRunStore';
@@ -21,6 +22,7 @@ interface Parent {
 }
 
 interface BindingRow {
+  remote_request_id: string | null;
   child_session_id: string;
   parent_dsh_session_id: string;
   root_cowork_session_id: string;
@@ -56,6 +58,10 @@ export class DshSubagentSessions {
       target_agent_id TEXT NOT NULL,
       created_at INTEGER NOT NULL
     )`);
+    if (!(db.pragma('table_info(dsh_subagent_agent_bindings)') as Array<{ name: string }>)
+      .some(column => column.name === 'remote_request_id')) {
+      db.exec('ALTER TABLE dsh_subagent_agent_bindings ADD COLUMN remote_request_id TEXT');
+    }
     db.exec(`CREATE INDEX IF NOT EXISTS idx_dsh_subagent_bindings_root
       ON dsh_subagent_agent_bindings(root_cowork_session_id)`);
   }
@@ -67,7 +73,7 @@ export class DshSubagentSessions {
 
   private getAgentBinding(childSessionId: string): DshSubagentAgentBinding | undefined {
     const row = this.db.prepare(
-      `SELECT child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at
+      `SELECT child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at, remote_request_id
        FROM dsh_subagent_agent_bindings WHERE child_session_id = ?`,
     ).get(childSessionId) as BindingRow | undefined;
     if (!row) return undefined;
@@ -77,6 +83,7 @@ export class DshSubagentSessions {
       rootCoworkSessionId: row.root_cowork_session_id,
       targetAgentId: row.target_agent_id,
       createdAt: row.created_at,
+      ...(row.remote_request_id ? { remoteRequestId: row.remote_request_id } : {}),
     };
   }
 
@@ -97,9 +104,9 @@ export class DshSubagentSessions {
       : Date.now();
     this.db.prepare(
       `INSERT OR REPLACE INTO dsh_subagent_agent_bindings (
-        child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at
-      ) VALUES (?, ?, ?, ?, ?)`,
-    ).run(childSessionId, parentDshSessionId, rootCoworkSessionId, targetAgentId, createdAt);
+        child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at, remote_request_id
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(childSessionId, parentDshSessionId, rootCoworkSessionId, targetAgentId, createdAt, binding.remoteRequestId ?? null);
     this.directParentByChildId.set(childSessionId, parentDshSessionId);
     const runId = DSH_SESSION_ID_PREFIX + childSessionId;
     this.db.prepare('UPDATE subagent_runs SET agent_id = ? WHERE id = ? AND parent_session_id = ?')
@@ -116,7 +123,7 @@ export class DshSubagentSessions {
   listAgentBindings(limit = DEFAULT_REPLAY_BINDING_LIMIT): DshSubagentAgentBinding[] {
     const size = Number.isFinite(limit) ? Math.max(1, Math.min(2_000, Math.floor(limit))) : DEFAULT_REPLAY_BINDING_LIMIT;
     const rows = this.db.prepare(
-      `SELECT child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at
+      `SELECT child_session_id, parent_dsh_session_id, root_cowork_session_id, target_agent_id, created_at, remote_request_id
        FROM dsh_subagent_agent_bindings
        ORDER BY created_at DESC
        LIMIT ?`,
@@ -127,6 +134,7 @@ export class DshSubagentSessions {
       rootCoworkSessionId: row.root_cowork_session_id,
       targetAgentId: row.target_agent_id,
       createdAt: row.created_at,
+      ...(row.remote_request_id ? { remoteRequestId: row.remote_request_id } : {}),
     }));
   }
 
@@ -175,6 +183,10 @@ export class DshSubagentSessions {
   getOwningSessionId(nativeChildId: string): string | undefined {
     return this.runs.getSubagentRun(DSH_SESSION_ID_PREFIX + nativeChildId)?.parentSessionId
       ?? this.getAgentBinding(nativeChildId)?.rootCoworkSessionId;
+  }
+
+  getRemoteBinding(nativeChildId: string): DshSubagentAgentBinding | undefined {
+    return this.getAgentBinding(nativeChildId);
   }
 
   setTask(parentId: string, runId: string, task: string): void {
@@ -265,11 +277,11 @@ export class DshSubagentSessions {
     }));
   }
 
-  listSubagentRunsByAgent(agentId: string, limit: number, offset: number) {
+  listSubagentRunsByAgent(agentId: string, limit: number, offset: number, actor?: RemoteOwner | null) {
     const size = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
     const start = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
-    const runs = this.runs.listSubagentRunsByAgent(agentId, size, start);
-    return { runs, hasMore: start + runs.length < this.runs.countSubagentRunsByAgent(agentId) };
+    const runs = this.runs.listSubagentRunsByAgent(agentId, size, start, actor);
+    return { runs, hasMore: start + runs.length < this.runs.countSubagentRunsByAgent(agentId, actor) };
   }
 
   async getSubTaskHistory(parentId: string, runId: string): Promise<CoworkMessage[]> {

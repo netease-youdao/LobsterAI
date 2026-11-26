@@ -16,7 +16,7 @@ type Dependencies = {
 
 /** Resolve once before a chat run; the caller persists the real model before starting it. */
 export function createModelPresetClient(dependencies: Dependencies) {
-  const pending = new Map<string, Promise<ResolvedPresetModel>>();
+  const pending = new Map<string, { promise: Promise<ResolvedPresetModel>; isCurrent: () => boolean }>();
   return {
     async available(): Promise<AvailableModelPreset[]> {
       const isCurrent = dependencies.isAccountCurrent();
@@ -34,7 +34,7 @@ export function createModelPresetClient(dependencies: Dependencies) {
       const key = `${sessionId}:${presetId}:${requiresImage}`;
       // Independently cancellable calls must not share another caller's transport.
       const existing = signal ? undefined : pending.get(key);
-      if (existing) return existing;
+      if (existing?.isCurrent()) return existing.promise;
       const isCurrent = dependencies.isAccountCurrent();
       const request = (async () => {
         signal?.throwIfAborted();
@@ -44,6 +44,7 @@ export function createModelPresetClient(dependencies: Dependencies) {
           body: JSON.stringify({ sessionId, requiresImage }),
           signal,
         });
+        if (!isCurrent()) throw new Error('Account changed while resolving model preset');
         const body = await response.json() as { code: number; data?: ResolvedPresetModel; message?: string };
         signal?.throwIfAborted();
         if (!isCurrent()) throw new Error('Account changed while resolving model preset');
@@ -54,8 +55,8 @@ export function createModelPresetClient(dependencies: Dependencies) {
         return body.data;
       })();
       if (!signal) {
-        pending.set(key, request);
-        void request.finally(() => { if (pending.get(key) === request) pending.delete(key); }).catch((): void => {});
+        pending.set(key, { promise: request, isCurrent });
+        void request.finally(() => { if (pending.get(key)?.promise === request) pending.delete(key); }).catch((): void => {});
       }
       return request;
     },
@@ -68,15 +69,18 @@ export function registerModelPresetIpc(dependencies: {
   getStore: () => import('../sqliteStore').SqliteStore;
   getSessions: () => import('../coworkStore').CoworkStore;
   getRuntime: () => import('./agentEngine/types').CoworkRuntime;
+  assertSessionAccess: (sessionId: string) => void;
+  patchSession: import('./agentEngine/types').CoworkRuntime['patchSession'];
   ownerAccountKey: () => string | null;
   contextWindowOwnerKey?: () => string | null;
   ensureModelsReady: () => Promise<unknown>;
+  onSelectionCommitted?: (sessionId: string) => void;
   isAccountCurrent: () => () => boolean;
   t: (key: string) => string;
 }) {
   const { ipcMain, client, getSessions, t } = dependencies;
   const selectionRevision = new Map<string, number>();
-  const selections = new Map<string, Promise<import('../coworkStore').CoworkSession>>();
+  const selections = new Map<string, { promise: Promise<import('../coworkStore').CoworkSession>; isCurrent: () => boolean }>();
   const preferenceKey = () => {
     const owner = dependencies.ownerAccountKey();
     if (!owner) throw new Error(t('modelPresetLoginRequired'));
@@ -96,6 +100,7 @@ export function registerModelPresetIpc(dependencies: {
     const isCurrent = dependencies.isAccountCurrent();
     const owner = dependencies.ownerAccountKey();
     if (!owner) throw new Error(t('modelPresetLoginRequired'));
+    dependencies.assertSessionAccess(sessionId);
     const revision = (selectionRevision.get(sessionId) ?? 0) + 1;
     selectionRevision.set(sessionId, revision);
     const session = getSessions().getSession(sessionId);
@@ -104,8 +109,10 @@ export function registerModelPresetIpc(dependencies: {
     if (!initial && (session.status === 'running' || dependencies.getRuntime().isSessionActive(sessionId))) throw new Error(t('modelPresetSessionBusy'));
     await dependencies.ensureModelsReady();
     if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
+    dependencies.assertSessionAccess(sessionId);
     const model = await client.resolve(sessionId, presetId, requiresImage);
     if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
+    dependencies.assertSessionAccess(sessionId);
     if (selectionRevision.get(sessionId) !== revision) throw new Error(t('modelPresetModelMismatch'));
     const modelRef = `${OpenClawProviderId.LobsteraiServer}/${model.modelId}`;
     const contextModel = getServerModelMetadata(model.modelId);
@@ -121,28 +128,34 @@ export function registerModelPresetIpc(dependencies: {
         selectableContextWindows(contextModel, presetId))
       : null;
     if (!initial) {
-      const patched = await dependencies.getRuntime().patchSession?.(sessionId, {
+      const patched = await dependencies.patchSession(sessionId, {
         model: modelRef,
         thinkingLevel: thinkingLevel || null,
         contextWindow: sessionContextWindowSelection({ modelPresetId: presetId, contextWindowOverride,
           contextWindowOwnerKey: contextOwner }, contextModel, contextOwner),
       });
+      if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
+      dependencies.assertSessionAccess(sessionId);
       if (!patched || patched.modelOverride !== modelRef || patched.resolvedModelRef !== modelRef) throw new Error(t('modelPresetModelMismatch'));
     }
     if (!isCurrent()) throw new Error(t('modelPresetAccountChanged'));
+    dependencies.assertSessionAccess(sessionId);
     if (selectionRevision.get(sessionId) !== revision) throw new Error(t('modelPresetModelMismatch'));
     getSessions().updateSession(sessionId, { modelPresetId: presetId, modelOverride: modelRef, thinkingLevel,
       contextWindowOverride, contextWindowOwnerKey: contextWindowOverride ? contextOwner : null }, { touchUpdatedAt: false });
+    dependencies.onSelectionCommitted?.(sessionId);
     const updatedSession = getSessions().getSession(sessionId)!;
     return initial ? updatedSession : recordSessionModelChange(getSessions(), session, updatedSession);
   };
   const choose = (sessionId: string, presetId: ModelPresetId, requiresImage: boolean, initial = false, thinkingLevel?: ModelThinkingLevel) => {
+    dependencies.assertSessionAccess(sessionId);
+    const isCurrent = dependencies.isAccountCurrent();
     const key = `${dependencies.ownerAccountKey()}:${sessionId}:${presetId}:${requiresImage}:${initial}:${thinkingLevel ?? ''}`;
     const existing = selections.get(key);
-    if (existing) return existing;
+    if (existing?.isCurrent()) return existing.promise;
     const selection = resolveSelection(sessionId, presetId, requiresImage, initial, thinkingLevel);
-    selections.set(key, selection);
-    void selection.finally(() => { if (selections.get(key) === selection) selections.delete(key); }).catch((): void => {});
+    selections.set(key, { promise: selection, isCurrent });
+    void selection.finally(() => { if (selections.get(key)?.promise === selection) selections.delete(key); }).catch((): void => {});
     return selection;
   };
   ipcMain.handle(ModelPresetIpc.Available, () => result(() => client.available()));

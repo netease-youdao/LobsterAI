@@ -34,6 +34,7 @@ import {
   CoworkImageAttachmentRole,
   formatCoworkImageAttachmentLimit,
 } from '../../../shared/cowork/imageAttachments';
+import type { CoworkLocalInput } from '../../../shared/cowork/inputAttachments';
 import {
   type CoworkPastedTextBlock,
   createPastedTextAttachment,
@@ -456,6 +457,7 @@ interface CoworkPromptInputProps {
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
     browserAnnotations?: CoworkBrowserAnnotationMessageBatch[],
     collaborationMode?: CoworkCollaborationMode,
+    localInput?: CoworkLocalInput,
     titleInput?: string,
   ) => boolean | void | Promise<boolean | void>;
   onStop?: () => void | Promise<void>;
@@ -2004,6 +2006,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       promptPayload.selectedTextSnippets,
       preparedBrowserAnnotations,
       effectiveCollaborationMode,
+      promptPayload.localInput,
       buildSessionTitleInput(goalCommandPrompt, attachments),
     );
     if (result === false) {

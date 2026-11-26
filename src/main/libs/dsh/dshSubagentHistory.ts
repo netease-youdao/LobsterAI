@@ -1,4 +1,5 @@
 import type { CoworkMessage } from '../../coworkStore';
+import { publicDshEventData } from './dshSettingsToolPrivacy';
 import type { DshSessionAddress, DshTypertClient } from './dshTypertClient';
 
 export const DshChildEvent = {
@@ -34,7 +35,7 @@ function toolInput(value: unknown): Record<string, unknown> {
   try { return record(JSON.parse(value)); } catch { return {}; }
 }
 
-function readMessage(runId: string, event: Record<string, unknown>): CoworkMessage | undefined {
+export function readDshJournalMessage(runId: string, event: Record<string, unknown>): CoworkMessage | undefined {
   const data = record(event.data);
   const message = record(data.message);
   const id = `${runId}/${event.seq}`;
@@ -75,24 +76,22 @@ export async function readDshChildHistory(
   descriptorSeq: number,
   runId: string,
 ): Promise<CoworkMessage[]> {
-  const pages: CoworkMessage[][] = [];
+  const pages: Record<string, unknown>[][] = [];
   let throughSeq: number | undefined;
   let beforeSeq: number | undefined;
   for (;;) {
     const page = await client.getSessionEvents(address, { maxMessages: 100, throughSeq, beforeSeq });
     const entries = Array.isArray(page.records) ? page.records.map(entry => record(record(entry).event)) : [];
-    const messages: CoworkMessage[] = [];
-    for (const event of entries) {
-      if (typeof event.seq !== 'number' || event.seq <= descriptorSeq) continue;
-      const message = readMessage(runId, event);
-      if (message) messages.push(message);
-    }
-    pages.push(messages);
+    pages.push(entries.filter(event => typeof event.seq === 'number' && event.seq > descriptorSeq));
     const first = entries[0]?.seq;
     if (!page.hasMore || typeof first !== 'number' || first <= descriptorSeq) break;
     if (beforeSeq !== undefined && first >= beforeSeq) throw new Error('Subagent history cursor did not advance');
     beforeSeq = first;
     if (typeof page.cursor === 'number') throughSeq ??= page.cursor;
   }
-  return pages.reverse().flat();
+  const privateIds = new Set<string>();
+  return pages.reverse().flat().flatMap(event => {
+    const message = readDshJournalMessage(runId, { ...event, data: publicDshEventData(event.type, event.data, privateIds) });
+    return message ? [message] : [];
+  });
 }

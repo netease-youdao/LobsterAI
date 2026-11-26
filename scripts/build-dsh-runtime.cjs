@@ -83,6 +83,12 @@ const PRUNE_HEAVY_UNSCOPED_PREFIXES = [
 // build instead of shipping a runtime that quietly lost the fix.
 const PATCH_SENTINELS = [
   {
+    patch: '02-remote-waterfall-receipt.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-api-gateway/lib/index.js',
+    expect: 'appendPluginRecord(agent.session, "plugin:lobsterai/remote-decision"',
+    occurrences: 1,
+  },
+  {
     patch: '01-windows-sandbox-hide-console.cjs',
     file: 'node_modules/@deepseek-ai/dsh-sandbox-windows-acl/lib/types-CNjZgO4h.js',
     // STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW, with SW_HIDE, at both

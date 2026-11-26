@@ -1,6 +1,7 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 import type { InstalledKit, MarketplaceKit } from '../../types/kit';
+import { resetAccountSessionData } from '../accountSessionBoundary';
 
 interface KitState {
   installedKits: Record<string, InstalledKit>;
@@ -40,6 +41,9 @@ const kitSlice = createSlice({
     clearActiveKits: (state) => {
       state.activeKitIds = [];
     },
+  },
+  extraReducers: builder => {
+    builder.addCase(resetAccountSessionData, state => { state.activeKitIds = []; });
   },
 });
 

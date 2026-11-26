@@ -28,6 +28,7 @@ import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
 import { canonicalizeProviderId } from './model-bridge-helpers.mjs';
 import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
+import { inspectDecisionReceipt, remoteTurnOperation } from './remote-turn.mjs';
 import { getHostState } from './shared-state.mjs';
 import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
 
@@ -367,6 +368,7 @@ export function apply(ctx) {
             return jsonResponse({
               ok: true,
               bootedAt: state.bootedAt,
+              remoteTurnEvidenceVersion: 1,
               pluginsReady: { ...state.pluginsReady },
               providers: llm ? llm.listProviders() : [],
               mcpServers: [
@@ -536,6 +538,7 @@ export function apply(ctx) {
               if (!childSessionId || !targetAgentId) continue;
               state.delegatedChildAgents.set(childSessionId, {
                 targetAgentId,
+                ...(typeof entry.remoteRequestId === 'string' ? { remoteRequestId: entry.remoteRequestId } : {}),
                 ...(typeof entry.parentDshSessionId === 'string' && entry.parentDshSessionId.trim().length > 0
                   ? { parentDshSessionId: entry.parentDshSessionId.trim() }
                   : {}),
@@ -560,6 +563,11 @@ export function apply(ctx) {
             });
           }
 
+          case 'inspectDecisionReceipt':
+            return jsonResponse({ ok: true, result: await inspectDecisionReceipt(ctx, payload) });
+          case 'inspectRemoteTurn':
+          case 'cancelRemoteTurn':
+            return jsonResponse({ ok: true, result: await remoteTurnOperation(ctx, payload, action === 'cancelRemoteTurn') });
           case 'bindSessionContext': {
             const p = payload && typeof payload === 'object' ? payload : {};
             const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';

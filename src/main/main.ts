@@ -51,6 +51,7 @@ import { type AppUpdateActiveWorkloads, AppUpdateIpc } from '../shared/appUpdate
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import { ReviewIpc, ReviewScope, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
+import type { ArtifactFileAccess } from '../shared/artifactPreview/types';
 import { buildWorkspaceChangesArtifact } from '../shared/artifactPreview/workspaceChanges';
 import type { AsrRealtimeSessionRequest, AsrRealtimeSessionResult } from '../shared/asr/constants';
 import { createAccountOwnerKey } from '../shared/auth/accountOwner';
@@ -59,6 +60,7 @@ import {
   type AuthLifecycleEvent,
   AuthLifecycleEventType,
   AuthLoginFailureReason,
+  AuthRefreshFailureKind,
   AuthRefreshOutcome,
   AuthRefreshReason,
   type AuthSessionChangedEvent,
@@ -87,6 +89,7 @@ import {
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { normalizeClientBannerPlacement } from '../shared/clientBanner/constants';
 import { ClipboardIpc } from '../shared/clipboard/constants';
+import type { ApprovalState } from '../shared/cowork/approval';
 import {
   type CoworkBrowserAnnotationMessageBatch,
   normalizeBrowserAnnotationBatches,
@@ -115,6 +118,7 @@ import {
   CoworkIpcChannel,
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
+  SESSION_AGNOSTIC_PERMISSION_SESSION_ID,
 } from '../shared/cowork/constants';
 import { isEmbeddingProvider } from '../shared/cowork/embedding';
 import {
@@ -125,6 +129,7 @@ import {
   sniffImageMimeType,
   validateCoworkImageAttachmentSize,
 } from '../shared/cowork/imageAttachments';
+import type { CoworkLocalInput } from '../shared/cowork/inputAttachments';
 import type { CoworkMessageEditRequest } from '../shared/cowork/messageEdit';
 import { OpenClawQuestion } from '../shared/cowork/openclawQuestion';
 import { containsPlanModePrompt } from '../shared/cowork/planMode';
@@ -169,6 +174,7 @@ import {
   HtmlShareStatus,
   type HtmlShareStatus as HtmlShareStatusValue,
 } from '../shared/htmlShare/constants';
+import { ImIpcChannel } from '../shared/im/constants';
 import { imageEditMessageMetadata } from '../shared/imageEditing/messageSnapshot';
 import { ImageEditingIpc, type ImageEditRequest } from '../shared/imageEditing/types';
 import type {
@@ -194,7 +200,7 @@ import {
 } from '../shared/localWebServices/constants';
 import { LogIpc } from '../shared/logExport/constants';
 import { McpAuthMode } from '../shared/mcp/auth';
-import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
+import { ConfirmationBehavior, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
 import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { MediaDefaultsProtocol } from '../shared/media/defaultPolicy';
@@ -217,6 +223,7 @@ import {
   OpenClawEngineIpc,
   OpenClawLoopbackRepairOutcome,
 } from '../shared/openclawEngine/constants';
+import { OwnershipIpc } from '../shared/ownership/constants';
 import type { PptCoverRequest } from '../shared/pptCreation/cover';
 import {
   canonicalizeDshProviderId,
@@ -230,6 +237,7 @@ import {
   selectableContextWindows,
   userContextWindowSelection,
 } from '../shared/providers/modelContextWindow';
+import { RemoteCommandKind, RemoteInitializationFailure, RemoteIpc, type RemoteOwner, type RemoteSettingsState } from '../shared/remote/constants';
 import {
   ShareDeploymentCandidateSource,
   type ShareDeploymentCreateNodeInput,
@@ -254,6 +262,7 @@ import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
 import {
   createLocalFileProtocolResponse,
   getLocalFileProtocolPath,
+  revalidateLocalFileProtocolStreams,
 } from './artifactLocalFileProtocol';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
 import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
@@ -290,6 +299,7 @@ import { registerFeedbackIpc } from './feedback/feedbackIpc';
 import { getLanguage, setLanguage, t } from './i18n';
 import { IMGatewayConfig, IMGatewayManager } from './im';
 import { DshImInboundHandler, parseDshImInboundEvent } from './im/dshImInboundHandler';
+import { assertImInstanceAccess, canManageImPlatform, visibleImStatus } from './im/imConfigOwnership';
 import {
   approvePairingCode,
   listPairingRequests,
@@ -314,6 +324,7 @@ import type {
 } from './im/types';
 import { registerAccountMenuMoreHandlers } from './ipcHandlers/accountMenuMore';
 import { registerActivityIpcHandlers } from './ipcHandlers/activity';
+import { notifyAgentsChanged } from './ipcHandlers/agents';
 import { registerAgentHandlers } from './ipcHandlers/agents';
 import { registerArtifactWorkspaceHandlers } from './ipcHandlers/artifactWorkspace';
 import {
@@ -322,6 +333,7 @@ import {
   registerAsrIpcHandlers,
 } from './ipcHandlers/asr';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
+import { registerCoworkPermissionHandlers } from './ipcHandlers/cowork/permissions';
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
 import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
@@ -341,9 +353,11 @@ import { registerKitHandlers } from './ipcHandlers/kits';
 import { hasUnsafeMarkdownEdits, registerMarkdownEditingHandlers } from './ipcHandlers/markdownEditing';
 import { cancelAllMcpOAuthLogins, registerMcpHandlers } from './ipcHandlers/mcp';
 import { registerMigrationV2Handlers } from './ipcHandlers/migrationV2/handlers';
+import { registerOwnershipHandlers } from './ipcHandlers/ownership';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
 import { registerProviderModelDiscoveryHandlers } from './ipcHandlers/providerModelDiscovery';
+import { registerRemoteHandlers } from './ipcHandlers/remote/handlers';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -356,6 +370,7 @@ import { registerSiteIpcHandlers } from './ipcHandlers/site';
 import { registerSkillHandlers } from './ipcHandlers/skills';
 import { registerSubscriptionTrialIpcHandlers } from './ipcHandlers/subscriptionTrial';
 import { registerWordPanelHandlers } from './ipcHandlers/wordPanel';
+import { LibraryFileAccessError, LibraryFileAccessPolicy } from './library/libraryFileAccess';
 import { LibraryIndexService } from './library/libraryIndexService';
 import { registerLibraryIpcHandlers } from './library/libraryIpc';
 import { LibraryLocalStore } from './library/libraryLocalStore';
@@ -365,11 +380,12 @@ import { generateAgentDraft } from './libs/agentDraftGenerator';
 import {
   type CoworkAgentEngine,
   CoworkEngineRouter,
-  type PermissionResult,
 } from './libs/agentEngine';
 import { prepareMessageEdit } from './libs/agentEngine/prepareMessageEdit';
 import { getRetryableUserMessage } from './libs/agentEngine/prepareUnsentRetry';
 import { pickChangedAgentPersona, seedAgentPersonaFiles, writeAgentPersonaFiles } from './libs/agentPersonaFiles';
+import { createDshSettingsWriteLease } from './libs/agentSettingsConversation/runtime';
+import { assertAgentSettingsLocalWriteAllowed } from './libs/agentSettingsConversation/runtime';
 import {
   APP_QUIT_CONFIRMATION_STORE_KEY,
   appQuitConfirmationGate,
@@ -388,7 +404,9 @@ import { AuthCallbackRouter } from './libs/authCallbackRouter';
 import { startAuthLocalCallback, stopAuthLocalCallback } from './libs/authLocalCallbackServer';
 import { AuthLoginAttempt } from './libs/authLoginAttempt';
 import {
+  type AuthFetch,
   AuthSessionManager,
+  AuthSessionRequestError,
   resolveAuthSessionStatusFromError,
 } from './libs/authSessionManager';
 import type { BrowserAnnotationAssetIdentity, SaveBrowserAnnotationAssetInput } from './libs/browserAnnotationAssetStore';
@@ -427,6 +445,7 @@ import {
   refreshCopilotTokenNow,
   setCopilotTokenState,
 } from './libs/copilotTokenManager';
+import { prepareCoworkSubmission, reserveCoworkInput } from './libs/cowork/coworkSubmissionService';
 import { CoworkImageOriginalStore } from './libs/coworkImageOriginalStore';
 import { normalizeCoworkSystemPrompt } from './libs/coworkSystemPrompt';
 import {
@@ -470,6 +489,7 @@ import { buildDshImChannelInstances } from './libs/dsh/dshImConfigTranslator';
 import { createDshMediaGenerationProvider } from './libs/dsh/dshMediaGenerationTool';
 import { resolveEffectiveDshReasoningEffort } from './libs/dsh/dshModelSelection';
 import type { LobsterMcpServerRecord, LobsterProviderConfig } from './libs/dsh/dshProviderSync';
+import { createDshRemoteAgentSettingsProvider } from './libs/dsh/dshRemoteAgentSettingsTool';
 import { createDshSkillInstallProvider } from './libs/dsh/dshSkillInstallTool';
 import { DshUsageTelemetry } from './libs/dshUsageTelemetry';
 import {
@@ -497,6 +517,7 @@ import {
   createPreviewSession,
   destroyPreviewSession,
   isPreviewServerUrl,
+  revalidatePreviewSessions,
   stopHtmlPreviewServer,
 } from './libs/htmlPreviewServer';
 import {
@@ -560,6 +581,9 @@ import {
 } from './libs/mediaTaskStore';
 import { MediaUsageAnalytics } from './libs/mediaUsageAnalytics';
 import { MediaUsageStore } from './libs/mediaUsageStore';
+import { MobileRemoteAccountFence } from './libs/mobileRemoteAccountFence';
+import { buildMobileRemoteBridge } from './libs/mobileRemoteControl';
+import { mobileRemoteStartupEnabled } from './libs/mobileRemoteStartup';
 import {
   getModelAuthProxyPort,
   getModelAuthProxyTraceStats,
@@ -570,7 +594,7 @@ import {
 import { modelContextWindowOwnerKey, registerModelContextWindowIpc, rememberedContextWindow } from './libs/modelContextWindows';
 import { buildPresetContextWindows } from './libs/modelPresetContext';
 import { createModelPresetClient, registerModelPresetIpc } from './libs/modelPresets';
-import { bindNativeRunUsageOwner, claimNativeRunTurnUsage, configureNativeUsageSessionTitleResolver, getNativeRunMediaUsageContext, recordNativeRunMediaTask } from './libs/nativeRunTurnUsage';
+import { bindNativeRunUsageOwner, claimNativeRunTurnUsage, configureNativeUsageSessionTitleResolver, getNativeRunMediaUsageContext, isNativeUsageSessionId, recordNativeRunMediaTask } from './libs/nativeRunTurnUsage';
 import {
   migrateAgentModelRefs,
   parsePrimaryModelRef,
@@ -597,6 +621,7 @@ import { PptCreationStore } from './libs/pptCreationStore';
 import { buildProviderSelection } from './libs/providerSelection';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { isAnalyticsEndpointUrl, sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
+import { ServerRouteContextTracker } from './libs/serverRouteContext';
 import { recordSessionModelChange } from './libs/sessionModelChange';
 import { SessionTitleGenerator } from './libs/sessionTitleGenerator';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
@@ -643,7 +668,7 @@ import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
 import { WebSearchHost } from './libs/webSearchHost';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
 import { getLogFilePath, initLogger } from './logger';
-import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
+import { McpRuntime } from './mcp/mcpRuntime';
 import { createNeteaseMailDesktop } from './mcp/neteaseMail/desktop';
 import {
   type AccountBoundValue,
@@ -704,7 +729,26 @@ import {
   loadOpenClawSessionPolicyConfig,
   saveOpenClawSessionPolicyConfig,
 } from './openclawSessionPolicy/store';
+import { OwnershipAssociationService } from './ownershipAssociation';
+import { ownershipOperationGate } from './ownershipOperationGate';
 import { registerRendererPermissionHandler } from './permissions/rendererPermission';
+import { canUseAutomationSource, imAutomationSourceId } from './remote/automationOwnership';
+import { payloadHash, sameOwner } from './remote/canonical';
+import { captureDesktopInput, desktopInputCaptureEnabled } from './remote/desktopInputMetadata';
+import { RemoteAccountTransition } from './remote/remoteAccountTransition';
+import { RemoteBridge } from './remote/remoteBridge';
+import { RemoteInitializationError, RemoteInitializationRecovery } from './remote/remoteInitialization';
+import { RemoteLocalGc } from './remote/remoteLocalGc';
+import { remoteNetworkBinaryDownload } from './remote/remoteNetworkProtocol';
+import { remoteNetworkTransport } from './remote/remoteNetworkTransport';
+import { remotePerformance, RemotePerformanceStage } from './remote/remotePerformanceLog';
+import { stopOwnedSessionWithRecovery } from './remote/remoteQuarantineRecovery';
+import { PREVENT_SLEEP_STORE_KEY, RemoteSettingsController } from './remote/remoteSettingsController';
+import { logSettingsOpenFromRenderer } from './remote/remoteSettingsOpenLog';
+import { remoteLogMessage } from './remote/remoteSyncLog';
+import { initializeRemoteTelemetry } from './remote/remoteTelemetryRuntime';
+import { assertRemoteExecutionPermit,currentRemoteExecution, SessionCommandService } from './remote/sessionCommandService';
+import { SessionDeletionService } from './remote/sessionDeletionService';
 import { SkillManager } from './skills/skillManager';
 import {
   notifySkinChanged,
@@ -2254,10 +2298,12 @@ let cachedSubscriptionStatus: string = AuthSubscriptionStatus.Free;
 let cachedMediaGenerationEntitled = false;
 let coworkRuntimeForwarderBound = false;
 let preventSleepBlockerId: number | null = null;
+let remoteSettingsController: RemoteSettingsController | null = null;
 let appUpdateCoordinator: AppUpdateCoordinator | null = null;
 let resolveAppUpdateGraySession: () => AppUpdateGraySession | null = () => null;
 let mainLogReporter: MainLogReporter | null = null;
 let libraryIndexService: LibraryIndexService | null = null;
+let prepareRemoteFileRun: ((sessionId: string, cwd: string) => Promise<void>) | null = null;
 let unsubscribeLibrarySessionChanges: (() => void) | null = null;
 
 function setPreventSleepBlockerEnabled(enabled: boolean): void {
@@ -2323,6 +2369,7 @@ const getDshBootstrap = (): DshBootstrap => {
     const storeInstance = getCoworkStore();
     dshBootstrap = new DshBootstrap({
       toolProviders: [
+        createDshRemoteAgentSettingsProvider(),
         neteaseMailDesktop.host,
         createDshMediaGenerationProvider(
           request => getMcpRuntime().executeMediaGeneration(request),
@@ -2334,7 +2381,7 @@ const getDshBootstrap = (): DshBootstrap => {
             const session = storeInstance.getSession(id, 0);
             return session ? { cwd: session.cwd, userMessage: storeInstance.getLatestUserMessage(id)?.content } : null;
           },
-          ask: (...args) => getMcpRuntime().askUserInternal(...args),
+          ask: getMcpRuntime().askUserInternal.bind(getMcpRuntime()),
         }),
         createDshAgentRulesProvider({
           getAgent: agentId => getAgentManager().getAgent(agentId),
@@ -2373,6 +2420,9 @@ const getDshBootstrap = (): DshBootstrap => {
       db: getStore().getDatabase(),
       skillsDir: path.join(userDataDir, 'SKILLs'),
       coworkStore: {
+        remote: storeInstance.remote,
+        remoteCreationOwner: () => storeInstance.remoteCreationOwner(),
+        agentOwnership: storeInstance.agentOwnership,
         messageEdits: storeInstance.messageEdits,
         messageVersions: storeInstance.messageVersions,
         getSession: (sessionId, messageLimit) => storeInstance.getSession(sessionId, messageLimit),
@@ -2708,6 +2758,7 @@ const bootstrapOpenClawEngine = async (
   options: { forceReinstall?: boolean; reason?: string } = {},
 ): Promise<DshCompatEngineStatus> => bootstrapEngineFlight.run(
   async (): Promise<DshCompatEngineStatus> => {
+    if (!remoteCredentialsAllowed) throw new Error('Account transition in progress');
     const bootstrap = getDshBootstrap();
     try {
       ensureDefaultIdentity(bootstrap.memoryService.getAgentWorkspaceDir(AgentId.Main));
@@ -2735,6 +2786,7 @@ let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 let coworkTurnUsageService: CoworkTurnUsageService | null = null;
 
 const settleCoworkTurnUsage = (sessionId: string, nativeRuns?: NativeTurnRuns): void => {
+  if (!canViewCoworkSession(sessionId)) return;
   void coworkTurnUsageService?.settleLatestTurn(sessionId, nativeRuns).catch((error) => {
     console.warn(`[TurnUsage] settlement failed for session ${sessionId}.`, error);
   });
@@ -2749,6 +2801,7 @@ type CoworkEngineAdmission = {
 const ensureOpenClawRunningForCowork = async (
   admission: CoworkEngineAdmission = {},
 ): Promise<DshCompatEngineStatus> => {
+  await remoteAccountTransition.wait();
   await waitForPendingTokenRefresh();
   const bootstrap = getDshBootstrap();
   if (admission.queueDuringReconnect && bootstrap.canQueueTurnDuringReconnect()) {
@@ -2766,7 +2819,9 @@ const ensureOpenClawRunningForCowork = async (
 const getCoworkStore = () => {
   if (!coworkStore) {
     const sqliteStore = getStore();
-    coworkStore = new CoworkStore(sqliteStore.getDatabase());
+    coworkStore = new CoworkStore(sqliteStore.getDatabase(), { deferRemoteSynchronization: true });
+    coworkStore.remote.publicationOrigins.setRouteProvider(getServerApiBaseUrl);
+    coworkStore.agentOwnership.publicationOrigins.setRouteProvider(getServerApiBaseUrl);
     const cleaned = coworkStore.autoDeleteNonPersonalMemories();
     if (cleaned > 0) {
       console.info(`[cowork-memory] Auto-deleted ${cleaned} non-personal/procedural memories`);
@@ -2775,16 +2830,25 @@ const getCoworkStore = () => {
   return coworkStore;
 };
 
-let agentManager: AgentManager | null = null;
-const getAgentManager = () => {
-  if (!agentManager) {
-    const expertStore = new ExpertStore({
+let remoteBridge: RemoteBridge | null = null;
+let expertStore: ExpertStore | null = null;
+const getExpertStore = (): ExpertStore => {
+  if (!expertStore) {
+    expertStore = new ExpertStore({
       getEndpoint: getExpertStoreUrl,
       cacheDirectory: path.join(app.getPath('userData'), 'expert-store'),
+      onRemoteAvatarKeysChanged: () => remoteBridge?.agentCatalogChanged(),
       onLoad: fields => { void getMainLogReporter().report({ action: LogReporterAction.ExpertJourney,
         schemaVersion: UsageAnalytics.SchemaVersion, stage: UsageStage.CatalogRefresh, ...fields }); },
     });
-    agentManager = new AgentManager(getCoworkStore(), () => expertStore.getCatalog());
+  }
+  return expertStore;
+};
+
+let agentManager: AgentManager | null = null;
+const getAgentManager = () => {
+  if (!agentManager) {
+    agentManager = new AgentManager(getCoworkStore(), () => getExpertStore().getCatalog(), () => getCoworkStore().remoteCreationOwner());
   }
   return agentManager;
 };
@@ -2849,6 +2913,8 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
   return "dsh";
 };
 
+const remoteAccountTransition = new RemoteAccountTransition();
+let remoteCredentialsAllowed = true;
 const hasActiveGatewayWorkloads = (): boolean => {
   if (dshBootstrap?.runtimeAdapter.isSessionActive && coworkEngineRouter) {
     if (coworkEngineRouter.getActiveSessionIds().length > 0) return true;
@@ -2878,6 +2944,7 @@ const syncOpenClawConfig = async (options: {
 }> => {
   try {
     const bootstrap = getDshBootstrap();
+    if (!remoteCredentialsAllowed) throw new Error('Account transition in progress');
     const providers: Record<string, LobsterProviderConfig> = {};
 
     for (const provider of resolveAllEnabledProviderConfigs()) {
@@ -3131,7 +3198,7 @@ const syncOpenClawConfig = async (options: {
         imConfig,
         userDataDir: app.getPath('userData'),
         getDefaultCwd: agentId => resolveAgentDefaultWorkingDirectory(agentId) || os.homedir(),
-      });
+      }).filter(instance => canUseAutomationSource(getCoworkStore(), imAutomationSourceId(instance.platform, instance.instanceId)));
     } catch {
       // IM manager not initialized yet; skipped until ready.
     }
@@ -3143,6 +3210,7 @@ const syncOpenClawConfig = async (options: {
       ...normalizeBrowserHostnamePolicyList(normalizedBrowserWebAccess.blockedHostnames),
     ]));
 
+    if (!remoteCredentialsAllowed) throw new Error('Account transition in progress');
     const result = await bootstrap.syncAllConfig({
       providers,
       modelAuthProxyUrl: proxyUrl,
@@ -3192,6 +3260,21 @@ const syncOpenClawConfig = async (options: {
     return { success: false, changed: false, error: message };
   }
 };
+
+const coworkPermissionSessions = new Map<string, string>();
+const coworkRuntimePermissionIds = new Set<string>();
+let captureCoworkPermissionAccount: () => () => boolean = () => () => false;
+
+const canViewCoworkSession = (sessionId: string): boolean => {
+  try {
+    const store = getCoworkStore();
+    store.remote.assertActor(sessionId, store.remoteCreationOwner());
+    return store.getSession(sessionId, 0) !== null;
+  } catch {
+    return false;
+  }
+};
+
 const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
@@ -3199,6 +3282,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   bindCoworkTurnOutcomes(runtime, getCoworkStore());
 
   runtime.on('message', (sessionId: string, message: CoworkMessage, beforeMessageId?: string) => {
+    if (!canViewCoworkSession(sessionId)) return;
     if (message.type === 'tool_use') {
       const event = getDshBrowserToolStart(sessionId, message.metadata?.toolName, message.metadata?.toolInput);
       if (event && normalizeBrowserWebAccessConfig(getStore().get<AppConfigSettings>('app_config')?.browserWebAccess).displayMode === BrowserDisplayMode.InApp) {
@@ -3217,7 +3301,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:message', { sessionId, message: safeMessage, beforeMessageId });
+        win.webContents.send(CoworkIpcChannel.StreamMessage, { sessionId, message: safeMessage, beforeMessageId });
       } catch (error) {
         console.error('Failed to forward cowork message:', error);
       }
@@ -3227,12 +3311,13 @@ const bindCoworkRuntimeForwarder = (): void => {
   runtime.on(
     'messageUpdate',
     (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => {
+      if (!canViewCoworkSession(sessionId)) return;
       const safeContent = truncateIpcString(content, IPC_UPDATE_CONTENT_MAX_CHARS);
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (win.isDestroyed()) return;
         try {
-          win.webContents.send('cowork:stream:messageUpdate', {
+          win.webContents.send(CoworkIpcChannel.StreamMessageUpdate, {
             sessionId,
             messageId,
             content: safeContent,
@@ -3246,11 +3331,12 @@ const bindCoworkRuntimeForwarder = (): void => {
   );
 
   runtime.on('sessionStatus', (sessionId: string, status: string) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:sessionStatus', { sessionId, status });
+        win.webContents.send(CoworkIpcChannel.StreamSessionStatus, { sessionId, status });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward session status:', error);
       }
@@ -3258,6 +3344,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('btwResult', (sessionId: string, result: CoworkBtwEntry) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const safeResult: CoworkBtwEntry = {
       ...result,
       sessionId,
@@ -3284,11 +3371,12 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('contextUsageUpdate', (sessionId: string, usage: unknown) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:contextUsage', { sessionId, usage });
+        win.webContents.send(CoworkIpcChannel.StreamContextUsage, { sessionId, usage });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward context usage:', error);
       }
@@ -3296,6 +3384,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('goalUpdate', (sessionId: string, goal: unknown) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
@@ -3308,6 +3397,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('contextMaintenance', (sessionId: string, active: boolean) => {
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     console.log(
       `[CoworkRuntime] forwarding context maintenance ${active ? 'start' : 'end'} for session ${sessionId} to ${windows.length} windows.`,
@@ -3315,7 +3405,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:contextMaintenance', { sessionId, active });
+        win.webContents.send(CoworkIpcChannel.StreamContextMaintenance, { sessionId, active });
       } catch (error) {
         console.error('[CoworkRuntime] failed to forward context maintenance status:', error);
       }
@@ -3323,6 +3413,12 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('permissionRequest', (sessionId: string, request: unknown) => {
+    const incomingId = (request as { requestId?: unknown } | null)?.requestId;
+    if (typeof incomingId === 'string') {
+      coworkPermissionSessions.set(incomingId, sessionId);
+      coworkRuntimePermissionIds.add(incomingId);
+    }
+    if (!canViewCoworkSession(sessionId)) return;
     if (runtime.getSessionConfirmationMode(sessionId) === 'text') {
       return;
     }
@@ -3331,7 +3427,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach(win => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:permission', { sessionId, request: safeRequest });
+        win.webContents.send(CoworkIpcChannel.StreamPermission, { sessionId, request: safeRequest });
       } catch (error) {
         console.error('Failed to forward cowork permission request:', error);
       }
@@ -3345,7 +3441,25 @@ const bindCoworkRuntimeForwarder = (): void => {
     }
   });
 
-  runtime.on('permissionResolved', (_sessionId: string, requestId: string) => {
+  runtime.on('permissionState', (sessionId: string, state: ApprovalState) => {
+    if (state.status === 'pending') {
+      coworkPermissionSessions.set(state.requestId, sessionId);
+      coworkRuntimePermissionIds.add(state.requestId);
+    }
+    if (!canViewCoworkSession(sessionId)) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(CoworkIpcChannel.StreamPermissionState, { sessionId, state });
+      } catch (error) {
+        console.warn('[CoworkApproval] Failed to forward approval state:', error);
+      }
+    }
+  });
+
+  runtime.on('permissionResolved', (sessionId: string, requestId: string) => {
+    coworkPermissionSessions.delete(requestId);
+    coworkRuntimePermissionIds.delete(requestId);
     getDesktopNotificationManager().handlePermissionResolved(requestId);
     if (
       requestId.startsWith(OpenClawQuestion.RequestIdPrefix)
@@ -3361,6 +3475,13 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('sessionStopped', (sessionId, turn) => {
+    for (const [requestId, ownerSessionId] of coworkPermissionSessions) {
+      if (ownerSessionId === sessionId) {
+        coworkPermissionSessions.delete(requestId);
+        coworkRuntimePermissionIds.delete(requestId);
+      }
+    }
+    if (!canViewCoworkSession(sessionId)) return;
     getDesktopNotificationManager().handleSessionStopped(sessionId);
     void coworkTurnUsageService?.settleStoppedTurn(sessionId, turn).catch((error) => {
       console.warn(`[TurnUsage] settlement failed for stopped session ${sessionId}.`, error);
@@ -3379,12 +3500,13 @@ const bindCoworkRuntimeForwarder = (): void => {
     mediaTurnAccountScopeBySession.delete(sessionId);
     skinRuntimeController?.handleRuntimeComplete(sessionId);
     mediaReferencesBySession.delete(sessionId);
+    if (!canViewCoworkSession(sessionId)) return;
     getDesktopNotificationManager().handleComplete(sessionId);
     settleCoworkTurnUsage(sessionId, { runIds: runtime.getTurnRunIds(sessionId) });
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
-      win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
+      win.webContents.send(CoworkIpcChannel.StreamComplete, { sessionId, claudeSessionId });
     });
     // If this session used a server model, notify renderer to refresh quota.
     try {
@@ -3413,10 +3535,11 @@ const bindCoworkRuntimeForwarder = (): void => {
     } catch {
       /* ignore */
     }
+    if (!canViewCoworkSession(sessionId)) return;
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(win => {
       if (win.isDestroyed()) return;
-      win.webContents.send('cowork:stream:error', { sessionId, error });
+      win.webContents.send(CoworkIpcChannel.StreamError, { sessionId, error });
     });
     try {
       if (shouldRefreshServerQuotaForSession(sessionId)) {
@@ -3492,6 +3615,7 @@ const getDesktopNotificationManager = (): DesktopNotificationManager => {
       getNotificationSettings: () =>
         getStore().get<AppConfigSettings>('app_config')?.notificationSettings,
       getSessionTitle: (sessionId: string) => {
+        if (!canViewCoworkSession(sessionId)) return null;
         try {
           return getCoworkStore().getSession(sessionId, 0)?.title ?? null;
         } catch {
@@ -3534,6 +3658,10 @@ const getSkillManager = () => {
 const getMcpRuntime = (): McpRuntime => {
   if (!mcpRuntime) {
     mcpRuntime = new McpRuntime({
+      permissionSessions: coworkPermissionSessions,
+      captureAccountSnapshot: () => captureCoworkPermissionAccount(),
+      registerQuestion: (...args) => getCoworkEngineRouter().registerQuestion(...args),
+      settleQuestion: (...args) => getCoworkEngineRouter().settleQuestion(...args),
       getMailToken: id => dshBootstrap?.mcpOAuthManager.getToken(id) ?? null,
       getStore,
       syncOpenClawConfig,
@@ -3620,10 +3748,11 @@ const getIMGatewayManager = () => {
 
     // Forward IM events to renderer
     imGatewayManager.on('statusChange', status => {
+      const visibleStatus = visibleImStatus(status, imGatewayManager!.canUseInstance);
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (!win.isDestroyed()) {
-          win.webContents.send('im:status:change', status);
+          win.webContents.send(ImIpcChannel.StatusChange, visibleStatus);
         }
       });
     });
@@ -3703,10 +3832,11 @@ const getIMGatewayManager = () => {
     });
 
     imGatewayManager.on('message', message => {
+      if (!canManageImPlatform(imGatewayManager!.getIMStore().getConfig(), message.platform, imGatewayManager!.canUseInstance)) return;
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (!win.isDestroyed()) {
-          win.webContents.send('im:message:received', message);
+          win.webContents.send(ImIpcChannel.MessageReceived, message);
         }
       });
     });
@@ -3887,6 +4017,7 @@ const flushOpenSessionFromNotification = (): void => {
   const sessionId = pendingOpenSessionFromNotificationId;
   pendingOpenSessionFromNotificationId = null;
   console.log(`[DesktopNotification] opening session ${sessionId} from notification`);
+  if (!canViewCoworkSession(sessionId)) return;
   mainWindow.webContents.send(CoworkIpcChannel.OpenSessionFromNotification, { sessionId });
 };
 
@@ -4595,6 +4726,7 @@ if (!gotTheLock) {
   };
 
   ipcMain.on('log:fromRenderer', (_event, level: string, tag: string, message: string) => {
+    if (logSettingsOpenFromRenderer(tag, message)) return;
     const fn = level === 'error' ? console.error
       : level === 'warn' ? console.warn
         : level === 'debug' ? console.debug
@@ -4925,7 +5057,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(AppSettingsIpc.GetPreventSleep, () => {
-    const enabled = getStore().get<boolean>('prevent_sleep_enabled') ?? false;
+    const enabled = remoteSettingsController?.state().keepAwakeEnabled ?? false;
     return { enabled };
   });
 
@@ -4934,9 +5066,10 @@ if (!gotTheLock) {
       return { success: false, error: 'Invalid parameter: enabled must be boolean' };
     }
     try {
-      setPreventSleepBlockerEnabled(enabled);
-      getStore().set('prevent_sleep_enabled', enabled);
-      return { success: true };
+      if (!remoteSettingsController) throw new Error('Remote settings are not initialized');
+      if (!getCurrentRemoteOwner()) throw new Error('Sign in before configuring remote access');
+      const state = remoteSettingsController.setKeepAwake(enabled);
+      return { success: !state.keepAwakeError, error: state.keepAwakeError };
     } catch (error) {
       return {
         success: false,
@@ -5033,7 +5166,25 @@ if (!gotTheLock) {
 
   // ── Auth IPC handlers ──
 
+  let remoteTelemetryRuntime: ReturnType<typeof initializeRemoteTelemetry> | null = null;
+  prepareRemoteFileRun = async (sessionId, cwd) => {
+    await remoteBridge?.prepareFileRun(sessionId, [cwd, app.getPath('desktop')]);
+  };
+  let remoteLocalGc: RemoteLocalGc | null = null;
+  let remoteSessionCommands: SessionCommandService | null = null;
+  let ownershipAssociations: OwnershipAssociationService | null = null;
+  const ownershipBootId = crypto.randomUUID();
+  let ownershipAccountEpoch = 0;
   let authAccountGeneration = 0;
+  let libraryFileAccess: LibraryFileAccessPolicy | null = null;
+  const captureLibraryFileAccess = (filePath: string, access?: ArtifactFileAccess) => {
+    if (!libraryFileAccess) throw new Error(t('libraryFileUnavailable'));
+    return libraryFileAccess.capture(filePath, access);
+  };
+  const revalidateArtifactPreviews = (): void => {
+    revalidatePreviewSessions();
+    revalidateLocalFileProtocolStreams();
+  };
   let authExchangeIntentSequence = 0;
   let activeAuthExchangeIntent: AuthExchangeIntentSnapshot | null = null;
 
@@ -5118,6 +5269,19 @@ if (!gotTheLock) {
     }
   };
   resolveCurrentMediaAccountScope = getCurrentMediaAccountScope;
+  const remoteScopePendingKey = 'remote_account_scope_pending';
+  const getCurrentRemoteOwner = (): RemoteOwner | null => {
+    if (getStore().get<boolean>(remoteScopePendingKey) || !getAuthTokens()) return null;
+    const user = getAuthUser();
+    const value = user?.userId ?? user?.id;
+    // Server users.id only: yid and display-name fallbacks are deliberately forbidden.
+    if ((typeof value !== 'string' && typeof value !== 'number') || !/^[1-9]\d*$/.test(String(value))) return null;
+    if (typeof value === 'number' && !Number.isSafeInteger(value)) return null;
+    const enterprise = getPersistedEnterpriseAccountContext(getStore());
+    if (!enterprise && user?.accountMode === EnterpriseAccountMode.Enterprise) return null;
+    return { userId: String(value), scopeKey: enterprise ? `enterprise:${enterprise.enterpriseId}` : 'personal' };
+  };
+
 
   const captureEnterpriseAuthSessionSnapshot = (
     accountScope = getCurrentMediaAccountScope(),
@@ -5311,10 +5475,16 @@ if (!gotTheLock) {
     }
   };
 
-  const getAuthSessionKey = (): string | null => {
-    if (!getAuthTokens()) return null;
+  const serverRouteContexts = new ServerRouteContextTracker();
+  const captureRemoteRouteContext = () => {
     const scope = getCurrentMediaAccountScope();
-    return `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}`;
+    return serverRouteContexts.capture(getServerApiBaseUrl(),
+      `${scope?.ownerAccountKey ?? 'unresolved'}:${authAccountGeneration}:${ownershipAccountEpoch}`);
+  };
+  const getRemoteRouteEpoch = (): number => serverRouteContexts.peekEpoch();
+  const getAuthSessionKey = (): string | null => {
+    const context = captureRemoteRouteContext();
+    return getAuthTokens() ? `${context.authSessionKey}:${context.routeEpoch}` : null;
   };
 
   resolveAppUpdateGraySession = () => {
@@ -5376,16 +5546,19 @@ if (!gotTheLock) {
   });
   waitForPendingTokenRefresh = () => authSessionManager.waitForPendingRefresh();
 
-  const fetchWithAuth = async (url: string, options?: RequestInit): Promise<Response> => {
+  const fetchWithAuth = async (url: string, options?: RequestInit, transport?: AuthFetch): Promise<Response> => {
+    const requestAuthSessionKey = getAuthSessionKey();
     const requestEnterpriseSession = captureEnterpriseAuthSessionSnapshot();
-    const response = await authSessionManager.fetchWithAuth(url, options);
+    const response = await authSessionManager.fetchWithAuth(url, options, transport);
     if (
       requestEnterpriseSession
+      // A successful asset can itself be a JSON file; never clone/parse its byte stream as an API envelope.
+      && !(response.status === 200 && remoteNetworkBinaryDownload(url, options?.method))
       && response.headers.get('content-type')?.includes('application/json')
     ) {
       try {
         const code = readEnterpriseApiErrorCode(await response.clone().json());
-        if (code === EnterpriseApiErrorCode.NotMember) {
+        if (getAuthSessionKey() === requestAuthSessionKey && code === EnterpriseApiErrorCode.NotMember) {
           handleEnterpriseMembershipRevocation({
             code,
             source: resolveEnterpriseMembershipRevocationSource(url),
@@ -5396,14 +5569,352 @@ if (!gotTheLock) {
         // The original response remains available to the endpoint-specific parser.
       }
     }
+    if (getAuthSessionKey() !== requestAuthSessionKey) {
+      try { void response.body?.cancel().catch((): void => undefined); } catch { /* Preserve context cancellation. */ }
+      throw new AuthSessionRequestError(AuthSessionStatus.TemporarilyUnavailable, 'Auth response context changed',
+        { failureKind: AuthRefreshFailureKind.ContextChanged });
+    }
     return response;
   };
+
+  let sessionDeletionService: SessionDeletionService | null = null;
+  const getSessionDeletionService = (): SessionDeletionService => {
+    sessionDeletionService ??= new SessionDeletionService(getCoworkStore(), getCoworkEngineRouter(), sessionId => {
+      let cleanupFailed = false;
+      try {
+        mediaSelectionBySession.delete(sessionId);
+        mediaTurnAccountScopeBySession.delete(sessionId);
+        skinRuntimeController?.handleSessionDeleted(sessionId);
+        getCoworkImageOriginals().deleteSession(sessionId);
+        mediaReferencesBySession.delete(sessionId);
+        getDesktopNotificationManager().handleSessionDeleted(sessionId);
+        // Remove any pending media tasks for this session
+        for (const [taskId, tracker] of pendingMediaTasks) {
+          if (tracker.sessionId === sessionId) pendingMediaTasks.delete(taskId);
+        }
+        clearHandledMediaTasksForSession(sessionId);
+        clearMediaStatusPollCountsForSession(sessionId);
+        // Clean up IM session mapping so that new channel messages
+        // create a fresh session instead of referencing a deleted one.
+        try {
+          getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
+        } catch {
+          cleanupFailed = true;
+        }
+        // Notify runtime to purge in-memory caches for this session
+        // so that channel messages can create a fresh session.
+        try {
+          getCoworkEngineRouter().onSessionDeleted(sessionId);
+        } catch {
+          cleanupFailed = true;
+        }
+      } finally {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds: [sessionId], deletedSessionIds: [sessionId] });
+        }
+      }
+      if (cleanupFailed) throw new Error('Session runtime cleanup is pending');
+    }, getCurrentRemoteOwner, () => getRemoteAccountEpoch());
+    return sessionDeletionService;
+  };
+
+  // Remote transport must wait for startup recovery, provider setup and config synchronization.
+  let remoteStartupReady = false;
+  // Read persisted initialization intent only while initializing, never from a settings/diagnostic read.
+  let remoteInitializationIntent: { key: string; enabled: boolean } | null = null;
+  let remoteDisplayOwner: RemoteOwner | null = null;
+  let remoteDisplayKeepAwake: boolean | undefined;
+  const remoteIntentKey = (): string => JSON.stringify([remoteDisplayOwner, getServerApiBaseUrl()]);
+  const remoteSettingsRuntime = createDshSettingsWriteLease({
+    ready: () => remoteCredentialsAllowed && getDshBootstrap().isReadyForTurns(),
+    owner: getCurrentRemoteOwner, epoch: () => getRemoteAccountEpoch(),
+    busy: id => getCoworkEngineRouter().getActiveSessionIds().some(key => getCoworkStore().getSession(key, 0)?.agentId === id),
+  });
+  const supportsMobileCommand = (type: string): boolean => {
+    const runtime = getCoworkEngineRouter();
+    switch (type) {
+      case RemoteCommandKind.CreateSession:
+      case RemoteCommandKind.SendMessage:
+      case RemoteCommandKind.CancelRun: return runtime.supportsRemoteTurns();
+      case RemoteCommandKind.ApprovalResponse: return runtime.supportsDualApproval();
+      case RemoteCommandKind.QuestionResponse: return runtime.supportsRemoteQuestions();
+      default: return false;
+    }
+  };
+  let accountRuntimeReady = true;
+  const mobileAccountFence = new MobileRemoteAccountFence(remoteAccountTransition);
+  let disposeRemoteSecurity: (() => void) | undefined;
+  const refreshRemoteIntent = (): boolean => {
+    const owner = getCurrentRemoteOwner();
+    remoteInitializationIntent = { key: remoteIntentKey(), enabled: false };
+    try {
+      const saved = owner ? getCoworkStore().remote.get<unknown>(`settings:${owner.userId}:${owner.scopeKey}`) : null;
+      remoteInitializationIntent.enabled = mobileRemoteStartupEnabled(owner, saved);
+    } catch { /* An unreadable preference does not authorize automatic startup. */ }
+    return remoteInitializationIntent.enabled;
+  };
+  const initializeRemoteBridgeOnce = (): RemoteBridge => {
+    refreshRemoteIntent();
+    if (!accountRuntimeReady || !getCurrentRemoteOwner()) throw new RemoteInitializationError(RemoteInitializationFailure.DependencyUnavailable);
+    return remotePerformance.sync(RemotePerformanceStage.RemoteInitialize, () => remoteBridge = buildMobileRemoteBridge({
+      store: getCoworkStore, commands: () => remoteSessionCommands!, runtime: getCoworkEngineRouter, deletion: getSessionDeletionService,
+      owner: () => accountRuntimeReady ? getCurrentRemoteOwner() : null, displayOwner: () => remoteDisplayOwner, endpoint: getServerApiBaseUrl, token: () => getAuthTokens()?.accessToken ?? null,
+      routeEpoch: getRemoteRouteEpoch, headers: getEnterpriseAccountHeaders, fetchWithAuth, defaultModel: resolveDefaultAgentModelRef,
+      agents: getAgentManager, agentWorkspace: id => getDshBootstrap().memoryService.getAgentWorkspaceDir(id),
+      defaultCwd: resolveAgentDefaultWorkingDirectory, settingsRuntime: remoteSettingsRuntime, notifyAgents: notifyAgentsChanged,
+      assertSettingsTurn: (sessionId, requestId, agentId) => getDshBootstrap().runtimeAdapter.assertRemoteDelegation(sessionId, requestId, agentId),
+      syncSettings: async () => { const result = await syncOpenClawConfig({ reason: 'remote-agent-settings' }); if (!result.success || !getDshBootstrap().isReadyForTurns()) throw new Error('SETTINGS_OPERATION_PENDING'); },
+      expertEndpoint: getExpertStoreUrl, expertAvatar: url => getExpertStore().getRemoteAvatarKeys()?.get(url) ?? null,
+      library: () => libraryIndexService, captureFile: captureLibraryFileAccess, hasLock: gotTheLock,
+      disposeSecurity: close => { disposeRemoteSecurity = close; },
+      supportsCommand: type => accountRuntimeReady && remoteCredentialsAllowed && getDshBootstrap().isReadyForTurns() && supportsMobileCommand(type),
+      changed: () => remoteSettingsController?.notify(),
+    }));
+  };
+  const remoteInitialization = new RemoteInitializationRecovery({
+    initialize: initializeRemoteBridgeOnce,
+    canRetry: () => Boolean(getCurrentRemoteOwner()) && readRemoteState().enabled,
+    changed: () => remoteSettingsController?.notify(),
+    report: (failure, attempt) => {
+      const fields = { event: 'desktop.remote_initialization', result: failure ? 'failed' : 'success',
+        failure: failure ?? undefined, retryAttempt: attempt };
+      remoteLogMessage(failure ? 'warn' : 'info', '[RemoteInitialization]', fields);
+      if (failure) console.warn('[RemoteInitialization] Local initialization failed', fields);
+      else console.info('[RemoteInitialization] Original credentials readable; bridge initialized', fields);
+    },
+  });
+  const initializeRemoteBridge = (manual = false): RemoteBridge => {
+    // Early IPC must not start transport or consume the local recovery retry budget.
+    if (!remoteStartupReady || !accountRuntimeReady || !getCurrentRemoteOwner()) throw new RemoteInitializationError(RemoteInitializationFailure.DependencyUnavailable);
+    remoteInitialization.ensure(manual);
+    return remoteBridge!;
+  };
+  const startRemoteForCurrentAccount = (): void => {
+    if (isQuitting || !remoteStartupReady || !accountRuntimeReady || !refreshRemoteIntent()) return;
+    try { initializeRemoteBridge(); } catch { /* The settings snapshot exposes the recovery reason. */ }
+  };
+  const getRemoteAccountEpoch = (): string => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`;
+  captureCoworkPermissionAccount = () => {
+    const epoch = getRemoteAccountEpoch();
+    const owner = JSON.stringify(getCurrentRemoteOwner());
+    return () => epoch === getRemoteAccountEpoch() && owner === JSON.stringify(getCurrentRemoteOwner());
+  };
+  const readRemoteState = (): RemoteSettingsState => {
+    const owner = remoteDisplayOwner;
+    try {
+      if (remoteBridge && owner) {
+        const state = remoteBridge.state();
+        if (sameOwner(owner, state.owner)) return { ...state, accountEpoch: getRemoteAccountEpoch() };
+      }
+    } catch { /* A failed optional bridge must still expose a stable settings response. */ }
+    const enabled = Boolean(owner) && remoteInitializationIntent?.key === remoteIntentKey() && remoteInitializationIntent.enabled;
+    const failure = owner ? remoteInitialization.failure : undefined;
+    const failureMessages = {
+      [RemoteInitializationFailure.SecureStorageUnavailable]: 'remoteSecureStorageUnavailable',
+      [RemoteInitializationFailure.IdentityUnreadable]: 'remoteIdentityUnreadable',
+      [RemoteInitializationFailure.IdentityInvalid]: 'remoteIdentityInvalid',
+      [RemoteInitializationFailure.LocalStorageUnavailable]: 'remoteLocalStorageUnavailable',
+      [RemoteInitializationFailure.DependencyUnavailable]: 'remoteInitializationUnavailable',
+    };
+    return { accountEpoch: getRemoteAccountEpoch(), enabled, connected: false, name: os.hostname(), hostName: os.hostname(),
+      owner, workspaces: [], accessRequests: [], initializationFailure: failure,
+      ...(failure ? { deviceConnectionManagementSupported: false, error: t(failureMessages[failure]) } : {}) };
+  };
+  registerRemoteHandlers({ sender: () => mainWindow?.webContents, owner: getCurrentRemoteOwner, epoch: getRemoteAccountEpoch,
+    state: readRemoteState, controller: () => remoteSettingsController, bridge: initializeRemoteBridge, retryAccount: () => mobileAccountFence.retry() });
+  const initializeSessionExecutionCore = (): void => {
+    // Store-backed services and listeners must wait for initApp's database initialization.
+    getCoworkStore().remoteCreationOwner = getCurrentRemoteOwner;
+    getSessionDeletionService();
+    const notifySessionConfigurationChanged = (sessionId: string): void => {
+      if (!getCoworkStore().canReadSession(sessionId, getCurrentRemoteOwner())) return;
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds: [sessionId] });
+      }
+    };
+    remoteSessionCommands = new SessionCommandService(getCoworkStore(), getCoworkEngineRouter(), getCurrentRemoteOwner,
+      { getGeneration: () => `${ownershipAccountEpoch}:${authAccountGeneration}`,
+        onRecovered: notifySessionConfigurationChanged,
+        onInputConfigurationChanged: notifySessionConfigurationChanged,
+        recoveryTarget: getServerApiBaseUrl,
+        canRecover: () => !isQuitting && !isDataMigrationRestoreInProgress && remoteCredentialsAllowed && getDshBootstrap().isReadyForTurns() });
+    remoteSessionCommands.configure(submitStart, submitContinue);
+    getDshBootstrap().hostManager.on('connectionChange', () => {
+      if (getDshBootstrap().hostManager.isReady()) {
+        void getCoworkEngineRouter().probeRemoteDecisions().then(() => {
+          if (getDshBootstrap().isReadyForTurns()) {
+            remoteStartupReady = true;
+            startRemoteForCurrentAccount();
+            remoteSessionCommands?.recovery.gatewayReady();
+          }
+        }).catch(error => console.warn('[RemoteControl] Host capability query failed', error));
+      }
+    });
+    ownershipAssociations = new OwnershipAssociationService({
+      store: getCoworkStore(), gate: ownershipOperationGate,
+      actor: () => {
+        const user = getAuthUser();
+        const enterprise = getPersistedEnterpriseAccountContext(getStore());
+        const label = user?.nickname ?? user?.displayName ?? user?.name;
+        return { owner: getCurrentRemoteOwner(), generation: `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`,
+          label: typeof label === 'string' && label.trim() ? label : t('ownershipCurrentAccount'),
+          scopeLabel: enterprise?.enterpriseName || t(enterprise ? 'ownershipEnterpriseScope' : 'ownershipPersonalScope') };
+      },
+      deviceName: () => readRemoteState().name || os.hostname(),
+      isBusy: resources => resources.sessionIds.some(id => getCoworkEngineRouter().isSessionActive(id))
+        || getCoworkEngineRouter().listPendingPermissions().some(item => item.sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID),
+      syncState: target => remoteBridge?.associationSyncState(target),
+      taskSync: target => remoteBridge?.associationTaskSync(target),
+      publicationTarget: () => remoteBridge?.associationPublicationTarget() ?? null,
+      confirmPublication: (ids, target) => {
+        if (!remoteBridge) throw new Error('Remote publication is unavailable');
+        remoteBridge.resumeAssociationPublication(ids, target);
+      },
+      afterCommit: result => {
+        remoteBridge?.notifyAssociationChanged(result.sessionIds);
+        revalidateArtifactPreviews();
+        libraryIndexService?.notifySessionProjectionChanges({ changedSessionIds: result.sessionIds, deletedSessionIds: [], affectedArtifactIds: [] });
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+            window.webContents.send(OwnershipIpc.Changed);
+          }
+        }
+        syncOpenClawConfig({ reason: 'ownership-associated' }).catch(error => {
+          console.error('[Ownership] Failed to refresh execution permissions', error);
+        });
+      },
+    });
+    let actor = getCurrentRemoteOwner();
+    let route = getServerApiBaseUrl();
+    remoteDisplayOwner = actor;
+    const key = 'remote_account_execution_fence';
+    const fence = () => {
+      remoteCredentialsAllowed = false;
+      accountRuntimeReady = false;
+      const identity = payloadHash([actor, route]);
+      const resume = Boolean(dshBootstrap?.hostManager.hasLiveHost() || bootstrapEngineFlight.getInFlight() || remoteStartupReady);
+      // The transition is queued synchronously by the critical SQLite listener.
+      mobileAccountFence.change(async current => {
+        getStore().set(key, { phase: 'pending', identity });
+        const bootstrap = dshBootstrap;
+        if (bootstrap) {
+          bootstrap.scheduler.stop();
+          bootstrap.runtimeAdapter.stopAllSessions();
+          await bootstrapEngineFlight.getInFlight()?.catch((): void => undefined);
+          await bootstrap.hostManager.stop();
+        }
+        if (!current() || isQuitting) return;
+        remoteCredentialsAllowed = true;
+        try {
+          if (bootstrap && resume && !isDataMigrationRestoreInProgress) {
+            await bootstrapOpenClawEngine({ reason: 'remote-account-change' });
+            if (!current()) return;
+            const result = await bootstrap.runInitialConfigSync(
+              () => syncOpenClawConfig({ reason: 'remote-account-change' }), { force: true });
+            if (!current()) return;
+            if (!result) throw new Error('Account configuration unavailable');
+            bootstrap.scheduler.start();
+          }
+          getStore().set(key, { phase: 'ready', identity });
+          accountRuntimeReady = true;
+          remoteBridge?.accountChanged();
+          startRemoteForCurrentAccount();
+          remoteSettingsController?.notify();
+        } catch (error) {
+          if (current()) remoteCredentialsAllowed = false;
+          throw error;
+        }
+      });
+    };
+    const previous = getStore().get<{ phase: string; identity: string }>(key);
+    if (previous && (previous.phase !== 'ready' || previous.identity !== payloadHash([actor, route]))) fence();
+    else getStore().set(key, { phase: 'ready', identity: payloadHash([actor, route]) });
+    for (const setting of ['auth_tokens', LogReporterStoreKey.AuthUser, 'enterprise_account_context', 'app_config', remoteScopePendingKey]) {
+      getStore().onCriticalChange(setting, () => {
+        const next = getCurrentRemoteOwner();
+        const nextRoute = getServerApiBaseUrl();
+        if ((actor === null && next === null || sameOwner(actor, next)) && nextRoute === route) return;
+        const before = actor;
+        actor = next;
+        route = nextRoute;
+        remoteDisplayOwner = next;
+        ownershipAccountEpoch++;
+        fence();
+        captureRemoteRouteContext();
+        authSessionManager.invalidateContext();
+        const refresh = [
+          revalidateArtifactPreviews,
+          () => remoteSessionCommands?.accountChanged(before, next),
+          () => remoteBridge?.accountChanged(),
+          () => remoteSettingsController?.restoreKeepAwake(),
+          () => {
+            for (const window of BrowserWindow.getAllWindows()) {
+              if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(OwnershipIpc.Changed);
+            }
+          },
+        ];
+        for (const update of refresh) {
+          try { update(); } catch (error) { console.warn('[RemoteAccount] Account view refresh failed', error); }
+        }
+      });
+    }
+  };
+
+  const initializeRemoteControl = (): void => {
+    remotePerformance.start();
+    try {
+      remoteTelemetryRuntime = initializeRemoteTelemetry({
+        store: getStore(), reporter: getMainLogReporter(), appVersion: app.getVersion(),
+        directory: path.join(app.getPath('userData'), 'remote-telemetry'),
+        getOwner: getCurrentRemoteOwner, getRoute: getServerApiBaseUrl,
+        getTarget: () => remoteBridge?.telemetryIdentity() ?? {},
+        fetch: async (url, signal) => {
+          const response = await session.defaultSession.fetch(url, { method: 'GET', signal, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
+          const result = { ok: response.ok, status: response.status, retryAfter: response.headers.get('Retry-After') };
+          await response.body?.cancel();
+          return result;
+        },
+      });
+    } catch { /* Diagnostics cannot prevent desktop or remote initialization. */ }
+    try {
+      remoteLocalGc ??= new RemoteLocalGc({ store: getCoworkStore().remote,
+        cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), inputCacheRoot: path.join(app.getPath('userData'), 'remote-inputs'), owner: getCurrentRemoteOwner,
+        enabled: () => remoteStartupReady && Boolean(remoteBridge) && !getCoworkStore().remote.needsSecurityRecovery() });
+      remoteLocalGc.start();
+    } catch { console.warn('[RemoteGc] Background cache maintenance unavailable'); }
+    try {
+      remoteDisplayKeepAwake = getStore().get<boolean>(PREVENT_SLEEP_STORE_KEY);
+      getStore().onDidChange<boolean>(PREVENT_SLEEP_STORE_KEY, value => { remoteDisplayKeepAwake = value; });
+      remoteSettingsController = new RemoteSettingsController({
+        getRemoteState: readRemoteState,
+        getOwner: getCurrentRemoteOwner,
+        getAccountEpoch: getRemoteAccountEpoch,
+        getKeepAwakePreference: () => remoteDisplayKeepAwake,
+        saveKeepAwakePreference: enabled => getStore().set(PREVENT_SLEEP_STORE_KEY, enabled),
+        applyKeepAwake: setPreventSleepBlockerEnabled,
+        isKeepAwakeActive: () => preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId),
+        publish: state => {
+          remoteTelemetryRuntime?.refresh(state);
+          for (const window of BrowserWindow.getAllWindows()) {
+            if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(RemoteIpc.Changed, state);
+          }
+        },
+      });
+      remoteSettingsController.restoreKeepAwake();
+    } catch (error) { console.warn('[RemoteSettings] Optional settings initialization failed', error); }
+  };
+
+  registerOwnershipHandlers(() => ownershipAssociations, () => mainWindow?.webContents);
 
   configureLlmUsageContextResolver((traceId, registration) => {
     const currentOwner = getAuthSessionKey();
     const context = registration ? { ...registration, owner: registration.owner ?? currentOwner } : null;
     const target = getCoworkStore().findUserMessageByTrace(traceId, registration?.sessionId);
     if (!target) return context;
+    if (!canViewCoworkSession(target.sessionId)) {
+      // Retain the trace binding so native reports cannot reassign an inaccessible turn.
+      return { sessionId: target.sessionId, userMessage: '', owner: null };
+    }
     const trace = target.message.metadata?.llmTrace;
     if (!trace) return context;
     const scope = getCurrentMediaAccountScope();
@@ -5437,6 +5948,10 @@ if (!gotTheLock) {
 
   coworkTurnUsageService = new CoworkTurnUsageService({
     getStore: () => getCoworkStore(),
+    captureSessionAccess: sessionId => {
+      const accountEpoch = getRemoteAccountEpoch();
+      return () => accountEpoch === getRemoteAccountEpoch() && canViewCoworkSession(sessionId);
+    },
     fetchWithAuth,
     hasAuthTokens: () => Boolean(getAuthTokens()?.accessToken),
     getSessionKey: getAuthSessionKey,
@@ -5446,6 +5961,7 @@ if (!gotTheLock) {
     getTraceStats: getModelAuthProxyTraceStats,
     claimNativeRunTurnUsage,
     emitTurnUsage: (event) => {
+      if (!canViewCoworkSession(event.sessionId)) return;
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) {
           win.webContents.send(CoworkIpcChannel.StreamTurnUsage, event);
@@ -7613,6 +8129,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(AuthIpcChannel.Exchange, (_event, { code }: { code: string }) => authLoginAttempt.runExchange(async (loginAttempt) => {
     const startingTokens = getAuthTokens();
+    const startingScopePending = getStore().get<boolean>(remoteScopePendingKey) === true;
     const startingUser = getAuthUser();
     const startingEnterpriseContext = getPersistedEnterpriseAccountContext(getStore());
     const startingQuotaGateState = getAuthQuotaGateState();
@@ -7668,14 +8185,18 @@ if (!gotTheLock) {
       messageSpeechController?.stop();
       desktopCompanionManager?.resetLanguageTools();
       const exchangeAccountGeneration = authAccountGeneration;
-      clearEnterpriseAccountContext(getStore());
       clearServerModelMetadata();
       // A login exchange can switch accounts without an explicit logout.
       // Reset entitlement fallbacks before normalizing the new account so a
       // partial quota payload cannot inherit the previous account's plan.
       resetAuthQuotaGateState();
-      saveAuthTokens(body.data.accessToken, body.data.refreshToken);
-      saveAuthUser(body.data.user);
+      const exchanged = body.data;
+      getStore().transactionWithChanges(() => {
+        getStore().set(remoteScopePendingKey, true);
+        clearEnterpriseAccountContext(getStore());
+        saveAuthTokens(exchanged.accessToken, exchanged.refreshToken);
+        getStore().set(LogReporterStoreKey.AuthUser, exchanged.user);
+      });
       committedExchangeGeneration = exchangeAccountGeneration;
       const enterpriseContext = await syncEnterpriseAccountContextFromPayload(body.data);
       if (!loginAttempt.isCurrent()) throw new Error('Login was cancelled or replaced');
@@ -7695,6 +8216,7 @@ if (!gotTheLock) {
       mediaSelectionBySession.clear();
       mediaTurnAccountScopeBySession.clear();
       mediaReferencesBySession.clear();
+      getStore().delete(remoteScopePendingKey);
       if (previousAccountScope) {
         clearMediaPollingStateForOwner(previousAccountScope.ownerAccountKey);
       }
@@ -7739,21 +8261,25 @@ if (!gotTheLock) {
         && authExchangeIntentSequence === exchangeIntent.intentId
       ) {
         authAccountGeneration += 1;
-        if (startingTokens) {
-          saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
-        } else {
-          clearAuthTokens();
-        }
-        if (startingUser) {
-          saveAuthUser(startingUser);
-        } else {
-          clearAuthUser();
-        }
-        if (startingEnterpriseContext) {
-          persistEnterpriseAccountContext(getStore(), startingEnterpriseContext);
-        } else {
-          clearEnterpriseAccountContext(getStore());
-        }
+        getStore().transactionWithChanges(() => {
+          if (startingTokens) {
+            saveAuthTokens(startingTokens.accessToken, startingTokens.refreshToken);
+          } else {
+            clearAuthTokens();
+          }
+          if (startingUser) {
+            getStore().set(LogReporterStoreKey.AuthUser, startingUser);
+          } else {
+            getStore().delete(LogReporterStoreKey.AuthUser);
+          }
+          if (startingEnterpriseContext) {
+            persistEnterpriseAccountContext(getStore(), startingEnterpriseContext);
+          } else {
+            clearEnterpriseAccountContext(getStore());
+          }
+          if (startingScopePending) getStore().set(remoteScopePendingKey, true);
+          else getStore().delete(remoteScopePendingKey);
+        });
         updateServerModelMetadata(startingServerModels);
         cachedSubscriptionStatus = startingQuotaGateState.subscriptionStatus;
         cachedMediaGenerationEntitled = startingQuotaGateState.mediaGenerationEntitled;
@@ -7914,6 +8440,8 @@ if (!gotTheLock) {
         + `enterpriseContext=${enterpriseContext ? 'present' : 'absent'}`,
       );
       const purchaseOffer = await activateLowCreditPurchaseOffer();
+      if (getStore().get<boolean>(remoteScopePendingKey)
+        && (enterpriseContext || readAccountMode(profileBody.data) !== EnterpriseAccountMode.Enterprise)) getStore().delete(remoteScopePendingKey);
       return {
         success: true,
         status: AuthSessionStatus.Authenticated,
@@ -8247,6 +8775,12 @@ if (!gotTheLock) {
   };
   const modelContextWindows = registerModelContextWindowIpc({
     ipcMain, getStore, getSessions: getCoworkStore, getRuntime: getCoworkEngineRouter,
+    assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, currentRemoteExecution()?.owner ?? getCurrentRemoteOwner()),
+    patchSession: (sessionId, patch) => remoteSessionCommands!.patchConfiguration(sessionId, patch),
+    isAccountCurrent: () => {
+      const epoch = getRemoteAccountEpoch();
+      return () => epoch === getRemoteAccountEpoch();
+    },
     ownerKey: getContextWindowOwnerKey,
     resolveSessionModel: session => {
       const agent = getCoworkStore().getAgent(session.agentId);
@@ -8262,8 +8796,11 @@ if (!gotTheLock) {
     ipcMain, client: modelPresetClient, getStore, getSessions: getCoworkStore,
     contextWindowOwnerKey: getContextWindowOwnerKey,
     getRuntime: getCoworkEngineRouter,
+    assertSessionAccess: sessionId => getCoworkStore().remote.assertActor(sessionId, currentRemoteExecution()?.owner ?? getCurrentRemoteOwner()),
+    patchSession: (sessionId, patch) => remoteSessionCommands!.patchConfiguration(sessionId, patch),
     ownerAccountKey: () => getCurrentMediaAccountScope()?.ownerAccountKey ?? null,
     ensureModelsReady: () => loadAvailableServerModels({ reason: 'chat-model-preset', awaitConfigSync: true }),
+    onSelectionCommitted: sessionId => { remoteSessionCommands!.recordCurrentInputModel(sessionId); },
     isAccountCurrent: () => {
       const generation = authAccountGeneration;
       const scope = getCurrentMediaAccountScope();
@@ -8295,6 +8832,7 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeCreateFromHtmlFileInput(input);
+      const fileLease = captureLibraryFileAccess(options.filePath);
       console.debug(
         `[HtmlShare] received HTML file share request for session ${options.sessionId} and artifact ${options.artifactId}`,
       );
@@ -8302,8 +8840,9 @@ if (!gotTheLock) {
         `[HtmlShare] HTML file share uses access mode ${options.accessMode ?? 'server-default'} and source file ${options.filePath}`,
       );
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
-      const packaged = await packageHtmlFile(options.filePath);
+      const packaged = await packageHtmlFile(options.filePath, fileLease.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease.assertAllowed();
       console.debug(
         `[HtmlShare] packaged HTML file share with ${packaged.totalFiles} files, ${packaged.totalBytes} bytes, entry ${packaged.entryFile}, and ${packaged.warnings.length} warnings`,
       );
@@ -8368,9 +8907,11 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeUpdateFromHtmlFileInput(input);
+      const fileLease = captureLibraryFileAccess(options.filePath);
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
-      const packaged = await packageHtmlFile(options.filePath);
+      const packaged = await packageHtmlFile(options.filePath, fileLease.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease.assertAllowed();
       const result = await updateHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
@@ -8413,6 +8954,7 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeCreateFromArtifactFileInput(input);
+      const fileLease = options.filePath ? captureLibraryFileAccess(options.filePath) : undefined;
       console.debug(
         `[HtmlShare] received ${options.sourceType} share request for session ${options.sessionId} and artifact ${options.artifactId}`,
       );
@@ -8423,8 +8965,9 @@ if (!gotTheLock) {
         filePath: options.filePath,
         content: options.content,
         remoteUrl: options.remoteUrl,
-      });
+      }, fileLease?.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease?.assertAllowed();
       console.debug(
         `[HtmlShare] packaged ${options.sourceType} share with ${packaged.totalBytes} bytes and entry ${packaged.entryFile}`,
       );
@@ -8554,6 +9097,7 @@ if (!gotTheLock) {
     try {
       const { scopedFetch } = capturePublishingRequest();
       const options = sanitizeUpdateFromArtifactFileInput(input);
+      const fileLease = options.filePath ? captureLibraryFileAccess(options.filePath) : undefined;
       const clientSourceKey = buildArtifactShareClientSourceKey(options);
       const packaged = await packageArtifactFile({
         sourceType: options.sourceType,
@@ -8561,8 +9105,9 @@ if (!gotTheLock) {
         filePath: options.filePath,
         content: options.content,
         remoteUrl: options.remoteUrl,
-      });
+      }, fileLease?.assertAllowed);
       archivePath = packaged.archivePath;
+      fileLease?.assertAllowed();
       const result = await updateHtmlShare(
         getServerApiBaseUrl(),
         getHtmlSharePublicBaseUrl(),
@@ -9521,6 +10066,7 @@ if (!gotTheLock) {
 
   // Cowork IPC handlers
   const checkSubmissionAccount = (scope: MediaAccountScope | null) => {
+    if (!remoteCredentialsAllowed) throw new Error(t('authAccountChanged'));
     if (!isMediaAccountScopeSnapshotCurrent(scope, getCurrentMediaAccountScope())) throw new Error(t('authAccountChanged'));
   };
   const submissionOwner = (scope: MediaAccountScope | null) => JSON.stringify([getServerApiBaseUrl(), scope?.ownerAccountKey ?? null]);
@@ -9534,17 +10080,44 @@ if (!gotTheLock) {
     },
     getBaseUrl: getServerApiBaseUrl,
     fetch: (url, options) => net.fetch(url, options),
-    getSession: sessionId => getCoworkStore().getSession(sessionId),
+    getSession: sessionId => canViewCoworkSession(sessionId) ? getCoworkStore().getSession(sessionId) : null,
     setTitle: (sessionId, title) => {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getCoworkStore().updateSession(sessionId, { title }, { touchUpdatedAt: false });
       reportUsageSessionTitle(sessionId);
     },
   });
 
-  ipcMain.handle(
-    CoworkIpcChannel.SessionStart,
-    async (
-      _event,
+  const recordDesktopInput = async (sessionId: string, options: { prompt: string; localInput?: CoworkLocalInput; imageAttachments?: CoworkImageAttachmentMain[] }, selectedFileCaptureDeadline: number): Promise<void> => {
+    if (currentRemoteExecution()?.commandId) return;
+    const owner = getCurrentRemoteOwner();
+    const runId = getCoworkStore().remote.run(sessionId)?.runId;
+    const epoch = `${ownershipAccountEpoch}:${authAccountGeneration}`;
+    if (!owner || !runId || !sameOwner(getCoworkStore().remote.owner(sessionId), owner)) return;
+    const current = (): boolean => {
+      try {
+        getCoworkStore().remote.assertNoDeletionEffect(sessionId);
+        return epoch === `${ownershipAccountEpoch}:${authAccountGeneration}` && sameOwner(owner, getCurrentRemoteOwner())
+          && !!getCoworkStore().getSession(sessionId, 0) && sameOwner(getCoworkStore().remote.owner(sessionId), owner)
+          && getCoworkStore().remote.run(sessionId)?.runId === runId;
+      } catch { return false; }
+    };
+    const captured = await captureDesktopInput(options.localInput, options.imageAttachments, {
+      owner, fallbackText: options.prompt, cacheRoot: path.join(app.getPath('userData'), 'remote-file-uploads'), current,
+      captureSnapshot: desktopInputCaptureEnabled(() => remoteBridge?.canCaptureRemoteFiles() === true), selectedFileCaptureDeadline,
+      access: filePath => captureLibraryFileAccess(filePath),
+    });
+    if (current()) {
+      const inputModel = remoteSessionCommands?.recordCurrentInputModel(sessionId) || null;
+      if (captured) getCoworkStore().remote.put(`desktopInputRun:${runId}`, { ...captured, localSessionId: sessionId, inputModel });
+      else if (inputModel) getCoworkStore().remote.put(`desktopInputRun:${runId}`, { owner, localSessionId: sessionId, text: options.prompt, attachments: [], inputModel });
+      if (captured || inputModel) getCoworkStore().remote.markFilesDirty(sessionId);
+    } else if (captured) {
+      for (const source of captured.attachments) if (source.snapshot) await fs.promises.rm(source.snapshot.path, { force: true }).catch((): void => undefined);
+    }
+  };
+
+  const startCoworkSession = async (
       options: {
         submissionId?: string;
         analytics?: UsageContext;
@@ -9559,6 +10132,7 @@ if (!gotTheLock) {
         kitReferences?: KitReference[];
         resolvedKitCapabilities?: ResolvedKitCapabilities;
         imageAttachments?: CoworkImageAttachmentMain[];
+        localInput?: CoworkLocalInput;
         agentId?: string;
         modelOverride?: string;
         modelPresetId?: ModelPresetId;
@@ -9569,10 +10143,14 @@ if (!gotTheLock) {
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
+      senderId?: number,
     ) => {
+      let launched = false;
+      let localReservation: { sessionId: string; runId: string } | undefined;
       try {
+        assertRemoteExecutionPermit();
         const ipcStartedAtMs = Date.now();
-        const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
+        const captureCompanionTask = senderId === undefined ? undefined : desktopCompanionManager?.captureTaskAnalytics(senderId);
         const requestAccountScope = getCurrentMediaAccountScope();
         console.log(
           '[CoworkFirstResponseTiming] start IPC received.',
@@ -9679,7 +10257,23 @@ if (!gotTheLock) {
         if (!isMediaAccountScopeSnapshotCurrent(requestAccountScope, getCurrentMediaAccountScope())) {
           return { success: false, error: t('authAccountChanged') };
         }
-        let session = coworkStoreInstance.createSession(
+        const execution = currentRemoteExecution();
+        assertRemoteExecutionPermit();
+        if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
+        const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(options.imageAttachments);
+        const messageMetadata = buildCoworkUserSelectionMetadata({
+          prompt,
+          skillIds: options.activeSkillIds,
+          kitIds: options.kitIds,
+          kitReferences: options.kitReferences,
+          resolvedKitCapabilities: options.resolvedKitCapabilities,
+          selectedTextSnippets,
+          browserAnnotations,
+          imageAttachmentPreviews,
+        }) ?? {};
+        const preparedSession = execution?.preparedSessionId ? coworkStoreInstance.getSession(execution.preparedSessionId, 0) : null;
+        if (execution?.preparedSessionId && !preparedSession) throw new Error('Remote session unavailable');
+        let session = preparedSession || coworkStoreInstance.createSession(
           title,
           taskWorkingDirectory,
           persistedSystemPrompt,
@@ -9687,7 +10281,7 @@ if (!gotTheLock) {
           runtimeSkillIds || [],
           options.agentId || 'main',
           options.modelPresetId ? '' : options.modelOverride || '',
-          { thinkingLevel: thinkingLevel || '' },
+          { thinkingLevel: thinkingLevel || '', owner: execution?.owner ?? null },
         );
 
         if (options.modelPresetId !== undefined) {
@@ -9728,6 +10322,7 @@ if (!gotTheLock) {
           );
         }
 
+        assertRemoteExecutionPermit();
         const skinTurn = turnIsPlan ? { mediaSelection: turnMediaSelection } : getSkinRuntimeController().prepareTurn({
           sessionId: session.id,
           kitIds: options.kitIds,
@@ -9768,25 +10363,26 @@ if (!gotTheLock) {
             })),
           });
         }
+        const reservation = reserveCoworkInput(coworkStoreInstance, session.id, prompt);
+        localReservation = reservation.localReservation;
+        const captureEpoch = getRemoteAccountEpoch();
+        const assertDispatchCurrent = await reservation.captureInput(
+          deadline => recordDesktopInput(session.id, options, deadline),
+          () => remoteBridge?.canCaptureRemoteFiles() === true,
+          () => {
+            if (captureEpoch !== getRemoteAccountEpoch() || !canViewCoworkSession(session.id)) throw new Error(t('authAccountChanged'));
+            checkSubmissionAccount(requestAccountScope);
+          },
+        );
+        if (remoteBridge?.canCaptureRemoteFiles()) await prepareRemoteFileRun?.(session.id, taskWorkingDirectory);
+        assertDispatchCurrent();
         const imageAttachments = getCoworkImageOriginals().retain(session.id, options.imageAttachments);
-        const imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(imageAttachments);
-        const messageMetadata = buildCoworkUserSelectionMetadata({
-          prompt,
-          skillIds: options.activeSkillIds,
-          kitIds: options.kitIds,
-          kitReferences: options.kitReferences,
-          resolvedKitCapabilities: options.resolvedKitCapabilities,
-          selectedTextSnippets,
-          browserAnnotations,
-          imageAttachmentPreviews,
-        });
-        // Date the prompt by when it was submitted, not by when the engine
-        // became ready: the renderer times the optimistic turn from the click,
-        // and the turn timer must not restart when this session replaces it.
+        messageMetadata.imageAttachmentPreviews = buildCoworkImageAttachmentPreviews(imageAttachments);
+        // Preserve the submission time used by the optimistic turn timer.
         coworkStoreInstance.addMessage(session.id, {
           type: 'user',
           content: prompt,
-          metadata: { ...messageMetadata, ...imageEditMessageMetadata(options.mediaReferences) },
+          metadata: { ...messageMetadata, ...imageEditMessageMetadata(options.mediaReferences), remoteRunId: coworkStoreInstance.remote.run(session.id)?.runId, remoteCommandId: execution?.commandId },
         }, ipcStartedAtMs);
 
         coworkStoreInstance.updateSession(session.id, { status: 'running' });
@@ -9797,11 +10393,13 @@ if (!gotTheLock) {
           `Session ${session.id}.`,
           `Elapsed ${Date.now() - ipcStartedAtMs}ms.`,
         );
-        runtime
+        assertRemoteExecutionPermit();
+        const submission = prepareCoworkSubmission(coworkStoreInstance, session.id, getCurrentRemoteOwner, options.submissionId ? `desktop-${options.submissionId}` : undefined, runtime.supportsRemoteTurns());
+        const completion = runtime
           .startSession(session.id, prompt, {
             submissionOwner: submissionOwner(requestAccountScope),
             checkAccount: () => checkSubmissionAccount(requestAccountScope),
-            requestId: options.submissionId ? `desktop-${options.submissionId}` : undefined,
+            ...submission.options,
             analytics: options.analytics,
             skipInitialUserMessage: true,
             systemPrompt,
@@ -9819,17 +10417,19 @@ if (!gotTheLock) {
             mediaReferences: options.mediaReferences,
             selectedTextSnippets,
             browserAnnotations,
-          })
-          .catch(error => {
+          });
+        launched = true;
+        void completion.catch(error => {
             console.error('[Cowork] session error:', error);
             try {
+              if (!canViewCoworkSession(session.id)) return;
               const existing = coworkStoreInstance.getSession(session.id);
               if (existing?.status === 'error') return;
               const errorMessage = error instanceof Error ? error.message : String(error);
               const windows = BrowserWindow.getAllWindows();
               windows.forEach(win => {
                 if (win.isDestroyed()) return;
-                win.webContents.send('cowork:stream:error', {
+                win.webContents.send(CoworkIpcChannel.StreamError, {
                   sessionId: session.id,
                   error: errorMessage,
                 });
@@ -9842,6 +10442,7 @@ if (!gotTheLock) {
             }
           });
 
+        await submission.awaitAdmission(completion);
         captureCompanionTask?.(getTaskUsageAnalytics().context(session.id));
         const sessionWithMessages = coworkStoreInstance.getSession(session.id) || {
           ...session,
@@ -9849,18 +10450,22 @@ if (!gotTheLock) {
         };
         return { success: true, session: sessionWithMessages };
       } catch (error) {
+        if (currentRemoteExecution()?.commandId) throw error;
         console.error('[Cowork] failed to start session:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to start session',
         };
+      } finally {
+        if (localReservation && !launched) {
+          try { getCoworkStore().remote.settleUndispatchedRun(localReservation.sessionId, localReservation.runId); }
+          catch (error) { console.warn('[Cowork] Run requires recovery', error); }
+        }
       }
-    },
-  );
+    };
 
   const preparingContinuations = new Map<string, AbortController>();
   const continueCoworkSession = async (
-      _event: Electron.IpcMainInvokeEvent,
       options: {
         submissionId?: string;
         editRequest?: CoworkMessageEditRequest;
@@ -9877,12 +10482,16 @@ if (!gotTheLock) {
         kitReferences?: KitReference[];
         resolvedKitCapabilities?: ResolvedKitCapabilities;
         imageAttachments?: CoworkImageAttachmentMain[];
+        localInput?: CoworkLocalInput;
         mediaSelection?: MediaSelectionState;
         mediaReferences?: MediaAttachmentRefMain[];
         selectedTextSnippets?: CoworkSelectedTextSnippet[];
         browserAnnotations?: CoworkBrowserAnnotationMessageBatch[];
       },
+      senderId?: number,
     ) => {
+      let launched = false;
+      let localReservation: { sessionId: string; runId: string } | undefined;
       const preparation = new AbortController();
       if (options.retryMessageId && preparingContinuations.has(options.sessionId)) {
         return { success: false, error: t('coworkUnsentRetryUnavailable') };
@@ -9890,7 +10499,7 @@ if (!gotTheLock) {
       if (!options.editRequest) preparingContinuations.set(options.sessionId, preparation);
       try {
         const ipcStartedAtMs = Date.now();
-        const captureCompanionTask = desktopCompanionManager?.captureTaskAnalytics(_event.sender.id);
+        const captureCompanionTask = senderId === undefined ? undefined : desktopCompanionManager?.captureTaskAnalytics(senderId);
         const requestAccountScope = getCurrentMediaAccountScope();
         let retryRequestId: string | undefined;
         if (options.retryMessageId) {
@@ -9951,6 +10560,21 @@ if (!gotTheLock) {
         await runtime.reconcileMessageVersionSwitch(options.sessionId);
         const coworkStoreInstance = getCoworkStore();
         const existingSession = coworkStoreInstance.getSession(options.sessionId);
+        const execution = currentRemoteExecution();
+        assertRemoteExecutionPermit();
+        coworkStoreInstance.remote.assertActor(options.sessionId, execution?.owner ?? null);
+        if (execution?.owner && !sameOwner(execution.owner, getCurrentRemoteOwner())) throw new Error('Account changed');
+        const reservation = reserveCoworkInput(coworkStoreInstance, options.sessionId, options.prompt);
+        localReservation = reservation.localReservation;
+        const captureEpoch = getRemoteAccountEpoch();
+        const assertDispatchCurrent = await reservation.captureInput(
+          deadline => recordDesktopInput(options.sessionId, options, deadline),
+          () => remoteBridge?.canCaptureRemoteFiles() === true,
+          () => {
+            if (captureEpoch !== getRemoteAccountEpoch() || !canViewCoworkSession(options.sessionId)) throw new Error(t('authAccountChanged'));
+            checkSubmissionAccount(requestAccountScope);
+          },
+        );
         const config = coworkStoreInstance.getConfig();
         const hasLegacyPersistedPlanMode = containsPlanModePrompt(existingSession?.systemPrompt);
         const continuationSystemPrompt = mergeCoworkSystemPrompt(
@@ -9981,6 +10605,8 @@ if (!gotTheLock) {
             error: imageAttachmentValidation.error,
           };
         }
+        if (existingSession?.cwd && remoteBridge?.canCaptureRemoteFiles()) await prepareRemoteFileRun?.(options.sessionId, existingSession.cwd);
+        assertDispatchCurrent();
         const imageAttachments = getCoworkImageOriginals().retain(options.sessionId, options.imageAttachments);
 
         const turnIsPlan = containsPlanModePrompt(continuationSystemPrompt);
@@ -10042,8 +10668,13 @@ if (!gotTheLock) {
         );
         if (options.editRequest) {
           if ([...pendingMediaTasks.values()].some(task => task.sessionId === options.sessionId)) {
-            return { success: false, error: t('coworkEditBusy') };
+            throw new Error(t('coworkEditBusy'));
           }
+          if (localReservation) {
+            coworkStoreInstance.remote.markExecutionDispatch(options.sessionId, localReservation.runId);
+            coworkStoreInstance.remote.markRunDispatched(options.sessionId);
+          }
+          launched = true;
           await runtime.editMessage(options.editRequest, {
             systemPrompt: continuationSystemPrompt,
             skillIds: options.runtimeSkillIds ?? options.activeSkillIds,
@@ -10062,16 +10693,18 @@ if (!gotTheLock) {
           return { success: true };
         }
         const previousUsage = getTaskUsageAnalytics().context(options.sessionId);
-        if (preparation.signal.aborted) return { success: true };
+        if (preparation.signal.aborted) return { success: !execution?.commandId };
         if (options.retryMessageId) {
           if (preparingContinuations.get(options.sessionId) !== preparation) return { success: false, error: t('coworkUnsentRetryUnavailable') };
           getRetryableUserMessage(coworkStoreInstance, options.sessionId, options.retryMessageId, submissionOwner(requestAccountScope));
         }
-        runtime
+        assertRemoteExecutionPermit();
+        const submission = prepareCoworkSubmission(coworkStoreInstance, options.sessionId, getCurrentRemoteOwner, retryRequestId ?? (options.submissionId ? `desktop-${options.submissionId}` : undefined), runtime.supportsRemoteTurns());
+        const completion = runtime
           .continueSession(options.sessionId, options.prompt, {
             submissionOwner: submissionOwner(requestAccountScope),
             checkAccount: () => checkSubmissionAccount(requestAccountScope),
-            requestId: retryRequestId ?? (options.submissionId ? `desktop-${options.submissionId}` : undefined),
+            ...submission.options,
             skipInitialUserMessage: Boolean(retryRequestId),
             localMediaAttachments: options.localMediaAttachments,
             analytics: options.analytics,
@@ -10087,17 +10720,19 @@ if (!gotTheLock) {
             mediaReferences: options.mediaReferences,
             selectedTextSnippets,
             browserAnnotations,
-          })
-          .catch(error => {
+          });
+        launched = true;
+        void completion.catch(error => {
             console.error('[Cowork] continue error:', error);
             try {
+              if (!canViewCoworkSession(options.sessionId)) return;
               const existing = getCoworkStore().getSession(options.sessionId);
               if (existing?.status === 'error') return;
               const errorMessage = error instanceof Error ? error.message : String(error);
               const windows = BrowserWindow.getAllWindows();
               windows.forEach(win => {
                 if (win.isDestroyed()) return;
-                win.webContents.send('cowork:stream:error', {
+                win.webContents.send(CoworkIpcChannel.StreamError, {
                   sessionId: options.sessionId,
                   error: errorMessage,
                 });
@@ -10110,25 +10745,35 @@ if (!gotTheLock) {
             }
           });
 
+        await submission.awaitAdmission(completion);
         const currentUsage = getTaskUsageAnalytics().context(options.sessionId);
         captureCompanionTask?.(currentUsage?.turnId !== previousUsage?.turnId ? currentUsage : undefined);
         const session = getCoworkStore().getSession(options.sessionId);
         return { success: true, session };
       } catch (error) {
+        if (currentRemoteExecution()?.commandId) throw error;
         console.error('[Cowork] failed to continue session:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to continue session',
         };
       } finally {
+        if (localReservation && !launched) {
+          try { getCoworkStore().remote.settleUndispatchedRun(localReservation.sessionId, localReservation.runId); }
+          catch (error) { console.warn('[Cowork] Run requires recovery', error); }
+        }
         if (preparingContinuations.get(options.sessionId) === preparation) preparingContinuations.delete(options.sessionId);
       }
     };
 
-  ipcMain.handle(CoworkIpcChannel.SessionContinue, (event, options) =>
-    continueCoworkSession(event, { ...options, editRequest: undefined }));
+  const submitStart = (options: Parameters<typeof startCoworkSession>[0], senderId?: number) => remoteSessionCommands!.submit(options, true, input => startCoworkSession(input, senderId));
+  const submitContinue = (options: Parameters<typeof continueCoworkSession>[0], senderId?: number) => remoteSessionCommands!.submit(options, false, input => continueCoworkSession(input, senderId));
+  ipcMain.handle(CoworkIpcChannel.SessionStart, (event, options) => submitStart(options, event.sender.id));
+  ipcMain.handle(CoworkIpcChannel.SessionContinue, (event, options) => submitContinue({ ...options, editRequest: undefined }, event.sender.id));
+
 
   registerCoworkMessageEditHandlers(ipcMain, {
+    canRead: canViewCoworkSession,
     getStore: getCoworkStore,
     getRuntime: getCoworkEngineRouter,
     isRemoteManaged: sessionId => Boolean(getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId)),
@@ -10141,14 +10786,14 @@ if (!gotTheLock) {
       }
     },
     fitImage: fitImageBytesForModel,
-    resend: (event, request, prepared) => continueCoworkSession(event, {
+    resend: (event, request, prepared) => submitContinue({
       ...prepared,
       sessionId: request.sessionId,
       prompt: request.prompt,
       activeSkillIds: prepared.messageSkillIds,
       runtimeSkillIds: prepared.skillIds,
       editRequest: request,
-    }),
+    }, event.sender.id),
   });
 
   ipcMain.handle(CoworkIpcChannel.SubmitBtw, async (
@@ -10185,6 +10830,8 @@ if (!gotTheLock) {
       };
     }
     try {
+      const checkAccess = () => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      checkAccess();
       console.debug(
         '[CoworkBtw] side-question IPC received.',
         `Session ${sessionId}.`,
@@ -10209,6 +10856,7 @@ if (!gotTheLock) {
           error: t('coworkBtwUnavailable'),
         };
       }
+      checkAccess();
       const result = await runtime.submitBtw(sessionId, question, runId);
       console.debug(
         '[CoworkBtw] side-question IPC completed.',
@@ -10253,6 +10901,8 @@ if (!gotTheLock) {
     }
 
     try {
+      const checkAccess = () => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      checkAccess();
       console.debug(
         '[CoworkBtw] side-question stop IPC received.',
         `Session ${sessionId}.`,
@@ -10267,6 +10917,7 @@ if (!gotTheLock) {
           error: t('coworkBtwUnavailable'),
         };
       }
+      checkAccess();
       const result = await runtime.abortBtw(sessionId, runId);
       console.debug(
         '[CoworkBtw] side-question stop IPC completed.',
@@ -10299,6 +10950,8 @@ if (!gotTheLock) {
       ? options.clientSteerId.trim()
       : `steer-${Date.now()}`;
     try {
+      const checkAccess = () => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      checkAccess();
       const requestAccountScope = getCurrentMediaAccountScope();
       const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
       const text = typeof options?.text === 'string' ? options.text.trim() : '';
@@ -10370,6 +11023,7 @@ if (!gotTheLock) {
         };
       }
 
+      checkAccess();
       const result = await runtime.submitSteer(sessionId, text, clientSteerId);
       if (!isMediaAccountScopeSnapshotCurrent(
         requestAccountScope,
@@ -10408,6 +11062,8 @@ if (!gotTheLock) {
     options: { sessionId: string; command: string },
   ) => {
     try {
+      const checkAccess = () => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      checkAccess();
       const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
       const command = typeof options?.command === 'string' ? options.command.trim() : '';
       if (!sessionId || !command) {
@@ -10436,6 +11092,7 @@ if (!gotTheLock) {
         `Session ${sessionId}.`,
         `Action ${action}.`,
       );
+      checkAccess();
       const goal = await runtime.runGoalCommand(sessionId, command);
       const isRunning = runtime.isSessionActive(sessionId);
       return { success: true, goal, isRunning };
@@ -10448,21 +11105,30 @@ if (!gotTheLock) {
     }
   });
 
-  const reviewSources = new WorkspaceReviewSourceStore(sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd);
-  const scopedReviews = new ScopedReviewStore(sessionId => getCoworkStore().getSession(sessionId, 0)?.cwd);
+  const reviewSources = new WorkspaceReviewSourceStore(sessionId => canViewCoworkSession(sessionId)
+    ? getCoworkStore().getSession(sessionId, 0)?.cwd : undefined);
+  const scopedReviews = new ScopedReviewStore(sessionId => canViewCoworkSession(sessionId)
+    ? getCoworkStore().getSession(sessionId, 0)?.cwd : undefined);
   ipcMain.handle(ReviewIpc.Read, async (_event, input: ReviewScopeRequest) => {
     if (!input || typeof input.sessionId !== 'string' || !Object.values(ReviewScope).includes(input.scope)) return null;
+    if (!canViewCoworkSession(input.sessionId)) return null;
+    const accountScope = getCurrentMediaAccountScope();
     const session = getCoworkStore().getSession(input.sessionId, 0);
     if (!session) return null;
-    if (input.scope === ReviewScope.Repository) {
-      return buildWorkspaceChangesArtifact(input.sessionId, t('coworkWorkspaceChangesTitle'), await readEnvironmentSnapshot(session.cwd));
-    }
-    return scopedReviews.create(input);
+    const result = input.scope === ReviewScope.Repository
+      ? buildWorkspaceChangesArtifact(input.sessionId, t('coworkWorkspaceChangesTitle'), await readEnvironmentSnapshot(session.cwd))
+      : await scopedReviews.create(input);
+    return isMediaAccountScopeSnapshotCurrent(accountScope, getCurrentMediaAccountScope())
+      && canViewCoworkSession(input.sessionId) ? result : null;
   });
-  ipcMain.handle(ReviewIpc.Source, (_event, input: ReviewSourceRequest) => {
-    if (typeof input?.artifactId !== 'string' || typeof input.sessionId !== 'string' || !getCoworkStore().getSession(input.sessionId, 0)) return null;
-    if (isScopedReview(input.artifactId)) return scopedReviews.readSource(input);
-    return reviewSources.read(input);
+  ipcMain.handle(ReviewIpc.Source, async (_event, input: ReviewSourceRequest) => {
+    if (typeof input?.artifactId !== 'string' || typeof input.sessionId !== 'string' || !canViewCoworkSession(input.sessionId)) return null;
+    const accountScope = getCurrentMediaAccountScope();
+    const result = isScopedReview(input.artifactId)
+      ? await scopedReviews.readSource(input)
+      : await reviewSources.read(input);
+    return isMediaAccountScopeSnapshotCurrent(accountScope, getCurrentMediaAccountScope())
+      && canViewCoworkSession(input.sessionId) ? result : null;
   });
 
   ipcMain.handle(
@@ -10470,16 +11136,17 @@ if (!gotTheLock) {
     async (_event, options: { sessionId?: unknown; messageId?: unknown } | undefined) => {
       const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
       const messageId = typeof options?.messageId === 'string' ? options.messageId.trim() : '';
-      if (!sessionId || !messageId || !coworkTurnUsageService) return null;
-      return coworkTurnUsageService.refresh(sessionId, messageId);
+      if (!sessionId || !messageId || !coworkTurnUsageService || !canViewCoworkSession(sessionId)) return null;
+      const accountEpoch = getRemoteAccountEpoch();
+      const result = await coworkTurnUsageService.refresh(sessionId, messageId);
+      return accountEpoch === getRemoteAccountEpoch() && canViewCoworkSession(sessionId) ? result : null;
     },
   );
 
   ipcMain.handle(CoworkIpcChannel.StopSession, async (_event, sessionId: string) => {
     try {
+      stopOwnedSessionWithRecovery(getCoworkStore().remote, getCoworkEngineRouter(), getCurrentRemoteOwner(), sessionId);
       preparingContinuations.get(sessionId)?.abort();
-      const runtime = getCoworkEngineRouter();
-      runtime.stopSession(sessionId);
       return { success: true };
     } catch (error) {
       return {
@@ -10491,6 +11158,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.MarkSessionViewed, async (event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getDesktopNotificationManager().markSessionViewed(sessionId);
       if (event.sender.id === mainWindow?.webContents.id) desktopCompanionManager?.markSessionViewed(sessionId);
       return { success: true };
@@ -10508,6 +11176,7 @@ if (!gotTheLock) {
       return { success: false, error: 'Unknown renderer' };
     }
     try {
+      if (sessionId) getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       getDesktopNotificationManager().setActiveSession(
         typeof sessionId === 'string' && sessionId ? sessionId : null,
       );
@@ -10538,7 +11207,8 @@ if (!gotTheLock) {
         if (existingSessionId) {
           const coworkStoreInstance = getCoworkStore();
           const existingSession = coworkStoreInstance.getSession(existingSessionId);
-          if (existingSession) {
+          if (existingSession && canViewCoworkSession(existingSessionId)) {
+            coworkStoreInstance.remote.assertActor(existingSessionId, getCurrentRemoteOwner());
             if (existingSession.title !== title) {
               coworkStoreInstance.updateSession(existingSessionId, { title }, { touchUpdatedAt: false });
             }
@@ -10564,6 +11234,7 @@ if (!gotTheLock) {
           [],
           'main',
           '',
+          { owner: getCurrentRemoteOwner() },
         );
         coworkStoreInstance.addMessage(session.id, {
           type: 'assistant',
@@ -10601,76 +11272,41 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(CoworkIpcChannel.DeleteSession, async (_event, sessionId: string) => {
+    let release: (() => void) | null = null;
     try {
-      getCoworkEngineRouter().stopSession(sessionId);
-      const coworkStoreInstance = getCoworkStore();
-      coworkStoreInstance.deleteSession(sessionId);
-      mediaSelectionBySession.delete(sessionId);
-      mediaTurnAccountScopeBySession.delete(sessionId);
-      skinRuntimeController?.handleSessionDeleted(sessionId);
-      mediaReferencesBySession.delete(sessionId);
-      getCoworkImageOriginals().deleteSession(sessionId);
-      getDesktopNotificationManager().handleSessionDeleted(sessionId);
-      // Remove any pending media tasks for this session
-      for (const [taskId, tracker] of pendingMediaTasks) {
-        if (tracker.sessionId === sessionId) pendingMediaTasks.delete(taskId);
-      }
-      clearHandledMediaTasksForSession(sessionId);
-      clearMediaStatusPollCountsForSession(sessionId);
-      // Clean up IM session mapping so that new channel messages
-      // create a fresh session instead of referencing a deleted one.
-      try {
-        getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
-      } catch {
-        // IM store may not be initialised yet; safe to ignore.
-      }
-      // Notify runtime to purge in-memory caches for this session
-      // so that channel messages can create a fresh session.
-      try {
-        getCoworkEngineRouter().onSessionDeleted(sessionId);
-      } catch {
-        // Router may not be initialised yet; safe to ignore.
-      }
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      release = ownershipOperationGate.tryAcquire({
+        agentIds: [], sessionIds: [sessionId],
+      });
+      if (!release) throw new Error(t('ownershipOperationBusy'));
+      await getSessionDeletionService().deleteLocal(sessionId);
       return { success: true };
     } catch (error) {
+      console.warn('[SessionDeletion] Local task deletion failed', { sessionId }, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete session',
       };
-    }
+    } finally { release?.(); }
   });
 
   ipcMain.handle(CoworkIpcChannel.DeleteSessions, async (_event, sessionIds: string[]) => {
+    let release: (() => void) | null = null;
     try {
-      const runtime = getCoworkEngineRouter();
-      sessionIds.forEach(sessionId => {
-        runtime.stopSession(sessionId);
+      sessionIds.forEach(sessionId => getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner()));
+      release = ownershipOperationGate.tryAcquire({
+        agentIds: [], sessionIds,
       });
-      const coworkStoreInstance = getCoworkStore();
-      coworkStoreInstance.deleteSessions(sessionIds);
-      const router = getCoworkEngineRouter();
-      for (const sessionId of sessionIds) {
-        skinRuntimeController?.handleSessionDeleted(sessionId);
-        getCoworkImageOriginals().deleteSession(sessionId);
-        getDesktopNotificationManager().handleSessionDeleted(sessionId);
-        try {
-          getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
-        } catch {
-          // IM store may not be initialised yet; safe to ignore.
-        }
-        try {
-          router.onSessionDeleted(sessionId);
-        } catch {
-          // Router may not be initialised yet; safe to ignore.
-        }
-      }
+      if (!release) throw new Error(t('ownershipOperationBusy'));
+      await getSessionDeletionService().deleteLocalBatch(sessionIds);
       return { success: true };
     } catch (error) {
+      console.warn('[SessionDeletion] Local batch deletion failed', { count: sessionIds.length }, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to batch delete sessions',
       };
-    }
+    } finally { release?.(); }
   });
 
   ipcMain.handle(
@@ -10678,6 +11314,7 @@ if (!gotTheLock) {
     async (_event, options: { sessionId: string; pinned: boolean }) => {
       try {
         const coworkStoreInstance = getCoworkStore();
+        coworkStoreInstance.remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         const pinOrder = coworkStoreInstance.setSessionPinned(options.sessionId, options.pinned);
         return { success: true, pinOrder };
       } catch (error) {
@@ -10698,6 +11335,7 @@ if (!gotTheLock) {
           return { success: false, error: 'Title is required' };
         }
         const coworkStoreInstance = getCoworkStore();
+        coworkStoreInstance.remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         sessionTitleGenerator.cancel(options.sessionId);
         coworkStoreInstance.updateSession(options.sessionId, { title }, { touchUpdatedAt: false });
         reportUsageSessionTitle(options.sessionId);
@@ -10721,6 +11359,7 @@ if (!gotTheLock) {
         title?: string;
       },
     ) => {
+      let release: (() => void) | null = null;
       try {
         const sessionId = options?.sessionId?.trim();
         if (!sessionId) {
@@ -10729,11 +11368,15 @@ if (!gotTheLock) {
 
         const runtime = getCoworkEngineRouter();
         const coworkStoreInstance = getCoworkStore();
+        coworkStoreInstance.remote.assertActor(sessionId, getCurrentRemoteOwner());
         const sourceSession = coworkStoreInstance.getSession(sessionId);
         if (!sourceSession) {
           console.warn('[CoworkFork] fork request referenced a missing session');
           return { success: false, error: 'Session not found' };
         }
+        const generation = `${ownershipAccountEpoch}:${authAccountGeneration}`;
+        release = ownershipOperationGate.beginOperation({ agentIds: [sourceSession.agentId || AgentId.Main], sessionIds: [sessionId] });
+        if (!release) throw new Error(t('ownershipOperationBusy'));
         if (sourceSession.status === 'running' || runtime.isSessionActive(sessionId)) {
           console.warn('[CoworkFork] fork request was rejected because the session is still running');
           return { success: false, error: 'Please stop the current task before forking it.' };
@@ -10748,6 +11391,8 @@ if (!gotTheLock) {
           sessionId,
           forkedFromTimestamp ?? undefined,
         );
+        if (generation !== `${ownershipAccountEpoch}:${authAccountGeneration}`) throw new Error(t('authAccountChanged'));
+        coworkStoreInstance.remote.assertActor(sessionId, getCurrentRemoteOwner());
         if (compactionSummary) {
           forkContextMessages.push({
             content: compactionSummary.summary,
@@ -10797,13 +11442,16 @@ if (!gotTheLock) {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to fork session',
         };
-      }
+      } finally { release?.(); }
     },
   );
 
   ipcMain.handle(CoworkIpcChannel.GetSession, async (_event, sessionId: string) => {
     try {
       const store = getCoworkStore();
+      store.remote.assertActor(sessionId, getCurrentRemoteOwner());
+      // Opening history must not wait for remote transport or even a degraded local Gateway.
+      if (!isQuitting && !isDataMigrationRestoreInProgress) void remoteSessionCommands?.reconcileSession(sessionId).catch((): void => undefined);
       const session = store.getSession(sessionId);
       if (session) {
         console.log(
@@ -10821,8 +11469,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:remoteManaged', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.IsSessionRemoteManaged, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const mapping = getIMGatewayManager()
         ?.getIMStore()
         ?.getSessionMappingByCoworkSessionId(sessionId);
@@ -10854,8 +11503,8 @@ if (!gotTheLock) {
           ? store.searchSessions({ query: searchQuery, limit, offset, agentId })
           : store.listSessions(limit, offset, agentId, { pinnedFirst });
         const total = searchQuery
-          ? store.countSearchSessions({ query: searchQuery, agentId })
-          : store.countSessions(agentId);
+          ? store.countSearchSessions({ query: searchQuery, agentId }, getCurrentRemoteOwner())
+          : store.countSessions(agentId, getCurrentRemoteOwner());
         if (searchQuery) {
           console.debug(
             `[CoworkIPC] searched sessions; query length ${searchQuery.length}, returned ${sessions.length} of ${total} from offset ${offset} in ${Date.now() - startedAt}ms.`,
@@ -10873,13 +11522,14 @@ if (!gotTheLock) {
   );
 
   ipcMain.handle(
-    'cowork:session:getMessages',
+    CoworkIpcChannel.GetSessionMessages,
     async (_event, options: {
       sessionId: string;
       limit?: number;
       offset?: number;
     }) => {
       try {
+        getCoworkStore().remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         const { sessionId, limit = COWORK_MESSAGE_PAGE_SIZE, offset = 0 } = options;
         const store = getCoworkStore();
         const total = store.countSessionMessages(sessionId);
@@ -10918,7 +11568,7 @@ if (!gotTheLock) {
           updatedSince: typeof query?.updatedSince === 'number' ? query.updatedSince : undefined,
           pinnedOnly: query?.pinnedOnly === true ? true : undefined,
           limit: typeof query?.limit === 'number' ? query.limit : undefined,
-        });
+        }, getCurrentRemoteOwner());
         console.debug(
           `[CoworkIPC] listed filtered sessions; statuses=${query?.statuses?.length ?? 0}, `
           + `ids=${query?.sessionIds?.length ?? 0}, since=${query?.updatedSince ?? 'none'}, `
@@ -10949,7 +11599,7 @@ if (!gotTheLock) {
           query,
           limit,
           agentId: options?.agentId,
-        });
+        }, getCurrentRemoteOwner());
         console.debug(
           `[CoworkIPC] searched session content; query length ${query.length}, `
           + `returned ${results.length} sessions in ${Date.now() - startedAt}ms.`,
@@ -10975,6 +11625,7 @@ if (!gotTheLock) {
       knownTotal?: number;
     }) => {
       try {
+        getCoworkStore().remote.assertActor(options.sessionId, getCurrentRemoteOwner());
         const requestedLimit = options?.limit ?? COWORK_SEARCH_MESSAGE_PAGE_SIZE;
         const limit = Number.isFinite(requestedLimit)
           ? Math.max(1, Math.min(COWORK_SEARCH_MESSAGE_PAGE_MAX_SIZE, Math.floor(requestedLimit)))
@@ -11008,6 +11659,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.GetSessionMessageRailIndex, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const store = getCoworkStore();
       const items = store.getSessionMessageRailIndex(sessionId);
       console.log(
@@ -11023,9 +11675,13 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:contextUsage', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.GetSessionContextUsage, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
+      const actor = getCurrentRemoteOwner();
       const usage = await getCoworkEngineRouter().getContextUsage(sessionId);
+      if (actor !== null && !sameOwner(actor, getCurrentRemoteOwner())) throw new Error('Account changed');
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       return {
         success: true,
         usage,
@@ -11040,8 +11696,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:compactContext', async (_event, sessionId: string) => {
+  ipcMain.handle(CoworkIpcChannel.CompactSessionContext, async (_event, sessionId: string) => {
     try {
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const result = await getCoworkEngineRouter().compactContext(sessionId);
       return { success: true, ...result };
     } catch (error) {
@@ -11241,6 +11898,7 @@ if (!gotTheLock) {
   // ── Session diagnostics IPC ────────────────────────────────────────────
 
   registerSessionDiagnosticsHandlers({
+    assertSessionAccess: id => getCoworkStore().remote.assertActor(id, getCurrentRemoteOwner()),
     getDatabase: () => getStore().getDatabase(),
     getAppVersion: () => app.getVersion(),
     getDownloadsPath: () => app.getPath('downloads'),
@@ -11249,6 +11907,8 @@ if (!gotTheLock) {
   // ── Subagent tracking IPC ──────────────────────────────────────────────
 
   registerCoworkSubagentHandlers({
+    owner: getCurrentRemoteOwner,
+    canRead: canViewCoworkSession,
     getSubagentSessions: () => getDshBootstrap().subagentSessions,
   });
 
@@ -11286,67 +11946,13 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(CoworkIpcChannel.GetPendingQuestions, async () => [
-    ...await getCoworkEngineRouter().getPendingQuestions(),
-    ...getMcpRuntime().getPendingMediaConfirmations(),
-  ]);
-  ipcMain.handle(CoworkIpcChannel.MediaConfirmation, async (_event, command: MediaConfirmationCommand) => ({
-    success: await getMcpRuntime().actOnMediaConfirmation(command),
-  }));
-
-  ipcMain.handle(CoworkIpcChannel.PermissionRespond, async (_event, options: {
-    requestId: string;
-    result: PermissionResult;
-  }) => {
-    try {
-      if (options.requestId?.startsWith(OpenClawQuestion.RequestIdPrefix)) {
-        await getCoworkEngineRouter().respondToPermission(options.requestId, options.result);
-        return { success: true };
-      }
-      // Dual-dispatch pattern: permission responses arrive through one IPC channel
-      // but may target either of two independent subsystems.
-      //
-      // - resolveAskUser() handles AskUserQuestion plugin requests routed through
-      //   the McpBridgeServer HTTP callback. It is a no-op when the requestId does
-      //   not match a pending bridge request (i.e. for normal SDK permission requests).
-      //
-      // - respondToPermission() handles standard Claude Agent SDK permission requests
-      //   managed by the CoworkEngineRouter. It is a no-op when the requestId does
-      //   not match a pending SDK permission (i.e. for bridge plugin requests).
-      //
-      // Both calls are safe to invoke unconditionally; exactly one will match.
-
-        // AskUserQuestion plugin responses go to the bridge server, not the runtime
-        if (options.requestId) {
-          const result = options.result;
-          const updatedInput = result.behavior === 'allow' && result.updatedInput && typeof result.updatedInput === 'object'
-            ? (result.updatedInput as Record<string, unknown>)
-            : undefined;
-          const askUserResponse: AskUserResponse = {
-            behavior: result.behavior === 'allow' ? 'allow' : 'deny',
-            answers: updatedInput?.answers as Record<string, string> | undefined,
-            skippedQuestionIds: Array.isArray(updatedInput?.skippedQuestionIds)
-              ? (updatedInput.skippedQuestionIds as string[])
-              : undefined,
-          };
-          getMcpRuntime().resolveAskUser(options.requestId, askUserResponse);
-        }
-
-        const runtime = getCoworkEngineRouter();
-        await runtime.respondToPermission(options.requestId, options.result);
-        // Close the desktop notification for this request regardless of which
-        // subsystem handled it (runtime approvals emit permissionResolved on
-        // their own; AskUserQuestion bridge requests do not).
-        getDesktopNotificationManager().handlePermissionResolved(options.requestId);
-        return { success: true };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to respond to permission',
-        };
-      }
-    },
-  );
+  registerCoworkPermissionHandlers({
+    ipcMain, sender: () => mainWindow?.webContents, runtime: getCoworkEngineRouter, mcp: getMcpRuntime,
+    sessionForRequest: id => coworkPermissionSessions.get(id),
+    isRuntimeRequest: id => coworkRuntimePermissionIds.has(id),
+    accountKey: () => JSON.stringify([getRemoteAccountEpoch(), getCurrentRemoteOwner()]),
+    canViewSession: canViewCoworkSession, sanitize: sanitizePermissionRequestForIpc,
+  });
 
   ipcMain.handle('cowork:config:get', async () => {
     try {
@@ -11362,7 +11968,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(CoworkIpcChannel.TempStorageUsage, async () => {
     try {
-      const preview = await getCoworkTempJanitor().preview();
+      const preview = await remotePerformance.async(RemotePerformanceStage.SettingsTempPreview, () => getCoworkTempJanitor().preview());
       return { success: true, ...preview };
     } catch (error) {
       return {
@@ -11431,6 +12037,7 @@ if (!gotTheLock) {
         throw new Error('Session ID is required.');
       }
 
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
       const patch = sanitizeOpenClawSessionPatch(request.patch);
       if (patch.model) {
         patch.model = normalizeOpenClawModelRef(patch.model);
@@ -11444,8 +12051,8 @@ if (!gotTheLock) {
       if (patch.model !== undefined) {
         patch.contextWindow = contextOverride ? userContextWindowSelection(contextOverride) : null;
       }
-      const runtime = getCoworkEngineRouter();
-      const patchResult = await runtime.patchSession(sessionId, patch);
+      const patchResult = await remoteSessionCommands!.patchConfiguration(sessionId, patch);
+      getCoworkStore().remote.assertActor(sessionId, getCurrentRemoteOwner());
 
       if (patch.model !== undefined || patch.thinkingLevel !== undefined) {
         const sessionUpdates: {
@@ -11470,6 +12077,7 @@ if (!gotTheLock) {
             : '';
         }
         getCoworkStore().updateSession(sessionId, sessionUpdates, { touchUpdatedAt: false });
+        remoteSessionCommands!.recordCurrentInputModel(sessionId);
       }
 
       const session = getCoworkStore().getSession(sessionId);
@@ -11668,6 +12276,7 @@ if (!gotTheLock) {
     options?: { agentId?: string },
   ) => {
     try {
+      assertAgentSettingsLocalWriteAllowed(options?.agentId?.trim() || AgentId.Main);
       const workspace = resolveExistingAgentWorkspacePath(options?.agentId);
       writeBootstrapFile(workspace, filename, content);
       syncOpenClawConfig({ reason: 'bootstrap-updated' }).catch(err => {
@@ -11837,6 +12446,8 @@ if (!gotTheLock) {
     }),
   });
   const scheduledTaskHandlerDeps = {
+    canViewSession: canViewCoworkSession,
+    canUseImInstance: (platform: string, instanceId?: string) => canUseAutomationSource(getCoworkStore(), imAutomationSourceId(platform, instanceId)),
     getCronJobService,
     getIMGatewayManager: () => ({
       getIMStore: () => ({
@@ -11844,7 +12455,7 @@ if (!gotTheLock) {
           getIMGatewayManager()
             .getIMStore()
             .getSessionMapping(conversationId, platform as Platform),
-        getIMSettings: () => getIMGatewayManager().getIMStore().getIMSettings(),
+        getIMSettings: () => getIMGatewayManager().getConfig().settings,
         getConversationReplyRoute: (platform: Platform, conversationId: string) =>
           getIMGatewayManager().getIMStore().getConversationReplyRoute(platform, conversationId),
         listSessionMappings: (platform: string, accountId?: string) =>
@@ -11884,7 +12495,21 @@ if (!gotTheLock) {
 
   // ==================== IM Gateway IPC Handlers ====================
 
-  ipcMain.handle('im:config:get', async () => {
+  const prepareImSourceBinding = () => {
+    const epoch = getRemoteAccountEpoch();
+    const bind = getCoworkStore().remote.prepareSourceBinding(getCurrentRemoteOwner());
+    return (sourceId: string): void => {
+      if (getRemoteAccountEpoch() !== epoch) throw new Error('IM account changed');
+      bind(sourceId);
+    };
+  };
+
+  const assertImPlatformAccess = (platform: string) => {
+    const manager = getIMGatewayManager();
+    if (!canManageImPlatform(manager.getIMStore().getConfig(), platform, manager.canUseInstance)) throw new Error('IM channel is unavailable');
+  };
+
+  ipcMain.handle(ImIpcChannel.ConfigGet, async () => {
     try {
       const config = getIMGatewayManager().getConfig();
       return { success: true, config };
@@ -12031,7 +12656,7 @@ if (!gotTheLock) {
     recordImOpenClawConfigMutation(previousFingerprint, nextFingerprint, options);
   };
 
-  ipcMain.handle('im:config:set', async (_event, config: Partial<IMGatewayConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.ConfigSet, async (_event, config: Partial<IMGatewayConfig>, options?: IMConfigSetOptions) => {
     try {
       mutateImOpenClawConfig(() => {
         getIMGatewayManager().setConfig(config, {
@@ -12078,11 +12703,12 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:gateway:start', async (_event, platform: Platform) => {
+  ipcMain.handle(ImIpcChannel.GatewayStart, async (_event, platform: Platform) => {
     try {
+      assertImPlatformAccess(platform);
       // Persist enabled state
       const manager = getIMGatewayManager();
-      manager.setConfig({ [platform]: { enabled: true } });
+      if (!('instances' in manager.getConfig()[platform])) manager.setConfig({ [platform]: { enabled: true } });
       await manager.startGateway(platform);
       return { success: true };
     } catch (error) {
@@ -12093,11 +12719,12 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:gateway:stop', async (_event, platform: Platform) => {
+  ipcMain.handle(ImIpcChannel.GatewayStop, async (_event, platform: Platform) => {
     try {
+      assertImPlatformAccess(platform);
       // Persist disabled state
       const manager = getIMGatewayManager();
-      manager.setConfig({ [platform]: { enabled: false } });
+      if (!('instances' in manager.getConfig()[platform])) manager.setConfig({ [platform]: { enabled: false } });
       await manager.stopGateway(platform);
       return { success: true };
     } catch (error) {
@@ -12109,7 +12736,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(
-    'im:gateway:test',
+    ImIpcChannel.GatewayTest,
     async (_event, platform: Platform, configOverride?: Partial<IMGatewayConfig>) => {
       try {
         const result = await getIMGatewayManager().testGateway(platform, configOverride);
@@ -12124,7 +12751,7 @@ if (!gotTheLock) {
   );
 
   // Weixin QR login
-  ipcMain.handle('im:weixin:qr-login-start', async () => {
+  ipcMain.handle(ImIpcChannel.WeixinQrLoginStart, async () => {
     try {
       const result = await getIMGatewayManager().weixinQrLoginStart();
       return { success: true, ...result };
@@ -12136,7 +12763,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:weixin:qr-login-wait', async (_event, sessionKey?: string) => {
+  ipcMain.handle(ImIpcChannel.WeixinQrLoginWait, async (_event, sessionKey?: string) => {
     try {
       const previousFingerprint = getCurrentImOpenClawConfigFingerprint();
       const result = await getIMGatewayManager().weixinQrLoginWait(sessionKey);
@@ -12156,10 +12783,17 @@ if (!gotTheLock) {
     }
   });
 
-  // POPO QR login
-  ipcMain.handle('im:popo:qr-login-start', async () => {
+  // Poll tokens return bot credentials, so their owner must still be the account that opened the QR code.
+  const popoLoginAttempts = new Map<string, { epoch: string; expiresAt: number }>();
+  ipcMain.handle(ImIpcChannel.PopoQrLoginStart, async () => {
     try {
+      const epoch = getRemoteAccountEpoch();
+      const now = Date.now();
+      for (const [token, attempt] of popoLoginAttempts) {
+        if (attempt.epoch !== epoch || attempt.expiresAt <= now) popoLoginAttempts.delete(token);
+      }
       const result = getIMGatewayManager().popoQrLoginStart();
+      popoLoginAttempts.set(result.taskToken, { epoch, expiresAt: now + result.timeoutMs });
       return { success: true, ...result };
     } catch (error) {
       return {
@@ -12169,9 +12803,13 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:popo:qr-login-poll', async (_event, taskToken: string) => {
+  ipcMain.handle(ImIpcChannel.PopoQrLoginPoll, async (_event, taskToken: string) => {
     try {
+      const attempt = popoLoginAttempts.get(taskToken);
+      if (!attempt || attempt.epoch !== getRemoteAccountEpoch() || attempt.expiresAt <= Date.now()) throw new Error('IM login expired');
       const result = await getIMGatewayManager().popoQrLoginPoll(taskToken);
+      if (attempt.epoch !== getRemoteAccountEpoch()) throw new Error('IM account changed');
+      if (result.success) popoLoginAttempts.delete(taskToken);
       return result;
     } catch (error) {
       return {
@@ -12181,7 +12819,8 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:popo:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.PopoInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_POPO_CONFIG: defaults } = await import('./im/types');
@@ -12190,7 +12829,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'POPO Bot',
       };
-      getIMGatewayManager().getIMStore().setPopoInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setPopoInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:popo:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12200,8 +12842,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:popo:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.PopoInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'popo', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deletePopoInstance(instanceId),
         {
@@ -12219,10 +12862,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:popo:instance:config:set', async (_event, instanceId: string, config: Record<string, unknown>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.PopoInstanceConfigSet, async (_event, instanceId: string, config: Record<string, unknown>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setPopoInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('popo', instanceId, config, () => manager.getIMStore().setPopoInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12238,10 +12882,10 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:status:get', async () => {
+  ipcMain.handle(ImIpcChannel.StatusGet, async () => {
     try {
       const status = await getIMGatewayManager().getStatusWithOpenClawRuntime();
-      return { success: true, status };
+      return { success: true, status: visibleImStatus(status, getIMGatewayManager().canUseInstance) };
     } catch (error) {
       return {
         success: false,
@@ -12274,11 +12918,11 @@ if (!gotTheLock) {
   });
 
   // Email: Test connection
-  ipcMain.handle('email:testConnection', async (event, { instanceId }: { instanceId: string }) => {
+  ipcMain.handle(ImIpcChannel.EmailTestConnection, async (event, { instanceId }: { instanceId: string }) => {
     try {
       const imManager = getIMGatewayManager();
-      const imStore = imManager.getIMStore();
-      const emailConfig = imStore.getEmailConfig();
+      assertImInstanceAccess(imManager.canUseInstance, 'email', instanceId);
+      const emailConfig = imManager.getConfig().email;
       const instance = emailConfig.instances.find(i => i.instanceId === instanceId);
 
       if (!instance) {
@@ -12343,8 +12987,9 @@ if (!gotTheLock) {
 
   // ---- Pairing IPC handlers ----
 
-  ipcMain.handle('im:pairing:list', async (_event, platform: string) => {
+  ipcMain.handle(ImIpcChannel.PairingList, async (_event, platform: string) => {
     try {
+      assertImPlatformAccess(platform);
       const stateDir = path.join(app.getPath('userData'), 'dsh-profile');
       const requests = listPairingRequests(platform, stateDir);
       const allowFrom = readAllowFromStore(platform, stateDir);
@@ -12359,8 +13004,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:pairing:approve', async (_event, platform: string, code: string) => {
+  ipcMain.handle(ImIpcChannel.PairingApprove, async (_event, platform: string, code: string) => {
     try {
+      assertImPlatformAccess(platform);
       const stateDir = path.join(app.getPath('userData'), 'dsh-profile');
       const approved = approvePairingCode(platform, code, stateDir);
       if (!approved) {
@@ -12378,8 +13024,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:pairing:reject', async (_event, platform: string, code: string) => {
+  ipcMain.handle(ImIpcChannel.PairingReject, async (_event, platform: string, code: string) => {
     try {
+      assertImPlatformAccess(platform);
       const stateDir = path.join(app.getPath('userData'), 'dsh-profile');
       const rejected = rejectPairingRequest(platform, code, stateDir);
       if (!rejected) {
@@ -12395,7 +13042,8 @@ if (!gotTheLock) {
   });
 
   // DingTalk Multi-Instance handlers
-  ipcMain.handle('im:dingtalk:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.DingTalkInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_DINGTALK_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12404,7 +13052,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'DingTalk Bot',
       };
-      getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:dingtalk:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12414,8 +13065,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:dingtalk:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.DingTalkInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'dingtalk', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteDingTalkInstance(instanceId),
         {
@@ -12433,10 +13085,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:dingtalk:instance:config:set', async (_event, instanceId: string, config: Partial<DingTalkInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.DingTalkInstanceConfigSet, async (_event, instanceId: string, config: Partial<DingTalkInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('dingtalk', instanceId, config, () => manager.getIMStore().setDingTalkInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12453,7 +13106,8 @@ if (!gotTheLock) {
   });
 
   // NIM Multi-Instance handlers
-  ipcMain.handle('im:nim:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.NimInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_NIM_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12462,7 +13116,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'NIM Bot',
       };
-      getIMGatewayManager().getIMStore().setNimInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setNimInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:nim:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12472,8 +13129,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:nim:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.NimInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'nim', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteNimInstance(instanceId),
         {
@@ -12491,10 +13149,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:nim:instance:config:set', async (_event, instanceId: string, config: Partial<NimInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.NimInstanceConfigSet, async (_event, instanceId: string, config: Partial<NimInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setNimInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('nim', instanceId, config, () => manager.getIMStore().setNimInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12511,7 +13170,8 @@ if (!gotTheLock) {
   });
 
   // QQ Multi-Instance handlers
-  ipcMain.handle('im:qq:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.QQInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_QQ_CONFIG: defaults } = await import('./im/types');
@@ -12520,7 +13180,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'QQ Bot',
       };
-      getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:qq:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12530,8 +13193,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:qq:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.QQInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'qq', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteQQInstance(instanceId),
         {
@@ -12549,10 +13213,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:qq:instance:config:set', async (_event, instanceId: string, config: Partial<QQInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.QQInstanceConfigSet, async (_event, instanceId: string, config: Partial<QQInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('qq', instanceId, config, () => manager.getIMStore().setQQInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12569,7 +13234,8 @@ if (!gotTheLock) {
   });
 
   // Feishu Multi-Instance handlers
-  ipcMain.handle('im:feishu:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.FeishuInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_FEISHU_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12578,7 +13244,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'Feishu Bot',
       };
-      getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:feishu:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12588,8 +13257,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:feishu:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.FeishuInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'feishu', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteFeishuInstance(instanceId),
         {
@@ -12607,10 +13277,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:feishu:instance:config:set', async (_event, instanceId: string, config: Partial<FeishuInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.FeishuInstanceConfigSet, async (_event, instanceId: string, config: Partial<FeishuInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('feishu', instanceId, config, () => manager.getIMStore().setFeishuInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12627,7 +13298,8 @@ if (!gotTheLock) {
   });
 
   // Email Multi-Instance handlers
-  ipcMain.handle('im:email:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.EmailInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_EMAIL_INSTANCE_CONFIG: defaults } = await import('./im/types');
@@ -12638,7 +13310,10 @@ if (!gotTheLock) {
         email: '',
         agentId: 'main',
       };
-      getIMGatewayManager().getIMStore().setEmailInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setEmailInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:email:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12649,7 +13324,8 @@ if (!gotTheLock) {
   });
 
   // WeCom Multi-Instance handlers
-  ipcMain.handle('im:wecom:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.WecomInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_WECOM_CONFIG: defaults } = await import('./im/types');
@@ -12658,7 +13334,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'WeCom Bot',
       };
-      getIMGatewayManager().getIMStore().setWecomInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setWecomInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:wecom:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12668,8 +13347,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:email:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.EmailInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'email', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteEmailInstance(instanceId),
         {
@@ -12687,8 +13367,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:wecom:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.WecomInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'wecom', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteWecomInstance(instanceId),
         {
@@ -12706,10 +13387,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:email:instance:config:set', async (_event, instanceId: string, config: Partial<EmailMultiInstanceConfig['instances'][number]>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.EmailInstanceConfigSet, async (_event, instanceId: string, config: Partial<EmailMultiInstanceConfig['instances'][number]>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setEmailInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('email', instanceId, config, () => manager.getIMStore().setEmailInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12725,10 +13407,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:wecom:instance:config:set', async (_event, instanceId: string, config: Partial<WecomInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.WecomInstanceConfigSet, async (_event, instanceId: string, config: Partial<WecomInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setWecomInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('wecom', instanceId, config, () => manager.getIMStore().setWecomInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12745,7 +13428,8 @@ if (!gotTheLock) {
   });
 
   // Telegram Multi-Instance handlers
-  ipcMain.handle('im:telegram:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.TelegramInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_TELEGRAM_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12754,7 +13438,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'Telegram Bot',
       };
-      getIMGatewayManager().getIMStore().setTelegramInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setTelegramInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:telegram:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12764,8 +13451,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:telegram:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.TelegramInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'telegram', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteTelegramInstance(instanceId),
         {
@@ -12783,10 +13471,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:telegram:instance:config:set', async (_event, instanceId: string, config: Partial<TelegramInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.TelegramInstanceConfigSet, async (_event, instanceId: string, config: Partial<TelegramInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setTelegramInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('telegram', instanceId, config, () => manager.getIMStore().setTelegramInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -12803,7 +13492,8 @@ if (!gotTheLock) {
   });
 
   // Discord Multi-Instance handlers
-  ipcMain.handle('im:discord:instance:add', async (_event, name: string) => {
+  ipcMain.handle(ImIpcChannel.DiscordInstanceAdd, async (_event, name: string) => {
+    const bindRemoteSource = prepareImSourceBinding();
     try {
       const instanceId = crypto.randomUUID();
       const { DEFAULT_DISCORD_OPENCLAW_CONFIG: defaults } = await import('./im/types');
@@ -12812,7 +13502,10 @@ if (!gotTheLock) {
         instanceId,
         instanceName: name || 'Discord Bot',
       };
-      getIMGatewayManager().getIMStore().setDiscordInstanceConfig(instanceId, instance);
+      getStore().getDatabase().transaction(() => {
+        getIMGatewayManager().getIMStore().setDiscordInstanceConfig(instanceId, instance);
+        bindRemoteSource(`im:discord:${instanceId}`);
+      })();
       return { success: true, instance };
     } catch (error) {
       return {
@@ -12822,8 +13515,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:discord:instance:delete', async (_event, instanceId: string, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.DiscordInstanceDelete, async (_event, instanceId: string, options?: IMConfigSetOptions) => {
     try {
+      assertImInstanceAccess(getIMGatewayManager().canUseInstance, 'discord', instanceId);
       mutateImOpenClawConfig(
         () => getIMGatewayManager().getIMStore().deleteDiscordInstance(instanceId),
         {
@@ -12841,10 +13535,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:discord:instance:config:set', async (_event, instanceId: string, config: Partial<DiscordInstanceConfig>, options?: IMConfigSetOptions) => {
+  ipcMain.handle(ImIpcChannel.DiscordInstanceConfigSet, async (_event, instanceId: string, config: Partial<DiscordInstanceConfig>, options?: IMConfigSetOptions) => {
     try {
+      const manager = getIMGatewayManager();
       mutateImOpenClawConfig(
-        () => getIMGatewayManager().getIMStore().setDiscordInstanceConfig(instanceId, config),
+        () => manager.saveInstanceConfig('discord', instanceId, config, () => manager.getIMStore().setDiscordInstanceConfig(instanceId, config)),
         {
           syncGateway: options?.syncGateway,
           restartGatewayIfRunning: options?.restartGatewayIfRunning,
@@ -13096,7 +13791,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('get-recent-cwds', async (_event, limit?: number) => {
     const boundedLimit = limit ? Math.min(Math.max(limit, 1), 20) : 8;
-    return getCoworkStore().listRecentCwds(boundedLimit);
+    return getCoworkStore().listRecentCwds(boundedLimit, getCurrentRemoteOwner());
   });
 
   // Only reports whether a model is usable: the raw config carries API keys.
@@ -13251,17 +13946,20 @@ if (!gotTheLock) {
     '.avif': 'image/avif',
   };
   ipcMain.handle(
-    'dialog:readFileAsDataUrl',
+    DialogIpc.ReadFileAsDataUrl,
     async (
       _event,
       filePath?: string,
+      access?: ArtifactFileAccess,
     ): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
         const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
         }
@@ -13271,7 +13969,9 @@ if (!gotTheLock) {
             error: `File too large (max ${Math.floor(MAX_READ_AS_DATA_URL_BYTES / (1024 * 1024))}MB)`,
           };
         }
+        lease.assertAllowed();
         const buffer = await fs.promises.readFile(resolvedPath);
+        lease.assertAllowed();
         const ext = path.extname(resolvedPath).toLowerCase();
         const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream';
         const base64 = buffer.toString('base64');
@@ -13288,12 +13988,15 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     DialogIpc.StatFile,
-    async (_event, filePath?: string): Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
+    async (_event, filePath?: string, access?: ArtifactFileAccess): Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
-        const stat = await fs.promises.stat(path.resolve(filePath.trim()));
+        const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
+        const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         return {
           success: true,
           isFile: stat.isFile(),
@@ -13313,23 +14016,27 @@ if (!gotTheLock) {
   const MAX_READ_TEXT_FILE_BYTES = 2 * 1024 * 1024;
   ipcMain.handle(
     DialogIpc.ReadTextFile,
-    async (_event, filePath?: string): Promise<{ success: boolean; content?: string; size?: number; readBytes?: number; truncated?: boolean; error?: string }> => {
+    async (_event, filePath?: string, access?: ArtifactFileAccess): Promise<{ success: boolean; content?: string; size?: number; readBytes?: number; truncated?: boolean; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
         const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
         }
 
         const truncated = stat.size > MAX_READ_TEXT_FILE_BYTES;
+        lease.assertAllowed();
         const handle = await fs.promises.open(resolvedPath, 'r');
         try {
           const bytesToRead = Math.min(stat.size, MAX_READ_TEXT_FILE_BYTES);
           const buffer = Buffer.alloc(bytesToRead);
           const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0);
+          lease.assertAllowed();
           return {
             success: true,
             content: buffer.subarray(0, bytesRead).toString('utf8'),
@@ -13339,6 +14046,7 @@ if (!gotTheLock) {
           };
         } finally {
           await handle.close();
+          lease.assertAllowed();
         }
       } catch (error) {
         console.warn('[Dialog] failed to read text file:', error);
@@ -13355,13 +14063,16 @@ if (!gotTheLock) {
     async (
       event,
       filePath?: string,
+      access?: ArtifactFileAccess,
     ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        const lease = captureLibraryFileAccess(resolvedPath, access);
         const stat = await fs.promises.stat(resolvedPath);
+        lease.assertAllowed();
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
         }
@@ -13375,7 +14086,9 @@ if (!gotTheLock) {
         if (saveResult.canceled || !saveResult.filePath) {
           return { success: true, canceled: true };
         }
+        lease.assertAllowed();
         await fs.promises.copyFile(resolvedPath, saveResult.filePath);
+        lease.assertAllowed();
         return { success: true, canceled: false, path: saveResult.filePath };
       } catch (error) {
         console.warn('[Dialog] failed to save file copy:', error);
@@ -13484,10 +14197,12 @@ if (!gotTheLock) {
             retryable: false,
           };
         }
+        const lease = captureLibraryFileAccess(request.filePath, request.access);
         const dataUrl = await libraryThumbnailService.generate(request.filePath, {
           requestId: request.requestId,
           priority: request.priority,
         });
+        lease.assertAllowed();
         return { success: true, dataUrl };
       } catch (error) {
         const failure = getLibraryThumbnailFailureDetails(error);
@@ -13552,12 +14267,16 @@ if (!gotTheLock) {
   ipcMain.handle(ShellIpc.OpenPath, async (_event, filePath: string) => {
     try {
       const normalizedPath = normalizeWindowsShellPath(filePath);
+      captureLibraryFileAccess(normalizedPath);
       const result = await shell.openPath(normalizedPath);
       if (result) {
         return await getFailedShellPathStatus('open local path', normalizedPath, result);
       }
       return { success: true };
     } catch (error) {
+      if (error instanceof LibraryFileAccessError) {
+        return { success: false, error: error.message, reason: ShellOpenFailureReason.Unknown };
+      }
       const normalizedPath = normalizeWindowsShellPath(filePath);
       return await getFailedShellPathStatus(
         'open local path',
@@ -13570,6 +14289,7 @@ if (!gotTheLock) {
   ipcMain.handle(ShellIpc.ShowItemInFolder, async (_event, filePath: string) => {
     try {
       const normalizedPath = normalizeWindowsShellPath(filePath);
+      const lease = captureLibraryFileAccess(normalizedPath);
       try {
         await fs.promises.stat(normalizedPath);
       } catch (error) {
@@ -13580,6 +14300,7 @@ if (!gotTheLock) {
           reason: getFileAccessFailureReason(error),
         };
       }
+      lease.assertAllowed();
       shell.showItemInFolder(normalizedPath);
       return { success: true };
     } catch (error) {
@@ -13646,10 +14367,15 @@ if (!gotTheLock) {
   ipcMain.handle(ShellIpc.OpenPathWithApp, async (_event, filePath: string, appPath: string) => {
     const normalizedPath = normalizeWindowsShellPath(filePath);
     try {
+      const lease = captureLibraryFileAccess(normalizedPath);
       const { openFileWithApp } = await import('./shellApps');
+      lease.assertAllowed();
       await openFileWithApp(normalizedPath, appPath);
       return { success: true };
     } catch (error) {
+      if (error instanceof LibraryFileAccessError) {
+        return { success: false, error: error.message, reason: ShellOpenFailureReason.Unknown };
+      }
       return await getFailedShellPathStatus(
         'open local path with selected app',
         normalizedPath,
@@ -13697,6 +14423,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(ClipboardIpc.WriteImageFromFile, async (_event, filePath: string) => {
     try {
+      captureLibraryFileAccess(filePath);
       const image = nativeImage.createFromPath(filePath);
       if (image.isEmpty()) {
         return { success: false, error: 'Failed to read image file' };
@@ -13797,18 +14524,20 @@ if (!gotTheLock) {
     if (typeof filePath === 'string') artifactFileWatcher.unwatch(filePath, event.sender);
   });
 
-  ipcMain.handle(ArtifactPreviewIpc.CreateSession, async (_event, filePath: string) => {
+  ipcMain.handle(ArtifactPreviewIpc.CreateSession, async (_event, filePath: string, access?: ArtifactFileAccess) => {
     try {
-      const result = await createPreviewSession(filePath);
+      const lease = captureLibraryFileAccess(filePath, access);
+      const result = await createPreviewSession(filePath, lease.assertAllowed);
       return { success: true, ...result };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
 
-  ipcMain.handle(ArtifactPreviewIpc.CreateOfficeSession, async (_event, filePath: string) => {
+  ipcMain.handle(ArtifactPreviewIpc.CreateOfficeSession, async (_event, filePath: string, access?: ArtifactFileAccess) => {
     try {
-      const result = await createOfficePreviewSession(filePath);
+      const lease = captureLibraryFileAccess(filePath, access);
+      const result = await createOfficePreviewSession(filePath, lease.assertAllowed);
       return { success: true, ...result };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -14725,6 +15454,17 @@ if (!gotTheLock) {
   ): Promise<void> => {
     const cleanupStartedAt = Date.now();
     console.log(`[Main] App cleanup started for ${reason}`);
+    mobileAccountFence.dispose();
+    remoteSessionCommands?.recovery.dispose();
+    remoteStartupReady = false;
+    remoteInitialization.dispose();
+    remoteSettingsController?.dispose();
+    remoteBridge?.stop();
+    disposeRemoteSecurity?.();
+    remoteLocalGc?.stop();
+    void remoteTelemetryRuntime?.dispose();
+    remoteNetworkTransport.dispose();
+    remotePerformance.stop();
     currentAppCleanupStep = 'sync-teardown';
     // Tear down companion windows, shortcut and monitors before the first await
     // so nothing re-shows a window that hideAppWindowsForQuit() just hid.
@@ -14986,6 +15726,7 @@ if (!gotTheLock) {
           : undefined,
     });
     protocol.handle(ArtifactPreviewProtocol.LocalFile, request => createLocalFileProtocolResponse(request, {
+      captureAccess: captureLibraryFileAccess,
       resolveThumbnail: (filePath, stat, edge, fit) => localImageThumbnails.resolve(filePath, stat, edge, fit),
     }));
     setTimeout(() => {
@@ -15007,7 +15748,11 @@ if (!gotTheLock) {
     store = await initStore();
     profiler.measure('initStore');
     console.log('[Main] initApp: store initialized');
+    initializeSessionExecutionCore();
+    initializeRemoteControl();
     const libraryLocalStore = new LibraryLocalStore(store.getDatabase());
+    libraryFileAccess = new LibraryFileAccessPolicy(libraryLocalStore, getCurrentRemoteOwner,
+      () => `${ownershipBootId}:${ownershipAccountEpoch}:${authAccountGeneration}`);
     const emitLibraryChanged = (payload: LibraryChangedPayload): void => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send(LibraryIpc.Changed, payload);
@@ -15026,6 +15771,8 @@ if (!gotTheLock) {
     });
     registerLibraryIpcHandlers({
       localStore: libraryLocalStore,
+      fileAccess: libraryFileAccess,
+      getOwner: getCurrentRemoteOwner,
       indexService: libraryIndexService,
       getServerApiBaseUrl,
       fetchWithAuth: (url, options) => {
@@ -15058,9 +15805,10 @@ if (!gotTheLock) {
       const sessionId = getCoworkStore().getSessionIdByScheduledTaskId(
         jobId, agentMatch?.[1] ?? AgentId.Main,
       );
-      return sessionId ? getCoworkStore().getSession(sessionId)?.title : undefined;
+      return sessionId && canViewCoworkSession(sessionId) ? getCoworkStore().getSession(sessionId)?.title : undefined;
     });
     configureUsageTitleReporter((sessionId, reportedTitle) => {
+      if (!isNativeUsageSessionId(sessionId) && !canViewCoworkSession(sessionId)) return;
       const title = reportedTitle ?? getCoworkStore().getSession(sessionId)?.title;
       if (!title) return;
       try { usageTitleSync.enqueue(sessionId, title); }
@@ -15088,6 +15836,7 @@ if (!gotTheLock) {
     // gets a fresh token without blocking.
 
     setAuthTokensGetter(() => {
+      if (!remoteCredentialsAllowed) return null;
       const tokens = getAuthTokens();
       if (!tokens) return null;
       // Check if accessToken is close to expiry and trigger background refresh
@@ -15156,7 +15905,7 @@ if (!gotTheLock) {
     profiler.mark('modelAuthProxy');
     try {
       const tokenProxy = await startModelAuthProxy({
-        getAuthTokens,
+        getAuthTokens: () => remoteCredentialsAllowed ? getAuthTokens() : null,
         refreshToken: reason => authSessionManager.refresh(reason),
         getServerBaseUrl: getServerApiBaseUrl,
         getAccountContextHeaders: getEnterpriseAccountHeaders,
@@ -15361,8 +16110,13 @@ if (!gotTheLock) {
     profiler.measure('startAskUserServer');
 
     void proxyPreferenceReady
+      .then(() => remoteAccountTransition.wait())
       .then(() => bootstrapOpenClawEngine({ reason: 'startup' }))
-      .then(() => {
+      .then(async () => {
+        await getCoworkEngineRouter().probeRemoteDecisions();
+        remoteStartupReady = getDshBootstrap().isReadyForTurns();
+        startRemoteForCurrentAccount();
+        remoteSessionCommands?.recovery.gatewayReady();
         try {
           getCronJobService().startPolling();
         } catch (err) {
@@ -15402,6 +16156,7 @@ if (!gotTheLock) {
       reportAnalytics: event => getMainLogReporter().report(event),
       getAnalyticsOwner: () => getStore().get<AppConfigSettings>('app_config')?.usageAnalyticsEnabled === false ? null : getAuthSessionKey() ?? '',
       getTaskInfo: sessionId => {
+        if (!canViewCoworkSession(sessionId)) return null;
         const task = getCoworkStore().getSession(sessionId, 1);
         return task ? { ...task, preview: getCompanionTaskPreview(task.messages.at(-1)) } : null;
       },
@@ -15421,6 +16176,7 @@ if (!gotTheLock) {
       getMainWindow: () => mainWindow,
       onPreferencesChanged: () => updateTrayMenu(() => isQuitting ? null : mainWindow),
       openMain: sessionId => {
+        if (sessionId && !canViewCoworkSession(sessionId)) return;
         if (sessionId) pendingOpenSessionFromNotificationId = sessionId;
         focusMainWindowForReason('desktop companion');
         flushOpenSessionFromNotification();

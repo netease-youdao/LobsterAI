@@ -1,11 +1,14 @@
+import { createHash } from 'node:crypto';
+
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { DshPermissionPreset, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
+import { DshOpsAction, DshPermissionPreset, DshSearchPolicy } from '../../../shared/dshEngine/hostConstants';
 import { DshHostManager } from './dshHostManager';
+import { type DshWaterfallEvent, type DshWaterfallOutcome, DshWaterfallReceipt } from './dshTypertClient';
 
 const ROOT_DIR = process.cwd();
 const RUNTIME_DIR = path.join(ROOT_DIR, 'vendor', 'dsh-runtime', 'current');
@@ -259,3 +262,83 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: lobster_enable_tools', 
     60_000,
   );
 });
+
+test.skipIf(!HAS_DSH_RUNTIME)('real owner host correlates admission, cancellation, and a waterfall receipt across restart', async () => {
+  const temp = createTempDir('lobsterai-dsh-remote-e2e-');
+  const origin = (await startServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const body: CapturedLlmRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (!body.tools?.length) return sendSseChunks(res, makeFinalTextSse('Sample'));
+      const last = body.messages.at(-1);
+      if (last?.role === 'tool') return sendSseChunks(res, makeFinalTextSse('Decision recorded'));
+      if (JSON.stringify(body.messages).includes('wait-for-cancellation')) return;
+      sendSseChunks(res, makeToolCallSse('ask-first', 'ask_user_question', {
+        questions: [{ id: 'q', question: 'Which?', options: [{ label: 'Blue', description: 'Blue' }] }],
+      }));
+    });
+  })).origin;
+  const manager = new DshHostManager({ userDataDir: temp, skillsDir: temp, runtimeDir: RUNTIME_DIR,
+    hostBundleDir: HOST_BUNDLE_DIR, executablePath: process.execPath, skipElectronRunAsNode: true, bootTimeoutMs: 45_000 });
+  manager.setApprovalEvaluator(() => ({ kind: 'allow' }));
+  try {
+    await manager.start();
+    const client = manager.getClient();
+    expect(await client.supportsWaterfallReceipts()).toBe(true);
+    await manager.syncProviders({ providers: [{ id: 'mock-openai', displayName: 'Mock OpenAI', api: 'openai-completions',
+      baseURL: origin + '/v1', apiKey: 'mock-key', models: [{ id: 'mock-gpt', name: 'Mock', contextWindow: 64000, maxTokens: 4096 }] }] });
+    const { sessionId } = await client.createSession({ cwd: temp, agentPreset: 'lobsterai' });
+    await manager.bindSessionContext({ sessionId, agentId: 'main', coworkSessionId: 'cw', userQuestionsDisabled: false });
+    await client.selectModel({ sessionId, provider: 'mock-openai', model: 'mock-gpt' });
+    const inspect = (requestId: string) => client.callOps(DshOpsAction.InspectRemoteTurn, { sessionId, requestId });
+    const cancel = (requestId: string) => client.callOps(DshOpsAction.CancelRemoteTurn, { sessionId, requestId });
+    const ask = Promise.withResolvers<DshWaterfallEvent>();
+    const answer = Promise.withResolvers<DshWaterfallOutcome>();
+    client.onWaterfall('user-questions/request', event => { ask.resolve(event); return answer.promise; });
+    const prompt = (requestId: string, text: string) => client.promptSession({ sessionId, requestId,
+      content: [{ type: 'text', text }], mode: 'queue' });
+    expect(await prompt('a', 'ask-first')).toEqual({ accepted: true });
+    const event = await ask.promise;
+    expect(await inspect('a')).toMatchObject({ status: 'running' });
+    expect(await client.callOps(DshOpsAction.InspectRemoteTurn, {
+      sessionId, requestId: 'a', interaction: { toolName: 'ask_user_question' },
+    })).toMatchObject({ interactionOwned: true });
+    expect(await client.callOps(DshOpsAction.InspectRemoteTurn, {
+      sessionId, requestId: 'missing', interaction: { toolName: 'ask_user_question' },
+    })).toMatchObject({ interactionOwned: false });
+    expect(await prompt('a', 'ask-first')).toEqual({ accepted: true });
+    expect(await prompt('b', 'wait-for-cancellation')).toEqual({ accepted: true });
+    expect(await inspect('b')).toMatchObject({ status: 'queued' });
+    const delivery = event.confirmDelivery!();
+    const outcome: DshWaterfallOutcome = { kind: 'result', value: { answers: [{ id: 'q', selected: ['Blue'] }] } };
+    answer.resolve(outcome);
+    expect(await delivery).toBe(DshWaterfallReceipt.Applied);
+    const stream = client.openStream<{ clientId: string }>('$events', {});
+    try {
+      const ready = await stream.next();
+      if (ready.done) throw new Error('Owner event stream closed');
+      expect(await client.call('$events/lobster-result', { clientId: ready.value.clientId,
+        eventId: event.eventId, outcome })).toEqual({ eventId: event.eventId, applied: false });
+    } finally { await stream.return(); }
+    await expect.poll(async () => (await inspect('a')).status, { timeout: 15_000 }).toBe('succeeded');
+    await expect.poll(async () => (await inspect('b')).status, { timeout: 15_000 }).toBe('running');
+    expect(await cancel('a')).toMatchObject({ status: 'succeeded', canCancel: false });
+    expect(await inspect('b')).toMatchObject({ status: 'running' });
+    await cancel('b');
+    await expect.poll(async () => (await inspect('b')).status, { timeout: 15_000 }).toBe('cancelled');
+    // Restart both the owner and Host to prove its original log contains the bound digest.
+    await manager.stop();
+    await manager.start();
+    const restarted = manager.getClient();
+    const replay = await restarted.callOps<{ records: Array<{ type: string; seq: number }> }>(DshOpsAction.InspectRemoteTurn,
+      { sessionId, requestId: 'a', afterSeq: -1 });
+    expect(replay.records.map(record => record.type)).toContain('assistant/message');
+    const cut = replay.records.at(-1)!.seq;
+    expect(await restarted.callOps(DshOpsAction.InspectRemoteTurn, { sessionId, requestId: 'a', afterSeq: cut }))
+      .toMatchObject({ records: [], status: 'succeeded' });
+    const receipt = { sessionId, eventId: event.eventId, outcomeHash: createHash('sha256').update(JSON.stringify(outcome)).digest('hex') };
+    expect(await restarted.callOps(DshOpsAction.InspectDecisionReceipt, receipt)).toEqual({ matched: true });
+    expect(await restarted.callOps(DshOpsAction.InspectDecisionReceipt, { ...receipt, eventId: 'different' })).toEqual({ matched: false });
+  } finally { await manager.stop(); }
+}, 120_000);

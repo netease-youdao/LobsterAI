@@ -26,6 +26,7 @@ import {
   type CoworkContinuityCapsule,
   formatCoworkContinuityCapsuleBridge,
 } from '../libs/agentEngine/coworkContinuityCapsule';
+import { TrustedWriteContext, withTrustedMigrationWrite } from './remoteWriteContext';
 
 const DSH_SESSION_FORMAT_VERSION = 4;
 const DSH_SESSION_LOG_FILENAME = `session.v${DSH_SESSION_FORMAT_VERSION}.jsonl.zstd`;
@@ -901,7 +902,8 @@ export function seedLegacySessionsToDsh(options: {
         throw new Error(`Pre-seeded DSH session file failed verification at ${logFilePath}`);
       }
 
-      updateSessionIdStmt.run(`${DSH_SESSION_ID_PREFIX}${dshSessionId}`, session.id);
+      withTrustedMigrationWrite(db, TrustedWriteContext.Session, () =>
+        updateSessionIdStmt.run(`${DSH_SESSION_ID_PREFIX}${dshSessionId}`, session.id));
       result.createdSessionDirs.push(sessionDirPath);
       result.sessionsPreSeeded += 1;
     } catch (error) {

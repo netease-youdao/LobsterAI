@@ -5,7 +5,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
-import { AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
+import { AgentAccessErrorCode, AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
 import { expertReminderRevision, ExpertUpgradeStatus, hasExpertUpdate } from '../shared/agent/presets';
 import { CoworkSessionStatusValue } from '../shared/cowork/constants';
@@ -40,6 +40,8 @@ afterEach(() => {
 // Compatibility fixture for databases opened by the remote-connect branch.
 // Keep its identity guard and ownership tombstones (agentOwnership.ts, ae1748103).
 function installLegacyOwnershipSchema(db: Database.Database): void {
+  // Current databases already carry the ownership guards this fixture emulates.
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_ownership'").get()) return;
   db.exec(`
     CREATE TABLE agent_ownership (
       agent_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL,
@@ -98,7 +100,7 @@ test.each([false, true])('recreates a custom agent without reusing its retired i
   expect(db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' ORDER BY name").all()).toEqual(triggers);
   if (legacyOwnership) {
     expect(db.prepare('SELECT * FROM agent_ownership WHERE agent_id=?').get(legacy.id)).toEqual(retiredIdentity);
-    expect(() => store.createAgent({ id: legacy.id, name: '111' })).toThrow('Agent identity cannot be reused');
+    expect(() => store.createAgent({ id: legacy.id, name: '111' })).toThrow(expect.objectContaining({ code: AgentAccessErrorCode.IdentityReused }));
   }
 });
 

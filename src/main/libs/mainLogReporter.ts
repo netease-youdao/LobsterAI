@@ -19,9 +19,10 @@ export type MainLogEventParams = Record<string, LogParamValue> & {
 
 type MainLogReporterStore = Pick<SqliteStore, 'get' | 'set'>;
 
-type MainLogReporterResponse = {
+export type MainLogReporterResponse = {
   ok: boolean;
   status: number;
+  retryAfter?: string | null;
 };
 
 export interface MainLogReporterOptions {
@@ -75,7 +76,7 @@ const getErrorName = (error: unknown): string => {
 export const buildMainLogUrl = (
   params: MainLogEventParams,
   context: MainLogUrlContext,
-  eventId: string = randomUUID(),
+  eventId: string = getTrimmedString(params.eventId) || randomUUID(),
 ): string => {
   const url = new URL(LogReporterEndpoint.YoudaoAnalyzer);
   const logParams: Record<string, LogParamValue> = {
@@ -112,13 +113,6 @@ export class MainLogReporter {
 
   constructor(options: MainLogReporterOptions) {
     this.options = options;
-  }
-
-  // Queued observations can retain their original account and event identity.
-  // No token or auth-session key is included in this public snapshot.
-  captureContext(): MainLogUrlContext | null {
-    if (!this.isUsageAnalyticsEnabled()) return null;
-    return this.buildContext();
   }
 
   async report(params: MainLogEventParams, snapshot?: MainLogReportSnapshot): Promise<boolean> {
@@ -170,6 +164,12 @@ export class MainLogReporter {
     } finally {
       this.activeRequestCount -= 1;
     }
+  }
+
+  /** Capture once outside hot paths; frozen-event callers never reread a later account. */
+  captureContext(): MainLogUrlContext | null {
+    if (!this.isUsageAnalyticsEnabled()) return null;
+    try { return Object.freeze(this.buildContext()); } catch { return null; }
   }
 
   private getMaxConcurrentRequests(): number {
@@ -239,4 +239,48 @@ export class MainLogReporter {
       return null;
     }
   }
+}
+
+export const FrozenLogOutcome = { Sent: 'sent', Retry: 'retry', Rejected: 'rejected', Cancelled: 'cancelled' } as const;
+export type FrozenLogSendResult = { outcome: typeof FrozenLogOutcome[keyof typeof FrozenLogOutcome]; status?: number; retryAfterMs?: number };
+export interface FrozenMainLogEvent { readonly url: string; }
+/** Shared wire format only. Does not read auth/config, use legacy concurrency, or log recursively. */
+export function freezeMainLogEvent(params: MainLogEventParams, context: MainLogUrlContext, maximumBytes = 2048): FrozenMainLogEvent | null {
+  try {
+    if (!params.action.startsWith(LogReporterActionPrefix.LobsterAI)) return null;
+    const url = buildMainLogUrl(params, context);
+    return Buffer.byteLength(url) <= maximumBytes ? Object.freeze({ url }) : null;
+  } catch { return null; }
+}
+export async function sendFrozenMainLogEvent(event: FrozenMainLogEvent, options: {
+  fetch: MainLogReporterOptions['fetch']; signal: AbortSignal; timeoutMs?: number; now?: () => number;
+}): Promise<FrozenLogSendResult> {
+  try {
+    const target = new URL(event.url), expected = new URL(LogReporterEndpoint.YoudaoAnalyzer);
+    if (target.origin !== expected.origin || target.pathname !== expected.pathname || target.username || target.password
+      || target.hash || Buffer.byteLength(event.url) > 2048) return { outcome: FrozenLogOutcome.Rejected };
+  } catch { return { outcome: FrozenLogOutcome.Rejected }; }
+  if (options.signal.aborted) return { outcome: FrozenLogOutcome.Cancelled };
+  const controller = new AbortController();
+  let cancel: (() => void) | undefined;
+  const interrupted = new Promise<null>(resolve => { cancel = () => { controller.abort(); resolve(null); }; });
+  const abort = () => cancel?.();
+  options.signal.addEventListener('abort', abort, { once: true });
+  const timeout = setTimeout(abort, options.timeoutMs ?? 10000);
+  timeout.unref?.();
+  try {
+    // Promise.race bounds a broken injected transport as well as native AbortSignal support.
+    const response = await Promise.race([options.fetch(event.url, controller.signal), interrupted]);
+    if (!response) return { outcome: options.signal.aborted ? FrozenLogOutcome.Cancelled : FrozenLogOutcome.Retry };
+    if (response.ok) return { outcome: FrozenLogOutcome.Sent, status: response.status };
+    let retryAfterMs: number | undefined;
+    if (typeof response.retryAfter === 'string' && response.retryAfter.length <= 128) {
+      const raw = response.retryAfter.trim();
+      const duration = /^\d{1,10}$/u.test(raw) ? Number(raw) * 1000 : Date.parse(raw) - (options.now?.() ?? Date.now());
+      if (Number.isFinite(duration) && duration >= 0) retryAfterMs = Math.min(duration, Number.MAX_SAFE_INTEGER);
+    }
+    return { outcome: response.status === 429 || response.status >= 500 || response.status === 0
+      ? FrozenLogOutcome.Retry : FrozenLogOutcome.Rejected, status: response.status, retryAfterMs };
+  } catch { return { outcome: options.signal.aborted ? FrozenLogOutcome.Cancelled : FrozenLogOutcome.Retry }; }
+  finally { clearTimeout(timeout); options.signal.removeEventListener('abort', abort); }
 }

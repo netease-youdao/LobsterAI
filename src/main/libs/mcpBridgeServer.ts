@@ -36,7 +36,12 @@ const log = (level: string, msg: string) => {
 
 export type AskUserRequest = {
   requestId: string;
+  /** Trusted bridge timestamps; never accepted from the callback body. */
+  createdAt: number;
+  expiresAt: number;
   sessionKey?: string;
+  /** Main-process consent that must not be published as a remote question. */
+  localOnly?: boolean;
   mediaConfirmation?: MediaConfirmationState;
   questions: Array<{
     id?: string;
@@ -48,20 +53,32 @@ export type AskUserRequest = {
     quoteKey?: string;
     options: Array<{ label: string; description?: string }>;
     multiSelect?: boolean;
+    isOther?: boolean;
+    allowSkip?: boolean;
     /** Video generation confirmations: what the desktop card lays out. */
     video?: VideoConfirmationDetails;
   }>;
 };
 
-export type AskUserResponse = MediaConfirmationResponse;
+export const AskUserResponseReason = {
+  Timeout: 'timeout',
+  Unavailable: 'unavailable',
+} as const;
 
+export type AskUserResponse = Omit<MediaConfirmationResponse, 'reason'> & {
+  reason?: MediaConfirmationResponse['reason'] | typeof AskUserResponseReason[keyof typeof AskUserResponseReason];
+};
 export interface AskUserOptions {
+  /** Local cancellation only; never deserialized from an HTTP body. */
+  signal?: AbortSignal;
   sessionKey?: string;
+  localOnly?: boolean;
   recoverableMedia?: RecoverableMediaConfirmation;
 }
 
 type PendingAskUser = {
   requestId: string;
+  expiresAt: number;
   resolve: (response: AskUserResponse) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -85,9 +102,10 @@ export type MediaGenerationResponse = {
 };
 
 export type BrowserToolRequest = {
+  /** Lifetime of the authenticated local HTTP request, not tool arguments. */
+  signal?: AbortSignal;
   tool: string;
   args: Record<string, unknown>;
-  signal?: AbortSignal;
 };
 
 export type BrowserToolResponse = {
@@ -115,6 +133,12 @@ export type DecisionToolResponse = {
   details?: Record<string, unknown>;
 };
 
+export interface AgentSettingsToolRequest {
+  args: Record<string, unknown>;
+  context: { agentId: string; sessionKey: string; runId: string; toolCallId: string };
+}
+export type AgentSettingsToolHandler = (request: AgentSettingsToolRequest, signal: AbortSignal) => Promise<DecisionToolResponse>;
+
 export type DecisionToolHandler = (
   request: DecisionToolRequest,
   signal: AbortSignal,
@@ -127,6 +151,7 @@ export class McpBridgeServer {
   private readonly pendingAskUser = new Map<string, PendingAskUser>();
   private onAskUserCallback: ((request: AskUserRequest) => void) | null = null;
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
+  private onAskUserSettledCallback: ((requestId: string, response: AskUserResponse) => void) | null = null;
   private readonly mediaConfirmations = new MediaConfirmationRequests({
     publish: request => {
       if (!this.onAskUserCallback) throw new Error('AskUser route unavailable');
@@ -140,6 +165,7 @@ export class McpBridgeServer {
 
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
+  private onAgentSettingsToolCallback: AgentSettingsToolHandler | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
   /** Editor tool handlers by route, served at `/<route>/tool`. */
   private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
@@ -170,6 +196,11 @@ export class McpBridgeServer {
     return this._port ? `http://127.0.0.1:${this._port}/decision/tool` : null;
   }
 
+  get agentSettingsCallbackUrl(): string | null {
+    return this._port ? `http://127.0.0.1:${this._port}/agent-settings/tool` : null;
+  }
+  onAgentSettingsTool(handler: AgentSettingsToolHandler): void { this.onAgentSettingsToolCallback = handler; }
+
   /**
    * Per-launch host facts (the app's process id) for bridge clients. They are
    * served here instead of being written into openclaw.json: any config change
@@ -197,6 +228,11 @@ export class McpBridgeServer {
    */
   onAskUserDismiss(callback: (requestId: string) => void): void {
     this.onAskUserDismissCallback = callback;
+  }
+
+  /** Receive the actual terminal result, including timeout and shutdown. */
+  onAskUserSettled(callback: (requestId: string, response: AskUserResponse) => void): void {
+    this.onAskUserSettledCallback = callback;
   }
 
   /**
@@ -227,14 +263,28 @@ export class McpBridgeServer {
   /**
    * Resolve a pending AskUserQuestion request (called when user clicks in the modal).
    */
-  resolveAskUser(requestId: string, response: AskUserResponse): void {
+  resolveAskUser(requestId: string, response: AskUserResponse): boolean {
     // Recoverable media approves only through its revision-checked command.
-    if (this.mediaConfirmations.deny(requestId, response.reason ?? MediaConfirmationReason.NoRoute)) return;
+    const mediaReason = response.reason === AskUserResponseReason.Timeout ? MediaConfirmationReason.Timeout
+      : response.reason === AskUserResponseReason.Unavailable ? MediaConfirmationReason.NoRoute
+        : response.reason ?? MediaConfirmationReason.NoRoute;
+    if (this.mediaConfirmations.deny(requestId, mediaReason)) return true;
     const pending = this.pendingAskUser.get(requestId);
-    if (!pending) return;
+    if (!pending) return false;
     clearTimeout(pending.timer);
     this.pendingAskUser.delete(requestId);
-    pending.resolve(response);
+    const terminal = Date.now() >= pending.expiresAt
+      ? { behavior: 'deny' as const, reason: AskUserResponseReason.Timeout } : response;
+    console.debug('[McpBridge:HTTP] Settled AskUser request', {
+      requestId, behavior: terminal.behavior, reason: terminal.reason,
+    });
+    pending.resolve(terminal);
+    // A derived authority/projection failure must never strand the local question.
+    try { this.onAskUserSettledCallback?.(requestId, terminal); }
+    catch (error) { log('WARN', `AskUser settlement observer failed: ${error instanceof Error ? error.name : 'Error'}`); }
+    try { this.onAskUserDismissCallback?.(requestId); }
+    catch (error) { log('WARN', `AskUser dismissal observer failed: ${error instanceof Error ? error.name : 'Error'}`); }
+    return true;
   }
 
   /**
@@ -244,31 +294,49 @@ export class McpBridgeServer {
    */
   async askUserInternal(
     questions: AskUserRequest['questions'],
+    timeoutMs: number,
+    options: AskUserOptions & { recoverableMedia: RecoverableMediaConfirmation },
+  ): Promise<MediaConfirmationResponse>;
+  async askUserInternal(
+    questions: AskUserRequest['questions'],
+    timeoutMs?: number,
+    options?: AskUserOptions,
+  ): Promise<AskUserResponse>;
+  async askUserInternal(
+    questions: AskUserRequest['questions'],
     timeoutMs = 120_000,
     options: AskUserOptions = {},
   ): Promise<AskUserResponse> {
+    if (options.signal?.aborted) return { behavior: 'deny', reason: AskUserResponseReason.Unavailable };
     if (options.recoverableMedia) return this.mediaConfirmations.request(questions, options.sessionKey, options.recoverableMedia);
     const requestId = crypto.randomUUID();
     const sessionKey = options.sessionKey?.trim() || undefined;
+    const createdAt = Date.now();
+    const expiresAt = createdAt + timeoutMs;
     log('INFO', `AskUser (internal) request, requestId=${requestId}`);
 
     return new Promise<AskUserResponse>((resolve) => {
       const timer = setTimeout(() => {
         log('INFO', `AskUser (internal) timeout, requestId=${requestId}`);
-        this.pendingAskUser.delete(requestId);
-        this.onAskUserDismissCallback?.(requestId);
-        resolve({ behavior: 'deny' });
+        this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Timeout });
       }, timeoutMs);
 
-      this.pendingAskUser.set(requestId, { requestId, resolve, timer });
+      const cancel = (): void => {
+        this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+      };
+      this.pendingAskUser.set(requestId, { requestId, expiresAt, timer, resolve: response => {
+        options.signal?.removeEventListener('abort', cancel);
+        resolve(response);
+      } });
+      options.signal?.addEventListener('abort', cancel, { once: true });
 
       if (this.onAskUserCallback) {
-        this.onAskUserCallback({ requestId, questions, sessionKey });
+        this.onAskUserCallback({ requestId, questions, sessionKey, createdAt, expiresAt,
+          ...(options.localOnly ? { localOnly: true } : {}),
+        });
       } else {
         log('WARN', 'AskUser callback not registered, denying (internal)');
-        clearTimeout(timer);
-        this.pendingAskUser.delete(requestId);
-        resolve({ behavior: 'deny' });
+        this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
       }
     });
   }
@@ -312,6 +380,9 @@ export class McpBridgeServer {
    * Stop the HTTP callback server.
    */
   async stop(): Promise<void> {
+    for (const requestId of this.pendingAskUser.keys()) {
+      this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
+    }
     this.mediaConfirmations.clear();
     if (!this.server) return;
 
@@ -403,6 +474,8 @@ export class McpBridgeServer {
       }
 
       const requestId = crypto.randomUUID();
+      const createdAt = Date.now();
+      const expiresAt = createdAt + ASKUSER_TIMEOUT_MS;
       log('INFO', `AskUser waiting for user response, requestId=${requestId}`);
 
       // The wait can outlast the caller's fetch header/body timeouts (5 min in
@@ -416,12 +489,10 @@ export class McpBridgeServer {
       const userResponse = await new Promise<AskUserResponse>((resolve) => {
         const timer = setTimeout(() => {
           log('INFO', `AskUser timeout, requestId=${requestId}`);
-          this.pendingAskUser.delete(requestId);
-          this.onAskUserDismissCallback?.(requestId);
-          resolve({ behavior: 'deny' });
+          this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Timeout });
         }, ASKUSER_TIMEOUT_MS);
 
-        this.pendingAskUser.set(requestId, { requestId, resolve, timer });
+        this.pendingAskUser.set(requestId, { requestId, expiresAt, resolve, timer });
 
         // The asker gave up (its MCP call timed out, the run was stopped):
         // close the dialog now instead of leaving it up until the timeout.
@@ -440,12 +511,12 @@ export class McpBridgeServer {
             requestId,
             sessionKey,
             questions: input.questions as AskUserRequest['questions'],
+            createdAt,
+            expiresAt,
           });
         } else {
           log('WARN', 'AskUser callback not registered, denying');
-          clearTimeout(timer);
-          this.pendingAskUser.delete(requestId);
-          resolve({ behavior: 'deny' });
+          this.resolveAskUser(requestId, { behavior: 'deny', reason: AskUserResponseReason.Unavailable });
         }
       });
 
@@ -524,6 +595,9 @@ export class McpBridgeServer {
 
   private async handleBrowserTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const startedAt = Date.now();
+    const controller = new AbortController();
+    const cancel = (): void => { if (!res.writableFinished) controller.abort(); };
+    res.on('close', cancel);
     try {
       const body = await this.readBody(req);
       const request = JSON.parse(body) as BrowserToolRequest;
@@ -548,8 +622,8 @@ export class McpBridgeServer {
       res.once('close', () => { if (!res.writableEnded) controller.abort(); });
       if (res.destroyed) return;
       const result = await this.onBrowserToolCallback({
-        tool: request.tool,
         signal: controller.signal,
+        tool: request.tool,
         args: request.args && typeof request.args === 'object' && !Array.isArray(request.args)
           ? request.args
           : {},
@@ -561,13 +635,41 @@ export class McpBridgeServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log('ERROR', `Browser tool request failed after ${Date.now() - startedAt}ms: ${message}`);
-      if (!res.writableEnded) {
+      if (!res.writableEnded && !res.destroyed) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           content: [{ type: 'text', text: `LobsterAI browser error: ${message}` }],
           isError: true,
         }));
       }
+    } finally {
+      res.removeListener('close', cancel);
+    }
+  }
+
+  private async handleAgentSettingsTool(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const controller = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+    const reply = (status: number, value: DecisionToolResponse): void => {
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(value));
+    };
+    try {
+      const chunks: Buffer[] = []; let bytes = 0;
+      for await (const chunk of req) {
+        bytes += chunk.length;
+        if (bytes > 512 * 1024) throw new Error('SETTINGS_CONTENT_TOO_LARGE');
+        chunks.push(Buffer.from(chunk));
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as AgentSettingsToolRequest;
+      if (!body || Object.keys(body).some(key => !['args', 'context'].includes(key)) || !body.args || typeof body.args !== 'object' || Array.isArray(body.args)
+        || !body.context || Object.keys(body.context).sort().join(',') !== 'agentId,runId,sessionKey,toolCallId'
+        || Object.values(body.context).some(value => typeof value !== 'string' || !value || value.length > 256)) throw new Error('CONVERSATION_SOURCE_INVALID');
+      if (!this.onAgentSettingsToolCallback) throw new Error('SETTINGS_UNAVAILABLE');
+      reply(200, await this.onAgentSettingsToolCallback(body, controller.signal));
+    } catch {
+      reply(400, { content: [{ type: 'text', text: 'SETTINGS_UNAVAILABLE' }], isError: true });
     }
   }
 

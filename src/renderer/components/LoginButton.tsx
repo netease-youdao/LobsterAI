@@ -2,6 +2,7 @@ import { ArrowPathIcon, ChevronRightIcon, GiftIcon, QuestionMarkCircleIcon } fro
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -826,12 +827,16 @@ const formatRewardExpiry = (expiresAt: string): string => {
 };
 
 interface LoginButtonProps {
+  onActivate?: () => void;
+  dismissMenu?: boolean;
   contentLeftOffset?: number;
   loggedOutVariant?: 'default' | 'sidebarPromo';
   loginPromoTipVisible?: boolean;
 }
 
 const LoginButton: React.FC<LoginButtonProps> = ({
+  onActivate,
+  dismissMenu = false,
   contentLeftOffset = 0,
   loggedOutVariant = 'default',
   loginPromoTipVisible = false,
@@ -883,6 +888,13 @@ const LoginButton: React.FC<LoginButtonProps> = ({
 
   authAccountScopeRef.current = authAccountScope;
 
+  useLayoutEffect(() => {
+    if (!dismissMenu) return;
+    menuOpenRequestRef.current += 1;
+    setMenuOpening(false);
+    setShowMenu(false);
+    setMenuDailyCheckInSnapshot(null);
+  }, [dismissMenu]);
   const prefetchMenuDailyCheckIn = useCallback(() => {
     if (!canLoadMenuDailyCheckIn
         || dailyCheckInSnapshotStore.isFresh(authAccountScope)) return;
@@ -1000,6 +1012,7 @@ const LoginButton: React.FC<LoginButtonProps> = ({
 
   const handleClick = async () => {
     if (isLoading) return;
+    onActivate?.();
     if (connectionState) {
       setShowMenu(current => !current);
       return;

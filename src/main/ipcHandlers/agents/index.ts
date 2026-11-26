@@ -1,2 +1,2 @@
 export type { AgentHandlerDeps } from './handlers';
-export { registerAgentHandlers } from './handlers';
+export { notifyAgentsChanged, registerAgentHandlers } from './handlers';

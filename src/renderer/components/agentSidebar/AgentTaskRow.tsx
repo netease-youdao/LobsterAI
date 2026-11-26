@@ -1,10 +1,9 @@
 import { ShareIcon } from '@heroicons/react/20/solid';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { OwnershipTargetKind } from '@shared/ownership/constants';
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
-import Modal from '../common/Modal';
 import {
   getIMSessionDisplayTitle,
   getIMSessionPlatformIconClassName,
@@ -18,6 +17,8 @@ import ListChecksIcon from '../icons/ListChecksIcon';
 import LoadingIcon from '../icons/LoadingIcon';
 import PushPinIcon from '../icons/PushPinIcon';
 import TrashIcon from '../icons/TrashIcon';
+import OwnershipMenuItems from '../ownership/OwnershipMenuItems';
+import AgentTaskDeleteDialog from './AgentTaskDeleteDialog';
 import AgentTaskHoverCard, {
   type AgentTaskHoverCardMeta,
   getTaskHoverCardDelayMs,
@@ -72,8 +73,8 @@ interface AgentTaskRowProps {
 
 const ACTION_MENU_VIEWPORT_PADDING = 8;
 const ACTION_MENU_VERTICAL_GAP = 4;
-const ACTION_MENU_HEIGHT = 164;
-const ACTION_MENU_WITH_BATCH_HEIGHT = 196;
+const ACTION_MENU_HEIGHT = 228;
+const ACTION_MENU_WITH_BATCH_HEIGHT = 260;
 
 const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
   task,
@@ -416,6 +417,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       role="menu"
       onKeyDown={handleMenuKeyDown}
     >
+      <OwnershipMenuItems target={{ kind: OwnershipTargetKind.Task, id: task.id }} onAction={closeMenu} className={menuItemClassName} />
       {showBatchOption && (
         <button
           type="button"
@@ -699,6 +701,7 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
 
       {hoverAnchor && hoverMeta && (
         <AgentTaskHoverCard
+          sessionId={task.id}
           anchor={hoverAnchor}
           title={displayTitle}
           timestamp={taskTimestamp}
@@ -712,47 +715,13 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
       )}
 
       {showConfirmDelete && (
-        <Modal
+        <AgentTaskDeleteDialog
+          key={task.id}
+          onDelete={onDelete}
           onClose={() => setShowConfirmDelete(false)}
-          className="mx-4 w-full max-w-sm overflow-hidden rounded-2xl bg-surface shadow-xl"
-        >
-          <div className="flex items-center gap-3 px-5 py-4">
-            <div className="rounded-full bg-red-100 p-2 dark:bg-red-900/30">
-              <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
-            </div>
-            <h2 className="text-base font-semibold text-foreground">
-              {i18nService.t('deleteTaskConfirmTitle')}
-            </h2>
-          </div>
-          <div className="px-5 pb-4">
-            <p className="text-sm text-secondary">
-              {i18nService.t('deleteTaskConfirmMessage')}
-            </p>
-          </div>
-          <div className="flex items-center justify-end gap-3 border-t border-border px-5 py-4">
-            <button
-              type="button"
-              onClick={() => {
-                onSidebarAction?.('task_delete_cancel', analyticsParams);
-                setShowConfirmDelete(false);
-              }}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-secondary transition-colors hover:bg-surface-raised"
-            >
-              {i18nService.t('cancel')}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                onSidebarAction?.('task_delete_submit', analyticsParams);
-                setShowConfirmDelete(false);
-                void onDelete();
-              }}
-              className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600"
-            >
-              {i18nService.t('deleteSession')}
-            </button>
-          </div>
-        </Modal>
+          onSubmit={() => onSidebarAction?.('task_delete_submit', analyticsParams)}
+          onCancel={() => onSidebarAction?.('task_delete_cancel', analyticsParams)}
+        />
       )}
     </div>
   );

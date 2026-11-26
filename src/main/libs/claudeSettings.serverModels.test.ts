@@ -9,6 +9,7 @@ import {
   clearServerModelMetadata,
   evaluateServerModelRunGate,
   getAllServerModelMetadata,
+  getServerModelMetadata,
   ServerModelRunGateReason,
   updateServerModelMetadata,
   updateServerModelMetadataFromResponse,
@@ -21,6 +22,21 @@ beforeEach(() => {
 });
 
 describe('server model metadata cache', () => {
+  test('retains access decisions in both getters and detects permission changes', () => {
+    const base = { modelId: 'chat', accessible: true };
+    expect(updateServerModelMetadata([base])).toBe(true);
+    expect(getServerModelMetadata('chat')?.accessible).toBe(true);
+    expect(getAllServerModelMetadata()[0].accessible).toBe(true);
+    expect(updateServerModelMetadata([base])).toBe(false);
+    expect(updateServerModelMetadata([{ ...base, accessible: false }])).toBe(true);
+    expect(getServerModelMetadata('chat')?.accessible).toBe(false);
+    expect(getAllServerModelMetadata()[0].accessible).toBe(false);
+    expect(updateServerModelMetadata([{ ...base, accessible: false }])).toBe(false);
+    expect(updateServerModelMetadata([base])).toBe(true);
+    expect(updateServerModelMetadata([{ modelId: 'chat' }])).toBe(true);
+    expect(getAllServerModelMetadata()[0].accessible).toBeUndefined();
+  });
+
   test('preserves K3 runtime and agentic capability metadata', () => {
     expect(updateServerModelMetadata([{
       modelId: 'kimi-k3-YoudaoInner',

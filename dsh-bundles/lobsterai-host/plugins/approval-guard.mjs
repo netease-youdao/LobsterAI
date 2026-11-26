@@ -14,6 +14,7 @@
  */
 
 import { evaluateOfficeGuiGuard } from './office-gui-guard-helpers.mjs';
+import { remoteToolDenied } from './remote-tool-scope.mjs';
 import { callLobsterBridge, getHostState, resolveSessionContext, resolveSessionId } from './shared-state.mjs';
 import { evaluateWebAccessGuard } from './web-access-guard-helpers.mjs';
 import { isWebSearchEnabledByPolicy } from './web-search-bridge-helpers.mjs';
@@ -54,17 +55,20 @@ export function apply(ctx) {
   });
 
   ctx.on('tools/pre-execute', async (exec, next) => {
-    if (!state.bridgeUrl) {
-      return next();
-    }
     const sessionId = resolveSessionId(exec);
     const bound = resolveSessionContext(ctx, state, sessionId);
 
+    const remote = Array.isArray(bound?.remoteAllowedAgentIds);
+    if (remote && (remoteToolDenied(bound, exec.name) || !bound.remoteRequestId || !state.bridgeUrl)) {
+      return { kind: 'deny', reason: 'This tool requires a locally authorized session.' };
+    }
+    if (!state.bridgeUrl) return next();
     const response = await callLobsterBridge(
       state,
       '/dsh-bridge/approval-evaluate',
       {
         toolName: exec.name,
+        ...(remote ? { remoteRequestId: bound.remoteRequestId } : {}),
         args: exec.arguments,
         callId: exec.callId,
         sessionId,
@@ -77,7 +81,7 @@ export function apply(ctx) {
     );
 
     if (!response.available || !response.ok || !response.data || typeof response.data !== 'object') {
-      return next();
+      return remote ? { kind: 'deny', reason: 'Remote authorization unavailable.' } : next();
     }
 
     const decision = /** @type {Record<string, unknown>} */ (response.data);

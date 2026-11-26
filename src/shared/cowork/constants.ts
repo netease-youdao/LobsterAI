@@ -95,6 +95,13 @@ export const CoworkTempDirKind = {
 export type CoworkTempDirKind = typeof CoworkTempDirKind[keyof typeof CoworkTempDirKind];
 
 export const CoworkIpcChannel = {
+  StreamMessage: 'cowork:stream:message',
+  StreamMessageUpdate: 'cowork:stream:messageUpdate',
+  StreamSessionStatus: 'cowork:stream:sessionStatus',
+  StreamContextUsage: 'cowork:stream:contextUsage',
+  StreamContextMaintenance: 'cowork:stream:contextMaintenance',
+  StreamPermission: 'cowork:stream:permission',
+  PermissionList: 'cowork:permission:list',
   SessionStart: 'cowork:session:start',
   SessionContinue: 'cowork:session:continue',
   EditMessage: 'cowork:message:edit',
@@ -102,15 +109,22 @@ export const CoworkIpcChannel = {
   GetMessageEdit: 'cowork:message:editState',
   RecoverMessageEdit: 'cowork:message:recoverEdit',
   SwitchMessageVersion: 'cowork:message:switchVersion',
-  GetSession: 'cowork:session:get',
   ListSessions: 'cowork:session:list',
   GenerateSessionTitle: 'cowork:session:generateTitle',
   RenameSession: 'cowork:session:rename',
-  ConfigSet: 'cowork:config:set',
   PermissionRespond: 'cowork:permission:respond',
+  StreamPermissionState: 'cowork:stream:permissionState',
   MediaConfirmation: 'cowork:media:confirmation',
-  GetPendingQuestions: 'cowork:question:pending',
   StreamPermissionDismiss: 'cowork:stream:permissionDismiss',
+  StreamComplete: 'cowork:stream:complete',
+  StreamError: 'cowork:stream:error',
+  GetSession: 'cowork:session:get',
+  GetSessionMessages: 'cowork:session:getMessages',
+  GetSessionContextUsage: 'cowork:session:contextUsage',
+  CompactSessionContext: 'cowork:session:compactContext',
+  IsSessionRemoteManaged: 'cowork:session:remoteManaged',
+  ConfigSet: 'cowork:config:set',
+  GetPendingQuestions: 'cowork:question:pending',
   CancelMediaTask: 'cowork:media:cancel',
   GetMediaModels: 'media:getModels',
   GetMediaPreferences: 'media:getPreferences',
@@ -162,6 +176,7 @@ export type CoworkIpcChannel = typeof CoworkIpcChannel[keyof typeof CoworkIpcCha
 
 export interface CoworkSessionsChangedPayload {
   sessionIds: string[];
+  deletedSessionIds?: string[];
 }
 
 export const CoworkOnboardingMessageKind = {

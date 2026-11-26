@@ -29,6 +29,7 @@ import {
 } from '../../../shared/cowork/btw';
 import { COWORK_TEMP_SESSION_ID_PREFIX, CoworkOnboardingMessageKind } from '../../../shared/cowork/constants';
 import { CoworkGoalStatus } from '../../../shared/cowork/goal';
+import type { CoworkLocalInput } from '../../../shared/cowork/inputAttachments';
 import {
   COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH,
   type CoworkMessageRailIndexItem,
@@ -187,6 +188,7 @@ import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
+import OwnershipTaskSyncButton from '../ownership/OwnershipTaskSyncButton';
 import { type ToastEventDetail } from '../Toast';
 import Tooltip, {
   TOOLTIP_DARK_BUBBLE_CLASS_NAME,
@@ -317,6 +319,7 @@ interface CoworkSessionDetailProps {
     selectedTextSnippets?: CoworkSelectedTextSnippet[],
     browserAnnotations?: import('@shared/cowork/browserAnnotations').CoworkBrowserAnnotationMessageBatch[],
     collaborationMode?: CoworkCollaborationModeType,
+    localInput?: CoworkLocalInput,
     titleInput?: string,
   ) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
@@ -6970,6 +6973,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               </div>
             );
           })()}
+          <OwnershipTaskSyncButton sessionId={currentSession.id} />
           {isConversationSearchOpen && (
             <div className="non-draggable absolute right-2 top-0 z-40 flex h-full items-start">
               <CoworkConversationSearch

@@ -76,7 +76,10 @@ import BrainIcon from './icons/BrainIcon';
 import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
+import RemoteControlIcon from './icons/RemoteControlIcon';
 import IMSettings from './im/IMSettings';
+import { RemoteDeviceHelp } from './remote/RemoteDeviceHelp';
+import { RemoteDeviceSettings } from './remote/RemoteDeviceSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import DataMigrationDialogs from './settings/DataMigrationDialogs';
@@ -864,6 +867,7 @@ export type SettingsOpenOptions = {
 };
 
 interface SettingsProps extends SettingsOpenOptions {
+  onShowLogin: () => void;
   onClose: () => void;
   onStartAiSkin?: (text: string, kitId: string) => void;
   initialTabRequestId?: number;
@@ -1221,6 +1225,7 @@ const SettingsNumberInputRow: React.FC<{
 
 const Settings: React.FC<SettingsProps> = ({
   onClose,
+  onShowLogin,
   onStartAiSkin,
   initialTab,
   initialMemoryAgentId,
@@ -3988,6 +3993,7 @@ const Settings: React.FC<SettingsProps> = ({
       { key: SettingsTabId.CoworkMemory,     label: i18nService.t('coworkMemoryTitle'),     icon: <BrainIcon className="h-5 w-5" /> },
       { key: SettingsTabId.BrowserWebAccess, label: i18nService.t('browserWebAccessTab'),   icon: <GlobeAltIcon className="h-5 w-5" /> },
       { key: SettingsTabId.Im,               label: i18nService.t('imBot'),                 icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.RemoteDevices, label: i18nService.t('remoteDeviceManagement'), icon: <RemoteControlIcon className="h-5 w-5" /> },
       { key: SettingsTabId.Email,            label: i18nService.t('emailTab'),              icon: <EnvelopeIcon className="h-5 w-5" /> },
       { key: SettingsTabId.Plugins,          label: i18nService.t('pluginsTab'),            icon: <PlugIcon className="h-5 w-5" /> },
       { key: SettingsTabId.DataPrivacy,      label: i18nService.t('dataPrivacyTab'),        icon: <ShieldCheckIcon className="h-5 w-5" /> },
@@ -4323,6 +4329,8 @@ const Settings: React.FC<SettingsProps> = ({
 
   const renderTabContent = () => {
     switch(activeTab) {
+      case SettingsTabId.RemoteDevices:
+        return <RemoteDeviceSettings onLogin={onShowLogin} loginAllowed={enterpriseConfig?.ui?.login !== 'hide'} />;
       case SettingsTabId.Experimental:
         return (
           <div className="space-y-8">
@@ -5106,7 +5114,10 @@ const Settings: React.FC<SettingsProps> = ({
         <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden bg-background rounded-r-2xl">
           {/* Content header */}
           <div className="flex justify-between items-center gap-3 px-6 pt-5 pb-3 shrink-0">
-            <h3 className={`min-w-0 truncate ${SETTINGS_PAGE_TITLE_TEXT} font-semibold text-foreground`}>{activeTabLabel}</h3>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h3 className={`min-w-0 truncate ${SETTINGS_PAGE_TITLE_TEXT} font-semibold text-foreground`}>{activeTabLabel}</h3>
+              {activeTab === SettingsTabId.RemoteDevices && <RemoteDeviceHelp />}
+            </div>
             <button
               onClick={guardedClose}
               className="text-secondary hover:text-foreground p-1.5 hover:bg-surface-raised rounded-lg transition-colors"
@@ -5165,7 +5176,7 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
 
             {/* Footer buttons */}
-            {activeTab !== SettingsTabId.CoworkMemory && activeTab !== SettingsTabId.Email && (
+            {activeTab !== SettingsTabId.CoworkMemory && activeTab !== SettingsTabId.Email && activeTab !== SettingsTabId.RemoteDevices && (
               <div className="relative shrink-0">
                 <div
                   aria-hidden="true"

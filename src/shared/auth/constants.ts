@@ -80,6 +80,7 @@ export type AuthTokenRefreshResult = {
 };
 
 export const AuthRefreshFailureKind = {
+  ContextChanged: 'context_changed',
   Http: 'http_error',
   InvalidResponse: 'invalid_response',
   Network: 'network',
@@ -135,6 +136,7 @@ export type AuthSessionChangedEvent = {
 };
 
 export const AuthSubscriptionStatus = {
+  Unavailable: 'unavailable',
   Active: 'active',
   Enterprise: 'enterprise',
   Free: 'free',

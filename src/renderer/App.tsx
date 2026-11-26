@@ -1,5 +1,5 @@
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
-import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo,useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
 import { AgentUiEvent } from '../shared/agent/constants';
@@ -48,6 +48,7 @@ import LaunchAdModal from './components/LaunchAdModal';
 import LibraryView from './components/library/LibraryView';
 import FirstRunLoginIntroduction from './components/login/FirstRunLoginIntroduction';
 import { MigrationReportModal } from './components/migration/MigrationReportModal';
+import OwnershipHost from './components/ownership/OwnershipHost';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import { SettingsTabId } from './components/settings/settingsTabs';
@@ -74,9 +75,10 @@ import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import { selectIsEnterpriseAccount } from './features/enterpriseAccount/selectors';
 import { SkinProvider } from './providers/SkinProvider';
+import { agentService } from './services/agent';
 import { apiService } from './services/api';
 import { applyAppConfigToStore } from './services/appConfigModels';
-import { AppDeepLinkEvent, type AppDeepLinkTarget } from './services/appDeepLink';
+import { AppDeepLinkEvent, type AppDeepLinkTarget, RemoteControlDeepLink } from './services/appDeepLink';
 import { authService } from './services/auth';
 import { configService } from './services/config';
 import { coworkService } from './services/cowork';
@@ -98,6 +100,8 @@ import { LogReporterAction, reportYdAnalyzer } from './services/logReporter';
 import { installOfficeAgentBridges } from './services/office/officeFormats';
 import { reportOnboardingAction } from './services/onboardingAnalytics';
 import { resolveOpenWithAttachments } from './services/openWith';
+import { ownershipService } from './services/ownership';
+import { remoteSettingsService } from './services/remoteSettings';
 import { scheduledTaskService } from './services/scheduledTask';
 import { getMouseButtonHistoryDirection, sessionNavigationService } from './services/sessionNavigation';
 import { isTextEditingSafeShortcut, matchesShortcut } from './services/shortcuts';
@@ -197,6 +201,25 @@ const logAppUpdateRendererLifecycle = (
 };
 
 const App: React.FC = () => {
+  const accountGeneration = useSelector((state: RootState) => state.auth.accountGeneration);
+  const [remoteControlGeneration, setRemoteControlGeneration] = useState<number | null>(null);
+  const [pendingRemoteControl, setPendingRemoteControl] = useState<number | null>(null);
+  const [sidebarBatchMode, setSidebarBatchMode] = useState(false);
+  const handleRemoteControlOpen = useCallback((open: boolean) => {
+    setRemoteControlGeneration(open ? accountGeneration : null);
+  }, [accountGeneration]);
+  useLayoutEffect(() => {
+    setRemoteControlGeneration(null);
+    setPendingRemoteControl(null);
+    remoteSettingsService.invalidate();
+    coworkService.accountChanged();
+    if (hasInitialized.current) {
+      void Promise.all([agentService.loadAgents(), coworkService.loadSessions()]).catch(error => {
+        console.warn('[App] Failed to load tasks after account change', error);
+      });
+    }
+  }, [accountGeneration]);
+
   const [showSettings, setShowSettings] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions & { requestId: number }>({ requestId: 0 });
@@ -646,6 +669,8 @@ const App: React.FC = () => {
   }, [isInitialized, defaultSelectedModel?.id, defaultSelectedModel?.providerKey]);
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
+    setRemoteControlGeneration(null);
+    setPendingRemoteControl(null);
     setSettingsOptions((current) => ({
       initialTab: options?.initialTab,
       initialMemoryAgentId: options?.initialMemoryAgentId,
@@ -765,6 +790,11 @@ const App: React.FC = () => {
     const handleDeepLink = (event: Event) => {
       const target = (event as CustomEvent<AppDeepLinkTarget>).detail;
       if (!target) return;
+      if (target.kind === RemoteControlDeepLink) {
+        setPendingRemoteControl(accountGeneration);
+        return;
+      }
+      setPendingRemoteControl(null);
       if (target.kind === 'view' && target.view === MainView.Experts && !ENABLE_EXPERT_PLAZA_UI) return;
       if (target.kind === 'settings') {
         handleShowSettings({ initialTab: target.tab });
@@ -777,7 +807,7 @@ const App: React.FC = () => {
     };
     window.addEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
     return () => window.removeEventListener(AppDeepLinkEvent.Navigate, handleDeepLink);
-  }, [handleShowExperts, handleShowLibrary, handleShowSettings]);
+  }, [accountGeneration, handleShowExperts, handleShowLibrary, handleShowSettings]);
 
   const handleExpertSummon = useCallback((agent: Agent, prompt: string, reference?: PreparedImageExampleReference) => {
     openExpertDraft(agent, prompt);
@@ -1006,8 +1036,27 @@ const App: React.FC = () => {
   }, [showToast, stopUserInitiatedUpdateFlow]);
 
   const handleShowLogin = useCallback(() => {
-    showToast(i18nService.t('featureInDevelopment'));
-  }, [showToast]);
+    setRemoteControlGeneration(null);
+    if (enterpriseConfig?.ui?.login === 'hide') {
+      showToast(i18nService.t('remoteLoginUnavailable'));
+      return;
+    }
+    const generation = store.getState().auth.accountGeneration;
+    const reportFailure = () => {
+      if (generation === store.getState().auth.accountGeneration) showToast(i18nService.t('remoteLoginFailed'));
+    };
+    void authService.login().then(result => { if (!result.success) reportFailure(); }).catch(reportFailure);
+  }, [enterpriseConfig, showToast]);
+
+  const handleOpenOwnershipTask = useCallback(async (sessionId: string) => {
+    const generation = store.getState().auth.accountGeneration;
+    const sequence = ownershipService.getSequence();
+    const isCurrent = () => generation === store.getState().auth.accountGeneration && sequence === ownershipService.getSequence();
+    const session = await coworkService.loadSession(sessionId, { isCurrent });
+    if (!session || !isCurrent()) throw new Error('OWNERSHIP_TASK_UNAVAILABLE');
+    setShowSettings(false);
+    setMainView(MainView.Cowork);
+  }, []);
 
   const runUpdateCheck = useCallback(async (): Promise<boolean> => {
     try {
@@ -1807,6 +1856,15 @@ const App: React.FC = () => {
     || isPermissionModalOpen
     || isUpdateInteractionBlocked
     || shouldShowNewUserOnboarding;
+  useEffect(() => {
+    if (pendingRemoteControl === null || isOverlayActive || isLaunchAdBlocking || sidebarBatchMode || !isInitialized) return;
+    if (pendingRemoteControl === accountGeneration) {
+      setIsSidebarCollapsed(false);
+      setRemoteControlGeneration(accountGeneration);
+    }
+    setPendingRemoteControl(null);
+  }, [pendingRemoteControl, accountGeneration, isOverlayActive, isLaunchAdBlocking, sidebarBatchMode, isInitialized]);
+
   // Downloads stay silent: the badge and sidebar card only appear once the
   // installer is ready or the update needs the user's attention.
   const shouldShowUpdateNotice = shouldShowAppUpdateNotice(appUpdateState);
@@ -1900,6 +1958,7 @@ const App: React.FC = () => {
           {showSettings && (
             <SkinProvider>
               <Settings
+                onShowLogin={handleShowLogin}
                 onClose={handleCloseSettings}
                 initialTab={settingsOptions.initialTab}
                 initialMemoryAgentId={settingsOptions.initialMemoryAgentId}
@@ -1930,6 +1989,7 @@ const App: React.FC = () => {
           onClose={() => setToastMessage(null)}
         />
       )}
+      <OwnershipHost onOpenTask={handleOpenOwnershipTask} />
       <SubscriptionTrialCampaign
         privacyAgreed={privacyAgreed}
         taskCreatedSignal={trialTaskCreatedSignal}
@@ -1951,6 +2011,11 @@ const App: React.FC = () => {
         <Sidebar
           onShowLogin={handleShowLogin}
           onShowSettings={handleShowSettings}
+          hideDeviceManagement={enterpriseConfig?.ui?.['settings.remoteDevices'] === 'hide'}
+          remoteControlOpen={remoteControlGeneration === accountGeneration}
+          onRemoteControlOpenChange={handleRemoteControlOpen}
+          onBatchModeChange={setSidebarBatchMode}
+          remoteControlBlocked={isOverlayActive || isLaunchAdBlocking}
           activeView={mainView}
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
@@ -2070,6 +2135,7 @@ const App: React.FC = () => {
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
       {showSettings && (
         <Settings
+          onShowLogin={handleShowLogin}
           onClose={handleCloseSettings}
           onStartAiSkin={handleStartAiSkinFromSettings}
           initialTab={settingsOptions.initialTab}

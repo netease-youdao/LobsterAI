@@ -1,0 +1,571 @@
+import { createHash, randomUUID } from 'crypto';
+import { constants, createReadStream, promises as fs, realpathSync, statSync } from 'fs';
+import path from 'path';
+
+import { AgentAccessErrorCode, AgentId } from '../../shared/agent/constants';
+import { COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES, type CoworkImageAttachmentPayload, estimateBase64DecodedBytes } from '../../shared/cowork/imageAttachments';
+import { type ModelPresetId, modelPresetModelId, parseModelPresetId } from '../../shared/modelPresets/constants';
+import { OpenClawProviderId } from '../../shared/providers/constants';
+import { parseModelThinkingLevel } from '../../shared/providers/modelThinking';
+import { REMOTE_TEXT_BYTES, type RemoteOwner } from '../../shared/remote/constants';
+import { RemoteInputIntent, RemoteInputMode, RemoteInputReason, RemoteInputRecovery, type RemoteInputRecoveryReceipt, type RemotePreparationClaim, type RemoteResolvedInput } from '../../shared/remote/input';
+import { AgentAccessError } from '../agentOwnership';
+import type { CoworkStore } from '../coworkStore';
+import { payloadHash, sameOwner } from './canonical';
+import type { RemoteAgentCatalog } from './remoteAgentCatalog';
+import { captureRemoteFileTelemetry, remoteFileRequestFailure, remoteFileRequestFailureFields, RemoteFileTelemetry as Telemetry,remoteFileTelemetryReason } from './remoteFileTelemetry';
+import type { RemoteImageContext } from './remoteImageDecoder';
+import { RemoteInputError, type RemoteModelCatalog } from './remoteModelCatalog';
+import { remotePublicationAllowed,RemotePublicationKind } from './remotePublicationOrigins';
+import { remoteDiagnosticLog,RemoteInputDiagnostic } from './remoteSyncLog';
+import { withRemoteTelemetryRequest } from './remoteTelemetryTransport';
+
+// Only attachment decoding/representation failures qualify for the server attachment reason.
+export class RemoteAttachmentError extends RemoteInputError {
+  constructor() { super(RemoteInputReason.Invalid); }
+}
+
+export const inputOperationKey = (operationId: string, targetId?: string): string => `inputOperation:${targetId ? `${targetId}:` : ''}${operationId}`;
+
+interface FileIdentity { realPath: string; dev: string; ino: string; size: number; mtimeMs: number }
+interface InputImagePreview { mimeType: string; base64Data: string }
+interface LocalAsset { preview?: InputImagePreview | null; assetId: string; version: string; path: string; identity: FileIdentity; imagePath?: string; imageIdentity?: FileIdentity; imageMime?: string }
+export interface LocalPreparedInput {
+  preparationId: string; owner: RemoteOwner; deviceId: string; requestHash: string; inputDigest: string;
+  targetId?: string;
+  resolvedInput: RemoteResolvedInput; cwd: string; directoryIdentity: FileIdentity; runtimeRef: string;
+  /** Local-only evidence for retaining an already bound preset during keep_session. */
+  presetBinding?: { mode: 'keep_session'; presetId: ModelPresetId; physicalModel: { modelRef: string; version: string };
+    sessionThinkingLevel: string | null; thinkingLevel: string | null };
+  /** Desktop-only inherited custom-provider setting, not a remotely selectable option. */
+  inheritedThinking?: string;
+  sessionId: string | null; expectedInputVersion: string | null; expectedControlVersion: string | null;
+  files: LocalAsset[]; createdAt: number; expiresAt: number; boundCommandId: string | null;
+  cacheDirectory?: string; cacheCleanup?: 'deleting';
+}
+export const preparedThinkingLevel = (prepared: LocalPreparedInput): string | null | undefined =>
+  prepared.presetBinding ? prepared.presetBinding.thinkingLevel
+    : prepared.inheritedThinking ?? prepared.resolvedInput.options.thinkingLevel;
+
+const CustomModelSource = 'custom';
+
+interface Dependencies {
+  store: CoworkStore; models: RemoteModelCatalog; cacheRoot: string; getOwner(): RemoteOwner | null;
+  getTargetId?(): string | null;
+  getDefaultModel(): string; getAgentCatalog(): RemoteAgentCatalog | null;
+  createImagePreview?(filePath: string, context?: RemoteImageContext): Promise<InputImagePreview | undefined>;
+  convertImage?(filePath: string, mimeType: string, targetPath: string, maximumBytes: number, context?: RemoteImageContext): Promise<{ path: string; mimeType: string }>;
+}
+const maxPreviewBytes = 128 * 1024;
+// Includes cold sandbox renderer startup; timeout aborts the decoder, not just its waiter.
+const previewTimeoutMs = 2500;
+const imageMimes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const maxFileBytes = 100 * 1024 * 1024;
+const maxTotalBytes = 256 * 1024 * 1024;
+const imageFrameBytes = 29_500_000 - 64 * 1024;
+const identity = (filePath: string): FileIdentity => {
+  const value = statSync(filePath);
+  return { realPath: realpathSync(filePath), dev: String(value.dev), ino: String(value.ino), size: value.size, mtimeMs: value.mtimeMs };
+};
+const sameFile = (filePath: string, expected: FileIdentity, directory = false): boolean => {
+  try {
+    const actual = identity(filePath);
+    return actual.realPath === expected.realPath && actual.dev === expected.dev && actual.ino === expected.ino
+      && (directory ? statSync(filePath).isDirectory() : statSync(filePath).isFile() && actual.size === expected.size && actual.mtimeMs === expected.mtimeMs);
+  } catch { return false; }
+};
+const hashFile = async (filePath: string, check: () => void): Promise<string> => {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) { check(); hash.update(chunk); }
+  check(); return hash.digest('hex');
+};
+
+/** No runtime mutation occurs here. An immutable local manifest is required again at dispatch. */
+export class InputPreparationService {
+  private operationEpoch = 0;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private cleanupRunning = false;
+  private cleanupCursor = '';
+  constructor(private readonly deps: Dependencies) {}
+  reset(): void { this.operationEpoch++; }
+  startCleanup(): void {
+    if (this.cleanupTimer) return;
+    const run = (): void => { void this.cleanupExpired().catch(() => console.warn('[RemoteInput] Cache cleanup deferred')); };
+    this.cleanupTimer = setInterval(run, 60_000); this.cleanupTimer.unref?.(); run();
+  }
+  stopCleanup(): void { if (this.cleanupTimer) clearInterval(this.cleanupTimer); this.cleanupTimer = null; }
+  /** Remote command lifetimes are <=60s. Keep unbound ready files a further day so a
+   * previously accepted command cannot lose its input while waiting for delivery. */
+  async cleanupExpired(now = Date.now()): Promise<number> {
+    if (this.cleanupRunning) return 0;
+    this.cleanupRunning = true;
+    let removed = 0;
+    try {
+      const rows = this.deps.store.remote.entries<LocalPreparedInput>('inputPreparation:', this.cleanupCursor, 50);
+      for (const row of rows) {
+        this.cleanupCursor = row.key;
+        const current = this.deps.store.remote.get<LocalPreparedInput>(row.key);
+        if (!current || current.boundCommandId || !Number.isFinite(current.expiresAt) || current.expiresAt > now - 24 * 60 * 60_000) continue;
+        // Claim synchronously before filesystem awaits; bind/read reject this durable marker.
+        this.deps.store.remote.put(row.key, { ...current, cacheCleanup: 'deleting' });
+        try {
+          const folder = await this.cleanupDirectory(current);
+          if (folder) await fs.rm(folder, { recursive: true, force: true });
+          this.deps.store.remote.remove(row.key); removed++;
+        } catch { console.warn('[RemoteInput] Expired input retained for cleanup retry'); }
+      }
+      if (rows.length < 50) this.cleanupCursor = '';
+      return removed;
+    } finally { this.cleanupRunning = false; }
+  }
+  private async cleanupDirectory(prepared: LocalPreparedInput): Promise<string | null> {
+    const paths = prepared.files.flatMap(file => [file.path, ...(file.imagePath ? [file.imagePath] : [])]);
+    const folder = prepared.cacheDirectory || (paths.length ? path.dirname(paths[0]) : null);
+    if (!folder) return null; // Old text-only records did not retain their empty directory.
+    const root = path.resolve(this.deps.cacheRoot);
+    const parent = path.join(root, payloadHash([prepared.owner.userId, prepared.owner.scopeKey, prepared.deviceId]));
+    if (path.dirname(path.resolve(folder)) !== parent || !/^[0-9a-f-]{36}$/iu.test(path.basename(folder))
+      || paths.some(file => path.dirname(path.resolve(file)) !== path.resolve(folder))) throw new Error('Unsafe input cache directory');
+    // Refuse symlinked owner/directory components. rm must never traverse into user files.
+    try {
+      const rootReal = await fs.realpath(root);
+      const parentInfo = await fs.lstat(parent);
+      if (parentInfo.isSymbolicLink() || !parentInfo.isDirectory() || await fs.realpath(parent) !== path.join(rootReal, path.basename(parent))) throw new Error('Unsafe input cache parent');
+      const info = await fs.lstat(folder);
+      if (info.isSymbolicLink() || !info.isDirectory() || await fs.realpath(folder) !== path.join(rootReal, path.basename(parent), path.basename(folder))) throw new Error('Unsafe input cache directory');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+    return folder;
+  }
+  private async imagePreview(filePath: string, check: () => void): Promise<InputImagePreview | undefined> {
+    if (!this.deps.createImagePreview) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let preview: InputImagePreview | undefined;
+    const abort = new AbortController();
+    const current = (): boolean => { try { check(); return true; } catch { return false; } };
+    try {
+      preview = await Promise.race([
+        this.deps.createImagePreview(filePath, { current, signal: abort.signal }),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => { abort.abort(); resolve(undefined); }, previewTimeoutMs); }),
+      ]);
+    } catch {
+      console.warn('[RemoteInput] Image preview unavailable; retaining file attachment');
+    } finally { if (timer) clearTimeout(timer); abort.abort(); }
+    check(); // A failed preview must not swallow a revoked execution/account permit.
+    if (!preview || !imageMimes.has(preview.mimeType) || !preview.base64Data
+      || preview.base64Data.length > 4 * Math.ceil(maxPreviewBytes / 3)
+      || estimateBase64DecodedBytes(preview.base64Data) > maxPreviewBytes) return undefined;
+    return preview;
+  }
+  private targetId(): string | undefined {
+    const targetId = this.deps.getTargetId?.();
+    if (this.deps.getTargetId && !targetId) throw new RemoteInputError(RemoteInputReason.Stale);
+    return targetId ?? undefined;
+  }
+  private key(id: string): string { return `inputPreparation:${this.deps.getTargetId ? JSON.stringify([this.targetId(), id]) : id}`; }
+  private assertTarget(prepared: LocalPreparedInput): void {
+    if (prepared.targetId !== this.targetId()) throw new RemoteInputError(RemoteInputReason.Stale);
+  }
+  private assertOwner(owner: RemoteOwner, current: () => boolean): void {
+    if (!sameOwner(owner, this.deps.getOwner()) || !current()) throw new RemoteInputError(RemoteInputReason.Account);
+  }
+  private assertAgentAccess(agentId: string, owner: RemoteOwner): void {
+    try { this.deps.store.assertAgentAccess(agentId, owner); }
+    catch (error) {
+      // Keep missing, quarantined and foreign Agents indistinguishable to remote callers.
+      if (error instanceof AgentAccessError && error.code === AgentAccessErrorCode.Unavailable) {
+        throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+      }
+      throw error;
+    }
+  }
+  private sessionInputVersion(sessionId: string): string { return this.deps.store.remote.inputVersion(sessionId); }
+  async prepare(owner: RemoteOwner, deviceId: string, claim: RemotePreparationClaim,
+    download: (assetId: string, requestId: string) => Promise<Response>, current: () => boolean): Promise<LocalPreparedInput> {
+    const telemetry = captureRemoteFileTelemetry(owner, { device_id: deviceId, direction: Telemetry.InputDownload,
+      operation_id: claim.preparationId, operation_kind: 'input_preparation', preparation_id: claim.preparationId });
+    let phase: string = Telemetry.Validate;
+    const startedAt = Date.now();
+    let assetId: string | undefined, transportRequestId: string | undefined;
+    let actualBytes: number | undefined, expectedBytes: number | undefined, failureReason: string | undefined;
+    let decoding = false;
+    const diagnostic = (stage: string, result: 'success' | 'failed', reason?: string): void => {
+      remoteDiagnosticLog(RemoteInputDiagnostic.Event, { preparationId: claim.preparationId, assetId, transportRequestId,
+        stage, result, reason, actualBytes, expectedBytes, elapsedMs: Date.now() - startedAt }, result === 'failed' ? 'warn' : 'debug');
+    };
+    try {
+      const targetId = this.targetId(), epoch = this.operationEpoch;
+      const check = (): void => this.assertOwner(owner, () => current() && this.deps.getTargetId?.() === targetId && this.operationEpoch === epoch);
+      check();
+      const request = claim.request;
+      if (request.inputSchemaVersion !== 2 || request.preparationId !== claim.preparationId) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const previous = this.deps.store.remote.get<LocalPreparedInput>(this.key(claim.preparationId));
+      if (previous) {
+        if (previous.requestHash !== payloadHash(request) || previous.deviceId !== deviceId || !sameOwner(previous.owner, owner)) throw new RemoteInputError(RemoteInputReason.Stale);
+        this.validate(previous, owner, deviceId, false);
+        await this.validateFiles(previous, check);
+        check();
+        telemetry.emit(Telemetry.Input, { phase: Telemetry.LocalReady, outcome: Telemetry.Succeeded });
+        diagnostic(Telemetry.LocalReady, 'success');
+        return previous;
+      }
+      const store = this.deps.store;
+      const continuation = request.purpose === 'send_message';
+      const sessionId = continuation ? store.remote.localSessionId(request.sessionId || '') : null;
+      const session = sessionId ? store.getSession(sessionId, 0) : null;
+      if (continuation && (!session || !sameOwner(store.remote.owner(session.id), owner))) throw new RemoteInputError(RemoteInputReason.Account);
+      if (session && (request.expectedInputVersion !== this.sessionInputVersion(session.id) || request.expectedControlVersion !== store.remote.controlVersion(session.id))) throw new RemoteInputError(RemoteInputReason.Version);
+      if (session && !store.remote.isTaskAdmitted(session.id)) throw new RemoteInputError(RemoteInputReason.Stale);
+      const agentId = session?.agentId || request.input.agent?.agentId || AgentId.Main;
+      // An existing task authorizes only its fixed Agent binding, not Agent-wide publication.
+      if (targetId && !remotePublicationAllowed(store.remote.db, session ? RemotePublicationKind.Session : RemotePublicationKind.Agent,
+        session?.id || agentId, owner, targetId)) throw new RemoteInputError(session ? RemoteInputReason.Stale : RemoteInputReason.AgentUnavailable);
+      this.assertAgentAccess(agentId, owner);
+      const agent = store.getAgent(agentId);
+      const ownership = store.agentOwnership.get(agentId);
+      if (!agent?.enabled || !ownership || (!continuation && !store.agentOwnership.canPublish(agentId, owner))) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+      if (!continuation && request.input.agent?.expectedVersion !== ownership.version) throw new RemoteInputError(RemoteInputReason.AgentChanged);
+      let workspaceId = session ? store.remote.get<string>(`workspace:${session.id}`) : null;
+      let cwd = session?.cwd || '';
+      if (!session) {
+        const catalog = this.deps.getAgentCatalog();
+        const items = await catalog?.refresh(owner, deviceId, current);
+        check();
+        const item = items?.find(value => value.agentId === agentId);
+        if (!item || item.version !== request.input.agent?.expectedVersion || !item.workspaceAvailable || !item.defaultWorkspaceId) throw new RemoteInputError(RemoteInputReason.AgentChanged);
+        workspaceId = item.defaultWorkspaceId;
+        cwd = catalog!.resolve(owner, deviceId, agentId, item.version, workspaceId);
+      }
+      await fs.access(cwd, constants.R_OK | constants.W_OK); check();
+      if (!statSync(cwd).isDirectory()) throw new RemoteInputError(RemoteInputReason.Workspace);
+      const directoryIdentity = identity(cwd);
+      const mode = request.input.model.mode;
+      if ((!continuation && mode === RemoteInputMode.Session) || !Object.values(RemoteInputMode).includes(mode)) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const physical = mode === RemoteInputMode.Selected
+        ? this.deps.models.resolve(owner, deviceId, request.input.model.modelRef || '', request.input.model.expectedVersion || '')
+        : this.deps.models.resolveRuntime(owner, deviceId, mode === RemoteInputMode.Session
+          ? session?.modelOverride || agent.model || this.deps.getDefaultModel() : agent.model || this.deps.getDefaultModel());
+      const presetId = mode === RemoteInputMode.Session ? parseModelPresetId(session?.modelPresetId) : null;
+      const model = presetId ? this.deps.models.resolveRuntime(owner, deviceId, `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(presetId)}`) : physical;
+      const inheritedThinking = mode === RemoteInputMode.Session ? session?.thinkingLevel : mode === RemoteInputMode.Agent ? agent.thinkingLevel : undefined;
+      let thinkingLevel = request.input.options?.thinkingLevel ?? (inheritedThinking || model.item.thinking.default);
+      // No advertised choices means no mobile override, not loss of the desktop's existing setting.
+      const preserveInherited = !presetId && model.item.source === CustomModelSource && model.item.thinking.options.length === 0
+        && !Object.prototype.hasOwnProperty.call(request.input.options || {}, 'thinkingLevel')
+        && Boolean(parseModelThinkingLevel(inheritedThinking));
+      const localThinking = preserveInherited ? inheritedThinking! : undefined;
+      if (preserveInherited) thinkingLevel = undefined;
+      let presetBinding: LocalPreparedInput['presetBinding'];
+      if (presetId) {
+        if (!session?.modelOverride || session.modelOverride !== physical.local.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+        const actualThinking = session.thinkingLevel || physical.item.thinking.default || null;
+        const visibleThinking = actualThinking && model.item.thinking.options.includes(actualThinking)
+          && physical.item.thinking.options.includes(actualThinking) ? actualThinking : null;
+        const explicitThinking = Object.prototype.hasOwnProperty.call(request.input.options || {}, 'thinkingLevel');
+        thinkingLevel = explicitThinking ? request.input.options!.thinkingLevel : visibleThinking || model.item.thinking.default;
+        if (explicitThinking && (typeof thinkingLevel !== 'string' || !thinkingLevel)
+          || thinkingLevel && (!model.item.thinking.options.includes(thinkingLevel) || !physical.item.thinking.options.includes(thinkingLevel)))
+          throw new RemoteInputError(RemoteInputReason.Invalid);
+        if (!explicitThinking && thinkingLevel && thinkingLevel !== actualThinking) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+        const executionThinking = thinkingLevel || actualThinking;
+        if (executionThinking && !physical.item.thinking.options.includes(executionThinking)) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+        presetBinding = { mode: RemoteInputMode.Session, presetId,
+          physicalModel: { modelRef: physical.item.modelRef, version: physical.item.version },
+          sessionThinkingLevel: session.thinkingLevel || null, thinkingLevel: executionThinking };
+      }
+      if (thinkingLevel && !model.item.thinking.options.includes(thinkingLevel)) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const text = request.input.text || '';
+      const requestedAssets = request.input.attachments || [];
+      if ((!text.trim() && !requestedAssets.length) || Buffer.byteLength(text) > REMOTE_TEXT_BYTES || requestedAssets.length > 20) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const attachments = requestedAssets.map(ref => {
+        const asset = claim.attachments?.find(value => value.assetId === ref.assetId && value.version === ref.version);
+        if (!asset || asset.intent !== ref.intent || !/^[a-f0-9]{64}$/u.test(asset.sha256) || !/^\d+$/u.test(asset.sizeBytes)) throw new RemoteInputError(RemoteInputReason.Asset);
+        const size = Number(asset.sizeBytes);
+        if (!Number.isSafeInteger(size) || size < 0 || size > maxFileBytes || ref.kind !== 'uploaded_asset') throw new RemoteInputError(RemoteInputReason.Invalid);
+        if (asset.intent === RemoteInputIntent.Image && (!model.item.inputCapabilities.image || !physical.item.inputCapabilities.image)) throw new RemoteInputError(RemoteInputReason.Invalid);
+        return { assetId: asset.assetId, version: asset.version, intent: asset.intent, sha256: asset.sha256, sizeBytes: asset.sizeBytes,
+          mimeType: asset.mimeType, fileName: asset.fileName };
+      });
+      if (attachments.reduce((total, value) => total + Number(value.sizeBytes), 0) > maxTotalBytes) throw new RemoteInputError(RemoteInputReason.Invalid);
+      const resolvedInput: RemoteResolvedInput = { text, agentId, expectedAgentVersion: ownership.version, workspaceId,
+        model: { modelRef: model.item.modelRef, version: model.item.version }, options: thinkingLevel ? { thinkingLevel } : {}, attachments };
+      const folder = path.join(this.deps.cacheRoot, payloadHash([owner.userId, owner.scopeKey, deviceId]), randomUUID());
+      phase = Telemetry.Write;
+      await fs.mkdir(folder, { recursive: true, mode: 0o700 });
+      const files: LocalAsset[] = [];
+      let frameBytes = 0;
+      try {
+        check();
+        for (const asset of attachments) {
+          assetId = asset.assetId; transportRequestId = randomUUID();
+          actualBytes = 0; expectedBytes = Number(asset.sizeBytes); failureReason = undefined;
+          check();
+          const extension = path.extname(asset.fileName).replace(/[^.a-zA-Z0-9]/gu, '').slice(0, 12);
+          const filePath = path.join(folder, `${randomUUID()}${extension}`);
+          const temporary = `${filePath}.part`;
+          const transfer = telemetry.request({ request_family: 'remote_binary', operation: 'input_asset_content', method: 'GET', lane: 'files' });
+          let response: Response | undefined;
+          let consuming = false;
+          let bytesRead = 0;
+          try {
+            phase = Telemetry.Download;
+            response = await withRemoteTelemetryRequest(transfer, () => download(asset.assetId, transportRequestId!)); check();
+            if (response.status !== 200 || !response.body) {
+              failureReason = RemoteInputDiagnostic.DownloadRejected;
+              transfer.finish(response.status === 200 ? 'response_invalid' : 'response_rejected', { http_status: response.status, failure_stage: response.status === 200 ? 'protocol' : 'http' });
+              throw new RemoteInputError(RemoteInputReason.Asset);
+            }
+            phase = Telemetry.Write;
+            const handle = await fs.open(temporary, 'wx', 0o600);
+            let count = 0; const hash = createHash('sha256');
+            try {
+              consuming = true; phase = Telemetry.Download;
+              for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+                consuming = false; check(); count += chunk.byteLength; bytesRead = count; actualBytes = count; phase = Telemetry.Validate;
+                if (count > Number(asset.sizeBytes)) { failureReason = RemoteInputDiagnostic.SizeMismatch; throw new RemoteInputError(RemoteInputReason.Asset); }
+                hash.update(chunk);
+                phase = Telemetry.Write;
+                let offset = 0;
+                while (offset < chunk.byteLength) {
+                  const written = await handle.write(chunk, offset, chunk.byteLength - offset);
+                  if (!written.bytesWritten) throw new RemoteInputError(RemoteInputReason.Asset);
+                  offset += written.bytesWritten; check();
+                }
+                consuming = true; phase = Telemetry.Download;
+              }
+              consuming = false;
+              transfer.finish('transfer_http_ok', { http_status: response.status, response_bytes: count });
+              diagnostic(Telemetry.Download, 'success');
+              phase = Telemetry.Validate;
+              if (count !== Number(asset.sizeBytes)) { failureReason = RemoteInputDiagnostic.SizeMismatch; throw new RemoteInputError(RemoteInputReason.Asset); }
+              if (hash.digest('hex') !== asset.sha256) { failureReason = RemoteInputDiagnostic.HashMismatch; throw new RemoteInputError(RemoteInputReason.Asset); }
+              diagnostic(Telemetry.Validate, 'success');
+              telemetry.emit(Telemetry.Input, { phase: Telemetry.Validate, outcome: Telemetry.Succeeded, asset_id: asset.assetId });
+              phase = Telemetry.Write;
+              await handle.sync();
+            } finally { await handle.close(); }
+            check(); await fs.rename(temporary, filePath); check();
+            const file: LocalAsset = { assetId: asset.assetId, version: asset.version, path: filePath, identity: identity(filePath) };
+            if (asset.intent === RemoteInputIntent.Image) {
+              decoding = true;
+              let image = { path: filePath, mimeType: asset.mimeType };
+              if (this.deps.convertImage) {
+                try {
+                  image = await this.deps.convertImage(filePath, asset.mimeType, path.join(folder, `${randomUUID()}.png`), Math.floor((imageFrameBytes - frameBytes) / 4) * 3,
+                    { current: () => { try { check(); return true; } catch { return false; } } });
+                } catch (error) {
+                  check(); // Account/claim revocation takes precedence over a decoder failure.
+                  if (error instanceof Error && error.message === RemoteInputReason.Invalid) throw new RemoteAttachmentError();
+                  throw error;
+                }
+                check();
+              }
+              if (!imageMimes.has(image.mimeType)) throw new RemoteAttachmentError();
+              file.imagePath = image.path; file.imageMime = image.mimeType; file.imageIdentity = identity(image.path);
+              file.preview = await this.imagePreview(image.path, check) || null;
+              frameBytes += 4 * Math.ceil(file.imageIdentity.size / 3);
+              if (frameBytes > imageFrameBytes) throw new RemoteAttachmentError();
+              diagnostic('decode', 'success'); decoding = false;
+            }
+            files.push(file);
+            telemetry.emit(Telemetry.Input, { phase: Telemetry.Write, outcome: Telemetry.Succeeded, asset_id: asset.assetId });
+          } catch (error) {
+            const result = error instanceof RemoteInputError && error.reason === RemoteInputReason.Account ? 'context_changed'
+              : !response ? remoteFileRequestFailure(error) : !response.ok ? 'response_rejected'
+              : consuming ? 'transport_failed' : 'local_processing_failed';
+            transfer.finish(result, { ...remoteFileRequestFailureFields(result, error, response), response_bytes: bytesRead });
+            throw error;
+          } finally {
+            // Rejecting headers/context/open can happen before for-await takes ownership.
+            if (response?.body && !response.body.locked) {
+              try { await response.body.cancel(); } catch { /* Preserve the original result. */ }
+            }
+          }
+        }
+        assetId = undefined; transportRequestId = undefined; actualBytes = undefined; expectedBytes = undefined;
+        check();
+        const prepared: LocalPreparedInput = { preparationId: claim.preparationId, owner, deviceId, requestHash: payloadHash(request),
+          ...(targetId ? { targetId } : {}),
+          inputDigest: payloadHash(resolvedInput), resolvedInput, cwd, directoryIdentity, runtimeRef: physical.local.runtimeRef,
+          ...(presetBinding ? { presetBinding } : {}),
+          ...(localThinking ? { inheritedThinking: localThinking } : {}),
+          sessionId: session?.id || null, expectedInputVersion: request.expectedInputVersion || null, expectedControlVersion: request.expectedControlVersion || null,
+          files, cacheDirectory: folder, createdAt: Date.now(), expiresAt: Math.min(Date.now() + 15 * 60_000, claim.expiresAt ? Date.parse(claim.expiresAt) : Infinity), boundCommandId: null };
+        this.validate(prepared, owner, deviceId, false);
+        phase = Telemetry.LocalCommit;
+        this.deps.store.remote.put(this.key(claim.preparationId), prepared);
+        diagnostic(Telemetry.LocalCommit, 'success');
+        telemetry.emit(Telemetry.Input, { phase: Telemetry.LocalReady, outcome: Telemetry.Succeeded, attachment_count: files.length });
+        return prepared;
+      } catch (error) { await fs.rm(folder, { recursive: true, force: true }); throw error; }
+    } catch (error) {
+      telemetry.emit(Telemetry.Input, { phase, outcome: Telemetry.Failed, reason: remoteFileTelemetryReason(error) });
+      diagnostic(decoding ? 'decode' : phase, 'failed', error instanceof RemoteAttachmentError ? RemoteInputDiagnostic.ImageInvalid
+        : error instanceof RemoteInputError && error.reason === RemoteInputReason.Account ? RemoteInputReason.Account
+        : failureReason ?? remoteFileTelemetryReason(error));
+      throw error;
+    }
+  }
+  read(id: string, owner: RemoteOwner, deviceId: string): LocalPreparedInput {
+    const prepared = this.deps.store.remote.get<LocalPreparedInput>(this.key(id));
+    if (!prepared || prepared.cacheCleanup || !sameOwner(prepared.owner, owner) || prepared.deviceId !== deviceId) throw new RemoteInputError(RemoteInputReason.Stale);
+    this.assertTarget(prepared);
+    return prepared;
+  }
+  validate(prepared: LocalPreparedInput, owner: RemoteOwner, deviceId: string, bound: boolean): void {
+    this.assertTarget(prepared);
+    if (prepared.cacheCleanup || !sameOwner(prepared.owner, owner) || !sameOwner(owner, this.deps.getOwner()) || prepared.deviceId !== deviceId
+      || (!bound && prepared.expiresAt <= Date.now()) || payloadHash(prepared.resolvedInput) !== prepared.inputDigest) throw new RemoteInputError(RemoteInputReason.Stale);
+    const input = prepared.resolvedInput;
+    const targetId = this.deps.getTargetId?.();
+    if (targetId && !remotePublicationAllowed(this.deps.store.remote.db, prepared.sessionId ? RemotePublicationKind.Session : RemotePublicationKind.Agent,
+      prepared.sessionId || input.agentId, owner, targetId)) throw new RemoteInputError(prepared.sessionId ? RemoteInputReason.Stale : RemoteInputReason.AgentUnavailable);
+    if (prepared.sessionId && !this.deps.store.remote.isTaskAdmitted(prepared.sessionId)) throw new RemoteInputError(RemoteInputReason.Stale);
+    const model = this.deps.models.resolve(owner, deviceId, input.model.modelRef, input.model.version);
+    if (prepared.inheritedThinking !== undefined) {
+      const inherited = prepared.sessionId ? this.deps.store.getSession(prepared.sessionId, 0)?.thinkingLevel
+        : this.deps.store.getAgent(input.agentId)?.thinkingLevel;
+      if (prepared.presetBinding || model.item.source !== CustomModelSource || model.item.thinking.options.length !== 0
+        || !parseModelThinkingLevel(prepared.inheritedThinking) || inherited !== prepared.inheritedThinking
+        || Object.prototype.hasOwnProperty.call(input.options, 'thinkingLevel')) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    }
+    if (prepared.presetBinding) {
+      const binding = prepared.presetBinding;
+      const session = prepared.sessionId ? this.deps.store.getSession(prepared.sessionId, 0) : null;
+      const applied = bound && prepared.boundCommandId ? this.deps.store.remote.get<{ phase: string; beforeVersion: string; afterVersion: string; presetApplication?: unknown }>(inputOperationKey(prepared.boundCommandId, prepared.targetId)) : null;
+      const saved = applied ? this.deps.store.remote.get<LocalPreparedInput>(this.key(prepared.preparationId)) : null;
+      const ownApplication = saved?.boundCommandId === prepared.boundCommandId && saved?.inputDigest === prepared.inputDigest
+        && saved?.runtimeRef === prepared.runtimeRef && saved?.presetBinding && payloadHash(saved.presetBinding) === payloadHash(binding)
+        && applied?.phase === 'model_applied' && applied.beforeVersion === prepared.expectedInputVersion && applied.presetApplication && payloadHash(applied.presetApplication) === payloadHash({
+        preparationId: prepared.preparationId, inputDigest: prepared.inputDigest, bindingHash: payloadHash(binding),
+        runtimeRef: prepared.runtimeRef, thinkingLevel: binding.thinkingLevel });
+      if (binding.mode !== RemoteInputMode.Session || !parseModelPresetId(binding.presetId) || !session
+        || !binding.physicalModel || typeof binding.physicalModel.modelRef !== 'string' || !binding.physicalModel.modelRef
+        || typeof binding.physicalModel.version !== 'string' || !binding.physicalModel.version
+        || session.modelPresetId !== binding.presetId || session.modelOverride !== prepared.runtimeRef
+        || (session.thinkingLevel || null) !== (ownApplication ? binding.thinkingLevel : binding.sessionThinkingLevel)
+        || ownApplication && this.sessionInputVersion(session.id) !== applied!.afterVersion || prepared.expectedInputVersion === null
+        || model.local.runtimeRef !== `${OpenClawProviderId.LobsteraiServer}/${modelPresetModelId(binding.presetId)}`)
+        throw new RemoteInputError(RemoteInputReason.ModelChanged);
+      const physical = this.deps.models.resolve(owner, deviceId, binding.physicalModel.modelRef, binding.physicalModel.version);
+      if (Object.prototype.hasOwnProperty.call(input.options, 'thinkingLevel') && (typeof input.options.thinkingLevel !== 'string' || !input.options.thinkingLevel))
+        throw new RemoteInputError(RemoteInputReason.Invalid);
+      const wireThinking = input.options.thinkingLevel || null;
+      const expectedThinking = wireThinking || session.thinkingLevel || physical.item.thinking.default || null;
+      if (physical.local.runtimeRef !== prepared.runtimeRef || binding.thinkingLevel !== expectedThinking
+        || wireThinking && (!model.item.thinking.options.includes(wireThinking) || !physical.item.thinking.options.includes(wireThinking))
+        || binding.thinkingLevel && !physical.item.thinking.options.includes(binding.thinkingLevel)
+        || input.attachments.some(asset => asset.intent === RemoteInputIntent.Image && (!model.item.inputCapabilities.image || !physical.item.inputCapabilities.image)))
+        throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    } else if (model.local.runtimeRef !== prepared.runtimeRef) throw new RemoteInputError(RemoteInputReason.ModelChanged);
+    this.assertAgentAccess(input.agentId, owner);
+    if (!this.deps.store.getAgent(input.agentId)?.enabled) throw new RemoteInputError(RemoteInputReason.AgentUnavailable);
+    if (!bound && !prepared.sessionId && this.deps.store.agentOwnership.get(input.agentId)?.version !== input.expectedAgentVersion) throw new RemoteInputError(RemoteInputReason.AgentChanged);
+    if (prepared.sessionId) {
+      const session = this.deps.store.getSession(prepared.sessionId, 0);
+      if (!session || !sameOwner(this.deps.store.remote.owner(session.id), owner) || session.cwd !== prepared.cwd || session.agentId !== input.agentId) throw new RemoteInputError(RemoteInputReason.Stale);
+      if (!bound && (this.sessionInputVersion(session.id) !== prepared.expectedInputVersion || this.deps.store.remote.controlVersion(session.id) !== prepared.expectedControlVersion)) throw new RemoteInputError(RemoteInputReason.Version);
+    }
+    if (!sameFile(prepared.cwd, prepared.directoryIdentity, true)) throw new RemoteInputError(RemoteInputReason.Workspace);
+    for (const file of prepared.files) if (!sameFile(file.path, file.identity) || file.imagePath && !sameFile(file.imagePath, file.imageIdentity!)) throw new RemoteInputError(RemoteInputReason.Stale);
+  }
+  bind(prepared: LocalPreparedInput, commandId: string): void {
+    this.assertTarget(prepared);
+    const current = this.deps.store.remote.get<LocalPreparedInput>(this.key(prepared.preparationId));
+    if (!current || current.cacheCleanup || current.requestHash !== prepared.requestHash || !sameOwner(current.owner, prepared.owner)
+      || current.targetId !== prepared.targetId || current.deviceId !== prepared.deviceId
+      || current.boundCommandId && current.boundCommandId !== commandId) throw new RemoteInputError(RemoteInputReason.Stale);
+    Object.assign(prepared, current, { boundCommandId: commandId }); this.deps.store.remote.put(this.key(prepared.preparationId), prepared);
+  }
+  confirmReady(id: string, owner: RemoteOwner, deviceId: string, expiresAt: string): void {
+    const prepared = this.read(id, owner, deviceId);
+    const expiry = Date.parse(expiresAt);
+    if (!Number.isFinite(expiry)) throw new RemoteInputError(RemoteInputReason.Stale);
+    prepared.expiresAt = Math.min(prepared.expiresAt, expiry);
+    this.deps.store.remote.put(this.key(id), prepared);
+  }
+  private recoveryKey(id: string, owner: RemoteOwner, deviceId: string): string {
+    return `inputRecoveryDiagnostic:${JSON.stringify([this.targetId(), owner.userId, owner.scopeKey, deviceId, id])}`;
+  }
+  /** Diagnostic only: never changes a preparation, dispatch fence or command outcome. */
+  retainRecoveryDiagnostic(id: string, owner: RemoteOwner, deviceId: string): void {
+    this.assertOwner(owner, () => true);
+    const key = this.recoveryKey(id, owner, deviceId);
+    let previous: unknown;
+    try { previous = this.deps.store.remote.get(key); }
+    catch (error) { if (error instanceof SyntaxError) return; throw error; }
+    if (!previous && this.deps.store.remote.countKeys('inputRecoveryDiagnostic:', RemoteInputRecovery.DiagnosticLimit) >= RemoteInputRecovery.DiagnosticLimit)
+      throw new Error('REMOTE_INPUT_RECOVERY_DIAGNOSTIC_BUDGET');
+    this.deps.store.remote.put(key, { preparationId: id, owner, deviceId, targetId: this.targetId(), kind: RemoteInputRecovery.Unavailable });
+  }
+  /** Reconcile an existing manifest only; server enumeration never authorizes execution. */
+  recoverReceipt(receipt: RemoteInputRecoveryReceipt, owner: RemoteOwner, deviceId: string): boolean {
+    this.assertOwner(owner, () => true);
+    let prepared: LocalPreparedInput | null;
+    try { prepared = this.deps.store.remote.get<LocalPreparedInput>(this.key(receipt.preparationId)); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      this.retainRecoveryDiagnostic(receipt.preparationId, owner, deviceId); return false;
+    }
+    if (!prepared || receipt.status !== 'ready' || !receipt.readyExpiresAt) return false;
+    const summary = receipt.targetSummary;
+    let matches = false;
+    try { matches = payloadHash(prepared.resolvedInput) === prepared.inputDigest
+      && payloadHash(summary?.resolvedInput) === prepared.inputDigest && (!receipt.request || payloadHash(receipt.request) === prepared.requestHash); }
+    catch { /* Malformed local/server value is isolated without changing the manifest. */ }
+    if (prepared.cacheCleanup || prepared.preparationId !== receipt.preparationId || !/^[a-f0-9]{64}$/u.test(prepared.requestHash)
+      || !prepared.resolvedInput || typeof prepared.resolvedInput !== 'object' || !Number.isFinite(prepared.expiresAt)
+      || prepared.targetId !== this.targetId() || !sameOwner(prepared.owner, owner) || prepared.deviceId !== deviceId
+      || summary?.deviceId !== deviceId || !summary.resolvedInput || typeof summary.resolvedInput !== 'object' || prepared.inputDigest !== receipt.inputDigest
+      || !matches
+      || prepared.boundCommandId !== (receipt.boundCommandId ?? null) || !Number.isFinite(Date.parse(receipt.readyExpiresAt))) {
+      this.retainRecoveryDiagnostic(receipt.preparationId, owner, deviceId); return false;
+    }
+    this.confirmReady(receipt.preparationId, owner, deviceId, receipt.readyExpiresAt);
+    this.deps.store.remote.remove(this.recoveryKey(receipt.preparationId, owner, deviceId));
+    return true;
+  }
+  private async validateFiles(prepared: LocalPreparedInput, check: () => void): Promise<void> {
+    for (const file of prepared.files) {
+      const asset = prepared.resolvedInput.attachments.find(value => value.assetId === file.assetId && value.version === file.version)!;
+      if (!sameFile(file.path, file.identity) || await hashFile(file.path, check) !== asset.sha256 || !sameFile(file.path, file.identity)) throw new RemoteInputError(RemoteInputReason.Stale);
+    }
+  }
+  async executionOptions(prepared: LocalPreparedInput, check: () => void): Promise<{ prompt: string; modelOverride: string; thinkingLevel?: string; imageAttachments: CoworkImageAttachmentPayload[] }> {
+    const checkCurrent = check, epoch = this.operationEpoch;
+    check = () => {
+      this.assertTarget(prepared);
+      if (epoch !== this.operationEpoch) throw new RemoteInputError(RemoteInputReason.Stale);
+      checkCurrent();
+      if (prepared.presetBinding || prepared.inheritedThinking !== undefined) this.validate(prepared, prepared.owner, prepared.deviceId, true);
+    };
+    check();
+    await this.validateFiles(prepared, check);
+    check();
+    const imageAttachments: CoworkImageAttachmentPayload[] = [];
+    const references: string[] = [];
+    for (const file of prepared.files) {
+      check();
+      const asset = prepared.resolvedInput.attachments.find(value => value.assetId === file.assetId)!;
+      if (asset.intent === RemoteInputIntent.Image) {
+        if (!sameFile(file.imagePath!, file.imageIdentity!)) throw new RemoteInputError(RemoteInputReason.Stale);
+        const data = await fs.readFile(file.imagePath!); check();
+        if (!sameFile(file.imagePath!, file.imageIdentity!)) throw new RemoteInputError(RemoteInputReason.Stale);
+        // Preparations saved before preview support can still produce a desktop thumbnail.
+        const preview = file.preview === undefined ? await this.imagePreview(file.imagePath!, check) : file.preview;
+        check();
+        if (!sameFile(file.imagePath!, file.imageIdentity!)) throw new RemoteInputError(RemoteInputReason.Stale);
+        imageAttachments.push({ name: asset.fileName, mimeType: file.imageMime!, base64Data: data.toString('base64'), sizeBytes: data.length, localPath: file.path,
+          ...(preview ? { previewBase64Data: preview.base64Data, previewMimeType: preview.mimeType } : {}) });
+        // Large images without a thumbnail are omitted by the shared preview builder.
+        // Keep a visible filename while sending the original image to the model.
+        if (!preview && data.length > COWORK_IMAGE_ATTACHMENT_PREVIEW_FALLBACK_MAX_BYTES) references.push(`[File: ${JSON.stringify(asset.fileName)}]`);
+      } else references.push(`[File: ${JSON.stringify(asset.fileName)}] ${JSON.stringify(file.path)}`);
+    }
+    const executionThinking = preparedThinkingLevel(prepared);
+    return { prompt: [prepared.resolvedInput.text, ...references].filter(Boolean).join('\n\n') || ' ', modelOverride: prepared.runtimeRef,
+      ...(executionThinking ? { thinkingLevel: executionThinking } : {}), imageAttachments };
+  }
+}

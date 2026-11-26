@@ -18,6 +18,10 @@ import {
 export const DSH_REMOTE_MUX_PATH = '/api/remote.mux';
 export const DSH_REMOTE_EVENT_STREAM_ENDPOINT = '$events';
 export const DSH_REMOTE_EVENT_RESULT_ENDPOINT = '$events/result';
+const DSH_RECEIPT_ENDPOINT = '$events/lobster-result';
+const DSH_RECEIPT_CAPABILITIES_ENDPOINT = '$events/lobster-capabilities';
+export const DshWaterfallReceipt = { Applied: 'applied', Stale: 'stale', Unknown: 'unknown' } as const;
+export type DshWaterfallReceipt = typeof DshWaterfallReceipt[keyof typeof DshWaterfallReceipt];
 const INITIAL_HANDSHAKE_TIMEOUT_MS = 90_000;
 const RECONNECT_HANDSHAKE_TIMEOUT_MS = 12_000;
 
@@ -60,6 +64,7 @@ export type DshHttpRequester = (
 ) => Promise<DshHttpResponse>;
 
 export interface DshWaterfallEvent {
+  confirmDelivery?: () => Promise<DshWaterfallReceipt>;
   event: string;
   eventId: string;
   agentId: string;
@@ -554,6 +559,11 @@ export class DshTypertClient extends EventEmitter {
    * Register a waterfall handler for forwarded Host events such as
    * `'approval/request'` or `'user-questions/request'`.
    */
+  async supportsWaterfallReceipts(): Promise<boolean> {
+    const result = await this.call<{ receipts: number }>(DSH_RECEIPT_CAPABILITIES_ENDPOINT, {}, AbortSignal.timeout(3_000));
+    return result?.receipts === 1;
+  }
+
   onWaterfall(eventName: string, handler: DshWaterfallHandler): () => void {
     this.waterfallHandlers.set(eventName, handler);
     return () => {
@@ -1172,6 +1182,10 @@ export class DshTypertClient extends EventEmitter {
     const onGenAbort = () => controller.abort(generationSignal.reason);
     generationSignal.addEventListener('abort', onGenAbort, { once: true });
 
+    let confirm: ((receipt: DshWaterfallReceipt) => void) | undefined;
+    const delivery = new Promise<DshWaterfallReceipt>(resolve => { confirm = resolve; });
+    let requiresReceipt = false;
+    controller.signal.addEventListener('abort', () => confirm?.(DshWaterfallReceipt.Unknown), { once: true });
     let outcome: DshWaterfallOutcome = { kind: 'next' };
     try {
       const handler = this.waterfallHandlers.get(event);
@@ -1182,6 +1196,7 @@ export class DshTypertClient extends EventEmitter {
           agentId,
           request,
           signal: controller.signal,
+          confirmDelivery: () => { requiresReceipt = true; return delivery; },
         });
       }
     } catch (error) {
@@ -1198,11 +1213,14 @@ export class DshTypertClient extends EventEmitter {
       this.activeWaterfallControllers.delete(eventId);
     }
 
-    if (controller.signal.aborted || this.disposed) return;
+    if (controller.signal.aborted || this.disposed) {
+      confirm?.(DshWaterfallReceipt.Unknown);
+      return;
+    }
 
     try {
-      await this.call(
-        DSH_REMOTE_EVENT_RESULT_ENDPOINT,
+      const receipt = await this.call<{ eventId: string; applied: boolean } | undefined>(
+        requiresReceipt ? DSH_RECEIPT_ENDPOINT : DSH_REMOTE_EVENT_RESULT_ENDPOINT,
         {
           clientId: this.clientId,
           eventId,
@@ -1212,7 +1230,10 @@ export class DshTypertClient extends EventEmitter {
         },
         generationSignal,
       );
+      confirm?.(receipt?.eventId !== eventId ? DshWaterfallReceipt.Unknown
+        : receipt.applied === true ? DshWaterfallReceipt.Applied : DshWaterfallReceipt.Stale);
     } catch (error) {
+      confirm?.(DshWaterfallReceipt.Unknown);
       if (!this.disposed) {
         this.emit('error', error);
       }

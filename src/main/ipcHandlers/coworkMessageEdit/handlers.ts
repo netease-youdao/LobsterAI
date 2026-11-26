@@ -15,6 +15,7 @@ import type { CoworkContinueOptions } from '../../libs/agentEngine/types';
 
 interface CoworkMessageEditHandlerDeps extends PrepareMessageEditDeps {
   getStore: () => CoworkStore;
+  canRead?(sessionId: string): boolean;
   getRuntime: () => CoworkEngineRouter;
   isRemoteManaged: (sessionId: string) => boolean;
   hasPendingMedia: (sessionId: string) => boolean;
@@ -28,13 +29,14 @@ function validTarget(request: { sessionId: string; messageId: string } | undefin
 
 export function registerCoworkMessageEditHandlers(ipc: Pick<IpcMain, 'handle'>, deps: CoworkMessageEditHandlerDeps): void {
   const pending = (sessionId: string): CoworkMessageEditPending | undefined => {
+    if (deps.canRead?.(sessionId) === false) return undefined;
     const op = deps.getStore().messageEdits.pending(sessionId);
     if (!op) return undefined;
     const { operationId, messageId, prompt, phase, removedImageIndexes } = op;
     return { operationId, messageId, prompt, phase, removedImageIndexes };
   };
   const checkLocalSession = (sessionId: string) => {
-    if (deps.isRemoteManaged(sessionId)) throw new Error(t('coworkEditUnsupported'));
+    if (deps.canRead?.(sessionId) === false || deps.isRemoteManaged(sessionId)) throw new Error(t('coworkEditUnsupported'));
     if (deps.hasPendingMedia(sessionId)) throw new Error(t('coworkEditBusy'));
   };
 
@@ -58,6 +60,7 @@ export function registerCoworkMessageEditHandlers(ipc: Pick<IpcMain, 'handle'>, 
     try {
       checkLocalSession(request.sessionId);
       const prepared = await prepareMessageEdit(deps.getStore().getMessage(request.sessionId, request.messageId), request, deps);
+      checkLocalSession(request.sessionId);
       const result = await deps.resend(event, request, prepared);
       return { ...result, pending: pending(request.sessionId) };
     } catch (error) {

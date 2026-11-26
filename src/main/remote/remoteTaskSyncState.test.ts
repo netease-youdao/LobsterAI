@@ -1,0 +1,523 @@
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { RemoteSyncTaskIssueStatus } from '../../shared/remote/constants';
+import { RemoteInputReason } from '../../shared/remote/input';
+import { RemoteImportValidation } from '../../shared/remote/retention';
+import { finishProjectionFault, grantProjectionProbe, initializeProjectionFaults, projectionFault, recordProjectionFault } from './remoteProjectionFaults';
+import { SyncTelemetry } from './remoteSyncTelemetry';
+import { RemoteTaskSyncState, type TaskSyncContext, TaskSyncFailureReason, TaskSyncPhase } from './remoteTaskSyncState';
+
+const telemetryEvents = vi.hoisted(() => [] as Array<{ event: string; fields: Record<string, unknown> }>);
+vi.mock('./remoteTelemetry', () => ({
+  captureRemoteTelemetry: (base: Record<string, unknown> = {}) => ({
+    emit: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields: { ...base, ...fields } }),
+  }),
+  remoteTelemetryEvent: (event: string, fields: Record<string, unknown> = {}) => telemetryEvents.push({ event, fields }),
+}));
+
+
+const databases: Database.Database[] = [];
+afterEach(() => { telemetryEvents.length = 0; for (const db of databases.splice(0)) db.close(); });
+const context: TaskSyncContext = { owner: { userId: 'owner', scopeKey: 'personal' }, target: 'target', deviceId: 'device' };
+function fixture() {
+  const db = new Database(':memory:'); databases.push(db);
+  db.exec(`CREATE TABLE cowork_sessions(id TEXT PRIMARY KEY,title TEXT);
+    CREATE TABLE cowork_session_ownership(session_id TEXT PRIMARY KEY,owner_user_id TEXT,owner_scope_key TEXT,ownership_status TEXT);
+    CREATE TABLE remote_sync(local_id TEXT PRIMARY KEY,needs_snapshot INTEGER,source_seq INTEGER,ack_seq INTEGER,device_id TEXT DEFAULT 'device',sync_environment TEXT DEFAULT 'target');
+    CREATE TABLE remote_session_revisions(session_id TEXT PRIMARY KEY,dirty_at INTEGER);
+    CREATE TABLE remote_dirty(session_id TEXT PRIMARY KEY);
+    CREATE TABLE remote_state(key TEXT PRIMARY KEY,value TEXT);`);
+  let now = 0;
+  const create = () => new RemoteTaskSyncState(db, () => now, () => 0);
+  const state = create();
+  const add = (id: string, owner = context.owner) => {
+    db.prepare('INSERT INTO cowork_sessions VALUES (?,?)').run(id, `Title ${id}`);
+    db.prepare('INSERT INTO cowork_session_ownership VALUES (?,?,?,?)').run(id, owner.userId, owner.scopeKey, 'confirmed');
+    db.prepare('INSERT INTO remote_sync(local_id,needs_snapshot,source_seq,ack_seq) VALUES (?,1,0,0)').run(id);
+  };
+  return { db, state, create, add, now: () => now, at: (value: number) => { now = value; } };
+}
+const transport = { phase: TaskSyncPhase.Backoff, scope: 'service', reason: 'TRANSPORT' };
+
+describe('task retry scheduling', () => {
+  it('finds future pending work without making it eligible early', () => {
+    const f = fixture(); f.add('later'); f.state.defer(context, 'later', 5000);
+    expect(f.state.candidates(context)).toHaveLength(0);
+    expect(f.state.nextRetryAt(context)).toBe(5000);
+    f.at(4999); expect(f.state.nextRetryAt(context)).toBe(5000);
+    f.at(5000); expect(f.state.candidates(context).map(row => row.local_id)).toEqual(['later']);
+    expect(f.state.nextRetryAt(context)).toBeNull();
+  });
+  it('honors server lower bounds and excludes other owners, closed, deleted and completed tasks', () => {
+    const f = fixture();
+    f.add('server'); f.state.fail(context, 'server', { ...transport, retryAfterMs: 100000 });
+    f.db.prepare('UPDATE remote_sync_task_state SET next_retry_at=10 WHERE local_session_id=?').run('server');
+    for (const id of ['closed', 'isolated', 'deleted', 'complete']) { f.add(id); f.state.defer(context, id, 1000); }
+    f.state.fail(context, 'closed', { phase: TaskSyncPhase.Closed, scope: 'session', reason: 'SESSION_DELETED' });
+    f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'RECORD_INVALID' });
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('deletionClosed:deleted', 'true');
+    f.db.prepare('UPDATE remote_sync SET needs_snapshot=0 WHERE local_id=?').run('complete');
+    const other = { ...context, owner: { userId: 'another', scopeKey: 'personal' } };
+    f.add('another', other.owner); f.state.defer(other, 'another', 500);
+    expect(f.state.nextRetryAt(context)).toBe(100000);
+    expect(f.state.nextRetryAt({ ...context, deviceId: 'other-device' })).toBeNull();
+    expect(f.state.nextRetryAt({ ...context, target: 'other-target' })).toBeNull();
+  });
+  it('returns no deadline for idle state or an indefinite safety wait', () => {
+    const f = fixture(); expect(f.state.nextRetryAt(context)).toBeNull();
+    f.add('s'); f.state.defer(context, 's', Number.MAX_SAFE_INTEGER);
+    expect(f.state.nextRetryAt(context)).toBeNull();
+  });
+});
+
+describe('task fault isolation persistence', () => {
+  it('permits only a targeted local projection probe before independently reconciling a repaired task', () => {
+    const f = fixture(); f.add('s');
+    f.db.exec(`ALTER TABLE remote_session_revisions ADD COLUMN revision INTEGER DEFAULT 1;
+      ALTER TABLE remote_session_revisions ADD COLUMN clean_revision INTEGER DEFAULT 0;
+      CREATE TABLE remote_projection_rechecks(session_id TEXT PRIMARY KEY,next_retry INTEGER);
+      CREATE TABLE remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT,retry_at INTEGER,revision INTEGER);`);
+    f.state.fail(context,'s',{ phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+    expect(f.state.projectionEligible(context,'s')).toBe(false);
+    initializeProjectionFaults(f.db);
+    recordProjectionFault(f.db, 's', 'REMOTE_PROJECTION_BUDGET', 1, Number.MAX_SAFE_INTEGER);
+    grantProjectionProbe(f.db, 's');
+    expect(f.state.projectionEligible(context,'s')).toBe(true); expect(f.state.eligible(context,'s')).toBe(false);
+    f.state.reconcileProjectionFailures(context,()=>true); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Isolated);
+    f.db.prepare('INSERT INTO remote_session_revisions VALUES(?,?,?,?)').run('s',0,2,0);
+    finishProjectionFault(f.db, 's', 2, projectionFault(f.db, 's')!.epoch);
+    f.state.reconcileProjectionFailures(context,()=>false); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Isolated);
+    f.state.reconcileProjectionFailures(context,()=>true); expect(f.state.get(context,'s')!.phase).toBe(TaskSyncPhase.Reconciling);
+  });
+  it('continues recovery past a full page whose independent admission is unavailable', () => {
+    const f = fixture();
+    f.db.exec(`ALTER TABLE remote_session_revisions ADD COLUMN revision INTEGER DEFAULT 1;
+      ALTER TABLE remote_session_revisions ADD COLUMN clean_revision INTEGER DEFAULT 0;
+      CREATE TABLE remote_projection_failures(session_id TEXT PRIMARY KEY,reason TEXT,retry_at INTEGER,revision INTEGER);`);
+    initializeProjectionFaults(f.db);
+    for (let i = 0; i < 17; i++) {
+      const id = `task-${String(i).padStart(2, '0')}`; f.add(id);
+      f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_PROJECTION_BUDGET' });
+      f.db.prepare('INSERT INTO remote_session_revisions VALUES(?,?,?,?)').run(id, 0, 1, 0);
+      recordProjectionFault(f.db, id, 'REMOTE_PROJECTION_BUDGET', 1, Number.MAX_SAFE_INTEGER);
+      grantProjectionProbe(f.db, id); finishProjectionFault(f.db, id, 1, projectionFault(f.db, id)!.epoch);
+    }
+    const admitted = (id: string): boolean => { if (id !== 'task-16') throw new Error('Task-specific admission unavailable'); return true; };
+    expect(() => f.state.reconcileProjectionFailures(context, admitted)).not.toThrow();
+    expect(f.state.get(context, 'task-16')!.phase).toBe(TaskSyncPhase.Isolated);
+    f.state.reconcileProjectionFailures(context, admitted);
+    expect(f.state.get(context, 'task-16')!.phase).toBe(TaskSyncPhase.Reconciling);
+    expect(f.state.get(context, 'task-00')!.phase).toBe(TaskSyncPhase.Isolated);
+  });
+  it('preserves failure counts through restart and state verification, then resets only on publication progress', () => {
+    const f = fixture(); f.add('s');
+    let state = f.state;
+    for (let count = 1; count <= 5; count++) {
+      const result = state.fail(context, 's', transport);
+      expect(result.failure_count).toBe(count);
+      expect(result.next_retry_at - f.now()).toBe([24000, 48000, 96000, 240000, 900000][count - 1]);
+      f.at(result.next_retry_at); state = f.create();
+    }
+    const before = state.get(context, 's')!;
+    expect(before.phase).toBe(TaskSyncPhase.Cooldown);
+    expect(state.manualRetry(context, 's')).toBe(true);
+    state.resumeAfterVerification(context, 's');
+    expect(state.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Ready, failure_count: 5, last_progress_at: 0 });
+    state.progress(context, 's');
+    expect(state.get(context, 's')).toMatchObject({ failure_count: 0, last_progress_at: f.now() });
+  });
+  it('honors the server lower bound across manual retry, defer and restart without clamping large valid waits', () => {
+    const f = fixture(); f.add('s');
+    const wait = 100 * 24 * 60 * 60 * 1000;
+    f.state.fail(context, 's', { ...transport, retryAfterMs: wait });
+    f.state.defer(context, 's', 1);
+    const state = f.create();
+    expect(state.get(context, 's')).toMatchObject({ next_retry_at: wait, server_retry_at: wait });
+    expect(state.manualRetry(context, 's')).toBe(false);
+    expect(state.candidates(context)).toHaveLength(0);
+    f.at(wait - 1); expect(state.eligible(context, 's')).toBe(false);
+    f.at(wait); expect(state.manualRetry(context, 's')).toBe(true);
+  });
+  it('migrates an older task ledger without shortening its existing retry deadline', () => {
+    const f = fixture(); f.add('s');
+    const value = f.state.fail(context, 's', transport);
+    f.db.exec('DROP INDEX idx_remote_sync_task_retry_deadline');
+    f.db.exec('ALTER TABLE remote_sync_task_state DROP COLUMN server_retry_at');
+    f.db.exec('UPDATE remote_sync_task_state SET manual_retry_at=0');
+    const migrated = f.create();
+    expect(migrated.get(context, 's')).toMatchObject({ server_retry_at: value.next_retry_at, manual_retry_at: -1 });
+    expect(migrated.manualRetry(context, 's')).toBe(false);
+    f.at(value.next_retry_at); expect(migrated.manualRetry(context, 's')).toBe(true);
+    expect(f.create().manualRetry(context, 's')).toBe(false);
+  });
+  it('enforces the exact manual retry boundary, including a first retry at time zero', () => {
+    const f = fixture(); f.add('s');
+    expect(f.state.manualRetry(context, 's')).toBe(true);
+    expect(f.create().manualRetry(context, 's')).toBe(false);
+    f.at(59999); expect(f.state.manualRetry(context, 's')).toBe(false);
+    f.at(60000); expect(f.state.manualRetry(context, 's')).toBe(true);
+  });
+  it('never reopens a closed stream through late progress, failure, repair or manual retry', () => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Closed, scope: 'session', reason: 'SESSION_DELETED' });
+    f.state.progress(context, 's', true); f.state.fail(context, 's', transport); f.state.resumeAfterVerification(context, 's');
+    expect(f.state.get(context, 's')!.phase).toBe(TaskSyncPhase.Closed);
+    expect(f.state.reserveRepair(context, 's', 'broken')).toBe(false);
+    expect(f.state.manualRetry(context, 's')).toBe(false);
+    expect(f.state.health(context).taskIssues).toEqual([]);
+  });
+  it('keeps unresolved repair keys beyond 24 hours and never evicts them to grant another repair', () => {
+    const f = fixture(); f.add('s');
+    expect(f.state.reserveRepair(context, 's', 'same-object')).toBe(true);
+    expect(f.create().reserveRepair(context, 's', 'same-object')).toBe(false);
+    expect(f.state.reserveRepair(context, 's', 'second-object')).toBe(true);
+    expect(f.state.reserveRepair(context, 's', 'third-object')).toBe(false);
+    f.at(86400001);
+    expect(f.state.reserveRepair(context, 's', 'same-object')).toBe(false);
+    for (let index = 2; index < 8; index++) {
+      f.at(Math.floor(index / 2) * 86400001);
+      expect(f.state.reserveRepair(context, 's', `object-${index}`)).toBe(true);
+    }
+    f.at(10 * 86400001);
+    expect(f.state.reserveRepair(context, 's', 'ninth-object')).toBe(false);
+    expect(JSON.parse(f.state.get(context, 's')!.repair_json).attempts).toHaveLength(8);
+  });
+  it('does not clear repair budgets during verification or authorize repair with a damaged ledger', () => {
+    const f = fixture(); f.add('s');
+    f.state.reserveRepair(context, 's', 'original');
+    const original = f.state.get(context, 's')!.repair_json;
+    expect(f.state.manualRetry(context, 's')).toBe(true); f.state.resumeAfterVerification(context, 's');
+    expect(f.state.get(context, 's')!.repair_json).toBe(original);
+    f.db.prepare('UPDATE remote_sync_task_state SET repair_json=?').run('{broken');
+    f.at(60000);
+    expect(f.state.reserveRepair(context, 's', 'different')).toBe(false);
+    expect(f.state.manualRetry(context, 's')).toBe(false);
+    f.state.progress(context, 's', true);
+    expect(f.state.get(context, 's')!.repair_json).toBe('{broken');
+  });
+  it('ignores invalid optional waits and preserves valid long deadlines', () => {
+    const f = fixture();
+    for (const [index, value] of [NaN, -1, Infinity, Number.MAX_SAFE_INTEGER].entries()) {
+      const id = `s${index}`; f.add(id); f.at(1);
+      const result = f.state.fail(context, id, { ...transport, retryAfterMs: value });
+      expect(result).toMatchObject({ phase: TaskSyncPhase.Backoff, reason: transport.reason });
+      expect(result.server_retry_at).toBe(value === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : 0);
+    }
+  });
+  it('reconciles a proven legacy invalid-hint isolation once without changing original operation bytes', () => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: TaskSyncFailureReason.RetryHintInvalid });
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('import:s', '{original');
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['s']);
+    expect(f.state.get(context, 's')?.phase).toBe(TaskSyncPhase.Reconciling);
+    expect(f.db.prepare("SELECT value FROM remote_state WHERE key='import:s'").get()).toEqual({ value: '{original' });
+    expect(f.state.reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+  });
+  it('probes an old input metadata conflict once and keeps later conflicts isolated across restarts', () => {
+    const f = fixture(); f.add('s');
+    const failure = { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteInputReason.Version };
+    f.state.fail(context, 's', failure);
+    // Current failures do not inherit the compatibility grant for older client versions.
+    expect(f.state.reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1; UPDATE remote_sync SET source_seq=117,ack_seq=109');
+    f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run('import:s', '{original immutable operation');
+    const before = f.state.get(context, 's')!;
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['s']);
+    expect(f.state.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Reconciling, recovery_probe_version: 3,
+      failure_count: before.failure_count, repair_json: before.repair_json, fingerprint: before.fingerprint });
+    expect(f.db.prepare('SELECT source_seq,ack_seq FROM remote_sync').get()).toEqual({ source_seq: 117, ack_seq: 109 });
+    expect(f.db.prepare('SELECT value FROM remote_state').get()).toEqual({ value: '{original immutable operation' });
+    f.state.resumeAfterVerification(context, 's'); f.state.fail(context, 's', failure);
+    expect(f.create().reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+    expect(f.state.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Isolated, failure_count: 2 });
+  });
+  it('probes old invalid import requests only after the reason-specific check and never grants the probe again', () => {
+    const f = fixture();
+    for (const id of ['allowed', 'denied']) {
+      f.add(id);
+      f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+      f.db.prepare('INSERT INTO remote_state VALUES(?,?)').run(`import:${id}`, '{original immutable import');
+    }
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1; UPDATE remote_sync SET source_seq=9,ack_seq=0');
+    const before = f.state.get(context, 'allowed')!;
+    const check = vi.fn((row, reason) => {
+      expect(f.db.inTransaction).toBe(false);
+      return row.local_id === 'allowed' && reason === RemoteImportValidation.Reason;
+    });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: ['allowed'], scanned: 2, hasMore: false });
+    expect(check).toHaveBeenNthCalledWith(1, expect.objectContaining({ local_id: 'allowed', source_seq: 9 }), RemoteImportValidation.Reason);
+    expect(check).toHaveBeenNthCalledWith(2, expect.objectContaining({ local_id: 'denied' }), RemoteImportValidation.Reason);
+    expect(f.state.get(context, 'allowed')).toMatchObject({ phase: TaskSyncPhase.Reconciling, recovery_probe_version: 4,
+      failure_count: before.failure_count, repair_json: before.repair_json, fingerprint: before.fingerprint });
+    expect(f.state.get(context, 'denied')).toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 4 });
+    expect(f.db.prepare('SELECT source_seq,ack_seq FROM remote_sync').all()).toEqual([
+      { source_seq: 9, ack_seq: 0 }, { source_seq: 9, ack_seq: 0 },
+    ]);
+    expect(f.db.prepare('SELECT value FROM remote_state ORDER BY key').all()).toEqual([
+      { value: '{original immutable import' }, { value: '{original immutable import' },
+    ]);
+    const reopenedCheck = vi.fn(() => true);
+    expect(f.create().reconcileLegacyFailures(context, reopenedCheck)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    expect(reopenedCheck).not.toHaveBeenCalled();
+  });
+  it.each(['reason', 'phase'] as const)('keeps the probe unconsumed when task %s changes during admission', field => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1');
+    const before = f.state.get(context, 's')!;
+    const changed = field === 'reason' ? transport.reason : TaskSyncPhase.Closed;
+    const check = vi.fn(() => {
+      expect(f.db.inTransaction).toBe(false);
+      f.db.prepare(`UPDATE remote_sync_task_state SET ${field}=? WHERE local_session_id=?`).run(changed, 's');
+      return true;
+    });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 1, hasMore: false });
+    expect(check).toHaveBeenCalledOnce();
+    expect(f.state.get(context, 's')).toEqual({ ...before, [field]: changed });
+    expect(f.create().get(context, 's')?.recovery_probe_version).toBe(1);
+  });
+  it.each(['source', 'ownership'] as const)('keeps the probe unconsumed when %s evidence changes during admission', evidence => {
+    const f = fixture(); f.add('s');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason });
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1');
+    const before = f.state.get(context, 's')!;
+    const check = vi.fn(() => {
+      expect(f.db.inTransaction).toBe(false);
+      if (evidence === 'source') f.db.prepare('UPDATE remote_sync SET source_seq=source_seq+1 WHERE local_id=?').run('s');
+      else f.db.prepare("UPDATE cowork_session_ownership SET ownership_status='quarantined' WHERE session_id=?").run('s');
+      return true;
+    });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 1, hasMore: false });
+    expect(check).toHaveBeenCalledOnce();
+    expect(f.state.get(context, 's')).toEqual(before);
+    expect(f.create().get(context, 's')?.recovery_probe_version).toBe(1);
+  });
+  it('does not automatically probe new invalid import request failures', () => {
+    const f = fixture(); f.add('s');
+    expect(f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason }))
+      .toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 4 });
+    const check = vi.fn(() => true);
+    expect(f.create().reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    expect(check).not.toHaveBeenCalled();
+  });
+  it('preserves a consumed invalid import probe through transport failures and repeated validation failures', () => {
+    const f = fixture(); f.add('s');
+    const failure = { phase: TaskSyncPhase.Isolated, scope: 'session', reason: RemoteImportValidation.Reason };
+    f.state.fail(context, 's', failure);
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=1');
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['s']);
+    expect(f.state.fail(context, 's', transport)).toMatchObject({ phase: TaskSyncPhase.Backoff, recovery_probe_version: 4 });
+    const restarted = f.create();
+    expect(restarted.fail(context, 's', failure)).toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 4, failure_count: 3 });
+    const check = vi.fn(() => true);
+    expect(f.create().reconcileLegacyFailures(context, check)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    expect(check).not.toHaveBeenCalled();
+  });
+  it('schedules clean legacy tasks that still need admission or failure migration without touching corrupt operation JSON', () => {
+    const f = fixture();
+    f.db.exec(`CREATE TABLE remote_sync_session_admissions(target_id TEXT,owner_user_id TEXT,owner_scope_key TEXT,device_id TEXT,local_session_id TEXT,admission TEXT);
+      CREATE TABLE remote_sync_admission_evidence(archive_id TEXT,table_name TEXT,row_key TEXT);
+      CREATE TABLE remote_sync_targets(target_id TEXT,owner_user_id TEXT,owner_scope_key TEXT);`);
+    f.db.prepare('INSERT INTO remote_sync_targets VALUES (?,?,?)').run(context.target, context.owner.userId, context.owner.scopeKey);
+    for (const id of ['legacy', 'missing-admission', 'verified', 'failed', 'delayed', 'isolated']) f.add(id);
+    f.db.exec('UPDATE remote_sync SET needs_snapshot=0,source_seq=10,ack_seq=10');
+    for (const [id, admission] of [['legacy', 'unverified'], ['verified', 'verified'], ['delayed', 'unverified'], ['isolated', 'quarantined']]) {
+      f.db.prepare('INSERT INTO remote_sync_session_admissions VALUES (?,?,?,?,?,?)')
+        .run(context.target, context.owner.userId, context.owner.scopeKey, context.deviceId, id, admission);
+    }
+    f.db.prepare('INSERT INTO remote_sync_admission_evidence VALUES (?,?,?)').run(`admission:${context.target}`, 'remote_sync', 'missing-admission');
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('syncFailure:failed', '{broken');
+    f.state.fail(context, 'delayed', transport);
+    f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'BAD' });
+    expect(f.state.candidates(context).map(row => row.local_id).sort()).toEqual(['failed', 'legacy', 'missing-admission']);
+    expect(f.db.prepare('SELECT value FROM remote_state WHERE key=?').get('syncFailure:failed')).toEqual({ value: '{broken' });
+    f.db.prepare("UPDATE remote_sync_targets SET owner_user_id='other' WHERE target_id=?").run(context.target);
+    expect(f.state.candidates(context).map(row => row.local_id)).toEqual(['failed']);
+  });
+  it('rounds candidates across large backlogs without letting a blocked first task consume every page', () => {
+    const f = fixture();
+    for (let i = 0; i < 80; i++) f.add(`task-${String(i).padStart(2, '0')}`);
+    f.state.fail(context, 'task-00', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'BAD' });
+    f.at(1); const first = f.state.candidates(context, 1000);
+    expect(first).toHaveLength(50); expect(first.some(row => row.local_id === 'task-00')).toBe(false);
+    for (const row of first) f.state.served(context, row.local_id);
+    const next = f.state.candidates(context, 30);
+    expect(next[0].local_id).toBe('task-51');
+  });
+  it('bounds issue details and prevents stale ownership, device and target rows from leaking titles', () => {
+    const f = fixture();
+    for (let i = 0; i < 22; i++) { f.add(`own${i}`); f.state.fail(context, `own${i}`, transport); }
+    f.add('isolated'); f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'DATA' });
+    f.add('foreign', { userId: 'another-owner', scopeKey: 'personal' }); f.state.fail(context, 'foreign', transport);
+    f.add('other-target'); f.state.fail({ ...context, target: 'other' }, 'other-target', transport);
+    f.add('other-device'); f.state.fail({ ...context, deviceId: 'other' }, 'other-device', transport);
+    f.add('closed'); f.state.fail(context, 'closed', { phase: TaskSyncPhase.Closed, scope: 'session', reason: 'SESSION_DELETED' });
+    const health = f.state.health(context);
+    expect(health).toMatchObject({ failedSessions: 23, retryingSessions: 22, isolatedSessions: 1, taskIssuesTruncated: true });
+    expect(health.taskIssues).toHaveLength(20);
+    expect(health.taskIssues[0]).toMatchObject({ localSessionId: 'isolated', title: 'Title isolated', status: RemoteSyncTaskIssueStatus.Isolated, retryable: true });
+    expect(health.taskIssues.some(issue => /foreign|other|closed/u.test(issue.localSessionId))).toBe(false);
+    expect(f.state.health(context, () => false).taskIssues.every(issue => !issue.retryable)).toBe(true);
+    expect(f.state.health(context, () => { throw new Error('bad admission'); }).taskIssues.every(issue => !issue.retryable)).toBe(true);
+    f.state.manualRetry(context, 'isolated');
+    expect(f.state.health(context).taskIssues.find(issue => issue.localSessionId === 'isolated')?.retryable).toBe(false);
+  });
+  it('bounds health visibility work and reports lower-bound counts for more than one page', () => {
+    const f = fixture();
+    for (let i = 0; i < 100; i++) { const id = `own-${String(i).padStart(3, '0')}`; f.add(id); f.state.fail(context, id, transport); }
+    for (let i = 0; i < 100; i++) { const id = `foreign-${i}`; f.add(id, { userId: 'foreign', scopeKey: 'personal' }); f.state.fail(context, id, transport); }
+    const visible = vi.fn(() => true);
+    const health = f.state.health(context, () => true, visible);
+    expect(visible).toHaveBeenCalledTimes(64);
+    expect(health).toMatchObject({ failedSessions: 64, retryingSessions: 64, isolatedSessions: 0, countsTruncated: true, taskIssuesTruncated: true });
+    expect(health.taskIssues).toHaveLength(20);
+    expect(health.taskIssues.every(issue => issue.localSessionId.startsWith('own-'))).toBe(true);
+  });
+  it('probes migrated ambiguous failures once without changing original operations, ACKs or repair evidence', () => {
+    const f = fixture(); f.add('s');
+    f.state.reserveRepair(context, 's', 'original-object');
+    f.state.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
+    const before = f.state.get(context, 's')!;
+    f.db.prepare('UPDATE remote_sync SET source_seq=10,ack_seq=5 WHERE local_id=?').run('s');
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('import:s', '{original fixed operation');
+    f.db.prepare('INSERT INTO remote_state VALUES (?,?)').run('syncFailure:s', '{original failure');
+    // Simulate the old on-disk schema; the new constructor must not infer success.
+    f.db.exec('DROP INDEX idx_remote_sync_task_recovery; ALTER TABLE remote_sync_task_state DROP COLUMN recovery_probe_version');
+    const migrated = f.create();
+    expect(migrated.reconcileLegacyFailures(context, row => row.sync_environment === context.target)).toEqual({ promotedIds: ['s'], scanned: 1, hasMore: false });
+    expect(migrated.get(context, 's')).toMatchObject({ phase: TaskSyncPhase.Reconciling, next_retry_at: 0, recovery_probe_version: 1,
+      fingerprint: before.fingerprint, failure_count: before.failure_count, repair_json: before.repair_json,
+      reason: before.reason, scope: before.scope, manual_retry_at: before.manual_retry_at, last_progress_at: before.last_progress_at });
+    expect(f.db.prepare('SELECT source_seq,ack_seq FROM remote_sync WHERE local_id=?').get('s')).toEqual({ source_seq: 10, ack_seq: 5 });
+    expect(f.db.prepare('SELECT key,value FROM remote_state ORDER BY key').all()).toEqual([
+      { key: 'import:s', value: '{original fixed operation' }, { key: 'syncFailure:s', value: '{original failure' },
+    ]);
+    expect(f.create().reconcileLegacyFailures(context, () => true)).toEqual({ promotedIds: [], scanned: 0, hasMore: false });
+    migrated.fail(context, 's', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
+    expect(f.create().reconcileLegacyFailures(context, () => true).promotedIds).toEqual([]);
+  });
+  it('does not automatically retry new generic failures and accepts only the exact legacy reason allowlist', () => {
+    const f = fixture();
+    for (const [id, reason] of [['new', 'REMOTE_TASK_SYNC_FAILED'], ['import', 'REMOTE_IMPORT_CONTEXT_CHANGED'],
+      ['projection', 'REMOTE_PROJECTION_CONTEXT_CHANGED'], ['data', 'REMOTE_SYNC_STATE_CONFLICT'], ['permission', 'APPROVAL_STALE']]) {
+      f.add(id); f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason });
+      if (id !== 'new') f.db.prepare('UPDATE remote_sync_task_state SET recovery_probe_version=0 WHERE local_session_id=?').run(id);
+    }
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['import', 'projection']);
+    for (const id of ['new', 'data', 'permission']) expect(f.state.get(context, id)?.phase).toBe(TaskSyncPhase.Isolated);
+  });
+  it('never crosses owner, scope, target, device, admission or closed-session boundaries', () => {
+    const f = fixture();
+    const ids = ['healthy', 'foreign-owner', 'quarantined-owner', 'other-device', 'other-target', 'other-scope', 'other-environment', 'not-admitted', 'deleted-local', 'closed', 'device-scope'];
+    for (const id of ids) {
+      f.add(id, id === 'foreign-owner' ? { ...context.owner, userId: 'other-owner' } : context.owner);
+      const current = id === 'other-target' ? { ...context, target: 'other' } : id === 'other-scope' ? { ...context, owner: { ...context.owner, scopeKey: 'enterprise' } } : context;
+      f.state.fail(current, id, { phase: id === 'closed' ? TaskSyncPhase.Closed : TaskSyncPhase.Isolated,
+        scope: id === 'device-scope' ? 'device' : 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
+    }
+    f.db.exec("UPDATE remote_sync_task_state SET recovery_probe_version=0; UPDATE cowork_session_ownership SET ownership_status='quarantined' WHERE session_id='quarantined-owner'; UPDATE remote_sync SET device_id='other' WHERE local_id='other-device'; UPDATE remote_sync SET sync_environment='other' WHERE local_id='other-environment'; DELETE FROM cowork_sessions WHERE id='deleted-local'");
+    const result = f.state.reconcileLegacyFailures(context, row => row.sync_environment === context.target && row.local_id !== 'not-admitted');
+    expect(result.promotedIds).toEqual(['healthy']);
+    expect(f.state.get(context, 'closed')?.phase).toBe(TaskSyncPhase.Closed);
+    expect(f.state.get({ ...context, target: 'other' }, 'other-target')?.recovery_probe_version).toBe(0);
+  });
+  it('keeps valid server retry lower bounds and refuses damaged repair or fingerprint evidence', () => {
+    const f = fixture();
+    for (const id of ['delayed', 'ledger', 'fingerprint', 'invalid-wait']) {
+      f.add(id); f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED', retryAfterMs: 100000 });
+    }
+    f.db.exec("UPDATE remote_sync_task_state SET recovery_probe_version=0; UPDATE remote_sync_task_state SET repair_json='{broken' WHERE local_session_id='ledger'; UPDATE remote_sync_task_state SET fingerprint='wrong' WHERE local_session_id='fingerprint'; UPDATE remote_sync_task_state SET server_retry_at=9007199254740991 WHERE local_session_id='invalid-wait'");
+    expect(f.state.reconcileLegacyFailures(context, () => true).promotedIds).toEqual(['delayed']);
+    expect(f.state.get(context, 'delayed')).toMatchObject({ phase: TaskSyncPhase.Reconciling, next_retry_at: 100000, server_retry_at: 100000 });
+    expect(f.state.eligible(context, 'delayed')).toBe(false);
+    expect(f.state.get(context, 'ledger')?.repair_json).toBe('{broken');
+  });
+  it('bounds legacy scanning and durably advances past failures that are ineligible for repair', () => {
+    const f = fixture();
+    for (let i = 0; i < 53; i++) {
+      const id = `s${String(i).padStart(2, '0')}`; f.add(id);
+      f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: i < 50 ? 'BAD_DATA' : 'REMOTE_TASK_SYNC_FAILED' });
+    }
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=0');
+    expect(f.state.reconcileLegacyFailures(context, () => true, 1000)).toEqual({ promotedIds: [], scanned: 50, hasMore: true });
+    expect(f.create().reconcileLegacyFailures(context, () => true)).toEqual({ promotedIds: ['s50', 's51', 's52'], scanned: 3, hasMore: false });
+    expect(f.create().reconcileLegacyFailures(context, () => true).scanned).toBe(0);
+  });
+  it('retains damaged task-local evidence and still probes the following healthy task', () => {
+    const f = fixture();
+    for (const id of ['bad', 'healthy']) {
+      f.add(id); f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
+    }
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=0');
+    const before = f.state.get(context, 'bad')!;
+    const check = vi.fn(row => { if (row.local_id === 'bad') throw new SyntaxError('invalid persisted record'); return true; });
+    expect(f.state.reconcileLegacyFailures(context, check)).toEqual({ promotedIds: ['healthy'], scanned: 2, hasMore: false });
+    expect(f.state.get(context, 'bad')).toEqual({ ...before, recovery_probe_version: 1 });
+    expect(f.create().reconcileLegacyFailures(context, check).scanned).toBe(0);
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+  it.each(['SQLITE_CORRUPT', 'SQLITE_NOTADB', 'SQLITE_FULL', 'SQLITE_IOERR_READ'])('rolls back all probe markers on shared database failure %s', code => {
+    const f = fixture();
+    for (const id of ['a', 'b']) {
+      f.add(id); f.state.fail(context, id, { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'REMOTE_TASK_SYNC_FAILED' });
+    }
+    f.db.exec('UPDATE remote_sync_task_state SET recovery_probe_version=0');
+    const error = Object.assign(new Error('identity database unavailable'), { code });
+    expect(() => f.state.reconcileLegacyFailures(context, row => { if (row.local_id === 'b') throw error; return true; })).toThrow(error);
+    for (const id of ['a', 'b']) expect(f.state.get(context, id)).toMatchObject({ phase: TaskSyncPhase.Isolated, recovery_probe_version: 0 });
+  });
+  it('keeps healthy local projection eligible during network backoff without reopening isolated or closed tasks', () => {
+    const f = fixture();
+    expect(f.state.projectionEligible(context, 'new')).toBe(true);
+    f.state.fail(context, 'network', { ...transport, retryAfterMs: 100000 });
+    expect(f.state.eligible(context, 'network')).toBe(false);
+    expect(f.state.projectionEligible(context, 'network')).toBe(true);
+    f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'BAD_DATA' });
+    f.state.fail(context, 'closed', { phase: TaskSyncPhase.Closed, scope: 'session', reason: 'SESSION_DELETED' });
+    expect(f.state.projectionEligible(context, 'isolated')).toBe(false);
+    expect(f.state.projectionEligible(context, 'closed')).toBe(false);
+  });
+
+});
+
+
+describe('task recovery telemetry commits', () => {
+  it('does not announce a repair from a rolled-back outer transaction', () => {
+    const f = fixture(); f.add('s');
+    expect(() => f.db.transaction(() => {
+      expect(f.state.reserveRepair(context, 's', 'RUN_MAPPING')).toBe(true);
+      throw new Error('rollback');
+    })()).toThrow('rollback');
+    expect(f.state.get(context, 's')).toBeNull();
+    expect(telemetryEvents).toHaveLength(0);
+    expect(f.state.reserveRepair(context, 's', 'RUN_MAPPING')).toBe(true);
+    expect(telemetryEvents).toContainEqual(expect.objectContaining({ event: SyncTelemetry.Event.Stage,
+      fields: expect.objectContaining({ stage: SyncTelemetry.Stage.Repair, outcome: SyncTelemetry.Outcome.Started }) }));
+  });
+  it('distinguishes a retry request rejected by its guard from a successfully admitted retry', () => {
+    const f = fixture(); f.add('s');
+    expect(f.state.manualRetry(context, 's')).toBe(true);
+    expect(f.state.manualRetry(context, 's')).toBe(false);
+    expect(telemetryEvents.filter(item => item.fields.stage === SyncTelemetry.Stage.ManualRetry).map(item => item.fields.outcome))
+      .toEqual([SyncTelemetry.Outcome.Started, SyncTelemetry.Outcome.Blocked]);
+  });
+});
+
+it('quit resumes only healthy local deferrals and preserves server backoff and account scope', () => {
+  const f = fixture();
+  for (const id of ['local', 'failed', 'isolated', 'server']) f.add(id);
+  f.state.defer(context, 'local', 5000);
+  f.state.fail(context, 'failed', transport);
+  f.state.fail(context, 'isolated', { phase: TaskSyncPhase.Isolated, scope: 'session', reason: 'invalid' });
+  f.state.fail(context, 'server', { ...transport, retryAfterMs: 60000 });
+  f.state.progress(context, 'server');
+  const failed = f.state.get(context, 'failed'), isolated = f.state.get(context, 'isolated'), server = f.state.get(context, 'server');
+  f.state.resumeLocalDeferral({ ...context, owner: { ...context.owner, userId: 'another' } }, 'local');
+  expect(f.state.eligible(context, 'local')).toBe(false);
+  for (const id of ['local', 'failed', 'isolated', 'server']) f.state.resumeLocalDeferral(context, id);
+  expect(f.state.eligible(context, 'local')).toBe(true);
+  expect(f.state.get(context, 'failed')).toEqual(failed);
+  expect(f.state.get(context, 'isolated')).toEqual(isolated);
+  expect(f.state.get(context, 'server')).toEqual(server);
+});
