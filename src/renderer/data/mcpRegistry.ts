@@ -1,16 +1,27 @@
-import { McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
+import { convertMarketplaceToRegistry } from '../services/mcpMarketplaceInstall';
+import { type McpMarketplaceServer, type McpRegistryEntry, McpRegistryEntryKind } from '../types/mcp';
+import catalog from './mcpRegistry.json';
 
-/**
- * App-managed MCP registry entries.
- *
- * Marketplace content comes from the server (`mcpService.fetchMarketplace`,
- * cached in localStorage between sessions) — it is deliberately NOT mirrored
- * here, so there is a single source of truth for names, descriptions and the
- * server list itself. This file only holds entries the server payload cannot
- * express: flows managed by the app, such as the Qichacha OAuth bundle, which
- * `mergeMarketplaceRegistry` re-inserts into whatever the server returns.
- */
-export const mcpRegistry: McpRegistryEntry[] = [
+const bundledRegistry = convertMarketplaceToRegistry(catalog.servers);
+const bundledById = new Map(bundledRegistry.map(entry => [entry.id, entry]));
+
+/** Older Overmind payloads lack featuredConnectors. A published empty list explicitly clears the market. */
+export function selectMarketplaceRegistry(featured?: McpMarketplaceServer[]): McpRegistryEntry[] {
+  if (!Array.isArray(featured)) return bundledRegistry;
+  const selected: McpRegistryEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of convertMarketplaceToRegistry(featured)) {
+    const bundled = bundledById.get(entry.id);
+    if (!bundled || seen.has(entry.id) || entry.transportType !== bundled.transportType
+      || entry.connector?.auth !== bundled.connector?.auth) continue;
+    seen.add(entry.id);
+    selected.push({ ...entry, icon: bundled.icon });
+  }
+  return selected;
+}
+
+/** Metadata used to manage existing bundle installations. */
+export const legacyInstalledRegistry: McpRegistryEntry[] = [
   {
     id: 'qichacha',
     name: '企查查',
@@ -22,7 +33,6 @@ export const mcpRegistry: McpRegistryEntry[] = [
     defaultArgs: ['6 servers'],
     oauthProvider: 'qichacha',
     kind: McpRegistryEntryKind.Bundle,
-    marketplacePosition: 4,
   },
 ];
 

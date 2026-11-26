@@ -6,7 +6,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
 import { isCliConnectorId } from '../../../shared/mcp/cliConnector';
 import { McpManagedConnection } from '../../../shared/mcp/constants';
-import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
+import { legacyInstalledRegistry, mcpCategories, selectMarketplaceRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
 import { buildOAuthRegistryInstallData, isOAuthRegistryEntry } from '../../services/mcpMarketplaceInstall';
@@ -17,7 +17,6 @@ import {
   getRegistryEntryLocalizedDescription,
   getRegistryEntryRequiredKeyCount,
   McpInstalledItem,
-  mergeMarketplaceRegistry,
   pickMcpConnectorText,
 } from '../../services/mcpRegistryPresentation';
 import { skillService } from '../../services/skill';
@@ -167,15 +166,11 @@ const McpManager: React.FC = () => {
   }, []);
   useEffect(() => cancelConnectionAttempt, [cancelConnectionAttempt]);
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
-  // First frame renders the cached copy of the last fetch, so entries and
-  // localized names don't visibly swap in when the live response lands. With
-  // no cache yet (first run) the marketplace shows a skeleton instead — the
-  // server is the only source of listing data, mirroring the Skills page.
   const [initialCache] = useState(() => mcpService.getCachedMarketplace());
-  const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(initialCache === null);
   const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(() =>
-    mergeMarketplaceRegistry(initialCache?.registry ?? mcpRegistry, mcpRegistry),
+    initialCache?.registry ?? selectMarketplaceRegistry(),
   );
+  const installedRegistry = useMemo(() => [...dynamicRegistry, ...legacyInstalledRegistry], [dynamicRegistry]);
   const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(() =>
     initialCache ? buildCategoryOptions(initialCache.categories) : mcpCategories,
   );
@@ -232,9 +227,8 @@ const McpManager: React.FC = () => {
     const fetchMarketplace = async () => {
       const result = await mcpService.fetchMarketplace();
       if (!isActive) return;
-      setIsLoadingMarketplace(false);
       if (!result) return;
-      setDynamicRegistry(mergeMarketplaceRegistry(result.registry, mcpRegistry));
+      setDynamicRegistry(result.registry);
       setDynamicCategories(buildCategoryOptions(result.categories));
     };
     fetchMarketplace();
@@ -308,15 +302,15 @@ const McpManager: React.FC = () => {
 
   const getRegistryEntryForServer = useCallback((server: McpServerConfig): McpRegistryEntry | undefined => {
     if (server.registryId) {
-      return dynamicRegistry.find(entry => entry.id === server.registryId);
+      return installedRegistry.find(entry => entry.id === server.registryId);
     }
     if (!server.isBuiltIn) return undefined;
-    return dynamicRegistry.find((entry) => (
+    return installedRegistry.find((entry) => (
       entry.name.toLowerCase() === server.name.toLowerCase()
       && entry.transportType === server.transportType
       && entry.command === server.command
     ));
-  }, [dynamicRegistry]);
+  }, [installedRegistry]);
 
   const getTransportSummary = (server: McpServerConfig): string => {
     if (server.transportType === 'stdio') {
@@ -385,8 +379,8 @@ const McpManager: React.FC = () => {
   );
 
   const installedItems = useMemo(
-    () => buildInstalledMcpItems(servers, dynamicRegistry),
-    [dynamicRegistry, servers],
+    () => buildInstalledMcpItems(servers, installedRegistry),
+    [installedRegistry, servers],
   );
 
   const getRegistryGroupName = useCallback((item: RegistryGroupItem): string => {
@@ -1781,16 +1775,6 @@ const McpManager: React.FC = () => {
 
       {/* ── Tab: Marketplace ────────────────────────────── */}
       {activeTab === McpTab.Marketplace && (
-        isLoadingMarketplace ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,230px),1fr))] gap-3" aria-hidden="true">
-          {Array.from({ length: 6 }).map((_, idx) => (
-            <div key={idx} className="flex h-16 animate-pulse items-center gap-3 rounded-xl border border-border px-3">
-              <div className="h-10 w-10 rounded-lg bg-surface-raised" />
-              <div className="h-3 w-1/2 rounded bg-surface-raised" />
-            </div>
-          ))}
-        </div>
-        ) : (
         <div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,230px),1fr))] gap-3">
             {filteredMarketplace.length === 0 ? (
@@ -1822,7 +1806,6 @@ const McpManager: React.FC = () => {
             )}
           </div>
         </div>
-        )
       )}
 
       </div>

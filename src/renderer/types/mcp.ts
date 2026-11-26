@@ -99,8 +99,6 @@ export interface McpRegistryEntry {
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
   oauthProvider?: 'qichacha';    // special app-managed OAuth/API key flow
   kind?: McpRegistryEntryKind;   // defaults to a single-server registry entry
-  featured?: boolean;
-  marketplacePosition?: number;  // 1-based preferred position; clamps to the available list
   connector?: McpMarketplaceConnector; // remote URL/auth/credential form, tool allowlist, examples
 }
 

@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
+import { selectMarketplaceRegistry } from '../data/mcpRegistry';
 import type { McpRegistryEntry, McpServerConfig } from '../types/mcp';
 import { McpRegistryEntryKind } from '../types/mcp';
 import {
   buildInstalledMcpItems,
   getRegistryEntryDisplayName,
   getRegistryEntryLocalizedDescription,
-  mergeMarketplaceRegistry,
 } from './mcpRegistryPresentation';
 
 function registryEntry(id: string, overrides: Partial<McpRegistryEntry> = {}): McpRegistryEntry {
@@ -38,41 +38,23 @@ function server(id: string, registryId?: string): McpServerConfig {
   };
 }
 
-describe('mergeMarketplaceRegistry', () => {
-  const qichacha = registryEntry('qichacha', {
-    oauthProvider: 'qichacha',
-    kind: McpRegistryEntryKind.Bundle,
-    marketplacePosition: 4,
-  });
-
-  test('inserts a managed local entry at its 1-based preferred position', () => {
-    const remote = ['one', 'two', 'three', 'four', 'five'].map(id => registryEntry(id));
-
-    expect(mergeMarketplaceRegistry(remote, [qichacha]).map(entry => entry.id)).toEqual([
-      'one',
-      'two',
-      'three',
-      'qichacha',
-      'four',
-      'five',
+describe('curated connector marketplace', () => {
+  test('uses the seven bundled providers for a legacy catalog', () => {
+    expect(selectMarketplaceRegistry().map(entry => entry.id)).toEqual([
+      'tdx', 'connector-wecom', 'connector-feishu', 'connector-dingtalk', 'connector-github', 'notion-oauth', 'baidu-drive',
     ]);
+    expect(selectMarketplaceRegistry([])).toEqual([]);
   });
 
-  test('appends when the preferred position exceeds the remote list', () => {
-    const remote = ['one', 'two'].map(id => registryEntry(id));
-
-    expect(mergeMarketplaceRegistry(remote, [qichacha]).map(entry => entry.id)).toEqual([
-      'one',
-      'two',
-      'qichacha',
+  test('keeps only supported providers in published order and uses their bundled icons', () => {
+    const feishu = { id: 'connector-feishu', name: 'Feishu', category: 'productivity', transportType: 'skill', icon: 'old.png' };
+    const github = { ...feishu, id: 'connector-github', name: 'GitHub' };
+    const retired = { ...feishu, id: 'tavily', transportType: 'stdio' };
+    const result = selectMarketplaceRegistry([github, retired, feishu, github]);
+    expect(result.map(entry => [entry.id, entry.icon])).toEqual([
+      ['connector-github', 'connector-icons/connector-github.png'],
+      ['connector-feishu', 'connector-icons/connector-feishu.png'],
     ]);
-  });
-
-  test('uses the managed local definition when the remote list has the same id', () => {
-    const remote = [registryEntry('one'), registryEntry('qichacha'), registryEntry('two')];
-    const result = mergeMarketplaceRegistry(remote, [qichacha]);
-
-    expect(result.filter(entry => entry.id === 'qichacha')).toEqual([qichacha]);
   });
 });
 

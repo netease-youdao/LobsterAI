@@ -94,29 +94,6 @@ export function getRegistryEntryLocalizedDescription(
   return pickLocalized(language, entry.description_zh, entry.description_en);
 }
 
-function getMarketplaceInsertionIndex(position: number | undefined, listLength: number): number {
-  if (position === undefined || !Number.isFinite(position)) return listLength;
-  const zeroBasedPosition = Math.max(0, Math.trunc(position) - 1);
-  return Math.min(zeroBasedPosition, listLength);
-}
-
-export function mergeMarketplaceRegistry(
-  remoteRegistry: McpRegistryEntry[],
-  localRegistry: McpRegistryEntry[],
-): McpRegistryEntry[] {
-  const managedLocalEntries = localRegistry.filter(entry => entry.oauthProvider);
-  const managedLocalIds = new Set(managedLocalEntries.map(entry => entry.id));
-  const merged = remoteRegistry.filter(entry => !managedLocalIds.has(entry.id));
-
-  const featuredCount = merged.filter(entry => entry.featured).length;
-  for (const entry of managedLocalEntries) {
-    const insertionIndex = Math.max(featuredCount, getMarketplaceInsertionIndex(entry.marketplacePosition, merged.length));
-    merged.splice(insertionIndex, 0, entry);
-  }
-
-  return merged;
-}
-
 export function buildInstalledMcpItems(
   servers: McpServerConfig[],
   registry: McpRegistryEntry[],
