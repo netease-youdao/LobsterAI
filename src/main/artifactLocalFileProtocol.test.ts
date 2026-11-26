@@ -168,6 +168,23 @@ describe('artifact local file protocol', () => {
     expect(stat.mock.calls.map(([filePath]) => filePath)).toEqual(['C:\\Users\\me\\a.png', 'c:\\Users\\me\\a.png']);
   });
 
+  test('serves extensionless raster images by sniffing magic bytes while keeping sandbox headers', async () => {
+    const webpHeader = Buffer.alloc(30);
+    webpHeader.write('RIFF', 0, 'ascii');
+    webpHeader.write('WEBP', 8, 'ascii');
+    webpHeader.write('VP8X', 12, 'ascii');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-localfile-'));
+    const blobPath = path.join(tempDir, 'a'.repeat(64));
+    fs.writeFileSync(blobPath, webpHeader);
+
+    const response = await createLocalFileProtocolResponse(new Request(toLocalFileUrl(blobPath)));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/webp');
+    expect(response.headers.get('content-security-policy')).toMatch(/^sandbox;/);
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(webpHeader);
+  });
+
   test('refuses paths that are not absolute', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     vi.spyOn(console, 'warn').mockImplementation(() => {});

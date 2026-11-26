@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
-import { createAgentWorkspaceSync } from './agent-workspace-sync.mjs';
+import { attachSessionToWorkspace, createAgentWorkspaceSync } from './agent-workspace-sync.mjs';
 import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
 import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
 import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
@@ -328,7 +328,8 @@ export function apply(ctx) {
     }
   }
 
-  // Ensure every newly attached/created session inherits LobsterAI's active permission preset.
+  // Ensure every newly attached/created session inherits LobsterAI's active permission preset
+  // and top-level sessions attach to their matching DSH workspace group.
   ctx.on('agent/created', ({ agent }) => {
     if (!agent?.session) return;
     const sid = agent.id || agent.session.id;
@@ -338,6 +339,9 @@ export function apply(ctx) {
       : state.defaultPermissionPreset;
     if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
       applyPermissionPresetToAgent(agent, targetPreset, { notifyPolicyChange: false });
+    }
+    if (sid && agent.session.header?.origin !== 'subagent' && typeof agent.session.header?.cwd === 'string') {
+      void attachSessionToWorkspace(ctx, sid, agent.session.header.cwd);
     }
   });
 
@@ -501,15 +505,18 @@ export function apply(ctx) {
             state.agents = nextAgents;
             state.agentOrder = nextOrder;
             state.invalidateSkills?.();
+            let workspaceSync;
             if (Array.isArray(p.workspaceDirectories)) {
-              void syncAgentWorkspaces(p.workspaceDirectories).catch(error => {
+              workspaceSync = await syncAgentWorkspaces(p.workspaceDirectories).catch(error => {
                 ctx.logger.warn('[LobsterAgentWorkspaces] Failed to sync Agent workspaces:', error);
+                return undefined;
               });
             }
             return jsonResponse({
               ok: true,
               result: {
                 agentsCount: nextAgents.size,
+                ...(workspaceSync ? { workspaceSync } : {}),
               },
             });
           }
