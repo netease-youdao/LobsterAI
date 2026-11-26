@@ -15,7 +15,6 @@ interface QuickActionBarProps {
   children?: React.ReactNode;
 }
 
-// 图标映射
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   PresentationChartBarIcon,
   GlobeAltIcon,
@@ -25,38 +24,83 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   AcademicCapIcon,
 };
 
+const iconAccentMap: Record<string, string> = {
+  PresentationChartBarIcon: 'text-rose-500 dark:text-rose-400',
+  ChartBarIcon: 'text-emerald-600 dark:text-emerald-400',
+  DocumentTextIcon: 'text-violet-500 dark:text-violet-400',
+  GlobeAltIcon: 'text-blue-500 dark:text-blue-400',
+  DevicePhoneMobileIcon: 'text-cyan-600 dark:text-cyan-400',
+  AcademicCapIcon: 'text-indigo-500 dark:text-indigo-400',
+};
+
+export interface QuickActionChipProps
+  extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
+  selected?: boolean;
+  icon?: React.ReactNode;
+  iconAccentClassName?: string;
+  label: React.ReactNode;
+  badge?: React.ReactNode;
+}
+
+export const QuickActionChip: React.FC<QuickActionChipProps> = ({
+  selected = false,
+  icon,
+  iconAccentClassName = 'text-secondary',
+  label,
+  badge,
+  className = '',
+  ...buttonProps
+}) => (
+  <button
+    type="button"
+    aria-pressed={selected}
+    {...buttonProps}
+    className={`group relative flex min-h-[108px] w-full flex-col items-start justify-between rounded-2xl border p-4 text-left transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:scale-[0.98] ${
+      selected
+        ? 'border-primary/45 bg-primary-muted/60 shadow-subtle ring-1 ring-primary/15'
+        : 'border-border/75 bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.03)] hover:-translate-y-0.5 hover:border-border hover:shadow-[0_6px_18px_rgba(0,0,0,0.06)] dark:hover:bg-surface-raised/60'
+    }${className ? ` ${className}` : ''}`}
+  >
+    <div className="flex w-full items-start justify-between gap-2">
+      {icon && (
+        <span
+          aria-hidden="true"
+          className={`inline-flex shrink-0 transition-transform duration-200 group-hover:scale-105 ${iconAccentClassName}`}
+        >
+          {icon}
+        </span>
+      )}
+      {badge && <span className="shrink-0">{badge}</span>}
+    </div>
+    <span className="mt-4 w-full truncate text-[13.5px] font-medium leading-5 text-foreground">
+      {label}
+    </span>
+  </button>
+);
+
 const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedActionId, onActionSelect, children }) => {
   if (actions.length === 0 && !children) {
     return null;
   }
 
   return (
-    <div data-skin-quick-actions="true" className="flex flex-wrap items-center justify-center gap-2">
+    <div
+      data-skin-quick-actions="true"
+      className="grid w-full grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5"
+    >
       {actions.map((action) => {
         const IconComponent = iconMap[action.icon];
         const isSelected = action.id === selectedActionId;
 
         return (
-          <button
+          <QuickActionChip
             key={action.id}
-            type="button"
-            aria-pressed={isSelected}
+            selected={isSelected}
             onClick={() => onActionSelect(action.id)}
-            className={`group flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[length:var(--lobster-text-sidebarCompact)] font-normal leading-5 transition-all duration-200 ease-out active:translate-y-0 active:scale-[0.97] ${
-              isSelected
-                ? 'border-[color-mix(in_srgb,var(--lobster-primary)_50%,transparent)] bg-primary-muted text-primary'
-                : 'border-border-subtle bg-surface text-secondary hover:-translate-y-px hover:border-primary/30 hover:bg-surface-raised hover:text-foreground hover:shadow-subtle'
-            }`}
-          >
-            {IconComponent && (
-              <IconComponent
-                className={`h-3.5 w-3.5 transition-colors duration-200 ${
-                  isSelected ? 'text-primary' : 'text-secondary group-hover:text-primary'
-                }`}
-              />
-            )}
-            <span>{action.label}</span>
-          </button>
+            icon={IconComponent && <IconComponent className="h-[22px] w-[22px]" />}
+            iconAccentClassName={iconAccentMap[action.icon] ?? 'text-secondary'}
+            label={action.label}
+          />
         );
       })}
       {children}

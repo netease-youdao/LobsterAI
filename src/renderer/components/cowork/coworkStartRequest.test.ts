@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { CoworkCollaborationMode, type OpenClawEngineStatus } from '../../types/cowork';
 import {
   buildCoworkStartPlan,
   CoworkStartBlock,
   type CoworkStartRequestInput,
   resolveCoworkStartBlock,
+  shouldShowCoworkEngineNotice,
 } from './coworkStartRequest';
 
 const capabilities = {
@@ -89,10 +91,18 @@ describe('cowork start plan', () => {
 
 describe('cowork start blocks', () => {
   test('quota, then engine readiness, then a model that bills the other side', () => {
-    expect(resolveCoworkStartBlock({ blockingQuotaReason: 'exhausted', engineStatus: engine('starting'), crossesBillingSide: true }))
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: 'exhausted', engineStatus: engine('error'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.EnterpriseQuota);
-    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('starting'), crossesBillingSide: true }))
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('error'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.EngineNotReady);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('not_installed'), crossesBillingSide: false }))
+      .toBe(CoworkStartBlock.EngineNotReady);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('installing'), crossesBillingSide: false }))
+      .toBe(CoworkStartBlock.EngineNotReady);
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('starting'), crossesBillingSide: false }))
+      .toBeNull();
+    expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('starting'), crossesBillingSide: true }))
+      .toBe(CoworkStartBlock.ModelBillingSide);
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('running'), crossesBillingSide: true }))
       .toBe(CoworkStartBlock.ModelBillingSide);
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: engine('ready'), crossesBillingSide: false })).toBeNull();
@@ -100,5 +110,20 @@ describe('cowork start blocks', () => {
 
   test('an unknown engine status lets the request report its own failure', () => {
     expect(resolveCoworkStartBlock({ blockingQuotaReason: null, engineStatus: null, crossesBillingSide: false })).toBeNull();
+  });
+});
+
+describe('cowork engine notice', () => {
+  test('stays silent during normal startup, idle ready, running, unknown, and error states', () => {
+    expect(shouldShowCoworkEngineNotice(null)).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Starting))).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Ready))).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Running))).toBe(false);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Error))).toBe(false);
+  });
+
+  test('only shows for non-error states that block starting a session', () => {
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.NotInstalled))).toBe(true);
+    expect(shouldShowCoworkEngineNotice(engine(OpenClawEnginePhase.Installing))).toBe(true);
   });
 });

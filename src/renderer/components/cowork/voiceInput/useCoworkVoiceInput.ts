@@ -42,6 +42,19 @@ const showToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 };
 
+const describeVoiceInputError = (error: unknown): string => {
+  if (error instanceof AsrClientError) {
+    return `AsrClientError(code=${error.code ?? 'none'})`;
+  }
+  if (error instanceof DOMException) {
+    return `DOMException(${error.name})`;
+  }
+  if (error instanceof Error) {
+    return error.name || 'Error';
+  }
+  return 'unknown';
+};
+
 const logVoiceInputDiagnostic = (level: 'debug' | 'info' | 'warn', message: string): void => {
   if (level === 'warn') {
     console.warn(`[VoiceInput] ${message}`);
@@ -186,7 +199,7 @@ export const useCoworkVoiceInput = ({
     } catch (error) {
       if (generation !== voiceInputGenerationRef.current) return null;
       console.warn('[VoiceInput] voice input recognition failed:', error);
-      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `voice input recognition failed for draft ${targetDraftKey}.`);
+      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `voice input recognition failed for draft ${targetDraftKey} (${describeVoiceInputError(error)}).`);
       const quotaExhausted = markQuotaExhaustedIfNeeded(error)
         || updateQuotaAfterRecording(activeRecording);
       if (!quotaExhausted) {
@@ -236,7 +249,7 @@ export const useCoworkVoiceInput = ({
           if (generation !== voiceInputGenerationRef.current) return;
           if (!voiceRecordingRef.current) return;
           console.warn('[VoiceInput] realtime voice input session reported an error:', error);
-          window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `realtime voice input session reported an error for draft ${draftKey}.`);
+          window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `realtime voice input session reported an error for draft ${draftKey} (${describeVoiceInputError(error)}).`);
           const quotaExhausted = markQuotaExhaustedIfNeeded(error);
           voiceInputStartingRef.current = false;
           clearVoiceAutoStopTimer();
@@ -273,7 +286,7 @@ export const useCoworkVoiceInput = ({
     } catch (error) {
       if (generation !== voiceInputGenerationRef.current) return;
       console.warn('[VoiceInput] failed to start voice input:', error);
-      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `failed to start voice input for draft ${draftKey}.`);
+      window.electron?.log?.fromRenderer?.('warn', 'VoiceInput', `failed to start voice input for draft ${draftKey} (${describeVoiceInputError(error)}).`);
       const quotaExhausted = markQuotaExhaustedIfNeeded(error);
       voiceInputStartingRef.current = false;
       voiceRecordingRef.current?.cancel();

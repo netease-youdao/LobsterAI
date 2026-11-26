@@ -351,6 +351,24 @@ const UserMessageItem: React.FC<{
   const userImageAttachments = allImageAttachments.filter(image =>
     !(browserAnnotationCount > 0 && isBrowserAnnotationTransportImage(image))
   );
+  const copyImages = useMemo<MessageImageSource[]>(() => {
+    if (userImageAttachments.length > 0) return userImageAttachments;
+    const localMedia = Array.isArray(metadata?.localMediaAttachments)
+      ? metadata.localMediaAttachments
+      : [];
+    return localMedia
+      .filter((attachment) => {
+        const mime = attachment.mimeType?.trim().toLowerCase() ?? '';
+        return Boolean(attachment.localPath?.trim())
+          && (!mime || mime.startsWith('image/') || mime === 'image/*');
+      })
+      .map((attachment, index) => ({
+        name: attachment.name?.trim() || `image-${index + 1}`,
+        mimeType: attachment.mimeType?.trim() || 'image/jpeg',
+        base64Data: '',
+        localPath: attachment.localPath,
+      }));
+  }, [metadata?.localMediaAttachments, userImageAttachments]);
   const displayImageAttachments = userImageAttachments.filter(image =>
     !imageEdits.some(snapshot => snapshot.source.filePath === image.localPath)
   );
@@ -500,7 +518,7 @@ const UserMessageItem: React.FC<{
                   <span>{formatMessageDateTime(message.timestamp)}</span>
                   <CopyButton
                     content={copyContent}
-                    images={userImageAttachments}
+                    images={copyImages}
                     onCopy={(result) => reportConversationMessageAction({
                       actionType: 'copy_message',
                       message,
@@ -508,7 +526,7 @@ const UserMessageItem: React.FC<{
                         result,
                         copySource: 'user_message',
                         copiedLength: copyContent.length,
-                        copiedImageCount: userImageAttachments.length,
+                        copiedImageCount: copyImages.length,
                       },
                     })}
                     visible={isHovered}

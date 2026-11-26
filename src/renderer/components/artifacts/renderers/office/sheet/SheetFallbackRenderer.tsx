@@ -2,13 +2,13 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
+import { readSheetPreview } from '@/services/office/sheet/sheetPreview';
 
 import {
   type OfficePreviewZoomControlsConfig,
   useRegisterOfficePreviewZoomControls,
 } from '../common/OfficePreviewActionsContext';
 import { useOfficePreviewZoom } from '../common/OfficeZoomControls';
-import { getExtension } from './excelPreprocess';
 
 const t = (key: string) => i18nService.t(key);
 
@@ -36,9 +36,8 @@ interface SheetData {
 }
 
 interface SheetFallbackRendererProps {
-  data: ArrayBuffer;
+  data: ArrayBuffer | string;
   fileName: string;
-  error?: string | null;
 }
 
 const ROW_HEIGHT = 28;
@@ -62,17 +61,19 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [activeSheet, setActiveSheet] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [parsedInput, setParsedInput] = useState<SheetFallbackRendererProps | null>(null);
+  const isCurrent = parsedInput?.data === data && parsedInput.fileName === fileName;
   const parentRef = useRef<HTMLDivElement>(null);
   const { zoomFactor, zoomIn, zoomOut, resetZoom, handleWheelZoom } = useOfficePreviewZoom();
   const zoomControls = useMemo<OfficePreviewZoomControlsConfig | null>(() => {
-    if (sheets.length === 0) return null;
+    if (!isCurrent || error || sheets.length === 0) return null;
     return {
       zoomFactor,
       onZoomOut: zoomOut,
       onZoomIn: zoomIn,
       onResetZoom: resetZoom,
     };
-  }, [resetZoom, sheets.length, zoomFactor, zoomIn, zoomOut]);
+  }, [error, isCurrent, resetZoom, sheets.length, zoomFactor, zoomIn, zoomOut]);
 
   useRegisterOfficePreviewZoomControls(zoomControls);
 
@@ -92,13 +93,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     const parse = async () => {
       try {
         const XLSX = await import('xlsx');
-        const ext = getExtension(fileName);
-        const workbook = ext === '.csv' || ext === '.tsv'
-          ? XLSX.read(new TextDecoder('utf-8').decode(new Uint8Array(data)), {
-              type: 'string',
-              FS: ext === '.tsv' ? '\t' : undefined,
-            })
-          : XLSX.read(new Uint8Array(data), { type: 'array', cellStyles: true });
+        const workbook = readSheetPreview(XLSX, data, fileName);
 
         const parsed: SheetData[] = workbook.SheetNames.map(name => {
           const sheet = workbook.Sheets[name];
@@ -136,11 +131,16 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
         });
 
         if (!cancelled) {
+          setError(null);
           setSheets(parsed);
           setActiveSheet(0);
+          setParsedInput({ data, fileName });
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setParsedInput({ data, fileName });
+        }
       }
     };
 
@@ -148,7 +148,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     return () => { cancelled = true; };
   }, [data, fileName]);
 
-  const activeSheetData = sheets[activeSheet] || sheets[0] || null;
+  const activeSheetData = isCurrent ? sheets[activeSheet] || sheets[0] || null : null;
   const autoFitColWidths = useMemo(
     () => activeSheetData ? getAutoFitColumnWidths(activeSheetData.rows, activeSheetData.colWidths) : [],
     [activeSheetData],
@@ -158,7 +158,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     [activeSheetData, zoomFactor],
   );
 
-  if (error) {
+  if (isCurrent && error) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-sm text-red-500">
         {t('artifactDocumentError')}: {error}
@@ -166,7 +166,7 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
     );
   }
 
-  if (sheets.length === 0) {
+  if (!isCurrent || sheets.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted">
         {t('artifactDocumentLoading')}
@@ -182,22 +182,6 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white text-[#383a42]">
-      <div className="flex shrink-0 items-center gap-2 border-b border-[#e0e0e0] px-2 py-1">
-        <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-          {sheets.map((sheet, i) => (
-            <button
-              key={sheet.name}
-              onClick={() => setActiveSheet(i)}
-              className={`whitespace-nowrap rounded px-2 py-0.5 text-xs transition-colors ${
-                i === activeSheet ? 'bg-[#217346]/10 font-medium text-[#217346]' : 'text-[#666] hover:bg-[#f0f2f5] hover:text-[#383a42]'
-              }`}
-            >
-              {sheet.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div ref={parentRef} className="flex-1 overflow-auto" onWheel={handleWheelZoom}>
         <div style={{ width: totalWidth, minWidth: '100%' }}>
           <ColumnHeaders
@@ -221,8 +205,32 @@ export const SheetFallbackRenderer: React.FC<SheetFallbackRendererProps> = ({ da
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-[#e0e0e0] px-3 py-1 text-xs text-[#777]">
-        {currentSheet.rows.length.toLocaleString()} {t('artifactRowCount')}
+      {/* Excel-native bottom sheet bar shared with the fallback preview */}
+      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-t border-[#e0e0e0] bg-[#f5f6f8] px-2">
+        <div className="flex h-full min-w-0 flex-1 items-end gap-0.5 overflow-x-auto" role="tablist" aria-label={t('sheetTabsRegion')}>
+          {sheets.map((sheet, i) => {
+            const isActive = i === activeSheet;
+            return (
+              <button
+                key={sheet.name}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveSheet(i)}
+                className={`h-7 shrink-0 whitespace-nowrap rounded-t px-2.5 text-xs transition-colors ${
+                  isActive
+                    ? 'border-x border-b-2 border-x-[#e0e0e0] border-b-[#217346] bg-white font-semibold text-[#217346]'
+                    : 'text-[#666] hover:bg-black/5 hover:text-[#383a42]'
+                }`}
+              >
+                {sheet.name}
+              </button>
+            );
+          })}
+        </div>
+        <div className="shrink-0 border-l border-[#e0e0e0] pl-2 text-[11px] tabular-nums text-[#777]">
+          {currentSheet.rows.length.toLocaleString()} {t('artifactRowCount')}
+        </div>
       </div>
     </div>
   );

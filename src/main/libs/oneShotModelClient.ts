@@ -3,7 +3,13 @@ import { ApiFormat, OpenClawApi, ProviderName } from '../../shared/providers';
 import { resolveRawApiConfig } from './claudeSettings';
 import { buildAnthropicMessagesUrl } from './coworkModelApi';
 import type { ResolvedPresetModel } from './modelPresets';
-import { buildProviderSelection } from './openclawConfigSync';
+import {
+  buildProviderSelection,
+  PROXY_TOKEN_PLACEHOLDER,
+  resolveProxyBackedBaseUrl,
+  stripChatCompletionsSuffix,
+  stripResponsesSuffix,
+} from './providerSelection';
 import {
   readAnthropicStreamEvent,
   readGeminiStreamEvent,
@@ -22,7 +28,19 @@ import {
  * openclaw.json, so they always match what the agent runtime uses.
  */
 
-const PROXY_TOKEN_PLACEHOLDER = '${LOBSTER_PROXY_TOKEN}';
+const LOOPBACK_PROXY_PATH_PATTERN = /^\/v1(?:\/(?:lobsterai-server|lobster|lobsterai|youdao|github-copilot|copilot))?$/;
+
+function isLoopbackProxyBaseUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    return (host === '127.0.0.1' || host === 'localhost' || host === '::1')
+      && LOOPBACK_PROXY_PATH_PATTERN.test(pathname);
+  } catch {
+    return false;
+  }
+}
 
 export const OneShotTargetError = {
   NoModel: 'no-model',
@@ -90,6 +108,7 @@ export function toOneShotTarget(options: {
   providerName: string;
   apiKey: string;
   proxyToken: string | null;
+  proxyBaseUrl?: string | null;
 }): OneShotTargetResolution {
   const { providerConfig } = options.selection;
   const api = providerConfig.models[0]?.api ?? providerConfig.api;
@@ -101,13 +120,27 @@ export function toOneShotTarget(options: {
   if (providerConfig.apiKey === undefined) {
     return { error: OneShotTargetError.UnsupportedModel, detail: 'oauth' };
   }
-  const apiKey = providerConfig.apiKey === PROXY_TOKEN_PLACEHOLDER
-    ? options.proxyToken ?? ''
-    : options.apiKey;
+  let baseUrl = providerConfig.baseUrl.replace(/\/+$/, '');
+  let apiKey: string;
+  if (providerConfig.apiKey === PROXY_TOKEN_PLACEHOLDER) {
+    if (!isLoopbackProxyBaseUrl(baseUrl)) {
+      const rewritten = resolveProxyBackedBaseUrl(options.providerName, options.proxyBaseUrl);
+      if (rewritten) {
+        baseUrl = rewritten;
+      }
+    }
+    // Never send the local loopback proxy secret directly to an upstream server.
+    if (!isLoopbackProxyBaseUrl(baseUrl)) {
+      return { error: OneShotTargetError.UnsupportedModel, detail: 'proxy-unavailable' };
+    }
+    apiKey = options.proxyToken ?? '';
+  } else {
+    apiKey = options.apiKey;
+  }
   return {
     target: {
       api: api as OpenClawApi,
-      baseUrl: providerConfig.baseUrl.replace(/\/+$/, ''),
+      baseUrl,
       apiKey,
       model: options.selection.sessionModelId,
       providerName: options.providerName,
@@ -116,7 +149,10 @@ export function toOneShotTarget(options: {
 }
 
 /** Resolve the current default model into a one-shot target. */
-export function resolveOneShotTarget(deps: { getProxyToken: () => string | null }): OneShotTargetResolution {
+export function resolveOneShotTarget(deps: {
+  getProxyToken: () => string | null;
+  getProxyBaseUrl?: () => string | null;
+}): OneShotTargetResolution {
   const raw = resolveRawApiConfig();
   const config = raw.config;
   const metadata = raw.providerMetadata;
@@ -124,6 +160,7 @@ export function resolveOneShotTarget(deps: { getProxyToken: () => string | null 
     return { error: OneShotTargetError.NoModel, detail: raw.error };
   }
   const providerName = metadata?.providerName ?? '';
+  const proxyBaseUrl = deps.getProxyBaseUrl?.() ?? null;
   const selection = buildProviderSelection({
     apiKey: config.apiKey,
     baseURL: config.baseURL,
@@ -136,12 +173,14 @@ export function resolveOneShotTarget(deps: { getProxyToken: () => string | null 
     codingPlanEnabled: metadata?.codingPlanEnabled,
     supportsImage: metadata?.supportsImage,
     modelName: metadata?.modelName,
+    proxyBaseUrl,
   });
   return toOneShotTarget({
     selection,
     providerName,
     apiKey: config.apiKey,
     proxyToken: deps.getProxyToken(),
+    proxyBaseUrl,
   });
 }
 
@@ -180,7 +219,7 @@ export function buildOneShotHttpRequest(target: OneShotTarget, request: OneShotR
       };
     case OpenClawApi.OpenAICompletions:
       return {
-        url: `${target.baseUrl}/chat/completions`,
+        url: `${stripChatCompletionsSuffix(target.baseUrl)}/chat/completions`,
         init: json({ Authorization: `Bearer ${target.apiKey}` }, {
           model: target.model,
           messages: [{ role: 'system', content: request.system }, ...request.messages],
@@ -192,7 +231,7 @@ export function buildOneShotHttpRequest(target: OneShotTarget, request: OneShotR
       // System text rides in `input`: OpenClaw only sends `instructions` and
       // `store` to endpoints verified to honor them.
       return {
-        url: `${target.baseUrl}/responses`,
+        url: `${stripResponsesSuffix(target.baseUrl)}/responses`,
         init: json({ Authorization: `Bearer ${target.apiKey}` }, {
           model: target.model,
           input: [{ role: 'system', content: request.system }, ...request.messages],

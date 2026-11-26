@@ -8,7 +8,7 @@ import { afterEach, expect, test } from 'vitest';
 const require = createRequire(import.meta.url);
 const tar = require('tar');
 const { createSkillsPayloadFilter, listSkillDevOnlyPackages } = require('../scripts/skill-payload.cjs');
-const { packMultipleSources } = require('../scripts/pack-openclaw-tar.cjs');
+const { packMultipleSources } = require('../scripts/pack-dsh-win-resources.cjs');
 
 const tempDirs: string[] = [];
 

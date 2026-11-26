@@ -124,9 +124,3 @@ export const NeteaseMailReadTools = [
   NeteaseMailTool.GetMessage, NeteaseMailTool.ListAttachments, NeteaseMailTool.DownloadAttachment,
   NeteaseMailTool.ListDrafts,
 ] as const;
-
-export const NeteaseMailAuthStoreOperation = { Initialize: 'initialize', Status: 'status', Save: 'save', Remove: 'remove' } as const;
-
-export const NeteaseMailRuntimeRpc = {
-  ReloadCredentials: 'secrets.reload', ResolveConfirmation: 'neteaseMail.confirmation.resolve', ConfirmationStatus: 'neteaseMail.confirmation.status',
-} as const;

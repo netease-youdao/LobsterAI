@@ -89,7 +89,10 @@ export class AgentManager {
     const catalog = await this.loadCatalog();
     const presets = new Map(catalog.experts.map(preset => [preset.id, preset]));
     for (const agent of this.store.listAgents()) {
-      const icon = presets.get(agent.presetId)?.icon;
+      const preset = presets.get(agent.presetId);
+      // Unversioned catalogs retain their legacy cosmetic refresh. Versioned avatars install on consent.
+      if (preset?.revision !== undefined || agent.presetRevision !== undefined) continue;
+      const icon = preset?.icon;
       if (icon && parseAgentAvatarImageUrl(icon) && usesManagedPresetAvatar(agent) && agent.icon !== icon) {
         try {
           this.store.updatePresetAgentAvatar(agent.id, icon);

@@ -33,6 +33,7 @@ const lastRunStatusLabelKeys: Record<TaskStatus, string> = {
   [TaskStatus.Success]: 'scheduledTasksStatusSuccess',
   [TaskStatus.Error]: 'scheduledTasksStatusError',
   [TaskStatus.Skipped]: 'scheduledTasksStatusSkipped',
+  [TaskStatus.Stopped]: 'scheduledTasksStatusStopped',
   [TaskStatus.Running]: 'scheduledTasksStatusRunning',
 };
 
@@ -40,6 +41,7 @@ const lastRunStatusTones: Record<TaskStatus, string> = {
   [TaskStatus.Success]: 'text-green-600 dark:text-green-400',
   [TaskStatus.Error]: 'text-red-600 dark:text-red-400',
   [TaskStatus.Skipped]: 'text-yellow-600 dark:text-yellow-400',
+  [TaskStatus.Stopped]: 'text-secondary',
   [TaskStatus.Running]: 'text-blue-600 dark:text-blue-400',
 };
 

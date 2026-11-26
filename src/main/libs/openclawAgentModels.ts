@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { OpenClawProviderId } from '../../shared/providers/constants';
+import { OpenClawProviderId, ProviderName } from '../../shared/providers/constants';
 import type { Agent } from '../coworkStore';
 
 type BuildManagedAgentEntriesInput = {
@@ -94,6 +94,10 @@ const LegacyQualifiedProviderMigration: Record<string, readonly string[]> = {
   [OpenClawProviderId.OpenAI]: [OpenClawProviderId.OpenAICodex],
   [OpenClawProviderId.Minimax]: [OpenClawProviderId.MinimaxPortal],
   [OpenClawProviderId.OpenAICodex]: [OpenClawProviderId.OpenAI],
+  [OpenClawProviderId.MinimaxPortal]: [ProviderName.Minimax],
+  [OpenClawProviderId.Zai]: [ProviderName.Zhipu],
+  [OpenClawProviderId.Google]: [ProviderName.Gemini],
+  [OpenClawProviderId.LobsteraiCopilot]: [ProviderName.Copilot],
 };
 
 function normalizeSubagentAllowAgentIds(agent: Agent): string[] {

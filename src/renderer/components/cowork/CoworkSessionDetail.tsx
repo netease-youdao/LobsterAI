@@ -14,6 +14,7 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import { isModelStreamInterruptedError } from '../../../common/coworkSystemMessages';
 import { stripGoalCommandPrefixForDisplay } from '../../../common/sessionTitle';
+import { BlankDocumentKind } from '../../../shared/artifactPreview/blankDocument';
 import {
   BrowserDisplayMode,
   normalizeBrowserWebAccessConfig,
@@ -45,7 +46,7 @@ import {
 import { isChatPresetSession } from '../../../shared/modelPresets/constants';
 import { classifyWaitingNotificationKind, WaitingNotificationKind } from '../../../shared/notifications/constants';
 import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/constants';
-import { resolveArtifactAutoPreviewEnabled } from '../../config';
+import { resolveArtifactAutoPreviewEnabled, ShortcutAction } from '../../config';
 import { EnterpriseQuotaPrompt } from '../../features/enterpriseAccount/components/EnterpriseQuotaPrompt';
 import {
   findCurrentEnterpriseQuotaSignal,
@@ -53,6 +54,7 @@ import {
 } from '../../features/enterpriseAccount/quotaPromptState';
 import { selectEnterpriseAccountContext } from '../../features/enterpriseAccount/selectors';
 import { collectSessionArtifacts, loadDetectedFileArtifact } from '../../services/artifactDetection';
+import { findLocalServiceArtifactForUrl } from '../../services/artifactLinkOpen';
 import {
   dedupeArtifactsForDisplay,
   normalizeFilePathForDedup,
@@ -61,12 +63,24 @@ import {
   parseMediaTokensFromText,
   resolveArtifactIdForDisplay,
 } from '../../services/artifactParser';
+import {
+  createBlankWorkspaceDocument,
+  openWorkspaceDirectoryInSystem,
+  pickLocalFileForPreview,
+  readWorkspaceChangesReview,
+} from '../../services/artifactWorkspace';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
 import { readLocalServiceProjectDirectoryCandidate } from '../../services/localServiceProjectDirectoryCache';
+import { requestOfficeAutoFocus } from '../../services/office/officeFormats';
 import { getSubagentWaitPhase, SubagentWaitPhase } from '../../services/subagentWaitState';
+import {
+  loadWorkspaceFileArtifact,
+  resolveWorkspaceFileOpenTarget,
+  WorkspaceFileOpenTargetKind,
+} from '../../services/workspaceFileOpen';
 import { RootState } from '../../store';
 import {
   selectCurrentMessagesLength,
@@ -81,10 +95,12 @@ import {
   activateArtifactAgentBrowserTab,
   activateArtifactBrowserTab,
   activateArtifactFileListTab,
+  activateArtifactNewTab,
   activateArtifactPreviewTab,
   activateArtifactSubagentTab,
   activateArtifactUserAttachmentTab,
   addArtifact,
+  addLinkedFileArtifact,
   type ArtifactPreviewTab,
   ArtifactSpecialTab,
   closeArtifactPreviewTab,
@@ -128,8 +144,10 @@ import {
 } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
+import { useShortcutHint } from '../agentSidebar/useShortcutHint';
 import {
   AgentBrowserInAppPanel,
+  ArtifactNewTabContent,
   ArtifactPanel,
   type LocalServiceDeploymentRequest,
   SubagentPanelContent,
@@ -137,22 +155,46 @@ import {
   type UserAttachmentPreviewPayload,
 } from '../artifacts';
 import { reportArtifactPreviewAction } from '../artifacts/artifactAnalytics';
+import { commitArtifactFileRename } from '../artifacts/artifactFileRename';
 import { ArtifactFileShareProvider } from '../artifacts/ArtifactFileShareController';
+import { canRenameArtifactFile } from '../artifacts/artifactHeaderPath';
+import {
+  ArtifactBrowserIcon,
+  WorkspaceFilesIcon,
+} from '../artifacts/ArtifactPreviewIdentity';
 import {
   ArtifactAutoPreviewOpenTarget,
   getAutoPreviewOpenTarget,
   selectAutoPreviewArtifact,
 } from '../artifacts/autoPreviewPolicy';
+import {
+  activateBrowserPreviewTab,
+  type BrowserLocalServiceContext,
+  type BrowserPreviewTab,
+  closeBrowserPreviewTab,
+  createBrowserPreviewTab,
+  EMPTY_SESSION_BROWSER_TABS_STATE,
+  getActiveBrowserPreviewTab,
+  getBrowserPreviewTabLabel,
+  insertBrowserPreviewTabAfter,
+  openOrReuseBlankBrowserPreviewTab,
+  type SessionBrowserTabsState,
+  updateBrowserPreviewTab,
+} from '../artifacts/browserPreviewTabs';
 import ImageStudioHost from '../artifacts/imageEditor/ImageStudioHost';
 import { preloadInlineImages } from '../artifacts/imageEditor/InlineImageGallery';
 import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
-import SidebarSearchIcon from '../icons/SidebarSearchIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
 import { MarkdownLinkOpenerContext } from '../markdownLinkOpener';
 import { type ToastEventDetail } from '../Toast';
+import Tooltip, {
+  TOOLTIP_DARK_BUBBLE_CLASS_NAME,
+  TooltipAlign,
+  TooltipPosition,
+} from '../ui/Tooltip';
 import { MAC_TRAFFIC_LIGHT_INSET_CLASS } from '../window/windowZoom';
 import { resolveAgentModelSelection, useAgentSelectedModel } from './agentModelSelection';
 import ArtifactPreviewTabItem from './ArtifactPreviewTabItem';
@@ -167,6 +209,18 @@ import {
   bucketLength,
   reportConversationNavigationAction,
 } from './conversationAnalytics';
+import {
+  alignRailTargetInContainer,
+  RAIL_NAVIGATION_WINDOW_LEADING_CONTEXT,
+  RAIL_NAVIGATION_WINDOW_PAGE_SIZE,
+  RailNavigationMode,
+  resolveRailNavigationMode,
+  scheduleRailNavigationSettle,
+} from './conversationRailNavigation';
+import {
+  buildRailTooltipContent,
+  resolveRailTurnTimestamp,
+} from './conversationRailTooltip';
 import {
   canScrollElementInWheelDirection,
   isAtConversationSessionBottom,
@@ -255,14 +309,6 @@ interface CoworkSessionDetailProps {
   onRespondToPermission?: (result: CoworkPermissionResult) => void;
 }
 
-interface BrowserLocalServiceContext {
-  artifactId?: string;
-  url: string;
-  origin: string;
-  projectDirectory?: string;
-  projectCandidates?: NonNullable<Artifact['localService']>['projectCandidates'];
-}
-
 const LOCAL_SERVICE_RESOLVED_CANDIDATE_SOURCES = new Set<string>([
   ShareDeploymentCandidateSource.Process,
   ShareDeploymentCandidateSource.ProcessCwd,
@@ -306,7 +352,6 @@ const getLocalServiceProjectMetadataKey = (
     `${candidate.source}:${normalizeProjectDirectoryForDedup(candidate.directory)}`
   ),
 ].join('|');
-const NAV_SCROLL_LOCK_DURATION = 800;
 const NAV_BOTTOM_SNAP_THRESHOLD = 20;
 const WHEEL_DELTA_LINE_HEIGHT = 16;
 const SCROLL_TO_BOTTOM_SETTLE_THRESHOLD = 24;
@@ -316,6 +361,8 @@ const AutoScrollDetachSource = {
   ScrollToBottomControlWheel: 'scroll_to_bottom_control_wheel',
   MessageVersionSwitch: 'message_version_switch',
 } as const;
+const MESSAGE_VERSION_DIM_DELAY_MS = 180;
+const MESSAGE_VERSION_SETTLE_MS = 250;
 const MessageVersionSwitchPhase = {
   /** Requested; a quick switch finishes here and simply replaces the content. */
   Waiting: 'waiting',
@@ -325,8 +372,6 @@ const MessageVersionSwitchPhase = {
   Settling: 'settling',
 } as const;
 type MessageVersionSwitchPhase = typeof MessageVersionSwitchPhase[keyof typeof MessageVersionSwitchPhase];
-const MESSAGE_VERSION_DIM_DELAY_MS = 180;
-const MESSAGE_VERSION_SETTLE_MS = 250;
 const MESSAGE_VERSION_PHASE_CLASS: Record<MessageVersionSwitchPhase, string | undefined> = {
   [MessageVersionSwitchPhase.Waiting]: undefined,
   [MessageVersionSwitchPhase.Dimmed]: 'opacity-40 transition-opacity duration-200',
@@ -337,6 +382,8 @@ const AUTO_PREVIEW_ARTIFACT_SETTLE_MS = 600;
 const MAX_AUTO_PREVIEW_HANDLED_TURNS = 128;
 const LOCAL_SERVICE_PROCESS_DIRECTORY_RETRY_DELAY_MS = 900;
 const ARTIFACT_PANEL_TRANSITION_MS = 200;
+/** Width of the right-side panel controls (expand + toggle + right gutter) while transitioning. */
+const ARTIFACT_HEADER_TRANSITION_MIN_WIDTH = 88;
 const ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH = 4;
 const COWORK_DETAIL_MIN_WIDTH = 480;
 const ARTIFACT_PANEL_MIN_WIDTH_RATIO = 1 / 6;
@@ -354,7 +401,7 @@ const RAIL_LINE_ACTIVE_WIDTH = 28;
 const RAIL_LINE_HOVER_STEPS = [28, 18, 13, 10] as const;
 const RAIL_LINE_HEIGHT = 3;
 const RAIL_TARGET_RENDER_RELEASE_DELAY = 2400;
-const RAIL_TARGET_SCROLL_RETRY_LIMIT = 6;
+const RAIL_TARGET_SCROLL_RETRY_LIMIT = 10;
 
 const getPermissionPreviewText = (permission: CoworkPermissionRequest): string => {
   const toolInput = permission.toolInput ?? {};
@@ -432,6 +479,7 @@ type RailItem = {
   absoluteIndex: number;
   label: string;
   summary: string;
+  timestamp: number | null;
   contentLen: number;
   isUser: boolean;
   isLoaded: boolean;
@@ -519,13 +567,17 @@ const buildRailItems = (
   for (let index = 0; index < turns.length; index += 1) {
     const turn = turns[index];
     let assistantContent = '';
+    let firstAssistantMessage: CoworkMessage | null = null;
     for (const item of turn.assistantItems) {
       if (item.type === 'assistant' && isAssistantRailContentMessage(item.message)) {
+        if (!firstAssistantMessage) {
+          firstAssistantMessage = item.message;
+        }
         assistantContent += item.message.content;
       }
     }
 
-    const assistantMessageId = getAssistantRailMessageId(turn);
+    const assistantMessageId = firstAssistantMessage?.id ?? null;
     const primaryMessageId = turn.userMessage?.id ?? assistantMessageId;
     if (!primaryMessageId) continue;
 
@@ -539,6 +591,7 @@ const buildRailItems = (
       summary: assistantContent
         ? getRailLabel(assistantContent, 'LobsterAI', COWORK_RAIL_TOOLTIP_PREVIEW_MAX_LENGTH)
         : '',
+      timestamp: resolveRailTurnTimestamp(turn.userMessage?.timestamp, firstAssistantMessage?.timestamp),
       contentLen: userContent.length + assistantContent.length,
       isUser: false,
       isLoaded: true,
@@ -591,6 +644,7 @@ const buildRailItemsFromIndex = (
         absoluteIndex: current.messageOffset,
         label: current.preview,
         summary: assistantItems.map(item => item.preview).join(' '),
+        timestamp: resolveRailTurnTimestamp(current.timestamp, assistantItems[0]?.timestamp),
         contentLen: current.contentLen + assistantItems.reduce((acc, item) => acc + item.contentLen, 0),
         isUser: false,
         isLoaded: loadedTurnIndex >= 0,
@@ -607,6 +661,7 @@ const buildRailItemsFromIndex = (
       absoluteIndex: current.messageOffset,
       label: 'LobsterAI',
       summary: current.preview,
+      timestamp: resolveRailTurnTimestamp(null, current.timestamp),
       contentLen: current.contentLen,
       isUser: false,
       isLoaded: loadedTurnIndex >= 0,
@@ -643,6 +698,7 @@ const buildPlaceholderRailItems = (
       absoluteIndex: Math.min(Math.max(0, count - 1), index * 2),
       label: `Turn ${index + 1}`,
       summary: '',
+      timestamp: null,
       contentLen: 1,
       isUser: false,
       isLoaded: false,
@@ -1288,14 +1344,6 @@ const ArtifactTabPlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => 
   </svg>
 );
 
-const ArtifactBrowserTabIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <circle cx="8" cy="8" r="6" />
-    <ellipse cx="8" cy="8" rx="2.5" ry="6" />
-    <path d="M2 8h12" />
-  </svg>
-);
-
 class ArtifactPanelErrorBoundary extends React.Component<
   { children: React.ReactNode; onClose: () => void },
   { hasError: boolean; error: Error | null }
@@ -1430,17 +1478,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
+  const toggleArtifactPanelShortcutHint = useShortcutHint(ShortcutAction.ToggleArtifacts);
   const currentSession = useSelector(selectCurrentSession);
-  const [modelSwitchNotice, setModelSwitchNotice] = useState<{ sessionId: string; messageId: string } | null>(null);
-  useEffect(() => {
-    if (!modelSwitchNotice) return;
-    if (modelSwitchNotice.sessionId !== currentSession?.id) {
-      setModelSwitchNotice(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setModelSwitchNotice(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [modelSwitchNotice, currentSession?.id]);
   const pendingPermissions = useSelector(selectPendingPermissions);
   const enterpriseAccountContext = useSelector(selectEnterpriseAccountContext);
   const isStreaming = useSelector(selectIsStreaming);
@@ -1728,8 +1767,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const turnToRailRangeRef = useRef<{ first: number; last: number }[]>([]);
   const loadedRailRangeRef = useRef<{ first: number; last: number } | null>(null);
   const isNavigatingRef = useRef(false);
-  const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isLoadingRailTargetRef = useRef(false);
+  const railNavigationRequestIdRef = useRef(0);
+  const cancelRailNavigationSettleRef = useRef<(() => void) | null>(null);
+  const conversationContentElementRef = useRef<HTMLElement | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
   const railLinesRef = useRef<HTMLDivElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -1831,6 +1871,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       && !conversationSearchViewportLockedRef.current,
   });
   const setConversationContentElement = useCallback((element: HTMLElement | null) => {
+    conversationContentElementRef.current = element;
     setAnchorContentElement(element);
     setEntryContentElement(element);
   }, [setAnchorContentElement, setEntryContentElement]);
@@ -2218,8 +2259,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [shouldRenderArtifactPanel, setShouldRenderArtifactPanel] = useState(isPanelOpen);
   const [isArtifactPanelVisible, setIsArtifactPanelVisible] = useState(isPanelOpen);
   const [isArtifactPanelTransitioning, setIsArtifactPanelTransitioning] = useState(false);
-  const [isFileListPreviewTabOpen, setIsFileListPreviewTabOpen] = useState(isPanelOpen);
-  const [isBrowserPreviewTabOpen, setIsBrowserPreviewTabOpen] = useState(false);
+  const [isNewTabPreviewTabOpen, setIsNewTabPreviewTabOpen] = useState(isPanelOpen);
+  const [isFileListPreviewTabOpen, setIsFileListPreviewTabOpen] = useState(false);
+  const [browserTabsState, setBrowserTabsState] = useState<SessionBrowserTabsState>(
+    EMPTY_SESSION_BROWSER_TABS_STATE,
+  );
   const [isAgentBrowserPreviewTabOpen, setIsAgentBrowserPreviewTabOpen] = useState(false);
   const [browserDisplayMode, setBrowserDisplayMode] = useState(
     () => normalizeBrowserWebAccessConfig(
@@ -2230,17 +2274,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [isSubagentPreviewTabOpen, setIsSubagentPreviewTabOpen] = useState(false);
   const [isUserAttachmentPreviewTabOpen, setIsUserAttachmentPreviewTabOpen] = useState(false);
   const [userAttachmentPreview, setUserAttachmentPreview] = useState<UserAttachmentPreviewPayload | null>(null);
-  const [activeSpecialPreviewTab, setActiveSpecialPreviewTab] = useState<ArtifactSpecialTab>(ArtifactSpecialTab.FileList);
-  const [browserPreviewAddress, setBrowserPreviewAddress] = useState('');
-  const [browserPreviewUrl, setBrowserPreviewUrl] = useState('');
-  const [browserPreviewTitle, setBrowserPreviewTitle] = useState('');
-  const [browserLocalServiceContext, setBrowserLocalServiceContext] =
-    useState<BrowserLocalServiceContext | null>(null);
+  const [activeSpecialPreviewTab, setActiveSpecialPreviewTab] = useState<ArtifactSpecialTab>(ArtifactSpecialTab.NewTab);
   const [localServiceDeploymentRequest, setLocalServiceDeploymentRequest] =
     useState<LocalServiceDeploymentRequest | null>(null);
-  const [browserHtmlPreviewArtifactId, setBrowserHtmlPreviewArtifactId] = useState<string | null>(null);
-  const [showArtifactAddMenu, setShowArtifactAddMenu] = useState(false);
-  const [artifactAddMenuPosition, setArtifactAddMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [artifactTabsCanScrollLeft, setArtifactTabsCanScrollLeft] = useState(false);
   const [artifactTabsCanScrollRight, setArtifactTabsCanScrollRight] = useState(false);
   const [artifactTabsIsOverflowing, setArtifactTabsIsOverflowing] = useState(false);
@@ -2265,13 +2301,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [contentRowWidth, setContentRowWidth] = useState(0);
   const [promptInputAreaHeight, setPromptInputAreaHeight] = useState(0);
   const [isArtifactPanelExpanded, setIsArtifactPanelExpanded] = useState(false);
+  const [renamingArtifactTabId, setRenamingArtifactTabId] = useState<string | null>(null);
   const [isExpandedPromptInputHidden, setIsExpandedPromptInputHidden] = useState(false);
   const [isExpandedConversationPreviewOpen, setIsExpandedConversationPreviewOpen] = useState(false);
   const [goalStatusBarPortalTarget, setGoalStatusBarPortalTarget] = useState<HTMLDivElement | null>(null);
   const [steerPreviewPortalTarget, setSteerPreviewPortalTarget] = useState<HTMLDivElement | null>(null);
   const previousArtifactPanelOpenRef = useRef(isPanelOpen);
+  const newTabPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const fileListPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
-  const browserPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
+  const browserTabsBySessionRef = useRef<Record<string, SessionBrowserTabsState>>({});
   const agentBrowserPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const unreadAgentBrowserActivityBySessionRef = useRef<Record<string, boolean>>({});
   const subagentPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
@@ -2279,17 +2317,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const userAttachmentPreviewBySessionRef = useRef<Record<string, UserAttachmentPreviewPayload>>({});
   const userAttachmentFocusRequestKeyRef = useRef(0);
   const activeSpecialPreviewTabBySessionRef = useRef<Record<string, ArtifactSpecialTab>>({});
-  const browserPreviewAddressBySessionRef = useRef<Record<string, string>>({});
-  const browserPreviewUrlBySessionRef = useRef<Record<string, string>>({});
-  const browserPreviewTitleBySessionRef = useRef<Record<string, string>>({});
-  const browserLocalServiceContextBySessionRef = useRef<Record<string, BrowserLocalServiceContext>>({});
-  const browserHtmlPreviewArtifactIdBySessionRef = useRef<Record<string, string>>({});
-  const browserHtmlPreviewSessionIdBySessionRef = useRef<Record<string, string>>({});
-  const browserHtmlPreviewUrlBySessionRef = useRef<Record<string, string>>({});
-  const browserHtmlPreviewRequestIdRef = useRef(0);
+  const browserHtmlPreviewRequestIdByTabRef = useRef<Record<string, number>>({});
   const localServiceDeploymentRequestIdRef = useRef(0);
-  const artifactAddButtonRef = useRef<HTMLButtonElement>(null);
-  const artifactAddMenuRef = useRef<HTMLDivElement>(null);
   const artifactTabsScrollRef = useRef<HTMLDivElement>(null);
   const contentRowRef = useRef<HTMLDivElement>(null);
   const promptInputAreaRef = useRef<HTMLDivElement>(null);
@@ -2316,20 +2345,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       .map(tab => ({ tab, artifact: artifactsById.get(tab.artifactId) }))
       .filter((item): item is { tab: typeof artifactPreviewTabs[number]; artifact: Artifact } => Boolean(item.artifact));
   }, [artifactPreviewTabs, sessionArtifacts]);
-  // A later reply that rewrites the HTML file replaces its artifact in the
-  // display list; follow it so the browser tab keeps watching the file and
-  // offers HTML sharing instead of deploying the internal preview server.
-  const browserHtmlPreviewDisplayArtifactId = useMemo(() => (
-    browserHtmlPreviewArtifactId
-      ? resolveArtifactIdForDisplay(
-          rawSessionArtifacts,
-          browserHtmlPreviewArtifactId,
-          { defaultProjectDirectory: currentSession?.cwd },
-        )
-      : null
-  ), [browserHtmlPreviewArtifactId, currentSession?.cwd, rawSessionArtifacts]);
-  const shouldPinArtifactAddTab = artifactTabsIsOverflowing || artifactTabsCanScrollLeft || artifactTabsCanScrollRight;
-  const browserPreviewTabTitle = browserPreviewTitle.trim() || i18nService.t('artifactBrowserTab');
+  const browserTabs = browserTabsState.tabs;
+  const activeBrowserTab = useMemo(
+    () => getActiveBrowserPreviewTab(browserTabsState),
+    [browserTabsState],
+  );
+  const activeBrowserTabId = activeBrowserTab?.id ?? null;
+  const isBrowserPreviewTabOpen = browserTabs.length > 0;
+  // A later reply that rewrites an HTML file replaces its artifact in the
+  // display list; follow it per browser tab so each tab keeps watching its file
+  // and offers HTML sharing instead of deploying the internal preview server.
+  const browserTabsForPanel = useMemo<BrowserPreviewTab[]>(() => (
+    browserTabs.map(tab => {
+      if (!tab.htmlPreviewArtifactId) return tab;
+      const displayArtifactId = resolveArtifactIdForDisplay(
+        rawSessionArtifacts,
+        tab.htmlPreviewArtifactId,
+        { defaultProjectDirectory: currentSession?.cwd },
+      );
+      return displayArtifactId === tab.htmlPreviewArtifactId
+        ? tab
+        : { ...tab, htmlPreviewArtifactId: displayArtifactId };
+    })
+  ), [browserTabs, currentSession?.cwd, rawSessionArtifacts]);
+  const shouldShowArtifactAddButton = !isNewTabPreviewTabOpen;
+  const shouldPinArtifactAddTab = shouldShowArtifactAddButton
+    && (artifactTabsIsOverflowing || artifactTabsCanScrollLeft || artifactTabsCanScrollRight);
   const fetchSubagents = useCallback(async (targetSessionId: string, options: { showLoading?: boolean } = {}) => {
     if (!targetSessionId) return;
     if (options.showLoading) {
@@ -2404,6 +2445,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const candidateIds = [
       group.toolUse.id,
       group.toolUse.metadata?.toolUseId,
+      group.toolResult?.metadata?.subagentRunId,
     ].filter((value): value is string => typeof value === 'string' && value.length > 0);
     for (const candidateId of candidateIds) {
       if (seen.has(candidateId)) continue;
@@ -2600,13 +2642,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   useEffect(() => {
     if (isPanelOpen) return;
     setIsArtifactPanelExpanded(false);
+    setRenamingArtifactTabId(null);
     setIsExpandedPromptInputHidden(false);
     setIsExpandedConversationPreviewOpen(false);
   }, [isPanelOpen]);
 
   useEffect(() => {
+    setIsNewTabPreviewTabOpen(sessionId ? newTabPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
     setIsFileListPreviewTabOpen(sessionId ? fileListPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
-    setIsBrowserPreviewTabOpen(sessionId ? browserPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
+    setBrowserTabsState(sessionId
+      ? browserTabsBySessionRef.current[sessionId] ?? EMPTY_SESSION_BROWSER_TABS_STATE
+      : EMPTY_SESSION_BROWSER_TABS_STATE);
     setIsAgentBrowserPreviewTabOpen(sessionId
       ? agentBrowserPreviewTabOpenBySessionRef.current[sessionId] ?? false
       : false);
@@ -2617,17 +2663,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsUserAttachmentPreviewTabOpen(sessionId ? userAttachmentPreviewTabOpenBySessionRef.current[sessionId] ?? false : false);
     setUserAttachmentPreview(sessionId ? userAttachmentPreviewBySessionRef.current[sessionId] ?? null : null);
     setActiveSpecialPreviewTab(sessionId
-      ? activeSpecialPreviewTabBySessionRef.current[sessionId] ?? ArtifactSpecialTab.FileList
-      : ArtifactSpecialTab.FileList);
-    setBrowserPreviewAddress(sessionId ? browserPreviewAddressBySessionRef.current[sessionId] ?? '' : '');
-    setBrowserPreviewUrl(sessionId ? browserPreviewUrlBySessionRef.current[sessionId] ?? '' : '');
-    setBrowserPreviewTitle(sessionId ? browserPreviewTitleBySessionRef.current[sessionId] ?? '' : '');
-    setBrowserLocalServiceContext(sessionId ? browserLocalServiceContextBySessionRef.current[sessionId] ?? null : null);
-    setBrowserHtmlPreviewArtifactId(sessionId ? browserHtmlPreviewArtifactIdBySessionRef.current[sessionId] ?? null : null);
+      ? activeSpecialPreviewTabBySessionRef.current[sessionId] ?? ArtifactSpecialTab.NewTab
+      : ArtifactSpecialTab.NewTab);
     setIsArtifactPanelExpanded(false);
+    setRenamingArtifactTabId(null);
     setIsExpandedPromptInputHidden(false);
     setIsExpandedConversationPreviewOpen(false);
-    setShowArtifactAddMenu(false);
     setSubagents([]);
     setSubagentsLoading(false);
     setSelectedSubagent(null);
@@ -2642,18 +2683,28 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   useEffect(() => (
     () => {
-      for (const previewSessionId of Object.values(browserHtmlPreviewSessionIdBySessionRef.current)) {
-        void window.electron?.artifact?.destroyPreviewSession(previewSessionId);
+      for (const sessionState of Object.values(browserTabsBySessionRef.current)) {
+        for (const tab of sessionState.tabs) {
+          if (tab.htmlPreviewSessionId) {
+            void window.electron?.artifact?.destroyPreviewSession(tab.htmlPreviewSessionId);
+          }
+        }
       }
-      browserHtmlPreviewSessionIdBySessionRef.current = {};
-      browserHtmlPreviewUrlBySessionRef.current = {};
-      browserHtmlPreviewArtifactIdBySessionRef.current = {};
+      browserTabsBySessionRef.current = {};
+      browserHtmlPreviewRequestIdByTabRef.current = {};
       for (const timer of localServiceProjectRetryTimersRef.current.values()) {
         window.clearTimeout(timer);
       }
       localServiceProjectRetryTimersRef.current.clear();
     }
   ), []);
+
+  const setSessionNewTabPreviewTabOpen = useCallback((open: boolean) => {
+    setIsNewTabPreviewTabOpen(open);
+    if (sessionId) {
+      newTabPreviewTabOpenBySessionRef.current[sessionId] = open;
+    }
+  }, [sessionId]);
 
   const setSessionFileListPreviewTabOpen = useCallback((open: boolean) => {
     setIsFileListPreviewTabOpen(open);
@@ -2662,11 +2713,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [sessionId]);
 
-  const setSessionBrowserPreviewTabOpen = useCallback((open: boolean) => {
-    setIsBrowserPreviewTabOpen(open);
-    if (sessionId) {
-      browserPreviewTabOpenBySessionRef.current[sessionId] = open;
+  const updateSessionBrowserTabs = useCallback((
+    updater: (current: SessionBrowserTabsState) => SessionBrowserTabsState,
+    targetSessionId = sessionId,
+  ): SessionBrowserTabsState => {
+    if (!targetSessionId) return EMPTY_SESSION_BROWSER_TABS_STATE;
+    const current = browserTabsBySessionRef.current[targetSessionId] ?? EMPTY_SESSION_BROWSER_TABS_STATE;
+    const next = updater(current);
+    browserTabsBySessionRef.current[targetSessionId] = next;
+    if (targetSessionId === sessionId) {
+      setBrowserTabsState(next);
     }
+    return next;
   }, [sessionId]);
 
   const setSessionAgentBrowserPreviewTabOpen = useCallback((open: boolean) => {
@@ -2765,106 +2823,110 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionActiveSpecialPreviewTab,
   ]);
 
-  const handleBrowserPreviewAddressChange = useCallback((value: string) => {
-    setBrowserPreviewAddress(value);
-    if (sessionId) {
-      browserPreviewAddressBySessionRef.current[sessionId] = value;
-    }
-  }, [sessionId]);
+  const handleBrowserPreviewAddressChange = useCallback((tabId: string, value: string) => {
+    updateSessionBrowserTabs(current =>
+      updateBrowserPreviewTab(current, tabId, tab => (
+        tab.address === value ? tab : { ...tab, address: value }
+      )),
+    );
+  }, [updateSessionBrowserTabs]);
 
-  const setSessionBrowserLocalServiceContext = useCallback((context: BrowserLocalServiceContext | null) => {
-    setBrowserLocalServiceContext(context);
-    if (!sessionId) return;
-    if (context) {
-      browserLocalServiceContextBySessionRef.current[sessionId] = context;
-    } else {
-      delete browserLocalServiceContextBySessionRef.current[sessionId];
-    }
-  }, [sessionId]);
+  const handleBrowserLocalServiceContextChange = useCallback((
+    tabId: string,
+    context: BrowserLocalServiceContext | null,
+  ) => {
+    updateSessionBrowserTabs(current =>
+      updateBrowserPreviewTab(current, tabId, tab => ({ ...tab, localServiceContext: context })),
+    );
+  }, [updateSessionBrowserTabs]);
 
   useEffect(() => {
-    const artifactId = browserLocalServiceContext?.artifactId;
-    if (!artifactId) return;
-    const artifact = rawSessionArtifacts.find(item => item.id === artifactId);
-    if (artifact?.type !== ArtifactTypeValue.LocalService || !artifact.localService) return;
-    const nextMetadataKey = getLocalServiceProjectMetadataKey(
-      artifact.localService.projectDirectory,
-      artifact.localService.projectCandidates,
-    );
-    const currentMetadataKey = getLocalServiceProjectMetadataKey(
-      browserLocalServiceContext.projectDirectory,
-      browserLocalServiceContext.projectCandidates,
-    );
-    if (nextMetadataKey === currentMetadataKey) return;
-    setSessionBrowserLocalServiceContext({
-      ...browserLocalServiceContext,
-      projectDirectory: artifact.localService.projectDirectory,
-      projectCandidates: artifact.localService.projectCandidates,
-    });
+    if (!sessionId || browserTabs.length === 0) return;
+    const updates = new Map<string, BrowserLocalServiceContext>();
+    for (const tab of browserTabs) {
+      const context = tab.localServiceContext;
+      const artifactId = context?.artifactId;
+      if (!context || !artifactId) continue;
+      const artifact = rawSessionArtifacts.find(item => item.id === artifactId);
+      if (artifact?.type !== ArtifactTypeValue.LocalService || !artifact.localService) continue;
+      const nextMetadataKey = getLocalServiceProjectMetadataKey(
+        artifact.localService.projectDirectory,
+        artifact.localService.projectCandidates,
+      );
+      const currentMetadataKey = getLocalServiceProjectMetadataKey(
+        context.projectDirectory,
+        context.projectCandidates,
+      );
+      if (nextMetadataKey === currentMetadataKey) continue;
+      updates.set(tab.id, {
+        ...context,
+        projectDirectory: artifact.localService.projectDirectory,
+        projectCandidates: artifact.localService.projectCandidates,
+      });
+    }
+    if (updates.size === 0) return;
+    updateSessionBrowserTabs(current => ({
+      ...current,
+      tabs: current.tabs.map(tab => {
+        const nextContext = updates.get(tab.id);
+        return nextContext ? { ...tab, localServiceContext: nextContext } : tab;
+      }),
+    }));
   }, [
-    browserLocalServiceContext,
+    browserTabs,
     rawSessionArtifacts,
-    setSessionBrowserLocalServiceContext,
+    sessionId,
+    updateSessionBrowserTabs,
   ]);
 
-  const clearBrowserHtmlPreviewState = useCallback((targetSessionId = sessionId) => {
-    if (!targetSessionId) return;
-    const previewSessionId = browserHtmlPreviewSessionIdBySessionRef.current[targetSessionId];
-    if (previewSessionId) {
-      void window.electron?.artifact?.destroyPreviewSession(previewSessionId);
+  const handleBrowserPreviewUrlChange = useCallback((tabId: string, value: string) => {
+    let previewSessionIdToDestroy: string | null = null;
+    updateSessionBrowserTabs(current =>
+      updateBrowserPreviewTab(current, tabId, tab => {
+        const shouldClearHtmlPreview = Boolean(
+          tab.htmlPreviewUrl && !isSameBrowserPreviewUrl(value, tab.htmlPreviewUrl),
+        );
+        if (shouldClearHtmlPreview && tab.htmlPreviewSessionId) {
+          previewSessionIdToDestroy = tab.htmlPreviewSessionId;
+        }
+        const shouldClearLocalServiceContext = Boolean(
+          tab.localServiceContext
+          && (!value.trim() || normalizeLocalServiceOrigin(value) !== tab.localServiceContext.origin),
+        );
+        if (
+          tab.url === value
+          && !shouldClearHtmlPreview
+          && !shouldClearLocalServiceContext
+        ) {
+          return tab;
+        }
+        return {
+          ...tab,
+          url: value,
+          ...(shouldClearHtmlPreview
+            ? {
+                htmlPreviewArtifactId: null,
+                htmlPreviewSessionId: null,
+                htmlPreviewUrl: null,
+              }
+            : {}),
+          ...(shouldClearLocalServiceContext ? { localServiceContext: null } : {}),
+        };
+      }),
+    );
+    if (previewSessionIdToDestroy) {
+      void window.electron?.artifact?.destroyPreviewSession(previewSessionIdToDestroy);
     }
-    delete browserHtmlPreviewSessionIdBySessionRef.current[targetSessionId];
-    delete browserHtmlPreviewUrlBySessionRef.current[targetSessionId];
-    delete browserHtmlPreviewArtifactIdBySessionRef.current[targetSessionId];
-    if (targetSessionId === sessionId) {
-      setBrowserHtmlPreviewArtifactId(null);
-    }
-  }, [sessionId]);
+  }, [updateSessionBrowserTabs]);
 
-  const handleBrowserPreviewUrlChange = useCallback((value: string) => {
-    setBrowserPreviewUrl(value);
-    if (sessionId) {
-      browserPreviewUrlBySessionRef.current[sessionId] = value;
-      const htmlPreviewUrl = browserHtmlPreviewUrlBySessionRef.current[sessionId];
-      if (htmlPreviewUrl && !isSameBrowserPreviewUrl(value, htmlPreviewUrl)) {
-        clearBrowserHtmlPreviewState(sessionId);
-      }
-    }
-    setBrowserLocalServiceContext(current => {
-      if (!current || !value.trim()) return current;
-      if (normalizeLocalServiceOrigin(value) === current.origin) return current;
-      if (sessionId) {
-        delete browserLocalServiceContextBySessionRef.current[sessionId];
-      }
-      return null;
-    });
-  }, [clearBrowserHtmlPreviewState, sessionId]);
-
-  const handleBrowserPreviewTitleChange = useCallback((value: string) => {
+  const handleBrowserPreviewTitleChange = useCallback((tabId: string, value: string) => {
     const nextTitle = value.trim();
-    setBrowserPreviewTitle(nextTitle);
-    if (sessionId) {
-      if (nextTitle) {
-        browserPreviewTitleBySessionRef.current[sessionId] = nextTitle;
-      } else {
-        delete browserPreviewTitleBySessionRef.current[sessionId];
-      }
-    }
-  }, [sessionId]);
-
-  const clearBrowserPreviewState = useCallback(() => {
-    setBrowserPreviewAddress('');
-    setBrowserPreviewUrl('');
-    setBrowserPreviewTitle('');
-    setBrowserLocalServiceContext(null);
-    if (sessionId) {
-      delete browserPreviewAddressBySessionRef.current[sessionId];
-      delete browserPreviewUrlBySessionRef.current[sessionId];
-      delete browserPreviewTitleBySessionRef.current[sessionId];
-      delete browserLocalServiceContextBySessionRef.current[sessionId];
-      clearBrowserHtmlPreviewState(sessionId);
-    }
-  }, [clearBrowserHtmlPreviewState, sessionId]);
+    updateSessionBrowserTabs(current =>
+      updateBrowserPreviewTab(current, tabId, tab => (
+        tab.title === nextTitle ? tab : { ...tab, title: nextTitle }
+      )),
+    );
+  }, [updateSessionBrowserTabs]);
 
   const handleOpenArtifactFileListTab = useCallback(() => {
     reportArtifactPreviewAction({
@@ -2897,7 +2959,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch(activateArtifactFileListTab({ sessionId }));
   }, [artifactTabsWithArtifacts.length, dispatch, sessionId, setSessionActiveSpecialPreviewTab, setSessionFileListPreviewTabOpen]);
 
-  const handleOpenArtifactBrowserTab = useCallback(() => {
+  const handleOpenArtifactBrowserTab = useCallback((options?: {
+    url?: string;
+    afterTabId?: string;
+    background?: boolean;
+    referrer?: string;
+    reuseBlank?: boolean;
+  }) => {
     reportArtifactPreviewAction({
       actionType: 'panel_tab_open',
       source: 'artifact_panel',
@@ -2906,12 +2974,42 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         tabCount: artifactTabsWithArtifacts.length,
       },
     });
-    setShowArtifactAddMenu(false);
     if (!sessionId) return;
-    setSessionBrowserPreviewTabOpen(true);
+    const normalizedUrl = options?.url?.trim() ?? '';
+    const newTab = createBrowserPreviewTab({
+      address: normalizedUrl,
+      url: normalizedUrl,
+      ...(options?.referrer ? { initialReferrer: options.referrer } : {}),
+    });
+    if (options?.afterTabId) {
+      updateSessionBrowserTabs(current =>
+        insertBrowserPreviewTabAfter(current, {
+          afterTabId: options.afterTabId,
+          tab: newTab,
+          activate: !options.background,
+        }),
+      );
+      if (!options.background) {
+        setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
+        dispatch(activateArtifactBrowserTab({ sessionId }));
+      }
+      return;
+    }
+    updateSessionBrowserTabs(current =>
+      openOrReuseBlankBrowserPreviewTab(current, {
+        tab: newTab,
+        reuseBlank: options?.reuseBlank ?? !normalizedUrl,
+      }).state,
+    );
     setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
     dispatch(activateArtifactBrowserTab({ sessionId }));
-  }, [artifactTabsWithArtifacts.length, dispatch, sessionId, setSessionActiveSpecialPreviewTab, setSessionBrowserPreviewTabOpen]);
+  }, [
+    artifactTabsWithArtifacts.length,
+    dispatch,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    updateSessionBrowserTabs,
+  ]);
 
   const handleOpenArtifactSubagentTab = useCallback(() => {
     reportArtifactPreviewAction({
@@ -2922,7 +3020,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         tabCount: artifactTabsWithArtifacts.length,
       },
     });
-    setShowArtifactAddMenu(false);
     setSelectedSubagent(null);
     if (!sessionId) return;
     setSessionSubagentPreviewTabOpen(true);
@@ -3023,20 +3120,64 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       },
     });
 
-    setShowArtifactAddMenu(false);
-    setSessionBrowserPreviewTabOpen(true);
+    const targetDisplayArtifactId = resolveArtifactIdForDisplay(
+      rawSessionArtifacts,
+      artifact.id,
+      { defaultProjectDirectory: currentSession?.cwd },
+    );
+    const currentState = browserTabsBySessionRef.current[sessionId] ?? EMPTY_SESSION_BROWSER_TABS_STATE;
+    const existingTab = currentState.tabs.find(tab => (
+      tab.htmlPreviewArtifactId
+      && resolveArtifactIdForDisplay(
+        rawSessionArtifacts,
+        tab.htmlPreviewArtifactId,
+        { defaultProjectDirectory: currentSession?.cwd },
+      ) === targetDisplayArtifactId
+    ));
+
+    let targetTabId: string;
+    const previousPreviewSessionId = existingTab?.htmlPreviewSessionId ?? null;
+    if (existingTab) {
+      targetTabId = existingTab.id;
+      updateSessionBrowserTabs(current =>
+        activateBrowserPreviewTab(
+          updateBrowserPreviewTab(current, targetTabId, tab => ({
+            ...tab,
+            localServiceContext: null,
+          })),
+          targetTabId,
+        ),
+      );
+    } else {
+      const pendingTab = createBrowserPreviewTab({
+        address: artifact.filePath,
+        htmlPreviewArtifactId: artifact.id,
+      });
+      let createdTabId = pendingTab.id;
+      updateSessionBrowserTabs(current => {
+        const opened = openOrReuseBlankBrowserPreviewTab(current, {
+          tab: pendingTab,
+          reuseBlank: true,
+        });
+        createdTabId = opened.tabId;
+        return opened.state;
+      });
+      targetTabId = createdTabId;
+    }
+
     setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
-    setSessionBrowserLocalServiceContext(null);
     dispatch(activateArtifactBrowserTab({ sessionId }));
 
-    const requestId = browserHtmlPreviewRequestIdRef.current + 1;
-    browserHtmlPreviewRequestIdRef.current = requestId;
-    const previousPreviewSessionId = browserHtmlPreviewSessionIdBySessionRef.current[sessionId];
+    const requestId = (browserHtmlPreviewRequestIdByTabRef.current[targetTabId] ?? 0) + 1;
+    browserHtmlPreviewRequestIdByTabRef.current[targetTabId] = requestId;
     try {
       const result = await window.electron?.artifact?.createPreviewSession(artifact.filePath);
+      const latestSessionState = browserTabsBySessionRef.current[sessionId] ?? EMPTY_SESSION_BROWSER_TABS_STATE;
+      const tabStillOpen = latestSessionState.tabs.some(tab => tab.id === targetTabId);
       if (
-        browserHtmlPreviewRequestIdRef.current !== requestId ||
-        currentSession?.id !== sessionId
+        browserHtmlPreviewRequestIdByTabRef.current[targetTabId] !== requestId
+        || currentSession?.id !== sessionId
+        || !tabStillOpen
       ) {
         if (result?.success && result.sessionId) {
           void window.electron?.artifact?.destroyPreviewSession(result.sessionId);
@@ -3049,13 +3190,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       if (previousPreviewSessionId && previousPreviewSessionId !== result.sessionId) {
         void window.electron?.artifact?.destroyPreviewSession(previousPreviewSessionId);
       }
-      browserHtmlPreviewArtifactIdBySessionRef.current[sessionId] = artifact.id;
-      browserHtmlPreviewSessionIdBySessionRef.current[sessionId] = result.sessionId;
-      browserHtmlPreviewUrlBySessionRef.current[sessionId] = result.url;
-      setBrowserHtmlPreviewArtifactId(artifact.id);
-      handleBrowserPreviewAddressChange(artifact.filePath);
-      handleBrowserPreviewUrlChange(result.url);
-      handleBrowserPreviewTitleChange('');
+      updateSessionBrowserTabs(current =>
+        updateBrowserPreviewTab(current, targetTabId, tab => ({
+          ...tab,
+          address: artifact.filePath!,
+          url: result.url!,
+          title: '',
+          localServiceContext: null,
+          htmlPreviewArtifactId: artifact.id,
+          htmlPreviewSessionId: result.sessionId!,
+          htmlPreviewUrl: result.url!,
+        })),
+      );
       reportArtifactPreviewAction({
         actionType: 'browser_preview_session_create',
         source: 'artifact_panel',
@@ -3066,7 +3212,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       });
     } catch (error) {
       if (!previousPreviewSessionId) {
-        clearBrowserHtmlPreviewState(sessionId);
+        updateSessionBrowserTabs(current =>
+          updateBrowserPreviewTab(current, targetTabId, tab => ({
+            ...tab,
+            htmlPreviewArtifactId: null,
+            htmlPreviewSessionId: null,
+            htmlPreviewUrl: null,
+          })),
+        );
       }
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: error instanceof Error ? error.message : i18nService.t('artifactSourceLoadFailed'),
@@ -3081,23 +3234,30 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       });
     }
   }, [
-    clearBrowserHtmlPreviewState,
+    currentSession?.cwd,
     currentSession?.id,
     dispatch,
-    handleBrowserPreviewAddressChange,
-    handleBrowserPreviewTitleChange,
-    handleBrowserPreviewUrlChange,
+    rawSessionArtifacts,
     sessionId,
     setSessionActiveSpecialPreviewTab,
-    setSessionBrowserPreviewTabOpen,
-    setSessionBrowserLocalServiceContext,
+    updateSessionBrowserTabs,
   ]);
 
   const handleOpenLocalServiceArtifact = useCallback((artifact: Artifact) => {
+    if (!sessionId) return;
     const url = artifact.url || artifact.content;
     if (!url) return;
     const origin = artifact.localService?.origin || normalizeLocalServiceOrigin(url);
     const projectDirectory = artifact.localService?.projectDirectory?.trim();
+    const localServiceContext: BrowserLocalServiceContext = {
+      artifactId: artifact.id,
+      url,
+      origin,
+      ...(projectDirectory ? { projectDirectory } : {}),
+      ...(artifact.localService?.projectCandidates?.length
+        ? { projectCandidates: artifact.localService.projectCandidates }
+        : {}),
+    };
     reportArtifactPreviewAction({
       actionType: 'open_local_service',
       source: 'artifact_panel',
@@ -3106,25 +3266,53 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         openTarget: 'lobster_browser',
       },
     });
-    handleOpenArtifactBrowserTab();
-    setSessionBrowserLocalServiceContext({
-      artifactId: artifact.id,
-      url,
-      origin,
-      ...(projectDirectory ? { projectDirectory } : {}),
-      ...(artifact.localService?.projectCandidates?.length
-        ? { projectCandidates: artifact.localService.projectCandidates }
-        : {}),
-    });
-    handleBrowserPreviewAddressChange(url);
-    handleBrowserPreviewUrlChange(url);
-    handleBrowserPreviewTitleChange('');
+    const currentState = browserTabsBySessionRef.current[sessionId] ?? EMPTY_SESSION_BROWSER_TABS_STATE;
+    const existingTab = currentState.tabs.find(tab => (
+      tab.localServiceContext?.artifactId === artifact.id
+      || isSameBrowserPreviewUrl(tab.url, url)
+    ));
+    let previewSessionIdToDestroy: string | null = null;
+    if (existingTab) {
+      if (existingTab.htmlPreviewSessionId) {
+        previewSessionIdToDestroy = existingTab.htmlPreviewSessionId;
+      }
+      updateSessionBrowserTabs(current =>
+        activateBrowserPreviewTab(
+          updateBrowserPreviewTab(current, existingTab.id, tab => ({
+            ...tab,
+            address: url,
+            url,
+            title: isSameBrowserPreviewUrl(tab.url, url) ? tab.title : '',
+            localServiceContext,
+            htmlPreviewArtifactId: null,
+            htmlPreviewSessionId: null,
+            htmlPreviewUrl: null,
+          })),
+          existingTab.id,
+        ),
+      );
+    } else {
+      updateSessionBrowserTabs(current =>
+        openOrReuseBlankBrowserPreviewTab(current, {
+          tab: createBrowserPreviewTab({
+            address: url,
+            url,
+            localServiceContext,
+          }),
+          reuseBlank: true,
+        }).state,
+      );
+    }
+    if (previewSessionIdToDestroy) {
+      void window.electron?.artifact?.destroyPreviewSession(previewSessionIdToDestroy);
+    }
+    setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
+    dispatch(activateArtifactBrowserTab({ sessionId }));
   }, [
-    handleBrowserPreviewAddressChange,
-    handleBrowserPreviewTitleChange,
-    handleBrowserPreviewUrlChange,
-    handleOpenArtifactBrowserTab,
-    setSessionBrowserLocalServiceContext,
+    dispatch,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    updateSessionBrowserTabs,
   ]);
 
   const markdownLinkOpener = useCoworkMarkdownLinkOpener({
@@ -3162,10 +3350,262 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setLocalServiceDeploymentRequest(null);
   }, [sessionId]);
 
-  const handleOpenArtifactFileListFromMenu = useCallback(() => {
-    setShowArtifactAddMenu(false);
+  const handleOpenArtifactNewTab = useCallback(() => {
+    if (!sessionId) return;
+    reportArtifactPreviewAction({
+      actionType: 'panel_tab_open',
+      source: 'artifact_panel',
+      params: {
+        tabType: 'new_tab',
+        tabCount: artifactTabsWithArtifacts.length,
+      },
+    });
+    setSessionNewTabPreviewTabOpen(true);
+    setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+    dispatch(activateArtifactNewTab({ sessionId }));
+  }, [artifactTabsWithArtifacts.length, dispatch, sessionId, setSessionActiveSpecialPreviewTab, setSessionNewTabPreviewTabOpen]);
+
+  const handleActivateArtifactNewTab = useCallback(() => {
+    if (!sessionId) return;
+    reportArtifactPreviewAction({
+      actionType: 'panel_tab_switch',
+      source: 'artifact_panel',
+      params: {
+        tabType: 'new_tab',
+        tabCount: artifactTabsWithArtifacts.length,
+      },
+    });
+    setSessionNewTabPreviewTabOpen(true);
+    setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+    dispatch(activateArtifactNewTab({ sessionId }));
+  }, [artifactTabsWithArtifacts.length, dispatch, sessionId, setSessionActiveSpecialPreviewTab, setSessionNewTabPreviewTabOpen]);
+
+  const handleCloseArtifactNewTab = useCallback(() => {
+    const wasActive = !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.NewTab;
+    reportArtifactPreviewAction({
+      actionType: 'panel_tab_close',
+      source: 'artifact_panel',
+      params: {
+        tabType: 'new_tab',
+        wasActive,
+        tabCount: artifactTabsWithArtifacts.length,
+      },
+    });
+    setSessionNewTabPreviewTabOpen(false);
+    if (!sessionId) {
+      dispatch(closePanel(undefined));
+      return;
+    }
+
+    if (!wasActive) return;
+
+    const nextTabId = artifactTabsWithArtifacts[0]?.tab.id;
+    if (nextTabId) {
+      dispatch(activateArtifactPreviewTab({ sessionId, tabId: nextTabId }));
+      return;
+    }
+
+    if (isFileListPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.FileList);
+      dispatch(activateArtifactFileListTab({ sessionId }));
+      return;
+    }
+
+    if (isBrowserPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
+      dispatch(activateArtifactBrowserTab({ sessionId }));
+      return;
+    }
+
+    if (isAgentBrowserPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.AgentBrowser);
+      dispatch(activateArtifactAgentBrowserTab({ sessionId }));
+      return;
+    }
+
+    if (isSubagentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Subagents);
+      dispatch(activateArtifactSubagentTab({ sessionId }));
+      return;
+    }
+
+    if (isUserAttachmentPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.UserAttachment);
+      dispatch(activateArtifactUserAttachmentTab({ sessionId }));
+      return;
+    }
+
+    dispatch(closePanel({ sessionId }));
+  }, [
+    activeArtifactPreviewTab,
+    activeSpecialPreviewTab,
+    artifactTabsWithArtifacts,
+    dispatch,
+    isAgentBrowserPreviewTabOpen,
+    isBrowserPreviewTabOpen,
+    isFileListPreviewTabOpen,
+    isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    setSessionNewTabPreviewTabOpen,
+  ]);
+
+  const handleNewTabSelectArtifact = useCallback((artifactId: string) => {
+    if (!sessionId) return;
+    setSessionNewTabPreviewTabOpen(false);
+    const target = sessionArtifacts.find(item => item.id === artifactId);
+    if (target?.type === ArtifactTypeValue.Html && target.filePath) {
+      void handleOpenHtmlFileInBrowser(target);
+      return;
+    }
+    if (target?.type === ArtifactTypeValue.LocalService) {
+      handleOpenLocalServiceArtifact(target);
+      return;
+    }
+    dispatch(openArtifactPreviewTab({ sessionId, artifactId }));
+  }, [
+    dispatch,
+    handleOpenHtmlFileInBrowser,
+    handleOpenLocalServiceArtifact,
+    sessionArtifacts,
+    sessionId,
+    setSessionNewTabPreviewTabOpen,
+  ]);
+
+  const openWorkspaceFileInPanel = useCallback(async (filePath: string): Promise<boolean> => {
+    if (!sessionId || !filePath.trim()) return false;
+    const target = resolveWorkspaceFileOpenTarget(filePath, sessionArtifacts, {
+      sessionId,
+      cwd: currentSession?.cwd,
+    });
+    if (!target || target.kind === WorkspaceFileOpenTargetKind.System) {
+      return false;
+    }
+
+    const showArtifact = (artifact: Artifact) => {
+      if (artifact.type === ArtifactTypeValue.Html && artifact.filePath) {
+        handleOpenHtmlFileInBrowser(artifact);
+        return;
+      }
+      dispatch(openArtifactPreviewTab({ sessionId, artifactId: artifact.id }));
+    };
+
+    if (target.kind === WorkspaceFileOpenTargetKind.Existing) {
+      showArtifact(target.artifact);
+      return true;
+    }
+
+    const loaded = await loadWorkspaceFileArtifact(target, currentSession?.cwd);
+    if (!loaded) return false;
+    dispatch(addLinkedFileArtifact({ sessionId, artifact: loaded }));
+    showArtifact(loaded);
+    return true;
+  }, [currentSession?.cwd, dispatch, handleOpenHtmlFileInBrowser, sessionArtifacts, sessionId]);
+
+  const handleOpenWorkspaceFilePath = useCallback(async (filePath: string) => {
+    if (!filePath.trim()) return;
+    const opened = await openWorkspaceFileInPanel(filePath);
+    if (opened) return;
+    await openWorkspaceDirectoryInSystem(filePath);
+  }, [openWorkspaceFileInPanel]);
+
+  const handleNewTabOpenLocalFilePath = useCallback(async (filePath: string) => {
+    if (!filePath.trim()) return;
+    const opened = await openWorkspaceFileInPanel(filePath);
+    if (opened) {
+      setSessionNewTabPreviewTabOpen(false);
+      return;
+    }
+    await openWorkspaceDirectoryInSystem(filePath);
+  }, [openWorkspaceFileInPanel, setSessionNewTabPreviewTabOpen]);
+
+  const handleNewTabOpenLocalFilePicker = useCallback(async () => {
+    const picked = await pickLocalFileForPreview(i18nService.t('artifactNewTabOpenLocalFile'));
+    if (!picked) return;
+    await handleNewTabOpenLocalFilePath(picked);
+  }, [handleNewTabOpenLocalFilePath]);
+
+  const handleNewTabCreateBlankDocument = useCallback(async (kind: BlankDocumentKind) => {
+    if (!sessionId) return;
+    const baseNameKeyByKind: Record<BlankDocumentKind, string> = {
+      [BlankDocumentKind.Word]: 'artifactBlankWordName',
+      [BlankDocumentKind.Slides]: 'artifactBlankSlidesName',
+      [BlankDocumentKind.Sheet]: 'artifactBlankSheetName',
+      [BlankDocumentKind.Markdown]: 'artifactBlankMarkdownName',
+    };
+    const result = await createBlankWorkspaceDocument({
+      sessionId,
+      cwd: currentSession?.cwd,
+      kind,
+      baseName: i18nService.t(baseNameKeyByKind[kind]),
+    });
+    if (!result.success) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: result.error || i18nService.t('artifactCreateBlankDocumentFailed'),
+      }));
+      return;
+    }
+    if (kind === BlankDocumentKind.Word) {
+      requestOfficeAutoFocus(result.filePath);
+    }
+    await handleNewTabOpenLocalFilePath(result.filePath);
+  }, [currentSession?.cwd, handleNewTabOpenLocalFilePath, sessionId]);
+
+  const handleNewTabOpenFileList = useCallback(() => {
+    setSessionNewTabPreviewTabOpen(false);
     handleOpenArtifactFileListTab();
-  }, [handleOpenArtifactFileListTab]);
+  }, [handleOpenArtifactFileListTab, setSessionNewTabPreviewTabOpen]);
+
+  const handleNewTabOpenBrowserUrl = useCallback((url?: string) => {
+    setSessionNewTabPreviewTabOpen(false);
+    const trimmed = url?.trim();
+    if (trimmed) {
+      const localService = findLocalServiceArtifactForUrl(trimmed, sessionArtifacts);
+      if (localService) {
+        handleOpenLocalServiceArtifact({ ...localService, url: trimmed, content: trimmed });
+        return;
+      }
+      handleOpenArtifactBrowserTab({ url: trimmed, reuseBlank: true });
+      return;
+    }
+    handleOpenArtifactBrowserTab();
+  }, [
+    handleOpenArtifactBrowserTab,
+    handleOpenLocalServiceArtifact,
+    sessionArtifacts,
+    setSessionNewTabPreviewTabOpen,
+  ]);
+
+  const handleNewTabOpenSubagents = useCallback(() => {
+    setSessionNewTabPreviewTabOpen(false);
+    handleOpenArtifactSubagentTab();
+  }, [handleOpenArtifactSubagentTab, setSessionNewTabPreviewTabOpen]);
+
+  const handleNewTabOpenWorkspaceChanges = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const review = await readWorkspaceChangesReview(sessionId);
+      if (!review || (!review.content && !(review.workspaceChanges?.files?.length))) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('workspaceDiffScopeEmpty'),
+        }));
+        return;
+      }
+      const artifact: Artifact = {
+        ...review,
+        sessionId,
+        messageId: '',
+      };
+      dispatch(addLinkedFileArtifact({ sessionId, artifact }));
+      setSessionNewTabPreviewTabOpen(false);
+      dispatch(openArtifactPreviewTab({ sessionId, artifactId: artifact.id }));
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: error instanceof Error ? error.message : i18nService.t('workspaceDiffScopeUnavailable'),
+      }));
+    }
+  }, [dispatch, sessionId, setSessionNewTabPreviewTabOpen]);
 
   const handleCloseArtifactFileListTab = useCallback(() => {
     const wasActive = !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.FileList;
@@ -3216,6 +3656,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isNewTabPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -3224,6 +3670,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch,
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isSubagentPreviewTabOpen,
     isUserAttachmentPreviewTabOpen,
     sessionId,
@@ -3231,7 +3678,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionFileListPreviewTabOpen,
   ]);
 
-  const handleActivateArtifactBrowserTab = useCallback(() => {
+  const handleActivateArtifactBrowserTab = useCallback((tabId?: string) => {
     if (!sessionId) return;
     reportArtifactPreviewAction({
       actionType: 'panel_tab_switch',
@@ -3241,10 +3688,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         tabCount: artifactTabsWithArtifacts.length,
       },
     });
-    setSessionBrowserPreviewTabOpen(true);
+    updateSessionBrowserTabs(current => activateBrowserPreviewTab(current, tabId));
     setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
     dispatch(activateArtifactBrowserTab({ sessionId }));
-  }, [artifactTabsWithArtifacts.length, dispatch, sessionId, setSessionActiveSpecialPreviewTab, setSessionBrowserPreviewTabOpen]);
+  }, [
+    artifactTabsWithArtifacts.length,
+    dispatch,
+    sessionId,
+    setSessionActiveSpecialPreviewTab,
+    updateSessionBrowserTabs,
+  ]);
 
   const handleActivateArtifactAgentBrowserTab = useCallback(() => {
     if (!sessionId) return;
@@ -3268,6 +3721,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setSessionAgentBrowserPreviewTabOpen,
     setSessionAgentBrowserUnread,
   ]);
+
+  const handleNewTabOpenAgentBrowser = useCallback(() => {
+    setSessionNewTabPreviewTabOpen(false);
+    handleActivateArtifactAgentBrowserTab();
+  }, [handleActivateArtifactAgentBrowserTab, setSessionNewTabPreviewTabOpen]);
 
   const handleActivateArtifactSubagentTab = useCallback(() => {
     if (!sessionId) return;
@@ -3293,8 +3751,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     subagents.length,
   ]);
 
-  const handleCloseArtifactBrowserTab = useCallback(() => {
-    const wasActive = !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Browser;
+  const handleCloseArtifactBrowserTab = useCallback((tabId: string) => {
+    const currentState = sessionId
+      ? browserTabsBySessionRef.current[sessionId] ?? EMPTY_SESSION_BROWSER_TABS_STATE
+      : EMPTY_SESSION_BROWSER_TABS_STATE;
+    const currentActiveBrowserTabId = getActiveBrowserPreviewTab(currentState)?.id ?? null;
+    const wasActive = !activeArtifactPreviewTab
+      && activeSpecialPreviewTab === ArtifactSpecialTab.Browser
+      && currentActiveBrowserTabId === tabId;
     reportArtifactPreviewAction({
       actionType: 'panel_tab_close',
       source: 'artifact_panel',
@@ -3304,14 +3768,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         tabCount: artifactTabsWithArtifacts.length,
       },
     });
-    setSessionBrowserPreviewTabOpen(false);
-    clearBrowserPreviewState();
     if (!sessionId) {
       dispatch(closePanel(undefined));
       return;
     }
 
+    const { state: nextState, closedTab, nextActiveTabId } = closeBrowserPreviewTab(currentState, tabId);
+    browserTabsBySessionRef.current[sessionId] = nextState;
+    setBrowserTabsState(nextState);
+    if (closedTab?.htmlPreviewSessionId) {
+      void window.electron?.artifact?.destroyPreviewSession(closedTab.htmlPreviewSessionId);
+    }
+    delete browserHtmlPreviewRequestIdByTabRef.current[tabId];
+
     if (!wasActive) return;
+
+    if (nextActiveTabId) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.Browser);
+      dispatch(activateArtifactBrowserTab({ sessionId }));
+      return;
+    }
 
     const nextTabId = artifactTabsWithArtifacts[0]?.tab.id;
     if (nextTabId) {
@@ -3343,20 +3819,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isNewTabPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
     activeSpecialPreviewTab,
     artifactTabsWithArtifacts,
     dispatch,
-    clearBrowserPreviewState,
     isAgentBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isSubagentPreviewTabOpen,
     isUserAttachmentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
-    setSessionBrowserPreviewTabOpen,
   ]);
 
   const handleCloseArtifactAgentBrowserTab = useCallback(() => {
@@ -3404,6 +3885,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       dispatch(activateArtifactUserAttachmentTab({ sessionId }));
       return;
     }
+    if (isNewTabPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
+      return;
+    }
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -3412,6 +3898,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isSubagentPreviewTabOpen,
     isUserAttachmentPreviewTabOpen,
     sessionId,
@@ -3470,6 +3957,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isNewTabPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
+      return;
+    }
+
     dispatch(closePanel({ sessionId }));
   }, [
     activeArtifactPreviewTab,
@@ -3479,6 +3972,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isUserAttachmentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
@@ -3549,6 +4043,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
+    if (isNewTabPreviewTabOpen) {
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
+      return;
+    }
 
     dispatch(closePanel({ sessionId }));
   }, [
@@ -3559,6 +4058,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isSubagentPreviewTabOpen,
     sessionId,
     setSessionActiveSpecialPreviewTab,
@@ -3609,8 +4109,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch(activateArtifactPreviewTab({ sessionId, tabId }));
   }, [artifactTabsWithArtifacts, dispatch, sessionId]);
 
+  const handleStartArtifactTabRename = useCallback((tabId: string) => {
+    if (!sessionId) return;
+    const item = artifactTabsWithArtifacts.find(({ tab }) => tab.id === tabId);
+    if (!item || !canRenameArtifactFile(item.artifact)) return;
+    if (activeArtifactPreviewTab?.id !== tabId) {
+      dispatch(activateArtifactPreviewTab({ sessionId, tabId }));
+    }
+    setRenamingArtifactTabId(tabId);
+  }, [activeArtifactPreviewTab?.id, artifactTabsWithArtifacts, dispatch, sessionId]);
+
+  const handleCommitArtifactTabRename = useCallback(async (artifact: Artifact, nextStem: string) => {
+    if (!sessionId) return false;
+    return commitArtifactFileRename({
+      sessionId,
+      artifact,
+      nextStem,
+      dispatch,
+    });
+  }, [dispatch, sessionId]);
+
   const handleCloseArtifactTab = useCallback((tabId: string) => {
     if (!sessionId) return;
+    setRenamingArtifactTabId(current => (current === tabId ? null : current));
     const artifact = artifactTabsWithArtifacts.find(item => item.tab.id === tabId)?.artifact;
     const remainingTabs = artifactTabsWithArtifacts.filter(({ tab }) => tab.id !== tabId);
     reportArtifactPreviewAction({
@@ -3625,6 +4146,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch(closeArtifactPreviewTab({ sessionId, tabId }));
     if (
       remainingTabs.length === 0
+      && !isNewTabPreviewTabOpen
       && !isFileListPreviewTabOpen
       && !isBrowserPreviewTabOpen
       && !isAgentBrowserPreviewTabOpen
@@ -3639,15 +4161,28 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isSubagentPreviewTabOpen,
     isUserAttachmentPreviewTabOpen,
     sessionId,
   ]);
 
   const artifactTabActionTargets: ArtifactTabActionTarget[] = [
+    ...(isFileListPreviewTabOpen ? [{
+      id: ArtifactSpecialTab.FileList,
+      active: !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.FileList,
+      activate: handleActivateArtifactFileListTab,
+      close: handleCloseArtifactFileListTab,
+    }] : []),
+    ...browserTabs.map(tab => ({
+      id: tab.id,
+      active: !activeArtifactPreviewTab
+        && activeSpecialPreviewTab === ArtifactSpecialTab.Browser
+        && activeBrowserTabId === tab.id,
+      activate: () => handleActivateArtifactBrowserTab(tab.id),
+      close: () => handleCloseArtifactBrowserTab(tab.id),
+    })),
     ...([
-      [ArtifactSpecialTab.FileList, isFileListPreviewTabOpen, handleActivateArtifactFileListTab, handleCloseArtifactFileListTab],
-      [ArtifactSpecialTab.Browser, isBrowserPreviewTabOpen, handleActivateArtifactBrowserTab, handleCloseArtifactBrowserTab],
       [ArtifactSpecialTab.AgentBrowser, isAgentBrowserPreviewTabOpen, handleActivateArtifactAgentBrowserTab, handleCloseArtifactAgentBrowserTab],
       [ArtifactSpecialTab.Subagents, isSubagentPreviewTabOpen, handleActivateArtifactSubagentTab, handleCloseArtifactSubagentTab],
       [ArtifactSpecialTab.UserAttachment, isUserAttachmentPreviewTabOpen, handleActivateArtifactUserAttachmentTab, handleCloseArtifactUserAttachmentTab],
@@ -3658,6 +4193,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       id: tab.id, active: tab.id === activeArtifactPreviewTab?.id,
       activate: () => handleActivateArtifactTab(tab.id), close: () => handleCloseArtifactTab(tab.id),
     })),
+    ...(isNewTabPreviewTabOpen ? [{
+      id: ArtifactSpecialTab.NewTab,
+      active: !activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.NewTab,
+      activate: handleActivateArtifactNewTab,
+      close: handleCloseArtifactNewTab,
+    }] : []),
   ];
 
   const handleToggleArtifactPanel = useCallback(() => {
@@ -3670,7 +4211,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       },
     });
     if (isPanelOpen) {
-      setShowArtifactAddMenu(false);
       if (sessionId && autoPreviewPendingTurnId) {
         markAutoPreviewTurnHandled(sessionId, autoPreviewPendingTurnId);
       }
@@ -3690,14 +4230,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     if (
       artifactTabsWithArtifacts.length === 0
+      && !isNewTabPreviewTabOpen
       && !isFileListPreviewTabOpen
       && !isBrowserPreviewTabOpen
       && !isAgentBrowserPreviewTabOpen
       && !isSubagentPreviewTabOpen
+      && !isUserAttachmentPreviewTabOpen
     ) {
-      setSessionFileListPreviewTabOpen(true);
-      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.FileList);
-      dispatch(activateArtifactFileListTab({ sessionId }));
+      setSessionNewTabPreviewTabOpen(true);
+      setSessionActiveSpecialPreviewTab(ArtifactSpecialTab.NewTab);
+      dispatch(activateArtifactNewTab({ sessionId }));
       return;
     }
 
@@ -3711,12 +4253,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     isSubagentPreviewTabOpen,
+    isUserAttachmentPreviewTabOpen,
     isPanelOpen,
     markAutoPreviewTurnHandled,
     sessionId,
     setSessionActiveSpecialPreviewTab,
-    setSessionFileListPreviewTabOpen,
+    setSessionNewTabPreviewTabOpen,
   ]);
 
   useEffect(() => {
@@ -3725,45 +4269,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       window.removeEventListener(CoworkUiEvent.ShortcutToggleArtifacts, handleToggleArtifactPanel);
     };
   }, [handleToggleArtifactPanel]);
-
-  const handleToggleArtifactAddMenu = useCallback(() => {
-    setShowArtifactAddMenu(open => {
-      const nextOpen = !open;
-      reportArtifactPreviewAction({
-        actionType: 'panel_add_menu_toggle',
-        source: 'artifact_panel',
-        params: {
-          targetOpen: nextOpen,
-          tabCount: artifactTabsWithArtifacts.length,
-        },
-      });
-      return nextOpen;
-    });
-  }, [artifactTabsWithArtifacts.length]);
-
-  useLayoutEffect(() => {
-    if (!showArtifactAddMenu) {
-      setArtifactAddMenuPosition(null);
-      return undefined;
-    }
-
-    const updateMenuPosition = () => {
-      const rect = artifactAddButtonRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setArtifactAddMenuPosition({
-        left: Math.round(Math.max(8, Math.min(window.innerWidth - 184, rect.right - 176))),
-        top: Math.round(rect.bottom + 6),
-      });
-    };
-
-    updateMenuPosition();
-    window.addEventListener('resize', updateMenuPosition);
-    window.addEventListener('scroll', updateMenuPosition, true);
-    return () => {
-      window.removeEventListener('resize', updateMenuPosition);
-      window.removeEventListener('scroll', updateMenuPosition, true);
-    };
-  }, [showArtifactAddMenu]);
 
   const updateArtifactTabsScrollState = useCallback(() => {
     const element = artifactTabsScrollRef.current;
@@ -3811,11 +4316,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     };
   }, [
     activeArtifactPreviewTab?.id,
+    activeBrowserTabId,
     activeSpecialPreviewTab,
+    browserTabs.length,
     isArtifactPanelVisible,
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     shouldPinArtifactAddTab,
     updateArtifactTabsScrollState,
   ]);
@@ -3845,42 +4353,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     };
   }, [
     activeArtifactPreviewTab?.id,
+    activeBrowserTabId,
     activeSpecialPreviewTab,
     artifactPanelMaxWidth,
     artifactPanelMinWidth,
     artifactTabsWithArtifacts.length,
+    browserTabs.length,
     isArtifactPanelVisible,
     isAgentBrowserPreviewTabOpen,
     isBrowserPreviewTabOpen,
     isFileListPreviewTabOpen,
+    isNewTabPreviewTabOpen,
     panelWidth,
     updateArtifactTabsScrollState,
   ]);
-
-  useEffect(() => {
-    if (!showArtifactAddMenu) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (artifactAddMenuRef.current?.contains(target) || artifactAddButtonRef.current?.contains(target)) {
-        return;
-      }
-      setShowArtifactAddMenu(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setShowArtifactAddMenu(false);
-      }
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [showArtifactAddMenu]);
 
   useEffect(() => {
     if (!sessionId || !currentSession?.messages?.length) return;
@@ -4085,7 +4571,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // Cleanup nav timers on unmount
   useEffect(() => {
     return () => {
-      if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+      railNavigationRequestIdRef.current += 1;
+      cancelRailNavigationSettleRef.current?.();
+      cancelRailNavigationSettleRef.current = null;
       if (forcedRailTurnReleaseTimerRef.current) clearTimeout(forcedRailTurnReleaseTimerRef.current);
       clearScrollToBottomSettleTimers();
     };
@@ -4096,14 +4584,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsScrollable(false);
     setCurrentRailIndex(-1);
     currentRailIndexRef.current = -1;
+    railNavigationRequestIdRef.current += 1;
+    cancelRailNavigationSettleRef.current?.();
+    cancelRailNavigationSettleRef.current = null;
     isNavigatingRef.current = false;
     scrollToBottomIntentRef.current = false;
     userDetachedFromBottomRef.current = false;
     clearScrollToBottomSettleTimers();
     turnElsCacheRef.current = [];
     loadedRailRangeRef.current = null;
-    isLoadingRailTargetRef.current = false;
-    if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     if (forcedRailTurnReleaseTimerRef.current) clearTimeout(forcedRailTurnReleaseTimerRef.current);
     forcedRailTurnReleaseTimerRef.current = null;
     setForcedRailTurnIndex(null);
@@ -4605,7 +5094,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const nextShouldAutoScroll = shouldAutoScrollForPosition(
       distanceToBottom,
       userDetachedFromBottomRef.current,
-      conversationSearchViewportLockedRef.current || !hasLoadedSessionEnd,
+      conversationSearchViewportLockedRef.current || !hasLoadedSessionEnd || isNavigatingRef.current,
     );
     if (userDetachedFromBottomRef.current && nextShouldAutoScroll) {
       userDetachedFromBottomRef.current = false;
@@ -4620,8 +5109,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!scrollable) return;
 
     const isSearchNavigationActive = conversationSearchPaginationLockRef.current !== null;
+    const isPaginationLocked = isSearchNavigationActive || isNavigatingRef.current;
     let requestedNewerMessages = false;
-    if (!isSearchNavigationActive && shouldLoadNewerConversationMessages(
+    if (!isPaginationLocked && shouldLoadNewerConversationMessages(
       loadedMessageOffset,
       loadedMessageCount,
       totalMessageCount,
@@ -4649,7 +5139,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     // Load older messages when scrolled near the top
     if (
-      !isSearchNavigationActive
+      !isPaginationLocked
       && !requestedNewerMessages
       && !isLoadingNewerMessagesRef.current
       && container.scrollTop <= 80
@@ -4766,6 +5256,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       markConversationSearchViewportAsManual();
       clearConversationSearchHighlights();
     }
+    railNavigationRequestIdRef.current += 1;
+    cancelRailNavigationSettleRef.current?.();
+    cancelRailNavigationSettleRef.current = null;
+    isNavigatingRef.current = false;
     const requestId = ++scrollToBottomRequestRef.current;
     const scrollLoadedWindowToBottom = () => {
       if (requestId !== scrollToBottomRequestRef.current) return;
@@ -4966,13 +5460,31 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       },
     });
 
+    const requestId = ++railNavigationRequestIdRef.current;
+    const isRequestCurrent = (): boolean => railNavigationRequestIdRef.current === requestId;
+    cancelRailNavigationSettleRef.current?.();
+    cancelRailNavigationSettleRef.current = null;
+    scrollToBottomRequestRef.current += 1;
+    clearScrollToBottomSettleTimers();
+    scrollToBottomIntentRef.current = false;
+    markConversationSearchViewportAsManual();
+
     const isNavigatingToLastRailItem = railIndex >= railItemCountRef.current - 1;
     if (!isNavigatingToLastRailItem) {
-      scrollToBottomIntentRef.current = false;
+      userDetachedFromBottomRef.current = true;
       updateShouldAutoScroll(false);
     }
 
-    const container = scrollContainerRef.current;
+    isNavigatingRef.current = true;
+    currentRailIndexRef.current = railIndex;
+    setCurrentRailIndex(railIndex);
+
+    const releaseNavigationLock = (): void => {
+      if (!isRequestCurrent()) return;
+      cancelRailNavigationSettleRef.current = null;
+      isNavigatingRef.current = false;
+    };
+
     const forceRenderRailTurn = (turnIndex: number): void => {
       if (turnIndex < 0) return;
       setForcedRailTurnIndex(turnIndex);
@@ -4985,122 +5497,262 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       }, RAIL_TARGET_RENDER_RELEASE_DELAY);
     };
 
-    const scrollToRailTarget = (targetRailIndex: number, targetItem: RailItem, requireMessageTarget = false): boolean => {
+    const findRailMessageElement = (
+      latestContainer: HTMLDivElement,
+      messageId: string | null,
+    ): HTMLElement | null => (
+      messageId
+        ? latestContainer.querySelector<HTMLElement>(`[data-rail-message-id="${CSS.escape(messageId)}"]`)
+        : null
+    );
+
+    const findLoadedTurnElement = (
+      latestContainer: HTMLDivElement,
+      targetTurnIdx: number,
+    ): HTMLElement | null => {
+      if (targetTurnIdx < 0) return null;
+      return latestContainer.querySelector<HTMLElement>(`[data-turn-index="${targetTurnIdx}"]`)
+        ?? turnElsCacheRef.current[targetTurnIdx]
+        ?? null;
+    };
+
+    const findLatestRailTarget = (
+      targetRailIndex: number,
+      fallbackItem: RailItem,
+    ): { resolvedIndex: number; resolvedItem: RailItem } => {
+      const latestRailItems = railItemsRef.current;
+      if (fallbackItem.messageId) {
+        const matchedIndex = latestRailItems.findIndex(
+          candidate => candidate.messageId === fallbackItem.messageId,
+        );
+        if (matchedIndex >= 0) {
+          return { resolvedIndex: matchedIndex, resolvedItem: latestRailItems[matchedIndex] };
+        }
+      }
+      const indexedItem = latestRailItems[targetRailIndex];
+      if (indexedItem) {
+        return { resolvedIndex: targetRailIndex, resolvedItem: indexedItem };
+      }
+      return { resolvedIndex: targetRailIndex, resolvedItem: fallbackItem };
+    };
+
+    const scrollAndSettleElement = (
+      targetRailIndex: number,
+      targetItem: RailItem,
+      targetElement: HTMLElement,
+      crossWindow: boolean,
+    ): boolean => {
       const latestContainer = scrollContainerRef.current;
       if (!latestContainer) return false;
 
-      const messageEl = targetItem.messageId
-        ? latestContainer.querySelector<HTMLElement>(`[data-rail-message-id="${CSS.escape(targetItem.messageId)}"]`)
-        : null;
-      if (messageEl) {
-        const decision = getRailNavigationDecision(latestContainer, messageEl);
-        if (decision.behavior === 'auto') {
-          logRailNavigationDiagnostic(
-            `rail navigation used instant scroll for item ${targetRailIndex}; reason=${decision.reason}; distance=${Math.round(decision.distance)}px; threshold=${Math.round(decision.threshold)}px.`,
-          );
-        }
-        messageEl.scrollIntoView({ behavior: decision.behavior, block: 'start' });
-        return true;
+      const decision = crossWindow
+        ? { behavior: 'auto' as const, distance: 0, threshold: 0, reason: 'long_distance' as const }
+        : getRailNavigationDecision(latestContainer, targetElement);
+      if (decision.behavior === 'auto') {
+        logRailNavigationDiagnostic(
+          `rail navigation used instant scroll for item ${targetRailIndex}; reason=${crossWindow ? 'cross_window' : decision.reason}; distance=${Math.round(decision.distance)}px; threshold=${Math.round(decision.threshold)}px.`,
+        );
       }
 
-      if (requireMessageTarget) {
-        return false;
-      }
+      alignRailTargetInContainer(
+        latestContainer,
+        targetElement.getBoundingClientRect(),
+        decision.behavior,
+        undefined,
+        0,
+      );
 
-      const el = messageEl
-        ?? latestContainer.querySelector<HTMLElement>(`[data-rail-index="${targetRailIndex}"]`);
-      if (el) {
-        const decision = getRailNavigationDecision(latestContainer, el);
-        if (decision.behavior === 'auto') {
-          logRailNavigationDiagnostic(
-            `rail navigation used instant scroll for item ${targetRailIndex}; reason=${decision.reason}; distance=${Math.round(decision.distance)}px; threshold=${Math.round(decision.threshold)}px.`,
-          );
-        }
-        el.scrollIntoView({ behavior: decision.behavior, block: 'start' });
-        return true;
-      }
-
-      const targetTurnIdx = targetItem.turnIndex;
-      if (targetTurnIdx >= 0) {
-        // Fallback: scroll to the turn element (always in DOM)
-        const turnEls = turnElsCacheRef.current;
-        if (targetTurnIdx < turnEls.length) {
-          const targetEl = turnEls[targetTurnIdx];
-          const decision = getRailNavigationDecision(latestContainer, targetEl);
-          if (decision.behavior === 'auto') {
-            logRailNavigationDiagnostic(
-              `rail navigation used instant fallback scroll for item ${targetRailIndex}; reason=${decision.reason}; distance=${Math.round(decision.distance)}px; threshold=${Math.round(decision.threshold)}px.`,
-            );
-          }
-          targetEl.scrollIntoView({ behavior: decision.behavior, block: 'start' });
-          return true;
-        } else {
-          logRailNavigationDiagnostic(`rail navigation skipped item ${targetRailIndex} because target turn ${targetTurnIdx} is not mounted.`);
-        }
-      } else {
-        logRailNavigationDiagnostic(`rail navigation skipped item ${targetRailIndex} because no loaded target was found.`);
-      }
-      return false;
+      cancelRailNavigationSettleRef.current?.();
+      cancelRailNavigationSettleRef.current = scheduleRailNavigationSettle({
+        isCurrent: isRequestCurrent,
+        getContainer: () => scrollContainerRef.current,
+        getContentElement: () => conversationContentElementRef.current,
+        getTargetRect: () => {
+          const currentContainer = scrollContainerRef.current;
+          if (!currentContainer) return null;
+          const { resolvedItem } = findLatestRailTarget(targetRailIndex, targetItem);
+          const currentElement = findRailMessageElement(currentContainer, resolvedItem.messageId)
+            ?? findLoadedTurnElement(currentContainer, resolvedItem.turnIndex);
+          return currentElement ? currentElement.getBoundingClientRect() : null;
+        },
+        allowContinuousCorrection: decision.behavior === 'auto',
+        onRelease: releaseNavigationLock,
+      });
+      return true;
     };
 
-    const scrollToRenderedRailTarget = (targetRailIndex: number, fallbackItem: RailItem, attempt = 0): void => {
-      const latestRailItems = railItemsRef.current;
-      const latestItem = latestRailItems[targetRailIndex] ?? fallbackItem;
-      if (latestItem.turnIndex >= 0) {
-        forceRenderRailTurn(latestItem.turnIndex);
+    const scrollToRenderedRailTarget = (
+      targetRailIndex: number,
+      fallbackItem: RailItem,
+      crossWindow: boolean,
+      attempt = 0,
+    ): void => {
+      if (!isRequestCurrent()) return;
+      const { resolvedIndex, resolvedItem } = findLatestRailTarget(targetRailIndex, fallbackItem);
+      if (resolvedIndex !== currentRailIndexRef.current && resolvedIndex >= 0) {
+        currentRailIndexRef.current = resolvedIndex;
+        setCurrentRailIndex(resolvedIndex);
+      }
+      if (resolvedItem.turnIndex >= 0) {
+        forceRenderRailTurn(resolvedItem.turnIndex);
       }
 
       requestAnimationFrame(() => {
+        if (!isRequestCurrent()) return;
         requestAnimationFrame(() => {
-          if (scrollToRailTarget(targetRailIndex, latestItem, true)) return;
+          if (!isRequestCurrent()) return;
+          const latestContainer = scrollContainerRef.current;
+          if (!latestContainer) {
+            releaseNavigationLock();
+            return;
+          }
+          const latestTarget = findLatestRailTarget(resolvedIndex, resolvedItem);
+          const messageEl = findRailMessageElement(latestContainer, latestTarget.resolvedItem.messageId);
+          if (messageEl && scrollAndSettleElement(latestTarget.resolvedIndex, latestTarget.resolvedItem, messageEl, crossWindow)) {
+            return;
+          }
           if (attempt < RAIL_TARGET_SCROLL_RETRY_LIMIT) {
-            scrollToRenderedRailTarget(targetRailIndex, latestItem, attempt + 1);
+            scrollToRenderedRailTarget(latestTarget.resolvedIndex, latestTarget.resolvedItem, crossWindow, attempt + 1);
             return;
           }
           logRailNavigationDiagnostic(
-            `rail navigation could not find rendered message for item ${targetRailIndex} after ${attempt + 1} attempts; falling back to turn container.`,
+            `rail navigation could not find rendered message for item ${latestTarget.resolvedIndex} after ${attempt + 1} attempts; falling back to turn container.`,
           );
-          scrollToRailTarget(targetRailIndex, latestItem);
+          const turnEl = findLoadedTurnElement(latestContainer, latestTarget.resolvedItem.turnIndex);
+          if (turnEl && scrollAndSettleElement(latestTarget.resolvedIndex, latestTarget.resolvedItem, turnEl, crossWindow)) {
+            return;
+          }
+          logRailNavigationDiagnostic(
+            `rail navigation skipped item ${latestTarget.resolvedIndex} because no loaded target was found.`,
+          );
+          releaseNavigationLock();
         });
       });
     };
 
-    isNavigatingRef.current = true;
-    if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
-    navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
+    const loadWindowAndScroll = async (
+      targetSessionId: string,
+      targetRailIndex: number,
+      targetItem: RailItem,
+    ): Promise<void> => {
+      try {
+        let activeItem = targetItem;
+        let loaded = await coworkService.loadMessageWindowAroundIndex(
+          targetSessionId,
+          activeItem.absoluteIndex,
+          {
+            pageSize: RAIL_NAVIGATION_WINDOW_PAGE_SIZE,
+            leadingContext: RAIL_NAVIGATION_WINDOW_LEADING_CONTEXT,
+            expectedMessageId: activeItem.messageId ?? undefined,
+            isRequestCurrent,
+          },
+        );
+        if (!isRequestCurrent()) return;
 
-    if (container && scrollToRailTarget(railIndex, item, true)) {
-      currentRailIndexRef.current = railIndex;
-      setCurrentRailIndex(railIndex);
-      return;
-    }
+        // If the cached rail offset drifted and missed the target message, refresh the
+        // rail index once so we jump to the exact persisted offset.
+        if (!loaded && activeItem.messageId) {
+          const refreshedIndex = await coworkService.loadSessionMessageRailIndex(targetSessionId);
+          if (!isRequestCurrent()) return;
+          const refreshedEntry = refreshedIndex.find(entry => entry.messageId === activeItem.messageId);
+          if (refreshedEntry) {
+            activeItem = {
+              ...activeItem,
+              absoluteIndex: refreshedEntry.messageOffset,
+            };
+            loaded = await coworkService.loadMessageWindowAroundIndex(
+              targetSessionId,
+              refreshedEntry.messageOffset,
+              {
+                pageSize: RAIL_NAVIGATION_WINDOW_PAGE_SIZE,
+                leadingContext: RAIL_NAVIGATION_WINDOW_LEADING_CONTEXT,
+                expectedMessageId: refreshedEntry.messageId,
+                isRequestCurrent,
+              },
+            );
+          }
+        }
 
-    if (container && item.turnIndex >= 0) {
-      scrollToRenderedRailTarget(railIndex, item);
-      currentRailIndexRef.current = railIndex;
-      setCurrentRailIndex(railIndex);
-      return;
-    }
+        if (!isRequestCurrent()) return;
+        if (!loaded) {
+          releaseNavigationLock();
+          return;
+        }
+        scrollToRenderedRailTarget(targetRailIndex, activeItem, true);
+      } catch (error) {
+        console.warn('[CoworkSessionDetail] Failed to load target message window for rail navigation:', error);
+        releaseNavigationLock();
+      }
+    };
 
-    if (container && scrollToRailTarget(railIndex, item)) {
-      currentRailIndexRef.current = railIndex;
-      setCurrentRailIndex(railIndex);
-      return;
-    }
+    const executeNavigation = (targetRailIndex: number, targetItem: RailItem): void => {
+      if (!isRequestCurrent()) return;
+      const latestContainer = scrollContainerRef.current;
+      const mountedMessageEl = latestContainer
+        ? findRailMessageElement(latestContainer, targetItem.messageId)
+        : null;
+      const mode = resolveRailNavigationMode(targetItem, Boolean(mountedMessageEl));
 
-    if (!currentSession?.id || isLoadingRailTargetRef.current) return;
+      if (mode === RailNavigationMode.ScrollLoadedDom && mountedMessageEl) {
+        if (!scrollAndSettleElement(targetRailIndex, targetItem, mountedMessageEl, false)) {
+          releaseNavigationLock();
+        }
+        return;
+      }
 
-    isLoadingRailTargetRef.current = true;
-    void coworkService.loadMessageWindowAroundIndex(currentSession.id, item.absoluteIndex).then((loaded) => {
-      if (!loaded) return;
-      scrollToRenderedRailTarget(railIndex, item);
-    }).finally(() => {
-      isLoadingRailTargetRef.current = false;
-    });
+      if (mode === RailNavigationMode.ForceRenderLoadedTurn && latestContainer) {
+        scrollToRenderedRailTarget(targetRailIndex, targetItem, false);
+        return;
+      }
 
-    currentRailIndexRef.current = railIndex;
-    setCurrentRailIndex(railIndex);
-  }, [currentSession?.id, currentSession?.messages.length, currentSession?.totalMessages, isStreaming, updateShouldAutoScroll]);
+      if (!currentSession?.id) {
+        releaseNavigationLock();
+        return;
+      }
+
+      if (mode === RailNavigationMode.RefreshRailIndex) {
+        void (async () => {
+          try {
+            await coworkService.loadSessionMessageRailIndex(currentSession.id);
+            if (!isRequestCurrent()) return;
+            requestAnimationFrame(() => {
+              if (!isRequestCurrent()) return;
+              const latestItems = railItemsRef.current;
+              if (latestItems.length === 0) {
+                releaseNavigationLock();
+                return;
+              }
+              const clampedIndex = Math.min(targetRailIndex, latestItems.length - 1);
+              const refreshedItem = latestItems[clampedIndex];
+              if (!refreshedItem || refreshedItem.isPlaceholder || !refreshedItem.messageId) {
+                releaseNavigationLock();
+                return;
+              }
+              currentRailIndexRef.current = clampedIndex;
+              setCurrentRailIndex(clampedIndex);
+              executeNavigation(clampedIndex, refreshedItem);
+            });
+          } catch (error) {
+            console.warn('[CoworkSessionDetail] Failed to refresh rail index before navigation:', error);
+            releaseNavigationLock();
+          }
+        })();
+        return;
+      }
+
+      void loadWindowAndScroll(currentSession.id, targetRailIndex, targetItem);
+    };
+
+    executeNavigation(railIndex, item);
+  }, [
+    clearScrollToBottomSettleTimers,
+    currentSession?.id,
+    currentSession?.messages.length,
+    currentSession?.totalMessages,
+    isStreaming,
+    markConversationSearchViewportAsManual,
+    updateShouldAutoScroll,
+  ]);
 
   // lastMessageContent and messagesLength are now sourced from memoized
   // selectors (selectLastMessageContent / selectCurrentMessagesLength)
@@ -5149,7 +5801,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   }, []);
 
   const messageEdit = useUserMessageEdit(currentSession, isSessionBusy || remoteManaged);
-  const handleReEdit = messageEdit.begin;
 
 
   const messages = currentSession?.messages;
@@ -5173,12 +5824,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const messageVersionAnchorRef = useRef<{ fromMessageId: string; absoluteIndex: number; bottom: number } | null>(null);
   const messageVersionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const switchMessageVersion = messageEdit.switchVersion;
+
   const handleSwitchMessageVersion = useCallback((message: CoworkMessage, targetIndex: number) => {
     const container = scrollContainerRef.current;
     const windowIndex = currentSession?.messages.findIndex(item => item.id === message.id) ?? -1;
     const element = container?.querySelector<HTMLElement>(`[data-rail-message-id="${CSS.escape(message.id)}"]`);
     if (!currentSession || !container || !element || windowIndex < 0) return;
-    // The other version can be longer or shorter, so following the end would move the switcher away.
     detachAutoScrollForUserIntent(AutoScrollDetachSource.MessageVersionSwitch);
     messageVersionAnchorRef.current = {
       fromMessageId: message.id,
@@ -5196,7 +5847,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     void switchMessageVersion(message, targetIndex).then(switched => {
       messageVersionAnchorRef.current = null;
       if (messageVersionTimerRef.current) clearTimeout(messageVersionTimerRef.current);
-      // Only content that was dimmed has anything to fade back from.
       setMessageVersionSwitch(current => switched && current?.phase === MessageVersionSwitchPhase.Dimmed
         ? { ...current, phase: MessageVersionSwitchPhase.Settling }
         : null);
@@ -5334,16 +5984,23 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     ],
   );
   const railTooltipItem = railTooltip ? railItems[railTooltip.railIndex] : undefined;
-  const railTooltipTitle = railTooltipItem
-    ? railTooltipItem.isPlaceholder
-      ? i18nService.t('coworkRailUnloadedMessageTitle')
-      : railTooltipItem.label
-    : '';
-  const railTooltipSummary = railTooltipItem
-    ? railTooltipItem.isPlaceholder
-      ? i18nService.t('coworkRailUnloadedMessageHint')
-      : railTooltipItem.summary
-    : '';
+  const hasPlaceholderRailItems = useMemo(
+    () => railItems.some(item => item.isPlaceholder),
+    [railItems],
+  );
+  const railTooltipContent = railTooltip && railTooltipItem
+    ? buildRailTooltipContent({
+      item: railTooltipItem,
+      railIndex: railTooltip.railIndex,
+      totalCount: railItems.length,
+      hasPlaceholderItems: hasPlaceholderRailItems,
+      labels: {
+        unloadedTitle: i18nService.t('coworkRailUnloadedMessageTitle'),
+        unloadedHint: i18nService.t('coworkRailUnloadedMessageHint'),
+        turnPositionTemplate: i18nService.t('coworkRailTurnPosition'),
+      },
+    })
+    : null;
 
   const clearConversationSearchPresentation = useCallback(() => {
     conversationSearchNavigationRequestRef.current += 1;
@@ -5379,9 +6036,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     clearScrollToBottomSettleTimers();
     updateShouldAutoScroll(false);
     setIsArtifactPanelExpanded(false);
+    setRenamingArtifactTabId(null);
     setIsExpandedPromptInputHidden(false);
     setIsExpandedConversationPreviewOpen(false);
-    setShowArtifactAddMenu(false);
     openConversationSearch();
   }, [
     clearScrollToBottomSettleTimers,
@@ -5922,17 +6579,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     );
   }, [turns]);
 
+  const turnToRailRange = useMemo(() => buildTurnToRailRange(railItems), [railItems]);
+
   useLayoutEffect(() => {
     railItemsRef.current = railItems;
     railItemCountRef.current = railItems.length;
-    turnToRailRangeRef.current = buildTurnToRailRange(railItems);
+    turnToRailRangeRef.current = turnToRailRange;
     const loadedIndices = railItems
       .map((item, index) => (item.isLoaded ? index : -1))
       .filter(index => index >= 0);
     loadedRailRangeRef.current = loadedIndices.length > 0
       ? { first: loadedIndices[0], last: loadedIndices[loadedIndices.length - 1] }
       : null;
-  }, [railItems]);
+  }, [railItems, turnToRailRange]);
 
   // Sync rail index when turns change or rail first appears (isScrollable becomes true)
   useEffect(() => {
@@ -6071,7 +6730,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     ? isArtifactPanelExpanded && contentRowWidth > 0
       ? contentRowWidth
       : Math.max(0, artifactPanelFrameWidth - ARTIFACT_PANEL_RESIZE_HANDLE_WIDTH)
-    : undefined;
+    : isArtifactPanelTransitioning && !isArtifactPanelExpanded
+      ? ARTIFACT_HEADER_TRANSITION_MIN_WIDTH
+      : undefined;
   const artifactPanelRenderMinWidth = isArtifactPanelExpanded
     ? expandedArtifactPanelContentWidth
     : artifactPanelMinWidth;
@@ -6129,7 +6790,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const editingTurnIndex = editingMessageId
       ? turns.findIndex(turn => turn.userMessage?.id === editingMessageId)
       : -1;
-    let railCounter = 0;
     if (turns.length === 0) {
       if (!isSessionBusy) return null;
       return (
@@ -6183,11 +6843,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         ? MESSAGE_VERSION_PHASE_CLASS[messageVersionSwitch.phase]
         : undefined;
 
-      // Compute one rail index per conversation turn (must match grouped rail item logic).
-      const hasAssistantContent = turn.assistantItems.some(
-        item => item.type === 'assistant' && isAssistantRailContentMessage(item.message),
-      );
-      const turnRailIdx = turn.userMessage || hasAssistantContent ? railCounter++ : -1;
+      // Use the global rail index from the full session index (never a local 0-based
+      // window counter) so DOM attributes stay consistent across paginated windows.
+      const turnRailIdx = turnToRailRange[index]?.first ?? -1;
       const assistantRailMessageId = getAssistantRailMessageId(turn);
 
       const turnArtifacts = rawSessionArtifacts.filter(
@@ -6231,10 +6889,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 skills={skills}
                 marketplaceKits={marketplaceKits}
                 sessionId={sessionId}
-                onReEdit={remoteManaged ? undefined : handleReEdit}
-                reEditDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending) || Boolean(messageEdit.editing)}
+                onReEdit={remoteManaged ? undefined : messageEdit.begin}
+                reEditDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending)}
                 onSwitchVersion={remoteManaged ? undefined : handleSwitchMessageVersion}
-                versionSwitchDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending) || Boolean(messageEdit.editing)}
+                versionSwitchDisabled={isSessionBusy || messageEdit.busy || Boolean(messageEdit.pending || messageEdit.editing)}
                 onLocateSelectedText={handleLocateSelectedText}
                 onOpenAnnotation={handleOpenMessageAnnotation}
               />}
@@ -6285,12 +6943,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   hasRunningSubagents: turnHasRunningSubagents,
                 })}
                 hiddenSystemMessageId={enterpriseQuotaPromptMessageId}
-                modelSwitchNoticeMessageId={
-                  !isExportingImage && modelSwitchNotice?.sessionId === currentSession.id
-                    ? modelSwitchNotice.messageId
-                    : null
-                }
-                onDismissModelSwitchNotice={() => setModelSwitchNotice(null)}
                 completedGoal={
                   isLastTurn && currentSession.goal?.status === CoworkGoalStatus.Complete
                     ? currentSession.goal
@@ -6312,6 +6964,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     });
   };
 
+  const expandArtifactPanelLabel = isArtifactPanelExpanded
+    ? i18nService.t('artifactBrowserRestorePanelWidth')
+    : i18nService.t('artifactBrowserExpandPanel');
+  const toggleArtifactPanelLabel = isPanelOpen
+    ? i18nService.t('artifactPanelHide')
+    : i18nService.t('artifactPanelShow');
+
   return (
     <ArtifactFileShareProvider sessionId={currentSession.id}>
     <MarkdownLinkOpenerContext.Provider value={markdownLinkOpener}>
@@ -6325,8 +6984,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           isArtifactPanelExpanded ? 'pl-0 pr-4' : 'px-4'
         }`}
       >
-        {/* Left side: Toggle buttons (when collapsed) + Title */}
-        <div className="flex h-full flex-1 items-center gap-2 min-w-0">
+        {/* Left side: Toggle buttons (when collapsed) + Title (+ chat-scoped Cmd/Ctrl+F search overlay) */}
+        <div className="relative flex h-full flex-1 items-center gap-2 min-w-0">
           {isSidebarCollapsed && !isWindows && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? MAC_TRAFFIC_LIGHT_INSET_CLASS : ''}`}>
               <button
@@ -6349,30 +7008,38 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <h1 className="text-sm leading-5 font-medium text-foreground truncate max-w-[360px]">
             {getSessionTitleForDisplay(currentSession.title) || i18nService.t('coworkNewSession')}
           </h1>
+          {isConversationSearchOpen && (
+            <div className="non-draggable absolute right-2 top-0 z-40 flex h-full items-start">
+              <CoworkConversationSearch
+                query={conversationSearchQuery}
+                status={conversationSearchStatus}
+                errorReason={conversationSearchErrorReason}
+                activeMatchIndex={activeConversationSearchMatchIndex}
+                resultCount={conversationSearchMatches.length}
+                isResultLimitReached={isConversationSearchResultLimitReached}
+                focusRequestKey={conversationSearchFocusRequestKey}
+                onQueryChange={setConversationSearchQuery}
+                onNavigate={navigateConversationSearch}
+                onClose={closeConversationSearch}
+              />
+            </div>
+          )}
         </div>
 
-        {isConversationSearchOpen ? (
-          <CoworkConversationSearch
-            query={conversationSearchQuery}
-            status={conversationSearchStatus}
-            errorReason={conversationSearchErrorReason}
-            activeMatchIndex={activeConversationSearchMatchIndex}
-            resultCount={conversationSearchMatches.length}
-            isResultLimitReached={isConversationSearchResultLimitReached}
-            focusRequestKey={conversationSearchFocusRequestKey}
-            onQueryChange={setConversationSearchQuery}
-            onNavigate={navigateConversationSearch}
-            onClose={closeConversationSearch}
-          />
-        ) : (
-          /* Right side: Artifact toggle */
-          <div
-          className={`flex h-full shrink-0 items-center gap-1 ${
+        {/* Right side: Artifact panel tabs & panel controls */}
+        <div
+          className={`flex h-full shrink-0 items-center justify-end gap-1 ${
+            isArtifactPanelTransitioning && !isArtifactPanelExpanded
+              ? 'overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none'
+              : ''
+          } ${
             isArtifactPanelVisible
               ? isArtifactPanelExpanded
                 ? '-mr-4 pr-4'
                 : '-mr-4 border-l border-border pr-4'
-              : ''
+              : isArtifactPanelTransitioning && !isArtifactPanelExpanded
+                ? '-mr-4 pr-4'
+                : ''
           }`}
           style={artifactHeaderWidth !== undefined ? { width: artifactHeaderWidth } : undefined}
         >
@@ -6390,29 +7057,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   {isFileListPreviewTabOpen && (
                     <ArtifactPreviewTabItem
                       active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.FileList}
-                      icon={<ArtifactPanelIcon className="h-3.5 w-3.5" open />}
-                      label={i18nService.t('artifactFileList')}
+                      icon={<WorkspaceFilesIcon className="h-3.5 w-3.5" />}
+                      label={i18nService.t('artifactFiles')}
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactFileListTab}
                       onClose={handleCloseArtifactFileListTab}
                       {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList)}
                     />
                   )}
-                  {isBrowserPreviewTabOpen && (
+                  {browserTabs.map(tab => (
                     <ArtifactPreviewTabItem
-                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Browser}
-                      icon={<ArtifactBrowserTabIcon className="h-3.5 w-3.5" />}
-                      label={browserPreviewTabTitle}
+                      key={tab.id}
+                      active={!activeArtifactPreviewTab
+                        && activeSpecialPreviewTab === ArtifactSpecialTab.Browser
+                        && activeBrowserTabId === tab.id}
+                      icon={<ArtifactBrowserIcon className="h-3.5 w-3.5 text-[#0EA5E9] dark:text-[#38BDF8]" />}
+                      label={getBrowserPreviewTabLabel(tab, i18nService.t('artifactBrowserTab'))}
                       closeLabel={i18nService.t('artifactCloseTab')}
-                      onActivate={handleActivateArtifactBrowserTab}
-                      onClose={handleCloseArtifactBrowserTab}
-                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Browser)}
+                      onActivate={() => handleActivateArtifactBrowserTab(tab.id)}
+                      onClose={() => handleCloseArtifactBrowserTab(tab.id)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
                     />
-                  )}
+                  ))}
                   {isAgentBrowserPreviewTabOpen && (
                     <ArtifactPreviewTabItem
                       active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.AgentBrowser}
-                      icon={<ComputerDesktopIcon className="h-3.5 w-3.5" />}
+                      icon={<ComputerDesktopIcon className="h-3.5 w-3.5 text-[#0EA5E9] dark:text-[#38BDF8]" />}
                       label={i18nService.t('agentBrowserTab')}
                       closeLabel={i18nService.t('artifactCloseTab')}
                       indicator={hasUnreadAgentBrowserActivity ? (
@@ -6429,7 +7099,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   {isSubagentPreviewTabOpen && (
                     <ArtifactPreviewTabItem
                       active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.Subagents}
-                      icon={<SubagentIcon className="h-3.5 w-3.5" />}
+                      icon={<SubagentIcon className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" />}
                       label={i18nService.t('subagentPanelTitle')}
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactSubagentTab}
@@ -6450,6 +7120,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   )}
                   {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
                     const fileName = artifact.fileName || artifact.title;
+                    const renamable = canRenameArtifactFile(artifact);
                     return (
                       <ArtifactPreviewTabItem
                         key={tab.id}
@@ -6457,32 +7128,56 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                         icon={<FileTypeIcon fileName={fileName} className="h-3.5 w-3.5" />}
                         label={fileName}
                         closeLabel={i18nService.t('artifactCloseTab')}
+                        canRename={renamable}
+                        isRenaming={renamingArtifactTabId === tab.id}
+                        onStartRename={renamable ? () => handleStartArtifactTabRename(tab.id) : undefined}
+                        onCancelRename={() => setRenamingArtifactTabId(current => (current === tab.id ? null : current))}
+                        onCommitRename={renamable ? (nextStem) => handleCommitArtifactTabRename(artifact, nextStem) : undefined}
                         onActivate={() => handleActivateArtifactTab(tab.id)}
                         onClose={() => handleCloseArtifactTab(tab.id)}
                         {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
                       />
                     );
                   })}
-                  {shouldPinArtifactAddTab ? (
-                    <div className="h-full w-9 shrink-0" aria-hidden="true" />
-                  ) : (
-                    <div
-                      data-skin-artifact-add-tab="true"
-                      className="z-20 flex h-full shrink-0 items-center bg-background pl-1 pr-1"
-                    >
-                      <button
-                        ref={artifactAddButtonRef}
-                        type="button"
-                        onClick={handleToggleArtifactAddMenu}
-                        className={`non-draggable inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface hover:text-foreground ${
-                          showArtifactAddMenu ? 'bg-surface text-foreground' : ''
-                        }`}
-                        aria-label={i18nService.t('artifactAddTab')}
-                        title={i18nService.t('artifactAddTab')}
+                  {isNewTabPreviewTabOpen && (
+                    <ArtifactPreviewTabItem
+                      active={!activeArtifactPreviewTab && activeSpecialPreviewTab === ArtifactSpecialTab.NewTab}
+                      icon={<ArtifactTabPlusIcon className="h-3.5 w-3.5" />}
+                      label={i18nService.t('artifactNewTabTitle')}
+                      closeLabel={i18nService.t('artifactCloseTab')}
+                      onActivate={handleActivateArtifactNewTab}
+                      onClose={handleCloseArtifactNewTab}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.NewTab)}
+                    />
+                  )}
+                  {shouldShowArtifactAddButton && (
+                    shouldPinArtifactAddTab ? (
+                      <div className="h-full w-9 shrink-0" aria-hidden="true" />
+                    ) : (
+                      <div
+                        data-skin-artifact-add-tab="true"
+                        className="z-20 flex h-full shrink-0 items-center bg-background pl-1 pr-1"
                       >
-                        <ArtifactTabPlusIcon className="h-4 w-4" />
-                      </button>
-                    </div>
+                        <Tooltip
+                          portal
+                          content={i18nService.t('artifactAddTab')}
+                          position={TooltipPosition.Bottom}
+                          align={TooltipAlign.Center}
+                          delay={300}
+                          bubbleClassName={TOOLTIP_DARK_BUBBLE_CLASS_NAME}
+                          className="non-draggable shrink-0"
+                        >
+                          <button
+                            type="button"
+                            onClick={handleOpenArtifactNewTab}
+                            className="non-draggable inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                            aria-label={i18nService.t('artifactAddTab')}
+                          >
+                            <ArtifactTabPlusIcon className="h-4 w-4" />
+                          </button>
+                        </Tooltip>
+                      </div>
+                    )
                   )}
                   </div>
                 </div>
@@ -6491,18 +7186,24 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                     data-skin-artifact-add-tab="true"
                     className="absolute inset-y-0 right-0 z-20 flex items-center bg-background pl-1 pr-1"
                   >
-                    <button
-                      ref={artifactAddButtonRef}
-                      type="button"
-                      onClick={handleToggleArtifactAddMenu}
-                      className={`non-draggable inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface hover:text-foreground ${
-                        showArtifactAddMenu ? 'bg-surface text-foreground' : ''
-                      }`}
-                      aria-label={i18nService.t('artifactAddTab')}
-                      title={i18nService.t('artifactAddTab')}
+                    <Tooltip
+                      portal
+                      content={i18nService.t('artifactAddTab')}
+                      position={TooltipPosition.Bottom}
+                      align={TooltipAlign.Center}
+                      delay={300}
+                      bubbleClassName={TOOLTIP_DARK_BUBBLE_CLASS_NAME}
+                      className="non-draggable shrink-0"
                     >
-                      <ArtifactTabPlusIcon className="h-4 w-4" />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={handleOpenArtifactNewTab}
+                        className="non-draggable inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                        aria-label={i18nService.t('artifactAddTab')}
+                      >
+                        <ArtifactTabPlusIcon className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
                   </div>
                 )}
                 {(artifactTabsCanScrollLeft || artifactTabsCanScrollRight) && (
@@ -6511,101 +7212,80 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background from-[34%] via-background/80 via-[66%] to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_right,black_0%,black_40%,rgba(0,0,0,0.75)_72%,transparent_100%)] [-webkit-mask-image:linear-gradient(to_right,black_0%,black_40%,rgba(0,0,0,0.75)_72%,transparent_100%)]" />
                     )}
                     {artifactTabsCanScrollRight && (
-                      <div className="pointer-events-none absolute inset-y-0 right-[36px] z-10 w-12 bg-gradient-to-l from-background from-[18%] via-background/80 via-[58%] to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_left,black_0%,black_30%,rgba(0,0,0,0.75)_68%,transparent_100%)] [-webkit-mask-image:linear-gradient(to_left,black_0%,black_30%,rgba(0,0,0,0.75)_68%,transparent_100%)]" />
+                      <div className={`pointer-events-none absolute inset-y-0 z-10 w-12 bg-gradient-to-l from-background from-[18%] via-background/80 via-[58%] to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_left,black_0%,black_30%,rgba(0,0,0,0.75)_68%,transparent_100%)] [-webkit-mask-image:linear-gradient(to_left,black_0%,black_30%,rgba(0,0,0,0.75)_68%,transparent_100%)] ${
+                        shouldPinArtifactAddTab ? 'right-[36px]' : 'right-0'
+                      }`}
+                      />
                     )}
                   </>
                 )}
               </div>
             </div>
           )}
-          {/* Artifact panel toggle */}
+          {/* Artifact panel controls */}
           {isPanelOpen && (
+            <Tooltip
+              portal
+              content={expandArtifactPanelLabel}
+              position={TooltipPosition.Bottom}
+              align={TooltipAlign.End}
+              delay={300}
+              bubbleClassName={TOOLTIP_DARK_BUBBLE_CLASS_NAME}
+              className="non-draggable shrink-0"
+            >
+              <button
+                type="button"
+                onClick={handleToggleArtifactPanelExpanded}
+                className={`non-draggable relative inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                  isArtifactPanelExpanded
+                    ? 'bg-surface-raised text-foreground hover:bg-surface-hover'
+                    : 'text-secondary hover:bg-surface-raised hover:text-foreground'
+                }`}
+                aria-label={expandArtifactPanelLabel}
+              >
+                {isArtifactPanelExpanded ? (
+                  <PanelRestoreIcon className="h-4 w-4" />
+                ) : (
+                  <PanelExpandIcon className="h-4 w-4" />
+                )}
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip
+            portal
+            content={(
+              <span className="inline-flex items-center gap-1.5">
+                <span>{toggleArtifactPanelLabel}</span>
+                {toggleArtifactPanelShortcutHint && (
+                  <span className="rounded bg-white/15 px-1 py-0.5 text-[10px] leading-none text-white/80">
+                    {toggleArtifactPanelShortcutHint}
+                  </span>
+                )}
+              </span>
+            )}
+            position={TooltipPosition.Bottom}
+            align={TooltipAlign.End}
+            delay={300}
+            bubbleClassName={TOOLTIP_DARK_BUBBLE_CLASS_NAME}
+            className="non-draggable shrink-0"
+          >
             <button
               type="button"
-              onClick={handleToggleArtifactPanelExpanded}
-              className={`non-draggable relative inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-                isArtifactPanelExpanded
-                  ? 'bg-surface-raised text-foreground hover:bg-surface-hover'
-                  : 'text-secondary hover:bg-surface-raised hover:text-foreground'
-              }`}
-              aria-label={
-                isArtifactPanelExpanded
-                  ? i18nService.t('artifactBrowserRestorePanelWidth')
-                  : i18nService.t('artifactBrowserExpandPanel')
-              }
-              title={
-                isArtifactPanelExpanded
-                  ? i18nService.t('artifactBrowserRestorePanelWidth')
-                  : i18nService.t('artifactBrowserExpandPanel')
-              }
+              onClick={handleToggleArtifactPanel}
+              className="non-draggable relative h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+              aria-label={toggleArtifactPanelLabel}
             >
-              {isArtifactPanelExpanded ? (
-                <PanelRestoreIcon className="h-4 w-4" />
-              ) : (
-                <PanelExpandIcon className="h-4 w-4" />
+              <ArtifactPanelIcon className="h-4 w-4" open={isPanelOpen} />
+              {hasUnreadAgentBrowserActivity && (
+                <span
+                  className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
+                  aria-hidden="true"
+                />
               )}
             </button>
-          )}
-          <button
-            type="button"
-            onClick={handleOpenConversationSearch}
-            className="non-draggable relative h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            aria-label={i18nService.t('coworkConversationSearchOpen')}
-            title={i18nService.t('coworkConversationSearchOpen')}
-          >
-            <SidebarSearchIcon className="h-[18px] w-[18px]" />
-          </button>
-          <button
-            type="button"
-            onClick={handleToggleArtifactPanel}
-            className="non-draggable relative h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            aria-label={i18nService.t('artifactPanelToggle')}
-          >
-            <ArtifactPanelIcon className="h-4 w-4" open={isPanelOpen} />
-            {hasUnreadAgentBrowserActivity && (
-              <span
-                className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
-                title={i18nService.t('agentBrowserLiveActivity')}
-              />
-            )}
-          </button>
-          </div>
-        )}
+          </Tooltip>
+        </div>
       </div>
-
-      {showArtifactAddMenu && artifactAddMenuPosition && createPortal(
-        <div
-          ref={artifactAddMenuRef}
-          className="fixed z-50 w-44 overflow-hidden rounded-lg border border-border bg-background py-1 shadow-lg"
-          style={{ left: artifactAddMenuPosition.left, top: artifactAddMenuPosition.top }}
-        >
-          <button
-            type="button"
-            onClick={handleOpenArtifactFileListFromMenu}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-surface"
-          >
-            <ArtifactPanelIcon className="h-4 w-4 shrink-0" open />
-            <span className="truncate">{i18nService.t('artifactOpenFileTab')}</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleOpenArtifactBrowserTab}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-surface"
-          >
-            <ArtifactBrowserTabIcon className="h-4 w-4 shrink-0" />
-            <span className="truncate">{i18nService.t('artifactBrowserTab')}</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleOpenArtifactSubagentTab}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-surface"
-          >
-            <SubagentIcon className="h-4 w-4 shrink-0" />
-            <span className="truncate">{i18nService.t('subagentPanelTitle')}</span>
-          </button>
-        </div>,
-        document.body
-      )}
 
       {/* Export Options Modal */}
       {showExportOptions && createPortal(
@@ -6819,7 +7499,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                     onMouseEnter={(e) => {
                       setHoveredRailIndex(idx);
                       const rect = e.currentTarget.getBoundingClientRect();
-                      const top = Math.max(8, Math.min(rect.top + rect.height / 2, window.innerHeight - 8));
+                      const verticalPadding = Math.min(60, window.innerHeight / 2);
+                      const top = Math.max(
+                        verticalPadding,
+                        Math.min(rect.top + rect.height / 2, window.innerHeight - verticalPadding),
+                      );
                       setRailTooltip({
                         railIndex: idx,
                         top,
@@ -6870,9 +7554,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         )}
 
-        {railTooltip && railTooltipItem && createPortal(
+        {railTooltip && railTooltipContent && createPortal(
           <div
-            className={`fixed z-[100] px-3.5 py-2 text-[13px] leading-snug pointer-events-none overflow-hidden
+            className={`fixed z-[100] px-3.5 py-2.5 text-[13px] leading-snug pointer-events-none overflow-hidden
               shadow-[0_2px_12px_rgba(0,0,0,0.12)]
               border dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]
               rounded-xl bg-neutral-50 border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700`}
@@ -6893,9 +7577,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 wordBreak: 'break-all',
               }}
             >
-              {railTooltipTitle}
+              {railTooltipContent.title}
             </div>
-            {railTooltipSummary && (
+            {railTooltipContent.summary && (
               <div
                 className="mt-1 text-[13px] text-neutral-600 dark:text-neutral-300"
                 style={{
@@ -6906,7 +7590,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   wordBreak: 'break-all',
                 }}
               >
-                {railTooltipSummary}
+                {railTooltipContent.summary}
+              </div>
+            )}
+            {(railTooltipContent.turnPosition || railTooltipContent.timestampText) && (
+              <div className="mt-2 flex items-center justify-between gap-3 text-[12px] text-neutral-500 dark:text-neutral-400 tabular-nums">
+                {railTooltipContent.turnPosition && (
+                  <span className="shrink-0">{railTooltipContent.turnPosition}</span>
+                )}
+                {railTooltipContent.timestampText && (
+                  <span className="ml-auto shrink-0">{railTooltipContent.timestampText}</span>
+                )}
               </div>
             )}
           </div>,
@@ -7160,7 +7854,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onManageSkills={remoteManaged ? undefined : onManageSkills}
             onManageKits={remoteManaged ? undefined : onManageKits}
             showModelSelector={true}
-            onModelSwitch={(noticeSessionId, messageId) => setModelSwitchNotice({ sessionId: noticeSessionId, messageId })}
             showReadOnlyContext={!isArtifactPanelExpanded}
             showNewUserWelcomeLoginOverlay={isNewUserWelcomeSession}
             readOnlyContextTrailingText={isArtifactPanelExpanded ? undefined : i18nService.t('aiGeneratedDisclaimer')}
@@ -7257,19 +7950,49 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               minPanelWidth={artifactPanelRenderMinWidth}
               maxPanelWidth={artifactPanelRenderMaxWidth}
               isPanelExpanded={isArtifactPanelExpanded}
-              browserAddress={browserPreviewAddress}
-              browserUrl={browserPreviewUrl}
-              browserLocalServiceContext={browserLocalServiceContext}
+              browserTabs={browserTabsForPanel}
+              activeBrowserTabId={activeBrowserTabId}
               localServiceDeploymentRequest={localServiceDeploymentRequest}
-              browserHtmlArtifactId={browserHtmlPreviewDisplayArtifactId}
               onBrowserAddressChange={handleBrowserPreviewAddressChange}
               onBrowserUrlChange={handleBrowserPreviewUrlChange}
               onBrowserTitleChange={handleBrowserPreviewTitleChange}
-              onBrowserLocalServiceContextChange={setSessionBrowserLocalServiceContext}
+              onBrowserLocalServiceContextChange={handleBrowserLocalServiceContextChange}
               onLocalServiceDeploymentRequestConsumed={handleLocalServiceDeploymentRequestConsumed}
               onOpenFileListTab={handleOpenArtifactFileListTab}
               onOpenBrowserTab={handleOpenArtifactBrowserTab}
+              onOpenLocalServiceInBrowser={handleOpenLocalServiceArtifact}
               onOpenHtmlFileInBrowser={handleOpenHtmlFileInBrowser}
+              newTabPanel={(
+                <ArtifactNewTabContent
+                  sessionId={currentSession.id}
+                  workingDirectory={currentSession.cwd}
+                  artifacts={sessionArtifacts}
+                  subagents={subagents}
+                  hasAgentBrowserActivity={
+                    browserDisplayMode === BrowserDisplayMode.InApp
+                    && (hasUnreadAgentBrowserActivity || isAgentBrowserPreviewTabOpen)
+                  }
+                  onSelectArtifact={handleNewTabSelectArtifact}
+                  onOpenLocalFilePath={handleNewTabOpenLocalFilePath}
+                  onOpenLocalFilePicker={handleNewTabOpenLocalFilePicker}
+                  onCreateBlankDocument={handleNewTabCreateBlankDocument}
+                  onOpenFileList={handleNewTabOpenFileList}
+                  onOpenBrowserUrl={handleNewTabOpenBrowserUrl}
+                  onOpenAgentBrowser={
+                    browserDisplayMode === BrowserDisplayMode.InApp && isAgentBrowserPreviewTabOpen
+                      ? handleNewTabOpenAgentBrowser
+                      : undefined
+                  }
+                  onOpenSubagents={handleNewTabOpenSubagents}
+                  onOpenWorkspaceChanges={handleNewTabOpenWorkspaceChanges}
+                />
+              )}
+              onOpenLocalFilePicker={() => void handleNewTabOpenLocalFilePicker()}
+              onOpenWorkspaceFile={handleOpenWorkspaceFilePath}
+              onCreateBlankDocumentFromFileList={() => void handleNewTabCreateBlankDocument(BlankDocumentKind.Word)}
+              onRevealWorkspaceFromFileList={currentSession.cwd
+                ? () => void openWorkspaceDirectoryInSystem(currentSession.cwd!)
+                : undefined}
               agentBrowserPanel={browserDisplayMode === BrowserDisplayMode.InApp
                 ? (
                     <AgentBrowserInAppPanel

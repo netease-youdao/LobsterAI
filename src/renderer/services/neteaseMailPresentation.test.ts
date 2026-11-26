@@ -33,6 +33,16 @@ describe('mail result presentation', () => {
     expect(getNeteaseMailErrorKey(code)).toBe(key);
   });
 
+  test.each([
+    [NeteaseMailTool.GetMessage, NeteaseMailError.MessageNotFound],
+    [NeteaseMailTool.DownloadAttachment, NeteaseMailError.PartNotFound],
+  ])('renders the DSH native MCP error for %s', (toolName, code) => {
+    const text = `Error: ${JSON.stringify({ error: { code: String(code), details: {} } })}`;
+    expect(getNeteaseMailPresentation({ toolName, text, isError: true })).toEqual({ kind: NeteaseMailView.Notice, code });
+    expect(getNeteaseMailPresentation({ toolName, text })).toBeNull();
+    expect(getNeteaseMailPresentation({ toolName, text: `Diagnostic: ${text}`, isError: true })).toBeNull();
+  });
+
   test('an executing receipt replaces streaming confirmation and remains distinct from unknown', () => {
     expect(getNeteaseMailPresentation({ toolName: NeteaseMailTool.SendMessage, details: {
       code: NeteaseMailError.OperationInProgress, data: { confirmation_id: 'old', operation_summary: summary },

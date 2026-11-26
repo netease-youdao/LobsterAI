@@ -34,6 +34,31 @@ describe('expert catalog protocol', () => {
     expect(parseExpertCatalog(fixture).experts[0].icon).toBe(DefaultAgentAvatarIcon);
   });
 
+  test('round-trips optional per-expert revisions without changing the v1 catalog contract', () => {
+    const catalog = createExpertCatalogFixture();
+    expect(parseExpertCatalog(catalog).experts[0].revision).toBeUndefined();
+    const expert = catalog.experts[0];
+    expect(parseExpertCatalog({ ...catalog, experts: catalog.experts.map(item => ({ ...item, revision: 2 })) })
+      .experts[0].revision).toBe(2);
+    for (const revision of [0, -1, 1.5, '2', null]) {
+      expect(() => parseExpertCatalog({ ...catalog, experts: [{ ...expert, revision }, ...catalog.experts.slice(1)] }))
+        .toThrow('Invalid expert revision');
+    }
+  });
+
+  test.each([
+    [true, true],
+    [false, false],
+    ['true', undefined],
+  ])('parses the optional NEW badge flag %s as %s', (configuredValue, expectedValue) => {
+    const catalog = createExpertCatalogFixture();
+    const [expert, ...otherExperts] = catalog.experts;
+    const parsed = parseExpertCatalog({ ...catalog, experts: [{ ...expert, isNew: configuredValue }, ...otherExperts] });
+
+    expect(parsed.experts[0].isNew).toBe(expectedValue);
+    expect(parsed.experts.slice(1)).toEqual(otherExperts);
+  });
+
   test('manifest permits only supported HTTPS CDN assets and a SHA-256 digest', () => {
     const manifest = { schemaVersion: 1, version: 'v1', catalogUrl: 'https://ydhardwarecommon.nosdn.127.net/catalog.json', sha256: 'a'.repeat(64) };
     expect(parseExpertStoreManifest(manifest)).toEqual(manifest);

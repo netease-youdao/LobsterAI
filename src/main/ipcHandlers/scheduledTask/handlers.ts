@@ -6,16 +6,17 @@ import {
   PayloadKind as STPayloadKind,
   SessionTarget as STSessionTarget,
 } from '../../../scheduledTask/constants';
-import type { CronJobService } from '../../../scheduledTask/cronJobService';
 import type {
+  RunFilter,
   ScheduledTask,
   ScheduledTaskDelivery,
   ScheduledTaskInput,
   ScheduledTaskPayload,
 } from '../../../scheduledTask/types';
 import { AgentId } from '../../../shared/agent/constants';
+import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
 import { sanitizeWeixinDeliveryError } from '../../../shared/im/weixin';
-import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import {
   imConversationDisplayName,
   ImPeerKind,
@@ -24,32 +25,21 @@ import {
   type Platform,
   PlatformRegistry,
 } from '../../../shared/platform';
+import type { CronJobServiceFacade } from './cronJobServiceManager';
 import {
   dedupeConversationMappings,
   filterConversationMappingsForSelectedAccount,
   listScheduledTaskChannels,
   resolveConversationAgentIdFromMappings,
-  resolveGroupDeliveryTargetFromSessions,
-  resolveImDeliveryHintsFromSessions,
 } from './helpers';
 import { WeixinReportDelivery } from './weixinReportDelivery';
 
-/** Matches auto-generated channel session titles, e.g. "[TG] group:123". */
 const AUTO_CHANNEL_TITLE_RE = /^\[[^\]]*\]\s/;
 const DINGTALK_PLATFORM: Platform = 'dingtalk';
 const WECOM_PLATFORM: Platform = 'wecom';
 const CASE_SENSITIVE_GROUP_TARGET_PLATFORMS = new Set<Platform>([
   DINGTALK_PLATFORM,
   WECOM_PLATFORM,
-]);
-const WEIXIN_PLATFORM: Platform = 'weixin';
-/**
- * Direct-peer providers that route by case-sensitive user ids. Weixin also
- * keys its per-conversation context tokens by the original id, so a
- * lowercased target is sent without context and rejected by the API.
- */
-const CASE_SENSITIVE_DIRECT_TARGET_PLATFORMS = new Set<Platform>([
-  WEIXIN_PLATFORM,
 ]);
 
 type ConversationMappingForList = {
@@ -66,61 +56,66 @@ type AnnounceNormalizationContext = {
   parsedConversation: ParsedImConversationId;
 };
 
+function hasMixedCase(value: string): boolean {
+  return value !== value.toLowerCase();
+}
+
 function normalizeImAnnounceDeliveryTo(
   rawTo: string,
   mappings: readonly ConversationMappingForList[],
   platform: Platform,
 ): string {
+  if (platform === RetainedImPlatform.Feishu) {
+    const route = parseFeishuReplyRoute(rawTo);
+    if (route) return formatFeishuReplyRoute(route);
+  }
   const parsed = parseImConversationId(rawTo);
+  let candidate: string;
   if (
     parsed.peerKind === ImPeerKind.Direct ||
     parsed.peerKind === ImPeerKind.Group ||
     parsed.peerKind === ImPeerKind.Channel
   ) {
-    return parsed.peerId;
+    candidate = parsed.peerId.trim();
+  } else if (CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(platform) && !rawTo.includes(':')) {
+    candidate = rawTo.trim();
+  } else {
+    const colonIdx = rawTo.lastIndexOf(':');
+    candidate = colonIdx > 0 ? rawTo.slice(colonIdx + 1).trim() : rawTo.trim();
   }
 
-  // Bare targets for case-sensitive group-id providers are already native ids.
-  // Do not replace their case from a lowercased OpenClaw session mapping.
-  if (CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(platform) && !rawTo.includes(':')) {
-    return rawTo;
-  }
-
-  // Session mappings derive from lowercased OpenClaw session keys, so a
-  // matching mapping only confirms the peer. Keep the caller's casing: it is
-  // the channel-native id for case-sensitive providers such as Weixin.
-  const peer = parsed.peerId.trim().toLowerCase();
-  if (peer) {
+  // Restore original mixed-case peer ID from im_session_mappings when the
+  // incoming target was lowercased, without ever downgrading a mixed-case target.
+  const lowerCandidate = candidate.toLowerCase();
+  if (lowerCandidate && !hasMixedCase(candidate)) {
     for (const mapping of mappings) {
       const mappingParsed = parseImConversationId(mapping.imConversationId);
-      if (mappingParsed.peerId.trim().toLowerCase() !== peer) continue;
-      return parsed.peerId.trim();
+      const mappingPeer = mappingParsed.peerId.trim();
+      if (mappingPeer.toLowerCase() === lowerCandidate && hasMixedCase(mappingPeer)) {
+        return mappingPeer;
+      }
     }
   }
 
-  const colonIdx = rawTo.lastIndexOf(':');
-  if (colonIdx > 0) {
-    return rawTo.slice(colonIdx + 1);
-  }
-  return rawTo;
+  return candidate;
 }
 
 export interface ScheduledTaskHandlerDeps {
-  getCronJobService: () => CronJobService;
+  getCronJobService: () => CronJobServiceFacade;
   getIMGatewayManager: () => {
     getIMStore: () =>
       | {
           getSessionMapping: (
             conversationId: string,
             platform: string,
-          ) =>
-            | {
-                coworkSessionId: string;
-              }
-            | undefined;
+          ) => { coworkSessionId: string } | undefined;
           getIMSettings?: () => {
             platformAgentBindings?: Record<string, string>;
           };
+          getConversationReplyRoute: (platform: Platform, conversationId: string) => {
+            to: string;
+            accountId?: string;
+          } | null;
           listSessionMappings: (
             platform: string,
             accountId?: string,
@@ -133,115 +128,16 @@ export interface ScheduledTaskHandlerDeps {
       coworkSessionId: string,
     ) => Promise<void>;
   } | null;
-  /** Resolve a Cowork session title for conversation display names. */
   getCoworkSessionTitle: (sessionId: string) => string | null;
-  getOpenClawRuntimeAdapter: () => {
-    getGatewayClient: () => unknown;
-    getEngineStatusSnapshot: () => { phase: OpenClawEnginePhase };
-    connectGatewayIfNeeded: () => Promise<void>;
-    fetchSessionByKey: (
-      sessionKey: string,
-      options?: { sessionId?: string | null },
-    ) => Promise<unknown>;
-  } | null;
+  getCoworkSession?: (sessionId: string) => unknown | null;
+  sendProactiveImMessage?: (params: {
+    platform: string;
+    instanceId?: string;
+    chatId: string;
+    text: string;
+  }) => Promise<unknown>;
 }
 
-/** Structural view of the OpenClaw gateway client needed for session lookups. */
-interface GatewayRpcClient {
-  request: <T>(
-    method: string,
-    params?: unknown,
-    opts?: { timeoutMs?: number },
-  ) => Promise<T>;
-}
-
-function asGatewayRpcClient(value: unknown): GatewayRpcClient | null {
-  if (value && typeof (value as GatewayRpcClient).request === 'function') {
-    return value as GatewayRpcClient;
-  }
-  return null;
-}
-
-function summarizeAccountId(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  return trimmed.length <= 16 ? trimmed : `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
-}
-
-function summarizeGroupMappings(
-  mappings: readonly ConversationMappingForList[],
-): Array<{ peerId: string; agentId: string }> {
-  return mappings
-    .map((mapping) => {
-      const parsed = parseImConversationId(mapping.imConversationId);
-      if (parsed.accountId || parsed.peerKind !== 'group') return null;
-      return {
-        peerId: summarizeAccountId(parsed.peerId) ?? parsed.peerId,
-        agentId: mapping.agentId,
-      };
-    })
-    .filter((entry): entry is { peerId: string; agentId: string } => Boolean(entry))
-    .slice(0, 8);
-}
-
-function summarizeRelevantBindings(
-  platformAgentBindings: Record<string, string> | undefined,
-  platform: string,
-  selectedAccountId: string | undefined,
-): Array<{ key: string; agentId: string }> {
-  if (!platformAgentBindings) return [];
-  const selectedPrefix = selectedAccountId ? `${platform}:${selectedAccountId}` : null;
-  return Object.entries(platformAgentBindings)
-    .filter(([key]) => (
-      key === platform ||
-      (selectedPrefix ? key.startsWith(selectedPrefix) : key.startsWith(`${platform}:`))
-    ))
-    .map(([key, agentId]) => ({ key: summarizeAccountId(key) ?? key, agentId }))
-    .slice(0, 8);
-}
-
-function logChannelConversationList(params: {
-  channel: string;
-  platform: string;
-  accountId?: string;
-  filterAccountId?: string;
-  selectedAccountId?: string;
-  platformAgentBindings?: Record<string, string>;
-  rawMappings: readonly ConversationMappingForList[];
-  filteredMappings: readonly ConversationMappingForList[];
-  dedupedMappings: readonly ConversationMappingForList[];
-}): void {
-  const filteredSet = new Set(params.filteredMappings);
-  const droppedMappings = params.rawMappings.filter(mapping => !filteredSet.has(mapping));
-  console.debug(
-    '[ScheduledTask] listed channel conversations:',
-    JSON.stringify({
-      channel: params.channel,
-      platform: params.platform,
-      accountId: summarizeAccountId(params.accountId),
-      filterAccountId: summarizeAccountId(params.filterAccountId),
-      selectedAccountId: summarizeAccountId(params.selectedAccountId),
-      rawCount: params.rawMappings.length,
-      filteredCount: params.filteredMappings.length,
-      dedupedCount: params.dedupedMappings.length,
-      bindingCount: Object.keys(params.platformAgentBindings ?? {}).length,
-      rawGroups: summarizeGroupMappings(params.rawMappings),
-      filteredGroups: summarizeGroupMappings(params.filteredMappings),
-      dedupedGroups: summarizeGroupMappings(params.dedupedMappings),
-      droppedGroups: summarizeGroupMappings(droppedMappings),
-      relevantBindings: summarizeRelevantBindings(
-        params.platformAgentBindings,
-        params.platform,
-        params.selectedAccountId,
-      ),
-    }),
-  );
-}
-
-/**
- * Fast, local-only announce normalization. It never queries gateway session
- * history, so it is safe for background migration and manual-run repair.
- */
 function applyLocalAnnounceDeliveryNormalization(
   normalizedInput: Record<string, any>,
   deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager'>,
@@ -254,7 +150,9 @@ function applyLocalAnnounceDeliveryNormalization(
   const platform = PlatformRegistry.platformOfChannel(delivery.channel);
   if (!platform) return null;
   const imStore = getIMGatewayManager()?.getIMStore();
-  const mappings = imStore?.listSessionMappings(platform) ?? [];
+  const mappings = (platform === RetainedImPlatform.Feishu && delivery.accountId
+    ? imStore?.listSessionMappings(platform, delivery.accountId)
+    : imStore?.listSessionMappings(platform)) ?? [];
   const imSettings = imStore?.getIMSettings?.();
 
   normalizedInput.sessionTarget = STSessionTarget.Isolated;
@@ -265,34 +163,20 @@ function applyLocalAnnounceDeliveryNormalization(
     };
   }
 
-  // Strip conversation-id prefixes (e.g. "acc:direct:ou_xxx" -> "ou_xxx").
-  // Outbound delivery targets must stay channel-native ids. For Feishu groups
-  // this is the raw chat id (oc_xxx), not the OpenClaw session peer kind
-  // marker (group:oc_xxx).
   const rawTo: string = delivery.to;
   const parsedConversation = parseImConversationId(rawTo);
   delivery.to = normalizeImAnnounceDeliveryTo(rawTo, mappings, platform);
-  if (delivery.to !== rawTo) {
-    console.debug(
-      '[ScheduledTask] normalized IM delivery.to:',
-      rawTo,
-      '->',
-      delivery.to,
-    );
-  }
 
-  // IM conversations can be bound to a non-main agent. Run the job under that
-  // agent so the gateway mirrors the delivered result into the conversation
-  // session the LobsterAI record maps to, instead of a main-agent shadow
-  // session that stays invisible in the UI.
   const existingAgentId = typeof normalizedInput.agentId === 'string'
     ? normalizedInput.agentId.trim()
     : '';
   if (!existingAgentId || existingAgentId === AgentId.Main) {
     try {
+      const topic = platform === RetainedImPlatform.Feishu ? parseFeishuReplyRoute(rawTo) : null;
+      const mappingTarget = topic?.threadId ? buildFeishuTopicConversationId(topic.chatId, topic.threadId) : rawTo;
       const boundAgentId = resolveConversationAgentIdFromMappings(
         mappings,
-        rawTo,
+        mappingTarget,
         parsedConversation.accountId ?? delivery.accountId,
         {
           platform,
@@ -301,10 +185,6 @@ function applyLocalAnnounceDeliveryNormalization(
       );
       if (boundAgentId && boundAgentId !== AgentId.Main) {
         normalizedInput.agentId = boundAgentId;
-        console.log(
-          '[ScheduledTask] bound delivery job to conversation agent:',
-          boundAgentId,
-        );
       }
     } catch (error) {
       console.warn('[ScheduledTask] failed to resolve conversation agent binding:', error);
@@ -312,156 +192,6 @@ function applyLocalAnnounceDeliveryNormalization(
   }
 
   return { platform, rawTo, parsedConversation };
-}
-
-function describeRunFilter(
-  filter?: import('../../../scheduledTask/types').RunFilter,
-): Record<string, string | undefined> | null {
-  if (!filter) return null;
-  return {
-    startDate: filter.startDate,
-    endDate: filter.endDate,
-    status: filter.status,
-  };
-}
-
-async function restoreAnnounceDeliveryHintsFromGateway(
-  normalizedInput: Record<string, any>,
-  context: AnnounceNormalizationContext,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getOpenClawRuntimeAdapter'>,
-  options?: { casingOnly?: boolean },
-): Promise<void> {
-  const { getOpenClawRuntimeAdapter } = deps;
-  const delivery = normalizedInput.delivery;
-  if (!(delivery && delivery.mode === STDeliveryMode.Announce && delivery.channel && delivery.to)) {
-    return;
-  }
-
-  // Conversation ids are lowercased session-key derivatives; case-sensitive
-  // channels (e.g. weixin) silently drop sends to a wrong-case peer id, and a
-  // missing accountId makes the cron delivery route into a fresh "default"
-  // account session instead of the existing conversation. Restore both from
-  // the gateway's session store, which keeps the original casing.
-  try {
-    if (await ensureScheduledTaskGatewayClient(getOpenClawRuntimeAdapter)) {
-      const client = asGatewayRpcClient(getOpenClawRuntimeAdapter()?.getGatewayClient());
-      if (client) {
-        const result = await client.request<{ sessions?: unknown[] }>(
-          'sessions.list',
-          { includeGlobal: true, includeUnknown: true, limit: 500 },
-          { timeoutMs: 10_000 },
-        );
-        const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
-        const selectedAccountId = typeof delivery.accountId === 'string'
-          ? delivery.accountId
-          : undefined;
-        if (!options?.casingOnly) {
-          const hints = resolveImDeliveryHintsFromSessions({
-            sessions,
-            channel: delivery.channel,
-            peerId: delivery.to,
-            preferredAccountId: context.parsedConversation.accountId,
-          });
-          if (hints) {
-            if (hints.to !== delivery.to) {
-              console.log(
-                '[ScheduledTask] restored delivery.to casing from gateway session:',
-                delivery.to,
-                '->',
-                hints.to,
-              );
-              delivery.to = hints.to;
-            }
-            if (!delivery.accountId && hints.accountId) {
-              delivery.accountId = hints.accountId;
-            }
-          }
-        }
-
-        if (
-          options?.casingOnly &&
-          CASE_SENSITIVE_DIRECT_TARGET_PLATFORMS.has(context.platform)
-        ) {
-          // Historical repair for direct peers: only restore the channel-native
-          // casing of the same peer id; never change the account routing.
-          const hints = resolveImDeliveryHintsFromSessions({
-            sessions,
-            channel: delivery.channel,
-            peerId: delivery.to,
-            preferredAccountId: selectedAccountId ?? context.parsedConversation.accountId,
-          });
-          if (
-            hints &&
-            hints.to !== delivery.to &&
-            hints.to.toLowerCase() === delivery.to.toLowerCase()
-          ) {
-            console.log(
-              `[ScheduledTask] restored ${context.platform} direct delivery.to casing from gateway session:`,
-              delivery.to,
-              '->',
-              hints.to,
-            );
-            delivery.to = hints.to;
-          }
-        }
-
-        if (CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(context.platform)) {
-          const nativeGroupTarget = resolveGroupDeliveryTargetFromSessions({
-            sessions,
-            platform: context.platform,
-            peerId: delivery.to,
-            preferredAccountId: selectedAccountId,
-          });
-          if (nativeGroupTarget && nativeGroupTarget !== delivery.to) {
-            console.log(
-              `[ScheduledTask] restored ${context.platform} group delivery.to casing from gateway origin:`,
-              delivery.to,
-              '->',
-              nativeGroupTarget,
-            );
-            delivery.to = nativeGroupTarget;
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.warn('[ScheduledTask] failed to restore IM delivery target from gateway sessions:', error);
-  }
-}
-
-async function primeAnnounceReplyRoute(
-  context: AnnounceNormalizationContext,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager'>,
-): Promise<void> {
-  if (context.platform === 'dingtalk') {
-    const { getIMGatewayManager } = deps;
-    const imStore = getIMGatewayManager()?.getIMStore();
-    const mapping = imStore?.getSessionMapping(context.rawTo, context.platform);
-    if (mapping) {
-      await getIMGatewayManager()!.primeConversationReplyRoute(
-        context.platform,
-        context.rawTo,
-        mapping.coworkSessionId,
-      );
-    }
-  }
-}
-
-/**
- * Normalizes an announce-mode delivery payload for OpenClaw native delivery.
- * Mutates `normalizedInput` in place: sets sessionTarget, converts SystemEvent
- * payloads to AgentTurn, strips IM subtype prefixes from delivery.to, restores
- * the channel-native target casing/account from gateway sessions, and primes
- * the DingTalk reply route when needed.
- */
-async function applyAnnounceDeliveryNormalization(
-  normalizedInput: Record<string, any>,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'>,
-): Promise<void> {
-  const context = applyLocalAnnounceDeliveryNormalization(normalizedInput, deps);
-  if (!context) return;
-  await restoreAnnounceDeliveryHintsFromGateway(normalizedInput, context, deps);
-  await primeAnnounceReplyRoute(context, deps);
 }
 
 function cloneDelivery(delivery?: ScheduledTaskDelivery): ScheduledTaskDelivery | undefined {
@@ -476,13 +206,10 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-async function buildAnnounceNormalizationPatch(
+function buildAnnounceNormalizationPatch(
   task: ScheduledTask,
-  deps: Pick<
-    ScheduledTaskHandlerDeps,
-    'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'
-  >,
-): Promise<Partial<ScheduledTaskInput> | null> {
+  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager'>,
+): Partial<ScheduledTaskInput> | null {
   const normalizedInput: Record<string, any> = {
     sessionTarget: task.sessionTarget,
     payload: clonePayload(task.payload),
@@ -492,21 +219,6 @@ async function buildAnnounceNormalizationPatch(
   };
   const context = applyLocalAnnounceDeliveryNormalization(normalizedInput, deps);
   if (!context) return null;
-  const normalizedTo = typeof normalizedInput.delivery?.to === 'string'
-    ? normalizedInput.delivery.to.trim()
-    : '';
-  if (
-    (CASE_SENSITIVE_GROUP_TARGET_PLATFORMS.has(context.platform) ||
-      CASE_SENSITIVE_DIRECT_TARGET_PLATFORMS.has(context.platform)) &&
-    normalizedTo &&
-    normalizedTo === normalizedTo.toLowerCase()
-  ) {
-    // Historical repair must only restore the case-sensitive native target id;
-    // it must not infer or change account routing from gateway metadata.
-    await restoreAnnounceDeliveryHintsFromGateway(normalizedInput, context, deps, {
-      casingOnly: true,
-    });
-  }
 
   const patch: Partial<ScheduledTaskInput> = {};
   if (normalizedInput.sessionTarget !== task.sessionTarget) {
@@ -534,97 +246,48 @@ async function buildAnnounceNormalizationPatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-async function migrateScheduledTaskAnnounceJob(
-  task: ScheduledTask,
-  deps: Pick<
-    ScheduledTaskHandlerDeps,
-    'getCronJobService' | 'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'
-  >,
-): Promise<boolean> {
-  const patch = await buildAnnounceNormalizationPatch(task, deps);
-  if (!patch) return false;
-  await deps.getCronJobService().updateJob(task.id, patch);
-  console.log(
-    '[ScheduledTask] migrated IM announce job:',
-    JSON.stringify({
-      id: task.id,
-      deliveryChannel: task.delivery?.channel,
-      deliveryTo: task.delivery?.to,
-      patchedFields: Object.keys(patch),
-    }),
-  );
-  return true;
-}
-
 export async function migrateScheduledTaskAnnounceJobs(
-  deps: Pick<
-    ScheduledTaskHandlerDeps,
-    'getCronJobService' | 'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'
-  >,
+  deps: Pick<ScheduledTaskHandlerDeps, 'getCronJobService' | 'getIMGatewayManager'>,
 ): Promise<{ checked: number; updated: number }> {
   const tasks = await deps.getCronJobService().listJobs();
   let updated = 0;
   for (const task of tasks) {
-    if (await migrateScheduledTaskAnnounceJob(task, deps)) {
+    const patch = buildAnnounceNormalizationPatch(task, deps);
+    if (patch) {
+      await deps.getCronJobService().updateJob(task.id, patch);
       updated += 1;
     }
   }
-  const result = { checked: tasks.length, updated };
-  if (updated > 0) {
-    console.log('[ScheduledTask] migrated existing IM announce jobs:', JSON.stringify(result));
-  }
-  return result;
-}
-
-async function ensureScheduledTaskGatewayClient(
-  getOpenClawRuntimeAdapter: ScheduledTaskHandlerDeps['getOpenClawRuntimeAdapter'],
-): Promise<boolean> {
-  const adapter = getOpenClawRuntimeAdapter();
-  if (!adapter) return false;
-  if (adapter.getGatewayClient()) return true;
-
-  // While the engine is still installing/starting, report not-ready instead
-  // of blocking on gateway startup; the renderer reloads via the refresh
-  // event after the first successful cron poll.
-  if (adapter.getEngineStatusSnapshot().phase !== OpenClawEnginePhase.Running) {
-    return false;
-  }
-
-  await adapter.connectGatewayIfNeeded();
-  return Boolean(adapter.getGatewayClient());
+  return { checked: tasks.length, updated };
 }
 
 export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): void {
-  const { getCronJobService, getIMGatewayManager, getOpenClawRuntimeAdapter, getCoworkSessionTitle } = deps;
+  const {
+    getCronJobService,
+    getIMGatewayManager,
+    getCoworkSessionTitle,
+    getCoworkSession,
+    sendProactiveImMessage,
+  } = deps;
+
   const weixinReportDelivery = new WeixinReportDelivery({
     getJob: id => getCronJobService().getJob(id),
     listRuns: (id, limit, offset) => getCronJobService().listRuns(id, limit, offset),
-    send: async params => {
-      await ensureScheduledTaskGatewayClient(getOpenClawRuntimeAdapter);
-      const client = asGatewayRpcClient(getOpenClawRuntimeAdapter()?.getGatewayClient());
-      if (!client) throw new Error('Gateway not ready');
-      return client.request('send', params, { timeoutMs: 90_000 });
+    send: async (params: Record<string, unknown>) => {
+      if (!sendProactiveImMessage) {
+        throw new Error('IM channels delivery bridge is not available');
+      }
+      return sendProactiveImMessage({
+        platform: String(params.channel ?? 'weixin'),
+        instanceId: typeof params.accountId === 'string' ? params.accountId : undefined,
+        chatId: String(params.to ?? ''),
+        text: String(params.message ?? ''),
+      });
     },
   });
 
   ipcMain.handle(ScheduledTaskIpc.ResendWeixinReport, async (_event, taskId: string, runId: string) => {
     try {
-      // A lowercased Weixin recipient is sent without its context token and
-      // rejected, so repair the stored target before reusing it for the resend.
-      try {
-        const task = typeof taskId === 'string' && taskId
-          ? await getCronJobService().getJob(taskId)
-          : null;
-        if (task) {
-          await migrateScheduledTaskAnnounceJob(task, {
-            getCronJobService,
-            getIMGatewayManager,
-            getOpenClawRuntimeAdapter,
-          });
-        }
-      } catch (error) {
-        console.warn('[ScheduledTask] failed to repair delivery target before Weixin resend:', error);
-      }
       await weixinReportDelivery.resend(taskId, runId);
       return { success: true };
     } catch (error) {
@@ -634,9 +297,6 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(ScheduledTaskIpc.List, async () => {
     try {
-      if (!(await ensureScheduledTaskGatewayClient(getOpenClawRuntimeAdapter))) {
-        return { success: true, ready: false, tasks: [] };
-      }
       const tasks = await getCronJobService().listJobs();
       return { success: true, ready: true, tasks };
     } catch (error) {
@@ -662,14 +322,8 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.debug('[ScheduledTask] create input:', JSON.stringify(normalizedInput, null, 2));
-      await applyAnnounceDeliveryNormalization(normalizedInput, {
-        getIMGatewayManager,
-        getOpenClawRuntimeAdapter,
-      });
-
-      const task = await getCronJobService().addJob(normalizedInput);
-      console.log('[IPC][scheduledTask:create] result task id:', task?.id, 'name:', task?.name);
+      applyLocalAnnounceDeliveryNormalization(normalizedInput, { getIMGatewayManager });
+      const task = await getCronJobService().addJob(normalizedInput as ScheduledTaskInput);
       return { success: true, task };
     } catch (error) {
       return {
@@ -682,18 +336,8 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.debug(
-        '[ScheduledTask] update input id:',
-        id,
-        JSON.stringify(normalizedInput, null, 2),
-      );
-      await applyAnnounceDeliveryNormalization(normalizedInput, {
-        getIMGatewayManager,
-        getOpenClawRuntimeAdapter,
-      });
-
-      const task = await getCronJobService().updateJob(id, normalizedInput);
-      console.log('[IPC][scheduledTask:update] result task id:', task?.id, 'name:', task?.name);
+      applyLocalAnnounceDeliveryNormalization(normalizedInput, { getIMGatewayManager });
+      const task = await getCronJobService().updateJob(id, normalizedInput as Partial<ScheduledTaskInput>);
       return { success: true, task };
     } catch (error) {
       return {
@@ -729,16 +373,14 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(ScheduledTaskIpc.RunManually, async (_event, id: string) => {
     try {
-      const cronJobService = getCronJobService();
-      const task = await cronJobService.getJob(id);
-      if (task) {
-        await migrateScheduledTaskAnnounceJob(task, {
-          getCronJobService,
-          getIMGatewayManager,
-          getOpenClawRuntimeAdapter,
-        });
+      const existing = await getCronJobService().getJob(id);
+      if (existing) {
+        const patch = buildAnnounceNormalizationPatch(existing, { getIMGatewayManager });
+        if (patch) {
+          await getCronJobService().updateJob(id, patch);
+        }
       }
-      await cronJobService.runJob(id);
+      await getCronJobService().runJob(id);
       return { success: true };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -747,44 +389,25 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     }
   });
 
-  ipcMain.handle(ScheduledTaskIpc.Stop, async (_event, _id: string) => {
-    // OpenClaw doesn't expose a direct stop API for running cron jobs
-    // The job will complete or timeout on its own
-    return { success: true, result: false };
+  ipcMain.handle(ScheduledTaskIpc.Stop, async (_event, id: string) => {
+    try {
+      const stopped = await getCronJobService().stopJob(id);
+      return { success: true, result: stopped };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to stop task',
+      };
+    }
   });
 
   ipcMain.handle(
     ScheduledTaskIpc.ListRuns,
-    async (
-      _event,
-      taskId: string,
-      limit?: number,
-      offset?: number,
-      filter?: import('../../../scheduledTask/types').RunFilter,
-    ) => {
+    async (_event, taskId: string, limit?: number, offset?: number, filter?: RunFilter) => {
       try {
-        console.debug('[ScheduledTask] list job run history request:', JSON.stringify({
-          taskId,
-          limit,
-          offset,
-          filter: describeRunFilter(filter),
-        }));
         const runs = await getCronJobService().listRuns(taskId, limit, offset, filter);
-        console.debug('[ScheduledTask] list job run history result:', JSON.stringify({
-          taskId,
-          limit,
-          offset,
-          returnedCount: runs.length,
-        }));
         return { success: true, runs };
       } catch (error) {
-        console.warn('[ScheduledTask] list job run history failed:', JSON.stringify({
-          taskId,
-          limit,
-          offset,
-          filter: describeRunFilter(filter),
-          error: error instanceof Error ? error.message : String(error),
-        }));
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to list runs',
@@ -807,36 +430,11 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(
     ScheduledTaskIpc.ListAllRuns,
-    async (
-      _event,
-      limit?: number,
-      offset?: number,
-      filter?: import('../../../scheduledTask/types').RunFilter,
-    ) => {
+    async (_event, limit?: number, offset?: number, filter?: RunFilter) => {
       try {
-        console.debug('[ScheduledTask] list all run history request:', JSON.stringify({
-          limit,
-          offset,
-          filter: describeRunFilter(filter),
-        }));
-        if (!(await ensureScheduledTaskGatewayClient(getOpenClawRuntimeAdapter))) {
-          console.debug('[ScheduledTask] list all run history deferred; gateway is not ready.');
-          return { success: true, ready: false, runs: [] };
-        }
         const runs = await getCronJobService().listAllRuns(limit, offset, filter);
-        console.debug('[ScheduledTask] list all run history result:', JSON.stringify({
-          limit,
-          offset,
-          returnedCount: runs.length,
-        }));
         return { success: true, ready: true, runs };
       } catch (error) {
-        console.warn('[ScheduledTask] list all run history failed:', JSON.stringify({
-          limit,
-          offset,
-          filter: describeRunFilter(filter),
-          error: error instanceof Error ? error.message : String(error),
-        }));
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to list all runs',
@@ -847,18 +445,11 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
 
   ipcMain.handle(
     ScheduledTaskIpc.ResolveSession,
-    async (
-      _event,
-      input: string | { sessionId?: string | null; sessionKey?: string | null },
-    ) => {
+    async (_event, input: string | { sessionId?: string | null; sessionKey?: string | null }) => {
       try {
-        const sessionKey = typeof input === 'string' ? input : (input.sessionKey ?? '');
-        const sessionId = typeof input === 'string' ? null : (input.sessionId ?? null);
-        if (!sessionKey) return { success: true, session: null };
-        // Fetch session history from OpenClaw (returns transient session, not persisted)
-        const session = await getOpenClawRuntimeAdapter()?.fetchSessionByKey(sessionKey, {
-          sessionId,
-        });
+        const sessionId = typeof input === 'string' ? input : (input.sessionId ?? input.sessionKey ?? null);
+        if (!sessionId || !getCoworkSession) return { success: true, session: null };
+        const session = getCoworkSession(sessionId);
         return { success: true, session: session ?? null };
       } catch (error) {
         return {
@@ -900,35 +491,34 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
           selectedAccountId,
           platformAgentBindings,
         );
-        const mappings = dedupeConversationMappings(filteredMappings);
-        logChannelConversationList(
-          {
-            channel,
-            platform,
-            accountId,
-            filterAccountId,
-            selectedAccountId,
-            platformAgentBindings,
-            rawMappings,
-            filteredMappings,
-            dedupedMappings: mappings,
-          },
-        );
-        const conversations = mappings.map(m => {
+        const mappings = dedupeConversationMappings(filteredMappings, platform);
+        const listedTopics = new Set<string>();
+        const conversations = mappings.flatMap(m => {
           const parsed = parseImConversationId(m.imConversationId);
+          const topic = platform === RetainedImPlatform.Feishu ? parseFeishuReplyRoute(m.imConversationId) : null;
+          const cachedRoute = topic && imStore.getConversationReplyRoute(m.platform as Platform, m.imConversationId);
+          if (selectedAccountId && cachedRoute?.accountId && cachedRoute.accountId !== selectedAccountId
+            && cachedRoute.accountId.slice(0, 8) !== selectedAccountId
+            && selectedAccountId.slice(0, 8) !== cachedRoute.accountId) return [];
+          const deliveryRoute = cachedRoute ? parseFeishuReplyRoute(cachedRoute.to) : topic;
+          // A native thread ID alone is not a Feishu message that can be
+          // replied to. Once a message arrives, its route is saved on disk.
+          if (topic && !deliveryRoute?.replyToMessageId) return [];
+          if (topic) {
+            if (listedTopics.has(m.coworkSessionId)) return [];
+            listedTopics.add(m.coworkSessionId);
+          }
           const sessionTitle = getCoworkSessionTitle(m.coworkSessionId)?.trim();
-          // Channel-synced sessions get auto titles like "[TG] group:123"; only a
-          // title the user renamed (no "[...] " prefix) beats the parsed peer id.
           const customTitle =
             sessionTitle && !AUTO_CHANNEL_TITLE_RE.test(sessionTitle) ? sessionTitle : undefined;
-          return {
-            conversationId: m.imConversationId,
+          return [{
+            conversationId: deliveryRoute ? formatFeishuReplyRoute(deliveryRoute) : m.imConversationId,
             platform: m.platform,
             coworkSessionId: m.coworkSessionId,
             lastActiveAt: m.lastActiveAt,
             ...(parsed.peerKind ? { peerKind: parsed.peerKind } : {}),
             displayName: customTitle ?? imConversationDisplayName(m.imConversationId),
-          };
+          }];
         });
         return { success: true, conversations };
       } catch (error) {

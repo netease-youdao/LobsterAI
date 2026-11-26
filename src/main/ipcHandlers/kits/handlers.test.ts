@@ -68,7 +68,6 @@ import {
   getComputerUseRuntimeRoot,
   inspectComputerUseRuntime,
 } from '../../computerUse/computerUseRuntime';
-import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
 import type { SqliteStore } from '../../sqliteStore';
 import { type KitHandlerDeps, registerKitHandlers } from './handlers';
 
@@ -363,7 +362,7 @@ describe('registerKitHandlers Computer Use integration', () => {
       },
     });
     expect(syncOpenClawConfig).toHaveBeenCalledWith({
-      expectedImpact: OpenClawConfigImpact.Sync,
+      expectedImpact: 'sync',
       reason: 'computer-use-kit-installed',
     });
     expect(skillManager.stopWatching).toHaveBeenCalledTimes(1);
@@ -398,7 +397,7 @@ describe('registerKitHandlers Computer Use integration', () => {
     expect(storeData.skills_state).toEqual({});
     expect(storeData[KitStoreKey.Installed]).toEqual({});
     expect(syncOpenClawConfig).toHaveBeenLastCalledWith({
-      expectedImpact: OpenClawConfigImpact.Sync,
+      expectedImpact: 'sync',
       reason: 'computer-use-kit-uninstalled',
     });
     // OpenClaw drops the MCP server, and with it the running helper, before

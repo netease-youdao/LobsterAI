@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { appendChildren, childInsertionPoint, firstChildElement } from './xlsxXml';
+import { appendChildren, childInsertionPoint, ensureXmlNamespace, firstChildElement, namespacePrefixFor } from './xlsxXml';
 
 const FOLLOWERS = ['hyperlinks', 'pageMargins', 'drawing', 'controls', 'tableParts', 'extLst'];
 
@@ -40,5 +40,32 @@ describe('schema-ordered insertion', () => {
       .toBe('<workbook><sheets/><definedNames><definedName name="b">2</definedName></definedNames><calcPr/></workbook>');
     expect(appendChildren('<Relationships xmlns="rels"/>', 'Relationships', '<Relationship Id="rId1"/>')).toBe('<Relationships xmlns="rels"><Relationship Id="rId1"/></Relationships>');
     expect(appendChildren('<workbook/>', 'definedNames', '<definedName/>')).toBeUndefined();
+  });
+});
+
+describe('namespace declarations', () => {
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  test('finds the prefix bound to a namespace URI regardless of quotes or spacing', () => {
+    expect(namespacePrefixFor(`<workbook xmlns="main" xmlns:r="${REL}">`, REL)).toBe('r');
+    expect(namespacePrefixFor(`<workbook xmlns="main" xmlns:ns1 = '${REL}'>`, REL)).toBe('ns1');
+    expect(namespacePrefixFor(`<workbook xmlns="${REL}">`, REL)).toBeUndefined();
+    expect(namespacePrefixFor('<workbook xmlns="main" xmlns:r="urn:other">', REL)).toBeUndefined();
+  });
+
+  test('adds a missing namespace declaration, keeps existing ones unchanged, and refuses conflicts', () => {
+    const bare = '<workbook xmlns="main"><sheets/></workbook>';
+    expect(ensureXmlNamespace(bare, 'workbook', 'r', REL)).toEqual({
+      xml: `<workbook xmlns="main" xmlns:r="${REL}"><sheets/></workbook>`,
+      bound: true,
+    });
+
+    const spaced = `<x:workbook xmlns:x="main" xmlns:r = '${REL}'><x:sheets/></x:workbook>`;
+    expect(ensureXmlNamespace(spaced, 'workbook', 'r', REL)).toEqual({ xml: spaced, bound: true });
+
+    const conflict = '<workbook xmlns="main" xmlns:r="urn:other"><sheets/></workbook>';
+    expect(ensureXmlNamespace(conflict, 'workbook', 'r', REL)).toEqual({ xml: conflict, bound: false });
+
+    expect(ensureXmlNamespace('<worksheet/>', 'workbook', 'r', REL)).toEqual({ xml: '<worksheet/>', bound: false });
   });
 });

@@ -2,6 +2,7 @@ import { type CompanionPoint, type CompanionRect, rectContains } from './geometr
 
 /** What the orb's hover launcher can start. `Ask` is its input-shaped button; the others are rows. */
 export const CompanionLauncherAction = {
+  ContextFile: 'context-file',
   Ask: 'ask',
   Screenshot: 'screenshot',
   Files: 'files',

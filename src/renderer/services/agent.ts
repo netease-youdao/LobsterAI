@@ -4,9 +4,11 @@ import {
   AgentLegacyIdentityCleanupStatus,
   AgentModelSelectionMode,
   AgentSource,
+  normalizeSubagentCollaborationMode,
+  type SubagentCollaborationMode,
 } from '@shared/agent';
 import { usesInheritedAgentModel } from '@shared/agent/modelSelection';
-import { ExpertUiEvent } from '@shared/agent/presets';
+import { type ExpertCatalog, ExpertUiEvent, ExpertUpgradeStatus } from '@shared/agent/presets';
 
 import { store } from '../store';
 import {
@@ -14,6 +16,7 @@ import {
   removeAgent,
   setAgents,
   setCurrentAgentId,
+  setExpertRevisions,
   setLoading,
   updateAgent as updateAgentAction,
 } from '../store/slices/agentSlice';
@@ -44,6 +47,32 @@ interface SwitchAgentOptions {
 class AgentService {
   private watchingExternalChanges = false;
 
+  async upgradePreset(agentId: string, revision: number) {
+    const status = await window.electron.agents.upgradePreset(agentId, revision);
+    if (status === ExpertUpgradeStatus.Updated) await this.loadAgents();
+    return status;
+  }
+
+  isExpertBusy(agentId: string): Promise<boolean> {
+    return window.electron.agents.isExpertBusy(agentId);
+  }
+
+  async dismissPresetUpdate(agentId: string, revision: number): Promise<boolean> {
+    const dismissed = await window.electron.agents.dismissPresetUpdate(agentId, revision);
+    if (dismissed) await this.loadAgents();
+    return dismissed;
+  }
+
+  async loadExpertCatalog(): Promise<ExpertCatalog> {
+    const catalog = await window.electron.agents.expertCatalog();
+    const revisions: Record<string, number> = {};
+    for (const expert of catalog.experts) {
+      if (expert.revision !== undefined) revisions[expert.id] = expert.revision;
+    }
+    store.dispatch(setExpertRevisions(revisions));
+    return catalog;
+  }
+
   async loadAgents(): Promise<void> {
     if (!this.watchingExternalChanges) {
       // Agents edited in another window (e.g. the desktop companion's composer) reload here too.
@@ -71,7 +100,10 @@ class AgentService {
           isDefault: a.isDefault,
           source: a.source,
           presetId: a.presetId,
+          presetRevision: a.presetRevision,
+          dismissedPresetRevision: a.dismissedPresetRevision,
           skillIds: a.skillIds ?? [],
+          subagentCollaborationMode: normalizeSubagentCollaborationMode(a.subagentCollaborationMode),
           subagentAllowAgentIds: a.subagentAllowAgentIds ?? [],
         }));
         store.dispatch(setAgents(mappedAgents));
@@ -93,6 +125,7 @@ class AgentService {
     workingDirectory?: string;
     icon?: string;
     skillIds?: string[];
+    subagentCollaborationMode?: SubagentCollaborationMode;
     subagentAllowAgentIds?: string[];
   }): Promise<Agent | null> {
     try {
@@ -115,7 +148,9 @@ class AgentService {
           isDefault: agent.isDefault,
           source: agent.source,
           presetId: agent.presetId,
+          presetRevision: agent.presetRevision,
           skillIds: agent.skillIds ?? [],
+          subagentCollaborationMode: normalizeSubagentCollaborationMode(agent.subagentCollaborationMode),
           subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
         }));
         return agent;
@@ -138,6 +173,7 @@ class AgentService {
     workingDirectory?: string;
     icon?: string;
     skillIds?: string[];
+    subagentCollaborationMode?: SubagentCollaborationMode;
     subagentAllowAgentIds?: string[];
     enabled?: boolean;
     pinned?: boolean;
@@ -171,6 +207,7 @@ class AgentService {
             pinOrder: agent.pinOrder ?? null,
             sortOrder: agent.sortOrder ?? null,
             skillIds,
+            subagentCollaborationMode: normalizeSubagentCollaborationMode(agent.subagentCollaborationMode),
             subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
           },
         }));
@@ -210,7 +247,9 @@ class AgentService {
         isDefault: agent.isDefault,
         source: agent.source,
         presetId: agent.presetId,
+        presetRevision: agent.presetRevision,
         skillIds: agent.skillIds ?? [],
+        subagentCollaborationMode: normalizeSubagentCollaborationMode(agent.subagentCollaborationMode),
         subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
       }));
       store.dispatch(setAgents(mappedAgents));
@@ -311,7 +350,9 @@ class AgentService {
           isDefault: agent.isDefault,
           source: agent.source,
           presetId: agent.presetId,
+          presetRevision: agent.presetRevision,
           skillIds: agent.skillIds ?? [],
+          subagentCollaborationMode: normalizeSubagentCollaborationMode(agent.subagentCollaborationMode),
           subagentAllowAgentIds: agent.subagentAllowAgentIds ?? [],
         }));
         return agent;

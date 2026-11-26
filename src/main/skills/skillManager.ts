@@ -1545,59 +1545,6 @@ const parseGithubTreeOrBlobUrl = (source: string): NormalizedGitSource | null =>
   }
 };
 
-const isWebSearchSkillBroken = (skillRoot: string): boolean => {
-  const startServerScript = path.join(skillRoot, 'scripts', 'start-server.sh');
-  const searchScript = path.join(skillRoot, 'scripts', 'search.sh');
-  const serverEntry = path.join(skillRoot, 'dist', 'server', 'index.js');
-  const requiredPaths = [
-    startServerScript,
-    searchScript,
-    serverEntry,
-    path.join(skillRoot, 'node_modules', 'iconv-lite', 'encodings', 'index.js'),
-  ];
-
-  if (requiredPaths.some(requiredPath => !fs.existsSync(requiredPath))) {
-    return true;
-  }
-
-  try {
-    const startScript = fs.readFileSync(startServerScript, 'utf-8');
-    const searchScriptContent = fs.readFileSync(searchScript, 'utf-8');
-    const serverEntryContent = fs.readFileSync(serverEntry, 'utf-8');
-    if (!startScript.includes('WEB_SEARCH_FORCE_REPAIR')) {
-      return true;
-    }
-    if (!startScript.includes('detect_healthy_bridge_server')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('ACTIVE_SERVER_URL')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('try_switch_to_local_server')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('build_search_payload')) {
-      return true;
-    }
-    if (!searchScriptContent.includes('@query_file')) {
-      return true;
-    }
-    if (!serverEntryContent.includes('decodeJsonRequestBody')) {
-      return true;
-    }
-    if (!serverEntryContent.includes("TextDecoder('gb18030'")) {
-      return true;
-    }
-    if (serverEntryContent.includes('scoreDecodedJsonText') && serverEntryContent.includes('Request body decoded using gb18030 (score')) {
-      return true;
-    }
-  } catch {
-    return true;
-  }
-
-  return false;
-};
-
 export class SkillManager {
   private watchers: fs.FSWatcher[] = [];
   private notifyTimer: NodeJS.Timeout | null = null;
@@ -1682,12 +1629,14 @@ export class SkillManager {
     }
   }
 
-  syncBundledSkillsToUserData(): void {
+  syncBundledSkillsToUserData(onlySkillId?: string): void {
     console.log('[skills] syncBundledSkillsToUserData: start', { packaged: app.isPackaged });
     const userRoot = this.ensureSkillsRoot();
-    removeRetiredBundledSkills(userRoot, path.join(userRoot, SKILLS_CONFIG_FILE));
-    const state = this.loadSkillStateMap();
-    if (removeRetiredSkillEntries(state)) this.saveSkillStateMap(state);
+    if (!onlySkillId) {
+      removeRetiredBundledSkills(userRoot, path.join(userRoot, SKILLS_CONFIG_FILE));
+      const state = this.loadSkillStateMap();
+      if (removeRetiredSkillEntries(state)) this.saveSkillStateMap(state);
+    }
     console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
     const bundledRoot = this.getBundledSkillsRoot();
     console.log('[skills] syncBundledSkillsToUserData: bundledRoot =', bundledRoot);
@@ -1719,7 +1668,7 @@ export class SkillManager {
       console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
       bundledSkillDirs.forEach((dir) => {
         const id = path.basename(dir);
-        if (RETIRED_BUNDLED_SKILL_IDS.has(id)) return;
+        if ((onlySkillId && onlySkillId !== id) || RETIRED_BUNDLED_SKILL_IDS.has(id)) return;
         if (bundledIds && !bundledIds.has(id)) {
           console.log(`[skills] syncBundledSkillsToUserData: skipping non-bundled "${id}"`);
           return;
@@ -1736,10 +1685,6 @@ export class SkillManager {
           if (bundledVer && compareVersions(bundledVer, this.getSkillVersion(targetDir) || '0.0.0') > 0) {
             shouldRepair = true;
             needsCleanCopy = true;
-          }
-          // web-search has specific broken checks
-          else if (id === 'web-search' && isWebSearchSkillBroken(targetDir)) {
-            shouldRepair = true;
           }
           // Generic check: if bundled has node_modules but target doesn't, repair it
           else if (!this.isSkillRuntimeHealthy(targetDir, dir)) {
@@ -1791,6 +1736,7 @@ export class SkillManager {
         }
       });
 
+      if (onlySkillId) return;
       const bundledConfig = path.join(bundledRoot, SKILLS_CONFIG_FILE);
       const targetConfig = path.join(userRoot, SKILLS_CONFIG_FILE);
       if (fs.existsSync(bundledConfig)) {
@@ -2017,6 +1963,15 @@ export class SkillManager {
     }
   }
 
+  isSkillEnabled(id: string): boolean {
+    const state = this.loadSkillStateMap();
+    if (state[id] !== undefined) {
+      return state[id].enabled;
+    }
+    const skill = this.listSkills().find(item => item.id === id);
+    return skill ? skill.enabled : false;
+  }
+
   setSkillEnabled(id: string, enabled: boolean): SkillRecord[] {
     const state = this.loadSkillStateMap();
     state[id] = { enabled };
@@ -2128,8 +2083,9 @@ export class SkillManager {
     }
   }
 
-  async downloadSkill(source: string): Promise<{
+  async downloadSkill(source: string, signal?: AbortSignal): Promise<{
     success: boolean;
+    installedIds?: string[];
     skills?: SkillRecord[];
     error?: string;
     auditReport?: SkillSecurityReport;
@@ -2137,6 +2093,7 @@ export class SkillManager {
   }> {
     let cleanupPath: string | null = null;
     try {
+      signal?.throwIfAborted();
       const trimmed = source.trim();
       if (!trimmed) {
         return { success: false, error: 'Missing skill source' };
@@ -2290,6 +2247,7 @@ export class SkillManager {
       }
 
       // If risk detected, cache for user confirmation instead of auto-installing
+      signal?.throwIfAborted();
       if (auditReport && auditReport.riskLevel !== 'safe') {
         const pendingId = crypto.randomUUID();
         console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
@@ -2320,14 +2278,14 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
-      installSkillDirs(root, skillDirs, installNameHints);
+      const installedIds = installSkillDirs(root, skillDirs, installNameHints);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
 
       this.startWatching();
       this.notifySkillsChanged(createSkillChangeBatch(SkillChangeSource.Install));
-      return { success: true, skills: this.listSkills() };
+      return { success: true, installedIds, skills: this.listSkills() };
     } catch (error) {
       cleanupPathSafely(cleanupPath);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to download skill' };
@@ -2541,7 +2499,7 @@ export class SkillManager {
   confirmPendingInstall(
     pendingId: string,
     action: SecurityReportAction
-  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+  ): { success: boolean; installedIds?: string[]; skills?: SkillRecord[]; error?: string } {
     console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
     const pending = this.pendingInstalls.get(pendingId);
     if (!pending) {
@@ -2589,7 +2547,7 @@ export class SkillManager {
 
     this.startWatching();
     this.notifySkillsChanged(createSkillChangeBatch(SkillChangeSource.ConfirmInstall));
-    return { success: true, skills: this.listSkills() };
+    return { success: true, installedIds, skills: this.listSkills() };
   }
 
   startWatching(): void {

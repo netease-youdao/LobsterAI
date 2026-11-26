@@ -87,6 +87,7 @@ export type MediaGenerationResponse = {
 export type BrowserToolRequest = {
   tool: string;
   args: Record<string, unknown>;
+  signal?: AbortSignal;
 };
 
 export type BrowserToolResponse = {
@@ -94,18 +95,6 @@ export type BrowserToolResponse = {
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
-
-/** A request from the web-search skill's bridge server to the hidden search page. */
-export type WebSearchPageRequest = Record<string, unknown> & { op?: unknown };
-
-export type WebSearchPageResponse = {
-  success: boolean;
-  data?: unknown;
-  error?: string;
-  code?: string;
-};
-
-export type WebSearchPageHandler = (request: WebSearchPageRequest) => Promise<WebSearchPageResponse>;
 
 /** Document editor tools (the Office editors) share the browser tools' request and result shapes. */
 export type EditorToolRequest = BrowserToolRequest;
@@ -152,7 +141,6 @@ export class McpBridgeServer {
   private onMediaGenerationCallback: ((request: MediaGenerationRequest) => Promise<MediaGenerationResponse>) | null = null;
   private onBrowserToolCallback: ((request: BrowserToolRequest) => Promise<BrowserToolResponse>) | null = null;
   private onDecisionToolCallback: DecisionToolHandler | null = null;
-  private onWebSearchPageCallback: WebSearchPageHandler | null = null;
   /** Editor tool handlers by route, served at `/<route>/tool`. */
   private readonly editorTools = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
@@ -176,10 +164,6 @@ export class McpBridgeServer {
 
   get browserCallbackUrl(): string | null {
     return this._port ? `http://127.0.0.1:${this._port}/browser/tool` : null;
-  }
-
-  get webSearchCallbackUrl(): string | null {
-    return this._port ? `http://127.0.0.1:${this._port}/web-search/page` : null;
   }
 
   get decisionCallbackUrl(): string | null {
@@ -225,10 +209,6 @@ export class McpBridgeServer {
 
   onBrowserTool(callback: (request: BrowserToolRequest) => Promise<BrowserToolResponse>): void {
     this.onBrowserToolCallback = callback;
-  }
-
-  onWebSearchPage(callback: WebSearchPageHandler): void {
-    this.onWebSearchPageCallback = callback;
   }
 
   /** Serve a document editor's tools at `/<route>/tool`; `editorName` appears in errors the agent reads. */
@@ -379,11 +359,6 @@ export class McpBridgeServer {
 
     if (req.url?.startsWith('/browser/tool')) {
       await this.handleBrowserTool(req, res);
-      return;
-    }
-
-    if (req.url?.startsWith('/web-search/page')) {
-      await this.handleWebSearchPage(req, res);
       return;
     }
 
@@ -569,13 +544,18 @@ export class McpBridgeServer {
         return;
       }
 
+      const controller = new AbortController();
+      res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+      if (res.destroyed) return;
       const result = await this.onBrowserToolCallback({
         tool: request.tool,
+        signal: controller.signal,
         args: request.args && typeof request.args === 'object' && !Array.isArray(request.args)
           ? request.args
           : {},
       });
       log('DEBUG', `Browser tool "${request.tool}" completed in ${Date.now() - startedAt}ms`);
+      if (res.destroyed) return;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
     } catch (error) {
@@ -588,30 +568,6 @@ export class McpBridgeServer {
           isError: true,
         }));
       }
-    }
-  }
-
-  private async handleWebSearchPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const reply = (status: number, payload: WebSearchPageResponse) => {
-      if (res.writableEnded) return;
-      res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(payload));
-    };
-    try {
-      const request = JSON.parse(await this.readBody(req)) as WebSearchPageRequest | null;
-      if (!request || typeof request !== 'object' || typeof request.op !== 'string') {
-        reply(400, { success: false, error: 'Missing web search page operation.' });
-        return;
-      }
-      if (!this.onWebSearchPageCallback) {
-        reply(503, { success: false, error: 'LobsterAI in-app browser is not ready.' });
-        return;
-      }
-      reply(200, await this.onWebSearchPageCallback(request));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log('ERROR', `Web search page request failed: ${message}`);
-      reply(500, { success: false, error: `LobsterAI web search error: ${message}` });
     }
   }
 

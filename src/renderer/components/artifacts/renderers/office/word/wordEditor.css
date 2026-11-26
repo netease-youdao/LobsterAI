@@ -1,12 +1,233 @@
 /* Word-specific parts; the shared frame is in ../common/officeEditor.css. */
+.lobster-word-chrome {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+/* ---- Unified single-row Word top header (40px, aligned with SlidesToolbar) ------------------ */
+.lobster-word-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--lobster-border, rgba(128, 128, 128, .16));
+  background: var(--lobster-background, transparent);
+}
+.lobster-word-header-left,
+.lobster-word-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.lobster-word-header-left { flex-shrink: 1; }
+
+.lobster-word-editor .lobster-word-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(128, 128, 128, .22);
+  border-radius: 999px;
+  background: var(--lobster-surface, rgba(128, 128, 128, .05));
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: inherit;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.dark .lobster-word-editor .lobster-word-mode-btn {
+  border-color: rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .06);
+}
+.lobster-word-editor .lobster-word-mode-btn.is-active {
+  border-color: rgba(37, 99, 235, .32);
+  background: rgba(37, 99, 235, .12);
+  color: #2563eb;
+}
+.dark .lobster-word-editor .lobster-word-mode-btn.is-active {
+  border-color: rgba(96, 165, 250, .38);
+  background: rgba(59, 130, 246, .2);
+  color: #60a5fa;
+}
+.lobster-word-format-glyph {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.lobster-word-utility-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.lobster-word-editor .lobster-word-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: inherit;
+  flex-shrink: 0;
+  transition: background-color 120ms ease;
+}
+.lobster-word-editor .lobster-word-icon-btn.is-active {
+  background: rgba(128, 128, 128, .15);
+}
+
+.lobster-word-status-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: .72;
+}
+.lobster-word-status-pill.is-readonly {
+  background: rgba(128, 128, 128, .12);
+  opacity: .85;
+}
+
+/* ---- Single-row formatting toolbar (shown only in Edit mode, never wraps) ------------------- */
+.lobster-word-format-bar {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.lobster-word-editor .lobster-office-toolbar {
+  height: 36px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--lobster-surface, rgba(128, 128, 128, .03));
+}
+.dark .lobster-word-editor .lobster-office-toolbar {
+  background: rgba(255, 255, 255, .02);
+}
+.lobster-word-editor .lobster-office-toolbar button { width: 24px; height: 26px; flex-shrink: 0; }
+.lobster-word-editor .lobster-office-toolbar .lobster-office-split { flex-shrink: 0; }
+.lobster-word-editor .lobster-office-toolbar .lobster-office-split > button:first-child { width: 22px; }
+.lobster-word-editor .lobster-office-toolbar .lobster-office-split > .lobster-office-split-arrow { width: 12px; }
+.lobster-word-editor .lobster-office-toolbar select { height: 26px; padding: 0 3px; flex-shrink: 0; }
+.lobster-word-editor .lobster-word-style-select { width: 64px; max-width: 68px; }
+.lobster-word-editor .lobster-word-font-select { width: 78px; max-width: 84px; }
+.lobster-word-editor .lobster-word-size-select { width: 70px; max-width: 76px; }
+.lobster-word-editor .lobster-office-toolbar .lobster-word-menu-button { width: auto; gap: 1px; padding: 0 3px; flex-shrink: 0; }
+.lobster-word-menu-button > span { font-size: 9px; opacity: .75; }
+
+/* ---- Popovers (outline, formatting overflow, more menu zoom) -------------------------------- */
+.lobster-word-popover-item { display: flex; align-items: center; gap: 7px; width: 100%; }
+.lobster-word-popover-item.is-active { background: rgba(30, 120, 220, .14); color: #277bc3; font-weight: 500; }
+.lobster-word-menu-heading { padding: 2px 8px; font-size: 11px; opacity: .65; }
+.lobster-word-menu-divider { height: 1px; margin: 2px 0; background: rgba(128, 128, 128, .2); }
+.lobster-office-popover .lobster-office-menu-item:disabled { opacity: .4; cursor: default; }
+.lobster-office-popover .lobster-office-menu-item:disabled:hover { background: none; }
+
+.lobster-word-outline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.lobster-word-outline-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+.lobster-word-outline-empty {
+  padding: 8px;
+  font-size: 12px;
+  opacity: .6;
+}
+.lobster-word-more-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 4px;
+}
+.lobster-word-more-zoom-label {
+  font-size: 12px;
+  opacity: .75;
+  white-space: nowrap;
+}
+
+/* ---- Floating in-document Find bar ---------------------------------------------------------- */
+.lobster-word-find-bar {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 28px);
+  padding: 4px 6px 4px 9px;
+  border: 1px solid rgba(128, 128, 128, .22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .96);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .06);
+  font-size: 12px;
+}
+.dark .lobster-word-find-bar {
+  border-color: rgba(255, 255, 255, .14);
+  background: rgba(34, 37, 42, .96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .42);
+}
+.lobster-word-find-input {
+  width: 152px;
+  min-width: 90px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.lobster-word-find-count {
+  font-size: 11px;
+  opacity: .65;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 0 3px;
+}
+.lobster-word-editor .lobster-word-find-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+/* ---- Page mount, footer, table grid, and picture overlay ------------------------------------ */
 .lobster-word-mount { flex: 1; min-height: 0; position: relative; overflow: auto; background: #e9eaec; overscroll-behavior: contain; }
 /* Holds the scrolled pages and, above them, "Add to chat" for the selected text. */
 .lobster-word-frame { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
-.lobster-word-mount.docx-editor__scroll-container { display: block; }
+.lobster-word-mount.docx-editor__scroll-container { display: block; scrollbar-gutter: auto; }
 /* Core sizes this plane in pixels. The surrounding viewport owns scrolling.
    Word emboldens and slants fonts without those faces (宋体, 楷体, 仿宋); the app shell
    turns synthesis off globally, so pages turn it back on. */
-.lobster-word-surface { margin: 12px auto; color: #202124; font-synthesis: weight style; }
+.lobster-word-surface { margin: 16px auto; color: #202124; font-synthesis: weight style; }
+.lobster-word-footer-end { display: flex; align-items: center; gap: 10px; }
+.lobster-word-font-badge { white-space: nowrap; }
+.lobster-word-footer-zoom button { height: 22px; font-size: 11px; }
 /* Lines paint at font size 0 around their runs. IME text typed into an empty line lands outside
    any run, so it needs the size of the text it will become (set in wordComposition.ts). */
 .lobster-word-surface.lobster-word-composing .docx-line:not(:has(.layout-run)) {
@@ -21,11 +242,6 @@
 .lobster-word-table-cell { width: 16px; height: 16px; box-sizing: border-box; border: 1px solid rgba(128, 128, 128, .45); border-radius: 2px; background: #fff; cursor: pointer; }
 .lobster-word-table-cell[aria-selected="true"] { border-color: #277bc3; background: rgba(30, 120, 220, .28); }
 .dark .lobster-word-table-cell:not([aria-selected="true"]) { background: #1f2124; }
-.lobster-office-toolbar .lobster-word-menu-button { width: auto; gap: 1px; padding: 0 3px; }
-.lobster-word-menu-button > span { font-size: 9px; opacity: .75; }
-.lobster-word-menu-divider { height: 1px; margin: 2px 0; background: rgba(128, 128, 128, .2); }
-.lobster-office-popover .lobster-office-menu-item:disabled { opacity: .4; cursor: default; }
-.lobster-office-popover .lobster-office-menu-item:disabled:hover { background: none; }
 
 /* The selected picture's frame and resize handles, over the pages and scrolled with them. */
 .lobster-word-image-overlay { position: absolute; inset: 0; z-index: 5; pointer-events: none; }

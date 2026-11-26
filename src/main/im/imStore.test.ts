@@ -426,3 +426,30 @@ test('IMStore does not resurrect deleted nim instances from legacy nim config', 
   expect(config.instances).toHaveLength(0);
   expect(db.getValue('nim')).toBeUndefined();
 });
+
+test('IMStore preserves persisted Weixin credentials across partial or undefined updates', () => {
+  const db = new FakeDb();
+  const store = new IMStore(db as unknown as ConstructorParameters<typeof IMStore>[0]);
+
+  store.setWeixinConfig({
+    enabled: true,
+    accountId: '91fcaf18cb3a@im.bot',
+    botToken: 'secret-weixin-token',
+    baseUrl: 'https://sz.ilinkai.weixin.qq.com',
+    userId: 'wxid_123@im.wechat',
+  });
+
+  store.setWeixinConfig({
+    enabled: false,
+    botToken: undefined,
+    baseUrl: undefined,
+  });
+
+  expect(store.getWeixinConfig()).toMatchObject({
+    enabled: false,
+    accountId: '91fcaf18cb3a@im.bot',
+    botToken: 'secret-weixin-token',
+    baseUrl: 'https://sz.ilinkai.weixin.qq.com',
+    userId: 'wxid_123@im.wechat',
+  });
+});

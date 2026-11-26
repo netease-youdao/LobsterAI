@@ -9,21 +9,8 @@ import {
 } from '../browserCredentials/constants';
 import type { BrowserPasskeyNotice } from './passkeys';
 
-export const BrowserProfileMode = {
-  Managed: 'managed',
-  User: 'user',
-  Custom: 'custom',
-} as const;
-
-export type BrowserProfileMode = typeof BrowserProfileMode[keyof typeof BrowserProfileMode];
-
-export const BrowserRuntimeProfile = {
-  Managed: 'openclaw',
-  InApp: 'lobster-in-app',
-  User: 'user',
-} as const;
-
-export type BrowserRuntimeProfile = typeof BrowserRuntimeProfile[keyof typeof BrowserRuntimeProfile];
+export const AgentBrowserMcpServerName = 'lobster-browser';
+export const AgentBrowserMcpToolPrefix = `mcp__${AgentBrowserMcpServerName}__`;
 
 export const AgentBrowserPartition = {
   Default: 'persist:lobster-agent-browser',
@@ -34,6 +21,13 @@ export type AgentBrowserPartition =
 
 export const AgentBrowserPageUrl = {
   Blank: 'about:blank',
+} as const;
+
+export const AgentBrowserNavigation = {
+  Url: 'url',
+  Back: 'back',
+  Forward: 'forward',
+  Reload: 'reload',
 } as const;
 
 export const AgentBrowserZoom = {
@@ -64,10 +58,10 @@ export const BrowserDisplayMode = {
 export type BrowserDisplayMode = typeof BrowserDisplayMode[keyof typeof BrowserDisplayMode];
 
 /**
- * One-time switch of existing installs to the in-app browser. The applied
- * version lives on the top-level app config so a later explicit choice wins.
+ * Migration version for the persisted browser display setting.
+ * v3 keeps the chosen mode and external connection settings on DSH upgrades.
  */
-export const BROWSER_DISPLAY_MODE_MIGRATION_VERSION = 1;
+export const BROWSER_DISPLAY_MODE_MIGRATION_VERSION = 3;
 
 const BrowserSearchUrlPrefix = {
   Baidu: 'https://www.baidu.com/s?wd=',
@@ -79,43 +73,7 @@ export const buildBrowserSearchUrl = (query: string, language?: string): string 
   `${language === 'zh' ? BrowserSearchUrlPrefix.Baidu : BrowserSearchUrlPrefix.Bing}${encodeURIComponent(query)}`
 );
 
-export const BrowserNetworkMode = {
-  ProxyCompatible: 'proxy-compatible',
-  Strict: 'strict',
-} as const;
-
-export type BrowserNetworkMode = typeof BrowserNetworkMode[keyof typeof BrowserNetworkMode];
-
-export const BrowserSnapshotMode = {
-  Default: 'default',
-  Efficient: 'efficient',
-} as const;
-
-export type BrowserSnapshotMode = typeof BrowserSnapshotMode[keyof typeof BrowserSnapshotMode];
-
-export const BrowserDiagnosticStep = {
-  GatewayStatus: 'gateway-status',
-  Profiles: 'profiles',
-  BrowserStatus: 'browser-status',
-  BrowserStart: 'browser-start',
-  OpenTestPage: 'open-test-page',
-} as const;
-
-export type BrowserDiagnosticStep = typeof BrowserDiagnosticStep[keyof typeof BrowserDiagnosticStep];
-
-export const BrowserDiagnosticStatus = {
-  Success: 'success',
-  Warning: 'warning',
-  Error: 'error',
-} as const;
-
-export type BrowserDiagnosticStatus = typeof BrowserDiagnosticStatus[keyof typeof BrowserDiagnosticStatus];
-
 export const BrowserIpc = {
-  GetStatus: 'openclaw:browser:getStatus',
-  ListProfiles: 'openclaw:browser:listProfiles',
-  Test: 'openclaw:browser:test',
-  ResetProfile: 'openclaw:browser:resetProfile',
   GetHostState: 'openclaw:browser:getHostState',
   SetHostView: 'openclaw:browser:setHostView',
   NavigateHost: 'openclaw:browser:navigateHost',
@@ -139,58 +97,13 @@ export const BrowserIpc = {
 
 export type BrowserIpc = typeof BrowserIpc[keyof typeof BrowserIpc];
 
-export const BrowserControlRequestMethod = {
-  Get: 'GET',
-  Post: 'POST',
-  Delete: 'DELETE',
-} as const;
-
-export type BrowserControlRequestMethod =
-  typeof BrowserControlRequestMethod[keyof typeof BrowserControlRequestMethod];
-
-export const OpenClawBrowserGatewayMethod = {
-  Request: 'browser.request',
-} as const;
-
-export interface BrowserControlGatewayRequest {
-  method: BrowserControlRequestMethod;
-  path: string;
-  query?: Record<string, string>;
-  body?: unknown;
-  timeoutMs?: number;
-}
-
-export interface BrowserWebFetchConfig {
-  enabled: boolean;
-  followGlobalProxy: boolean;
-  timeoutSeconds?: number;
-  maxRedirects?: number;
-  maxChars?: number;
-  userAgent?: string;
-  readability: boolean;
-  allowRfc2544BenchmarkRange?: boolean;
-}
-
 export interface BrowserWebAccessConfig {
-  browserEnabled: boolean;
-  profileMode: BrowserProfileMode;
   displayMode: BrowserDisplayMode;
-  networkMode: BrowserNetworkMode;
-  followGlobalProxy: boolean;
-  allowedHostnames: string[];
   blockedHostnames: string[];
-  snapshotMode: BrowserSnapshotMode;
-  evaluateEnabled: boolean;
   credentialUseMode: BrowserCredentialUseModeValue;
   credentialSaveMode: BrowserCredentialSaveModeValue;
   executablePath?: string;
   cdpUrl?: string;
-  headless?: boolean;
-  attachOnly?: boolean;
-  remoteCdpTimeoutMs?: number;
-  remoteCdpHandshakeTimeoutMs?: number;
-  extraArgs?: string[];
-  webFetch: BrowserWebFetchConfig;
 }
 
 export const AgentBrowserToolPhase = {
@@ -288,36 +201,11 @@ export interface AgentBrowserHostResponse {
   error?: string;
 }
 
-export interface BrowserDiagnosticResultStep {
-  step: BrowserDiagnosticStep;
-  status: BrowserDiagnosticStatus;
-  message: string;
-  details?: string;
-}
-
-export interface BrowserDiagnosticResult {
-  success: boolean;
-  steps: BrowserDiagnosticResultStep[];
-  error?: string;
-}
-
 export const defaultBrowserWebAccessConfig: BrowserWebAccessConfig = {
-  browserEnabled: true,
-  profileMode: BrowserProfileMode.Managed,
   displayMode: BrowserDisplayMode.InApp,
-  networkMode: BrowserNetworkMode.ProxyCompatible,
-  followGlobalProxy: true,
-  allowedHostnames: [],
   blockedHostnames: [],
-  snapshotMode: BrowserSnapshotMode.Efficient,
-  evaluateEnabled: true,
   credentialUseMode: BrowserCredentialUseMode.AlwaysAsk,
   credentialSaveMode: BrowserCredentialSaveMode.Ask,
-  webFetch: {
-    enabled: true,
-    followGlobalProxy: true,
-    readability: true,
-  },
 };
 
 const normalizeOptionalString = (value: unknown): string | undefined => {
@@ -326,25 +214,6 @@ const normalizeOptionalString = (value: unknown): string | undefined => {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
-};
-
-const normalizeOptionalNumber = (value: unknown): number | undefined => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return value > 0 ? value : undefined;
-};
-
-export const normalizeBrowserStringList = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return Array.from(new Set(
-    value
-      .filter((item): item is string => typeof item === 'string')
-      .map(item => item.trim())
-      .filter(Boolean),
-  ));
 };
 
 const BrowserUrlProtocol = {
@@ -529,24 +398,18 @@ export const normalizeBrowserCdpUrl = (value: unknown): string | undefined => {
   }
 };
 
+export type LegacyBrowserWebAccessConfigInput = Partial<BrowserWebAccessConfig> & {
+  headless?: boolean;
+};
+
 export const normalizeBrowserWebAccessConfig = (
-  value: Partial<BrowserWebAccessConfig> | undefined | null,
+  value: LegacyBrowserWebAccessConfigInput | undefined | null,
 ): BrowserWebAccessConfig => {
-  const webFetch: Partial<BrowserWebFetchConfig> = value?.webFetch ?? {};
-  const profileMode = Object.values(BrowserProfileMode).includes(value?.profileMode as BrowserProfileMode)
-    ? value?.profileMode as BrowserProfileMode
-    : defaultBrowserWebAccessConfig.profileMode;
   const displayMode = Object.values(BrowserDisplayMode).includes(value?.displayMode as BrowserDisplayMode)
     ? value?.displayMode as BrowserDisplayMode
     : value?.headless === false
       ? BrowserDisplayMode.External
       : defaultBrowserWebAccessConfig.displayMode;
-  const networkMode = Object.values(BrowserNetworkMode).includes(value?.networkMode as BrowserNetworkMode)
-    ? value?.networkMode as BrowserNetworkMode
-    : defaultBrowserWebAccessConfig.networkMode;
-  const snapshotMode = Object.values(BrowserSnapshotMode).includes(value?.snapshotMode as BrowserSnapshotMode)
-    ? value?.snapshotMode as BrowserSnapshotMode
-    : defaultBrowserWebAccessConfig.snapshotMode;
   const credentialUseMode = Object.values(BrowserCredentialUseMode).includes(
     value?.credentialUseMode as BrowserCredentialUseModeValue,
   )
@@ -559,41 +422,13 @@ export const normalizeBrowserWebAccessConfig = (
     : defaultBrowserWebAccessConfig.credentialSaveMode;
   const executablePath = normalizeOptionalString(value?.executablePath);
   const cdpUrl = normalizeBrowserCdpUrl(value?.cdpUrl);
-  const remoteCdpTimeoutMs = normalizeOptionalNumber(value?.remoteCdpTimeoutMs);
-  const remoteCdpHandshakeTimeoutMs = normalizeOptionalNumber(value?.remoteCdpHandshakeTimeoutMs);
-  const extraArgs = normalizeBrowserStringList(value?.extraArgs);
-  const timeoutSeconds = normalizeOptionalNumber(webFetch.timeoutSeconds);
-  const maxRedirects = normalizeOptionalNumber(webFetch.maxRedirects);
-  const maxChars = normalizeOptionalNumber(webFetch.maxChars);
-  const userAgent = normalizeOptionalString(webFetch.userAgent);
 
   return {
-    browserEnabled: value?.browserEnabled ?? defaultBrowserWebAccessConfig.browserEnabled,
-    profileMode,
     displayMode,
-    networkMode,
-    followGlobalProxy: value?.followGlobalProxy ?? defaultBrowserWebAccessConfig.followGlobalProxy,
-    allowedHostnames: normalizeBrowserHostnameList(value?.allowedHostnames),
     blockedHostnames: normalizeBrowserHostnameList(value?.blockedHostnames),
-    snapshotMode,
-    evaluateEnabled: value?.evaluateEnabled ?? defaultBrowserWebAccessConfig.evaluateEnabled,
     credentialUseMode,
     credentialSaveMode,
     ...(executablePath ? { executablePath } : {}),
     ...(cdpUrl ? { cdpUrl } : {}),
-    ...(value?.attachOnly === true ? { attachOnly: true } : {}),
-    ...(remoteCdpTimeoutMs ? { remoteCdpTimeoutMs } : {}),
-    ...(remoteCdpHandshakeTimeoutMs ? { remoteCdpHandshakeTimeoutMs } : {}),
-    ...(extraArgs.length ? { extraArgs } : {}),
-    webFetch: {
-      enabled: webFetch.enabled ?? defaultBrowserWebAccessConfig.webFetch.enabled,
-      followGlobalProxy: webFetch.followGlobalProxy ?? defaultBrowserWebAccessConfig.webFetch.followGlobalProxy,
-      ...(timeoutSeconds ? { timeoutSeconds } : {}),
-      ...(maxRedirects ? { maxRedirects } : {}),
-      ...(maxChars ? { maxChars } : {}),
-      ...(userAgent ? { userAgent } : {}),
-      readability: webFetch.readability ?? defaultBrowserWebAccessConfig.webFetch.readability,
-      ...(webFetch.allowRfc2544BenchmarkRange === true ? { allowRfc2544BenchmarkRange: true } : {}),
-    },
   };
 };

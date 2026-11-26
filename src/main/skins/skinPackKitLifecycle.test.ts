@@ -7,7 +7,6 @@ import {
   SkinPackKitId,
   SkinPackSkillId,
 } from '../../shared/skin/kit';
-import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import { createSkinPackKitLifecycle } from './skinPackKitLifecycle';
 
 const SKILLS_STATE_KEY = 'skills_state';
@@ -111,7 +110,7 @@ describe('AI Skin Designer kit lifecycle', () => {
     expect(notifySkillsChanged).toHaveBeenCalledOnce();
     expect(syncOpenClawConfig).toHaveBeenCalledWith({
       reason: 'ai-skin-designer-kit-installed',
-      expectedImpact: OpenClawConfigImpact.Sync,
+      expectedImpact: 'sync',
     });
     expect(store.get<Record<string, { workflowKind?: string }>>(KitStoreKey.Installed))
       .toMatchObject({
@@ -168,7 +167,7 @@ describe('AI Skin Designer kit lifecycle', () => {
     expect(notifySkillsChanged).toHaveBeenCalledOnce();
     expect(syncOpenClawConfig).toHaveBeenCalledWith({
       reason: 'ai-skin-designer-kit-uninstalled',
-      expectedImpact: OpenClawConfigImpact.Sync,
+      expectedImpact: 'sync',
     });
   });
 

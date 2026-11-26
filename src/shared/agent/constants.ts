@@ -17,6 +17,28 @@ export const AgentModelSelectionMode = {
 } as const;
 export type AgentModelSelectionMode = typeof AgentModelSelectionMode[keyof typeof AgentModelSelectionMode];
 
+export const SubagentCollaborationMode = {
+  All: 'all',
+  Allowlist: 'allowlist',
+  Disabled: 'disabled',
+} as const;
+export type SubagentCollaborationMode =
+  typeof SubagentCollaborationMode[keyof typeof SubagentCollaborationMode];
+
+export function normalizeSubagentCollaborationMode(
+  raw: unknown,
+  fallback: SubagentCollaborationMode = SubagentCollaborationMode.All,
+): SubagentCollaborationMode {
+  if (
+    raw === SubagentCollaborationMode.All
+    || raw === SubagentCollaborationMode.Allowlist
+    || raw === SubagentCollaborationMode.Disabled
+  ) {
+    return raw;
+  }
+  return fallback;
+}
+
 export const AgentIpcChannel = {
   List: 'agents:list',
   Get: 'agents:get',
@@ -29,6 +51,9 @@ export const AgentIpcChannel = {
   PresetTemplates: 'agents:presetTemplates',
   ExpertCatalog: 'agents:expertCatalog',
   AddPreset: 'agents:addPreset',
+  UpgradePreset: 'agents:upgradePreset',
+  DismissPresetUpdate: 'agents:dismissPresetUpdate',
+  IsExpertBusy: 'agents:isExpertBusy',
   /** Main to renderer: agents were changed by another window. */
   Changed: 'agents:changed',
 } as const;

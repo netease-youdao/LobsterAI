@@ -3,9 +3,9 @@
 /**
  * Warmup script for V8 compile cache.
  *
- * Loads the gateway-bundle.mjs (26MB) so V8 compiles it and writes bytecode
- * to the compile cache directory. Subsequent loads by the real gateway process
- * skip V8 compilation and start in ~5s instead of ~35s.
+ * Imports the bundled DSH runtime entry (dsh-runtime/lib/bin.js) so V8
+ * compiles it and writes bytecode to the compile cache directory. Subsequent
+ * loads by the real DSH process skip initial V8 compilation.
  *
  * Usage (via ELECTRON_RUN_AS_NODE=1):
  *   set ELECTRON_RUN_AS_NODE=1
@@ -38,12 +38,12 @@ for (let i = 0; i < args.length; i++) {
 
 // Default cache dir: same location the engine manager uses at runtime.
 if (!cacheDir) {
-  cacheDir = path.join(process.env.OPENCLAW_STATE_DIR || __dirname, '.compile-cache');
+  cacheDir = path.join(process.env.DSH_HOME || process.env.OPENCLAW_STATE_DIR || __dirname, '.compile-cache');
 }
 
 // Set NODE_COMPILE_CACHE env var — this enables V8 compile cache for BOTH
 // CJS require() and ESM import().  The enableCompileCache() API only covers
-// CJS, so we need the env var for the ESM gateway-bundle.mjs.
+// CJS, so we need the env var for the ESM DSH runtime entry.
 process.env.NODE_COMPILE_CACHE = cacheDir;
 
 // Also call enableCompileCache() as a belt-and-suspenders measure.
@@ -56,41 +56,41 @@ try {
   process.stderr.write(`[warmup] enableCompileCache: ${err.message}\n`);
 }
 
-// Find the gateway bundle
-const bundleCandidates = [
-  path.join(__dirname, 'gateway-bundle.mjs'),
-  path.join(__dirname, '..', 'resources', 'cfmind', 'gateway-bundle.mjs'),
+// Find the bundled DSH runtime entry
+const entryCandidates = [
+  path.join(__dirname, 'dsh-runtime', 'lib', 'bin.js'),
+  path.join(__dirname, '..', 'resources', 'dsh-runtime', 'lib', 'bin.js'),
 ];
 
-let bundlePath = null;
-for (const candidate of bundleCandidates) {
+let entryPath = null;
+for (const candidate of entryCandidates) {
   if (fs.existsSync(candidate)) {
-    bundlePath = candidate;
+    entryPath = candidate;
     break;
   }
 }
 
-if (!bundlePath) {
-  process.stderr.write(`[warmup] No gateway-bundle.mjs found, skipping. (${elapsed()})\n`);
+if (!entryPath) {
+  process.stderr.write(`[warmup] No dsh-runtime/lib/bin.js found, skipping. (${elapsed()})\n`);
   process.exit(0);
 }
 
-process.stderr.write(`[warmup] Loading bundle: ${bundlePath} ...\n`);
+process.stderr.write(`[warmup] Loading DSH runtime entry: ${entryPath} ...\n`);
 
-// Load the bundle to trigger V8 compilation.
-// The gateway-entry code inside the bundle will detect that it's not the main
-// module (isMainModule check) and skip all side effects — no gateway starts.
-const bundleUrl = pathToFileURL(bundlePath).href;
-import(bundleUrl)
+// Load the entry to trigger V8 compilation.
+// dsh-runtime/lib/bin.js checks `import.meta.main` and skips CLI startup when
+// imported as a module — no DSH process starts.
+const entryUrl = pathToFileURL(entryPath).href;
+import(entryUrl)
   .then(() => {
     try { require('node:module').flushCompileCache(); } catch (_) {}
-    process.stderr.write(`[warmup] Bundle loaded successfully. (${elapsed()})\n`);
+    process.stderr.write(`[warmup] DSH runtime entry loaded successfully. (${elapsed()})\n`);
     process.exit(0);
   })
   .catch((err) => {
     // Some import errors are expected (missing native modules, etc.)
     // The compile cache is still written for the JS portions that were parsed.
     try { require('node:module').flushCompileCache(); } catch (_) {}
-    process.stderr.write(`[warmup] Bundle load finished with error (cache still written): ${err.message} (${elapsed()})\n`);
+    process.stderr.write(`[warmup] DSH runtime load finished with error (cache still written): ${err.message} (${elapsed()})\n`);
     process.exit(0);
   });

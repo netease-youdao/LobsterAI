@@ -1,0 +1,731 @@
+/**
+ * @lobsterai/dsh-bundle — Owner-Only Operations RPC Plugin
+ *
+ * Registers `POST /api/lobsterai/ops` via `ctx.connection.fetch.register(...)`,
+ * automatically inheriting DSH's loopback/Origin fence, signed cookie auth,
+ * and `peer.principal.kind === 'owner'` enforcement.
+ *
+ * Supported actions:
+ * - `health`: runtime readiness & loaded LobsterAI plugin inventory
+ * - `syncProviders`: hot-sync LobsterAI providers & API keys into memory
+ * - `syncMcpServers`: reconcile LobsterAI MCP servers via `ctx.mcpManager.register`
+ * - `syncSkillsPolicy`: update global enabled/disabled skill lists & refresh catalog
+ * - `syncMemoryPolicy`: update global memoryEnabled toggle
+ * - `syncAgents`: hot-sync LobsterAI agent roster & collaboration policies into memory
+ * - `syncSubagentBindings`: restore durable childSessionId -> targetAgentId delegation bindings
+ * - `bindSessionContext`: bind `{ agentId, coworkSessionId, allowedSkillIds, customSystemPrompt, executionMode }`
+ * - `syncHostTools`: hot-sync native host tool definitions
+ * - `deleteSessionFiles`: cancel/stop live agent and delete persisted JSONL session dir
+ */
+
+import { existsSync } from 'node:fs';
+import { readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { createAgentWorkspaceSync } from './agent-workspace-sync.mjs';
+import { createMcpSseBridge } from './mcp-sse-bridge.mjs';
+import { reconcileMcpServers } from './mcp-sync-helpers.mjs';
+import { normalizeMcpToolFilter } from './mcp-tool-filter-helpers.mjs';
+import { canonicalizeProviderId } from './model-bridge-helpers.mjs';
+import { mergeBoundSessionContext, VALID_PERMISSION_PRESETS } from './ops-rpc-helpers.mjs';
+import { getHostState } from './shared-state.mjs';
+import { DSH_SEARCH_POLICY, normalizeHostnamePolicyList } from './web-access-guard-helpers.mjs';
+
+export const name = 'lobster-ops-rpc';
+export const inject = ['connection'];
+
+const OPS_ROUTE_PATH = '/api/lobsterai/ops';
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+const MCP_CONNECTION_WAIT_MS = 15_000;
+
+async function waitForMcpConnection(manager, name) {
+  const getResult = (views) => {
+    const view = views.find((item) => item.name === name && item.configured);
+    if (!view) return false;
+    if (view.status?.state === 'connected') return true;
+    if (['failed', 'disabled', 'waiting-credentials'].includes(view.status?.state)) return false;
+    return undefined;
+  };
+
+  const current = getResult(manager.list());
+  if (current !== undefined) return current;
+  if (typeof manager.watch !== 'function') return false;
+
+  try {
+    for await (const views of manager.watch(AbortSignal.timeout(MCP_CONNECTION_WAIT_MS))) {
+      const result = getResult(views);
+      if (result !== undefined) return result;
+    }
+  } catch {
+    // The host or its MCP manager may have shut down while waiting.
+  }
+  return false;
+}
+
+function sameSkillAllowlist(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Find and delete all directories matching an encoded DSH sessionId under
+ * `<dshHome>/sessions/<project>/<encodedId>` so deleting a LobsterAI session
+ * leaves zero orphaned JSONL history files behind.
+ */
+async function removeSessionDirectories(sessionId) {
+  const sessionsRoot = dshHomePath('sessions');
+  if (!existsSync(sessionsRoot)) return [];
+  const encoded = encodeURIComponent(sessionId);
+  const removed = [];
+  let projectDirs;
+  try {
+    projectDirs = await readdir(sessionsRoot, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+  for (const dirent of projectDirs) {
+    if (!dirent.isDirectory()) continue;
+    for (const candidateName of new Set([sessionId, encoded])) {
+      const target = join(sessionsRoot, dirent.name, candidateName);
+      if (existsSync(target)) {
+        await rm(target, { recursive: true, force: true });
+        removed.push(target);
+      }
+    }
+  }
+  return removed;
+}
+
+export function apply(ctx) {
+  const state = getHostState(ctx);
+  const syncAgentWorkspaces = createAgentWorkspaceSync(ctx, dshHomePath('lobsterai-agent-workspaces.json'));
+  /** @type {Map<string, { fingerprint: string, dispose: () => unknown }>} */
+  const managedMcpEntries = new Map();
+  const sseBridge = createMcpSseBridge(ctx);
+  /** Serialize concurrent `syncMcpServers` RPC calls so map/disposal ops never race. */
+  let mcpSyncTail = Promise.resolve();
+
+  const REMOVED_UNMOUNT_WAIT_MS = 5_000;
+
+  async function waitForRemovedMcpUnmounted(mcpManager, removedNames) {
+    if (!Array.isArray(removedNames) || removedNames.length === 0) return;
+    const isSettled = (views) => {
+      const byName = new Map(views.map((view) => [view.name, view]));
+      return removedNames.every((serverName) => {
+        const view = byName.get(serverName);
+        // Settled once removed from list(), re-configured, or retained only due to failed cleanup.
+        return !view || view.configured === true || view.status?.state === 'failed';
+      });
+    };
+
+    if (isSettled(mcpManager.list())) return;
+    if (typeof mcpManager.watch !== 'function') return;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOVED_UNMOUNT_WAIT_MS);
+    timer.unref?.();
+    try {
+      for await (const views of mcpManager.watch(controller.signal)) {
+        if (isSettled(views)) {
+          controller.abort();
+          break;
+        }
+      }
+    } catch {
+      // Ignore abort / stream shutdown errors; bounded best-effort unmount wait.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function runSyncMcpServers(payload) {
+    const mcpManager = ctx.get('mcpManager');
+    const tools = ctx.get('tools');
+    if (!mcpManager && !tools) {
+      const errors = ['mcpManager and tools services are not mounted'];
+      ctx.logger.warn('[LobsterAI:OpsRpc] syncMcpServers skipped: mcpManager and tools services are not mounted');
+      return {
+        available: false,
+        registered: [],
+        added: [],
+        updated: [],
+        removed: [],
+        unchanged: [],
+        errors,
+        statuses: [],
+      };
+    }
+
+    const body = payload && typeof payload === 'object' ? payload : {};
+    const servers = Array.isArray(body.servers) ? body.servers : [];
+    const deferSseWait = body.deferSseWait === true;
+
+    const standardEntries = [];
+    const sseEntries = [];
+    /** @type {Map<string, ReturnType<typeof normalizeMcpToolFilter>>} */
+    const desiredToolFilters = new Map();
+    const preErrors = [];
+    const seenNames = new Set();
+
+    for (const entry of servers) {
+      if (!entry || typeof entry !== 'object') continue;
+      const serverName = String(entry.name || '').trim();
+      if (!serverName || entry.enabled === false) continue;
+
+      if (seenNames.has(serverName)) {
+        preErrors.push(`${serverName}: duplicate MCP server name`);
+        continue;
+      }
+      seenNames.add(serverName);
+      desiredToolFilters.set(serverName, normalizeMcpToolFilter(entry.toolFilter));
+
+      const rawTransport = String(entry.transport || '').trim().toLowerCase();
+      if (rawTransport === 'sse') {
+        sseEntries.push({ ...entry, name: serverName });
+      } else {
+        standardEntries.push({ ...entry, name: serverName, transport: rawTransport });
+      }
+    }
+
+    // Publish incoming user MCP tool filters before registering new servers so
+    // any immediate `tools/change` event observes the updated filter policy,
+    // while retaining existing filters for removed servers until after disposal.
+    for (const [serverName, filter] of desiredToolFilters.entries()) {
+      state.mcpRegisteredServers.add(serverName);
+      if (filter) {
+        state.mcpToolFilters.set(serverName, filter);
+      } else {
+        state.mcpToolFilters.delete(serverName);
+      }
+    }
+
+    // Release removed or transport-switched SSE servers before reconciling
+    // standard servers so namespaces never collide during transport changes.
+    await sseBridge.disposeRemovedOrChanged(sseEntries);
+
+    let standardOutcome = {
+      registered: [],
+      added: [],
+      updated: [],
+      removed: [],
+      unchanged: [],
+      errors: [],
+    };
+    if (mcpManager) {
+      standardOutcome = await reconcileMcpServers({
+        managedEntries: managedMcpEntries,
+        servers: standardEntries,
+        register: (serverName, config) => mcpManager.register(serverName, config),
+        logger: ctx.logger,
+        afterDispose: (removedNames) => waitForRemovedMcpUnmounted(mcpManager, removedNames),
+      });
+    } else {
+      for (const existing of managedMcpEntries.values()) {
+        try {
+          await existing.dispose();
+        } catch {}
+      }
+      managedMcpEntries.clear();
+      for (const entry of standardEntries) {
+        standardOutcome.errors.push(`${entry.name}: mcpManager service is not mounted`);
+      }
+    }
+
+    const sseResult = await sseBridge.sync(sseEntries, {
+      awaitInitialReady: !deferSseWait,
+    });
+
+    // Prune removed or failed-to-register servers from active toolFilter state,
+    // then immediately reconcile restrictions across all live agents.
+    const activeRegistered = new Set([...standardOutcome.registered, ...sseResult.registered]);
+    state.mcpRegisteredServers.clear();
+    state.mcpToolFilters.clear();
+    for (const serverName of activeRegistered) {
+      state.mcpRegisteredServers.add(serverName);
+      const filter = desiredToolFilters.get(serverName);
+      if (filter) {
+        state.mcpToolFilters.set(serverName, filter);
+      }
+    }
+    state.reconcileToolDisclosure?.();
+
+    return {
+      available: true,
+      registered: [...standardOutcome.registered, ...sseResult.registered],
+      added: standardOutcome.added,
+      updated: standardOutcome.updated,
+      removed: standardOutcome.removed,
+      unchanged: standardOutcome.unchanged,
+      errors: [...preErrors, ...standardOutcome.errors, ...sseResult.errors],
+      statuses: [
+        ...(mcpManager ? mcpManager.list() : []),
+        ...sseBridge.list(),
+      ],
+    };
+  }
+
+  async function syncMcpServers(payload) {
+    const run = mcpSyncTail.then(() => runSyncMcpServers(payload));
+    mcpSyncTail = run.then(() => undefined, () => undefined);
+    const result = await run;
+    const name = payload?.waitForServerName;
+    if (typeof name !== 'string') return result;
+
+    // Keep the config queue free for subsequent changes while the new process
+    // negotiates and registers its tools.
+    const manager = ctx.get('mcpManager');
+    const serverConnected = Boolean(manager && result.registered.includes(name))
+      && await waitForMcpConnection(manager, name);
+    return { ...result, serverConnected };
+  }
+
+  state.syncMcpServers = syncMcpServers;
+
+  function applyPermissionPresetToAgent(agent, preset, options = {}) {
+    if (!agent || !agent.session || !VALID_PERMISSION_PRESETS.has(preset)) return false;
+    // dsh applies the delegation's sandbox on top of its parent's permissions.
+    if (agent.session.header?.origin === 'subagent') return false;
+    const permissionPresets = ctx.get('permissionPresets');
+    if (!permissionPresets || typeof permissionPresets.set !== 'function') return false;
+    try {
+      const current = typeof permissionPresets.current === 'function'
+        ? permissionPresets.current(agent.session)
+        : undefined;
+      if (current === preset) return true;
+      // Call `approval.setPolicy` BEFORE `permissionPresets.set` so `setPolicy`
+      // observes the previous effective policy and emits its model switch notice
+      // instead of silently returning early after `permissionPresets.set` already
+      // appends `approval/policy`. `permissionPresets.set` then writes
+      // `permission/preset` and `sandbox/mode` without duplicating `approval/policy`.
+      if (options.notifyPolicyChange !== false) {
+        const approval = ctx.get('approval');
+        if (approval && typeof approval.setPolicy === 'function' && typeof permissionPresets.resolve === 'function') {
+          const spec = permissionPresets.resolve(preset);
+          if (spec?.approval) {
+            approval.setPolicy(agent, spec.approval);
+          }
+        }
+      }
+      permissionPresets.set(agent.session, preset);
+      return true;
+    } catch (error) {
+      ctx.logger.warn(
+        `[LobsterAI:OpsRpc] failed to apply permission preset "${preset}" to session "${agent.id}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
+    }
+  }
+
+  // Ensure every newly attached/created session inherits LobsterAI's active permission preset.
+  ctx.on('agent/created', ({ agent }) => {
+    if (!agent?.session) return;
+    const sid = agent.id || agent.session.id;
+    const bound = sid ? state.sessionContexts.get(sid) : undefined;
+    const targetPreset = typeof bound?.permissionPreset === 'string' && VALID_PERMISSION_PRESETS.has(bound.permissionPreset)
+      ? bound.permissionPreset
+      : state.defaultPermissionPreset;
+    if (targetPreset && VALID_PERMISSION_PRESETS.has(targetPreset)) {
+      applyPermissionPresetToAgent(agent, targetPreset, { notifyPolicyChange: false });
+    }
+  });
+
+  ctx.connection.fetch.register({
+    path: OPS_ROUTE_PATH,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ ok: false, error: 'Request body must be valid JSON' }, 400);
+      }
+      const action = body && typeof body === 'object' ? body.action : undefined;
+      const payload = body && typeof body === 'object' ? body.payload : undefined;
+
+      try {
+        switch (action) {
+          case 'health': {
+            const llm = ctx.get('llm');
+            const mcpManager = ctx.get('mcpManager');
+            return jsonResponse({
+              ok: true,
+              bootedAt: state.bootedAt,
+              pluginsReady: { ...state.pluginsReady },
+              providers: llm ? llm.listProviders() : [],
+              mcpServers: [
+                ...(mcpManager ? mcpManager.list() : []),
+                ...sseBridge.list(),
+              ],
+              boundSessionsCount: state.sessionContexts.size,
+              agentsCount: state.agents.size,
+              delegatedBindingsCount: state.delegatedChildAgents.size,
+              workspacesDirConfigured: state.workspacesDir.length > 0,
+              skillsDirConfigured: state.skillsDir.length > 0,
+              bridgeConfigured: state.bridgeUrl.length > 0,
+              memoryEnabled: state.memoryEnabled !== false,
+            });
+          }
+
+          case 'syncProviders': {
+            if (!state.syncProviders) {
+              return jsonResponse({ ok: false, error: 'lobster-model-bridge is not active' }, 503);
+            }
+            const result = await state.syncProviders(payload);
+            return jsonResponse({ ok: true, result });
+          }
+
+          case 'syncMcpServers': {
+            const result = await syncMcpServers(payload);
+            return jsonResponse({ ok: true, result });
+          }
+
+          case 'syncSkillsPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            state.skillsPolicy.enabledIds = Array.isArray(p.enabledIds)
+              ? new Set(p.enabledIds.filter((s) => typeof s === 'string'))
+              : null;
+            state.skillsPolicy.disabledIds = Array.isArray(p.disabledIds)
+              ? new Set(p.disabledIds.filter((s) => typeof s === 'string'))
+              : new Set();
+            state.skillsPolicy.extraDirs = Array.isArray(p.extraDirs)
+              ? p.extraDirs.filter((s) => typeof s === 'string' && s.length > 0)
+              : [];
+            if (typeof p.skillsDir === 'string' && p.skillsDir.length > 0) {
+              state.skillsDir = p.skillsDir;
+            }
+            state.invalidateSkills?.();
+            return jsonResponse({
+              ok: true,
+              result: {
+                skillsDir: state.skillsDir,
+                enabledCount: state.skillsPolicy.enabledIds ? state.skillsPolicy.enabledIds.size : null,
+                disabledCount: state.skillsPolicy.disabledIds.size,
+              },
+            });
+          }
+
+          case 'syncMemoryPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            if (typeof p.enabled === 'boolean') {
+              state.memoryEnabled = p.enabled;
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                memoryEnabled: state.memoryEnabled !== false,
+              },
+            });
+          }
+
+          case 'syncAgents': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const rawAgents = Array.isArray(p.agents) ? p.agents : [];
+            const nextAgents = new Map();
+            const nextOrder = [];
+            for (const item of rawAgents) {
+              if (!item || typeof item !== 'object') continue;
+              const id = typeof item.id === 'string' ? item.id.trim() : '';
+              if (!id || nextAgents.has(id)) continue;
+              const collaborationMode = item.collaborationMode === 'allowlist' || item.collaborationMode === 'disabled'
+                ? item.collaborationMode
+                : 'all';
+              const allowAgentIds = Array.isArray(item.allowAgentIds)
+                ? [...new Set(item.allowAgentIds
+                  .filter((candidate) => typeof candidate === 'string')
+                  .map((candidate) => candidate.trim())
+                  .filter((candidate) => candidate.length > 0 && candidate !== id))]
+                : [];
+              const allowedSkillIds = Array.isArray(item.allowedSkillIds)
+                ? item.allowedSkillIds.filter((s) => typeof s === 'string' && s.trim().length > 0)
+                : null;
+              const rawModel = item.modelSelection && typeof item.modelSelection === 'object'
+                ? item.modelSelection
+                : null;
+              const modelSelection = rawModel
+                && typeof rawModel.provider === 'string' && rawModel.provider.trim().length > 0
+                && typeof rawModel.model === 'string' && rawModel.model.trim().length > 0
+                ? {
+                    provider: canonicalizeProviderId(rawModel.provider),
+                    model: rawModel.model.trim(),
+                    ...(typeof rawModel.reasoningEffort === 'string' && rawModel.reasoningEffort.trim().length > 0
+                      ? { reasoningEffort: rawModel.reasoningEffort.trim() }
+                      : {}),
+                  }
+                : undefined;
+              const skillSummaries = Array.isArray(item.skillSummaries)
+                ? item.skillSummaries
+                  .filter((s) => s && typeof s === 'object' && typeof s.id === 'string' && s.id.trim().length > 0)
+                  .map((s) => ({
+                    id: s.id.trim(),
+                    name: typeof s.name === 'string' && s.name.trim().length > 0 ? s.name.trim() : s.id.trim(),
+                    ...(typeof s.description === 'string' && s.description.trim().length > 0
+                      ? { description: s.description.trim() }
+                      : {}),
+                  }))
+                : [];
+              nextAgents.set(id, {
+                id,
+                name: typeof item.name === 'string' && item.name.trim().length > 0 ? item.name.trim() : id,
+                description: typeof item.description === 'string' ? item.description.trim() : '',
+                enabled: item.enabled !== false,
+                ...(typeof item.presetId === 'string' && item.presetId.trim().length > 0
+                  ? { presetId: item.presetId.trim() }
+                  : {}),
+                ...(typeof item.systemPrompt === 'string' && item.systemPrompt.trim().length > 0
+                  ? { systemPrompt: item.systemPrompt }
+                  : {}),
+                ...(typeof item.workingDirectory === 'string' && item.workingDirectory.trim().length > 0
+                  ? { workingDirectory: item.workingDirectory.trim() }
+                  : {}),
+                allowedSkillIds,
+                ...(modelSelection ? { modelSelection } : {}),
+                collaborationMode,
+                allowAgentIds,
+                skillSummaries,
+              });
+              nextOrder.push(id);
+            }
+            state.agents = nextAgents;
+            state.agentOrder = nextOrder;
+            state.invalidateSkills?.();
+            if (Array.isArray(p.workspaceDirectories)) {
+              void syncAgentWorkspaces(p.workspaceDirectories).catch(error => {
+                ctx.logger.warn('[LobsterAgentWorkspaces] Failed to sync Agent workspaces:', error);
+              });
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                agentsCount: nextAgents.size,
+              },
+            });
+          }
+
+          case 'syncSubagentBindings': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const rawBindings = Array.isArray(p.bindings) ? p.bindings : [];
+            const replace = p.replace === true;
+            if (replace) {
+              state.delegatedChildAgents.clear();
+            }
+            let syncedCount = 0;
+            for (const entry of rawBindings) {
+              if (!entry || typeof entry !== 'object') continue;
+              const childSessionId = typeof entry.childSessionId === 'string' ? entry.childSessionId.trim() : '';
+              const targetAgentId = typeof entry.targetAgentId === 'string' ? entry.targetAgentId.trim() : '';
+              if (!childSessionId || !targetAgentId) continue;
+              state.delegatedChildAgents.set(childSessionId, {
+                targetAgentId,
+                ...(typeof entry.parentDshSessionId === 'string' && entry.parentDshSessionId.trim().length > 0
+                  ? { parentDshSessionId: entry.parentDshSessionId.trim() }
+                  : {}),
+                ...(typeof entry.rootCoworkSessionId === 'string' && entry.rootCoworkSessionId.trim().length > 0
+                  ? { rootCoworkSessionId: entry.rootCoworkSessionId.trim() }
+                  : {}),
+                ...(typeof entry.workspaceDir === 'string' && entry.workspaceDir.trim().length > 0
+                  ? { workspaceDir: entry.workspaceDir.trim() }
+                  : {}),
+              });
+              syncedCount += 1;
+            }
+            if (replace || syncedCount > 0) {
+              state.invalidateSkills?.();
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                syncedCount,
+                totalBindings: state.delegatedChildAgents.size,
+              },
+            });
+          }
+
+          case 'bindSessionContext': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
+            if (!sessionId) {
+              return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
+            }
+            if (p.unbind === true) {
+              const removedSession = state.sessionContexts.delete(sessionId);
+              const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+              if (removedSession || removedDelegated) {
+                state.invalidateSkills?.();
+              }
+              return jsonResponse({ ok: true, result: { unbound: sessionId } });
+            }
+            const hadPrev = state.sessionContexts.has(sessionId);
+            const prev = state.sessionContexts.get(sessionId) ?? {};
+            const { nextPreset, context: nextContext } = mergeBoundSessionContext(prev, p, VALID_PERMISSION_PRESETS);
+            state.sessionContexts.set(sessionId, nextContext);
+            // Invalidate DSH's SkillRegistry collectCache whenever a session's
+            // agent binding or allowedSkillIds changes so Turn 2+ never serves
+            // a stale skill catalog from Turn 1.
+            if (
+              !hadPrev
+              || prev.agentId !== nextContext.agentId
+              || !sameSkillAllowlist(prev.allowedSkillIds, nextContext.allowedSkillIds)
+            ) {
+              state.invalidateSkills?.();
+            }
+            state.reconcileToolDisclosure?.(sessionId);
+            const effectivePreset = nextPreset ?? prev.permissionPreset ?? state.defaultPermissionPreset;
+            const liveAgent = ctx.get('agents')?.get(sessionId);
+            if (liveAgent && effectivePreset) {
+              applyPermissionPresetToAgent(liveAgent, effectivePreset);
+            }
+            return jsonResponse({ ok: true, result: { bound: sessionId, permissionPreset: effectivePreset } });
+          }
+
+          case 'setPermissionPreset': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const preset = typeof p.preset === 'string' ? p.preset.trim() : '';
+            if (!VALID_PERMISSION_PRESETS.has(preset)) {
+              return jsonResponse({ ok: false, error: `Unsupported permission preset: "${preset}"` }, 400);
+            }
+            const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
+            const appliedSessions = [];
+            if (sessionId) {
+              const prev = state.sessionContexts.get(sessionId) ?? {};
+              state.sessionContexts.set(sessionId, {
+                ...prev,
+                permissionPreset: preset,
+                permissionPresetExplicit: true,
+              });
+              const liveAgent = ctx.get('agents')?.get(sessionId);
+              if (liveAgent && applyPermissionPresetToAgent(liveAgent, preset)) {
+                appliedSessions.push(sessionId);
+              }
+            } else {
+              state.defaultPermissionPreset = preset;
+              for (const [sid, ctxEntry] of state.sessionContexts.entries()) {
+                if (ctxEntry?.permissionPresetExplicit) continue;
+                state.sessionContexts.set(sid, { ...ctxEntry, permissionPreset: preset });
+              }
+              const agents = ctx.get('agents');
+              if (agents && typeof agents.list === 'function') {
+                for (const agent of agents.list()) {
+                  const ctxEntry = state.sessionContexts.get(agent.id);
+                  if (ctxEntry?.permissionPresetExplicit) continue;
+                  if (applyPermissionPresetToAgent(agent, preset)) {
+                    appliedSessions.push(agent.id);
+                  }
+                }
+              }
+            }
+            return jsonResponse({
+              ok: true,
+              result: {
+                preset,
+                defaultPermissionPreset: state.defaultPermissionPreset,
+                appliedSessions,
+              },
+            });
+          }
+
+          case 'syncHostTools': {
+            if (!state.syncHostTools) {
+              return jsonResponse({ ok: false, error: 'lobster-host-tools is not active' }, 503);
+            }
+            const result = await state.syncHostTools(payload);
+            return jsonResponse({ ok: true, result });
+          }
+
+          case 'syncWebAccessPolicy': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const validSearchPolicies = new Set(Object.values(DSH_SEARCH_POLICY));
+            state.webAccessPolicy = {
+              webFetchEnabled: p.webFetchEnabled !== false,
+              browserSearchEnabled: p.browserSearchEnabled !== false,
+              blockedHostnames: normalizeHostnamePolicyList(p.blockedHostnames),
+              allowedHostnames: normalizeHostnamePolicyList(p.allowedHostnames),
+              deepseekSearchBaseUrl: typeof p.deepseekSearchBaseUrl === 'string'
+                ? p.deepseekSearchBaseUrl.trim()
+                : '',
+            };
+            if (typeof p.searchPolicy === 'string' && validSearchPolicies.has(p.searchPolicy)) {
+              state.searchPolicy = p.searchPolicy;
+            }
+            state.resetWebSearchCooldown?.();
+            return jsonResponse({
+              ok: true,
+              result: {
+                webFetchEnabled: state.webAccessPolicy.webFetchEnabled,
+                browserSearchEnabled: state.webAccessPolicy.browserSearchEnabled,
+                blockedHostnamesCount: state.webAccessPolicy.blockedHostnames.length,
+                allowedHostnamesCount: state.webAccessPolicy.allowedHostnames.length,
+                searchPolicy: state.searchPolicy,
+              },
+            });
+          }
+
+          case 'deleteSessionFiles': {
+            const p = payload && typeof payload === 'object' ? payload : {};
+            const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : '';
+            if (!sessionId) {
+              return jsonResponse({ ok: false, error: 'sessionId is required' }, 400);
+            }
+            const removedSession = state.sessionContexts.delete(sessionId);
+            const removedDelegated = state.delegatedChildAgents.delete(sessionId);
+            if (removedSession || removedDelegated) {
+              state.invalidateSkills?.();
+            }
+            // Stop live agent if running before deleting files.
+            const liveAgent = ctx.get('agents')?.get(sessionId);
+            if (liveAgent && typeof liveAgent.cancel === 'function') {
+              try {
+                liveAgent.cancel({ kind: 'user' });
+              } catch {
+                // ignore if already idle
+              }
+            }
+            const removedPaths = await removeSessionDirectories(sessionId);
+            return jsonResponse({ ok: true, result: { sessionId, removedPaths } });
+          }
+
+          default:
+            return jsonResponse({ ok: false, error: `Unknown ops action: ${String(action)}` }, 400);
+        }
+      } catch (error) {
+        ctx.logger.warn(
+          `[LobsterAI:OpsRpc] action "${String(action)}" failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return jsonResponse(
+          { ok: false, error: error instanceof Error ? error.message : String(error) },
+          500,
+        );
+      }
+    },
+  });
+
+  ctx.effect(() => async () => {
+    await mcpSyncTail;
+    await sseBridge.disposeAll();
+    const entries = [...managedMcpEntries.values()];
+    managedMcpEntries.clear();
+    for (const entry of entries) {
+      try {
+        await entry.dispose();
+      } catch {}
+    }
+    state.mcpToolFilters.clear();
+    state.mcpRegisteredServers.clear();
+    state.syncMcpServers = null;
+    state.pluginsReady.opsRpc = false;
+  }, 'lobster-ops-rpc cleanup');
+
+  state.pluginsReady.opsRpc = true;
+}

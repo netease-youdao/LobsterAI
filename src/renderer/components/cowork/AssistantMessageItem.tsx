@@ -136,6 +136,15 @@ export const getAssistantMessageCopyContent = (content: string): string => {
     .filter((part): part is string => Boolean(part)).join('\n\n');
 };
 
+export const getGoalCompletionLabel = (completedGoal?: CoworkGoal | null): string | null => {
+  const goalCompletionDuration = completedGoal
+    ? formatCoworkGoalCompletionDuration(completedGoal)
+    : null;
+  return goalCompletionDuration
+    ? i18nService.t('coworkGoalCompletedIn').replace('{duration}', goalCompletionDuration)
+    : null;
+};
+
 // ── AssistantMessageItem ─────────────────────────────────────────────────────
 
 const AssistantMessageItem: React.FC<{
@@ -173,12 +182,7 @@ const AssistantMessageItem: React.FC<{
   const proposedPlan = parseProposedPlanBlock(stripAssistantImageDiagnostic(rawContent));
   const displayContent = proposedPlan.visibleText.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
   const copyContent = getAssistantMessageCopyContent(rawContent);
-  const goalCompletionDuration = completedGoal
-    ? formatCoworkGoalCompletionDuration(completedGoal)
-    : null;
-  const goalCompletionLabel = goalCompletionDuration
-    ? i18nService.t('coworkGoalCompletedIn').replace('{duration}', goalCompletionDuration)
-    : null;
+  const goalCompletionLabel = getGoalCompletionLabel(completedGoal);
   const showPlanConfirmationActions = planConfirmationMessageId === message.id;
   const handleImageClick = useCallback((image: ImagePreviewSource) => {
     reportConversationMessageAction({

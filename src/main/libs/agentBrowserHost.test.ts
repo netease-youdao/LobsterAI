@@ -33,6 +33,9 @@ const electronMocks = vi.hoisted(() => {
       navigationHistory: {
         canGoBack: vi.fn(() => false),
         canGoForward: vi.fn(() => false),
+        getActiveIndex: vi.fn(() => 1),
+        getEntryAtIndex: vi.fn<(index: number) => { url: string } | null>(),
+        goToOffset: vi.fn<(offset: number) => void>(),
         goBack: vi.fn(),
         goForward: vi.fn(),
       },
@@ -103,8 +106,11 @@ import {
   BrowserCredentialLoginStatus,
 } from '../../shared/browserCredentials/constants';
 import {
+  AgentBrowserMcpToolPrefix,
+  AgentBrowserNavigation,
   AgentBrowserPageUrl,
   AgentBrowserPartition,
+  AgentBrowserToolPhase,
   BrowserDisplayMode,
 } from '../../shared/browserWebAccess/constants';
 import {
@@ -113,6 +119,7 @@ import {
   BrowserMcpTool,
   BrowserWindowOpenAction,
   CHROME_USER_AGENT_URL_PATTERNS,
+  getDshBrowserToolStart,
   toChromeUserAgent,
 } from './agentBrowserHost';
 import {
@@ -498,6 +505,56 @@ describe('AgentBrowserHost popup navigation', () => {
 });
 
 describe('AgentBrowserHost OpenClaw browser baseline', () => {
+  test('stops polling a cancelled browser wait and keeps the page usable', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      await host.newPage();
+      const contents = electronMocks.webContentsInstances[0];
+      contents.executeJavaScript.mockResolvedValue(false);
+      const controller = new AbortController();
+      const waiting = host.handleToolRequest({
+        tool: BrowserMcpTool.WaitFor, args: { text: 'later', timeout: 30000 }, signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await waiting).isError).toBe(true);
+      expect(contents.executeJavaScript).toHaveBeenCalledTimes(1);
+      expect((await host.handleToolRequest({ tool: BrowserMcpTool.ListPages, args: {} })).isError).not.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('routes built-in browser activity to its Cowork session', () => {
+    const tool = AgentBrowserMcpToolPrefix + BrowserMcpTool.TakeSnapshot;
+    expect(getDshBrowserToolStart('task-b', tool, { pageId: 7 })).toEqual({
+      sessionId: 'task-b', phase: AgentBrowserToolPhase.Start, action: BrowserMcpTool.TakeSnapshot, targetId: '7',
+    });
+    expect(getDshBrowserToolStart('task-b', 'mcp__another-browser__take_snapshot')).toBeUndefined();
+    expect(getDshBrowserToolStart('task-b', AgentBrowserMcpToolPrefix + BrowserMcpTool.TakeScreenshot, { pageId: 7 }))
+      .toMatchObject({ action: BrowserMcpTool.TakeScreenshot, targetId: undefined });
+  });
+
+  test('navigates the selected tab back and waits for the main frame', async () => {
+    const host = createHost();
+    await host.newPage();
+    await host.newPage();
+    const contents = electronMocks.webContentsInstances[1];
+    contents.navigationHistory.getEntryAtIndex.mockReturnValue({ url: 'https://example.com/previous' });
+    contents.navigationHistory.goToOffset.mockImplementation(() => {
+      contents.emit('did-navigate', {}, 'https://example.com/previous');
+      contents.emit('dom-ready');
+    });
+    const response = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage, args: { type: AgentBrowserNavigation.Back },
+    });
+    expect(response.isError).not.toBe(true);
+    expect(contents.navigationHistory.goToOffset).toHaveBeenCalledWith(-1);
+    expect(electronMocks.webContentsInstances[0].navigationHistory.goToOffset).not.toHaveBeenCalled();
+  });
+
   test('finishes navigation when the new top-level document is ready despite a hanging resource', async () => {
     vi.useFakeTimers();
     try {
@@ -690,7 +747,7 @@ describe('AgentBrowserHost script evaluation', () => {
     const sendCommand = webContents.debugger.sendCommand;
     const nodes = [
       { nodeId: 'root', backendDOMNodeId: 100, childIds: ['first', 'second'], role: { value: 'RootWebArea' } },
-      { nodeId: 'first', parentId: 'root', backendDOMNodeId: 101, role: { value: 'button' } },
+      { nodeId: 'first', parentId: 'root', backendDOMNodeId: 101, role: { value: 'button' }, name: { value: 'Read details' } },
       { nodeId: 'second', parentId: 'root', backendDOMNodeId: 102, role: { value: 'button' } },
     ];
     const evaluation: { response: Record<string, unknown> } = { response: { result: { value: true } } };
@@ -714,11 +771,19 @@ describe('AgentBrowserHost script evaluation', () => {
       tool: BrowserMcpTool.EvaluateScript,
       args: { pageId: 1, function: source, args },
     });
-    return { host, webContents, sendCommand, nodes, evaluation, refs, evaluate };
+    return { host, webContents, sendCommand, nodes, evaluation, refs, snapshot, evaluate };
   };
 
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  test('includes accessible names and usable element refs in model-facing MCP text', async () => {
+    const { snapshot, refs } = await setupPage();
+    const content = JSON.parse(String(snapshot.content[0].text));
+
+    expect(content).toEqual(snapshot.structuredContent);
+    expect(content.snapshot.children[0]).toMatchObject({ role: 'button', name: 'Read details', id: refs[0] });
   });
 
   test('passes snapshot refs as DOM objects for the OpenClaw scroll action', async () => {
@@ -897,14 +962,49 @@ describe('AgentBrowserHost script evaluation', () => {
     expect(host.getState().error).toBeUndefined();
   });
 
-  test('honors the script evaluation setting for DOM ref arguments', async () => {
+  test('blocks apex and www hostnames plus IPv6 rules consistently with normalized blockedHostnames', async () => {
+    const host = createHost({
+      getBrowserConfig: () => ({
+        displayMode: BrowserDisplayMode.InApp,
+        blockedHostnames: ['example.com', '*.internal.local', '[::1]'],
+      }),
+    });
+    await host.newPage();
+
+    const apexResult = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'https://example.com/docs' },
+    });
+    const wwwResult = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'https://www.example.com/docs' },
+    });
+    const wildcardResult = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'https://app.internal.local/' },
+    });
+    const ipv6Result = await host.handleToolRequest({
+      tool: BrowserMcpTool.NavigatePage,
+      args: { url: 'http://[::1]:8080/' },
+    });
+
+    expect(apexResult.isError).toBe(true);
+    expect(wwwResult.isError).toBe(true);
+    expect(wildcardResult.isError).toBe(true);
+    expect(ipv6Result.isError).toBe(true);
+  });
+
+  test('ignores legacy evaluateEnabled=false and still evaluates scripts for DOM ref arguments', async () => {
     const { evaluate, sendCommand } = await setupPage({
-      getBrowserConfig: () => ({ displayMode: BrowserDisplayMode.InApp, evaluateEnabled: false }),
+      getBrowserConfig: () => ({
+        displayMode: BrowserDisplayMode.InApp,
+        ...({ evaluateEnabled: false } as Record<string, unknown>),
+      }),
     });
     sendCommand.mockClear();
 
-    expect((await evaluate()).isError).toBe(true);
-    expect(sendCommand).not.toHaveBeenCalled();
+    expect((await evaluate()).isError).not.toBe(true);
+    expect(sendCommand).toHaveBeenCalled();
   });
 });
 
@@ -999,6 +1099,42 @@ describe('AgentBrowserHost browsing without a visible panel', () => {
       width: 900,
       height: 600,
     });
+  });
+
+  test('captures a background tab without moving the selection or detaching a newly selected tab', async () => {
+    const contentView = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    const host = createHost({
+      getMainWindow: () => ({
+        isVisible: () => true,
+        isDestroyed: () => false,
+        getContentBounds: () => ({ width: 800, height: 600 }),
+        contentView,
+      }) as never,
+    });
+    host.setView({ visible: true, bounds: { x: 10, y: 20, width: 700, height: 500 } });
+    await host.newPage();
+    await host.newPage();
+    const target = electronMocks.viewInstances[0];
+    const first = Promise.withResolvers<{ data: string }>();
+    const second = Promise.withResolvers<{ data: string }>();
+    electronMocks.webContentsInstances[0].debugger.sendCommand
+      .mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    contentView.removeChildView.mockClear();
+    const capture = () => host.handleToolRequest({ tool: BrowserMcpTool.TakeScreenshot, args: { pageId: 1 } });
+    const a = capture();
+    const b = capture();
+    await vi.waitFor(() => expect(contentView.addChildView).toHaveBeenCalledWith(target, 0));
+    expect(target.setBounds).toHaveBeenLastCalledWith({ x: -700, y: 0, width: 700, height: 500 });
+    expect(host.getState().selectedPageId).toBe(2);
+    first.resolve({ data: 'cG5n' });
+    expect((await a).isError).not.toBe(true);
+    expect(contentView.removeChildView).not.toHaveBeenCalledWith(target);
+    host.selectPage(1);
+    second.resolve({ data: 'cG5n' });
+    expect((await b).isError).not.toBe(true);
+    expect(target.setBounds).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 700, height: 500 });
+    expect(contentView.removeChildView).not.toHaveBeenCalledWith(target);
+    expect(host.getState().selectedPageId).toBe(1);
   });
 
   test('fails an Agent screenshot that Chromium never answers instead of hanging', async () => {

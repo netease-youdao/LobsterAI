@@ -1,0 +1,25 @@
+{
+  "name": "@lobsterai/dsh-channels",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LobsterAI IM Channels bundle for DeepSeek Harness (Feishu, Weixin, DingTalk, WeCom, QQ, Telegram, Discord, POPO)",
+  "exports": {
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./plugins/*": "./plugins/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-api-session-controller": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
+    "ws": "^8.0.0"
+  }
+}

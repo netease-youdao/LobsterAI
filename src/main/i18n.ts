@@ -46,8 +46,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     xaiAuthStoreFailed: '无法访问 xAI 认证存储，请检查 AI 引擎状态后重试。',
     openClawStartupMigrationFailed: 'AI 引擎状态升级失败：{error}',
     openClawPluginVerificationFailed: 'AI 引擎插件校验失败，已停止自动重启。请处理以下插件错误后重试：\n{error}',
-    openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重新启动网关：\n{error}',
-    openClawStartupCompatibilityRepairing: '正在备份并修复旧版网关状态…',
+    openClawStartupMigrationRefused: 'AI 引擎启动迁移未完成，已停止自动重启。请先处理以下旧数据，再重启 AI 引擎：\n{error}',
+    openClawStartupCompatibilityRepairing: '正在备份并修复旧版引擎状态…',
     openClawRepairCommandTimeout: '修复命令 {command} 等待 {seconds} 秒后超时，修复已停止。诊断记录：{path}',
     openClawRepairCommandFailed: '修复命令 {command} 未完成。诊断记录：{path}',
     openClawDreamingStateRepairing: '正在备份并处理旧版记忆状态…',
@@ -105,12 +105,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentBrowserMenuClearCookies: '清除 Cookie',
     agentBrowserMenuClearCache: '清除缓存',
     agentBrowserMenuUnavailable: '浏览器窗口当前不可用。',
-    agentBrowserRuntimeUnavailable: 'Agent 浏览器暂不可用，请稍后重试。',
     agentBrowserMenuOpenFailed: '无法打开浏览器菜单。',
     agentBrowserZoomFailed: '调整浏览器缩放失败。',
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
+    coworkEditUnsupported: '历史消息已改为从该消息新建分支会话，不再支持原地覆盖编辑。',
     coworkWorkspaceChangesTitle: '工作区变更',
     cronSessionPrefix: '定时',
     heartbeatUsageTitle: '后台心跳检查',
@@ -178,7 +178,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '所选模型的最新设置还没生效，会在正在运行的任务结束后应用。可以先停止正在运行的任务，或稍后重新发送。',
     openClawConfigApplyOverdue:
       'OpenClaw 正在等待活动任务结束后应用配置。请完成或停止活动任务，然后重试。',
-    openClawConfigApplyStalled: '最新配置在重启网关后仍无法应用到 OpenClaw（{detail}）。',
+    openClawConfigApplyStalled: '最新配置在重启 AI 引擎后仍无法应用（{detail}）。',
     coworkErrorModelResponseTimeout: '模型响应超时，请稍后重试。',
     coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
     coworkErrorNetworkErrorViaSystemProxy:
@@ -232,6 +232,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
+    skillChatAudit: '是否安装技能「{name}」？安全扫描风险等级为 {risk}。',
+    skillChatInstallDisabled: '安装并保持禁用',
+    skillChatInstall: '安装并启用',
+    skillChatInstallPermission: '将选中的本地技能安装到当前实例的「我的技能」。',
+    skillChatReadOnly: '只读会话无法安装技能。',
     skillErrInvalidSource:
       '无效的技能来源。支持 owner/repo、仓库链接、npm 包名、ClawHub 链接或 GitHub tree/blob 链接。',
     skillErrClawhubNotFound: '在 ClawHub 上未找到该技能，请检查链接是否正确。',
@@ -259,6 +264,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dataMigrationRestoreProgressTitle: '正在导入 LobsterAI 数据',
     dataMigrationRestoreProgressDesc: '正在恢复备份并校验数据，完成后应用会自动重启。',
     dataMigrationRestoreProgressWarning: '请不要关闭应用或重启电脑，否则可能中断本次数据迁移。',
+    dataMigrationPhaseCheckingSpace: '正在检查磁盘剩余空间...',
+    dataMigrationPhaseCreatingRollback: '正在为当前数据生成回滚备份...',
+    dataMigrationPhaseExtracting: '正在解压并校验备份内容...',
+    dataMigrationPhaseSanitizing: '正在重写路径并处理跨机配置...',
+    dataMigrationPhaseApplying: '正在替换应用数据并校验完整性...',
+    dataMigrationPhaseCompleted: '导入完成，正在重启应用...',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common
@@ -345,6 +356,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // WeCom
     imWecomFillBotIdSecret: '请补全 Bot ID 和 Secret 后重新测试连通性。',
+    imWecomConnectionReplaced: '另一客户端已接管此机器人。如需在本机接管，请关闭并保存，再启用并保存。',
+    imWecomInvalidCredentials: '企微拒绝了 Bot ID 或 Secret。请更新凭据并保存。',
+    imWecomReconnecting: '暂时无法连接企微，正在自动重试。',
+    imWecomDuplicateBot: '本机的「{name}」已启用同一 Bot ID。如需切换，请先关闭该机器人。',
     imWecomConfigReady: '企业微信配置已就绪（Bot ID: {botId}）。',
     imWecomOpenClawHint:
       '企业微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
@@ -355,12 +370,27 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinQrSessionExpired: '本次微信扫码已结束，请重新获取二维码。',
     imWeixinGatewayUnavailable: 'AI 引擎尚未连接，请启动引擎后重新扫码。',
     imWeixinQrInvalidResponse: '未能获取有效的微信二维码，请重试；若持续失败，请更新应用。',
+    imWeixinQrScanReady: '请使用手机微信扫描二维码完成连接。',
+    imWeixinQrConnected: '已成功连接到微信。',
+    imWeixinQrAlreadyConnected: '该微信机器人已连接，无需重复绑定。',
+    imWeixinQrExpired: '二维码已过期，请重新获取。',
+    imWeixinQrTimeout: '扫码超时，请重试。',
+    imWeixinQrAccountMissing: '微信登录成功但未返回账号信息，请重新扫码。',
+    imWeixinQrTokenMissing: '微信登录未返回有效凭据，请重新扫码。',
+    imWeixinQrVerifyRequired: '当前扫码触发了配对码校验，请稍后重新获取二维码重试。',
+    imWeixinCredentialsMissing: '微信登录凭据缺失，请重新扫码连接。',
+    imWeixinCredentialsExpired: '微信授权已过期，请重新扫码连接。',
+    imWeixinRescanSuggestion: '请点击「重新扫码」完成微信授权，再点击保存生效。',
+    imWeixinConnected: '微信渠道已连接到运行引擎。',
+    imWeixinVoiceDownloadFailed: '语音下载失败，请重试或直接发送文字。',
+    imWeixinVoiceTranscribeFailed: '语音识别失败，请重试或直接发送文字。',
+    imImageDefaultPrompt: '请查看这张图片。',
     openClawConfigSyncFailed: 'AI 引擎配置同步失败，请重试。',
     imWeixinEnableSuggestion: '请启用微信渠道后重新测试连通性。',
     imWeixinConfigReady: '微信配置已就绪。',
     imWeixinOpenClawHint:
-      '微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
-    imWeixinConfigReadyOpenClaw: '微信配置已就绪，通过 OpenClaw 运行。',
+      '微信通过 AI 引擎运行，Bot 将在保存配置且引擎就绪后自动连接。',
+    imWeixinConfigReadyOpenClaw: '微信配置已就绪。',
 
     // NIM
     imNimFillCredentials: '请补全 AppKey、Account 和 Token 后重新测试连通性。',
@@ -376,8 +406,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoFillWebhookCredentials: '请补全 appKey、appSecret、token 和 aesKey 后重新测试连通性。',
     imPopoFillWsCredentials: '请补全 appKey、appSecret 和 aesKey 后重新测试连通性。',
     imPopoConfigReady: 'POPO 配置已就绪。',
-    imPopoOpenClawHint: 'POPO 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
-    imPopoConfigReadyOpenClaw: 'POPO 配置已就绪，通过 OpenClaw 运行。',
+    imPopoConnected: 'POPO 机器人已连接到 DSH 渠道。',
+    imPopoPairingPrompt: '请在 LobsterAI 的此机器人设置中批准配对码 {code}，然后重新发送消息。',
 
     // Email Channel
     emailSettings: '邮件设置',
@@ -475,8 +505,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     xaiAuthStoreFailed: 'Unable to access the xAI credential store. Check the AI engine status and retry.',
     openClawStartupMigrationFailed: 'AI engine state migration failed: {error}',
     openClawPluginVerificationFailed: 'AI engine plugin verification failed. Automatic restarts stopped. Fix the plugin error and retry:\n{error}',
-    openClawStartupMigrationRefused: 'AI engine startup migrations did not complete. Automatic restarts stopped. Handle the legacy data below, then restart the gateway:\n{error}',
-    openClawStartupCompatibilityRepairing: 'Backing up and repairing legacy gateway state…',
+    openClawStartupMigrationRefused: 'AI engine startup migrations did not complete. Automatic restarts stopped. Handle the legacy data below, then restart the AI engine:\n{error}',
+    openClawStartupCompatibilityRepairing: 'Backing up and repairing legacy engine state…',
     openClawDreamingStateRepairing: 'Backing up and handling legacy memory state…',
     openClawRuntimeFilesMissing: 'AI engine runtime files are missing or unreadable. Startup has stopped. Quit the app and reinstall using the latest installer containing the fix, then try again.',
     openClawLoopbackBlocked: 'Local connection self-test failed ({code}). AI engine startup is paused.',
@@ -532,12 +562,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentBrowserMenuClearCookies: 'Clear Cookie',
     agentBrowserMenuClearCache: 'Clear cache',
     agentBrowserMenuUnavailable: 'The browser window is unavailable.',
-    agentBrowserRuntimeUnavailable: 'The Agent browser is temporarily unavailable. Try again later.',
     agentBrowserMenuOpenFailed: 'Failed to open the browser menu.',
     agentBrowserZoomFailed: 'Failed to adjust browser zoom.',
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',
+    coworkEditUnsupported: 'In-place historical message editing has been replaced by forking a new session from any message.',
     coworkWorkspaceChangesTitle: 'Workspace changes',
     cronSessionPrefix: 'Cron',
     heartbeatUsageTitle: 'Background heartbeat',
@@ -616,7 +646,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       "The latest settings for the selected model haven't taken effect yet; they apply once the running tasks finish. Stop the running tasks, or send again later.",
     openClawConfigApplyOverdue:
       'OpenClaw is waiting for active tasks to finish before applying configuration. Complete or stop the active tasks, then try again.',
-    openClawConfigApplyStalled: 'The latest configuration still could not be applied to OpenClaw after restarting the gateway ({detail}).',
+    openClawConfigApplyStalled: 'The latest configuration still could not be applied after restarting the AI engine ({detail}).',
     coworkErrorModelResponseTimeout: 'The model response timed out. Please try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorNetworkErrorViaSystemProxy:
@@ -678,6 +708,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
+    skillChatAudit: 'Install skill “{name}”? The security scan reported a {risk} risk.',
+    skillChatInstallDisabled: 'Install disabled',
+    skillChatInstall: 'Install and enable',
+    skillChatInstallPermission: 'Install the selected local skill into My Skills for this instance.',
+    skillChatReadOnly: 'Skill installation requires a writable session.',
     skillErrInvalidSource:
       'Invalid skill source. Use owner/repo, repo URL, npm package spec, ClawHub URL, or a GitHub tree/blob URL.',
     skillErrClawhubNotFound: 'Skill not found on ClawHub. Please check the URL.',
@@ -707,6 +742,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Restoring the backup and validating data. LobsterAI will restart automatically when finished.',
     dataMigrationRestoreProgressWarning:
       'Do not close the app or restart the computer, or the migration may be interrupted.',
+    dataMigrationPhaseCheckingSpace: 'Checking available disk space...',
+    dataMigrationPhaseCreatingRollback: 'Creating rollback backup of current data...',
+    dataMigrationPhaseExtracting: 'Extracting and validating backup archive...',
+    dataMigrationPhaseSanitizing: 'Rewriting paths and preparing migrated data...',
+    dataMigrationPhaseApplying: 'Applying restored data and verifying integrity...',
+    dataMigrationPhaseCompleted: 'Import complete. Restarting LobsterAI...',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common
@@ -813,6 +854,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // WeCom
     imWecomFillBotIdSecret: 'Please provide the Bot ID and Secret and test connectivity again.',
+    imWecomConnectionReplaced: 'Another client took over this bot. To reconnect here, turn it off and save, then turn it on and save again.',
+    imWecomInvalidCredentials: 'WeCom rejected the Bot ID or Secret. Update the credentials and save.',
+    imWecomReconnecting: 'Unable to connect to WeCom. Retrying automatically.',
+    imWecomDuplicateBot: '“{name}” already uses this Bot ID on this device. Turn it off before switching.',
     imWecomConfigReady: 'WeCom configuration is ready (Bot ID: {botId}).',
     imWecomOpenClawHint:
       'WeCom runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
@@ -824,12 +869,27 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinQrSessionExpired: 'This WeChat login session has ended. Please request a new QR code.',
     imWeixinGatewayUnavailable: 'The AI engine is not connected. Start the engine and try scanning again.',
     imWeixinQrInvalidResponse: 'Could not get a valid WeChat QR code. Try again; if this continues, update the app.',
+    imWeixinQrScanReady: 'Scan the QR code with WeChat on your phone to connect.',
+    imWeixinQrConnected: 'Successfully connected to WeChat.',
+    imWeixinQrAlreadyConnected: 'This WeChat bot is already connected.',
+    imWeixinQrExpired: 'The QR code has expired. Please request a new one.',
+    imWeixinQrTimeout: 'QR code login timed out. Please try again.',
+    imWeixinQrAccountMissing: 'WeChat login completed without an account ID. Please scan again.',
+    imWeixinQrTokenMissing: 'WeChat login did not return valid credentials. Please scan again.',
+    imWeixinQrVerifyRequired: 'WeChat requested an interactive verification code. Please request a new QR code and try again.',
+    imWeixinCredentialsMissing: 'WeChat login credentials are missing. Please scan the QR code again.',
+    imWeixinCredentialsExpired: 'Your WeChat authorization has expired. Please scan the QR code again.',
+    imWeixinRescanSuggestion: 'Click "Rescan" to authorize WeChat, then click Save to apply.',
+    imWeixinConnected: 'WeChat channel is connected to the AI engine.',
+    imWeixinVoiceDownloadFailed: 'Failed to download the voice message. Please try again or send text.',
+    imWeixinVoiceTranscribeFailed: 'Could not transcribe the voice message. Please try again or send text.',
+    imImageDefaultPrompt: 'Please inspect this image.',
     openClawConfigSyncFailed: 'Failed to sync the AI engine configuration. Please try again.',
     imWeixinEnableSuggestion: 'Please enable the WeChat channel and test connectivity again.',
     imWeixinConfigReady: 'WeChat configuration is ready.',
     imWeixinOpenClawHint:
-      'WeChat runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imWeixinConfigReadyOpenClaw: 'WeChat configuration is ready, running via OpenClaw.',
+      'WeChat runs via the AI engine. The bot will connect automatically once saved and ready.',
+    imWeixinConfigReadyOpenClaw: 'WeChat configuration is ready.',
 
     // NIM
     imNimFillCredentials:
@@ -850,9 +910,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoFillWsCredentials:
       'Please provide the appKey, appSecret, and aesKey and test connectivity again.',
     imPopoConfigReady: 'POPO configuration is ready.',
-    imPopoOpenClawHint:
-      'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
+    imPopoConnected: 'The POPO bot is connected to the DSH channel.',
+    imPopoPairingPrompt: 'Approve pairing code {code} in this bot’s LobsterAI settings, then send your message again.',
 
     // Email Channel
     emailSettings: 'Email Settings',

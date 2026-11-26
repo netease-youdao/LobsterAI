@@ -1,6 +1,5 @@
 import {
   ArrowTurnDownRightIcon,
-  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ExclamationTriangleIcon,
@@ -15,13 +14,11 @@ import {
   type CoworkBrowserAnnotationMessageBatch,
   normalizeBrowserAnnotationBatches,
 } from '@shared/cowork/browserAnnotations';
-import { ENABLE_EXPERT_PLAZA_UI } from '@shared/featureFlags';
 import { ProviderName } from '@shared/providers';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { CoworkSystemMessageKind } from '../../../common/coworkSystemMessages';
 import { buildSessionTitleInput } from '../../../common/sessionTitle';
 import {
   CoworkBtwCommandValidationError,
@@ -50,8 +47,10 @@ import {
   CoworkSteerStatus,
 } from '../../../shared/cowork/steer';
 import { hasImageEditModel } from '../../../shared/imageEditing/availability';
+import { MediaPreferenceMode } from '../../../shared/media/defaultPolicy';
 import { isChatPresetSession, modelPresetModelId } from '../../../shared/modelPresets/constants';
 import { buildPptOutlineSystemPrompt, shouldUsePptOutlinePrompt } from '../../../shared/pptCreation/outline';
+import { SkinPackKitId } from '../../../shared/skin/kit';
 import { authService } from '../../services/auth';
 import { configService, ConfigServiceEvent } from '../../services/config';
 import { coworkService } from '../../services/cowork';
@@ -71,12 +70,13 @@ import {
   LogReporterEntry,
   reportYdAnalyzer,
 } from '../../services/logReporter';
+import { setMediaPreference } from '../../services/mediaPreferences';
 import { modelPresetName } from '../../services/modelPresets';
 import { getOnboardingErrorCode, reportOnboardingAction } from '../../services/onboardingAnalytics';
 import { resolveLocalizedText, skillService } from '../../services/skill';
 import { getDraftAnalytics } from '../../services/usageAnalytics';
 import { useMediaPreferences } from '../../services/useMediaPreferences';
-import { RootState } from '../../store';
+import { type AppDispatch, RootState } from '../../store';
 import { selectDraftPrompts } from '../../store/selectors/coworkSelectors';
 import {
   AsrQuotaStatus,
@@ -112,7 +112,6 @@ import { setActiveKitIds, toggleActiveKit } from '../../store/slices/kitSlice';
 import type { Model } from '../../store/slices/modelSlice';
 import { isSameModelIdentity } from '../../store/slices/modelSlice';
 import { setActiveSkillIds, setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
-import type { CoworkSession } from '../../types/cowork';
 import { CoworkCollaborationMode, CoworkImageAttachment, CoworkSessionStatusValue } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { Skill } from '../../types/skill';
@@ -127,9 +126,10 @@ import { ImageEditDraftCard } from '../artifacts/imageEditor/ImageEditDraftCard'
 import { useImageEditSubmission } from '../artifacts/imageEditor/useImageEditSubmission';
 import Modal from '../common/Modal';
 import { PromptFoldedTool, PromptSubmenuSide, resolvePromptSubmenuSide } from '../common/promptSubmenu';
-import ExpertPickerMenuItem from '../experts/ExpertPickerMenuItem';
+import AgentPickerPopover, { type AgentPickerOption } from '../experts/AgentPickerPopover';
 import EditIcon from '../icons/EditIcon';
 import GoalIcon from '../icons/GoalIcon';
+import MagicIcon from '../icons/MagicIcon';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import PlanModeIcon from '../icons/PlanModeIcon';
 import PromptAddIcon from '../icons/PromptAddIcon';
@@ -180,7 +180,14 @@ import {
   resolveMediaMentionTrigger,
 } from './mediaMentionUtils';
 import MediaModelPicker from './MediaModelPicker';
+import { resolveCustomMediaModelBadge } from './mediaOverrideBadge';
+import {
+  resolveModelSwitchConfirmation,
+  setModelSwitchConfirmSkipped,
+} from './modelSwitchConfirm';
+import ModelSwitchConfirmDialog from './ModelSwitchConfirmDialog';
 import { PastedTextAttachmentCard } from './PastedTextCards';
+import PermissionModeSelector from './PermissionModeSelector';
 import {
   getAttachmentAnalyticsParams,
   getKitAnalyticsParams,
@@ -366,8 +373,8 @@ const SEND_SHORTCUT_OPTIONS = [
 const isMacPlatform = navigator.platform.includes('Mac');
 
 const ContextLabelMaxLength = {
-  Folder: 12,
-  Agent: 12,
+  Folder: 20,
+  Agent: 16,
   DefaultFolder: 30,
 } as const;
 
@@ -415,16 +422,7 @@ const getGoalSummary = (goal: CoworkGoal): string => {
   return [getGoalStatusLabel(goal), usage].filter(Boolean).join(' · ');
 };
 
-interface AgentSelectorOption {
-  id: string;
-  name?: string;
-  icon?: string;
-  iconCustomized?: boolean;
-  enabled?: boolean;
-  source?: RootState['agent']['agents'][number]['source'];
-}
-
-const AgentContextAvatar: React.FC<{ agent: AgentSelectorOption; className?: string }> = ({ agent, className = 'h-4 w-4' }) => {
+const AgentContextAvatar: React.FC<{ agent: AgentPickerOption; className?: string }> = ({ agent, className = 'h-4 w-4' }) => {
   return (
     <AgentAvatarIcon
       value={agent.icon}
@@ -473,7 +471,6 @@ interface CoworkPromptInputProps {
   onWorkingDirectoryChange?: (dir: string) => void;
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
-  onModelSwitch?: (sessionId: string, messageId: string) => void;
   showAgentSelector?: boolean;
   showReadOnlyContext?: boolean;
   readOnlyContextTrailingText?: string;
@@ -519,7 +516,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       onWorkingDirectoryChange,
       showFolderSelector = false,
       showModelSelector = false,
-      onModelSwitch,
       showAgentSelector = false,
       showReadOnlyContext = false,
       readOnlyContextTrailingText,
@@ -540,7 +536,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       narrow = false,
       analyticsSurface,
     } = props;
-    const dispatch = useDispatch();
+    const dispatch = useDispatch<AppDispatch>();
     const draftKey = sessionId || '__home__';
     const draftPrompt = useSelector((state: RootState) => selectDraftPrompts(state)[draftKey] || '');
     const steerDraft = useSelector((state: RootState) => (
@@ -562,6 +558,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     );
     useMediaPreferences(draftKey, !remoteManaged);
     const queuedMediaSelection = useSelector((state: RootState) => state.cowork.mediaSelection[draftKey]);
+    const cachedMediaModels = useSelector((state: RootState) => state.cowork.mediaModels);
+    const mediaModelsOwnerAccountKey = useSelector(
+      (state: RootState) => state.cowork.mediaModelsOwnerAccountKey,
+    );
     const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
     const agents = useSelector((state: RootState) => state.agent.agents);
     const coworkAgentEngine = useSelector((state: RootState) => state.cowork.config.agentEngine);
@@ -583,6 +583,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
     const [isPatchingModel, setIsPatchingModel] = useState(false);
+    const [pendingModelSwitch, setPendingModelSwitch] = useState<{
+      sessionId: string;
+      selectedModel: Model;
+      meta: ModelSelectorChangeMeta;
+      previousModelName: string;
+      nextModelName: string;
+    } | null>(null);
     const [showAgentMenu, setShowAgentMenu] = useState(false);
     const [isReadOnlyContextCompact, setIsReadOnlyContextCompact] = useState(false);
     const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
@@ -619,7 +626,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const skillMenuItemRef = useRef<HTMLButtonElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const agentButtonRef = useRef<HTMLButtonElement>(null);
-    const agentMenuRef = useRef<HTMLDivElement>(null);
+    const mediaOverridePillRef = useRef<HTMLDivElement>(null);
     const readOnlyContextGroupRef = useRef<HTMLDivElement>(null);
     const largeToolbarRef = useRef<HTMLDivElement>(null);
     const dragDepthRef = useRef(0);
@@ -1168,7 +1175,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [isLarge, showReadOnlyContext, useHomeContextLayout]);
 
   useEffect(() => {
-    if (!isLarge || useHomeContextLayout) {
+    if (!isLarge || narrow) {
       setIsLargeToolbarCompact(false);
       return;
     }
@@ -1187,42 +1194,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const resizeObserver = new ResizeObserver(updateCompactState);
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
-  }, [isLarge, useHomeContextLayout]);
-
-  useEffect(() => {
-    if (!showAgentMenu) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!agentButtonRef.current?.contains(target) && !agentMenuRef.current?.contains(target)) {
-        setShowAgentMenu(false);
-      }
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.isComposing) {
-        if (narrow) {
-          event.preventDefault();
-          agentButtonRef.current?.focus();
-        }
-        setShowAgentMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside, true);
-    document.addEventListener('keydown', handleEscape, true);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside, true);
-      document.removeEventListener('keydown', handleEscape, true);
-    };
-  }, [narrow, showAgentMenu]);
+  }, [isLarge, narrow]);
 
   useEffect(() => {
     if (!showAddMenu) return;
 
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (!addMenuButtonRef.current?.contains(target) && !addMenuRef.current?.contains(target)) {
+      if (
+        !addMenuButtonRef.current?.contains(target)
+        && !addMenuRef.current?.contains(target)
+        && !mediaOverridePillRef.current?.contains(target)
+      ) {
         setShowAddMenu(false);
         setShowSkillsPopover(false);
       }
@@ -1437,6 +1420,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       attachments: sourceAttachments,
       selectedTextSnippets: sourceSelectedTextSnippets,
       modelSupportsImage,
+      useAttachedImagesAsReferences: activeKitIds.includes(SkinPackKitId.BuiltIn),
       readFileAsDataUrl: path => window.electron.dialog.readFileAsDataUrl(path),
       fileLabel: i18nService.t('inputFileLabel'),
       folderLabel: i18nService.t('inputFolderLabel'),
@@ -1491,6 +1475,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
     return payload;
   }, [
+    activeKitIds,
     effectiveSelectedModel?.id,
     modelSupportsImage,
     reportPromptControl,
@@ -2319,7 +2304,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     ? 'relative rounded-2xl border border-border bg-surface shadow-subtle'
     : isLarge
     ? useHomeContextLayout
-      ? narrow ? 'relative rounded-2xl' : 'relative rounded-3xl'
+      ? narrow
+        ? 'relative rounded-2xl'
+        : 'relative rounded-[24px] border border-border/90 bg-surface-raised shadow-composer'
       : 'relative rounded-3xl border border-border bg-surface shadow-composer'
     : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
@@ -2764,15 +2751,53 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setShowSkillsPopover(false);
     setFoldedTool(tool);
   }, [activeKitIds.length, cancelCloseSkillsPopover, foldedTool, reportPromptControl]);
-  const handleExpertsMenuItemChange = useCallback((open: boolean) => {
-    handleFoldedToolChange(PromptFoldedTool.Experts, open);
-  }, [handleFoldedToolChange]);
   const handleKitsMenuItemChange = useCallback((open: boolean) => {
     handleFoldedToolChange(PromptFoldedTool.Kits, open);
   }, [handleFoldedToolChange]);
   const handleMediaMenuItemChange = useCallback((open: boolean) => {
     handleFoldedToolChange(PromptFoldedTool.Media, open);
   }, [handleFoldedToolChange]);
+
+  const customMediaModelBadge = useMemo(() => (
+    resolveCustomMediaModelBadge(
+      queuedMediaSelection,
+      authOwnerAccountKey === mediaModelsOwnerAccountKey ? cachedMediaModels : undefined,
+    )
+  ), [authOwnerAccountKey, cachedMediaModels, mediaModelsOwnerAccountKey, queuedMediaSelection]);
+
+  const handleToggleMediaPickerFromPill = useCallback(() => {
+    if (disabled || voiceInputLocksEditing) return;
+    if (showAddMenu && foldedTool === PromptFoldedTool.Media) {
+      setShowAddMenu(false);
+      setFoldedTool(null);
+      return;
+    }
+    setShowSkillsPopover(false);
+    setShowAddMenu(true);
+    setFoldedTool(PromptFoldedTool.Media);
+  }, [disabled, foldedTool, showAddMenu, voiceInputLocksEditing]);
+
+  const handleResetCustomMediaModels = useCallback(async () => {
+    if (disabled || voiceInputLocksEditing || !authOwnerAccountKey || !customMediaModelBadge) return;
+    const scope = {
+      draftKey,
+      ownerAccountKey: authOwnerAccountKey,
+      accountGeneration: authAccountGeneration,
+    };
+    await Promise.all(
+      customMediaModelBadge.types.map((type) => (
+        setMediaPreference(dispatch, scope, type, { mode: MediaPreferenceMode.Inherit })
+      )),
+    );
+  }, [
+    authAccountGeneration,
+    authOwnerAccountKey,
+    customMediaModelBadge,
+    disabled,
+    dispatch,
+    draftKey,
+    voiceInputLocksEditing,
+  ]);
 
   const handleTogglePlanMode = useCallback(() => {
     const nextMode = isPlanMode ? CoworkCollaborationMode.Default : CoworkCollaborationMode.Plan;
@@ -2886,7 +2911,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setGoalEditSaving(true);
     console.debug(`[CoworkGoal] submitting goal edit modal for session ${sessionId}.`);
     try {
-      const accepted = await Promise.resolve(onGoalCommand(`/goal set ${trimmedValue}`))
+      const accepted = await Promise.resolve(onGoalCommand(`/goal edit ${trimmedValue}`))
         .then((result) => result !== false);
       if (!accepted) {
         console.warn(`[CoworkGoal] goal edit modal command was rejected for session ${sessionId}.`);
@@ -3065,7 +3090,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const goalCommandCanRunWhileStreaming = goalInputActive && !!sessionId && !!onGoalCommand;
   const followUpCanQueueWhileStreaming = !!sessionId && !remoteManaged;
   const streamingSubmitCanRun = goalCommandCanRunWhileStreaming || followUpCanQueueWhileStreaming;
-  const currentAgentForDisplay: AgentSelectorOption = currentAgent ?? {
+  const currentAgentForDisplay: AgentPickerOption = currentAgent ?? {
     id: currentAgentId,
     name: currentAgentId,
     icon: '',
@@ -3079,7 +3104,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const homeContextAgentName = truncateDisplayText(currentAgentName, ContextLabelMaxLength.Agent);
   const readOnlyContextAgentId = contextAgentId?.trim() || currentAgentId;
   const readOnlyContextAgent = agents.find((agent) => agent.id === readOnlyContextAgentId);
-  const readOnlyContextAgentForDisplay: AgentSelectorOption = readOnlyContextAgent ?? {
+  const readOnlyContextAgentForDisplay: AgentPickerOption = readOnlyContextAgent ?? {
     id: readOnlyContextAgentId,
     name: readOnlyContextAgentId,
     icon: '',
@@ -3087,7 +3112,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   };
   const readOnlyContextAgentName = getAgentDisplayName(readOnlyContextAgentForDisplay);
   const readOnlyContextAgentLabel = truncateDisplayText(readOnlyContextAgentName, ContextLabelMaxLength.Agent);
-  const useLargeToolbarCompactLayout = isLargeToolbarCompact && !useHomeContextLayout;
+  const useLargeToolbarCompactLayout = isLargeToolbarCompact && !narrow;
   const largeToolbarGapClass = useLargeToolbarCompactLayout ? 'gap-1.5' : narrow ? 'gap-2' : 'gap-3';
   const largeToolbarControlGapClass = useLargeToolbarCompactLayout || narrow ? 'gap-1' : 'gap-2';
   const largeModelTriggerMaxWidthClassName = useLargeToolbarCompactLayout
@@ -3103,6 +3128,116 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     window.addEventListener(ConfigServiceEvent.Updated, syncFromConfig);
     return () => window.removeEventListener(ConfigServiceEvent.Updated, syncFromConfig);
   }, []);
+
+  useEffect(() => {
+    setPendingModelSwitch(null);
+  }, [sessionId]);
+
+  const applySessionModelSelection = async (
+    targetSessionId: string,
+    selectedModel: Model,
+    meta: ModelSelectorChangeMeta,
+  ) => {
+    const nextThinkingLevel = selectedModel.presetId
+      ? meta.thinkingLevel ?? ''
+      : resolveModelThinkingLevel(selectedModel, meta.thinkingLevel) ?? '';
+    if (selectedModel.presetId) {
+      setIsPatchingModel(true);
+      try {
+        await coworkService.selectSessionModelPreset(targetSessionId, selectedModel.presetId, nextThinkingLevel || undefined);
+        void coworkService.refreshContextUsage(targetSessionId, { notifyCompaction: false });
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: error instanceof Error ? error.message : i18nService.t('coworkModelSwitchFailed') }));
+      } finally {
+        setIsPatchingModel(false);
+      }
+      return;
+    }
+
+    const modelRef = toOpenClawModelRef(selectedModel);
+    const keepsSessionModel = meta.thinkingOnly === true
+      || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
+    const requestId = modelPatchRequestIdRef.current + 1;
+    modelPatchRequestIdRef.current = requestId;
+    const previousModelOverride = currentSession?.id === targetSessionId
+      ? currentSession.modelOverride
+      : '';
+    const previousThinkingLevel = currentSession?.id === targetSessionId
+      ? currentSession.thinkingLevel ?? ''
+      : '';
+
+    setIsPatchingModel(true);
+    logPromptModelSelection(
+      'debug',
+      `switching session ${targetSessionId} to ${modelRef}; thinking level is ${nextThinkingLevel || 'default'}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
+    );
+    dispatch(updateCurrentSessionModelOverride({
+      sessionId: targetSessionId,
+      modelOverride: modelRef,
+      thinkingLevel: nextThinkingLevel,
+    }));
+
+    try {
+      const patchedSession = await coworkService.patchSession(targetSessionId,
+        buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
+      if (requestId !== modelPatchRequestIdRef.current) return;
+
+      if (!patchedSession) {
+        dispatch(updateCurrentSessionModelOverride({
+          sessionId: targetSessionId,
+          modelOverride: previousModelOverride,
+          thinkingLevel: previousThinkingLevel,
+        }));
+        logPromptModelSelection('warn', `model switch for session ${targetSessionId} returned no session`);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkModelSwitchFailed'),
+        }));
+        return;
+      }
+
+      logPromptModelSelection('debug', `switched session ${targetSessionId} to ${patchedSession.modelOverride || modelRef}`);
+      reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, targetSessionId);
+      void coworkService.refreshContextUsage(targetSessionId, { notifyCompaction: false });
+    } catch (error) {
+      if (requestId === modelPatchRequestIdRef.current) {
+        dispatch(updateCurrentSessionModelOverride({
+          sessionId: targetSessionId,
+          modelOverride: previousModelOverride,
+          thinkingLevel: previousThinkingLevel,
+        }));
+        console.warn(`[CoworkPromptInput] model switch for session ${targetSessionId} failed:`, error);
+        window.electron?.log?.fromRenderer?.('warn', 'CoworkPromptInput', `model switch for session ${targetSessionId} failed`);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkModelSwitchFailed'),
+        }));
+      }
+    } finally {
+      if (requestId === modelPatchRequestIdRef.current) {
+        setIsPatchingModel(false);
+      }
+    }
+  };
+
+  const handleConfirmModelSwitch = async (dontAskAgain: boolean) => {
+    if (!pendingModelSwitch || isPatchingModel) return;
+    const nextPending = pendingModelSwitch;
+    if (dontAskAgain) {
+      setModelSwitchConfirmSkipped(true);
+    }
+    if (nextPending.sessionId !== sessionId) {
+      setPendingModelSwitch(null);
+      return;
+    }
+    try {
+      await applySessionModelSelection(
+        nextPending.sessionId,
+        nextPending.selectedModel,
+        nextPending.meta,
+      );
+    } finally {
+      setPendingModelSwitch(null);
+    }
+  };
 
   const largeModelSelector = showModelSelector ? (
     <div className="flex flex-col items-start gap-1">
@@ -3132,108 +3267,44 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         onChange={async (nextModel, meta: ModelSelectorChangeMeta) => {
           if (isPatchingModel || isPersistingAgentModel) return;
           if (!nextModel) return;
-          const modelSwitchStartedAt = Date.now();
-          const previousMessageIds = new Set(currentSession?.messages.map(message => message.id));
-          const notifyModelSwitch = (updatedSession: CoworkSession) => {
-            const notice = updatedSession.messages.find(message => (
-              message.metadata?.kind === CoworkSystemMessageKind.ModelChanged
-              && message.timestamp >= modelSwitchStartedAt
-              && !previousMessageIds.has(message.id)
-            ));
-            if (notice) onModelSwitch?.(updatedSession.id, notice.id);
-          };
           // Reuse only a valid binding. Reselecting a stale preset must resolve it again.
           const keepsBoundPreset = !!(!sessionModelIsInvalid && sessionId && nextModel.presetId && currentSession && currentSession.id === sessionId
             && currentSession.modelPresetId === nextModel.presetId && currentSession.modelOverride);
           if (keepsBoundPreset) return;
-          const selectedModel = !keepsBoundPreset && meta.group === ModelSelectorGroup.Server
+          const selectedModel = meta.group === ModelSelectorGroup.Server
             ? availableModels.find(model => (
               model.isServerModel
               && model.id === nextModel.id
               && model.accessible !== false
             )) ?? nextModel
             : nextModel;
-          const nextThinkingLevel = selectedModel.presetId && !keepsBoundPreset
+          if (sessionId) {
+            const matchedSession = currentSession?.id === sessionId ? currentSession : null;
+            const confirmInfo = resolveModelSwitchConfirmation({
+              session: matchedSession,
+              availableModels,
+              currentEffectiveModel: effectiveSelectedModel,
+              nextModel: selectedModel,
+              sessionModelIsInvalid,
+              thinkingOnly: meta.thinkingOnly === true,
+            });
+            if (confirmInfo) {
+              setPendingModelSwitch({
+                sessionId,
+                selectedModel,
+                meta,
+                previousModelName: confirmInfo.previousModelName,
+                nextModelName: confirmInfo.nextModelName,
+              });
+              return;
+            }
+            await applySessionModelSelection(sessionId, selectedModel, meta);
+            return;
+          }
+          const nextThinkingLevel = selectedModel.presetId
             ? meta.thinkingLevel ?? ''
             : resolveModelThinkingLevel(selectedModel, meta.thinkingLevel) ?? '';
-          if (sessionId && selectedModel.presetId && !keepsBoundPreset) {
-            setIsPatchingModel(true);
-            try {
-              const updatedSession = await coworkService.selectSessionModelPreset(sessionId, selectedModel.presetId, nextThinkingLevel || undefined);
-              notifyModelSwitch(updatedSession);
-              void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
-            } catch (error) {
-              window.dispatchEvent(new CustomEvent('app:showToast', { detail: error instanceof Error ? error.message : i18nService.t('coworkModelSwitchFailed') }));
-            } finally { setIsPatchingModel(false); }
-            return;
-          }
-          const modelRef = keepsBoundPreset ? currentSession!.modelOverride
-            : selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
-          if (sessionId) {
-            const keepsSessionModel = keepsBoundPreset || meta.thinkingOnly === true
-              || (!currentSession?.modelPresetId && currentSession?.modelOverride === modelRef);
-            const requestId = modelPatchRequestIdRef.current + 1;
-            modelPatchRequestIdRef.current = requestId;
-            const previousModelOverride = currentSession?.id === sessionId
-              ? currentSession.modelOverride
-              : '';
-            const previousThinkingLevel = currentSession?.id === sessionId
-              ? currentSession.thinkingLevel ?? ''
-              : '';
-
-            setIsPatchingModel(true);
-            logPromptModelSelection(
-              'debug',
-              `switching session ${sessionId} to ${modelRef}; thinking level is ${nextThinkingLevel || 'default'}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
-            );
-            dispatch(updateCurrentSessionModelOverride({
-              sessionId,
-              modelOverride: modelRef,
-              thinkingLevel: nextThinkingLevel,
-            }));
-
-            try {
-              const patchedSession = await coworkService.patchSession(sessionId,
-                buildSessionModelSelectionPatch(modelRef, nextThinkingLevel, keepsSessionModel));
-              if (requestId !== modelPatchRequestIdRef.current) return;
-
-              if (!patchedSession) {
-                dispatch(updateCurrentSessionModelOverride({
-                  sessionId,
-                  modelOverride: previousModelOverride,
-                  thinkingLevel: previousThinkingLevel,
-                }));
-                logPromptModelSelection('warn', `model switch for session ${sessionId} returned no session`);
-                window.dispatchEvent(new CustomEvent('app:showToast', {
-                  detail: i18nService.t('coworkModelSwitchFailed'),
-                }));
-                return;
-              }
-
-              logPromptModelSelection('debug', `switched session ${sessionId} to ${patchedSession.modelOverride || modelRef}`);
-              notifyModelSwitch(patchedSession);
-              reportModelSelected(selectedModel, meta.group, 'session', currentAgentId, sessionId);
-              void coworkService.refreshContextUsage(sessionId, { notifyCompaction: false });
-            } catch (error) {
-              if (requestId === modelPatchRequestIdRef.current) {
-                dispatch(updateCurrentSessionModelOverride({
-                  sessionId,
-                  modelOverride: previousModelOverride,
-                  thinkingLevel: previousThinkingLevel,
-                }));
-                console.warn(`[CoworkPromptInput] model switch for session ${sessionId} failed:`, error);
-                window.electron?.log?.fromRenderer?.('warn', 'CoworkPromptInput', `model switch for session ${sessionId} failed`);
-                window.dispatchEvent(new CustomEvent('app:showToast', {
-                  detail: i18nService.t('coworkModelSwitchFailed'),
-                }));
-              }
-            } finally {
-              if (requestId === modelPatchRequestIdRef.current) {
-                setIsPatchingModel(false);
-              }
-            }
-            return;
-          }
+          const modelRef = selectedModel.presetId ? selectedModel.id : toOpenClawModelRef(selectedModel);
           logPromptModelSelection(
             'debug',
             `persisting agent ${currentAgentId} model ${modelRef}; selector group is ${meta.group}; server model is ${selectedModel.isServerModel === true}`,
@@ -3297,19 +3368,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <PaperClipIcon className="h-5 w-5 shrink-0 text-secondary" />
             <span className="min-w-0 truncate">{i18nService.t('coworkAddFile')}</span>
           </button>
-          {ENABLE_EXPERT_PLAZA_UI && showAgentSelector && !sessionId && <ExpertPickerMenuItem
-            disabled={disabled || voiceInputLocksEditing}
-            menuItem={{ open: foldedTool === PromptFoldedTool.Experts, side: submenuSide, onOpenChange: handleExpertsMenuItemChange }}
-            onSelect={agentId => {
-              handleSelectAgent(agentId);
-              setShowAddMenu(false);
-              textareaRef.current?.focus();
-            }}
-            onExplore={() => {
-              dispatch(setDraftPrompt({ sessionId: draftKey, draft: value }));
-              setShowAddMenu(false);
-            }}
-          />}
+          <div className="mx-3 my-1 h-px bg-border" role="separator" />
           <KitsButton
             onSelectKit={handleSelectKit}
             onManageKits={handleManageKits}
@@ -3332,16 +3391,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <span className="min-w-0 flex-1 truncate">{i18nService.t('useSkill')}</span>
             <ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />
           </button>
-          {narrow && (
-            <>
-              <MediaModelPicker
-                draftKey={draftKey}
-                disabled={disabled || voiceInputLocksEditing}
-                menuItem={{ open: foldedTool === PromptFoldedTool.Media, side: submenuSide, onOpenChange: handleMediaMenuItemChange }}
-              />
-              <div className="mx-3 my-1 h-px bg-border" role="separator" />
-            </>
-          )}
+          <MediaModelPicker
+            draftKey={draftKey}
+            disabled={disabled || voiceInputLocksEditing}
+            menuItem={{ open: foldedTool === PromptFoldedTool.Media, side: submenuSide, onOpenChange: handleMediaMenuItemChange }}
+          />
+          <div className="mx-3 my-1 h-px bg-border" role="separator" />
           <button
             type="button"
             onClick={() => {
@@ -3426,9 +3481,43 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const largeInputToolActions = (
     <div className={`flex items-center ${useLargeToolbarCompactLayout ? 'gap-0' : 'gap-0.5'}`}>
       {largeInputActions}
-      {!narrow && <MediaModelPicker draftKey={draftKey} disabled={disabled || voiceInputLocksEditing} />}
     </div>
   );
+  const customMediaModelPill = !narrow && !remoteManaged && customMediaModelBadge ? (
+    <div
+      ref={mediaOverridePillRef}
+      data-custom-media-pill="true"
+      className={`inline-flex h-7 ${useLargeToolbarCompactLayout ? 'max-w-[116px]' : 'max-w-[168px]'} shrink-0 items-center rounded-lg border border-border/80 bg-surface-raised/70 text-xs text-foreground transition-colors hover:bg-surface-raised`}
+    >
+      <button
+        type="button"
+        disabled={disabled || voiceInputLocksEditing}
+        onClick={handleToggleMediaPickerFromPill}
+        className="flex min-w-0 items-center gap-1 py-1 pl-2 pr-1 text-left transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        title={`${i18nService.t('mediaCustomModelTooltipPrefix')}: ${customMediaModelBadge.names.join(' / ')}`}
+        aria-label={`${i18nService.t('mediaCustomModelTooltipPrefix')}: ${customMediaModelBadge.names.join(' / ')}`}
+      >
+        <MagicIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
+        <span className="min-w-0 truncate">
+          {customMediaModelBadge.primaryName}
+          {customMediaModelBadge.count > 1 ? ` +${customMediaModelBadge.count - 1}` : ''}
+        </span>
+      </button>
+      <button
+        type="button"
+        disabled={disabled || voiceInputLocksEditing}
+        onClick={(event) => {
+          event.stopPropagation();
+          void handleResetCustomMediaModels();
+        }}
+        className="flex h-full shrink-0 items-center justify-center rounded-r-lg px-1 text-secondary transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        title={i18nService.t('mediaCustomModelResetTooltip')}
+        aria-label={i18nService.t('mediaCustomModelResetTooltip')}
+      >
+        <XMarkIcon className="h-3 w-3" />
+      </button>
+    </div>
+  ) : null;
   const largeSendButtonSizeClass = useCompactSendButton ? 'h-7 w-7' : 'h-8 w-8';
   const largeSendIconSizeClass = useCompactSendButton ? 'h-4 w-4' : 'h-[18px] w-[18px]';
   const largeVoiceInputButton = !remoteManaged ? renderVoiceInputButton(
@@ -3949,10 +4038,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       data-prompt-context-tray
       className={narrow
         ? 'flex min-w-0 items-center gap-0.5'
-        : '-mt-6 flex min-h-10 items-center gap-1 rounded-b-3xl bg-black/[0.035] px-4 pb-2 pt-[30px] dark:bg-white/[0.05]'}
+        : 'flex h-[40px] items-center gap-1 px-3'}
     >
       {showFolderSelector && !narrow && (
-        <div className={`relative ${narrow ? 'shrink-0' : 'min-w-0 shrink'}`}>
+        <div className="relative min-w-0 shrink">
           <button
             ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
             type="button"
@@ -3962,26 +4051,22 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               });
               setShowFolderMenu(!showFolderMenu);
             }}
-            className={`flex items-center gap-1.5 rounded-lg ${narrow ? 'h-8 w-8 justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30' : 'h-7 max-w-[260px] px-2'} text-[13px] transition-colors ${
+            className={`flex h-7 max-w-[260px] items-center gap-1.5 rounded-lg px-2 text-[13px] transition-colors ${
               showFolderRequiredWarning
                 ? 'ring-1 ring-warning text-warning animate-shake'
-                : `text-secondary ${narrow ? 'hover:bg-surface-raised' : 'hover:bg-background/80'} hover:text-foreground ${
-                  showFolderMenu ? `${narrow ? 'bg-surface-raised' : 'bg-background/80'} text-foreground` : ''
+                : `text-secondary hover:bg-black/[0.05] hover:text-foreground dark:hover:bg-white/[0.08] ${
+                  showFolderMenu ? 'bg-black/[0.05] text-foreground dark:bg-white/[0.08]' : ''
                 }`
             }`}
             aria-label={`${i18nService.t('coworkWorkingDirectory')}: ${truncatePath(workingDirectory)}`}
             aria-expanded={showFolderMenu}
             title={workingDirectory || i18nService.t('noFolderSelected')}
           >
-            <WorkingDirectoryIcon className={`${narrow ? 'h-[18px] w-[18px]' : 'h-4 w-4'} shrink-0`} />
-            {!narrow && (
-              <>
-                <span className="min-w-0 truncate">
-                  {truncatePath(workingDirectory, ContextLabelMaxLength.Folder)}
-                </span>
-                <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" />
-              </>
-            )}
+            <WorkingDirectoryIcon className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 truncate">
+              {truncatePath(workingDirectory, ContextLabelMaxLength.Folder)}
+            </span>
+            <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" />
           </button>
           <FolderSelectorPopover
             isOpen={showFolderMenu}
@@ -3989,9 +4074,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             onSelectFolder={handleFolderSelect}
             anchorRef={folderButtonRef as React.RefObject<HTMLElement>}
             portal
+            placement="top"
           />
           {showFolderRequiredWarning && (
-            <div className="absolute left-0 top-full z-10 mt-1 whitespace-nowrap rounded-md bg-surface-raised px-2 py-1 text-xs text-warning shadow-subtle animate-fade-in-up">
+            <div className="absolute bottom-full left-0 z-20 mb-1.5 whitespace-nowrap rounded-md bg-surface-raised px-2 py-1 text-xs text-warning shadow-subtle animate-fade-in-up">
               {i18nService.t('coworkSelectFolderFirst')}
             </div>
           )}
@@ -4016,8 +4102,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               });
               setShowAgentMenu(!showAgentMenu);
             }}
-            className={`flex min-w-0 items-center gap-1.5 rounded-lg ${narrow ? 'h-8 max-w-28 px-1.5 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30' : 'h-7 max-w-[220px] px-2 hover:bg-background/80'} text-[13px] text-secondary transition-colors hover:text-foreground ${
-              showAgentMenu ? `${narrow ? 'bg-surface-raised' : 'bg-background/80'} text-foreground` : ''
+            className={`flex min-w-0 items-center gap-1.5 rounded-lg ${narrow ? 'h-8 max-w-28 px-1.5 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30' : 'h-7 max-w-[220px] px-2 hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'} text-[13px] text-secondary transition-colors hover:text-foreground ${
+              showAgentMenu ? (narrow ? 'bg-surface-raised text-foreground' : 'bg-black/[0.05] text-foreground dark:bg-white/[0.08]') : ''
             }`}
             aria-label={`${i18nService.t('coworkSelectAgent')}: ${currentAgentName}`}
             aria-expanded={showAgentMenu}
@@ -4028,38 +4114,23 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <ChevronDownIcon className={`${narrow ? 'h-3 w-3' : 'h-3.5 w-3.5'} shrink-0`} />
           </button>
         </Tooltip>
-        {showAgentMenu && (
-          <div
-            ref={agentMenuRef}
-            className={`absolute bottom-full left-0 z-50 overflow-y-auto rounded-xl border border-border bg-surface shadow-popover ${narrow
-              ? 'mb-2 max-h-60 w-52 p-1'
-              : 'mb-1 max-h-64 w-64 py-1'}`}
-          >
-            {agentOptions.map((agent) => {
-              const isSelectedAgent = agent.id === currentAgentId;
-              return (
-                <button
-                  key={agent.id}
-                  type="button"
-                  onClick={() => {
-                    handleSelectAgent(agent.id);
-                    if (narrow) requestAnimationFrame(() => textareaRef.current?.focus());
-                  }}
-                  title={getAgentDisplayName(agent)}
-                  className={`flex w-full items-center text-left text-foreground transition-colors hover:bg-surface-raised ${narrow
-                    ? 'gap-1.5 rounded-lg px-2 py-1.5 text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30'
-                    : 'gap-2 px-3 py-2 text-sm'} ${
-                    isSelectedAgent ? narrow ? 'bg-primary/[0.06]' : 'bg-surface-raised/70' : ''
-                  }`}
-                >
-                  <AgentContextAvatar agent={agent} className={narrow ? 'h-3.5 w-3.5 text-secondary' : undefined} />
-                  <span className="min-w-0 flex-1 truncate">{getAgentDisplayName(agent)}</span>
-                  {isSelectedAgent && <CheckIcon className={`${narrow ? 'h-3.5 w-3.5' : 'h-4 w-4'} shrink-0 text-primary`} />}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <AgentPickerPopover
+          isOpen={showAgentMenu}
+          anchorRef={agentButtonRef as React.RefObject<HTMLElement>}
+          agents={agentOptions}
+          currentAgentId={currentAgentId}
+          narrow={narrow}
+          preferredPlacement="top"
+          showExplorePlaza={!sessionId}
+          onSelect={(agentId) => {
+            handleSelectAgent(agentId);
+            requestAnimationFrame(() => textareaRef.current?.focus());
+          }}
+          onExplore={() => {
+            dispatch(setDraftPrompt({ sessionId: draftKey, draft: value }));
+          }}
+          onClose={() => setShowAgentMenu(false)}
+        />
       </div>
     </div>
   ) : null;
@@ -4209,55 +4280,63 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         {isLarge ? (
           useHomeContextLayout ? (
             <>
+              {!narrow && homeContextSelectors}
               <div
                 data-onboarding-target="home-prompt"
                 className={narrow
                   ? 'relative z-10 rounded-t-2xl'
-                  : 'relative z-10 rounded-3xl border border-border bg-surface shadow-composer'}
+                  : 'relative z-10 -mx-px -mb-px rounded-[23px] border border-border bg-surface'}
               >
-                {largeAttachmentPreview}
-                {selectedTextSnippetPreview}
-                {browserAnnotationPreview}
-                {steerPreview}
-                {sessionGoalStatusBar}
-                {renderMentionTextarea({
-                  rows: narrow ? 1 : 2,
-                  placeholder: textareaPlaceholder,
-                  style: { minHeight: `${minHeight}px` },
-                  wrapperClassName: narrow ? 'relative w-full overflow-hidden rounded-t-2xl' : undefined,
-                })}
-                {mentionPickerOpen && (
-                  <MediaMentionPicker
-                    items={mediaLabels}
-                    filter={mentionFilter}
-                    position={mentionPickerPosition}
-                    onSelect={handleMentionSelect}
-                    onDismiss={() => setMentionPickerOpen(false)}
-                  />
+              {largeAttachmentPreview}
+              {selectedTextSnippetPreview}
+              {browserAnnotationPreview}
+              {steerPreview}
+              {sessionGoalStatusBar}
+              {renderMentionTextarea({
+                rows: narrow ? 1 : 2,
+                placeholder: textareaPlaceholder,
+                style: { minHeight: `${minHeight}px` },
+                wrapperClassName: narrow ? 'relative w-full overflow-hidden rounded-t-2xl' : undefined,
+              })}
+              {mentionPickerOpen && (
+                <MediaMentionPicker
+                  items={mediaLabels}
+                  filter={mentionFilter}
+                  position={mentionPickerPosition}
+                  onSelect={handleMentionSelect}
+                  onDismiss={() => setMentionPickerOpen(false)}
+                />
+              )}
+              <div ref={largeToolbarRef} className={`relative flex items-center justify-between ${largeToolbarGapClass} ${narrow ? 'px-3' : 'px-4'} pb-2 pt-1`}>
+                {voiceRecordingUiState.showFooterRecordingStatus && (
+                  <div className="pointer-events-none absolute inset-x-0 top-1/2 z-20 flex -translate-y-1/2 justify-center">
+                    <VoiceInputRecordingStatus
+                      elapsedSeconds={recordingElapsedSeconds}
+                      showHint={!hasPromptText}
+                    />
+                  </div>
                 )}
-                <div ref={largeToolbarRef} className={`relative flex items-center justify-between ${largeToolbarGapClass} ${narrow ? 'px-3' : 'px-4'} pb-2 pt-1`}>
-                  {voiceRecordingUiState.showFooterRecordingStatus && (
-                    <div className="pointer-events-none absolute inset-x-0 top-1/2 z-20 flex -translate-y-1/2 justify-center">
-                      <VoiceInputRecordingStatus
-                        elapsedSeconds={recordingElapsedSeconds}
-                        showHint={!hasPromptText}
-                      />
-                    </div>
+                <div className={`flex min-w-0 items-center ${largeToolbarControlGapClass}`}>
+                  {voiceRecordingUiState.showLargeInputControls && largeInputToolActions}
+                  {voiceRecordingUiState.showLargeInputControls && (
+                    <PermissionModeSelector
+                      sessionId={sessionId}
+                      compact={narrow || isLargeToolbarCompact}
+                      disabled={disabled || voiceInputLocksEditing}
+                    />
                   )}
-                  <div className={`flex min-w-0 items-center ${largeToolbarControlGapClass}`}>
-                    {voiceRecordingUiState.showLargeInputControls && largeInputToolActions}
-                    {narrow && voiceRecordingUiState.showLargeInputControls && homeContextSelectors}
-                    {narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
-                  </div>
-                  <div className={`flex shrink-0 items-center ${largeToolbarControlGapClass}`}>
-                    {contextUsageControl}
-                    {!narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
-                    {largeVoiceInputButton}
-                    {largeSendButton}
-                  </div>
+                  {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}
+                  {narrow && voiceRecordingUiState.showLargeInputControls && homeContextSelectors}
+                  {narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
+                </div>
+                <div className={`flex shrink-0 items-center ${largeToolbarControlGapClass}`}>
+                  {contextUsageControl}
+                  {!narrow && voiceRecordingUiState.showLargeModelSelector && largeModelSelector}
+                  {largeVoiceInputButton}
+                  {largeSendButton}
                 </div>
               </div>
-              {!narrow && homeContextSelectors}
+            </div>
             </>
           ) : (
             <>
@@ -4336,6 +4415,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     </>
                   )}
                   {voiceRecordingUiState.showLargeInputControls && largeInputToolActions}
+                  {voiceRecordingUiState.showLargeInputControls && (
+                    <PermissionModeSelector
+                      sessionId={sessionId}
+                      compact={isCompact || isLargeToolbarCompact}
+                      disabled={disabled || voiceInputLocksEditing}
+                    />
+                  )}
+                  {voiceRecordingUiState.showLargeInputControls && customMediaModelPill}
                 </div>
                 <div className={`flex shrink-0 items-center ${largeToolbarControlGapClass}`}>
                   {contextUsageControl}
@@ -4428,6 +4515,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           onStart={() => { void handleChatLoginExperienceStart(); }}
         />
       )}
+      <ModelSwitchConfirmDialog
+        isOpen={Boolean(pendingModelSwitch && pendingModelSwitch.sessionId === sessionId)}
+        previousModelName={pendingModelSwitch?.previousModelName ?? ''}
+        nextModelName={pendingModelSwitch?.nextModelName ?? ''}
+        confirming={isPatchingModel}
+        onCancel={() => setPendingModelSwitch(null)}
+        onConfirm={(dontAskAgain) => { void handleConfirmModelSwitch(dontAskAgain); }}
+      />
       {modelAccessPrompt && (
         <ModelAccessPromptModal
           promptKind={modelAccessPrompt}

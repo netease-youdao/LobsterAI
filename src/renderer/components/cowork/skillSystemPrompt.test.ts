@@ -21,27 +21,27 @@ describe('buildCoworkSystemPrompt', () => {
 describe('buildPlanModeSystemPrompt', () => {
   test('instructs the model to emit a proposed plan block without mutating files', () => {
     const prompt = buildPlanModeSystemPrompt();
-    expect(prompt).toContain('Plan Mode');
-    expect(prompt).toContain('Do not edit files');
+    expect(prompt).toContain('# Plan Mode');
+    expect(prompt).toContain('严禁编辑或写入文件');
     expect(prompt).toContain('<proposed_plan>');
-    expect(prompt).toContain('Do not output only a preface');
+    expect(prompt).toContain('不要只输出一句引导语');
   });
 
   test('makes plan mode take priority over implementation-oriented skill instructions', () => {
     const prompt = buildPlanModeSystemPrompt();
-    expect(prompt).toContain('priority over selected skills');
-    expect(prompt).toContain('reinterpret that skill as planning guidance only');
-    expect(prompt).toContain('Do not call mutating tools');
+    expect(prompt).toContain('规划模式优先级高于已选技能');
+    expect(prompt).toContain('本轮仅作规划参考');
+    expect(prompt).toContain('变更类工具');
   });
 
   test('requires a decision-complete plan structure', () => {
     const prompt = buildPlanModeSystemPrompt();
-    expect(prompt).toContain('same language as the user request');
-    expect(prompt).toContain('Implementation Approach');
-    expect(prompt).toContain('Key Changes');
-    expect(prompt).toContain('Validation');
-    expect(prompt).toContain('Assumptions or Questions');
-    expect(prompt).toContain('8-16 bullets');
+    expect(prompt).toContain('与用户请求相同的语言');
+    expect(prompt).toContain('实现方案');
+    expect(prompt).toContain('核心改动');
+    expect(prompt).toContain('验证方式');
+    expect(prompt).toContain('假设与待确认问题');
+    expect(prompt).toContain('8-16 条要点');
   });
 });
 

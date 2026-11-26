@@ -1,27 +1,5 @@
 import { type Session, WebContentsView } from 'electron';
 
-import {
-  BrowserDisplayMode,
-  type BrowserWebAccessConfig,
-  normalizeBrowserWebAccessConfig,
-} from '../../shared/browserWebAccess/constants';
-import type { WebSearchPageRequest, WebSearchPageResponse } from './mcpBridgeServer';
-
-/**
- * Operations the web-search skill's bridge server may run on the hidden search
- * page. Deliberately narrow: the page shares the in-app browser's cookies, so
- * no operation accepts caller-supplied script.
- */
-export const WebSearchPageOp = {
-  Status: 'status',
-  Search: 'search',
-  Navigate: 'navigate',
-  Text: 'text',
-  Html: 'html',
-} as const;
-
-export type WebSearchPageOp = typeof WebSearchPageOp[keyof typeof WebSearchPageOp];
-
 export const WebSearchEngine = {
   Google: 'google',
   Bing: 'bing',
@@ -29,19 +7,61 @@ export const WebSearchEngine = {
 
 export type WebSearchEngine = typeof WebSearchEngine[keyof typeof WebSearchEngine];
 
-/** Lets the skill server tell "use your own browser" apart from a failed search. */
-export const WebSearchPageErrorCode = {
-  Disabled: 'in-app-disabled',
-} as const;
+export interface WebSearchSourceItem {
+  url: string;
+  title?: string;
+  snippet?: string;
+}
+
+export interface WebSearchRequest {
+  query: string;
+  maxResults?: number;
+  engine?: WebSearchEngine;
+}
+
+export interface WebSearchResult {
+  query: string;
+  engine: WebSearchEngine;
+  sources: WebSearchSourceItem[];
+  duration: number;
+}
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
+const GOOGLE_AUTO_NAVIGATION_TIMEOUT_MS = 10_000;
+const ABORTED_SETTLE_GRACE_MS = 1_500;
 const RESULT_WAIT_TIMEOUT_MS = 10_000;
+const GOOGLE_AUTO_RESULT_WAIT_TIMEOUT_MS = 8_000;
 const RESULT_POLL_INTERVAL_MS = 200;
 const EVALUATE_TIMEOUT_MS = 10_000;
 const IDLE_CLOSE_MS = 5 * 60_000;
+const DEFAULT_GOOGLE_COOLDOWN_MS = 10 * 60_000;
 const DEFAULT_MAX_RESULTS = 10;
 const MAX_RESULTS_LIMIT = 50;
 const PAGE_BOUNDS = { x: 0, y: 0, width: 1280, height: 800 };
+const WEB_SEARCH_NAVIGATION_ABORTED_CODE = -3;
+const WEB_SEARCH_NAVIGATION_ABORTED_NAME = 'ERR_ABORTED';
+const POLICY_BLOCKED_NAVIGATION_ERROR = 'Navigation was blocked by the LobsterAI browser access policy.';
+
+/** Minimal Electron WebContents surface needed for navigation helpers and tests. */
+export interface WebSearchWebContents {
+  loadURL(url: string): Promise<void>;
+  executeJavaScript(script: string, userGesture?: boolean): Promise<unknown>;
+  getURL(): string;
+  isDestroyed(): boolean;
+  isLoading(): boolean;
+  isLoadingMainFrame(): boolean;
+  stop(): void;
+  close(): void;
+  setAudioMuted(muted: boolean): void;
+  setWindowOpenHandler(handler: () => { action: 'deny' }): void;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+  removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+export interface WebSearchViewLike {
+  readonly webContents: WebSearchWebContents;
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
+}
 
 /** A page the host can drive; the default one is a detached WebContentsView. */
 export interface WebSearchPage {
@@ -60,9 +80,11 @@ export interface WebSearchPageContext {
 }
 
 export interface WebSearchHostDeps {
-  getBrowserConfig: () => Partial<BrowserWebAccessConfig> | null | undefined;
   getPageContext: () => WebSearchPageContext;
+  isSkillEnabled?: () => boolean;
   createPage?: (context: WebSearchPageContext) => WebSearchPage;
+  googleCooldownMs?: number;
+  now?: () => number;
 }
 
 interface SearchEngineSpec {
@@ -71,9 +93,8 @@ interface SearchEngineSpec {
   extractScript: string;
 }
 
-// The extraction scripts mirror SKILLs/web-search/server/search/{google,bing}.ts,
-// which run the same logic through Playwright when the skill uses its own
-// Chrome. Keep the selectors in sync when a search engine changes its markup.
+// Extraction scripts run inside the hidden in-app WebContentsView page.
+// Keep selectors up to date when Google or Bing changes its markup.
 const GOOGLE_EXTRACT_SCRIPT = String.raw`(max) => {
   const parseGoogleUrl = (rawUrl) => {
     if (!rawUrl) return '';
@@ -173,6 +194,108 @@ const readMaxResults = (value: unknown): number => {
   return Math.min(Math.floor(value), MAX_RESULTS_LIMIT);
 };
 
+const createAbortError = (signal?: AbortSignal): Error => {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const error = new Error(typeof signal?.reason === 'string' && signal.reason ? signal.reason : 'Web search aborted.');
+  error.name = 'AbortError';
+  return error;
+};
+
+const throwIfAborted = (signal?: AbortSignal): void => {
+  if (signal?.aborted) {
+    throw createAbortError(signal);
+  }
+};
+
+const sleepWithAbort = (ms: number, signal?: AbortSignal): Promise<void> => {
+  if (signal?.aborted) return Promise.reject(createAbortError(signal));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(createAbortError(signal));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+};
+
+/**
+ * Unwrap Bing click-tracking redirect URLs (`/ck/a?...&u=a1<base64url>`) into
+ * their real destination `http(s)` URL so downstream `web_fetch` and
+ * `blockedHostnames` policy checks operate on the actual target host.
+ */
+export const decodeBingClickUrl = (rawUrl: string): string => {
+  if (!rawUrl) return '';
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if ((host !== 'bing.com' && !host.endsWith('.bing.com')) || parsed.pathname !== '/ck/a') {
+    return rawUrl;
+  }
+  const encoded = parsed.searchParams.get('u');
+  if (!encoded || !encoded.startsWith('a1') || encoded.length <= 2) {
+    return rawUrl;
+  }
+  try {
+    const base64 = encoded.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+    const decoded = Buffer.from(padded, 'base64').toString('utf8').trim();
+    const target = new URL(decoded);
+    if (target.protocol === 'http:' || target.protocol === 'https:') {
+      return target.href;
+    }
+  } catch {
+    // Fall back to the original URL when Bing's payload is malformed or non-base64.
+  }
+  return rawUrl;
+};
+
+/**
+ * Normalize, deduplicate, and policy-filter raw extracted search results.
+ */
+export const normalizeSearchSources = (
+  rawItems: unknown,
+  isAllowedUrl: (url: string) => boolean,
+  maxResults: number,
+): WebSearchSourceItem[] => {
+  if (!Array.isArray(rawItems) || maxResults <= 0) return [];
+  const sources: WebSearchSourceItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawItems) {
+    if (sources.length >= maxResults) break;
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, unknown>;
+    const rawUrl = typeof item.url === 'string' ? item.url.trim() : '';
+    if (!rawUrl) continue;
+    const decodedUrl = decodeBingClickUrl(rawUrl);
+    let normalizedUrl = '';
+    try {
+      const parsed = new URL(decodedUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+      normalizedUrl = parsed.href;
+    } catch {
+      continue;
+    }
+    if (seen.has(normalizedUrl) || !isAllowedUrl(normalizedUrl)) continue;
+    seen.add(normalizedUrl);
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const snippet = typeof item.snippet === 'string' ? item.snippet.trim() : '';
+    sources.push({
+      url: normalizedUrl,
+      ...(title ? { title } : {}),
+      ...(snippet ? { snippet } : {}),
+    });
+  }
+  return sources;
+};
+
 const withTimeout = async <T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -187,8 +310,195 @@ const withTimeout = async <T>(work: Promise<T>, timeoutMs: number, message: stri
   }
 };
 
-const createDetachedPage = (context: WebSearchPageContext): WebSearchPage => {
-  const view = new WebContentsView({
+export const isNavigationAbortedError = (error: unknown): boolean => {
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    if (record.errno === WEB_SEARCH_NAVIGATION_ABORTED_CODE) return true;
+    if (record.code === WEB_SEARCH_NAVIGATION_ABORTED_NAME) return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes(WEB_SEARCH_NAVIGATION_ABORTED_NAME);
+};
+
+export interface NavigateWebContentsOptions {
+  timeoutMs: number;
+  isAllowedUrl: (url: string) => boolean;
+  abortedGraceMs?: number;
+}
+
+/**
+ * Navigate a hidden WebContents to `url`, tolerating Chromium's `ERR_ABORTED (-3)`
+ * when a search engine triggers a client/server redirect chain before `dom-ready`
+ * while still failing promptly on real network errors, policy blocks, or page destruction.
+ */
+export const navigateWebContents = (
+  webContents: WebSearchWebContents,
+  url: string,
+  options: NavigateWebContentsOptions,
+): Promise<void> => new Promise<void>((resolve, reject) => {
+  if (webContents.isDestroyed()) {
+    reject(new Error('Hidden search page was destroyed.'));
+    return;
+  }
+
+  // Cancel any lingering load from a previous search engine before attaching
+  // listeners for this navigation so old events cannot resolve or abort it.
+  if (webContents.isLoading()) {
+    webContents.stop();
+  }
+
+  const abortedGraceMs = options.abortedGraceMs ?? ABORTED_SETTLE_GRACE_MS;
+  let settled = false;
+  let committed = false;
+  let followUpNavigationStarted = false;
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let abortedGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearAbortedGraceTimer = () => {
+    if (abortedGraceTimer) {
+      clearTimeout(abortedGraceTimer);
+      abortedGraceTimer = undefined;
+    }
+  };
+
+  const cleanup = () => {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = undefined;
+    }
+    clearAbortedGraceTimer();
+    webContents.removeListener('did-start-navigation', onStartNavigation);
+    webContents.removeListener('did-navigate', onCommit);
+    webContents.removeListener('dom-ready', onDocumentReady);
+    webContents.removeListener('did-finish-load', onFinishLoad);
+    webContents.removeListener('did-fail-load', onFailLoad);
+    webContents.removeListener('will-navigate', onBeforeNavigate);
+    webContents.removeListener('will-redirect', onBeforeNavigate);
+    webContents.removeListener('destroyed', onDestroyed);
+    webContents.removeListener('render-process-gone', onRendererGone);
+  };
+
+  const succeed = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolve();
+  };
+
+  const fail = (error: unknown) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    reject(error instanceof Error ? error : new Error(String(error)));
+  };
+
+  const onStartNavigation = (...args: unknown[]) => {
+    const isInPlace = args[2] === true;
+    const isMainFrame = args[3] !== false;
+    if (!isMainFrame || isInPlace) return;
+    committed = false;
+    followUpNavigationStarted = true;
+    clearAbortedGraceTimer();
+  };
+
+  const onCommit = () => {
+    committed = true;
+    clearAbortedGraceTimer();
+  };
+
+  const onDocumentReady = () => {
+    if (committed) succeed();
+  };
+
+  const onFinishLoad = () => {
+    if (committed) succeed();
+  };
+
+  const onFailLoad = (...args: unknown[]) => {
+    const errorCode = typeof args[1] === 'number' ? args[1] : 0;
+    const errorDescription = typeof args[2] === 'string' && args[2] ? args[2] : 'ERR_FAILED';
+    const validatedURL = typeof args[3] === 'string' ? args[3] : url;
+    const isMainFrame = args[4] !== false;
+    if (!isMainFrame) return;
+    if (errorCode === WEB_SEARCH_NAVIGATION_ABORTED_CODE) return;
+    fail(new Error(`${errorDescription} (${errorCode}) loading '${validatedURL}'`));
+  };
+
+  const onBeforeNavigate = (...args: unknown[]) => {
+    const event = args[0] as { preventDefault?: () => void } | undefined;
+    const targetUrl = typeof args[1] === 'string' ? args[1] : '';
+    if (targetUrl && !options.isAllowedUrl(targetUrl)) {
+      event?.preventDefault?.();
+      fail(new Error(POLICY_BLOCKED_NAVIGATION_ERROR));
+    }
+  };
+
+  const onDestroyed = () => {
+    fail(new Error('Hidden search page was destroyed during navigation.'));
+  };
+
+  const onRendererGone = () => {
+    fail(new Error('Hidden search page renderer exited during navigation.'));
+  };
+
+  webContents.on('did-start-navigation', onStartNavigation);
+  webContents.on('did-navigate', onCommit);
+  webContents.on('dom-ready', onDocumentReady);
+  webContents.on('did-finish-load', onFinishLoad);
+  webContents.on('did-fail-load', onFailLoad);
+  webContents.on('will-navigate', onBeforeNavigate);
+  webContents.on('will-redirect', onBeforeNavigate);
+  webContents.on('destroyed', onDestroyed);
+  webContents.on('render-process-gone', onRendererGone);
+
+  timeoutTimer = setTimeout(() => {
+    fail(new Error(`Navigation timed out after ${options.timeoutMs}ms.`));
+  }, options.timeoutMs);
+
+  let loaded: Promise<void>;
+  try {
+    loaded = webContents.loadURL(url);
+  } catch (error) {
+    fail(error);
+    return;
+  }
+
+  loaded.then(
+    () => {
+      succeed();
+    },
+    (error: unknown) => {
+      if (settled) return;
+      if (webContents.isDestroyed() || !isNavigationAbortedError(error)) {
+        fail(error);
+        return;
+      }
+      // A redirect chain can abort the initial loadURL() promise with ERR_ABORTED (-3)
+      // while the replacement navigation continues toward did-navigate / dom-ready.
+      if (committed || webContents.isLoadingMainFrame()) {
+        return;
+      }
+      followUpNavigationStarted = false;
+      clearAbortedGraceTimer();
+      abortedGraceTimer = setTimeout(() => {
+        abortedGraceTimer = undefined;
+        if (settled) return;
+        if (committed || followUpNavigationStarted || webContents.isLoadingMainFrame()) {
+          return;
+        }
+        fail(error);
+      }, abortedGraceMs);
+    },
+  );
+});
+
+export const createDetachedPage = (
+  context: WebSearchPageContext,
+  createView: (options: Electron.WebContentsViewConstructorOptions) => WebSearchViewLike = options => (
+    new WebContentsView(options) as unknown as WebSearchViewLike
+  ),
+): WebSearchPage => {
+  const view = createView({
     webPreferences: {
       session: context.session,
       nodeIntegration: false,
@@ -204,88 +514,101 @@ const createDetachedPage = (context: WebSearchPageContext): WebSearchPage => {
     },
   });
   view.setBounds(PAGE_BOUNDS);
+  // Keep a strong reference to the detached WebContentsView for the entire
+  // page lifetime; without it V8 GC finalizes the unattached view and destroys
+  // its WebContents mid-search (`ERR_FAILED` / `Object has been destroyed`).
+  let retainedView: WebSearchViewLike | null = view;
   const webContents = view.webContents;
   webContents.setAudioMuted(true);
   webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  webContents.on('will-navigate', (event, url) => {
-    if (!context.isAllowedUrl(url)) event.preventDefault();
+  const preventBlockedNavigation = (...args: unknown[]) => {
+    const event = args[0] as { preventDefault?: () => void } | undefined;
+    const targetUrl = typeof args[1] === 'string' ? args[1] : '';
+    if (targetUrl && !context.isAllowedUrl(targetUrl)) event?.preventDefault?.();
+  };
+  webContents.on('will-navigate', preventBlockedNavigation);
+  webContents.on('will-redirect', preventBlockedNavigation);
+  webContents.on('destroyed', () => {
+    retainedView = null;
   });
+  webContents.on('render-process-gone', () => {
+    const crashedView = retainedView;
+    retainedView = null;
+    if (crashedView && !crashedView.webContents.isDestroyed()) {
+      crashedView.webContents.close();
+    }
+  });
+
+  const requireLiveWebContents = (): WebSearchWebContents => {
+    if (!retainedView || retainedView.webContents.isDestroyed()) {
+      throw new Error('Hidden search page was destroyed.');
+    }
+    return retainedView.webContents;
+  };
 
   return {
     async navigate(url, timeoutMs) {
       await context.whenReady();
-      let committed = false;
-      const onCommit = () => { committed = true; };
-      let onDocumentReady = () => {};
-      const documentReady = new Promise<void>(resolve => {
-        onDocumentReady = () => { if (committed) resolve(); };
+      const liveWebContents = requireLiveWebContents();
+      await navigateWebContents(liveWebContents, url, {
+        timeoutMs,
+        isAllowedUrl: context.isAllowedUrl,
       });
-      webContents.on('did-navigate', onCommit);
-      webContents.on('dom-ready', onDocumentReady);
-      const loaded = webContents.loadURL(url);
-      // The document is usable before subresources finish; a late rejection
-      // from the abandoned load must not surface as an unhandled rejection.
-      loaded.catch(() => {});
-      try {
-        await withTimeout(
-          Promise.race([loaded, documentReady]),
-          timeoutMs,
-          `Navigation timed out after ${timeoutMs}ms.`,
-        );
-      } finally {
-        webContents.removeListener('did-navigate', onCommit);
-        webContents.removeListener('dom-ready', onDocumentReady);
-      }
     },
     evaluate<T>(script: string, timeoutMs: number): Promise<T> {
+      const liveWebContents = requireLiveWebContents();
       return withTimeout(
-        webContents.executeJavaScript(script, false) as Promise<T>,
+        liveWebContents.executeJavaScript(script, false) as Promise<T>,
         timeoutMs,
         `Page script timed out after ${timeoutMs}ms.`,
       );
     },
-    url: () => webContents.getURL(),
-    isDestroyed: () => webContents.isDestroyed(),
+    url: () => (retainedView && !retainedView.webContents.isDestroyed() ? retainedView.webContents.getURL() : ''),
+    isDestroyed: () => !retainedView || retainedView.webContents.isDestroyed(),
     destroy: () => {
-      if (!webContents.isDestroyed()) webContents.close();
+      const currentView = retainedView;
+      retainedView = null;
+      if (currentView && !currentView.webContents.isDestroyed()) {
+        currentView.webContents.close();
+      }
     },
   };
 };
 
 /**
- * Runs the web-search skill's searches in a hidden page of the in-app browser
- * session, so the skill does not open an external Chrome window while the
- * in-app browser mode is on.
+ * Runs web searches in a hidden page of LobsterAI's in-app browser session
+ * (Google primary with automatic cooldown + Bing fallback), sharing the app's
+ * network/proxy settings and `blockedHostnames` policy without launching an
+ * external browser or background Express server.
  */
 export class WebSearchHost {
   private page: WebSearchPage | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private googleCooldownUntil = 0;
 
   constructor(private readonly deps: WebSearchHostDeps) {}
 
-  async handleRequest(request: WebSearchPageRequest): Promise<WebSearchPageResponse> {
-    if (!this.isInAppMode()) {
+  async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
+    throwIfAborted(signal);
+    if (this.deps.isSkillEnabled && !this.deps.isSkillEnabled()) {
       this.dispose();
-      return {
-        success: false,
-        code: WebSearchPageErrorCode.Disabled,
-        error: 'The LobsterAI in-app browser mode is not enabled.',
-      };
+      throw new Error('The LobsterAI web-search skill is disabled.');
     }
-    if (request.op === WebSearchPageOp.Status) {
-      return { success: true, data: { active: true } };
+    const query = typeof request.query === 'string' ? request.query.trim() : '';
+    if (!query) {
+      throw new Error('query is required');
     }
+    if (request.engine !== undefined && !isSearchEngine(request.engine)) {
+      throw new Error(`Unsupported search engine: ${String(request.engine)}`);
+    }
+    const maxResults = readMaxResults(request.maxResults);
 
     // One page serves every request; overlapping navigations would abort each other.
-    const run = this.queue.then(() => this.dispatch(request));
+    const run = this.queue.then(() => this.runAutoSearch(query, maxResults, request.engine, signal));
     this.queue = run.then(() => {}, () => {});
     try {
-      return { success: true, data: await run };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[WebSearchHost] ${String(request.op)} failed: ${message}`);
-      return { success: false, error: message };
+      return await run;
     } finally {
       this.scheduleIdleClose();
     }
@@ -298,77 +621,117 @@ export class WebSearchHost {
     this.page = null;
   }
 
-  private isInAppMode(): boolean {
-    return normalizeBrowserWebAccessConfig(this.deps.getBrowserConfig()).displayMode
-      === BrowserDisplayMode.InApp;
+  private now(): number {
+    return this.deps.now ? this.deps.now() : Date.now();
   }
 
-  private async dispatch(request: WebSearchPageRequest): Promise<unknown> {
-    switch (request.op) {
-      case WebSearchPageOp.Search:
-        return this.search(request);
-      case WebSearchPageOp.Navigate: {
-        const page = this.ensurePage();
-        await this.navigate(page, typeof request.url === 'string' ? request.url : '');
-        return { url: page.url() };
+  private getGoogleCooldownMs(): number {
+    return typeof this.deps.googleCooldownMs === 'number' && this.deps.googleCooldownMs >= 0
+      ? this.deps.googleCooldownMs
+      : DEFAULT_GOOGLE_COOLDOWN_MS;
+  }
+
+  private async runAutoSearch(
+    query: string,
+    maxResults: number,
+    explicitEngine: WebSearchEngine | undefined,
+    signal?: AbortSignal,
+  ): Promise<WebSearchResult> {
+    throwIfAborted(signal);
+    if (this.deps.isSkillEnabled && !this.deps.isSkillEnabled()) {
+      this.dispose();
+      throw new Error('The LobsterAI web-search skill is disabled.');
+    }
+
+    const engines: WebSearchEngine[] = explicitEngine
+      ? [explicitEngine]
+      : this.now() < this.googleCooldownUntil
+        ? [WebSearchEngine.Bing]
+        : [WebSearchEngine.Google, WebSearchEngine.Bing];
+
+    let lastError: unknown;
+    for (let i = 0; i < engines.length; i += 1) {
+      const engine = engines[i];
+      const hasFallback = i + 1 < engines.length;
+      try {
+        const result = await this.searchWithEngine(query, maxResults, engine, hasFallback, signal);
+        if (engine === WebSearchEngine.Google) {
+          this.googleCooldownUntil = 0;
+        }
+        return result;
+      } catch (error) {
+        if (signal?.aborted) {
+          throw createAbortError(signal);
+        }
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (engine === WebSearchEngine.Google && hasFallback) {
+          this.googleCooldownUntil = this.now() + this.getGoogleCooldownMs();
+          console.warn(`[WebSearchHost] google search failed; cooling down and falling back to bing: ${message}`);
+          continue;
+        }
+        console.warn(`[WebSearchHost] ${engine} search failed: ${message}`);
+        throw error;
       }
-      case WebSearchPageOp.Text:
-        return { text: await this.readDocument('(document.body && document.body.innerText) || ""') };
-      case WebSearchPageOp.Html:
-        return {
-          content: await this.readDocument(
-            '(document.documentElement && document.documentElement.outerHTML) || ""',
-          ),
-        };
-      default:
-        throw new Error(`Unsupported web search page operation: ${String(request.op)}`);
     }
+
+    throw lastError instanceof Error ? lastError : new Error('Web search failed.');
   }
 
-  /** Nothing has been loaded before the first search, and a page without a document cannot run script. */
-  private async readDocument(script: string): Promise<string> {
-    const page = this.page;
-    if (!page || page.isDestroyed() || !page.url()) return '';
-    return page.evaluate<string>(script, EVALUATE_TIMEOUT_MS);
-  }
-
-  private async search(request: WebSearchPageRequest): Promise<unknown> {
-    const query = typeof request.query === 'string' ? request.query.trim() : '';
-    if (!query) throw new Error('query is required');
-    if (!isSearchEngine(request.engine)) {
-      throw new Error(`Unsupported search engine: ${String(request.engine)}`);
-    }
-    const engine = request.engine;
+  private async searchWithEngine(
+    query: string,
+    maxResults: number,
+    engine: WebSearchEngine,
+    hasFallback: boolean,
+    signal?: AbortSignal,
+  ): Promise<WebSearchResult> {
+    throwIfAborted(signal);
     const spec = SEARCH_ENGINES[engine];
-    const maxResults = readMaxResults(request.maxResults);
-    const startedAt = Date.now();
-    const page = this.ensurePage();
+    const startedAt = this.now();
+    const context = this.deps.getPageContext();
+    const page = this.ensurePage(context);
 
-    await this.navigate(page, spec.buildUrl(query));
+    const navTimeoutMs = engine === WebSearchEngine.Google && hasFallback
+      ? GOOGLE_AUTO_NAVIGATION_TIMEOUT_MS
+      : NAVIGATION_TIMEOUT_MS;
+    const waitTimeoutMs = engine === WebSearchEngine.Google && hasFallback
+      ? GOOGLE_AUTO_RESULT_WAIT_TIMEOUT_MS
+      : RESULT_WAIT_TIMEOUT_MS;
 
-    let results: unknown[] = [];
-    if (await this.waitForSelector(page, spec.resultSelector)) {
-      results = await page.evaluate<unknown[]>(`(${spec.extractScript})(${maxResults})`, EVALUATE_TIMEOUT_MS);
+    await this.navigate(page, context, spec.buildUrl(query), navTimeoutMs, signal);
+    throwIfAborted(signal);
+
+    let rawResults: unknown[] = [];
+    if (await this.waitForSelector(page, spec.resultSelector, waitTimeoutMs, signal)) {
+      throwIfAborted(signal);
+      rawResults = await page.evaluate<unknown[]>(`(${spec.extractScript})(${maxResults})`, EVALUATE_TIMEOUT_MS);
     } else if (engine === WebSearchEngine.Google) {
       throw new Error(await this.isGoogleUnavailable(page)
         ? 'Google appears blocked or unavailable from this network'
         : 'Google search results did not load in time');
     }
-    if (engine === WebSearchEngine.Google && results.length === 0) {
+
+    const sources = normalizeSearchSources(rawResults, context.isAllowedUrl, maxResults);
+    if (engine === WebSearchEngine.Google && sources.length === 0) {
       throw new Error('Google returned no parsable results');
     }
 
     return {
       query,
       engine,
-      results,
-      totalResults: results.length,
-      timestamp: Date.now(),
-      duration: Date.now() - startedAt,
+      sources,
+      duration: Math.max(0, this.now() - startedAt),
     };
   }
 
-  private async navigate(page: WebSearchPage, url: string): Promise<void> {
+  private async navigate(
+    page: WebSearchPage,
+    context: WebSearchPageContext,
+    url: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    throwIfAborted(signal);
     let protocol = '';
     try {
       protocol = new URL(url).protocol;
@@ -378,21 +741,27 @@ export class WebSearchHost {
     if (protocol !== 'http:' && protocol !== 'https:') {
       throw new Error(`Blocked URL scheme "${protocol}" - only http/https allowed`);
     }
-    if (!this.deps.getPageContext().isAllowedUrl(url)) {
-      throw new Error('Navigation was blocked by the LobsterAI browser access policy.');
+    if (!context.isAllowedUrl(url)) {
+      throw new Error(POLICY_BLOCKED_NAVIGATION_ERROR);
     }
-    await page.navigate(url, NAVIGATION_TIMEOUT_MS);
+    await page.navigate(url, timeoutMs);
   }
 
-  private async waitForSelector(page: WebSearchPage, selector: string): Promise<boolean> {
+  private async waitForSelector(
+    page: WebSearchPage,
+    selector: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const script = `Boolean(document.querySelector(${JSON.stringify(selector)}))`;
-    const deadline = Date.now() + RESULT_WAIT_TIMEOUT_MS;
+    const deadline = this.now() + timeoutMs;
     for (;;) {
+      throwIfAborted(signal);
       // A redirect can replace the document mid-poll; treat that as "not yet".
       const found = await page.evaluate<boolean>(script, EVALUATE_TIMEOUT_MS).catch(() => false);
       if (found) return true;
-      if (Date.now() >= deadline) return false;
-      await new Promise(resolve => setTimeout(resolve, RESULT_POLL_INTERVAL_MS));
+      if (this.now() >= deadline) return false;
+      await sleepWithAbort(RESULT_POLL_INTERVAL_MS, signal);
     }
   }
 
@@ -406,9 +775,8 @@ export class WebSearchHost {
     return page.evaluate<boolean>(`(${GOOGLE_UNAVAILABLE_SCRIPT})()`, EVALUATE_TIMEOUT_MS).catch(() => false);
   }
 
-  private ensurePage(): WebSearchPage {
+  private ensurePage(context: WebSearchPageContext): WebSearchPage {
     if (this.page && !this.page.isDestroyed()) return this.page;
-    const context = this.deps.getPageContext();
     this.page = (this.deps.createPage ?? createDetachedPage)(context);
     console.log('[WebSearchHost] Created the hidden search page.');
     return this.page;

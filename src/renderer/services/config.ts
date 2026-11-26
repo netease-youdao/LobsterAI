@@ -16,6 +16,7 @@ import { normalizeNotificationSettings } from '../../shared/notifications/consta
 import { isUrlOnDomain } from '../../shared/url/hostname';
 import {
   AppConfig,
+  ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
   CODE_FONT_SIZE_MIGRATION_VERSION,
   CONFIG_KEYS,
   defaultConfig,
@@ -765,8 +766,15 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
       storedConfig.codeFontSizeMigrationVersion ?? 0,
       CODE_FONT_SIZE_MIGRATION_VERSION,
     ),
-    artifactAutoPreviewEnabled: resolveArtifactAutoPreviewEnabled(
-      storedConfig.artifactAutoPreviewEnabled,
+    // One-time forced reset to the current default (see
+    // ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION); afterwards the stored choice wins.
+    artifactAutoPreviewEnabled:
+      (storedConfig.artifactAutoPreviewMigrationVersion ?? 0) >= ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION
+        ? resolveArtifactAutoPreviewEnabled(storedConfig.artifactAutoPreviewEnabled)
+        : false,
+    artifactAutoPreviewMigrationVersion: Math.max(
+      storedConfig.artifactAutoPreviewMigrationVersion ?? 0,
+      ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
     ),
     browserWebAccess: normalizeBrowserWebAccessConfig(storedConfig.browserWebAccess),
     notificationSettings: normalizeNotificationSettings(storedConfig.notificationSettings),
@@ -848,6 +856,13 @@ class ConfigService {
         FontPreferences.CodeFontSizeDefault,
         FontPreferences.CodeFontSizeMin,
         FontPreferences.CodeFontSizeMax,
+      ),
+      artifactAutoPreviewEnabled: resolveArtifactAutoPreviewEnabled(
+        newConfig.artifactAutoPreviewEnabled ?? base.artifactAutoPreviewEnabled,
+      ),
+      artifactAutoPreviewMigrationVersion: Math.max(
+        newConfig.artifactAutoPreviewMigrationVersion ?? base.artifactAutoPreviewMigrationVersion ?? 0,
+        ARTIFACT_AUTO_PREVIEW_MIGRATION_VERSION,
       ),
       browserWebAccess: normalizeBrowserWebAccessConfig(
         newConfig.browserWebAccess ?? base.browserWebAccess,

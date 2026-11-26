@@ -2,12 +2,30 @@ import React from 'react';
 
 import { i18nService } from '@/services/i18n';
 
+import {
+  formatOfficeFontLabel,
+  formatOfficeFontSizeLabel,
+} from './officeToolbarLabels';
+
 const t = (key: string) => i18nService.t(key);
 
 /** Office's usual family names; each editor maps them to an installed face or a stand-in. */
-export const COMMON_FONTS = ['宋体', '黑体', '微软雅黑', '等线', '楷体', '仿宋', 'Calibri', 'Arial', 'Times New Roman', 'Cambria', 'Courier New'];
-/** Font sizes in points, as Office lists them. */
-export const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
+export const COMMON_FONTS = [
+  '等线',
+  'Noto Sans SC',
+  '宋体',
+  '黑体',
+  '微软雅黑',
+  '楷体',
+  '仿宋',
+  'Calibri',
+  'Arial',
+  'Times New Roman',
+  'Cambria',
+  'Courier New',
+];
+/** Font sizes in points, including standard Chinese typographic sizes. */
+export const FONT_SIZES = [7.5, 9, 10, 10.5, 11, 12, 14, 15, 16, 18, 20, 22, 24, 26, 28, 36, 42, 48, 72];
 
 /** Formatting controls of one editor; `label` is the i18n key of its accessible name. */
 export function OfficeToolbar({ label, children, toolbarRef }: {
@@ -54,29 +72,32 @@ export function OfficeFontSelect({ value, fonts = [], hidden, disabled, classNam
   className?: string;
   onChange: (font: string) => void;
 }): React.ReactElement {
+  const language = i18nService.getLanguage();
   const options = [...new Set([value, ...fonts, ...COMMON_FONTS])]
     .filter((font): font is string => Boolean(font) && !hidden?.(font!));
   return (
     <select className={className} aria-label={t('officeFont')} title={t('officeFont')} value={value ?? ''} disabled={disabled}
       onFocus={onFocus} onBlur={onBlur} onChange={event => onChange(event.target.value)}>
       <option value="" disabled>{t('officeFont')}</option>
-      {options.map(font => <option key={font} value={font}>{font}</option>)}
+      {options.map(font => <option key={font} value={font}>{formatOfficeFontLabel(font, language)}</option>)}
     </select>
   );
 }
 
 /** The font size menu in points: the current size among the usual ones. */
-export function OfficeFontSizeSelect({ value, disabled, onChange, onFocus, onBlur }: MenuFocus & {
+export function OfficeFontSizeSelect({ value, disabled, className, onChange, onFocus, onBlur }: MenuFocus & {
   value?: number;
   disabled?: boolean;
+  className?: string;
   onChange: (points: number) => void;
 }): React.ReactElement {
+  const language = i18nService.getLanguage();
   const sizes = [...new Set([value, ...FONT_SIZES])].filter((size): size is number => typeof size === 'number').sort((a, b) => a - b);
   return (
-    <select aria-label={t('officeFontSize')} title={t('officeFontSize')} value={value ?? ''} disabled={disabled}
+    <select className={className} aria-label={t('officeFontSize')} title={t('officeFontSize')} value={value ?? ''} disabled={disabled}
       onFocus={onFocus} onBlur={onBlur} onChange={event => onChange(Number(event.target.value))}>
       <option value="" disabled>{t('officeFontSize')}</option>
-      {sizes.map(size => <option key={size} value={size}>{size}</option>)}
+      {sizes.map(size => <option key={size} value={size}>{formatOfficeFontSizeLabel(size, language)}</option>)}
     </select>
   );
 }

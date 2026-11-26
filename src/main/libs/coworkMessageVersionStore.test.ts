@@ -72,6 +72,49 @@ function fixture() {
 }
 
 describe('versions left behind by message edits', () => {
+  test('opens a legacy version through its local projection and restores the DSH binding on return', () => {
+    const f = fixture();
+    f.commitEdit('v1', 'legacy-tip', 'v2');
+    f.db.exec("ALTER TABLE cowork_sessions ADD COLUMN claude_session_id TEXT; UPDATE cowork_sessions SET claude_session_id = 'dsh:current'");
+    const binding = () => f.db.prepare('SELECT claude_session_id FROM cowork_sessions').pluck().get();
+    expect(f.versions.switchDshVersion('session', 'v2', 1)).toBe('v1');
+    expect(f.ids()).toEqual(['keep', 'v1', 'v1-reply']);
+    expect(binding()).toBeNull();
+    expect(f.versions.switchDshVersion('session', 'v1', 2)).toBe('v2');
+    expect(binding()).toBe('dsh:current');
+  });
+
+  test('switches both messages and native session binding between DSH reply versions', () => {
+    const f = fixture();
+    f.db.exec("ALTER TABLE cowork_sessions ADD COLUMN claude_session_id TEXT; UPDATE cowork_sessions SET claude_session_id = 'dsh:original'");
+    const edits = new CoworkMessageEditStore(f.db, (_id, operation) => f.db.transaction(operation)());
+    const operation: CoworkMessageEditOperation = {
+      sessionId: 'session',
+      sessionKey: '',
+      operationId: 'dsh-edit',
+      messageId: 'v1',
+      runId: 'run-dsh',
+      prefixEntryIds: [],
+      prompt: 'edited wording',
+      phase: CoworkMessageEditPhase.Prepared,
+      dsh: { originalSessionId: 'dsh:original', forkedSessionId: 'dsh:edited' },
+    };
+    const binding = () => f.db.prepare('SELECT claude_session_id FROM cowork_sessions').pluck().get();
+    edits.prepare(operation);
+    edits.truncate(operation);
+    expect(binding()).toBe('dsh:edited');
+    f.db.exec(`INSERT INTO cowork_messages VALUES ('v2', 'session', 'user', 'edited wording', '{}', 10, 2);
+      INSERT INTO cowork_messages VALUES ('v2-reply', 'session', 'assistant', 'edited answer', '{}', 11, 3);`);
+    f.versions.recordDshEdit(operation, 'v2');
+    expect(f.versionOf('v2')).toEqual({ index: 2, count: 2 });
+    expect(f.createVersions().switchDshVersion('session', 'v2', 1)).toBe('v1');
+    expect(f.ids()).toEqual(['keep', 'v1', 'v1-reply']);
+    expect(binding()).toBe('dsh:original');
+    expect(f.createVersions().switchDshVersion('session', 'v1', 2)).toBe('v2');
+    expect(f.ids()).toEqual(['keep', 'v2', 'v2-reply']);
+    expect(binding()).toBe('dsh:edited');
+  });
+
   test('keeps the replaced conversation and numbers the resent message as the newest version', () => {
     const f = fixture();
     f.commitEdit('v1', 'tip-1', 'v2');

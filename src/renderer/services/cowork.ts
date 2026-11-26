@@ -18,10 +18,12 @@ import {
   CoworkContextUsageRefreshMode,
   type CoworkContextUsageRefreshMode as CoworkContextUsageRefreshModeType,
   CoworkContextUsageSource,
+  type CoworkMemoryStatusFilter,
   CoworkOnboardingMessageKind,
   CoworkSessionErrorCode,
 } from '../../shared/cowork/constants';
-import { normalizeCoworkGoal } from '../../shared/cowork/goal';
+import type { DreamDiaryData } from '../../shared/cowork/dreamDiary';
+import { CoworkGoalStatus, normalizeCoworkGoal } from '../../shared/cowork/goal';
 import type { CoworkTurnUsage } from '../../shared/cowork/llmTurnUsage';
 import type {
   CoworkMessageEditRequest,
@@ -119,6 +121,7 @@ const STREAM_ERROR_DUPLICATE_WINDOW_MS = 10_000;
 
 interface LoadMessageWindowAroundIndexOptions {
   pageSize?: number;
+  leadingContext?: number;
   expectedMessageId?: string;
   isRequestCurrent?: () => boolean;
 }
@@ -192,6 +195,7 @@ const restoreCurrentAgentDefaultSkills = (): void => {
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
   private openClawStatus: OpenClawEngineStatus | null = null;
   private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
   private openClawRepairPromise: Promise<OpenClawGatewayRepairResult> | null = null;
@@ -201,6 +205,10 @@ class CoworkService {
   // Only the current session can request a history window, so one monotonic
   // generation invalidates stale responses without retaining session ids.
   private messageWindowRequestGeneration = 0;
+  // Separate from messageWindowRequestGeneration so pagination jumps never
+  // discard an in-flight full rail index load.
+  private railIndexRequestGeneration = 0;
+  private railIndexInFlightBySessionId = new Map<string, Promise<CoworkMessageRailIndexItem[]>>();
   private contextUsageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private contextUsageInFlightBySessionId = new Map<string, Promise<CoworkContextUsage | null>>();
   private contextUsageAutoSuppressedUntilBySessionId = new Map<string, number>();
@@ -260,41 +268,52 @@ class CoworkService {
     store.dispatch(setStreaming(isStreaming));
   }
 
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
   async init(): Promise<void> {
     if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
 
-    // Attach listeners before reads so a slow initial snapshot cannot miss
-    // real-time events. Each snapshot is isolated and bounded: the Cowork view
-    // must never remain on a permanent loading screen because one IPC stalls.
-    this.setupStreamListeners();
-    this.setupOpenClawEngineListeners();
+    this.initPromise = (async () => {
+      // Attach listeners before reads so a slow initial snapshot cannot miss
+      // real-time events. Each snapshot is isolated and bounded: the Cowork view
+      // must never remain on a permanent loading screen because one IPC stalls.
+      this.setupStreamListeners();
+      this.setupOpenClawEngineListeners();
 
-    const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          task(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
-              COWORK_INIT_STAGE_TIMEOUT_MS,
-            );
-          }),
-        ]);
-      } catch (error) {
-        this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    };
+      const runStage = async (label: string, task: () => Promise<unknown>): Promise<void> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            task(),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(`${label} timed out after ${COWORK_INIT_STAGE_TIMEOUT_MS}ms`)),
+                COWORK_INIT_STAGE_TIMEOUT_MS,
+              );
+            }),
+          ]);
+        } catch (error) {
+          this.logDiagnostic('warn', `initialization stage ${label} failed: ${String(error)}`);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
 
-    await Promise.all([
-      runStage('loadConfig', () => this.loadConfig()),
-      runStage('loadSessions', () => this.loadSessions()),
-      runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
-    ]);
+      await Promise.all([
+        runStage('loadConfig', () => this.loadConfig()),
+        runStage('loadSessions', () => this.loadSessions()),
+        runStage('loadOpenClawEngineStatus', () => this.loadOpenClawEngineStatus()),
+      ]);
 
-    this.initialized = true;
+      this.initialized = true;
+    })().finally(() => {
+      this.initPromise = null;
+    });
+
+    return this.initPromise;
   }
 
   private setupStreamListeners(): void {
@@ -756,25 +775,27 @@ class CoworkService {
         } else {
           await this.refreshContextUsage(sessionId);
         }
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `context-compaction-manual-${sessionId}-${Date.now()}`,
-            type: 'system',
-            content: result.compacted
-              ? i18nService.t('coworkContextManualCompacted')
-              : i18nService.t('coworkContextManualCompactNoop'),
-            timestamp: Date.now(),
-            metadata: {
-              kind: CoworkSystemMessageKind.ContextCompaction,
-              mode: ContextCompactionMode.Manual,
-              status: result.compacted
-                ? ContextCompactionStatus.Completed
-                : ContextCompactionStatus.Failed,
-              compacted: result.compacted === true,
+        // When compaction actually ran, main persists and streams the durable
+        // ContextCompaction message via `onStreamMessage`. Only append an
+        // ephemeral notice here for no-op attempts so live chats never show
+        // duplicate compaction dividers.
+        if (!result.compacted) {
+          store.dispatch(addMessage({
+            sessionId,
+            message: {
+              id: `context-compaction-manual-${sessionId}-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkContextManualCompactNoop'),
+              timestamp: Date.now(),
+              metadata: {
+                kind: CoworkSystemMessageKind.ContextCompaction,
+                mode: ContextCompactionMode.Manual,
+                status: ContextCompactionStatus.Failed,
+                compacted: false,
+              },
             },
-          },
-        }));
+          }));
+        }
         return true;
       }
       console.warn(`[CoworkService] manual context compaction failed for session ${sessionId}: ${result.error ?? 'Unknown error'}`);
@@ -835,6 +856,8 @@ class CoworkService {
     this.contextUsageAutoSuppressedUntilBySessionId.clear();
     this.contextUsageBackoffUntil.clear();
     this.messageWindowRequestGeneration += 1;
+    this.railIndexRequestGeneration += 1;
+    this.railIndexInFlightBySessionId.clear();
     this.btwAbortRunIds.clear();
   }
 
@@ -994,7 +1017,12 @@ class CoworkService {
     offset: number,
   ): Promise<CoworkSessionListResult> {
     try {
-      const result = await window.electron?.cowork?.listSessions({ limit, offset, agentId });
+      const result = await window.electron?.cowork?.listSessions({
+        limit,
+        offset,
+        agentId,
+        pinnedFirst: false,
+      });
       const resolved = result ?? { success: false, error: 'Cowork IPC is unavailable' };
       if (!resolved.success) {
         this.logDiagnostic(
@@ -1062,6 +1090,23 @@ class CoworkService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to list filtered sessions',
+      };
+    }
+  }
+
+  async listPinnedSessions(): Promise<CoworkSessionListResult> {
+    return this.listFilteredSessions({ pinnedOnly: true });
+  }
+
+  async reorderPinnedSessions(sessionIds: string[]): Promise<CoworkSessionListResult> {
+    try {
+      const result = await window.electron?.cowork?.reorderPinnedSessions({ sessionIds });
+      return result ?? { success: false, error: 'Cowork IPC is unavailable' };
+    } catch (error) {
+      console.warn('[Cowork] failed to reorder pinned sessions:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to reorder pinned sessions',
       };
     }
   }
@@ -1569,11 +1614,6 @@ class CoworkService {
     const command = options.command.trim();
     const action = command.split(/\s+/, 2)[1] ?? 'status';
     const normalizedAction = action.toLowerCase();
-    const mayStartRun =
-      normalizedAction === 'start'
-      || normalizedAction === 'create'
-      || normalizedAction === 'set'
-      || normalizedAction === 'resume';
     this.logDiagnostic(
       'debug',
       `running goal command for session ${options.sessionId}, action ${action}`,
@@ -1586,6 +1626,16 @@ class CoworkService {
       session => session.id === options.sessionId,
     );
     const previousStatus = currentSessionBeforeGoalCommand?.status ?? listedSessionBeforeGoalCommand?.status;
+    const existingGoal = currentSessionBeforeGoalCommand?.goal ?? listedSessionBeforeGoalCommand?.goal ?? null;
+    const hasNonCompleteGoal = Boolean(existingGoal && existingGoal.status !== CoworkGoalStatus.Complete);
+    const isNonStartingAction =
+      normalizedAction === 'status'
+      || normalizedAction === 'pause'
+      || normalizedAction === 'clear'
+      || normalizedAction === 'edit';
+    const mayStartRun =
+      normalizedAction === 'resume'
+      || (!isNonStartingAction && !hasNonCompleteGoal);
     if (mayStartRun) {
       this.setCurrentSessionStreaming(options.sessionId, true, 'goal_command_requested');
       store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
@@ -1613,6 +1663,19 @@ class CoworkService {
     }
 
     store.dispatch(updateSessionGoal({ sessionId: options.sessionId, goal: result.goal ?? null }));
+    if (mayStartRun && result.isRunning === false) {
+      const latestCoworkState = store.getState().cowork;
+      const latestStatus = latestCoworkState.currentSession?.id === options.sessionId
+        ? latestCoworkState.currentSession.status
+        : latestCoworkState.sessions.find(session => session.id === options.sessionId)?.status;
+      if (latestStatus === 'running') {
+        this.setCurrentSessionStreaming(options.sessionId, false, 'goal_command_no_turn');
+        store.dispatch(updateSessionStatus({
+          sessionId: options.sessionId,
+          status: previousStatus && previousStatus !== 'running' ? previousStatus : 'idle',
+        }));
+      }
+    }
     return true;
   }
 
@@ -1732,6 +1795,8 @@ class CoworkService {
     // Fence already-running page refreshes before replacing the history projection.
     this.latestLoadSessionRequestId += 1;
     this.messageWindowRequestGeneration += 1;
+    this.railIndexRequestGeneration += 1;
+    this.railIndexInFlightBySessionId.delete(sessionId);
     try {
       const result = await action();
       if (result.success || result.pending) {
@@ -2027,37 +2092,45 @@ class CoworkService {
   }
 
   async loadSessionMessageRailIndex(sessionId: string): Promise<CoworkMessageRailIndexItem[]> {
-    const editGeneration = this.messageWindowRequestGeneration;
-    const cowork = window.electron?.cowork;
-    if (!cowork?.getSessionMessageRailIndex) return [];
+    const getSessionMessageRailIndex = window.electron?.cowork?.getSessionMessageRailIndex;
+    if (!getSessionMessageRailIndex) return [];
 
-    const state = store.getState().cowork;
-    if (state.messageRailIndexLoadingBySessionId[sessionId]) {
-      return state.messageRailIndexBySessionId[sessionId] ?? [];
+    const existingPromise = this.railIndexInFlightBySessionId.get(sessionId);
+    if (existingPromise) {
+      return existingPromise;
     }
 
+    const requestGeneration = this.railIndexRequestGeneration;
     store.dispatch(setMessageRailIndexLoading({ sessionId, loading: true }));
-    try {
-      const result = await cowork.getSessionMessageRailIndex(sessionId);
-      if (editGeneration !== this.messageWindowRequestGeneration) return [];
-      if (result.success && result.items) {
-        store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
+    const loadPromise = (async (): Promise<CoworkMessageRailIndexItem[]> => {
+      try {
+        const result = await getSessionMessageRailIndex(sessionId);
+        if (requestGeneration !== this.railIndexRequestGeneration) return [];
+        if (result.success && result.items) {
+          store.dispatch(setMessageRailIndex({ sessionId, items: result.items }));
+          this.logDiagnostic(
+            'info',
+            `loaded message rail index for session ${sessionId}; received ${result.items.length} items.`,
+          );
+          return result.items;
+        }
+        this.logDiagnostic('warn', `failed to load message rail index for session ${sessionId}: ${result.error ?? 'unknown error'}`);
+      } catch (error) {
         this.logDiagnostic(
-          'info',
-          `loaded message rail index for session ${sessionId}; received ${result.items.length} items.`,
+          'warn',
+          `failed to load message rail index for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return result.items;
       }
-      this.logDiagnostic('warn', `failed to load message rail index for session ${sessionId}: ${result.error ?? 'unknown error'}`);
-    } catch (error) {
-      this.logDiagnostic(
-        'warn',
-        `failed to load message rail index for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
+      return [];
+    })().finally(() => {
+      if (this.railIndexInFlightBySessionId.get(sessionId) === loadPromise) {
+        this.railIndexInFlightBySessionId.delete(sessionId);
+      }
       store.dispatch(setMessageRailIndexLoading({ sessionId, loading: false }));
-    }
-    return [];
+    });
+
+    this.railIndexInFlightBySessionId.set(sessionId, loadPromise);
+    return loadPromise;
   }
 
   async loadMessageWindowAroundIndex(
@@ -2080,9 +2153,13 @@ class CoworkService {
     const requestedPageSize = options.pageSize ?? 50;
     const safePageSize = Number.isFinite(requestedPageSize) ? Math.floor(requestedPageSize) : 50;
     const boundedPageSize = Math.max(COWORK_MESSAGE_PAGE_SIZE, Math.min(100, safePageSize));
+    const defaultLeadingContext = Math.floor(boundedPageSize / 2);
+    const resolvedLeadingContext = options.leadingContext !== undefined && Number.isFinite(options.leadingContext)
+      ? Math.max(0, Math.min(boundedPageSize - 1, Math.floor(options.leadingContext)))
+      : defaultLeadingContext;
     const offset = Math.max(0, Math.min(
       Math.max(0, totalMessages - boundedPageSize),
-      safeAbsoluteIndex - Math.floor(boundedPageSize / 2),
+      safeAbsoluteIndex - resolvedLeadingContext,
     ));
 
     this.logDiagnostic(
@@ -2448,66 +2525,98 @@ class CoworkService {
   }
 
   async listMemoryEntries(input: {
+    agentId?: string;
     query?: string;
+    status?: CoworkMemoryStatusFilter;
+    includeDeleted?: boolean;
     limit?: number;
     offset?: number;
-  }): Promise<CoworkUserMemoryEntry[]> {
+  } = {}): Promise<CoworkUserMemoryEntry[]> {
     const api = window.electron?.cowork?.listMemoryEntries;
     if (!api) return [];
     const result = await api(input);
-    if (!result?.success || !result.entries) return [];
+    if (!result?.success || !result.entries) {
+      throw new Error(result?.error || 'Failed to list memory entries');
+    }
     return result.entries;
   }
 
   async createMemoryEntry(input: {
+    agentId?: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+    section?: string;
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.createMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to create memory entry');
+    }
     return result.entry;
   }
 
   async updateMemoryEntry(input: {
+    agentId?: string;
     id: string;
     text: string;
-  }): Promise<CoworkUserMemoryEntry | null> {
+  }): Promise<CoworkUserMemoryEntry> {
     const api = window.electron?.cowork?.updateMemoryEntry;
-    if (!api) return null;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    if (!result?.success || !result.entry) return null;
+    if (!result?.success || !result.entry) {
+      throw new Error(result?.error || 'Failed to update memory entry');
+    }
     return result.entry;
   }
 
-  async deleteMemoryEntry(input: { id: string }): Promise<boolean> {
+  async deleteMemoryEntry(input: { agentId?: string; id: string }): Promise<boolean> {
     const api = window.electron?.cowork?.deleteMemoryEntry;
-    if (!api) return false;
+    if (!api) {
+      throw new Error('Memory API unavailable');
+    }
     const result = await api(input);
-    return Boolean(result?.success);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to delete memory entry');
+    }
+    return true;
   }
 
-  async getMemoryStats(): Promise<CoworkMemoryStats | null> {
+  async getMemoryStats(options?: { agentId?: string }): Promise<CoworkMemoryStats | null> {
     const api = window.electron?.cowork?.getMemoryStats;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success || !result.stats) return null;
     return result.stats;
   }
 
-  async readMemoryFileRaw(): Promise<string | null> {
+  async readMemoryFileRaw(options?: { agentId?: string }): Promise<string | null> {
     const api = window.electron?.cowork?.readMemoryFileRaw;
     if (!api) return null;
-    const result = await api();
+    const result = await api(options);
     if (!result?.success) return null;
     return result.content ?? '';
   }
 
-  async writeMemoryFileRaw(content: string): Promise<{ success: boolean; error?: string }> {
+  async writeMemoryFileRaw(
+    content: string,
+    options?: { agentId?: string },
+  ): Promise<{ success: boolean; error?: string }> {
     const api = window.electron?.cowork?.writeMemoryFileRaw;
     if (!api) return { success: false, error: 'Memory raw API unavailable' };
-    const result = await api({ content });
+    const result = await api({ content, agentId: options?.agentId });
     return result ?? { success: false };
+  }
+
+  async getDreamingDiary(options?: { agentId?: string }): Promise<DreamDiaryData | null> {
+    const api = window.electron?.cowork?.getDreamDiary;
+    if (!api) return null;
+    const result = await api(options);
+    if (!result?.success || !result.data) return null;
+    return result.data;
   }
 
   async readBootstrapFile(filename: string, options?: { agentId?: string }): Promise<string> {
@@ -2690,6 +2799,7 @@ class CoworkService {
     this.cleanupListeners();
     this.openClawStatusListeners.clear();
     this.initialized = false;
+    this.initPromise = null;
   }
 }
 

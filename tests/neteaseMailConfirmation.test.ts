@@ -1,9 +1,8 @@
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { getMailConfirmations, MailConfirmations, type MailOperation } from '../openclaw-extensions/netease-mail/confirmation';
-import manifest from '../openclaw-extensions/netease-mail/openclaw.plugin.json';
-import { MailAction, MailCode, MailForwardMode, MailRpc, MailScope, MailStatus, MailTool } from '../openclaw-extensions/netease-mail/protocol';
-import { NeteaseMailError, NeteaseMailForwardMode, NeteaseMailRuntimeRpc, NeteaseMailScope, NeteaseMailTool } from '../src/shared/neteaseMail/constants';
+import { MailConfirmations, type MailOperation } from '../src/main/mcp/neteaseMail/confirmation';
+import { MailAction, MailCode, MailForwardMode, MailScope, MailStatus, MailTool } from '../src/main/mcp/neteaseMail/protocol';
+import { NeteaseMailError, NeteaseMailForwardMode, NeteaseMailScope, NeteaseMailTool } from '../src/shared/neteaseMail/constants';
 
 function fixture() {
   const pending = new MailConfirmations();
@@ -23,10 +22,6 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 
-test('gateway and agent registrations share confirmations only within the same profile', () => {
-  expect(getMailConfirmations('profile-a')).toBe(getMailConfirmations('profile-a'));
-  expect(getMailConfirmations('profile-b')).not.toBe(getMailConfirmations('profile-a'));
-});
 
 test('only the matching trusted click consumes a pending operation once with frozen arguments', async () => {
   const f = fixture();
@@ -189,16 +184,13 @@ test.each([
   expect(f.call.mock.calls[1][1]).toEqual({ ...f.call.mock.calls[0][1], confirmation_token: 'private-token' });
 });
 
-test('deployed plugin wire values match the desktop boundary', () => {
-  expect(MailRpc.Resolve).toBe(NeteaseMailRuntimeRpc.ResolveConfirmation);
-  expect(MailRpc.Status).toBe(NeteaseMailRuntimeRpc.ConfirmationStatus);
+test('protected tool values match the desktop boundary', () => {
   expect(MailTool.Send).toBe(NeteaseMailTool.SendMessage);
   expect(MailTool.Trash).toBe(NeteaseMailTool.TrashMessage);
   expect(MailScope.Send).toBe(NeteaseMailScope.Send);
   expect(MailForwardMode).toEqual(NeteaseMailForwardMode);
   expect(MailCode.OutcomeUnknown).toBe(NeteaseMailError.OutcomeUnknown);
   expect(Object.values(MailCode).sort()).toEqual(Object.values(NeteaseMailError).sort());
-  expect(manifest.contracts.tools).toEqual([MailTool.Send, MailTool.Reply, MailTool.Forward, MailTool.Trash]);
 });
 
 const serviceErrors = [

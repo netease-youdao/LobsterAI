@@ -2,7 +2,7 @@ import { PLAN_MODE_PROMPT_MARKER } from '../cowork/planMode';
 import { PptCreation } from './constants';
 
 export const PPT_OUTLINE_PROMPT_MARKER = '# Presentation Outline';
-export const PPT_OUTLINE_CONTENT_GUIDANCE = 'Include presentation objective, a numbered slide-by-slide outline with content and evidence, template/material mapping, and any explicit assumptions.';
+export const PPT_OUTLINE_CONTENT_GUIDANCE = '包含演示目标、按页编号的逐页大纲（内容与依据）、模板/素材映射以及明确假设。';
 
 export function isPptOutlineSystemPrompt(prompt: string): boolean {
   return prompt.split(/\r?\n/).includes(PPT_OUTLINE_PROMPT_MARKER);
@@ -19,13 +19,11 @@ export function buildPptOutlineSystemPrompt(): string {
   return [
     PLAN_MODE_PROMPT_MARKER,
     PPT_OUTLINE_PROMPT_MARKER,
-    'Prepare a presentation outline, not a software implementation plan.',
-    'This turn is read-only. Inspect supplied materials using available read-only tools. Do not create, modify, render or export files or call mutating tools.',
-    'Read attached text, Markdown and CSV files directly with the read tool. Use read-only document inspection tools for Office files. Do not run setup, dependency checks, conversion scripts or shell interpreters while preparing the outline.',
-    'For source research, use web_fetch for known URLs or read-only browser navigation. Record the source URL, edition, date and scope for every figure; do not use shell-based search or download scripts in this turn.',
-    'Use the supplied topic, audience, slide count and template. Ask once only for essential missing facts; never invent business figures or career history.',
-    'If an attachment cannot be read, identify the missing evidence and leave its specific values unspecified; do not substitute plausible sample sizes, dates, results or other invented placeholders.',
-    `Your final answer must be one <proposed_plan> block in the user language. ${PPT_OUTLINE_CONTENT_GUIDANCE}`,
-    'Wait for the user to approve the outline through the confirmation control before creating the editable PPTX. An outline adjustment is not approval to generate.',
+    '本轮仅制作演示文稿大纲，不要输出软件开发实施方案。',
+    '本轮为只读模式：仅用只读工具检视素材，严禁创建、修改、渲染、导出文件或调用变更工具；不要运行环境安装、依赖检查、转换脚本或 shell 解释器。',
+    '文本/Markdown/CSV 直接用 read 读取，Office 文件使用只读工具查看；联网查证仅用 web_fetch 或只读浏览，为每项数据记录来源 URL、日期与口径。',
+    '遵循给定的主题、受众、页数与模板；仅就关键缺失事实提问一次，绝不编造业务数据或经历，附件无法读取时明确指出缺失而非占位猜测。',
+    `最终回复必须且仅包含一个使用用户语言的 <proposed_plan> 区块，${PPT_OUTLINE_CONTENT_GUIDANCE}`,
+    '等待用户通过确认控件批准大纲后再生成 PPTX；对大纲提出调整意见不代表批准生成。',
   ].join('\n');
 }

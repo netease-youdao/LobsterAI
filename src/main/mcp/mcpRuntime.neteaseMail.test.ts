@@ -4,9 +4,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
-import { NeteaseMail, NeteaseMailAuth, NeteaseMailReadTools, NeteaseMailScope, NeteaseMailTool } from '../../shared/neteaseMail/constants';
+import { NeteaseMail, NeteaseMailReadTools, NeteaseMailScope, NeteaseMailTool } from '../../shared/neteaseMail/constants';
 import { McpRuntime } from './mcpRuntime';
-import { saveNeteaseMailAuthorization } from './neteaseMailAuthorizationState';
 
 const clientId = 'mail-upgrade-client';
 let userData: string;
@@ -35,12 +34,9 @@ afterEach(() => {
 
 async function resolveMail(scope?: string) {
   vi.stubEnv('LOBSTER_NETEASE_MAIL_CLIENT_ID', clientId);
-  if (scope !== undefined) {
-    const stateDir = path.join(userData, 'openclaw', 'state');
-    fs.mkdirSync(stateDir, { recursive: true });
-    saveNeteaseMailAuthorization(stateDir, { clientId, scope });
-  }
   const runtime = new McpRuntime({
+    getMailToken: () => ({ serverId: 'mail', clientId, mailAuthorizationId: 'grant',
+      accessToken: 'test', tokenType: 'Bearer', updatedAt: 1, scope }),
     getStore: () => ({ get: () => undefined, getDatabase: () => ({}) }) as never,
     syncOpenClawConfig: async () => ({ success: true, changed: false }),
   });
@@ -49,7 +45,7 @@ async function resolveMail(scope?: string) {
 
 test('upgrades a stored ten-tool connector from its grant without another OAuth login', async () => {
   const server = await resolveMail(Object.values(NeteaseMailScope).join(' '));
-  expect(server?.oauth?.authProfileId).toBe(NeteaseMailAuth.ProfileId);
+  expect(server).toMatchObject({ id: 'mail', auth: 'oauth', url: NeteaseMail.Endpoint });
   expect(server?.toolFilter?.include).toHaveLength(12);
   expect(server?.toolFilter?.include).toEqual(expect.arrayContaining([
     NeteaseMailTool.UpdateMessageReadState, NeteaseMailTool.UpdateMessageFlagState,

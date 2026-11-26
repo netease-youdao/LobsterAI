@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   DesktopCompanionDragPhase,
@@ -9,25 +9,51 @@ import {
   type DesktopCompanionState,
   DesktopCompanionTiming,
 } from '../../../shared/desktopCompanion/constants';
+import {
+  PetAction,
+  PetDragDirection,
+  PetHoverBeat,
+  resolvePetAction,
+} from '../../../shared/desktopCompanion/petAtlas';
 import { CompanionSkinKind, getCompanionSkin } from '../../../shared/desktopCompanion/skins';
 import { i18nService } from '../../services/i18n';
 import { CoworkSessionStatusValue } from '../../types/cowork';
 import { fileKindsFromDataTransfer, filesToAttachments, hasFiles } from './companionTasks';
 import CompanionCharacter from './mascot/CompanionCharacter';
 import { CompanionMood, companionMood, companionMoodLabelKey } from './mascot/companionMood';
+import { usePetAtlas } from './mascot/PetAtlasPlayer';
 import { useCompanionSession } from './useCompanionSession';
 
 const CHARACTER_SIZE = 64;
 const DRAG_THRESHOLD = 5;
+const DRAG_RUN_THRESHOLD_PX = 2;
+const DRAG_SETTLE_MS = 110;
+const DRAG_MAX_TILT_DEG = 10;
+const LAND_DURATION_MS = 380;
 
 export default function CompanionOrb({ state }: { state: DesktopCompanionState }) {
   const api = window.electron.desktopCompanion;
-  const pointer = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
+  const pointer = useRef<{ x: number; y: number; lastX: number; dragging: boolean } | null>(null);
   const dragDepth = useRef(0);
   const dropTimer = useRef<ReturnType<typeof setTimeout>>();
+  const landTimer = useRef<ReturnType<typeof setTimeout>>();
+  const dragSettleTimer = useRef<ReturnType<typeof setTimeout>>();
+
   const [dropHover, setDropHover] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [dragDirection, setDragDirection] = useState<PetDragDirection>(PetDragDirection.None);
+  const [dragTiltDeg, setDragTiltDeg] = useState(0);
+  const [landing, setLanding] = useState(false);
+  const [hovering, setHovering] = useState(false);
+  const [hoverBeat, setHoverBeat] = useState<PetHoverBeat>(PetHoverBeat.Waving);
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      : false,
+  );
+
   const expanded = state.panelVisible || state.result.visible;
+  const launcherOpen = state.stage.kind === DesktopCompanionStageKind.Launcher;
   const { session, pending } = useCompanionSession(state.sessionId, state.panelVisible);
   const status = session?.status ?? null;
   const taskRecord = state.result.recentTasks.find(task => task.sessionId === state.sessionId);
@@ -41,12 +67,40 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
     snoozed: !!state.snooze,
     dropHover,
     dropStage: state.stage.kind === DesktopCompanionStageKind.Drop,
-    hintShowing: state.stage.kind === DesktopCompanionStageKind.Hint,
   });
-  const skinKind = getCompanionSkin(state.preferences.skin).kind;
+
+  const skin = getCompanionSkin(state.preferences.skin);
+  const skinKind = skin.kind;
+  const atlas = usePetAtlas(
+    skinKind === CompanionSkinKind.Image ? skin.petManifest : undefined,
+    skinKind === CompanionSkinKind.Image ? skin.asset ?? undefined : undefined,
+  );
+
+  const action = resolvePetAction({
+    skinKind,
+    hasAtlas: !!atlas,
+    mood,
+    dragDirection,
+    landing,
+    hovering,
+    launcherOpen,
+    panelOpen: expanded,
+    reducedMotion,
+    hoverBeat,
+  });
+
   const label = i18nService.t(state.result.visible ? 'desktopCompanionCloseResults'
     : state.panelVisible ? 'desktopCompanionClosePanel' : companionMoodLabelKey(mood));
   const canDrop = state.preferences.enabled && state.preferences.dragAssist && !state.snooze;
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setReducedMotion(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
 
   useEffect(() => {
     if (!canDrop) {
@@ -56,6 +110,29 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
     }
     return () => clearTimeout(dropTimer.current);
   }, [canDrop]);
+
+  useEffect(() => () => {
+    clearTimeout(landTimer.current);
+    clearTimeout(dragSettleTimer.current);
+  }, []);
+
+  // Reset hover beat choreography whenever hover + launcher ends.
+  const isHoverEngaged = hovering || (launcherOpen && !expanded);
+  useEffect(() => {
+    if (!isHoverEngaged) {
+      setHoverBeat(PetHoverBeat.Waving);
+    }
+  }, [isHoverEngaged]);
+
+  // Alternate cleanly between friendly waving and joyful jumping while hovered.
+  const handleActionCycleComplete = useCallback((completed: PetAction) => {
+    if (!isHoverEngaged) return;
+    if (completed === PetAction.Waving) {
+      setHoverBeat(PetHoverBeat.Jumping);
+    } else if (completed === PetAction.Jumping) {
+      setHoverBeat(PetHoverBeat.Waving);
+    }
+  }, [isHoverEngaged]);
 
   // News brings compact task bubbles back without expanding them or taking focus.
   const taskNews = state.sessionId && (mood === CompanionMood.Done || mood === CompanionMood.Attention || mood === CompanionMood.Error)
@@ -69,14 +146,29 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
     } catch (error) { console.warn('[DesktopCompanion] Failed to toggle task entry', error); }
   };
 
+  const triggerLandBounce = () => {
+    if (skinKind !== CompanionSkinKind.Image || reducedMotion) return;
+    clearTimeout(landTimer.current);
+    setLanding(true);
+    landTimer.current = setTimeout(() => setLanding(false), LAND_DURATION_MS);
+  };
+
   const finishDrag = (event: React.PointerEvent<HTMLButtonElement>, canceled = false) => {
     const start = pointer.current;
     pointer.current = null;
+    clearTimeout(dragSettleTimer.current);
+    setDragDirection(PetDragDirection.None);
+    setDragTiltDeg(0);
     setMoving(false);
     if (!start) return;
     api.drag(start.dragging ? DesktopCompanionDragPhase.End : DesktopCompanionDragPhase.Cancel);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (!canceled && !start.dragging) void toggle(true);
+    if (start.dragging) {
+      setHovering(false);
+      triggerLandBounce();
+    } else if (!canceled) {
+      void toggle(true);
+    }
   };
 
   const leaveFileDrag = () => {
@@ -141,11 +233,20 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         // At rest the hover launcher says what the orb is for; a tooltip would sit on top of it.
         title={expanded ? label : undefined}
         // A held button is a drag passing over, not a visit.
-        onPointerEnter={event => { if (event.buttons === 0) api.orbHover(true); }}
-        onPointerLeave={() => api.orbHover(false)}
+        onPointerEnter={event => {
+          if (event.buttons !== 0) return;
+          setHovering(true);
+          api.orbHover(true);
+        }}
+        onPointerLeave={() => {
+          setHovering(false);
+          api.orbHover(false);
+        }}
         onPointerDown={event => {
           if (event.button !== 0) return;
-          pointer.current = { x: event.screenX, y: event.screenY, dragging: false };
+          clearTimeout(landTimer.current);
+          setLanding(false);
+          pointer.current = { x: event.screenX, y: event.screenY, lastX: event.screenX, dragging: false };
           event.currentTarget.setPointerCapture(event.pointerId);
           api.drag(DesktopCompanionDragPhase.Start, { x: event.clientX / window.innerWidth, y: event.clientY / window.innerHeight });
         }}
@@ -156,9 +257,27 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
           if ((event.buttons & 1) === 0) { finishDrag(event, true); return; }
           if (!start.dragging && Math.hypot(event.screenX - start.x, event.screenY - start.y) > DRAG_THRESHOLD) {
             start.dragging = true;
+            start.lastX = event.screenX;
             setMoving(true);
+            setDragDirection(PetDragDirection.Hold);
           }
-          if (start.dragging) api.drag(DesktopCompanionDragPhase.Move);
+          if (start.dragging) {
+            const dx = event.screenX - start.lastX;
+            start.lastX = event.screenX;
+            if (skinKind === CompanionSkinKind.Image && !reducedMotion) {
+              if (Math.abs(dx) >= DRAG_RUN_THRESHOLD_PX) {
+                setDragDirection(dx > 0 ? PetDragDirection.Right : PetDragDirection.Left);
+              }
+              const targetTilt = Math.max(-DRAG_MAX_TILT_DEG, Math.min(DRAG_MAX_TILT_DEG, dx * 0.6));
+              setDragTiltDeg(current => Math.round((current * 0.65 + targetTilt * 0.35) * 10) / 10);
+              clearTimeout(dragSettleTimer.current);
+              dragSettleTimer.current = setTimeout(() => {
+                setDragDirection(PetDragDirection.Hold);
+                setDragTiltDeg(0);
+              }, DRAG_SETTLE_MS);
+            }
+            api.drag(DesktopCompanionDragPhase.Move);
+          }
         }}
         onPointerUp={event => finishDrag(event)}
         onPointerCancel={event => finishDrag(event, true)}
@@ -166,7 +285,16 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
         onClick={event => { if (event.detail === 0) void toggle(); }}
         onContextMenu={event => { event.preventDefault(); void api.showContextMenu(); }}
       >
-        <CompanionCharacter skin={state.preferences.skin} mood={mood} size={skinKind === CompanionSkinKind.Brand ? DesktopCompanionSize.BrandMark : CHARACTER_SIZE} />
+        <CompanionCharacter
+          skin={state.preferences.skin}
+          mood={mood}
+          size={skinKind === CompanionSkinKind.Brand ? DesktopCompanionSize.BrandMark : CHARACTER_SIZE}
+          atlas={atlas}
+          action={action}
+          landing={landing}
+          dragTiltDeg={moving && skinKind === CompanionSkinKind.Image ? dragTiltDeg : 0}
+          onActionCycleComplete={handleActionCycleComplete}
+        />
       </button>
     </div>
   );

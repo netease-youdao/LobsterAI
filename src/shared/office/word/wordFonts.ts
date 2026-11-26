@@ -172,6 +172,8 @@ export function classifyWordFont(name: string, decl?: WordDocumentFontDecl): Wor
   const cjk = /[\u3400-\u9fff]/.test(text) || (decl?.charset !== undefined && CJK_CHARSETS.has(decl.charset.toUpperCase()))
     || /(simsun|nsimsun|simhei|simkai|simfang|kaiti|fangsong|songti|heiti|yahei|dengxian|youyuan|lisu|st(song|zhongsong|fangsong|kaiti|heiti|xihei)|pingfang|hiragino|noto (sans|serif) cjk|source han|mingliu|pmingliu|mincho|ms p?gothic|yu gothic|meiryo|batang|gulim|dotum|malgun)/i.test(text);
   if (cjk) {
+    // PingFang (苹方) is a CJK sans-serif; guard against matching "fang" (仿宋) inside "PingFang".
+    if (/(苹方|pingfang)/i.test(text)) return WordFontClass.CjkSans;
     if (/(宋|明|仿|楷|song|ming|kai|fang|mincho|batang|serif)/i.test(text)) return WordFontClass.CjkSerif;
     return WordFontClass.CjkSans;
   }
@@ -191,7 +193,7 @@ export type CjkSerifStyle = typeof CjkSerifStyle[keyof typeof CjkSerifStyle];
 export function cjkSerifStyle(name: string, decl?: WordDocumentFontDecl): CjkSerifStyle {
   const text = `${name} ${decl?.altName ?? ''}`;
   if (/(楷|kai)/i.test(text)) return CjkSerifStyle.Kai;
-  if (/(仿|fang)/i.test(text)) return CjkSerifStyle.Fang;
+  if (!/(苹方|pingfang)/i.test(text) && /(仿|fang)/i.test(text)) return CjkSerifStyle.Fang;
   return CjkSerifStyle.Song;
 }
 

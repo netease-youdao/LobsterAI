@@ -11,6 +11,9 @@ import {
   slideSize, SlidesRefusal, themeOf,
 } from './slidesDeck';
 import { type HistoryEntry, SlidesHistory } from './slidesHistory';
+import {
+  resolveFitZoom, resolveSlidesThumbLayout, resolveStagePadding, SLIDES_ZOOM_LIMITS, SlidesThumbLayout,
+} from './slidesLayout';
 import { type Box, buildSlideView, fontsOf, type ShapeView, ShapeViewKind, type SlideView, type TextView } from './slidesModel';
 import { type PackageChange, SlidesPackage } from './slidesPackage';
 import { innerShapeElement, ownShapeElement, renderParagraphs, renderSlide, SlideElement, type SlideRenderLabels } from './slidesRender';
@@ -30,15 +33,12 @@ const AUTOSAVE_DELAY_MS = 700;
 const TEXT_SYNC_DELAY_MS = 300;
 const NOTES_SYNC_DELAY_MS = 400;
 const HISTORY_LIMIT = 100;
-/** Room around the slide on the stage, in screen pixels. */
-const STAGE_PADDING = 24;
+/** Room around the slide on the stage defaults; adjusted dynamically by resolveStagePadding. */
 const DRAG_THRESHOLD_PX = 3;
 const MIN_SHAPE_PX = 4;
 /** Arrow keys move a shape this far at 100%; with Alt, Ctrl or Cmd one pixel. */
 const NUDGE_PX = 8;
-const ZOOM_LIMITS = { min: 0.25, max: 4 } as const;
-/** Fitting goes below the smallest zoom step, so a narrow stage still shows the whole slide. */
-const MIN_FIT_ZOOM = 0.1;
+const WHEEL_ZOOM_STEP = 0.1;
 const PX_PER_PT = 96 / 72;
 /** The theme colors in the order of Office's color menus. */
 const THEME_PALETTE = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'];
@@ -107,7 +107,7 @@ interface EditOptions<T> {
 }
 
 const t = (key: string): string => i18nService.t(key);
-const clampZoom = (value: number): number => Math.max(ZOOM_LIMITS.min, Math.min(ZOOM_LIMITS.max, Math.round(value * 100) / 100));
+const clampZoom = (value: number): number => Math.max(SLIDES_ZOOM_LIMITS.min, Math.min(SLIDES_ZOOM_LIMITS.max, Math.round(value * 100) / 100));
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
   const created = document.createElement(tag);
@@ -172,21 +172,34 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
   private notesTimer?: ReturnType<typeof setTimeout>;
   private images = new Map<string, { bytes: Uint8Array; url?: string }>();
   private chatHandler?: (reference: SlidesChatReference) => void;
+  private slideMenuHandler?: (index: number, anchor: { x: number; y: number }) => void;
   private listeners = new Set<() => void>();
   private version = 0;
   private selectionFrame = 0;
+  private editorWidth = 0;
+  private thumbLayoutState: SlidesThumbLayout = SlidesThumbLayout.Bottom;
+  private notesOpenState = false;
+  private notesPreviewValue = '';
   private readonly slideList = new SlidesThumbnailList({
     draw: (ref, frame) => this.drawThumbnail(ref, frame),
     select: index => this.selectSlide(index),
     move: (from, to) => this.moveSlide(from, to),
+    add: () => this.addSlide(),
     remove: () => this.deleteSlide(),
     editable: () => this.editable,
     toggle: () => this.toggleSlideList(),
+    openMenu: (index, anchor) => this.slideMenuHandler?.(index, anchor),
   });
+  /** Portal slot anchored directly over the active slide stage (format bar, hover nav arrows). */
+  readonly stageOverlaySlot = element('div', 'lobster-slides-stage-overlay');
+  /** Portal slot positioned between the stage/notes and the bottom thumbnail strip (or at bottom in wide mode). */
+  readonly controlsSlot = element('div', 'lobster-slides-controls-slot');
+  private readonly stageShell = element('div', 'lobster-slides-stage-shell');
   private readonly stage = element('div', 'lobster-slides-stage');
   private readonly canvas = element('div', 'lobster-slides-canvas');
   private readonly frame = element('div', 'lobster-slides-selection');
   private readonly chatButton = element('button', 'lobster-slides-chat-action');
+  private readonly notesPanel = element('div', 'lobster-slides-notes-panel');
   private readonly notes = element('textarea', 'lobster-slides-notes');
   private readonly empty = element('div', 'lobster-slides-empty');
   private slideElement?: HTMLDivElement;
@@ -195,6 +208,7 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
 
   constructor(file: OfficeOpenResult<SlidesPackageInfo>, context: OfficeSessionContext<SlidesPackageInfo>) {
     super(file, context, { hostClassName: 'lobster-slides-workspace', autosaveDelayMs: AUTOSAVE_DELAY_MS, logTag: '[SlidesDocument]' });
+    this.host.dataset.layout = this.thumbLayoutState;
     this.stage.tabIndex = 0;
     for (const handle of Object.keys(HANDLES) as Handle[]) {
       const knob = element('span', `lobster-slides-handle lobster-slides-handle-${handle}`);
@@ -209,13 +223,16 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     this.empty.hidden = true;
     this.canvas.append(this.frame, this.chatButton);
     this.stage.append(this.canvas, this.empty);
+    this.stageShell.append(this.stage, this.stageOverlaySlot);
     this.notes.spellcheck = false;
+    this.notesPanel.append(this.notes);
+    this.notesPanel.hidden = true;
     const main = element('div', 'lobster-slides-main');
-    main.append(this.stage, this.notes);
+    main.append(this.stageShell, this.notesPanel, this.controlsSlot);
     this.host.append(this.slideList.pane, main);
 
     this.resizeObserver = new ResizeObserver(entries => {
-      // The editor's width sizes the thumbnails; the stage's size, a fitted zoom.
+      // The editor's width picks the adaptive thumbnail layout; the stage's size computes fitted zoom.
       if (entries.some(entry => entry.target === this.host)) this.fitSlideList();
       if (this.zoomMode === SlidesZoomMode.Fit) this.applyZoom();
     });
@@ -223,6 +240,7 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     this.resizeObserver.observe(this.stage);
     this.stage.addEventListener('pointerdown', this.onStagePointerDown);
     this.stage.addEventListener('dblclick', this.onStageDoubleClick);
+    this.stage.addEventListener('wheel', this.onStageWheel, { passive: false });
     this.frame.addEventListener('pointerdown', this.onHandlePointerDown);
     this.chatButton.addEventListener('mousedown', event => event.preventDefault());
     this.chatButton.addEventListener('click', this.onChatClick);
@@ -250,7 +268,15 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
 
   private applyLabels(): void {
     this.slideList.setLabels({
-      list: t('slidesList'), title: t('slidesPaneTitle'), show: t('slidesShowThumbnails'), hide: t('slidesHideThumbnails'),
+      list: t('slidesList'),
+      title: t('slidesPaneTitle'),
+      count: t('slidesCountLabel'),
+      show: t('slidesShowThumbnails'),
+      hide: t('slidesHideThumbnails'),
+      pin: t('slidesPinThumbnails'),
+      unpin: t('slidesUnpinThumbnails'),
+      addSlide: t('slidesNewSlide'),
+      slideActions: t('slidesSlideActions'),
     });
     this.stage.setAttribute('aria-label', t('slidesStage'));
     this.notes.placeholder = t('slidesNotesPlaceholder');
@@ -263,6 +289,7 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     return {
       titlePrompt: t('slidesPromptTitle'), subtitlePrompt: t('slidesPromptSubtitle'), textPrompt: t('slidesPromptText'),
       chart: t('slidesChart'), diagram: t('slidesDiagram'), object: t('slidesObject'), picture: t('slidesPicture'),
+      series: t('sheetChartSeries'),
     };
   }
 
@@ -358,12 +385,41 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     return Boolean(this.editing);
   }
 
+  get hasSelectedShape(): boolean {
+    return Boolean(this.selectedShape());
+  }
+
   get canUndo(): boolean {
     return this.history.canUndo || Boolean(this.editing?.pending);
   }
 
   get canRedo(): boolean {
     return this.history.canRedo;
+  }
+
+  get width(): number {
+    return this.editorWidth;
+  }
+
+  get thumbLayout(): SlidesThumbLayout {
+    return this.thumbLayoutState;
+  }
+
+  get thumbnailsShown(): boolean {
+    return this.slideList.shown;
+  }
+
+  get notesOpen(): boolean {
+    return this.notesOpenState;
+  }
+
+  get notesPreview(): string {
+    return this.notesPreviewValue;
+  }
+
+  /** Fonts used on the current slide so the font selector can list them. */
+  documentFonts(): string[] {
+    return this.view ? fontsOf(this.view) : [];
   }
 
   private currentRef(): SlideRef | undefined {
@@ -453,31 +509,52 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     this.slideList.redraw(slideId);
   }
 
-  /** Shows or hides the thumbnails for this presentation; every presentation opens with them shown. */
-  private toggleSlideList(): void {
+  /** Shows/docks or hides/collapses the thumbnails for the active layout mode. */
+  toggleSlideList(): void {
     const shown = !this.slideList.shown;
     // Focus in a list that goes away moves to the slide, so the arrow keys keep turning slides.
     const focused = !shown && this.slideList.element.contains(document.activeElement);
     this.slideList.setShown(shown);
     if (focused) this.stage.focus({ preventScroll: true });
+    this.bump();
   }
 
-  /** Thumbnails sized to the editor's width, so a narrow panel keeps most of it for the slide. */
+  setSlideMenuHandler(handler: ((index: number, anchor: { x: number; y: number }) => void) | undefined): void {
+    this.slideMenuHandler = handler;
+  }
+
+  setSlideMenuOpen(open: boolean): void {
+    this.slideList.setMenuOpen(open);
+  }
+
+  /** Adapt thumbnail orientation (`bottom` vs `left`) and dimensions to the editor's width. */
   private fitSlideList(): void {
     const width = this.host.clientWidth;
-    if (width > 0) this.slideList.fit(width);
+    if (width <= 0) return;
+    const nextLayout = resolveSlidesThumbLayout(width);
+    const changed = width !== this.editorWidth || nextLayout !== this.thumbLayoutState;
+    this.editorWidth = width;
+    this.thumbLayoutState = nextLayout;
+    this.host.dataset.layout = nextLayout;
+    this.slideList.fit(width, nextLayout);
+    if (changed) this.bump();
   }
 
   private fitZoom(): number | undefined {
     const view = this.view;
-    const width = this.stage.clientWidth - STAGE_PADDING * 2;
-    const height = this.stage.clientHeight - STAGE_PADDING * 2;
-    if (!view || width <= 0 || height <= 0) return undefined;
-    // Rounded down: a fit rounded up overflows the stage by a few pixels and shows scroll bars.
-    return Math.max(MIN_FIT_ZOOM, Math.min(ZOOM_LIMITS.max, Math.floor(Math.min(width / view.width, height / view.height) * 100) / 100));
+    if (!view) return undefined;
+    const padding = resolveStagePadding(this.stage.clientWidth);
+    return resolveFitZoom(
+      { width: view.width, height: view.height },
+      { width: this.stage.clientWidth, height: this.stage.clientHeight },
+      padding,
+    );
   }
 
   private applyZoom(): void {
+    const padding = resolveStagePadding(this.stage.clientWidth);
+    this.stage.style.setProperty('--lobster-slides-stage-pad-x', `${padding.x}px`);
+    this.stage.style.setProperty('--lobster-slides-stage-pad-y', `${padding.y}px`);
     if (this.zoomMode === SlidesZoomMode.Fit) {
       const fit = this.fitZoom();
       if (fit !== undefined && fit !== this.zoom) {
@@ -493,6 +570,13 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     }
     this.updateSelectionFrame();
   }
+
+  private onStageWheel = (event: WheelEvent): void => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -WHEEL_ZOOM_STEP : WHEEL_ZOOM_STEP;
+    this.setZoom(this.zoom + delta);
+  };
 
   setZoom(value: number): void {
     this.zoomMode = SlidesZoomMode.Fixed;
@@ -769,10 +853,11 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
 
   // ---- Slides ---------------------------------------------------------------------------------
 
-  addSlide(): void {
+  addSlide(afterIndex?: number): void {
     const pkg = this.pkg;
     if (!pkg) return;
-    const ref = this.currentRef();
+    const refs = slideRefs(pkg);
+    const ref = afterIndex !== undefined ? refs[afterIndex] : this.currentRef();
     const layout = layoutAfter(pkg, ref?.part);
     if (!layout) {
       this.refuse(SlidesRefusal.Invalid);
@@ -782,23 +867,25 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     this.edit(() => addSlide(pkg, { layout, after: ref ? ref.index : -1 }), { redraw: 'all', select: created => ({ slideId: created.id }) });
   }
 
-  duplicateSlide(): void {
+  duplicateSlide(index?: number): void {
     const pkg = this.pkg;
-    const ref = this.currentRef();
+    const refs = pkg ? slideRefs(pkg) : [];
+    const ref = index !== undefined ? refs[index] : this.currentRef();
     if (!pkg || !ref) return;
     this.endTextEditing();
     this.edit(() => duplicateSlide(pkg, ref.index), { redraw: 'all', select: created => ({ slideId: created.id }) });
   }
 
-  deleteSlide(): void {
+  deleteSlide(index?: number): void {
     const pkg = this.pkg;
-    const ref = this.currentRef();
+    const refs = pkg ? slideRefs(pkg) : [];
+    const ref = index !== undefined ? refs[index] : this.currentRef();
     if (!pkg || !ref || this.slideCount <= 1) return;
     this.endTextEditing();
     this.syncNotes();
-    const refs = slideRefs(pkg);
     const neighbor = refs[ref.index + 1] ?? refs[ref.index - 1];
-    this.edit(() => deleteSlide(pkg, ref.index), { redraw: 'all', select: () => ({ slideId: neighbor?.id }) });
+    const nextSelected = ref.id === this.currentSlideId ? neighbor?.id : this.currentSlideId;
+    this.edit(() => deleteSlide(pkg, ref.index), { redraw: 'all', select: () => ({ slideId: nextSelected }) });
   }
 
   moveSlide(from: number, to: number): void {
@@ -1102,11 +1189,31 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
 
   // ---- Notes ----------------------------------------------------------------------------------
 
+  setNotesOpen(open: boolean, focus = false): void {
+    if (this.notesOpenState === open) {
+      if (open && focus && !this.notes.disabled) this.notes.focus({ preventScroll: true });
+      return;
+    }
+    this.notesOpenState = open;
+    this.notesPanel.hidden = !open;
+    if (!open) this.syncNotes();
+    else if (focus && !this.notes.disabled) {
+      requestAnimationFrame(() => this.notes.focus({ preventScroll: true }));
+    }
+    this.bump();
+  }
+
+  toggleNotes(focus = false): void {
+    this.setNotesOpen(!this.notesOpenState, focus);
+  }
+
   private syncNotesField(): void {
     if (document.activeElement === this.notes && this.notesSlideId === this.currentSlideId) return;
     const ref = this.currentRef();
-    this.notes.value = ref && this.pkg ? notesText(this.pkg, ref.part) : '';
+    const text = ref && this.pkg ? notesText(this.pkg, ref.part) : '';
+    this.notes.value = text;
     this.notes.disabled = !ref;
+    this.notesPreviewValue = text.trim();
   }
 
   private onNotesFocus = (): void => {
@@ -1116,8 +1223,10 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
 
   private onNotesInput = (): void => {
     this.notesPending = true;
+    this.notesPreviewValue = this.notes.value.trim();
     clearTimeout(this.notesTimer);
     this.notesTimer = setTimeout(() => this.syncNotes(), NOTES_SYNC_DELAY_MS);
+    this.bump();
   };
 
   private syncNotes(): void {
@@ -1178,6 +1287,36 @@ export class SlidesEditorSession extends OfficeEditorSession<SlidesPackageInfo> 
     else if (arrows[key]) { stop(); this.nudge(...arrows[key]); }
     else if (key === 'Enter' || key === 'F2') { stop(); this.beginTextEditing(shape.id); }
   };
+
+  // ---- Presentation ---------------------------------------------------------------------------
+
+  /** Flush in-progress inline text and notes edits before entering presentation mode. */
+  prepareForPresentation(): void {
+    this.endTextEditing();
+    this.syncNotes();
+  }
+
+  /** Render one slide cleanly (without editing placeholders) for the fullscreen slideshow. */
+  renderPresentationSlide(index: number): { element: HTMLDivElement; width: number; height: number; notes: string } | undefined {
+    const pkg = this.pkg;
+    const ref = pkg ? slideRefs(pkg)[index] : undefined;
+    if (!pkg || !ref) return undefined;
+    try {
+      const view = buildSlideView(pkg, ref.part);
+      void prepareOfficeFonts(fontsOf(view));
+      const element = renderSlide(view, { image: this.imageUrl, editing: false, labels: this.labels() });
+      element.style.transformOrigin = '0 0';
+      return {
+        element,
+        width: view.width,
+        height: view.height,
+        notes: notesText(pkg, ref.part),
+      };
+    } catch (error) {
+      console.warn('[SlidesEditor] Could not render presentation slide:', error);
+      return undefined;
+    }
+  }
 
   // ---- Chat -----------------------------------------------------------------------------------
 
@@ -1259,3 +1398,4 @@ const registry = createOfficeEditorRegistry<SlidesPackageInfo, SlidesEditorSessi
 export const acquireSlidesEditor = registry.acquire;
 /** Route refreshes through the live session instead of replacing its artifact bytes. */
 export const refreshOpenSlidesEditor = registry.refresh;
+export const closeOpenSlidesEditor = registry.close;

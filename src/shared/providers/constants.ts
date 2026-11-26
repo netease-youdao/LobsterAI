@@ -78,6 +78,42 @@ export const OpenClawProviderId = {
 } as const;
 export type OpenClawProviderId = typeof OpenClawProviderId[keyof typeof OpenClawProviderId];
 
+// ─── Canonical DSH Provider ID Alias Map ────────────────────────────────
+// Maps legacy/OpenClaw gateway provider IDs to the canonical LobsterAI/DSH
+// provider IDs registered in `dshProviderSync` (matching `ProviderName`).
+const DSH_PROVIDER_ID_ALIASES: Readonly<Record<string, string>> = {
+  [OpenClawProviderId.Zai]: ProviderName.Zhipu,
+  [OpenClawProviderId.Google]: ProviderName.Gemini,
+  [OpenClawProviderId.LobsteraiCopilot]: ProviderName.Copilot,
+  [OpenClawProviderId.MinimaxPortal]: ProviderName.Minimax,
+  [OpenClawProviderId.OpenAICodex]: ProviderName.OpenAI,
+};
+
+/**
+ * Canonicalize legacy/OpenClaw provider IDs (`zai`, `google`,
+ * `lobsterai-copilot`, `minimax-portal`, `openai-codex`) to their canonical
+ * DSH provider IDs (`zhipu`, `gemini`, `github-copilot`, `minimax`, `openai`).
+ */
+export function canonicalizeDshProviderId(providerId: string): string {
+  const trimmed = providerId.trim();
+  if (!trimmed) return trimmed;
+  return DSH_PROVIDER_ID_ALIASES[trimmed] ?? trimmed;
+}
+
+/**
+ * Canonicalize the provider prefix of a `provider/model` reference while
+ * preserving the model ID (including any nested slashes like OpenRouter IDs).
+ */
+export function canonicalizeDshModelRef(modelRef: string): string {
+  const trimmed = modelRef.trim();
+  const slashIndex = trimmed.indexOf('/');
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) return trimmed;
+  const providerId = trimmed.slice(0, slashIndex).trim();
+  const modelId = trimmed.slice(slashIndex + 1).trim();
+  if (!providerId || !modelId) return trimmed;
+  return `${canonicalizeDshProviderId(providerId)}/${modelId}`;
+}
+
 // ─── OpenClaw API Protocol ──────────────────────────────────────────────
 export const OpenClawApi = {
   AnthropicMessages: 'anthropic-messages',

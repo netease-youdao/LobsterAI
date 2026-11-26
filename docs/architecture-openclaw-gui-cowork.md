@@ -76,11 +76,9 @@ flowchart LR
   - 负责内置 runtime 校验、启动、状态机（`not_installed/installing/ready/starting/running/error`，其中 `installing` 仅兼容保留）。
   - 向渲染层广播 `openclaw:engine:onProgress`。
 - `OpenClawConfigSync`
-  - 把当前模型配置与 `executionMode` 同步成 OpenClaw 需要的配置文件。
-  - 映射关系：
-    - `local -> sandbox.mode=off`
-    - `auto -> sandbox.mode=non-main`
-    - `sandbox -> sandbox.mode=all`
+  - 生成 OpenClaw 的模型和运行配置。Cowork 从 SQLite 读取保存的 `executionMode`，该值用于记录会话设置。
+  - `agents.defaults.sandbox.mode` 默认为 `off`。启用的 `openclaw.user.json` 可以覆盖默认值，企业包的 `openclaw.json` 对同名字段有最终优先权。
+  - 企业清单的 `sync.openclaw` 控制设置向 SQLite 的导入。交付给网关时，程序会另外合并企业包显式声明的字段。
 - `OpenClawRuntimeAdapter`
   - 负责把 Gateway 事件（chat delta/final、approval request）转换为 Cowork 标准事件。
   - 把 OpenClaw 工具审批转换为 GUI 可处理的权限请求。

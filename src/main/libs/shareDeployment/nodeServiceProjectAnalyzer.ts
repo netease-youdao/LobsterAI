@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 
+import { COWORK_TEMP_DIR_NAME } from '../../../shared/cowork/constants';
 import {
   type ShareDeploymentAnalyzeProjectInput,
   ShareDeploymentCandidateSource,
@@ -33,6 +34,9 @@ const PERSISTENCE_ROOT_DIRECTORY_NAMES = new Set(['data', 'uploads', 'storage'])
 const PERSISTENCE_DATABASE_EXTENSIONS = new Set(['.db', '.sqlite', '.sqlite3']);
 
 const COMMON_BLOCKED_DIRECTORY_NAMES = [
+  COWORK_TEMP_DIR_NAME,
+  '.dsh',
+  '.openclaw',
   '.git',
   '.hg',
   '.svn',

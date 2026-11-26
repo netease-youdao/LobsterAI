@@ -14,6 +14,7 @@ const chipClasses: Record<TaskDisplayStatus, string> = {
     'bg-red-500/10 text-red-600 dark:text-red-400',
   [TaskDisplayStatus.Skipped]:
     'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400',
+  [TaskDisplayStatus.Stopped]: 'bg-surface-raised text-secondary',
   [TaskDisplayStatus.Never]:
     'bg-surface-raised text-secondary',
 };
@@ -24,6 +25,7 @@ const dotClasses: Record<TaskDisplayStatus, string> = {
   [TaskDisplayStatus.Success]: 'bg-green-500',
   [TaskDisplayStatus.Error]: 'bg-red-500',
   [TaskDisplayStatus.Skipped]: 'bg-yellow-500',
+  [TaskDisplayStatus.Stopped]: 'bg-gray-400 dark:bg-gray-500',
   [TaskDisplayStatus.Never]: 'bg-gray-400 dark:bg-gray-500',
 };
 

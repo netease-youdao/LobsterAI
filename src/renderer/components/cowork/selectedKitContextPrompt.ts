@@ -153,10 +153,8 @@ export const buildSelectedKitContextPrompt = (
   });
 
   return [
-    '## Selected kits for this turn',
-    'The user selected these kits as high-level capability bundles.',
-    'Use this metadata to answer questions about what the selected kit can do or what "this kit" refers to.',
-    'Treat listed skills, MCP servers, and connectors as internal evidence. Do not enumerate internal capabilities unless the user explicitly asks which skills, MCP servers, or connectors are included.',
+    '## 本轮已选能力包（Kit）',
+    '用户选择了以下能力包，请据此理解能力包边界与用途。其中列出的技能、MCP 服务与连接器仅作内部参考，除非用户明确询问，否则不要主动罗列内部组件。',
     '<selected_kits>',
     ...kitEntries,
     '</selected_kits>',

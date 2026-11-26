@@ -1,3 +1,3 @@
 export { CoworkEngineRouter } from './coworkEngineRouter';
-export { OpenClawRuntimeAdapter } from './openclawRuntimeAdapter';
+export { DshRuntimeAdapter } from './dshRuntimeAdapter';
 export * from './types';

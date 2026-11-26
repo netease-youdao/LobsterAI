@@ -9,6 +9,7 @@ import { CompanionAnalyticsAction as AnalyticsAction, CompanionAnalyticsInteract
 import {
   COMPANION_COPY_MAX_BYTES,
   CompanionCapability,
+  CompanionOrbEdge,
   CompanionPermission,
   DEFAULT_COMPANION_SKIN,
   DEFAULT_DESKTOP_COMPANION_PREFERENCES,
@@ -27,9 +28,9 @@ import {
   DesktopCompanionSurface,
   DesktopCompanionTiming,
 } from '../../shared/desktopCompanion/constants';
+import { CompanionContextActionId, CompanionContextClipboardKind } from '../../shared/desktopCompanion/contextActions';
 import { CompanionContextMenuIpc, CompanionContextMenuSize } from '../../shared/desktopCompanion/contextMenu';
 import { CompanionFileKind } from '../../shared/desktopCompanion/fileKinds';
-import { CompanionHintRule } from '../../shared/desktopCompanion/hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolsIpc, SpeechCommand, SpeechStatus, TranslationTarget } from '../../shared/desktopCompanion/languageTools';
 import { CompanionLauncherAction } from '../../shared/desktopCompanion/launcher';
 import {
@@ -41,8 +42,10 @@ import { COMPANION_RECENT_TASK_LIMIT, COMPANION_RECENT_TASKS_KEY, CompanionResul
 import { CompanionSelectionAction } from '../../shared/desktopCompanion/selectionActions';
 import { CompanionToolbarItem, DEFAULT_COMPANION_TOOLBAR_ORDER } from '../../shared/desktopCompanion/selectionToolbar';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import { CompanionContextInspector } from './companionContextInspector';
 import { CompanionScreenPermissionError, CompanionScreenshotController } from './companionScreenshot';
 import { CompanionSelectionController, type SelectionHookModule } from './companionSelection';
+import { CompanionWindowLevel } from './companionWindow';
 import { DesktopCompanionManager } from './desktopCompanionManager';
 import { FileDragEvent } from './fileDragMonitor';
 import type { CompanionLanguageClient } from './languageToolClient';
@@ -89,8 +92,8 @@ vi.mock('electron', async () => {
     focus() { this.focused = true; this.emit('focus'); }
     blur() { this.focused = false; this.emit('blur'); }
     setMenu() {}
-    setAlwaysOnTop() {}
-    setVisibleOnAllWorkspaces() {}
+    setAlwaysOnTop = vi.fn();
+    setVisibleOnAllWorkspaces = vi.fn();
     loadURL() { return Promise.resolve(); }
     loadFile(_file: string, options?: { query?: { surface?: string } }) { this.surface = options?.query?.surface; return Promise.resolve(); }
     destroy() { this.destroyed = true; this.emit('closed'); }
@@ -108,9 +111,10 @@ vi.mock('electron', async () => {
     }),
     globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
     screen: Object.assign(new EventEmitter(), {
+      getAllDisplays: () => [{ id: 1, workArea }],
       getCursorScreenPoint: () => ({ x: 100, y: 100 }),
-      getDisplayNearestPoint: () => ({ workArea }),
-      getDisplayMatching: () => ({ workArea }),
+      getDisplayNearestPoint: () => ({ id: 1, workArea }),
+      getDisplayMatching: () => ({ id: 1, workArea }),
       screenToDipPoint: (point: unknown) => point,
     }),
     Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
@@ -165,6 +169,7 @@ let getTaskInfo: ReturnType<typeof vi.fn<(id: string) => CompanionTaskInfo | nul
 let reportAnalytics: ReturnType<typeof vi.fn>;
 let guideOpenSettings: ReturnType<typeof vi.fn>;
 let requestScreenAccess: ReturnType<typeof vi.fn>;
+let contextInspector: CompanionContextInspector | undefined;
 
 function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
   loadSelectionHook: () => SelectionHookModule | null = () => null) {
@@ -177,6 +182,11 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
   foreground = new FakeMonitor();
   fileDrag = new FakeMonitor();
   getTaskInfo = vi.fn(id => ({ id, title: `Task ${id}`, status: 'completed', updatedAt: 1000 }));
+  const inspector = contextInspector ?? new CompanionContextInspector({
+    readClipboard: () => ({ kind: 'empty' }),
+    queryActiveFile: async () => null,
+    statPath: () => null,
+  });
   manager = new DesktopCompanionManager({
     enginePhase,
     reportAnalytics,
@@ -193,6 +203,7 @@ function create(languageClient?: CompanionLanguageClient, enginePhase: OpenClawE
     openSettings,
     services: {
       foreground: foreground as any, fileDrag: fileDrag as any, loadSelectionHook, languageClient, requestScreenAccess,
+      contextInspector: inspector,
       permissionGuide: {
         openSettings: guideOpenSettings, locateAppWindow: async () => ({ x: 400, y: 143, width: 715, height: 625 }),
         loadApp: async () => null, focusedWindow: () => null, onAppTerminated: () => () => undefined,
@@ -271,9 +282,9 @@ beforeEach(() => {
   mocks.windows.length = 0;
   mocks.handlers.clear();
   FakeSelectionHook.last = null;
+  contextInspector = undefined;
   // Most lifecycle cases start with the orb explicitly disabled and open surfaces on demand.
   values = new Map<string, unknown>([
-    [DesktopCompanionStoreKey.Greeted, true],
     [DesktopCompanionStoreKey.Preferences, { enabled: false }],
   ]);
 });
@@ -359,6 +370,30 @@ describe('gateway readiness', () => {
     },
   );
 
+  test('shows the orb and reports Open once after did-finish-load even when ready-to-show never fires', () => {
+    vi.useFakeTimers();
+    try {
+      values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+      create();
+      expect(orb().isVisible()).toBe(false);
+
+      orb().webContents.emit('did-finish-load');
+      vi.advanceTimersByTime(250);
+      expect(orb().isVisible()).toBe(true);
+      const openReports = reportAnalytics.mock.calls.filter(([event]) =>
+        event.surface === DesktopCompanionSurface.Mascot && event.interactionType === Interaction.Open);
+      expect(openReports).toHaveLength(1);
+
+      // A late ready-to-show must not report a duplicate open.
+      orb().emit('ready-to-show');
+      const openReportsAfterLateEvent = reportAnalytics.mock.calls.filter(([event]) =>
+        event.surface === DesktopCompanionSurface.Mascot && event.interactionType === Interaction.Open);
+      expect(openReportsAfterLateEvent).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('defers a shortcut opening until ready, including when the orb is disabled', () => {
     create(undefined, OpenClawEnginePhase.Starting);
     manager.togglePanel(AnalyticsSource.Shortcut);
@@ -429,9 +464,9 @@ describe('orb edge snapping', () => {
   });
 
   test.each([
-    { edgeX: 0, releaseX: 30, placement: DesktopCompanionPanelPlacement.Right },
-    { edgeX: rightEdge, releaseX: rightEdge - 30, placement: DesktopCompanionPanelPlacement.Left },
-  ])('snaps to x=$edgeX on release, aligns the panel and restores the saved position', ({ edgeX, releaseX, placement }) => {
+    { edge: CompanionOrbEdge.Left, edgeX: 0, releaseX: 30, placement: DesktopCompanionPanelPlacement.Right },
+    { edge: CompanionOrbEdge.Right, edgeX: rightEdge, releaseX: rightEdge - 30, placement: DesktopCompanionPanelPlacement.Left },
+  ])('snaps to x=$edgeX on release, aligns the panel and restores the saved position', ({ edge, edgeX, releaseX, placement }) => {
     create();
     manager.togglePanel();
     const panel = mocks.windows.at(-1);
@@ -441,7 +476,13 @@ describe('orb edge snapping', () => {
     expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 200, y: 300 });
     drag(DesktopCompanionDragPhase.End, releaseX + 30);
     expect(orb().bounds).toMatchObject({ x: edgeX, y: 300 });
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: edgeX, y: 300 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({
+      x: edgeX,
+      y: 300,
+      edge,
+      yRatio: 300 / (900 - DesktopCompanionSize.BrandOrb.height),
+      displayId: 1,
+    });
     expect(manager.getState().panelPlacement).toBe(placement);
     if (placement === DesktopCompanionPanelPlacement.Right) {
       expect(panel.bounds.x + DesktopCompanionSize.SurfacePad).toBe(edgeX + DesktopCompanionSize.BrandOrb.width);
@@ -463,7 +504,7 @@ describe('orb edge snapping', () => {
     drag(DesktopCompanionDragPhase.Move, x + 30);
     drag(DesktopCompanionDragPhase.End, x + 30);
     expect(orb().bounds).toMatchObject({ x, y: 300 });
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x, y: 300 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x, y: 300, displayId: 1 });
   });
 
   test.each([30, rightEdge - 30])('a click near an edge at x=%i does not move the orb', x => {
@@ -483,7 +524,7 @@ describe('orb edge snapping', () => {
     drag(DesktopCompanionDragPhase.Move, 430);
     expect(orb().bounds).toMatchObject({ x: 400, y: 300 });
     drag(DesktopCompanionDragPhase.End, 430);
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 400, y: 300 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: 400, y: 300, displayId: 1 });
   });
 
   test('does not move the orb again for pointer events while the cursor stays still', () => {
@@ -501,9 +542,9 @@ describe('orb edge snapping', () => {
   });
 
   test.each([
-    { displayX: -1440, cursorX: -1380, edgeX: -1440 },
-    { displayX: 1280, cursorX: 2660, edgeX: 2660 },
-  ])('snaps to the display at x=$displayX under the cursor when crossing monitors', ({ displayX, cursorX, edgeX }) => {
+    { edge: CompanionOrbEdge.Left, displayX: -1440, cursorX: -1380, edgeX: -1440 },
+    { edge: CompanionOrbEdge.Right, displayX: 1280, cursorX: 2660, edgeX: 2660 },
+  ])('snaps to the display at x=$displayX under the cursor when crossing monitors', ({ edge, displayX, cursorX, edgeX }) => {
     create();
     drag(DesktopCompanionDragPhase.Start, 230);
     vi.spyOn(screen, 'getDisplayNearestPoint').mockReturnValue({
@@ -511,7 +552,128 @@ describe('orb edge snapping', () => {
     } as Electron.Display);
     drag(DesktopCompanionDragPhase.End, cursorX, 430);
     expect(orb().bounds).toMatchObject({ x: edgeX, y: 400 });
-    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({ x: edgeX, y: 400 });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual({
+      x: edgeX,
+      y: 400,
+      edge,
+      yRatio: (400 - 25) / (875 - DesktopCompanionSize.BrandOrb.height),
+    });
+  });
+
+  test('starts flush against the far right edge on a large monitor and does not bake default coordinates on display changes', () => {
+    values.delete(DesktopCompanionStoreKey.Position);
+    const laptop = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 875 } } as Electron.Display;
+    const large = { id: 2, workArea: { x: 0, y: 25, width: 2560, height: 1415 } } as Electron.Display;
+    let active: Electron.Display = laptop;
+    vi.spyOn(screen, 'getAllDisplays').mockImplementation(() => [active]);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockImplementation(() => active);
+    vi.spyOn(screen, 'getDisplayMatching').mockImplementation(() => active);
+
+    create();
+    expect(orb().bounds).toMatchObject({
+      x: laptop.workArea.width - DesktopCompanionSize.BrandOrb.width,
+      y: Math.round(laptop.workArea.y + (laptop.workArea.height - DesktopCompanionSize.BrandOrb.height) / 2),
+    });
+    // Display changes and skin switches must not persist the laptop's default x coordinate.
+    screen.emit('display-metrics-changed');
+    manager.setPreferences({ skin: 'ruanruanxia' });
+    expect(orb().bounds.x).toBe(laptop.workArea.width - DesktopCompanionSize.Orb.width);
+    manager.setPreferences({ skin: 'lobster' });
+    expect(values.get(DesktopCompanionStoreKey.Position)).toBeUndefined();
+
+    // Switching to a large monitor and relaunching keeps the orb flush against the large monitor's right edge.
+    manager.dispose();
+    mocks.windows.length = 0;
+    active = large;
+    create();
+    expect(orb().bounds).toMatchObject({
+      ...DesktopCompanionSize.BrandOrb,
+      x: large.workArea.width - DesktopCompanionSize.BrandOrb.width,
+      y: Math.round(large.workArea.y + (large.workArea.height - DesktopCompanionSize.BrandOrb.height) / 2),
+    });
+  });
+
+  test('keeps a docked orb flush against the large monitor edge on relaunch and restores it after unplugging and reconnecting', () => {
+    const laptop = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 875 } } as Electron.Display;
+    const large = { id: 2, workArea: { x: 0, y: 25, width: 2560, height: 1415 } } as Electron.Display;
+    let displays: Electron.Display[] = [laptop];
+    vi.spyOn(screen, 'getAllDisplays').mockImplementation(() => displays);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockImplementation(() => displays[displays.length - 1]);
+    vi.spyOn(screen, 'getDisplayMatching').mockImplementation(() => displays[displays.length - 1]);
+
+    // Dock on the laptop's right edge, then switch to a large monitor (clamshell mode) and relaunch.
+    values.set(DesktopCompanionStoreKey.Position, { x: 1000, y: 400 });
+    create();
+    drag(DesktopCompanionDragPhase.Start, 1030, 430);
+    drag(DesktopCompanionDragPhase.Move, laptop.workArea.width - 30, 430);
+    drag(DesktopCompanionDragPhase.End, laptop.workArea.width - 30, 430);
+    expect(orb().bounds.x).toBe(laptop.workArea.width - DesktopCompanionSize.BrandOrb.width);
+
+    manager.dispose();
+    mocks.windows.length = 0;
+    displays = [large];
+    create();
+    expect(orb().bounds.x).toBe(large.workArea.width - DesktopCompanionSize.BrandOrb.width);
+
+    // Dock explicitly on the large monitor, unplug it (falls back to laptop right edge), then reconnect it.
+    drag(DesktopCompanionDragPhase.Start, orb().bounds.x + 30, orb().bounds.y + 30);
+    drag(DesktopCompanionDragPhase.End, large.workArea.width - 20, 730);
+    expect(orb().bounds.x).toBe(large.workArea.width - DesktopCompanionSize.BrandOrb.width);
+    const savedOnLarge = values.get(DesktopCompanionStoreKey.Position);
+    expect(savedOnLarge).toMatchObject({ edge: CompanionOrbEdge.Right, displayId: 2 });
+
+    displays = [laptop];
+    screen.emit('display-removed');
+    expect(orb().bounds.x).toBe(laptop.workArea.width - DesktopCompanionSize.BrandOrb.width);
+    expect(values.get(DesktopCompanionStoreKey.Position)).toEqual(savedOnLarge);
+
+    displays = [laptop, large];
+    screen.emit('display-added');
+    expect(orb().bounds.x).toBe(large.workArea.width - DesktopCompanionSize.BrandOrb.width);
+  });
+
+  test('keeps an undragged orb anchored to its display when the cursor moves to another monitor', () => {
+    values.delete(DesktopCompanionStoreKey.Position);
+    const laptop = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 875 } } as Electron.Display;
+    const large = { id: 2, workArea: { x: 1440, y: 25, width: 2560, height: 1415 } } as Electron.Display;
+    const displayAt = ({ x }: { x: number }) => (x >= large.workArea.x ? large : laptop);
+    vi.spyOn(screen, 'getAllDisplays').mockReturnValue([laptop, large]);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockImplementation(displayAt);
+    vi.spyOn(screen, 'getDisplayMatching').mockImplementation(bounds => displayAt({ x: bounds.x + bounds.width / 2 }));
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: 2000, y: 500 });
+
+    create();
+    const expectedX = large.workArea.x + large.workArea.width - DesktopCompanionSize.BrandOrb.width;
+    expect(orb().bounds.x).toBe(expectedX);
+
+    // Moving the cursor back to the laptop must not pull the composer panel away from the orb on the large monitor.
+    vi.spyOn(screen, 'getCursorScreenPoint').mockReturnValue({ x: 300, y: 300 });
+    manager.togglePanel();
+    const panel = mocks.windows.at(-1);
+    expect(panel.bounds.x + panel.bounds.width - DesktopCompanionSize.SurfacePad).toBe(expectedX);
+  });
+
+  test('corrects cross-DPI Windows orb bounds before showing the window', () => {
+    values.delete(DesktopCompanionStoreKey.Position);
+    const large = { id: 2, workArea: { x: 0, y: 0, width: 2560, height: 1400 } } as Electron.Display;
+    vi.spyOn(screen, 'getAllDisplays').mockReturnValue([large]);
+    vi.spyOn(screen, 'getDisplayNearestPoint').mockReturnValue(large);
+    vi.spyOn(screen, 'getDisplayMatching').mockReturnValue(large);
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      create();
+      const expected = {
+        ...DesktopCompanionSize.BrandOrb,
+        x: large.workArea.width - DesktopCompanionSize.BrandOrb.width,
+        y: Math.round((large.workArea.height - DesktopCompanionSize.BrandOrb.height) / 2),
+      };
+      // Simulate Windows misplacing the newly created frameless window using another monitor's scale factor.
+      orb().bounds = { ...expected, x: 1250 };
+      orb().emit('ready-to-show');
+      expect(orb().bounds).toEqual(expected);
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   describe('task bubbles across displays', () => {
@@ -1011,6 +1173,25 @@ describe('desktop companion lifecycle', () => {
     expect(center()).toEqual(start);
   });
 
+  test('switching skins keeps a docked orb flush against its edge', () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    values.set(DesktopCompanionStoreKey.Position, {
+      x: 1280 - DesktopCompanionSize.BrandOrb.width,
+      y: 300,
+      edge: CompanionOrbEdge.Right,
+      yRatio: 300 / (900 - DesktopCompanionSize.BrandOrb.height),
+      displayId: 1,
+    });
+    create();
+    expect(orb().bounds.x + orb().bounds.width).toBe(1280);
+    manager.setPreferences({ skin: 'ruanruanxia' });
+    expect(orb().bounds).toMatchObject(DesktopCompanionSize.Orb);
+    expect(orb().bounds.x + orb().bounds.width).toBe(1280);
+    manager.setPreferences({ skin: 'lobster' });
+    expect(orb().bounds).toMatchObject(DesktopCompanionSize.BrandOrb);
+    expect(orb().bounds.x + orb().bounds.width).toBe(1280);
+  });
+
   test('the context menu holds only what changes the companion itself; what it does is in the hover launcher', () => {
     values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
     create();
@@ -1384,7 +1565,9 @@ describe('desktop companion lifecycle', () => {
     manager.setPreferences({ shortcut: 'Control+Shift+J' });
     manager.dispose();
     expect(globalShortcut.unregister).toHaveBeenCalledWith('Control+Shift+J');
+    expect(screen.listenerCount('display-added')).toBe(0);
     expect(screen.listenerCount('display-removed')).toBe(0);
+    expect(screen.listenerCount('display-metrics-changed')).toBe(0);
     expect(foreground.listenerCount('change')).toBe(0);
     expect(fileDrag.listenerCount(FileDragEvent.Start)).toBe(0);
     expect(mocks.handlers.size).toBe(0);
@@ -1582,24 +1765,194 @@ describe('snoozing', () => {
   });
 });
 
-describe('stage: hints and drops', () => {
-  test('accepting a mail hint pre-fills the habit as a prompt and opens the panel', () => {
+describe('stage: on-demand context and drops', () => {
+  test('never pops up a welcome bubble or proactive app-switch hint on its own', () => {
     vi.useFakeTimers();
-    const start = new Date(2026, 9, 6, 9, 0).getTime();
-    vi.setSystemTime(start);
-    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
     create();
     orb().emit('ready-to-show');
-    vi.setSystemTime(start + CompanionHintRule.LaunchQuietMs + 1_000);
-    foreground.emit('change', 'com.apple.mail');
-    vi.advanceTimersByTime(CompanionHintRule.DwellMs + 500);
-    expect(manager.getState().stage).toMatchObject({ kind: DesktopCompanionStageKind.Hint, topic: 'mail' });
-    expect(manager.getState().foreground).toEqual({ appId: 'com.apple.mail', category: 'mail' });
-    invoke(DesktopCompanionIpc.StageCommand, { type: DesktopCompanionStageCommandType.HintAccept });
+    // First appearance stays completely quiet — no welcome bubble.
+    vi.advanceTimersByTime(10_000);
     expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    // Dwelling in Mail or Excel never pops up a proactive bubble either.
+    foreground.emit('change', 'com.apple.mail');
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+    expect(manager.getState().foreground).toEqual({ appId: 'com.apple.mail', category: 'mail' });
+    foreground.emit('change', 'com.microsoft.Excel');
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.None);
+  });
+
+  test('captures P1 active file and clipboard on demand when opening the panel and runs context actions end to end', async () => {
+    let clipboardProbe: any = { kind: 'empty' };
+    const queryActiveFile = vi.fn(async (appId: string) => (
+      appId === 'com.microsoft.Excel' ? 'file:///Users/alice/Documents/Q3.xlsx' : null
+    ));
+    contextInspector = new CompanionContextInspector({
+      readClipboard: () => clipboardProbe,
+      queryActiveFile,
+      statPath: target => (target === '/Users/alice/Documents/Q3.xlsx' ? { isDirectory: false } : null),
+      saveClipboardImage: async () => '/tmp/lobsterai/attachments/clipboard-1.png',
+    });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+
+    // User copies fresh content after startup while working in Excel.
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Text,
+      fingerprint: 'txt:chat-1',
+      text: '张三：请今天下午确认悬浮球的新版情境交互方案\n李四：收到，待会同步结果',
+    };
+
+    // Before opening the panel, no OS active-file lookup runs in the background.
+    foreground.emit('change', 'com.microsoft.Excel');
+    expect(queryActiveFile).not.toHaveBeenCalled();
+    expect(manager.getState().context).toBeNull();
+
+    // Opening the panel immediately captures synchronous context + resolves active file asynchronously.
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(queryActiveFile).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.getState().context).toMatchObject({
+      appId: 'com.microsoft.Excel',
+      category: 'spreadsheet',
+      activeFile: { path: '/Users/alice/Documents/Q3.xlsx', name: 'Q3.xlsx', kind: CompanionFileKind.Spreadsheet, isDirectory: false },
+      clipboard: { kind: CompanionContextClipboardKind.Text, fingerprint: 'txt:chat-1' },
+    });
+
+    // Running ActiveFilePrimary returns the verified spreadsheet attachment + analysis prompt.
+    const fileRes = await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.ActiveFilePrimary });
+    expect(fileRes).toEqual({
+      success: true,
+      prompt: 'desktopCompanionDropAnalyzePrompt',
+      attachments: [{ path: '/Users/alice/Documents/Q3.xlsx', name: 'Q3.xlsx', isImage: false, isDirectory: false }],
+    });
+
+    // Running ClipboardText materializes the copied text and consumes the fingerprint.
+    const clipRes = await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.ClipboardText });
+    expect(clipRes).toEqual({
+      success: true,
+      prompt: 'desktopCompanionContextClipboardDefaultPrompt',
+      pastedText: clipboardProbe.text,
+    });
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+
+    // Dismissing a new clipboard image hides it immediately and suppresses it on reopen.
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Image,
+      fingerprint: 'img:shot-1',
+      width: 640,
+      height: 400,
+      toPNG: () => Buffer.from('png'),
+    };
+    manager.hidePanel();
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard?.fingerprint).toBe('img:shot-1');
+    await invoke(DesktopCompanionIpc.DismissContextClipboard, 'img:shot-1');
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+    manager.hidePanel();
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+  });
+
+  test('suppresses clipboard copied inside a password manager and honors disabling contextHints', async () => {
+    let clipboardProbe: any = { kind: 'empty' };
+    contextInspector = new CompanionContextInspector({
+      readClipboard: () => clipboardProbe,
+      queryActiveFile: async () => 'file:///Users/alice/Documents/Q3.xlsx',
+      statPath: () => ({ isDirectory: false }),
+    });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+
+    // Leaving 1Password records the newly copied clipboard fingerprint as blocked.
+    foreground.emit('change', 'com.1password.1password');
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Text,
+      fingerprint: 'txt:secret-note',
+      text: 'This text was copied while 1Password was focused and must never appear.',
+    };
+    foreground.emit('change', 'com.google.Chrome');
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard).toBeUndefined();
+
+    // Copying a fresh non-secret text in Chrome is allowed again.
+    clipboardProbe = {
+      kind: CompanionContextClipboardKind.Text,
+      fingerprint: 'txt:chrome-note',
+      text: 'This paragraph was copied in Chrome after leaving the password manager and should appear.',
+    };
+    manager.hidePanel();
+    manager.togglePanel(AnalyticsSource.Orb);
+    expect(manager.getState().context?.clipboard?.fingerprint).toBe('txt:chrome-note');
+
+    // Turning off contextHints clears context immediately and skips inspection on reopen.
+    manager.setPreferences({ contextHints: false });
+    expect(manager.getState().context).toBeNull();
+  });
+
+  test('context screenshot and file-picker actions carry their tailored prompt back into the panel', async () => {
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+    foreground.emit('change', 'com.tencent.xinwechat');
+    manager.togglePanel(AnalyticsSource.Orb);
+
+    const captureSpy = vi.spyOn(CompanionScreenshotController.prototype, 'capture')
+      .mockResolvedValue({ path: '/tmp/chat-shot.png', name: 'shot.png', isImage: true });
+    await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.ChatScreenshotTodo });
+    await vi.waitFor(() => expect(manager.getState().draft.attachments).toHaveLength(1));
+    expect(captureSpy).toHaveBeenCalledTimes(1);
     expect(manager.getState().panelVisible).toBe(true);
-    expect(manager.getState().draft.prompt).toBe('desktopCompanionPromptMail');
-    expect(values.get(DesktopCompanionStoreKey.HintLedger)).toMatchObject({ categories: { mail: { acceptedAt: expect.any(Number) } } });
+    expect(manager.getState().draft.prompt).toBe('desktopCompanionContextChatScreenshotTodoPrompt');
+
+    // Reset draft and test SpreadsheetPickAnalyze filtered file dialog.
+    manager.setDraft({ prompt: '', attachments: [], workingDirectory: '' });
+    foreground.emit('change', 'com.microsoft.Excel');
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/sales.xlsx'] });
+    await invoke(DesktopCompanionIpc.RunContextAction, { actionId: CompanionContextActionId.SpreadsheetPickAnalyze });
+    await vi.waitFor(() => expect(manager.getState().draft.attachments[0]?.path).toBe('/tmp/sales.xlsx'));
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [{ name: 'Spreadsheets', extensions: expect.arrayContaining(['xlsx', 'csv']) }],
+    }));
+    expect(manager.getState().draft.prompt).toBe('desktopCompanionDropAnalyzePrompt');
+  });
+
+  test('hover launcher resolves an active file on demand and opens the panel with it on ContextFile click', async () => {
+    vi.useFakeTimers();
+    contextInspector = new CompanionContextInspector({
+      readClipboard: () => ({ kind: 'empty' }),
+      queryActiveFile: async () => 'file:///Users/alice/Documents/Report.pdf',
+      statPath: target => (target === '/Users/alice/Documents/Report.pdf' ? { isDirectory: false } : null),
+    });
+    values.set(DesktopCompanionStoreKey.Preferences, { enabled: true, contextHints: true });
+    create();
+    orb().emit('ready-to-show');
+    foreground.emit('change', 'com.apple.Preview');
+
+    restOnOrb();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.getState().stage.kind).toBe(DesktopCompanionStageKind.Launcher);
+    expect(manager.getState().context?.activeFile).toMatchObject({
+      path: '/Users/alice/Documents/Report.pdf',
+      name: 'Report.pdf',
+      kind: CompanionFileKind.Pdf,
+    });
+
+    invoke(DesktopCompanionIpc.StageCommand, {
+      type: DesktopCompanionStageCommandType.LauncherRun,
+      action: CompanionLauncherAction.ContextFile,
+    }, stageWindow().webContents);
+    expect(manager.getState().panelVisible).toBe(true);
+    expect(manager.getState().draft.attachments).toEqual([
+      { path: '/Users/alice/Documents/Report.pdf', name: 'Report.pdf', isImage: false, isDirectory: false },
+    ]);
+    expect(manager.getState().draft.prompt).toBe('desktopCompanionDropDigestPrompt');
   });
 
   test('ordinary desktop drags never open a window or replace the current task', () => {
@@ -2527,6 +2880,57 @@ describe('hover launcher', () => {
     expect(reportAnalytics).toHaveBeenCalledWith(expect.objectContaining({
       action: AnalyticsAction.Action, source: AnalyticsSource.Launcher, interactionType: Interaction.Open, stage: AnalyticsStage.Shown,
     }));
+  });
+
+  test('the first hover opens as soon as the renderer measures the menu, even while the page is loading', () => {
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    vi.spyOn(stage.webContents, 'isLoadingMainFrame').mockReturnValue(true);
+    vi.advanceTimersByTime(1_000);
+    expect(stage.visible).toBe(false);
+
+    emitFromStage(DesktopCompanionIpc.ResizeSurface, { width: 276, height: 221 });
+    expect(stage.visible).toBe(true);
+    expect(stage.focused).toBe(false);
+  });
+
+  test.each([true, false])('a late first load can reveal an unmeasured menu only while still hovered (left: %s)', left => {
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    const loading = vi.spyOn(stage.webContents, 'isLoadingMainFrame').mockReturnValue(true);
+    vi.advanceTimersByTime(1_000);
+    if (left) {
+      hoverOrb(false);
+      vi.mocked(screen.getCursorScreenPoint).mockReturnValue({ x: 0, y: 0 });
+      vi.advanceTimersByTime(LauncherCloseDelayMs + LauncherPollMs * 2);
+    }
+
+    loading.mockReturnValue(false);
+    stage.webContents.emit('did-finish-load');
+    expect(stage.visible).toBe(false);
+    vi.advanceTimersByTime(1_000);
+    expect(stage.visible).toBe(!left);
+  });
+
+  test('the macOS hover menu floats over full-screen apps and releases that level when a drop replaces it', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    create();
+    restOnOrb();
+    const stage = stageWindow();
+    expect(stage.setAlwaysOnTop).toHaveBeenLastCalledWith(true, CompanionWindowLevel.PopUpMenu);
+    expect(stage.setVisibleOnAllWorkspaces).toHaveBeenLastCalledWith(true, {
+      visibleOnFullScreen: true, skipTransformProcessType: true,
+    });
+
+    dragOverOrb(DesktopCompanionFileDragPhase.Enter, [CompanionFileKind.Pdf]);
+    expect(stageKind()).toBe(DesktopCompanionStageKind.Drop);
+    expect(stageWindow()).toBe(stage);
+    expect(stage.setAlwaysOnTop).toHaveBeenLastCalledWith(true, CompanionWindowLevel.Floating);
+    expect(stage.setVisibleOnAllWorkspaces).toHaveBeenLastCalledWith(true, {
+      visibleOnFullScreen: false, skipTransformProcessType: true,
+    });
   });
 
   test('stays while the pointer is on the orb or the card and closes once it has left both', () => {

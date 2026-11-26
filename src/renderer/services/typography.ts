@@ -26,8 +26,12 @@ const TEXT_SIZE_BASE = {
   markdownH4: 15,
   promptLarge: 15,
   sidebarCompact: 13,
-  // Task titles nested under an agent sit one step below the agent name.
-  sidebarTask: 12,
+  // Nested task titles match sidebarCompact (14px at the 15px default) so
+  // scanning tasks stays effortless; hierarchy comes from icon, indent, and weight.
+  sidebarTask: 13,
+  // Section headers, timestamps, and fold controls stay crisp at an integer 12px
+  // (at both 14px and 15px UI sizes) so Windows DirectWrite never blurs half pixels.
+  sidebarMeta: 11.5,
 } as const;
 
 const LINE_HEIGHT_BASE = {

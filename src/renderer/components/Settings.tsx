@@ -1,16 +1,24 @@
-import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, QuestionMarkCircleIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArchiveBoxIcon, ArrowPathIcon, ArrowPathRoundedSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, ExclamationTriangleIcon, GlobeAltIcon, InformationCircleIcon, MagnifyingGlassIcon, QuestionMarkCircleIcon, ShieldCheckIcon, SignalIcon, SunIcon, TrashIcon, WrenchScrewdriverIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { AgentId } from '../../shared/agent/constants';
 import { OpenSettingsTab } from '../../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode } from '../../shared/appSettings/constants';
 import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import {
+  BrowserDisplayMode,
   type BrowserWebAccessConfig,
   defaultBrowserWebAccessConfig,
+  normalizeBrowserCdpUrl,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
-import { DataMigrationRestoreStatus } from '../../shared/dataMigration/constants';
+import {
+  CoworkMemoryStatus,
+  CoworkMemoryStatusFilter,
+  type CoworkMemoryStatusFilter as CoworkMemoryStatusFilterValue,
+  CoworkTempDirKind,
+} from '../../shared/cowork/constants';
 import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
 import {
@@ -59,20 +67,20 @@ import type {
   CoworkMemoryStats,
   CoworkTempDirPreview,
   CoworkUserMemoryEntry,
+  DreamDiaryData,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
   OpenClawSessionKeepAlive,
 } from '../types/cowork';
 import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
-import DreamingRecoveryNotice from './cowork/DreamingRecoveryNotice';
-import DreamingSettingsSection from './cowork/DreamingSettingsSection';
-import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
+import { getVisibleLegacyDreamDiaries } from './cowork/dreamDiaryParser';
+import LegacyDreamDiaryViewer from './cowork/LegacyDreamDiaryViewer';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
 import { companionShortcutFromKeys } from './desktopCompanion/shortcut';
 import { useDesktopCompanionState } from './desktopCompanion/useDesktopCompanionState';
-import DshExperimentalSettings from './DshExperimentalSettings';
+import { DshPluginEcosystemView } from './dsh/DshPluginEcosystemView';
 import ErrorMessage from './ErrorMessage';
 import FeedbackDialog from './feedback/FeedbackDialog';
 import BrainIcon from './icons/BrainIcon';
@@ -81,10 +89,14 @@ import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import IMSettings from './im/IMSettings';
-import PluginsSettings, { type PluginPendingChanges, type PluginsSettingsHandle } from './plugins/PluginsSettings';
 import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
+import DataMigrationDialogs from './settings/DataMigrationDialogs';
+import DataMigrationRestoreReportCard from './settings/DataMigrationRestoreReportCard';
+import DataPrivacySettingsSection from './settings/DataPrivacySettingsSection';
+import GeneralSettingsSection from './settings/GeneralSettingsSection';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
+import ManualDataMigrationAction from './settings/ManualDataMigrationAction';
 import {
   buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
@@ -113,9 +125,15 @@ import {
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
 import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
-import OpenClawUserConfigRow from './settings/OpenClawUserConfigRow';
 import ProviderTransferDialog from './settings/ProviderTransferDialog';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
+import { SettingsSwitch } from './settings/SettingsLayout';
+import {
+  filterVisibleSettingsTabs,
+  normalizeSettingsTab,
+  type SettingsTab,
+  SettingsTabId,
+} from './settings/settingsTabs';
 import {
   SETTINGS_DESCRIPTION_TEXT,
   SETTINGS_ITEM_TITLE_TEXT,
@@ -124,19 +142,19 @@ import {
   SETTINGS_PAGE_TITLE_TEXT,
   SETTINGS_SECTION_TITLE_TEXT,
 } from './settings/settingsTypography';
+import { useDataMigration } from './settings/useDataMigration';
 import { useProviderTransfer } from './settings/useProviderTransfer';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
 import SkinSettingsSection from './skin/SkinSettingsSection';
-import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'desktopCompanion' | 'coworkAgentEngine' | 'model' | 'browserWebAccess' | 'coworkMemory' | 'coworkDreaming' | 'shortcuts' | 'im' | 'email' | 'plugins' | 'experimental' | 'help' | 'about';
+type TabType = SettingsTab;
 
-const waitForNextPaint = (): Promise<void> => new Promise(resolve => {
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => resolve());
-  });
-});
+const MemorySubTab = {
+  Entries: 'entries',
+  LegacyDreamDiary: 'legacyDreamDiary',
+} as const;
+type MemorySubTab = typeof MemorySubTab[keyof typeof MemorySubTab];
 
 const getAutoLaunchErrorMessage = (errorCode?: string): string => {
   if (errorCode === AppSettingsAutoLaunchErrorCode.RequiresApproval) {
@@ -205,19 +223,20 @@ type ShortcutCommandDefinition = {
 };
 
 const SETTINGS_TAB_SHORTCUT_ACTIONS: Partial<Record<SettingsShortcutAction, TabType>> = {
-  [ShortcutAction.OpenSettingsGeneral]: 'general',
-  [ShortcutAction.OpenSettingsAppearance]: 'appearance',
+  [ShortcutAction.OpenSettingsGeneral]: SettingsTabId.General,
+  [ShortcutAction.OpenSettingsAppearance]: SettingsTabId.Appearance,
   [ShortcutAction.OpenSettingsDesktopCompanion]: OpenSettingsTab.DesktopCompanion,
-  [ShortcutAction.OpenSettingsAgentEngine]: 'coworkAgentEngine',
-  [ShortcutAction.OpenSettingsModel]: 'model',
-  [ShortcutAction.OpenSettingsIm]: 'im',
-  [ShortcutAction.OpenSettingsBrowser]: 'browserWebAccess',
-  [ShortcutAction.OpenSettingsEmail]: 'email',
-  [ShortcutAction.OpenSettingsMemory]: 'coworkMemory',
-  [ShortcutAction.OpenSettingsDreaming]: 'coworkDreaming',
-  [ShortcutAction.OpenSettingsPlugins]: 'plugins',
-  [ShortcutAction.OpenSettingsShortcuts]: 'shortcuts',
-  [ShortcutAction.OpenSettingsAbout]: 'about',
+  [ShortcutAction.OpenSettingsAgentEngine]: SettingsTabId.CoworkAgentEngine,
+  [ShortcutAction.OpenSettingsModel]: SettingsTabId.Model,
+  [ShortcutAction.OpenSettingsIm]: SettingsTabId.Im,
+  [ShortcutAction.OpenSettingsBrowser]: SettingsTabId.BrowserWebAccess,
+  [ShortcutAction.OpenSettingsEmail]: SettingsTabId.Email,
+  [ShortcutAction.OpenSettingsMemory]: SettingsTabId.CoworkMemory,
+  [ShortcutAction.OpenSettingsDreaming]: SettingsTabId.CoworkDreaming,
+  [ShortcutAction.OpenSettingsPlugins]: SettingsTabId.Plugins,
+  [ShortcutAction.OpenSettingsDataPrivacy]: SettingsTabId.DataPrivacy,
+  [ShortcutAction.OpenSettingsShortcuts]: SettingsTabId.Shortcuts,
+  [ShortcutAction.OpenSettingsAbout]: SettingsTabId.About,
 };
 
 const SettingsAnalyticsSource = {
@@ -259,14 +278,6 @@ type ShortcutSettingAnalyticsSummary = {
   configuredCount: number;
   disabledCount: number;
   resetToDefault: boolean;
-};
-
-type PluginSettingsAnalyticsSummary = {
-  changedKeys: string;
-  configCount: number;
-  disabledToggleCount: number;
-  enabledToggleCount: number;
-  toggleCount: number;
 };
 
 const DREAMING_FREQUENCY_PRESETS_FOR_ANALYTICS = new Set([
@@ -429,15 +440,27 @@ const buildBrowserSettingAnalyticsParams = (
 ): {
   blockedHostnameCount: number;
   changedKeys: string;
-  networkMode: string;
+  displayMode: string;
   previousBlockedHostnameCount?: number;
 } | null => {
   const changedKeys = new Set<string>();
-  if (previousConfig.networkMode !== nextConfig.networkMode) {
-    changedKeys.add('network_mode');
+  if (previousConfig.displayMode !== nextConfig.displayMode) {
+    changedKeys.add('display_mode');
   }
-  if (previousConfig.blockedHostnames.length !== nextConfig.blockedHostnames.length) {
+  if (previousConfig.credentialUseMode !== nextConfig.credentialUseMode) {
+    changedKeys.add('credential_use_mode');
+  }
+  if (previousConfig.credentialSaveMode !== nextConfig.credentialSaveMode) {
+    changedKeys.add('credential_save_mode');
+  }
+  if (JSON.stringify(previousConfig.blockedHostnames) !== JSON.stringify(nextConfig.blockedHostnames)) {
     changedKeys.add('blocked_hostnames');
+  }
+  if (previousConfig.executablePath !== nextConfig.executablePath) {
+    changedKeys.add('executable_path');
+  }
+  if (previousConfig.cdpUrl !== nextConfig.cdpUrl) {
+    changedKeys.add('cdp_url');
   }
 
   if (changedKeys.size === 0) {
@@ -447,7 +470,7 @@ const buildBrowserSettingAnalyticsParams = (
   return {
     blockedHostnameCount: nextConfig.blockedHostnames.length,
     changedKeys: Array.from(changedKeys).sort().join(','),
-    networkMode: nextConfig.networkMode,
+    displayMode: nextConfig.displayMode,
     previousBlockedHostnameCount: previousConfig.blockedHostnames.length,
   };
 };
@@ -587,31 +610,6 @@ const buildShortcutSettingAnalyticsSummary = (
   };
 };
 
-const buildPluginSettingsAnalyticsSummary = (
-  pendingChanges: PluginPendingChanges | null,
-): PluginSettingsAnalyticsSummary | null => {
-  if (!pendingChanges) {
-    return null;
-  }
-  const toggleCount = pendingChanges.toggles.length;
-  const configCount = pendingChanges.configs.length;
-  if (toggleCount === 0 && configCount === 0) {
-    return null;
-  }
-  const changedKeys = [
-    ...(toggleCount > 0 ? ['toggle'] : []),
-    ...(configCount > 0 ? ['config'] : []),
-  ].join(',');
-
-  return {
-    changedKeys,
-    configCount,
-    disabledToggleCount: pendingChanges.toggles.filter(change => !change.enabled).length,
-    enabledToggleCount: pendingChanges.toggles.filter(change => change.enabled).length,
-    toggleCount,
-  };
-};
-
 const reportGeneralSettingChanged = (
   settingKey: string,
   settingValue: SettingsAnalyticsValue,
@@ -644,7 +642,7 @@ const reportBrowserSettingChanged = (
   params: {
     blockedHostnameCount: number;
     changedKeys: string;
-    networkMode: string;
+    displayMode: string;
     previousBlockedHostnameCount?: number;
   },
 ): void => {
@@ -686,17 +684,6 @@ const reportDreamingSettingChanged = (
   void reportYdAnalyzer({
     action: LogReporterAction.DreamingSettingChanged,
     source: SettingsAnalyticsSource.Dreaming,
-    ...summary,
-  });
-};
-
-const reportPluginSettingsSaved = (
-  summary: PluginSettingsAnalyticsSummary,
-): void => {
-  console.debug('[Settings] reporting plugin settings analytics');
-  void reportYdAnalyzer({
-    action: LogReporterAction.PluginSettingsSaved,
-    source: SettingsAnalyticsSource.Plugins,
     ...summary,
   });
 };
@@ -809,14 +796,13 @@ const SETTINGS_TAB_SHORTCUT_COMMANDS: ShortcutCommandDefinition[] = [
   { key: ShortcutAction.OpenSettingsGeneral, tabLabelKey: 'general' },
   { key: ShortcutAction.OpenSettingsAppearance, tabLabelKey: 'appearance' },
   { key: ShortcutAction.OpenSettingsDesktopCompanion, tabLabelKey: 'desktopCompanionTitle' },
-  { key: ShortcutAction.OpenSettingsAgentEngine, tabLabelKey: 'coworkAgentEngine' },
   { key: ShortcutAction.OpenSettingsModel, tabLabelKey: 'settingsCustomModel' },
   { key: ShortcutAction.OpenSettingsIm, tabLabelKey: 'imBot' },
   { key: ShortcutAction.OpenSettingsBrowser, tabLabelKey: 'browserWebAccessTab' },
-  { key: ShortcutAction.OpenSettingsEmail, tabLabelKey: 'emailTab' },
   { key: ShortcutAction.OpenSettingsMemory, tabLabelKey: 'coworkMemoryTitle' },
-  { key: ShortcutAction.OpenSettingsDreaming, tabLabelKey: 'coworkMemoryTabDreaming' },
+  { key: ShortcutAction.OpenSettingsEmail, tabLabelKey: 'emailTab' },
   { key: ShortcutAction.OpenSettingsPlugins, tabLabelKey: 'pluginsTab' },
+  { key: ShortcutAction.OpenSettingsDataPrivacy, tabLabelKey: 'dataPrivacyTab' },
   { key: ShortcutAction.OpenSettingsAbout, tabLabelKey: 'about' },
 ].map(command => ({
   ...command,
@@ -916,23 +902,6 @@ const SettingsSlidersIcon: React.FC<{ className?: string }> = ({ className }) =>
     <path d="M19 7h-9" />
     <circle cx="17" cy="17" r="3" />
     <circle cx="7" cy="7" r="3" />
-  </svg>
-);
-
-const DreamingTabIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    width="34"
-    height="34"
-    viewBox="0 0 34 34"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    className={className}
-    aria-hidden="true"
-  >
-    <path
-      d="M27.9219 21.9648L29.014 22.4621L29.8552 20.6145L27.831 20.7683L27.9219 21.9648ZM16.0762 5.03516L17.1683 5.53234L18.0095 3.68449L15.9851 3.83862L16.0762 5.03516ZM27.9219 21.9648L26.8297 21.4676C25.1281 25.205 21.3674 27.8 17 27.8V29V30.2C22.3442 30.2 26.9378 27.0221 29.014 22.4621L27.9219 21.9648ZM17 29V27.8C11.0353 27.8 6.2 22.9647 6.2 17H5H3.8C3.8 24.2902 9.70984 30.2 17 30.2V29ZM5 17H6.2C6.2 11.3157 10.5923 6.65614 16.1673 6.23169L16.0762 5.03516L15.9851 3.83862C9.16855 4.35759 3.8 10.0512 3.8 17H5ZM16.0762 5.03516L14.984 4.53798C14.2262 6.20275 13.8 8.052 13.8 10H15H16.2C16.2 8.40537 16.5483 6.8944 17.1683 5.53234L16.0762 5.03516ZM15 10H13.8C13.8 17.2902 19.7098 23.2 27 23.2V22V20.8C21.0353 20.8 16.2 15.9647 16.2 10H15ZM27 22V23.2C27.3413 23.2 27.679 23.1868 28.0128 23.1614L27.9219 21.9648L27.831 20.7683C27.5562 20.7892 27.2791 20.8 27 20.8V22Z"
-      fill="currentColor"
-    />
   </svg>
 );
 
@@ -1280,85 +1249,6 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
-const SettingsSwitch: React.FC<{
-  checked: boolean;
-  label: string;
-  disabled?: boolean;
-  onClick: () => void | Promise<void>;
-}> = ({ checked, label, disabled, onClick }) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    aria-label={label}
-    onClick={() => {
-      void onClick();
-    }}
-    disabled={disabled}
-    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-      disabled ? 'opacity-50 cursor-not-allowed' : ''
-    } ${
-      checked
-        ? 'bg-primary'
-        : 'bg-gray-300 dark:bg-gray-600'
-    }`}
-  >
-    <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-        checked ? 'translate-x-6' : 'translate-x-1'
-      }`}
-    />
-  </button>
-);
-
-const SettingsToggleRow: React.FC<{
-  title: string;
-  description: string;
-  checked: boolean;
-  disabled?: boolean;
-  onToggle: () => void | Promise<void>;
-}> = ({ title, description, checked, disabled, onToggle }) => (
-  <div>
-    <div className="flex items-center justify-between gap-4">
-      <h4 className={`min-w-0 flex-1 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-        {title}
-      </h4>
-      <SettingsSwitch
-        checked={checked}
-        label={title}
-        disabled={disabled}
-        onClick={onToggle}
-      />
-    </div>
-    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-      {description}
-    </p>
-  </div>
-);
-
-// Groups related settings rows into a labeled card (label above a bordered,
-// divider-separated card). Used to categorize the General settings tab.
-const SettingsGroup: React.FC<{
-  title: string;
-  children: React.ReactNode;
-  footer?: React.ReactNode;
-}> = ({ title, children, footer }) => (
-  <section className="space-y-2.5">
-    <h4 className="px-1 text-xs font-semibold uppercase tracking-wider text-secondary">
-      {title}
-    </h4>
-    <div className="divide-y divide-border rounded-xl border border-border bg-surface">
-      {children}
-    </div>
-    {footer}
-  </section>
-);
-
-// A single padded row inside a SettingsGroup card.
-const SettingsRow: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="px-4 py-3.5">{children}</div>
-);
-
 const SettingsNumberInputRow: React.FC<{
   id: string;
   title: string;
@@ -1417,17 +1307,16 @@ const Settings: React.FC<SettingsProps> = ({
     selectThemeMode,
   } = useSkin();
   // 状态
-  const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
+  const [activeTab, setActiveTab] = useState<TabType>(() => normalizeSettingsTab(initialTab));
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getDefaultThemeId());
   const [uiFontSize, setUiFontSize] = useState<number>(FontPreferences.UiFontSizeDefault);
   const [codeFontSize, setCodeFontSize] = useState<number>(FontPreferences.CodeFontSizeDefault);
   const [language, setLanguage] = useState<LanguageType>('zh');
-  const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(true);
+  const [artifactAutoPreviewEnabled, setArtifactAutoPreviewEnabled] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
-  const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
   const [usageAnalyticsEnabled, setUsageAnalyticsEnabled] = useState(true);
   const [taskCompletionNotificationMode, setTaskCompletionNotificationMode] =
     useState<TaskCompletionNotificationMode>(TaskCompletionNotificationMode.Unfocused);
@@ -1435,7 +1324,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [questionNotificationsEnabled, setQuestionNotificationsEnabled] = useState(true);
   const [browserWebAccess, setBrowserWebAccess] = useState<BrowserWebAccessConfig>(() => ({
     ...defaultBrowserWebAccessConfig,
-    webFetch: { ...defaultBrowserWebAccessConfig.webFetch },
+    blockedHostnames: [...defaultBrowserWebAccessConfig.blockedHostnames],
   }));
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
@@ -1481,7 +1370,7 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   // Plugin settings handle (deferred save)
-  const pluginsSettingsRef = useRef<PluginsSettingsHandle>(null);
+  // DSH Ecosystem plugins are managed live via DshPluginEcosystemView.
   // Unsaved edits from the experimental decision model card (deferred save)
   const decisionModelDraftRef = useRef<DecisionModelConfigUpdate | null>(null);
 
@@ -1782,11 +1671,11 @@ const Settings: React.FC<SettingsProps> = ({
   }, [isExportingLogs]);
 
   const coworkConfig = useSelector(selectCoworkConfig);
+  const agents = useSelector((state: RootState) => state.agent.agents);
 
-  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
+  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'dsh');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
-  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
   const [tempStorageUsageBytes, setTempStorageUsageBytes] = useState<number | null>(null);
   const [tempStorageCleanableBytes, setTempStorageCleanableBytes] = useState<number | null>(null);
   const [isCleaningTempStorage, setIsCleaningTempStorage] = useState<boolean>(false);
@@ -1809,7 +1698,10 @@ const Settings: React.FC<SettingsProps> = ({
   const [dreamingFrequency, setDreamingFrequency] = useState<string>(coworkConfig.dreamingFrequency ?? '0 3 * * *');
   const [dreamingModel, setDreamingModel] = useState<string>(coworkConfig.dreamingModel ?? '');
   const [dreamingTimezone, setDreamingTimezone] = useState<string>(coworkConfig.dreamingTimezone ?? '');
-  const [memoryTab, setMemoryTab] = useState<'entries' | 'embedding'>('entries');
+  const [memoryTab, setMemoryTab] = useState<MemorySubTab>(MemorySubTab.Entries);
+  const [legacyDreamDiary, setLegacyDreamDiary] = useState<DreamDiaryData | null>(null);
+  const [legacyDreamDiaryLoading, setLegacyDreamDiaryLoading] = useState<boolean>(false);
+  const [legacyDreamDiaryError, setLegacyDreamDiaryError] = useState<string | null>(null);
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
     coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
@@ -1817,11 +1709,17 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
   const [coworkMemoryListLoading, setCoworkMemoryListLoading] = useState<boolean>(false);
   const [coworkMemoryQuery, setCoworkMemoryQuery] = useState<string>('');
+  const [coworkMemoryAgentId, setCoworkMemoryAgentId] = useState<string>(AgentId.Main);
+  const [coworkMemoryStatusFilter, setCoworkMemoryStatusFilter] = useState<CoworkMemoryStatusFilterValue>(
+    CoworkMemoryStatusFilter.Created,
+  );
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
+  const [coworkMemoryModalError, setCoworkMemoryModalError] = useState<string | null>(null);
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
   const [coworkMemoryRawMode, setCoworkMemoryRawMode] = useState<boolean>(false);
   const [coworkMemoryRawText, setCoworkMemoryRawText] = useState<string>('');
+  const [coworkMemoryRawError, setCoworkMemoryRawError] = useState<string | null>(null);
   const [coworkMemoryRawSaving, setCoworkMemoryRawSaving] = useState<boolean>(false);
   const [coworkMemoryExpandedIds, setCoworkMemoryExpandedIds] = useState<Set<string>>(new Set());
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
@@ -1829,16 +1727,11 @@ const Settings: React.FC<SettingsProps> = ({
   const [isRepairingOpenClaw, setIsRepairingOpenClaw] = useState<boolean>(false);
   const [openClawRepairResult, setOpenClawRepairResult] = useState<OpenClawGatewayRepairResult | null>(null);
   const [openClawGatewayCopied, setOpenClawGatewayCopied] = useState<boolean>(false);
-  const [isBackingUpOpenClawData, setIsBackingUpOpenClawData] = useState<boolean>(false);
-  const [isRestoringOpenClawData, setIsRestoringOpenClawData] = useState<boolean>(false);
-  const [openClawDataBackupResult, setOpenClawDataBackupResult] = useState<{ path: string; sizeBytes?: number } | null>(null);
-  const [showOpenClawDataRestoreConfirm, setShowOpenClawDataRestoreConfirm] = useState<boolean>(false);
 
   useEffect(() => {
-    setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
+    setCoworkAgentEngine(coworkConfig.agentEngine || 'dsh');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
-    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
     setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? false);
     setOpenClawSkillReviewEnabled(coworkConfig.openClawSkillReviewEnabled ?? false);
     setOpenClawMemoryFlushEnabled(coworkConfig.openClawMemoryFlushEnabled ?? false);
@@ -1859,7 +1752,6 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
     coworkConfig.openClawSessionPolicy?.keepAlive,
-    coworkConfig.skipMissedJobs,
     coworkConfig.openClawHeartbeatEnabled,
     coworkConfig.openClawSkillReviewEnabled,
     coworkConfig.openClawMemoryFlushEnabled,
@@ -1889,7 +1781,7 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'general') return;
+    if (activeTab !== SettingsTabId.DataPrivacy) return;
     void refreshTempStorageUsage();
   }, [activeTab, refreshTempStorageUsage]);
 
@@ -1974,27 +1866,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     let active = true;
-    void window.electron.openclaw.dataMigration.getLastRestoreResult().then((response) => {
-      if (!active || !response.success || !response.result) return;
-      if (response.result.status === DataMigrationRestoreStatus.Success) {
-        setNoticeMessage(i18nService.t('openClawDataMigrationSuccess'));
-        return;
-      }
-      const message = response.result.error
-        ? `${i18nService.t('openClawDataMigrationFailed')}: ${response.result.error}`
-        : i18nService.t('openClawDataMigrationFailed');
-      setError(message);
-    }).catch((loadError) => {
-      if (!active) return;
-      setError(loadError instanceof Error ? loadError.message : i18nService.t('openClawDataMigrationFailed'));
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
     void coworkService.getOpenClawEngineStatus().then((status) => {
       if (!active || !status) return;
       setOpenClawEngineStatus(status);
@@ -2040,7 +1911,6 @@ const Settings: React.FC<SettingsProps> = ({
         resolveArtifactAutoPreviewEnabled(config.artifactAutoPreviewEnabled),
       );
       setUseSystemProxy(config.useSystemProxy ?? false);
-      setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
       setUsageAnalyticsEnabled(config.usageAnalyticsEnabled !== false);
       {
         const notificationSettings = normalizeNotificationSettings(config.notificationSettings);
@@ -2346,7 +2216,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     if (initialTab) {
-      setActiveTab(initialTab);
+      setActiveTab(normalizeSettingsTab(initialTab));
     }
   }, [initialTab, initialTabRequestId]);
 
@@ -2893,7 +2763,6 @@ const Settings: React.FC<SettingsProps> = ({
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
-    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
     || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? false)
     || openClawSkillReviewEnabled !== (coworkConfig.openClawSkillReviewEnabled ?? false)
     || openClawMemoryFlushEnabled !== (coworkConfig.openClawMemoryFlushEnabled ?? false)
@@ -2907,7 +2776,7 @@ const Settings: React.FC<SettingsProps> = ({
     || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '')
     || dreamingEnabled !== (coworkConfig.dreamingEnabled ?? false)
     || dreamingFrequency !== (coworkConfig.dreamingFrequency ?? '0 3 * * *');
-  const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
+  const isOpenClawAgentEngine = coworkAgentEngine === 'dsh';
 
   const openClawProgressPercent = useMemo(() => {
     if (typeof openClawEngineStatus?.progressPercent !== 'number' || !Number.isFinite(openClawEngineStatus.progressPercent)) {
@@ -3070,19 +2939,6 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [openClawRepairResult?.backupPath]);
 
-  const handleRevealOpenClawDataBackup = useCallback(async () => {
-    const backupPath = openClawDataBackupResult?.path;
-    if (!backupPath) return;
-    try {
-      const result = await window.electron.shell.showItemInFolder(backupPath);
-      if (!result?.success) {
-        setError(result?.error || i18nService.t('showInFolderFailed'));
-      }
-    } catch (revealError) {
-      setError(revealError instanceof Error ? revealError.message : i18nService.t('showInFolderFailed'));
-    }
-  }, [openClawDataBackupResult?.path]);
-
   const persistModelSettingsBeforeDataBackup = useCallback(async () => {
     const normalizedProviders = normalizeProvidersForSettingsSave(providers);
     const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
@@ -3095,80 +2951,47 @@ const Settings: React.FC<SettingsProps> = ({
     });
   }, [activeProvider, providers]);
 
-  const handleOpenClawDataBackup = useCallback(async () => {
-    if (isBackingUpOpenClawData) return;
-    setError(null);
-    setNoticeMessage(null);
-    setOpenClawDataBackupResult(null);
-    setIsBackingUpOpenClawData(true);
-    try {
-      await waitForNextPaint();
-      await persistModelSettingsBeforeDataBackup();
-      const result = await window.electron.openclaw.dataMigration.backup();
-      if (!result.success) {
-        setError(result.error || i18nService.t('openClawDataBackupFailed'));
-        reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
-        return;
-      }
-      if (result.canceled) {
-        return;
-      }
-      if (result.path) {
-        setOpenClawDataBackupResult({ path: result.path, sizeBytes: result.sizeBytes });
-      }
-      setNoticeMessage(i18nService.t('openClawDataBackupSuccess'));
-      reportAgentEngineMaintenanceAction('backup_data', 'success', {
-        sizeBytes: result.sizeBytes,
-      });
-    } catch (backupError) {
-      setError(backupError instanceof Error ? backupError.message : i18nService.t('openClawDataBackupFailed'));
-      reportAgentEngineMaintenanceAction('backup_data', 'failed', { errorCode: 'unknown' });
-    } finally {
-      setIsBackingUpOpenClawData(false);
-    }
-  }, [isBackingUpOpenClawData, persistModelSettingsBeforeDataBackup]);
+  const dataMigration = useDataMigration({
+    persistModelSettingsBeforeBackup: persistModelSettingsBeforeDataBackup,
+    onError: setError,
+    onNotice: setNoticeMessage,
+    onReportAction: reportAgentEngineMaintenanceAction,
+  });
 
-  const handleConfirmOpenClawDataRestore = useCallback(async () => {
-    if (isRestoringOpenClawData) return;
-    setShowOpenClawDataRestoreConfirm(false);
-    setError(null);
-    setNoticeMessage(null);
-    setIsRestoringOpenClawData(true);
-    let keepLoadingUntilRestart = false;
-    try {
-      await waitForNextPaint();
-      const result = await window.electron.openclaw.dataMigration.restore();
-      if (!result.success) {
-        setError(result.error || i18nService.t('openClawDataMigrationFailed'));
-        reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
-        return;
-      }
-      if (result.canceled) {
-        return;
-      }
-      if (result.scheduledRestart) {
-        keepLoadingUntilRestart = true;
-        setNoticeMessage(i18nService.t('openClawDataMigrationRestarting'));
-      }
-      reportAgentEngineMaintenanceAction('restore_data', 'success');
-    } catch (restoreError) {
-      setError(restoreError instanceof Error ? restoreError.message : i18nService.t('openClawDataMigrationFailed'));
-      reportAgentEngineMaintenanceAction('restore_data', 'failed', { errorCode: 'unknown' });
-    } finally {
-      if (!keepLoadingUntilRestart) {
-        setIsRestoringOpenClawData(false);
-      }
-    }
-  }, [isRestoringOpenClawData]);
+  const memoryAgentOptions = useMemo(() => {
+    const mainAgent = agents.find((agent) => agent.id === AgentId.Main);
+    const others = agents.filter((agent) => agent.id !== AgentId.Main);
+    return [
+      {
+        id: AgentId.Main,
+        name: mainAgent?.name?.trim() || i18nService.t('coworkMemoryMainAgentLabel'),
+      },
+      ...others.map((agent) => ({
+        id: agent.id,
+        name: agent.name?.trim() || agent.id,
+      })),
+    ];
+  }, [agents]);
 
   const loadCoworkMemoryData = useCallback(async () => {
     setCoworkMemoryListLoading(true);
     try {
+      const effectiveStatus =
+        coworkMemoryAgentId === AgentId.Main
+          ? coworkMemoryStatusFilter
+          : CoworkMemoryStatusFilter.Created;
+      const includeDeleted =
+        coworkMemoryAgentId === AgentId.Main
+        && (effectiveStatus === CoworkMemoryStatusFilter.All
+          || effectiveStatus === CoworkMemoryStatusFilter.Deleted);
       const [entries, stats] = await Promise.all([
         coworkService.listMemoryEntries({
+          agentId: coworkMemoryAgentId,
           query: coworkMemoryQuery.trim() || undefined,
+          status: effectiveStatus,
+          includeDeleted,
         }),
-        coworkService.getMemoryStats(),
+        coworkService.getMemoryStats({ agentId: coworkMemoryAgentId }),
       ]);
       setCoworkMemoryEntries(entries);
       setCoworkMemoryStats(stats);
@@ -3176,11 +2999,18 @@ const Settings: React.FC<SettingsProps> = ({
       console.error('Failed to load cowork memory data:', loadError);
       setCoworkMemoryEntries([]);
       setCoworkMemoryStats(null);
+      setError(
+        loadError instanceof Error && loadError.message
+          ? loadError.message
+          : i18nService.t('coworkMemoryLoadFailed'),
+      );
     } finally {
       setCoworkMemoryListLoading(false);
     }
   }, [
+    coworkMemoryAgentId,
     coworkMemoryQuery,
+    coworkMemoryStatusFilter,
   ]);
 
   useEffect(() => {
@@ -3188,64 +3018,135 @@ const Settings: React.FC<SettingsProps> = ({
     void loadCoworkMemoryData();
   }, [activeTab, loadCoworkMemoryData]);
 
+  const visibleLegacyDreamDiaries = useMemo(
+    () => getVisibleLegacyDreamDiaries(legacyDreamDiary),
+    [legacyDreamDiary],
+  );
+
+  const loadLegacyDreamDiary = useCallback(async () => {
+    setLegacyDreamDiaryLoading(true);
+    setLegacyDreamDiaryError(null);
+    try {
+      const diary = await coworkService.getDreamingDiary();
+      setLegacyDreamDiary(diary);
+    } catch (loadError) {
+      console.error('Failed to load historical dream diary:', loadError);
+      setLegacyDreamDiaryError(
+        loadError instanceof Error ? loadError.message : i18nService.t('coworkDreamingDiaryLoadError'),
+      );
+    } finally {
+      setLegacyDreamDiaryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'coworkMemory') return;
+    void loadLegacyDreamDiary();
+  }, [activeTab, loadLegacyDreamDiary]);
+
+  useEffect(() => {
+    if (memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length === 0) {
+      setMemoryTab(MemorySubTab.Entries);
+    }
+  }, [memoryTab, visibleLegacyDreamDiaries.length]);
+
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
     setCoworkMemoryDraftText('');
+    setCoworkMemoryModalError(null);
     setShowMemoryModal(false);
+  };
+
+  const handleSelectCoworkMemoryAgent = (nextAgentId: string) => {
+    setCoworkMemoryAgentId(nextAgentId);
+    setCoworkMemoryExpandedIds(new Set());
+    setCoworkMemoryRawError(null);
+    setCoworkMemoryRawMode(false);
+    if (nextAgentId !== AgentId.Main) {
+      setCoworkMemoryStatusFilter(CoworkMemoryStatusFilter.Created);
+    }
   };
 
   const handleSaveCoworkMemoryEntry = async () => {
     const text = coworkMemoryDraftText.trim();
     if (!text) return;
 
+    setError(null);
+    setCoworkMemoryModalError(null);
     setCoworkMemoryListLoading(true);
     try {
       const operation = coworkMemoryEditingId ? 'updated' : 'created';
       if (coworkMemoryEditingId) {
         await coworkService.updateMemoryEntry({
+          agentId: coworkMemoryAgentId,
           id: coworkMemoryEditingId,
           text,
         });
       } else {
         await coworkService.createMemoryEntry({
+          agentId: coworkMemoryAgentId,
           text,
         });
       }
       resetCoworkMemoryEditor();
-      await loadCoworkMemoryData();
+      if (
+        operation === 'created'
+        && (coworkMemoryStatusFilter === CoworkMemoryStatusFilter.Deleted
+          || coworkMemoryStatusFilter === CoworkMemoryStatusFilter.Stale)
+      ) {
+        setCoworkMemoryStatusFilter(CoworkMemoryStatusFilter.Created);
+      } else {
+        await loadCoworkMemoryData();
+      }
       reportMemoryEntryChanged(
         operation,
         operation === 'created'
-          ? (coworkMemoryStats?.total ?? coworkMemoryEntries.length) + 1
-          : coworkMemoryStats?.total,
+          ? (coworkMemoryStats?.created ?? coworkMemoryEntries.length) + 1
+          : coworkMemoryStats?.created,
       );
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : i18nService.t('coworkMemoryCrudSaveFailed'));
+      const message =
+        saveError instanceof Error && saveError.message
+          ? saveError.message
+          : i18nService.t('coworkMemoryCrudSaveFailed');
+      setCoworkMemoryModalError(message);
+      setError(message);
     } finally {
       setCoworkMemoryListLoading(false);
     }
   };
 
   const handleEditCoworkMemoryEntry = (entry: CoworkUserMemoryEntry) => {
+    if (entry.isLegacyReadOnly) return;
+    setCoworkMemoryModalError(null);
     setCoworkMemoryEditingId(entry.id);
     setCoworkMemoryDraftText(entry.text);
     setShowMemoryModal(true);
   };
 
   const handleDeleteCoworkMemoryEntry = async (entry: CoworkUserMemoryEntry) => {
+    if (entry.isLegacyReadOnly) return;
+    setError(null);
     setCoworkMemoryListLoading(true);
     try {
-      await coworkService.deleteMemoryEntry({ id: entry.id });
+      await coworkService.deleteMemoryEntry({
+        agentId: coworkMemoryAgentId,
+        id: entry.id,
+      });
       if (coworkMemoryEditingId === entry.id) {
         resetCoworkMemoryEditor();
       }
       await loadCoworkMemoryData();
       reportMemoryEntryChanged(
         'deleted',
-        Math.max(0, (coworkMemoryStats?.total ?? coworkMemoryEntries.length) - 1),
+        Math.max(0, (coworkMemoryStats?.created ?? coworkMemoryEntries.length) - 1),
       );
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : i18nService.t('coworkMemoryCrudDeleteFailed'));
+      setError(
+        deleteError instanceof Error && deleteError.message
+          ? deleteError.message
+          : i18nService.t('coworkMemoryCrudDeleteFailed'),
+      );
     } finally {
       setCoworkMemoryListLoading(false);
     }
@@ -3258,7 +3159,8 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleEnterCoworkMemoryRawMode = async () => {
     setError(null);
-    const content = await coworkService.readMemoryFileRaw();
+    setCoworkMemoryRawError(null);
+    const content = await coworkService.readMemoryFileRaw({ agentId: coworkMemoryAgentId });
     if (content === null) {
       setError(i18nService.t('coworkMemoryRawLoadFailed'));
       return;
@@ -3270,11 +3172,16 @@ const Settings: React.FC<SettingsProps> = ({
   const handleSaveCoworkMemoryRaw = async () => {
     if (coworkMemoryRawSaving) return;
     setError(null);
+    setCoworkMemoryRawError(null);
     setCoworkMemoryRawSaving(true);
     try {
-      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText);
+      const result = await coworkService.writeMemoryFileRaw(coworkMemoryRawText, {
+        agentId: coworkMemoryAgentId,
+      });
       if (!result.success) {
-        setError(result.error || i18nService.t('coworkMemoryRawSaveFailed'));
+        const message = result.error || i18nService.t('coworkMemoryRawSaveFailed');
+        setCoworkMemoryRawError(message);
+        setError(message);
         return;
       }
       setCoworkMemoryRawMode(false);
@@ -3428,20 +3335,14 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       const normalizedProviders = normalizeProvidersForSettingsSave(providers);
       const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
-      const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig({
-        ...browserWebAccess,
-        browserEnabled: true,
-        profileMode: defaultBrowserWebAccessConfig.profileMode,
-        followGlobalProxy: defaultBrowserWebAccessConfig.followGlobalProxy,
-        snapshotMode: defaultBrowserWebAccessConfig.snapshotMode,
-        executablePath: undefined,
-        cdpUrl: undefined,
-        attachOnly: undefined,
-        remoteCdpTimeoutMs: undefined,
-        remoteCdpHandshakeTimeoutMs: undefined,
-        extraArgs: [],
-        webFetch: defaultBrowserWebAccessConfig.webFetch,
-      });
+      if (
+        browserWebAccess.displayMode === BrowserDisplayMode.External
+        && browserWebAccess.cdpUrl?.trim()
+        && !normalizeBrowserCdpUrl(browserWebAccess.cdpUrl)
+      ) {
+        throw new Error(i18nService.t('browserCdpUrlInvalid'));
+      }
+      const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig(browserWebAccess);
       const previousConfig = configService.getConfig();
       const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
       const previousShortcuts: ShortcutConfig = {
@@ -3451,11 +3352,10 @@ const Settings: React.FC<SettingsProps> = ({
       const previousProviders = previousConfig.providers
         ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
         : normalizedProviders;
-      const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
       const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? false;
       const previousOpenClawSkillReviewEnabled = coworkConfig.openClawSkillReviewEnabled ?? false;
       const previousOpenClawMemoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled ?? false;
-      const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
+      const previousAgentEngine = coworkConfig.agentEngine || 'dsh';
       const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
         || OpenClawSessionKeepAliveValues.ThirtyDays;
       const previousMemorySettings = {
@@ -3505,7 +3405,7 @@ const Settings: React.FC<SettingsProps> = ({
         FontPreferences.CodeFontSizeMin,
         FontPreferences.CodeFontSizeMax,
       );
-      let savedPluginPendingChanges: PluginPendingChanges | null = null;
+      // Legacy OpenClaw plugin batch-save removed; DSH ecosystem manages plugins directly.
 
       if (quickPanelShortcutDraft !== null) {
         const result = await window.electron.desktopCompanion.setPreferences({ shortcut: quickPanelShortcutDraft });
@@ -3525,7 +3425,6 @@ const Settings: React.FC<SettingsProps> = ({
         language,
         artifactAutoPreviewEnabled,
         useSystemProxy,
-        sqliteAutoBackupEnabled,
         usageAnalyticsEnabled,
         notificationSettings: normalizeNotificationSettings({
           taskCompletionNotificationMode,
@@ -3605,7 +3504,6 @@ const Settings: React.FC<SettingsProps> = ({
           agentEngine: coworkAgentEngine,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
-          skipMissedJobs,
           openClawHeartbeatEnabled,
           openClawSkillReviewEnabled,
           openClawMemoryFlushEnabled,
@@ -3640,16 +3538,6 @@ const Settings: React.FC<SettingsProps> = ({
         throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
       }
 
-      // Batch save plugin changes (toggles + configs) if any pending
-      if (activeTab === 'plugins' && pluginsSettingsRef.current) {
-        const pendingChanges = pluginsSettingsRef.current.getPendingChanges();
-        if (pendingChanges) {
-          await window.electron?.plugins.batchSave(pendingChanges);
-          savedPluginPendingChanges = pendingChanges;
-          pluginsSettingsRef.current.resetDirty();
-        }
-      }
-
       // Decision model edits save with the dialog, so switching the tool on
       // or off restarts the gateway once, on Save, rather than per field.
       if (decisionModelDraftRef.current) {
@@ -3671,13 +3559,6 @@ const Settings: React.FC<SettingsProps> = ({
         if ((previousConfig.useSystemProxy ?? false) !== useSystemProxy) {
           reportGeneralSettingChanged('useSystemProxy', useSystemProxy, previousConfig.useSystemProxy ?? false);
         }
-        if ((previousConfig.sqliteAutoBackupEnabled === true) !== sqliteAutoBackupEnabled) {
-          reportGeneralSettingChanged(
-            'sqliteAutoBackupEnabled',
-            sqliteAutoBackupEnabled,
-            previousConfig.sqliteAutoBackupEnabled === true,
-          );
-        }
         if (previousNotificationSettings.taskCompletionNotificationMode !== taskCompletionNotificationMode) {
           reportGeneralSettingChanged(
             'taskCompletionNotificationMode',
@@ -3698,9 +3579,6 @@ const Settings: React.FC<SettingsProps> = ({
             questionNotificationsEnabled,
             previousNotificationSettings.questionNotificationsEnabled,
           );
-        }
-        if (previousSkipMissedJobs !== skipMissedJobs) {
-          reportGeneralSettingChanged('skipMissedJobs', skipMissedJobs, previousSkipMissedJobs);
         }
         if (previousConfig.theme !== theme) {
           reportAppearanceSettingChanged('theme', theme, previousConfig.theme);
@@ -3773,10 +3651,6 @@ const Settings: React.FC<SettingsProps> = ({
         if (shortcutSettingsSummary) {
           reportShortcutSettingChanged(shortcutSettingsSummary);
         }
-        const pluginSettingsSummary = buildPluginSettingsAnalyticsSummary(savedPluginPendingChanges);
-        if (pluginSettingsSummary) {
-          reportPluginSettingsSaved(pluginSettingsSummary);
-        }
         const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
           previousProviders,
           normalizedProviders,
@@ -3817,21 +3691,15 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   const handleTabChange = useCallback((tab: TabType) => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
-    if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => doTabChange(tab))) {
-      return;
-    }
+    if (dataMigration.isBusy) return;
     doTabChange(tab);
-  }, [activeTab, doTabChange, isBackingUpOpenClawData, isRestoringOpenClawData]);
+  }, [dataMigration.isBusy, doTabChange]);
 
-  // Guarded close: check plugin dirty state before closing
+  // Guarded close: prevent closing while backup/restore is active
   const guardedClose = useCallback(() => {
-    if (isBackingUpOpenClawData || isRestoringOpenClawData) return;
-    if (activeTab === 'plugins' && pluginsSettingsRef.current?.guardLeave(() => onClose())) {
-      return;
-    }
+    if (dataMigration.isBusy) return;
     onClose();
-  }, [activeTab, isBackingUpOpenClawData, isRestoringOpenClawData, onClose]);
+  }, [dataMigration.isBusy, onClose]);
 
   const shortcutCommandMap = useMemo(
     () => new Map(SHORTCUT_COMMANDS.map(command => [command.key, command])),
@@ -4157,8 +4025,7 @@ const Settings: React.FC<SettingsProps> = ({
   // Dialogs rendered through Modal handle Escape themselves.
   const handleEscape = () => {
     const resolution = resolveSettingsEscapeAction({
-      isBlocked: isBackingUpOpenClawData
-        || isRestoringOpenClawData
+      isBlocked: dataMigration.isBusy
         || isRepairingOpenClaw
         || isCleaningTempStorage
         || isShortcutInputActive(),
@@ -4169,8 +4036,8 @@ const Settings: React.FC<SettingsProps> = ({
         { isOpen: showOpenClawRepairConfirm, dismiss: () => setShowOpenClawRepairConfirm(false) },
         { isOpen: showTempCleanConfirm, dismiss: () => setShowTempCleanConfirm(false) },
         {
-          isOpen: showOpenClawDataRestoreConfirm,
-          dismiss: () => setShowOpenClawDataRestoreConfirm(false),
+          isOpen: dataMigration.hasOpenModal,
+          dismiss: () => dataMigration.dismissTopModal(),
         },
         { isOpen: showMemoryModal, dismiss: resetCoworkMemoryEditor },
       ],
@@ -4394,33 +4261,26 @@ const Settings: React.FC<SettingsProps> = ({
     importInputRef.current?.click();
   };
 
-  // 渲染标签页
-  const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = (() => {
-    const allTabs = [
-      { key: 'general' as TabType,        label: i18nService.t('general'),        icon: <SettingsSlidersIcon className="h-5 w-5" /> },
-      { key: 'appearance' as TabType,     label: i18nService.t('appearance'),     icon: <SunIcon className="h-5 w-5" /> },
-      { key: 'desktopCompanion' as TabType, label: i18nService.t('desktopCompanionTitle'), icon: <FloatingOrbTabIcon className="h-5 w-5" /> },
-      { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
-      { key: 'model' as TabType,          label: i18nService.t('settingsCustomModel'), icon: <CubeIcon className="h-5 w-5" /> },
-      { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
-      { key: 'browserWebAccess' as TabType, label: i18nService.t('browserWebAccessTab'), icon: <GlobeAltIcon className="h-5 w-5" /> },
-      { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
-      { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
-      { key: 'coworkDreaming' as TabType, label: i18nService.t('coworkMemoryTabDreaming'), icon: <DreamingTabIcon className="h-5 w-5" /> },
-      { key: 'plugins' as TabType,        label: i18nService.t('pluginsTab'),     icon: <PlugIcon className="h-5 w-5" /> },
-      { key: 'experimental' as TabType,   label: i18nService.t('experimentalTab'), icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3v6.4c0 .35-.09.68-.27.98l-4.4 7.34A2 2 0 0 0 6.8 20.75h10.4a2 2 0 0 0 1.72-3.03l-4.4-7.34a1.9 1.9 0 0 1-.27-.98V3M8.25 3h7.5M7.5 14.25h9" /></svg> },
-      { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
-      { key: 'help' as TabType,           label: i18nService.t('helpAndFeedback'), icon: <QuestionMarkCircleIcon className="h-5 w-5" /> },
-      { key: 'about' as TabType,          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
+  // 渲染标签页（按组织后的平铺顺序展示，兼容企业配置隐藏指定页签）
+  const sidebarTabs = (() => {
+    const allTabs: Array<{ key: TabType; label: string; icon: React.ReactNode }> = [
+      { key: SettingsTabId.General,          label: i18nService.t('general'),               icon: <SettingsSlidersIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Appearance,       label: i18nService.t('appearance'),            icon: <SunIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.DesktopCompanion, label: i18nService.t('desktopCompanionTitle'), icon: <FloatingOrbTabIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Shortcuts,        label: i18nService.t('shortcuts'),             icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+      { key: SettingsTabId.Model,            label: i18nService.t('settingsCustomModel'),   icon: <CubeIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.CoworkMemory,     label: i18nService.t('coworkMemoryTitle'),     icon: <BrainIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.BrowserWebAccess, label: i18nService.t('browserWebAccessTab'),   icon: <GlobeAltIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Im,               label: i18nService.t('imBot'),                 icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Email,            label: i18nService.t('emailTab'),              icon: <EnvelopeIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Plugins,          label: i18nService.t('pluginsTab'),            icon: <PlugIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.DataPrivacy,      label: i18nService.t('dataPrivacyTab'),        icon: <ShieldCheckIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.Experimental,     label: i18nService.t('experimentalTab'),       icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3v6.4c0 .35-.09.68-.27.98l-4.4 7.34A2 2 0 0 0 6.8 20.75h10.4a2 2 0 0 0 1.72-3.03l-4.4-7.34a1.9 1.9 0 0 1-.27-.98V3M8.25 3h7.5M7.5 14.25h9" /></svg> },
+      { key: SettingsTabId.Help,             label: i18nService.t('helpAndFeedback'),       icon: <QuestionMarkCircleIcon className="h-5 w-5" /> },
+      { key: SettingsTabId.About,            label: i18nService.t('about'),                 icon: <InformationCircleIcon className="h-5 w-5" /> },
     ];
-    // Filter out tabs hidden by enterprise config
-    // Filter out tabs with 'hide' action in enterprise config
-    // e.g., ui: { "settings.im": "hide" } → hide the 'im' tab
-    const ui = enterpriseConfig?.ui;
-    if (ui) {
-      return allTabs.filter(tab => ui[`settings.${tab.key}`] !== 'hide');
-    }
-    return allTabs;
+    const tabsByKey = new Map(allTabs.map((tab) => [tab.key, tab]));
+    return filterVisibleSettingsTabs(tabsByKey, enterpriseConfig?.ui);
   })();
 
   const activeTabLabel = useMemo(() => {
@@ -4674,309 +4534,161 @@ const Settings: React.FC<SettingsProps> = ({
     </div>
   );
 
+  const handleToggleAutoLaunch = async () => {
+    if (isUpdatingAutoLaunch) return;
+    const next = !autoLaunch;
+    setIsUpdatingAutoLaunch(true);
+    try {
+      console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
+      const result = await window.electron.autoLaunch.set(next);
+      console.log(
+        `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
+      );
+      if (result.success) {
+        const previous = autoLaunch;
+        const actualEnabled = result.enabled ?? next;
+        setAutoLaunchState(actualEnabled);
+        reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
+      } else {
+        if (typeof result.enabled === 'boolean') {
+          setAutoLaunchState(result.enabled);
+        }
+        setError(getAutoLaunchErrorMessage(result.errorCode));
+      }
+    } catch (err) {
+      console.error('Failed to set auto-launch:', err);
+      setError(i18nService.t('autoLaunchUpdateFailed'));
+    } finally {
+      setIsUpdatingAutoLaunch(false);
+    }
+  };
+
+  const handleTogglePreventSleep = async () => {
+    if (isUpdatingPreventSleep) return;
+    const next = !preventSleep;
+    setIsUpdatingPreventSleep(true);
+    try {
+      const result = await window.electron.preventSleep.set(next);
+      if (result.success) {
+        const previous = preventSleep;
+        setPreventSleepState(next);
+        reportGeneralSettingChanged('preventSleep', next, previous);
+      } else {
+        setError(result.error || 'Failed to update prevent-sleep setting');
+      }
+    } catch (err) {
+      console.error('Failed to set prevent-sleep:', err);
+      setError('Failed to update prevent-sleep setting');
+    } finally {
+      setIsUpdatingPreventSleep(false);
+    }
+  };
+
+  const handleToggleQuitConfirmation = async () => {
+    if (isUpdatingQuitConfirmation) return;
+    const next = !quitConfirmation;
+    setIsUpdatingQuitConfirmation(true);
+    try {
+      const result = await window.electron.quitConfirmation.set(next);
+      if (result.success) {
+        const previous = quitConfirmation;
+        setQuitConfirmationState(next);
+        reportGeneralSettingChanged('quitConfirmation', next, previous);
+      } else {
+        setError(i18nService.t('quitConfirmationUpdateFailed'));
+      }
+    } catch (err) {
+      console.error('Failed to set quit-confirmation:', err);
+      setError(i18nService.t('quitConfirmationUpdateFailed'));
+    } finally {
+      setIsUpdatingQuitConfirmation(false);
+    }
+  };
+
   const renderTabContent = () => {
     switch(activeTab) {
-      case 'experimental':
+      case SettingsTabId.Experimental:
         return (
           <div className="space-y-8">
-            <DshExperimentalSettings />
             <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
           </div>
         );
-      case 'general':
+      case SettingsTabId.General:
         return (
-          <div className="space-y-8">
-            {/* Group: General basics */}
-            <SettingsGroup title={i18nService.t('settingsGroupBasics')}>
-              <SettingsRow>
-                <div className="flex items-center justify-between gap-4">
-                  <h4 className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                    {i18nService.t('language')}
-                  </h4>
-                  <div className="w-[140px] shrink-0">
-                    <ThemedSelect
-                      id="language"
-                      value={language}
-                      onChange={(value) => {
-                        const nextLanguage = value as LanguageType;
-                        setLanguage(nextLanguage);
-                        i18nService.setLanguage(nextLanguage, { persist: false });
-                      }}
-                      options={[
-                        { value: 'zh', label: i18nService.t('chinese') },
-                        { value: 'en', label: i18nService.t('english') }
-                      ]}
-                    />
-                  </div>
-                </div>
-              </SettingsRow>
+          <GeneralSettingsSection
+            language={language}
+            onLanguageChange={(nextLanguage) => {
+              setLanguage(nextLanguage);
+              i18nService.setLanguage(nextLanguage, { persist: false });
+            }}
+            artifactAutoPreviewEnabled={artifactAutoPreviewEnabled}
+            onToggleArtifactAutoPreview={() => {
+              setArtifactAutoPreviewEnabled((previous) => !previous);
+            }}
+            taskCompletionNotificationMode={taskCompletionNotificationMode}
+            onTaskCompletionNotificationModeChange={setTaskCompletionNotificationMode}
+            attentionNotificationsEnabled={permissionNotificationsEnabled || questionNotificationsEnabled}
+            onToggleAttentionNotifications={() => {
+              const nextEnabled = !(permissionNotificationsEnabled || questionNotificationsEnabled);
+              setPermissionNotificationsEnabled(nextEnabled);
+              setQuestionNotificationsEnabled(nextEnabled);
+            }}
+            autoLaunch={autoLaunch}
+            isUpdatingAutoLaunch={isUpdatingAutoLaunch}
+            onToggleAutoLaunch={handleToggleAutoLaunch}
+            preventSleep={preventSleep}
+            isUpdatingPreventSleep={isUpdatingPreventSleep}
+            onTogglePreventSleep={handleTogglePreventSleep}
+            quitConfirmation={quitConfirmation}
+            isUpdatingQuitConfirmation={isUpdatingQuitConfirmation}
+            onToggleQuitConfirmation={handleToggleQuitConfirmation}
+            useSystemProxy={useSystemProxy}
+            onToggleUseSystemProxy={() => {
+              setUseSystemProxy((prev) => !prev);
+            }}
+          />
+        );
 
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('artifactAutoPreviewEnabled')}
-                  description={i18nService.t('artifactAutoPreviewEnabledDescription')}
-                  checked={artifactAutoPreviewEnabled}
-                  onToggle={() => {
-                    setArtifactAutoPreviewEnabled((previous) => !previous);
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('autoLaunch')}
-                  description={i18nService.t('autoLaunchDescription')}
-                  checked={autoLaunch}
-                  disabled={isUpdatingAutoLaunch}
-                  onToggle={async () => {
-                    if (isUpdatingAutoLaunch) return;
-                    const next = !autoLaunch;
-                    setIsUpdatingAutoLaunch(true);
-                    try {
-                      console.log(`[Renderer][Settings] updating auto-launch setting: requested=${next}`);
-                      const result = await window.electron.autoLaunch.set(next);
-                      console.log(
-                        `[Renderer][Settings] auto-launch update result: success=${result.success}, enabled=${result.enabled ?? 'unknown'}, error=${result.error ?? 'none'}`,
-                      );
-                      if (result.success) {
-                        const previous = autoLaunch;
-                        const actualEnabled = result.enabled ?? next;
-                        setAutoLaunchState(actualEnabled);
-                        reportGeneralSettingChanged('autoLaunch', actualEnabled, previous);
-                      } else {
-                        if (typeof result.enabled === 'boolean') {
-                          setAutoLaunchState(result.enabled);
-                        }
-                        setError(getAutoLaunchErrorMessage(result.errorCode));
-                      }
-                    } catch (err) {
-                      console.error('Failed to set auto-launch:', err);
-                      setError(i18nService.t('autoLaunchUpdateFailed'));
-                    } finally {
-                      setIsUpdatingAutoLaunch(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('preventSleep')}
-                  description={i18nService.t('preventSleepDescription')}
-                  checked={preventSleep}
-                  disabled={isUpdatingPreventSleep}
-                  onToggle={async () => {
-                    if (isUpdatingPreventSleep) return;
-                    const next = !preventSleep;
-                    setIsUpdatingPreventSleep(true);
-                    try {
-                      const result = await window.electron.preventSleep.set(next);
-                      if (result.success) {
-                        const previous = preventSleep;
-                        setPreventSleepState(next);
-                        reportGeneralSettingChanged('preventSleep', next, previous);
-                      } else {
-                        setError(result.error || 'Failed to update prevent-sleep setting');
-                      }
-                    } catch (err) {
-                      console.error('Failed to set prevent-sleep:', err);
-                      setError('Failed to update prevent-sleep setting');
-                    } finally {
-                      setIsUpdatingPreventSleep(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('quitConfirmation')}
-                  description={i18nService.t('quitConfirmationDescription')}
-                  checked={quitConfirmation}
-                  disabled={isUpdatingQuitConfirmation}
-                  onToggle={async () => {
-                    if (isUpdatingQuitConfirmation) return;
-                    const next = !quitConfirmation;
-                    setIsUpdatingQuitConfirmation(true);
-                    try {
-                      const result = await window.electron.quitConfirmation.set(next);
-                      if (result.success) {
-                        const previous = quitConfirmation;
-                        setQuitConfirmationState(next);
-                        reportGeneralSettingChanged('quitConfirmation', next, previous);
-                      } else {
-                        setError(i18nService.t('quitConfirmationUpdateFailed'));
-                      }
-                    } catch (err) {
-                      console.error('Failed to set quit-confirmation:', err);
-                      setError(i18nService.t('quitConfirmationUpdateFailed'));
-                    } finally {
-                      setIsUpdatingQuitConfirmation(false);
-                    }
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('useSystemProxy')}
-                  description={i18nService.t('useSystemProxyDescription')}
-                  checked={useSystemProxy}
-                  onToggle={() => {
-                    setUseSystemProxy((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-
-            {/* Group: Notifications */}
-            <SettingsGroup
-              title={i18nService.t('settingsGroupNotifications')}
-              footer={
-                (window.electron.platform === 'win32' ||
-                  (window.electron.platform === 'darwin' && !import.meta.env.DEV)) && (
-                  <p className="px-1 text-xs text-secondary">
-                    {i18nService.t('notificationSystemPermissionHint')}{' '}
-                    <button
-                      type="button"
-                      className="text-primary hover:underline"
-                      onClick={() => {
-                        void window.electron.appInfo.openSystemNotificationSettings?.();
-                      }}
-                    >
-                      {i18nService.t('openSystemNotificationSettings')}
-                    </button>
-                  </p>
-                )
-              }
-            >
-              <SettingsRow>
-                <div>
-                  <div className="flex items-center justify-between gap-4">
-                    <h4 className={`min-w-0 flex-1 ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                      {i18nService.t('taskCompletionNotificationMode')}
-                    </h4>
-                    <div className="w-[180px] shrink-0">
-                      <ThemedSelect
-                        id="task-completion-notification-mode"
-                        value={taskCompletionNotificationMode}
-                        onChange={(value) => {
-                          setTaskCompletionNotificationMode(value as TaskCompletionNotificationMode);
-                        }}
-                        options={[
-                          {
-                            value: TaskCompletionNotificationMode.Always,
-                            label: i18nService.t('taskCompletionNotificationModeAlways'),
-                          },
-                          {
-                            value: TaskCompletionNotificationMode.Unfocused,
-                            label: i18nService.t('taskCompletionNotificationModeUnfocused'),
-                          },
-                          {
-                            value: TaskCompletionNotificationMode.Off,
-                            label: i18nService.t('taskCompletionNotificationModeOff'),
-                          },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                  <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                    {i18nService.t('taskCompletionNotificationModeDescription')}
-                  </p>
-                </div>
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('permissionNotifications')}
-                  description={i18nService.t('permissionNotificationsDescription')}
-                  checked={permissionNotificationsEnabled || questionNotificationsEnabled}
-                  onToggle={() => {
-                    const nextEnabled = !(permissionNotificationsEnabled || questionNotificationsEnabled);
-                    setPermissionNotificationsEnabled(nextEnabled);
-                    setQuestionNotificationsEnabled(nextEnabled);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-
-            {/* Group: Scheduled tasks */}
-            <SettingsGroup title={i18nService.t('scheduledTasks')}>
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('skipMissedJobs')}
-                  description={i18nService.t('skipMissedJobsDescription')}
-                  checked={skipMissedJobs}
-                  onToggle={() => {
-                    setSkipMissedJobs((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-
-            {/* Group: Data & privacy */}
-            <SettingsGroup title={i18nService.t('settingsGroupDataPrivacy')}>
-              <SettingsRow>
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <h4 className={`${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-                      {i18nService.t('coworkTempUsageTitle')}
-                    </h4>
-                    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                      {tempStorageUsageBytes === null
-                        ? i18nService.t('coworkTempUsageLoading')
-                        : i18nService.t('coworkTempUsageLabel')
-                            .replace('{size}', formatBackupSize(tempStorageUsageBytes) || '0 B')
-                            .replace(
-                              '{cleanable}',
-                              formatBackupSize(tempStorageCleanableBytes ?? 0) || '0 B',
-                            )}
-                    </p>
-                    <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-                      {i18nService.t('coworkTempUsageManualNote')}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleOpenTempCleanConfirm();
-                    }}
-                    disabled={isLoadingTempCleanPreview || isCleaningTempStorage || tempStorageCleanableBytes === 0}
-                    className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isLoadingTempCleanPreview
-                      ? i18nService.t('coworkTempPreviewLoading')
-                      : i18nService.t('coworkTempCleanNow')}
-                  </button>
-                </div>
-                {tempStorageCleanResult && (
-                  <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>{tempStorageCleanResult}</p>
-                )}
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('sqliteAutoBackupEnabled')}
-                  description={i18nService.t('sqliteAutoBackupEnabledDescription')}
-                  checked={sqliteAutoBackupEnabled}
-                  onToggle={() => {
-                    setSqliteAutoBackupEnabled((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-
-              <SettingsRow>
-                <SettingsToggleRow
-                  title={i18nService.t('usageAnalyticsEnabled')}
-                  description={i18nService.t('usageAnalyticsEnabledDescription')}
-                  checked={usageAnalyticsEnabled}
-                  onToggle={() => {
-                    setUsageAnalyticsEnabled((prev) => !prev);
-                  }}
-                />
-              </SettingsRow>
-            </SettingsGroup>
-          </div>
+      case SettingsTabId.DataPrivacy:
+        return (
+          <DataPrivacySettingsSection
+            tempStorageUsageBytes={tempStorageUsageBytes}
+            tempStorageCleanableBytes={tempStorageCleanableBytes}
+            tempStorageCleanResult={tempStorageCleanResult}
+            isLoadingTempCleanPreview={isLoadingTempCleanPreview}
+            isCleaningTempStorage={isCleaningTempStorage}
+            formatSize={formatBackupSize}
+            onOpenTempCleanConfirm={() => {
+              void handleOpenTempCleanConfirm();
+            }}
+            dataBackupResult={dataMigration.backupResult}
+            lastRestoreResult={dataMigration.lastRestoreResult}
+            pluginInstallOutcomes={dataMigration.pluginInstallOutcomes}
+            isBackingUpData={dataMigration.isBackingUp}
+            isRestoringData={dataMigration.isRestoring}
+            isPreviewingData={dataMigration.isPreviewing}
+            isReinstallingPlugins={dataMigration.isReinstallingPlugins}
+            onRevealDataBackup={() => {
+              void dataMigration.revealBackupResult();
+            }}
+            onRevealRollback={() => {
+              void dataMigration.revealRollbackPath();
+            }}
+            onReinstallPlugins={() => {
+              void dataMigration.reinstallMissingPlugins();
+            }}
+            onDismissRestoreResult={dataMigration.dismissLastRestoreResult}
+            onDataBackup={() => {
+              void dataMigration.runBackup();
+            }}
+            onOpenDataRestoreConfirm={() => {
+              void dataMigration.startRestoreFlow();
+            }}
+            usageAnalyticsEnabled={usageAnalyticsEnabled}
+            onToggleUsageAnalytics={() => {
+              setUsageAnalyticsEnabled((prev) => !prev);
+            }}
+          />
         );
 
       case 'appearance':
@@ -5196,26 +4908,24 @@ const Settings: React.FC<SettingsProps> = ({
                       </button>
                     </div>
 
-                    <OpenClawUserConfigRow />
-
-                    {openClawDataBackupResult && (
+                    {dataMigration.backupResult && (
                       <div className={`flex flex-col gap-3 p-4 ${SETTINGS_ITEM_TITLE_TEXT} sm:flex-row sm:items-center sm:justify-between`}>
                         <div className="min-w-0 space-y-1">
                           <div className="font-medium text-foreground">
                             {i18nService.t('openClawDataBackupSavedTitle')}
                           </div>
                           <div className="break-all font-mono text-xs leading-5 text-secondary">
-                            {openClawDataBackupResult.path}
+                            {dataMigration.backupResult.path}
                           </div>
-                          {formatBackupSize(openClawDataBackupResult.sizeBytes) && (
+                          {formatBackupSize(dataMigration.backupResult.sizeBytes) && (
                             <div className="text-xs text-secondary">
-                              {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(openClawDataBackupResult.sizeBytes)}
+                              {i18nService.t('openClawDataBackupSize')}: {formatBackupSize(dataMigration.backupResult.sizeBytes)}
                             </div>
                           )}
                         </div>
                         <button
                           type="button"
-                          onClick={() => { void handleRevealOpenClawDataBackup(); }}
+                          onClick={() => { void dataMigration.revealBackupResult(); }}
                           className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised active:scale-[0.98]"
                         >
                           {i18nService.t('showInFolder')}
@@ -5237,19 +4947,17 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => { void handleOpenClawDataBackup(); }}
-                        disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
+                      <ManualDataMigrationAction
+                        onClick={() => { void dataMigration.runBackup(); }}
+                        disabled={dataMigration.isBusy || dataMigration.isPreviewing}
                       >
-                        {isBackingUpOpenClawData && (
+                        {dataMigration.isBackingUp && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
-                        {isBackingUpOpenClawData
+                        {dataMigration.isBackingUp
                           ? i18nService.t('openClawDataBackupRunning')
                           : i18nService.t('openClawDataBackupAction')}
-                      </button>
+                      </ManualDataMigrationAction>
                     </div>
 
                     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -5266,26 +4974,20 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowOpenClawDataRestoreConfirm(true)}
-                        disabled={isBackingUpOpenClawData || isRestoringOpenClawData}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98] sm:self-auto"
+                      <ManualDataMigrationAction
+                        onClick={() => { void dataMigration.startRestoreFlow(); }}
+                        disabled={dataMigration.isBusy || dataMigration.isPreviewing}
                       >
-                        {isRestoringOpenClawData && (
+                        {dataMigration.isRestoring && (
                           <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
                         )}
-                        {isRestoringOpenClawData
+                        {dataMigration.isRestoring
                           ? i18nService.t('openClawDataMigrationRunning')
                           : i18nService.t('openClawDataMigrationAction')}
-                      </button>
+                      </ManualDataMigrationAction>
                     </div>
                   </div>
                 </section>
-
-                {openClawEngineStatus?.dreamingRecovery && (
-                  <DreamingRecoveryNotice summary={openClawEngineStatus.dreamingRecovery} />
-                )}
 
                 {openClawRepairResult && (
                   <div className={`rounded-lg border px-3 py-3 text-sm ${openClawRepairResult.success
@@ -5329,9 +5031,11 @@ const Settings: React.FC<SettingsProps> = ({
         );
 
       case 'coworkMemory': {
-        const memoryTabs = [
-          { key: 'entries' as const, titleKey: 'coworkMemoryTabEntries' },
-          { key: 'embedding' as const, titleKey: 'coworkMemoryTabEmbedding' },
+        const memoryTabs: Array<{ key: MemorySubTab; titleKey: string }> = [
+          { key: MemorySubTab.Entries, titleKey: 'coworkMemoryTabEntries' },
+          ...(visibleLegacyDreamDiaries.length > 0
+            ? [{ key: MemorySubTab.LegacyDreamDiary, titleKey: 'coworkMemoryTabLegacyDreamDiary' }]
+            : []),
         ];
         const coworkMemoryGroups: Array<{ section?: string; entries: CoworkUserMemoryEntry[] }> = [];
         for (const entry of coworkMemoryEntries) {
@@ -5367,7 +5071,7 @@ const Settings: React.FC<SettingsProps> = ({
               ))}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
-              {memoryTab === 'entries' && (
+              {memoryTab === MemorySubTab.Entries && (
                 <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-1">
@@ -5399,19 +5103,91 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
 
                     <>
-                      {coworkMemoryStats && (
-                        <div className="text-xs text-secondary">
-                          {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
-                        </div>
-                      )}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        {coworkMemoryStats && (
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-secondary">
+                            <span>{`${i18nService.t('coworkMemoryActiveLabel')}: ${coworkMemoryStats.created}`}</span>
+                            {coworkMemoryAgentId === AgentId.Main && coworkMemoryStats.stale > 0 && (
+                              <span>{`${i18nService.t('coworkMemoryStatusInactive')}: ${coworkMemoryStats.stale}`}</span>
+                            )}
+                            {coworkMemoryAgentId === AgentId.Main && coworkMemoryStats.deleted > 0 && (
+                              <span>{`${i18nService.t('coworkMemoryStatusDeleted')}: ${coworkMemoryStats.deleted}`}</span>
+                            )}
+                            <span>{`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}</span>
+                          </div>
+                        )}
+                        {memoryAgentOptions.length > 1 && (
+                          <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                            <span>{i18nService.t('coworkMemoryAgentSelectorLabel')}</span>
+                            <select
+                              value={coworkMemoryAgentId}
+                              onChange={(event) => handleSelectCoworkMemoryAgent(event.target.value)}
+                              className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-foreground focus:outline-none focus:border-primary"
+                            >
+                              {memoryAgentOptions.map((agent) => (
+                                <option key={agent.id} value={agent.id}>
+                                  {agent.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </div>
 
-                      <input
-                        type="text"
-                        value={coworkMemoryQuery}
-                        onChange={(event) => setCoworkMemoryQuery(event.target.value)}
-                        placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
-                        className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
-                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          value={coworkMemoryQuery}
+                          onChange={(event) => setCoworkMemoryQuery(event.target.value)}
+                          placeholder={i18nService.t('coworkMemorySearchPlaceholder')}
+                          className="min-w-[200px] flex-1 rounded-lg border px-3 py-2 text-sm border-border bg-surface"
+                        />
+                        {coworkMemoryAgentId === AgentId.Main && (
+                          <div className="inline-flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs">
+                            {(
+                              [
+                                {
+                                  key: CoworkMemoryStatusFilter.Created,
+                                  label: i18nService.t('coworkMemoryStatusActive'),
+                                  count: coworkMemoryStats?.created,
+                                },
+                                {
+                                  key: CoworkMemoryStatusFilter.Stale,
+                                  label: i18nService.t('coworkMemoryStatusInactive'),
+                                  count: coworkMemoryStats?.stale,
+                                },
+                                {
+                                  key: CoworkMemoryStatusFilter.Deleted,
+                                  label: i18nService.t('coworkMemoryStatusDeleted'),
+                                  count: coworkMemoryStats?.deleted,
+                                },
+                                {
+                                  key: CoworkMemoryStatusFilter.All,
+                                  label: i18nService.t('coworkMemoryStatusAll'),
+                                  count: coworkMemoryStats?.total,
+                                },
+                              ] as const
+                            ).map((chip) => {
+                              const active = coworkMemoryStatusFilter === chip.key;
+                              return (
+                                <button
+                                  key={chip.key}
+                                  type="button"
+                                  onClick={() => setCoworkMemoryStatusFilter(chip.key)}
+                                  className={`rounded-md px-2.5 py-1 transition-colors ${
+                                    active
+                                      ? 'bg-primary text-white font-medium'
+                                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                                  }`}
+                                >
+                                  {chip.label}
+                                  {typeof chip.count === 'number' && chip.count > 0 ? ` (${chip.count})` : ''}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
 
                       <div className="rounded-lg border border-border">
                         {coworkMemoryListLoading ? (
@@ -5436,17 +5212,57 @@ const Settings: React.FC<SettingsProps> = ({
                                   const isLongMemoryText =
                                     entry.text.split('\n').length > 3 || entry.text.length > 240;
                                   const isMemoryTextExpanded = coworkMemoryExpandedIds.has(entry.id);
+                                  const isDeleted = entry.status === CoworkMemoryStatus.Deleted;
+                                  const isStale = entry.status === CoworkMemoryStatus.Stale;
+                                  const hasSourceBadge = Boolean(
+                                    entry.sourceLabel || (entry.sourceCount && entry.sourceCount > 0),
+                                  );
+                                  const hasMetaRow = isDeleted || isStale || hasSourceBadge || entry.isLegacyReadOnly;
                                   return (
                                     <div key={entry.id} className="group px-3 py-3 text-xs transition-colors hover:bg-surface-raised/60">
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="flex-1 min-w-0">
                                           <div
-                                            className={`text-foreground break-words whitespace-pre-wrap leading-relaxed ${
+                                            className={`break-words whitespace-pre-wrap leading-relaxed ${
+                                              isDeleted || entry.isLegacyReadOnly
+                                                ? 'text-secondary'
+                                                : 'text-foreground'
+                                            } ${
                                               isLongMemoryText && !isMemoryTextExpanded ? 'line-clamp-3' : ''
                                             }`}
                                           >
                                             {entry.text}
                                           </div>
+                                          {hasMetaRow && (
+                                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                              {isDeleted && (
+                                                <span className="inline-flex items-center rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                                                  {i18nService.t('coworkMemoryStatusDeleted')}
+                                                </span>
+                                              )}
+                                              {isStale && (
+                                                <span className="inline-flex items-center rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                                                  {i18nService.t('coworkMemoryStatusInactive')}
+                                                </span>
+                                              )}
+                                              {hasSourceBadge && (
+                                                <span className="inline-flex items-center rounded-md bg-surface-raised px-1.5 py-0.5 text-[10px] text-secondary">
+                                                  {`${i18nService.t('coworkMemorySourcePrefix')}: ${
+                                                    entry.sourceLabel || entry.sources?.latestRole || ''
+                                                  }${
+                                                    entry.sourceCount && entry.sourceCount > 1
+                                                      ? ` (${entry.sourceCount} ${i18nService.t('coworkMemorySourceCountSuffix')})`
+                                                      : ''
+                                                  }`}
+                                                </span>
+                                              )}
+                                              {entry.isLegacyReadOnly && (
+                                                <span className="inline-flex items-center rounded-md border border-border px-1.5 py-0.5 text-[10px] text-secondary">
+                                                  {i18nService.t('coworkMemoryLegacyReadOnlyBadge')}
+                                                </span>
+                                              )}
+                                            </div>
+                                          )}
                                           {isLongMemoryText && (
                                             <button
                                               type="button"
@@ -5457,27 +5273,29 @@ const Settings: React.FC<SettingsProps> = ({
                                             </button>
                                           )}
                                         </div>
-                                        <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleEditCoworkMemoryEntry(entry)}
-                                            title={i18nService.t('edit')}
-                                            aria-label={i18nService.t('edit')}
-                                            className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
-                                          >
-                                            <EditIcon className="h-4 w-4" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
-                                            title={i18nService.t('delete')}
-                                            aria-label={i18nService.t('delete')}
-                                            className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
-                                            disabled={coworkMemoryListLoading}
-                                          >
-                                            <TrashIcon className="h-4 w-4" />
-                                          </button>
-                                        </div>
+                                        {!entry.isLegacyReadOnly && (
+                                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleEditCoworkMemoryEntry(entry)}
+                                              title={i18nService.t('edit')}
+                                              aria-label={i18nService.t('edit')}
+                                              className="rounded-md p-1.5 text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
+                                            >
+                                              <EditIcon className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => { void handleDeleteCoworkMemoryEntry(entry); }}
+                                              title={i18nService.t('delete')}
+                                              aria-label={i18nService.t('delete')}
+                                              className="rounded-md p-1.5 text-secondary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60 transition-colors"
+                                              disabled={coworkMemoryListLoading}
+                                            >
+                                              <TrashIcon className="h-4 w-4" />
+                                            </button>
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -5523,6 +5341,14 @@ const Settings: React.FC<SettingsProps> = ({
                         autoFocus
                         className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 pt-1 pb-4 text-xs font-mono leading-relaxed text-foreground focus:outline-none"
                       />
+                      {coworkMemoryRawError && (
+                        <div className="px-5 pb-2">
+                          <ErrorMessage
+                            message={coworkMemoryRawError}
+                            onClose={() => setCoworkMemoryRawError(null)}
+                          />
+                        </div>
+                      )}
                       <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
                         <button
                           type="button"
@@ -5545,20 +5371,12 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               )}
 
-              {memoryTab === 'embedding' && (
-                <EmbeddingSettingsSection
-                  embeddingEnabled={embeddingEnabled}
-                  embeddingProvider={embeddingProvider}
-                  embeddingModel={embeddingModel}
-                  embeddingVectorWeight={embeddingVectorWeight}
-                  embeddingRemoteBaseUrl={embeddingRemoteBaseUrl}
-                  embeddingRemoteApiKey={embeddingRemoteApiKey}
-                  onEmbeddingEnabledChange={setEmbeddingEnabled}
-                  onEmbeddingProviderChange={setEmbeddingProvider}
-                  onEmbeddingModelChange={setEmbeddingModel}
-                  onEmbeddingVectorWeightChange={setEmbeddingVectorWeight}
-                  onEmbeddingRemoteBaseUrlChange={setEmbeddingRemoteBaseUrl}
-                  onEmbeddingRemoteApiKeyChange={setEmbeddingRemoteApiKey}
+              {memoryTab === MemorySubTab.LegacyDreamDiary && visibleLegacyDreamDiaries.length > 0 && (
+                <LegacyDreamDiaryViewer
+                  diaries={visibleLegacyDreamDiaries}
+                  loading={legacyDreamDiaryLoading}
+                  error={legacyDreamDiaryError}
+                  onRefresh={() => { void loadLegacyDreamDiary(); }}
                 />
               )}
 
@@ -5568,16 +5386,7 @@ const Settings: React.FC<SettingsProps> = ({
       }
 
       case 'coworkDreaming':
-        return (
-          <div className="min-h-full">
-            <DreamingSettingsSection
-              dreamingEnabled={dreamingEnabled}
-              dreamingFrequency={dreamingFrequency}
-              onDreamingEnabledChange={setDreamingEnabled}
-              onDreamingFrequencyChange={setDreamingFrequency}
-            />
-          </div>
-        );
+        return null;
 
       case 'browserWebAccess':
         return (
@@ -5752,11 +5561,7 @@ const Settings: React.FC<SettingsProps> = ({
         return <IMSettings />;
 
       case 'plugins':
-        return (
-          <PluginsSettings
-            handleRef={pluginsSettingsRef}
-          />
-        );
+        return <DshPluginEcosystemView />;
 
       case 'help':
         return (
@@ -5908,6 +5713,7 @@ const Settings: React.FC<SettingsProps> = ({
             {sidebarTabs.map((tab) => (
               <button
                 key={tab.key}
+                type="button"
                 onClick={() => handleTabChange(tab.key)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg ${SETTINGS_NAV_TEXT} font-medium transition-colors text-left ${
                   activeTab === tab.key
@@ -5940,6 +5746,23 @@ const Settings: React.FC<SettingsProps> = ({
               <ErrorMessage
                 message={noticeMessage}
                 onClose={() => setNoticeMessage(null)}
+              />
+            </div>
+          )}
+
+          {dataMigration.lastRestoreResult && activeTab !== SettingsTabId.DataPrivacy && (
+            <div className="px-6 pt-2">
+              <DataMigrationRestoreReportCard
+                result={dataMigration.lastRestoreResult}
+                isReinstallingPlugins={dataMigration.isReinstallingPlugins}
+                pluginInstallOutcomes={dataMigration.pluginInstallOutcomes}
+                onRevealRollback={() => {
+                  void dataMigration.revealRollbackPath();
+                }}
+                onReinstallPlugins={() => {
+                  void dataMigration.reinstallMissingPlugins();
+                }}
+                onDismiss={dataMigration.dismissLastRestoreResult}
               />
             </div>
           )}
@@ -6135,6 +5958,11 @@ const Settings: React.FC<SettingsProps> = ({
                               }}
                             />
                             <span className="min-w-0 flex-1">
+                              {dir.kind === CoworkTempDirKind.LegacySqliteBackup && (
+                                <span className="mb-0.5 inline-flex items-center rounded bg-surface-raised px-1.5 py-0.5 text-[11px] font-medium text-secondary">
+                                  {i18nService.t('coworkTempCleanDialogLegacyBackupTag')}
+                                </span>
+                              )}
                               <span className="block truncate text-sm text-foreground" title={dir.tempDir}>
                                 {dir.tempDir}
                               </span>
@@ -6193,87 +6021,17 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-          {showOpenClawDataRestoreConfirm && (
-            <div
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
-              onClick={() => {
-                if (!isRestoringOpenClawData) setShowOpenClawDataRestoreConfirm(false);
-              }}
-            >
-              <div
-                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-md"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="px-5 pt-5 pb-4 border-b border-border">
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
-                      <ArrowPathRoundedSquareIcon className="h-5 w-5" />
-                    </span>
-                    <h3 className="text-base font-semibold text-foreground">
-                      {i18nService.t('openClawDataMigrationConfirmTitle')}
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="space-y-3 px-5 py-4 text-sm text-secondary">
-                  <p>{i18nService.t('openClawDataMigrationConfirmDesc')}</p>
-                  <p>{i18nService.t('openClawDataMigrationConfirmSafeDesc')}</p>
-                </div>
-
-                <div className="flex justify-end space-x-2 px-5 pb-5">
-                  <button
-                    type="button"
-                    onClick={() => setShowOpenClawDataRestoreConfirm(false)}
-                    disabled={isRestoringOpenClawData}
-                    className="px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-xl border border-border disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {i18nService.t('cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleConfirmOpenClawDataRestore(); }}
-                    disabled={isRestoringOpenClawData}
-                    className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-                  >
-                    {isRestoringOpenClawData
-                      ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
-                      : <ArrowPathRoundedSquareIcon className="h-4 w-4" />}
-                    {isRestoringOpenClawData
-                      ? i18nService.t('openClawDataMigrationRunning')
-                      : i18nService.t('openClawDataMigrationConfirmAction')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {(isBackingUpOpenClawData || isRestoringOpenClawData) && (
-            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4">
-              <div className="w-full max-w-md rounded-2xl border border-border bg-surface px-5 py-5 text-center shadow-xl">
-                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-primary-muted text-primary">
-                  <ArrowPathIcon className="h-5 w-5 animate-spin" />
-                </div>
-                <h3 className="mt-4 text-base font-semibold text-foreground">
-                  {i18nService.t(isBackingUpOpenClawData
-                    ? 'openClawDataBackupBlockingTitle'
-                    : 'openClawDataMigrationBlockingTitle')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-secondary">
-                  {i18nService.t(isBackingUpOpenClawData
-                    ? 'openClawDataBackupBlockingDesc'
-                    : 'openClawDataMigrationBlockingDesc')}
-                </p>
-                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>
-                    {i18nService.t(isBackingUpOpenClawData
-                      ? 'openClawDataBackupBlockingWarning'
-                      : 'openClawDataMigrationBlockingWarning')}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
+          <DataMigrationDialogs
+            restorePreview={dataMigration.restorePreview}
+            onCancelRestorePreview={dataMigration.cancelRestorePreview}
+            onConfirmRestore={() => {
+              void dataMigration.confirmRestore();
+            }}
+            isBackingUp={dataMigration.isBackingUp}
+            isRestoring={dataMigration.isRestoring}
+            progress={dataMigration.progress}
+            formatSize={formatBackupSize}
+          />
 
           {/* Memory Modal */}
           {showMemoryModal && (
@@ -6310,6 +6068,14 @@ const Settings: React.FC<SettingsProps> = ({
                   <div className="mt-1.5 text-[11px] leading-relaxed text-secondary">
                     {i18nService.t('coworkMemoryCrudMultilineHint')}
                   </div>
+                  {coworkMemoryModalError && (
+                    <div className="mt-2">
+                      <ErrorMessage
+                        message={coworkMemoryModalError}
+                        onClose={() => setCoworkMemoryModalError(null)}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-end space-x-2 px-5 py-4">

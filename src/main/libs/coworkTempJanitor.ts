@@ -4,6 +4,7 @@ import * as path from 'path';
 import {
   COWORK_TEMP_ATTACHMENTS_DIR_NAME,
   COWORK_TEMP_DIR_NAME,
+  CoworkTempDirKind,
 } from '../../shared/cowork/constants';
 
 /**
@@ -29,9 +30,19 @@ import {
 /** Attachment originals are kept this long before a clean removes them. */
 export const COWORK_TEMP_ATTACHMENTS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
+export const LEGACY_SQLITE_BACKUP_RELATIVE_DIRS = [
+  path.join('backups', 'sqlite'),
+  'sqlite-backups',
+] as const;
+
+const LEGACY_BACKUP_PARENT_DIR_NAME = 'backups';
 const SWEEP_MAX_ENTRIES = 20000;
 const MAX_SWEEP_DEPTH = 8;
 const GITIGNORE_FILE_NAME = '.gitignore';
+
+export function getLegacySqliteBackupDirs(userDataPath: string): string[] {
+  return LEGACY_SQLITE_BACKUP_RELATIVE_DIRS.map(relPath => path.join(userDataPath, relPath));
+}
 
 export interface CoworkTempSweepOptions {
   /** Scratch files with mtime older than now - retentionMs are deleted. 0 deletes all scratch files. */
@@ -121,6 +132,7 @@ interface WalkState {
   now: number;
   retentionMs: number;
   attachmentsRetentionMs: number;
+  preserveRootGitignore: boolean;
   dryRun: boolean;
   maxEntries: number;
   maxDepth: number;
@@ -183,7 +195,8 @@ async function sweepDirectory(
       continue;
     }
 
-    const isRootGitignore = depth === 0 && entry.name === GITIGNORE_FILE_NAME;
+    const isRootGitignore =
+      state.preserveRootGitignore && depth === 0 && entry.name === GITIGNORE_FILE_NAME;
 
     try {
       const stat = await fs.promises.lstat(entryPath);
@@ -193,7 +206,7 @@ async function sweepDirectory(
         continue;
       }
       const retentionMs = inAttachments ? state.attachmentsRetentionMs : state.retentionMs;
-      if (state.now - stat.mtimeMs < retentionMs) {
+      if (retentionMs > 0 && state.now - stat.mtimeMs < retentionMs) {
         continue;
       }
       if (!state.dryRun) {
@@ -237,6 +250,7 @@ export async function sweepCoworkTempDir(
       0,
       options.attachmentsRetentionMs ?? COWORK_TEMP_ATTACHMENTS_RETENTION_MS,
     ),
+    preserveRootGitignore: true,
     dryRun: options.dryRun ?? false,
     maxEntries: options.maxEntries ?? SWEEP_MAX_ENTRIES,
     maxDepth: options.maxDepth ?? MAX_SWEEP_DEPTH,
@@ -245,6 +259,55 @@ export async function sweepCoworkTempDir(
   };
 
   await sweepDirectory(tempDir, 0, false, state);
+  return result;
+}
+
+async function sweepLegacyBackupDir(
+  dirPath: string,
+  options: { dryRun?: boolean; now?: number; maxEntries?: number; maxDepth?: number } = {},
+): Promise<CoworkTempSweepResult> {
+  const result: CoworkTempSweepResult = {
+    deletedFiles: 0,
+    freedBytes: 0,
+    totalFiles: 0,
+    totalBytes: 0,
+    skippedEntries: 0,
+    truncated: false,
+  };
+
+  if (!(await isRealDirectory(dirPath))) {
+    return result;
+  }
+
+  const resolvedDir = path.resolve(dirPath);
+  const dryRun = options.dryRun ?? false;
+  const state: WalkState = {
+    rootPrefix: resolvedDir + path.sep,
+    now: options.now ?? Date.now(),
+    retentionMs: 0,
+    attachmentsRetentionMs: 0,
+    preserveRootGitignore: false,
+    dryRun,
+    maxEntries: options.maxEntries ?? SWEEP_MAX_ENTRIES,
+    maxDepth: options.maxDepth ?? MAX_SWEEP_DEPTH,
+    visitedEntries: 0,
+    result,
+  };
+
+  await sweepDirectory(resolvedDir, 0, false, state);
+
+  if (!dryRun) {
+    try {
+      await fs.promises.rmdir(resolvedDir);
+      const parentDir = path.dirname(resolvedDir);
+      if (path.basename(parentDir) === LEGACY_BACKUP_PARENT_DIR_NAME) {
+        await fs.promises.rmdir(parentDir);
+      }
+    } catch {
+      // Directory still has remaining entries or is not removable — keep it.
+    }
+  }
+
   return result;
 }
 
@@ -278,12 +341,15 @@ export interface CoworkTempJanitorDeps {
   listAllCwds(): string[];
   /** Working directories that currently have an active session (never cleaned). */
   listActiveCwds(): string[];
+  /** Optional retired app-owned directories (e.g. legacy SQLite snapshots) eligible for manual cleanup. */
+  listLegacyDirs?: () => string[];
 }
 
 /** Per-directory preview entry shown in the confirmation dialog. */
 export interface CoworkTempDirPreview {
   cwd: string;
   tempDir: string;
+  kind: CoworkTempDirKind;
   totalBytes: number;
   totalFiles: number;
   cleanableBytes: number;
@@ -329,10 +395,20 @@ export interface CoworkTempJanitor {
 export function createCoworkTempJanitor(deps: CoworkTempJanitorDeps): CoworkTempJanitor {
   let running = false;
 
-  const listCandidates = (): Array<{ cwd: string; tempDir: string; isActive: boolean }> => {
+  const listCandidates = (): Array<{
+    cwd: string;
+    tempDir: string;
+    kind: CoworkTempDirKind;
+    isActive: boolean;
+  }> => {
     const activeCwds = new Set(deps.listActiveCwds().map(normalizeCwdForCompare));
     const seen = new Set<string>();
-    const candidates: Array<{ cwd: string; tempDir: string; isActive: boolean }> = [];
+    const candidates: Array<{
+      cwd: string;
+      tempDir: string;
+      kind: CoworkTempDirKind;
+      isActive: boolean;
+    }> = [];
     for (const cwd of deps.listAllCwds()) {
       if (!cwd?.trim()) continue;
       const normalized = normalizeCwdForCompare(cwd);
@@ -342,7 +418,21 @@ export function createCoworkTempJanitor(deps: CoworkTempJanitorDeps): CoworkTemp
       candidates.push({
         cwd: resolvedCwd,
         tempDir: getCoworkTempDirPath(resolvedCwd),
+        kind: CoworkTempDirKind.SessionTemp,
         isActive: activeCwds.has(normalized),
+      });
+    }
+    for (const legacyDir of deps.listLegacyDirs?.() ?? []) {
+      if (!legacyDir?.trim()) continue;
+      const normalized = normalizeCwdForCompare(legacyDir);
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      const resolvedDir = path.resolve(legacyDir.trim());
+      candidates.push({
+        cwd: resolvedDir,
+        tempDir: resolvedDir,
+        kind: CoworkTempDirKind.LegacySqliteBackup,
+        isActive: false,
       });
     }
     return candidates;
@@ -360,13 +450,23 @@ export function createCoworkTempJanitor(deps: CoworkTempJanitorDeps): CoworkTemp
       };
       for (const candidate of listCandidates()) {
         if (!(await isRealDirectory(candidate.tempDir))) continue;
-        const usage = await measureCoworkTempDir(candidate.tempDir);
+        const usage: CoworkTempUsage =
+          candidate.kind === CoworkTempDirKind.LegacySqliteBackup
+            ? await sweepLegacyBackupDir(candidate.tempDir, { dryRun: true }).then(result => ({
+                bytes: result.totalBytes,
+                files: result.totalFiles,
+                cleanableBytes: result.freedBytes,
+                cleanableFiles: result.deletedFiles,
+                truncated: result.truncated,
+              }))
+            : await measureCoworkTempDir(candidate.tempDir);
         if (usage.files === 0) continue;
         const cleanableBytes = candidate.isActive ? 0 : usage.cleanableBytes;
         const cleanableFiles = candidate.isActive ? 0 : usage.cleanableFiles;
         preview.dirs.push({
           cwd: candidate.cwd,
           tempDir: candidate.tempDir,
+          kind: candidate.kind,
           totalBytes: usage.bytes,
           totalFiles: usage.files,
           cleanableBytes,
@@ -402,8 +502,13 @@ export function createCoworkTempJanitor(deps: CoworkTempJanitorDeps): CoworkTemp
           if (candidate.isActive) continue;
           if (selection && !selection.has(normalizeCwdForCompare(candidate.cwd))) continue;
           if (!(await isRealDirectory(candidate.tempDir))) continue;
-          ensureCoworkTempGitignore(candidate.tempDir);
-          const result = await sweepCoworkTempDir(candidate.tempDir, { retentionMs: 0 });
+          let result: CoworkTempSweepResult;
+          if (candidate.kind === CoworkTempDirKind.LegacySqliteBackup) {
+            result = await sweepLegacyBackupDir(candidate.tempDir, { dryRun: false });
+          } else {
+            ensureCoworkTempGitignore(candidate.tempDir);
+            result = await sweepCoworkTempDir(candidate.tempDir, { retentionMs: 0 });
+          }
           summary.sweptDirs++;
           summary.deletedFiles += result.deletedFiles;
           summary.freedBytes += result.freedBytes;

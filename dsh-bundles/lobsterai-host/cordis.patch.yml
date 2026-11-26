@@ -1,0 +1,227 @@
+# LobsterAI first-class host bundle layered after @deepseek-ai/dsh-base and
+# @deepseek-ai/dsh-web-app inside LobsterAI's App-Owned Profile.
+#
+# Ownership rules:
+# - Never mutate the user's cordis.patch.yml for LobsterAI-managed settings.
+# - Explicitly disable DeepSeek telemetry, session-log injection, DeepSeek Search
+#   API fallback for non-DeepSeek routes, and heavy LibreOffice kit rows that
+#   LobsterAI replaces natively.
+# - Mount LobsterAI's modular Cordis plugins via relative specifiers (resolved
+#   to file:// URLs by dsh-app-boot while keeping @deepseek-ai/* peer resolution).
+
+# ── Privacy & Compliance Guard (enforced by scripts/dsh-upgrade-check.cjs) ───
+
+- id: session-log-deepseek
+  disabled: true
+
+- id: plugin-package-inventory-deepseek
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true
+
+- id: deepseek-account
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true
+
+- id: desktop-product-telemetry
+  disabled: true
+
+- id: product-analytics
+  disabled: true
+
+# ── Pruned heavy / duplicate / DSH-dev capabilities ──────────────────────────
+# LobsterAI provides native Office editors & skills (docx/pptx/xlsx), its own
+# file:// link renderer, and does not expose DSH self-development context to
+# end users.
+
+- id: office-kit
+  disabled: true
+
+- id: skill-office
+  disabled: true
+
+- id: harness-dev-context
+  disabled: true
+
+- id: deliverable-file-references
+  disabled: true
+
+# LobsterAI owns scheduled tasks via SQLite `LobsterScheduler` (+ IM delivery &
+# sidebar UI) and exposes them through the compact `lobster_schedule` tool.
+- id: schedule
+  disabled: true
+
+# None of LobsterAI's built-in MCP servers use MCP Resources; disabling this
+# avoids injecting 3 unused resource tools + an extra prompt section per turn.
+- id: mcp-resources
+  disabled: true
+
+# ── Search policy guard (0.2.2-rc.5) ─────────────────────────────────────────
+# Disable both stock DSH search providers (`web-search-deepseek` and
+# `web-deepseek-api`) so LobsterAI's single `lobster-web-search-bridge` owns
+# `ctx.web` search routing unconditionally:
+# - Personal DeepSeek official API keys (`api.deepseek.com`, excluding plan
+#   provider `lobsterai-server`) try DeepSeek native search first with
+#   automatic fallback to LobsterAI's in-app browser search.
+# - LobsterAI plan models and all non-DeepSeek / third-party custom models
+#   route directly to LobsterAI's in-app browser search (`WebSearchHost`).
+
+- id: web-search-deepseek
+  disabled: true
+
+- id: web-deepseek-api
+  disabled: true
+
+# ── Product identity, prompt baseline & default preset ───────────────────────
+
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    includeRuntimeContext: true
+    personaPrefix: ''
+
+- id: agent-preset-registry
+  config:
+    default: lobsterai
+
+# ── Context compaction policy ────────────────────────────────────────────────
+# DSH's default headroomTokens (65536) causes TargetPressureConfigError on
+# <=64K context windows (64000 - 16384 - 65536 <= 0, silently disabling
+# pre-step auto-compaction) and triggers premature compaction at ~36% on 128K
+# models. Setting 8192 keeps 64K, 128K, and 200K+ models compacting smoothly
+# around ~75-80% while keeping the derived summary maxTokens within 8K caps.
+
+- id: compaction-basic
+  config:
+    headroomTokens: 8192
+
+# ── LobsterAI Default Agent Preset & Host Cordis Plugins ─────────────────────
+
+- insert:
+    - id: preset-lobsterai
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: lobsterai
+        name: LobsterAI
+        description: LobsterAI 默认智能体配置
+        order: 0
+        plugins:
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 32768
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              applyPatch: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          # Keep background job completions quiet when the owner session is idle
+          # so an exiting/crashing dev server does not trigger an unobserved
+          # wakeup LLM turn; completions are still injected on the next turn
+          # and live output remains readable via job_output during active turns.
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+            config:
+              completionDelivery: quiet
+          # Omit `@deepseek-ai/dsh-skill-filesystem` in `preset-lobsterai`:
+          # `@deepseek-ai/dsh-web-app` already disables the host-plane row, and
+          # `lobster-persona-scope` owns skill discovery (LobsterAI SKILLs +
+          # project `.dsh/skills` / `.agents/skills`) under LobsterAI's
+          # `skillsPolicy` and per-agent `allowedSkillIds` allowlists so
+          # disabled or restricted skills can never be shadowed back in.
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+            config:
+              catalogDescriptionMaxLength: 160
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+                config:
+                  headroomTokens: 8192
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: tool-subagent-control
+            name: '@deepseek-ai/dsh-tool-subagent-control'
+            config:
+              interrupt: false
+          - id: tool-subagent
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: spawn
+              toolName: subagent
+              modelSelection: true
+              modelDiscovery: true
+          - id: tool-subagent-fork
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: fork
+              toolName: subagent_fork
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchMaxQueries: 4
+              searchTimeoutMs: 60000
+
+    - id: lobster-log-forwarder
+      name: './plugins/log-forwarder.mjs'
+
+    - id: lobster-model-bridge
+      name: './plugins/model-bridge.mjs'
+
+    - id: lobster-web-search-bridge
+      name: './plugins/web-search-bridge.mjs'
+
+    - id: lobster-persona-scope
+      name: './plugins/persona-scope.mjs'
+
+    - id: lobster-host-tools
+      name: './plugins/host-tools.mjs'
+
+    - id: lobster-tool-disclosure
+      name: './plugins/tool-disclosure.mjs'
+
+    - id: lobster-agent-delegation
+      name: './plugins/agent-delegation.mjs'
+
+    - id: lobster-approval-guard
+      name: './plugins/approval-guard.mjs'
+
+    - id: lobster-ops-rpc
+      name: './plugins/ops-rpc.mjs'

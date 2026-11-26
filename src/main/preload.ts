@@ -9,14 +9,28 @@ import {
   type ActivityHostGetSlotInput,
   ActivityIpc,
 } from '../shared/activity/constants';
-import type { AgentModelSelectionMode } from '../shared/agent/constants';
+import type { AgentModelSelectionMode, SubagentCollaborationMode } from '../shared/agent/constants';
 import { AgentIpcChannel, AgentLegacyIdentityCleanupStatus } from '../shared/agent/constants';
 import type { AgentModelSelection } from '../shared/agent/modelSelection';
 import type { UsageContext } from '../shared/analytics/usage';
 import { AppIpcChannel, WindowIpcChannel, type WindowZoomChangedPayload } from '../shared/app/constants';
 import { AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
-import { ArtifactPreviewIpc } from '../shared/artifactPreview/constants';
+import {
+  ArtifactWorkspaceIpc,
+  type CreateBlankDocumentRequest,
+  type CreateBlankDocumentResponse,
+  type ListWorkspaceDirectoryRequest,
+  type ListWorkspaceDirectoryResponse,
+  type ProbeGitWorkspaceRequest,
+  type ProbeGitWorkspaceResponse,
+  type RenameArtifactFileRequest,
+  type RenameArtifactFileResponse,
+} from '../shared/artifactPreview/blankDocument';
+import {
+  type ArtifactBrowserWindowOpenEvent,
+  ArtifactPreviewIpc,
+} from '../shared/artifactPreview/constants';
 import { MarkdownFileIpc, type SaveMarkdownFileRequest } from '../shared/artifactPreview/markdownEditing';
 import { ReviewIpc, type ReviewScopeRequest } from '../shared/artifactPreview/reviewScopes';
 import type { ReviewSourceRequest } from '../shared/artifactPreview/reviewSource';
@@ -49,7 +63,6 @@ import {
   type AgentBrowserHostStateEvent,
   type AgentBrowserHostZoomRequest,
   BrowserIpc,
-  type BrowserRuntimeProfile,
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
@@ -63,12 +76,20 @@ import type {
 } from '../shared/cowork/btw';
 import {
   CoworkIpcChannel,
+  type CoworkMemoryStatus,
+  type CoworkMemoryStatusFilter,
   type CoworkSessionsChangedPayload,
 } from '../shared/cowork/constants';
 import type { CoworkTurnUsage } from '../shared/cowork/llmTurnUsage';
 import type { CoworkSearchMessageCursor } from '../shared/cowork/search';
 import type { CoworkSessionFilterQuery } from '../shared/cowork/sessionFilter';
-import { DataMigrationIpc } from '../shared/dataMigration/constants';
+import {
+  DataMigrationIpc,
+  type DataMigrationPreviewRequest,
+  type DataMigrationProgressEvent,
+  type DataMigrationReinstallPluginsRequest,
+  type DataMigrationRestoreRequest,
+} from '../shared/dataMigration/constants';
 import { type DecisionModelConfigUpdate, DecisionModelIpcChannel } from '../shared/decisionModel/constants';
 import {
   type CompanionQuickAnswerEvent,
@@ -83,6 +104,7 @@ import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
 import { DialogIpc } from '../shared/dialog/constants';
 import { DshIpcChannel } from '../shared/dshEngine/constants';
+import { DshHostIpc } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
   type EnterpriseQuotaRequestType,
@@ -130,6 +152,7 @@ import type {
   MediaSelection,
   MediaType,
 } from '../shared/media/defaultPolicy';
+import { MigrationV2Ipc } from '../shared/migration/constants';
 import { type ModelPresetId, ModelPresetIpc } from '../shared/modelPresets/constants';
 import { NeteaseMailIpc } from '../shared/neteaseMail/constants';
 import type { NeteaseMailAuthorizationOptions, NeteaseMailBridge, NeteaseMailConfirmationReference, NeteaseMailConfirmationRequest } from '../shared/neteaseMail/types';
@@ -161,7 +184,7 @@ import {
   type SiteUpdateAccessStatusInput,
   type SiteUpdateTitleInput,
 } from '../shared/site/constants';
-import { SkinIpc } from '../shared/skin/constants';
+import { type SkinBackdropVisibility, SkinIpc } from '../shared/skin/constants';
 import type {
   SkinApplyResponse,
   SkinBindThemeResponse,
@@ -169,6 +192,7 @@ import type {
   SkinDeleteResponse,
   SkinGetActiveResponse,
   SkinListResponse,
+  SkinSetBackdropVisibilityResponse,
 } from '../shared/skin/types';
 import { SubscriptionTrialIpc } from '../shared/subscriptionTrial/constants';
 import { createMessageSpeechBridge } from './conversation/messageSpeechPreload';
@@ -176,13 +200,18 @@ import { createLanguageToolsBridge } from './desktopCompanion/languageToolsPrelo
 import { createImageEditingBridge } from './imageEditingPreload';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { createOfficeBridges } from './office/officePreloadBridges';
+import { createWordPanelBridge } from './office/word/wordPanelPreloadBridge';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
-// Every page starts at 100%. Setting the zoom from the page also makes it a per-window zoom (see
-// installMainWindowZoom): Chromium then neither saves it across restarts nor shares it with other windows
-// of the same origin, which all windows are in development.
-webFrame.setZoomFactor(1);
+// Apply per-window zoom only when the main process asks (after initial paint for the main window).
+// Calling webFrame.setZoomFactor() unconditionally during preload on a hidden (`show: false`)
+// window triggers Electron #51972 (40.x–43.x), suppressing `ready-to-show` permanently.
+ipcRenderer.on(WindowIpcChannel.ApplyZoom, (_event, zoomFactor: unknown) => {
+  if (typeof zoomFactor === 'number' && Number.isFinite(zoomFactor) && zoomFactor > 0) {
+    webFrame.setZoomFactor(zoomFactor);
+  }
+});
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -241,6 +270,8 @@ contextBridge.exposeInMainWorld('electron', {
     abortQuickAnswer: requestId => ipcRenderer.invoke(DesktopCompanionIpc.QuickAnswerAbort, requestId),
     requestPermission: permission => ipcRenderer.invoke(DesktopCompanionIpc.RequestPermission, permission),
     copyText: text => ipcRenderer.invoke(DesktopCompanionIpc.CopyText, text),
+    runContextAction: request => ipcRenderer.invoke(DesktopCompanionIpc.RunContextAction, request),
+    dismissContextClipboard: fingerprint => ipcRenderer.invoke(DesktopCompanionIpc.DismissContextClipboard, fingerprint),
     onChanged: callback => {
       const handler = (_event: Electron.IpcRendererEvent, state: DesktopCompanionState) => callback(state);
       ipcRenderer.on(DesktopCompanionIpc.Changed, handler);
@@ -351,6 +382,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(SkinIpc.Apply, skinId, boundThemeId),
     bindTheme: (skinId: string, themeId: string): Promise<SkinBindThemeResponse> =>
       ipcRenderer.invoke(SkinIpc.BindTheme, skinId, themeId),
+    setBackdropVisibility: (
+      skinId: string,
+      visibility: SkinBackdropVisibility,
+    ): Promise<SkinSetBackdropVisibilityResponse> =>
+      ipcRenderer.invoke(SkinIpc.SetBackdropVisibility, skinId, visibility),
     deactivate: (): Promise<SkinDeactivateResponse> => ipcRenderer.invoke(SkinIpc.Deactivate),
     delete: (skinId: string): Promise<SkinDeleteResponse> => ipcRenderer.invoke(SkinIpc.Delete, skinId),
     onChanged: (callback: () => void) => {
@@ -522,10 +558,6 @@ contextBridge.exposeInMainWorld('electron', {
       }) => ipcRenderer.invoke(OpenClawSessionIpc.Patch, options),
     },
     browser: {
-      getStatus: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.GetStatus, options),
-      listProfiles: () => ipcRenderer.invoke(BrowserIpc.ListProfiles),
-      test: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.Test, options),
-      resetProfile: (options?: { profile?: BrowserRuntimeProfile }) => ipcRenderer.invoke(BrowserIpc.ResetProfile, options),
       getHostState: (request?: AgentBrowserHostRequest): Promise<AgentBrowserHostResponse> =>
         ipcRenderer.invoke(BrowserIpc.GetHostState, request),
       setHostView: (request: AgentBrowserHostSetViewRequest): Promise<AgentBrowserHostResponse> =>
@@ -586,9 +618,27 @@ contextBridge.exposeInMainWorld('electron', {
       },
     },
     dataMigration: {
-      backup: () => ipcRenderer.invoke(DataMigrationIpc.Backup),
-      restore: () => ipcRenderer.invoke(DataMigrationIpc.Restore),
-      getLastRestoreResult: () => ipcRenderer.invoke(DataMigrationIpc.GetLastRestoreResult),
+      backup: () =>
+        ipcRenderer.invoke(DataMigrationIpc.Backup),
+      pickRestoreArchive: () =>
+        ipcRenderer.invoke(DataMigrationIpc.PickRestoreArchive),
+      preview: (request: DataMigrationPreviewRequest) =>
+        ipcRenderer.invoke(DataMigrationIpc.Preview, request),
+      restore: (request?: DataMigrationRestoreRequest) =>
+        ipcRenderer.invoke(DataMigrationIpc.Restore, request),
+      getLastRestoreResult: () =>
+        ipcRenderer.invoke(DataMigrationIpc.GetLastRestoreResult),
+      reinstallPlugins: (request: DataMigrationReinstallPluginsRequest) =>
+        ipcRenderer.invoke(DataMigrationIpc.ReinstallPlugins, request),
+      onProgress: (callback: (event: DataMigrationProgressEvent) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, payload: DataMigrationProgressEvent) => {
+          callback(payload);
+        };
+        ipcRenderer.on(DataMigrationIpc.Progress, listener);
+        return () => {
+          ipcRenderer.removeListener(DataMigrationIpc.Progress, listener);
+        };
+      },
     },
   },
   agents: {
@@ -611,6 +661,7 @@ contextBridge.exposeInMainWorld('electron', {
       workingDirectory?: string;
       icon?: string;
       skillIds?: string[];
+      subagentCollaborationMode?: SubagentCollaborationMode;
       subagentAllowAgentIds?: string[];
       source?: string;
       presetId?: string;
@@ -631,6 +682,7 @@ contextBridge.exposeInMainWorld('electron', {
         workingDirectory?: string;
         icon?: string;
         skillIds?: string[];
+        subagentCollaborationMode?: SubagentCollaborationMode;
         subagentAllowAgentIds?: string[];
         enabled?: boolean;
         pinned?: boolean;
@@ -669,6 +721,9 @@ contextBridge.exposeInMainWorld('electron', {
       if (!result?.success) throw new Error(result?.error || 'Failed to load expert catalog');
       return result.catalog;
     },
+    upgradePreset: (agentId: string, revision: number) => ipcRenderer.invoke(AgentIpcChannel.UpgradePreset, agentId, revision),
+    dismissPresetUpdate: (agentId: string, revision: number) => ipcRenderer.invoke(AgentIpcChannel.DismissPresetUpdate, agentId, revision),
+    isExpertBusy: (agentId: string) => ipcRenderer.invoke(AgentIpcChannel.IsExpertBusy, agentId),
     addPreset: async (presetId: string, modelSelection?: AgentModelSelection) => {
       const result = await ipcRenderer.invoke(AgentIpcChannel.AddPreset, presetId, modelSelection);
       if (!result?.success) throw new Error(result?.error || 'Failed to add preset agent');
@@ -753,6 +808,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.DeleteSessions, sessionIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>
       ipcRenderer.invoke('cowork:session:pin', options),
+    reorderPinnedSessions: (options: { sessionIds: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.ReorderPinnedSessions, options),
     renameSession: (options: { sessionId: string; title: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.RenameSession, options),
     forkSession: (options: {
@@ -771,8 +828,13 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(CoworkIpcChannel.OpenSessionFromNotificationReady),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: (options?: { limit?: number; offset?: number; agentId?: string; searchQuery?: string }) =>
-      ipcRenderer.invoke('cowork:session:list', options),
+    listSessions: (options?: {
+      limit?: number;
+      offset?: number;
+      agentId?: string;
+      searchQuery?: string;
+      pinnedFirst?: boolean;
+    }) => ipcRenderer.invoke(CoworkIpcChannel.ListSessions, options),
     getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
       ipcRenderer.invoke('cowork:session:getMessages', options),
     getSessionSearchMessages: (options: {
@@ -836,7 +898,7 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: {
       workingDirectory?: string;
       executionMode?: 'auto' | 'local' | 'sandbox';
-      agentEngine?: 'openclaw';
+      agentEngine?: 'dsh';
       memoryEnabled?: boolean;
       memoryImplicitUpdateEnabled?: boolean;
       memoryLlmJudgeEnabled?: boolean;
@@ -859,27 +921,36 @@ contextBridge.exposeInMainWorld('electron', {
     getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
     cleanTempStorage: (options?: { cwds?: string[] }) =>
       ipcRenderer.invoke(CoworkIpcChannel.TempStorageClean, options),
-    listMemoryEntries: (input: {
+    listMemoryEntries: (input?: {
+      agentId?: string;
       query?: string;
-      status?: 'created' | 'stale' | 'deleted' | 'all';
+      status?: CoworkMemoryStatusFilter;
       includeDeleted?: boolean;
       limit?: number;
       offset?: number;
-    }) => ipcRenderer.invoke('cowork:memory:listEntries', input),
-    createMemoryEntry: (input: { text: string; confidence?: number; isExplicit?: boolean }) =>
-      ipcRenderer.invoke('cowork:memory:createEntry', input),
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryListEntries, input),
+    createMemoryEntry: (input: {
+      agentId?: string;
+      text: string;
+      section?: string;
+      confidence?: number;
+      isExplicit?: boolean;
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryCreateEntry, input),
     updateMemoryEntry: (input: {
+      agentId?: string;
       id: string;
       text?: string;
       confidence?: number;
-      status?: 'created' | 'stale' | 'deleted';
+      status?: CoworkMemoryStatus;
       isExplicit?: boolean;
-    }) => ipcRenderer.invoke('cowork:memory:updateEntry', input),
-    deleteMemoryEntry: (input: { id: string }) =>
-      ipcRenderer.invoke('cowork:memory:deleteEntry', input),
-    getMemoryStats: () => ipcRenderer.invoke('cowork:memory:getStats'),
-    readMemoryFileRaw: () => ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw),
-    writeMemoryFileRaw: (input: { content: string }) =>
+    }) => ipcRenderer.invoke(CoworkIpcChannel.MemoryUpdateEntry, input),
+    deleteMemoryEntry: (input: { agentId?: string; id: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryDeleteEntry, input),
+    getMemoryStats: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryGetStats, options),
+    readMemoryFileRaw: (options?: { agentId?: string }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.MemoryReadRaw, options),
+    writeMemoryFileRaw: (input: { agentId?: string; content: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.MemoryWriteRaw, input),
     getDreamingStatus: (options?: { agentId?: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.DreamingStatus, options),
@@ -1223,6 +1294,7 @@ contextBridge.exposeInMainWorld('electron', {
   artifact: {
     imageEditing: createImageEditingBridge(ipcRenderer),
     office: createOfficeBridges(ipcRenderer),
+    wordPanel: createWordPanelBridge(ipcRenderer),
     markdown: {
       read: (filePath: string) => ipcRenderer.invoke(MarkdownFileIpc.Read, filePath),
       save: (request: SaveMarkdownFileRequest) => ipcRenderer.invoke(MarkdownFileIpc.Save, request),
@@ -1236,6 +1308,14 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(ArtifactPreviewIpc.FileChanged, handler);
       return () => {
         ipcRenderer.removeListener(ArtifactPreviewIpc.FileChanged, handler);
+      };
+    },
+    onBrowserWindowOpen: (callback: (data: ArtifactBrowserWindowOpenEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: ArtifactBrowserWindowOpenEvent) =>
+        callback(data);
+      ipcRenderer.on(ArtifactPreviewIpc.BrowserWindowOpen, handler);
+      return () => {
+        ipcRenderer.removeListener(ArtifactPreviewIpc.BrowserWindowOpen, handler);
       };
     },
     createPreviewSession: (filePath: string) =>
@@ -1268,6 +1348,14 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(ArtifactPreviewIpc.DeleteBrowserAnnotationBatchAssets, input),
     listLocalWebServices: (options?: ListLocalWebServicesOptions) =>
       ipcRenderer.invoke(LocalWebServicesIpc.List, options) as Promise<LocalWebService[]>,
+    createBlankDocument: (request: CreateBlankDocumentRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.CreateBlankDocument, request) as Promise<CreateBlankDocumentResponse>,
+    probeGitWorkspace: (request?: ProbeGitWorkspaceRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.ProbeGitWorkspace, request ?? {}) as Promise<ProbeGitWorkspaceResponse>,
+    renameFile: (request: RenameArtifactFileRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.RenameFile, request) as Promise<RenameArtifactFileResponse>,
+    listWorkspaceDirectory: (request?: ListWorkspaceDirectoryRequest) =>
+      ipcRenderer.invoke(ArtifactWorkspaceIpc.ListDirectory, request ?? {}) as Promise<ListWorkspaceDirectoryResponse>,
   },
   autoLaunch: {
     get: () => ipcRenderer.invoke(AppSettingsIpc.GetAutoLaunch),
@@ -1326,35 +1414,6 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: any) => callback(data);
       ipcRenderer.on(AppUpdateIpc.StateChanged, handler);
       return () => ipcRenderer.removeListener(AppUpdateIpc.StateChanged, handler);
-    },
-  },
-  plugins: {
-    list: () => ipcRenderer.invoke('plugins:list'),
-    detect: () => ipcRenderer.invoke('plugins:detect'),
-    sync: () => ipcRenderer.invoke('plugins:sync'),
-    install: (params: {
-      source: 'npm' | 'clawhub' | 'git' | 'local';
-      spec: string;
-      registry?: string;
-      version?: string;
-    }) => ipcRenderer.invoke('plugins:install', params),
-    uninstall: (pluginId: string) => ipcRenderer.invoke('plugins:uninstall', pluginId),
-    setEnabled: (pluginId: string, enabled: boolean) =>
-      ipcRenderer.invoke('plugins:set-enabled', pluginId, enabled),
-    getConfigSchema: (pluginId: string) =>
-      ipcRenderer.invoke('plugins:get-config-schema', pluginId),
-    saveConfig: (pluginId: string, config: Record<string, unknown>) =>
-      ipcRenderer.invoke('plugins:save-config', pluginId, config),
-    batchSave: (changes: {
-      toggles?: Array<{ pluginId: string; enabled: boolean }>;
-      configs?: Array<{ pluginId: string; config: Record<string, unknown> }>;
-    }) => ipcRenderer.invoke('plugins:batch-save', changes),
-    checkUpdates: (pluginIds?: string[]) => ipcRenderer.invoke('plugins:check-updates', pluginIds),
-    update: (pluginId: string) => ipcRenderer.invoke('plugins:update', pluginId),
-    onInstallLog: (callback: (line: string) => void) => {
-      const handler = (_event: any, line: string) => callback(line);
-      ipcRenderer.on('plugins:install-log', handler);
-      return () => ipcRenderer.removeListener('plugins:install-log', handler);
     },
   },
   log: {
@@ -1573,6 +1632,7 @@ contextBridge.exposeInMainWorld('electron', {
     cancelLogin: () => ipcRenderer.invoke(AuthIpcChannel.CancelLogin),
     exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
     getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
+    getCachedSnapshot: () => ipcRenderer.invoke(AuthIpcChannel.GetCachedSnapshot),
     getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),
     logout: () => ipcRenderer.invoke(AuthIpcChannel.Logout),
     refreshToken: () => ipcRenderer.invoke(AuthIpcChannel.RefreshToken),
@@ -1595,6 +1655,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = () => callback();
       ipcRenderer.on(AuthIpcChannel.QuotaChanged, handler);
       return () => ipcRenderer.removeListener(AuthIpcChannel.QuotaChanged, handler);
+    },
+    onCreditsActivity: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(AuthIpcChannel.CreditsActivity, handler);
+      return () => ipcRenderer.removeListener(AuthIpcChannel.CreditsActivity, handler);
     },
     onSessionChanged: (callback: (event: AuthSessionChangedEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: AuthSessionChangedEvent) => callback(data);
@@ -1759,5 +1824,26 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('xai-oauth:device-code', handler);
       return () => ipcRenderer.removeListener('xai-oauth:device-code', handler);
     },
+  },
+  dshHost: {
+    getStatus: () => ipcRenderer.invoke(DshHostIpc.GetStatus),
+    restart: () => ipcRenderer.invoke(DshHostIpc.Restart),
+    getWebUrl: () => ipcRenderer.invoke(DshHostIpc.GetWebUrl),
+    openEcosystemView: (routeHash?: string) => ipcRenderer.invoke(DshHostIpc.OpenEcosystemView, routeHash),
+    closeEcosystemView: () => ipcRenderer.invoke(DshHostIpc.CloseEcosystemView),
+    listPlugins: () => ipcRenderer.invoke(DshHostIpc.ListPlugins),
+    installPlugin: (packageSpec: string) => ipcRenderer.invoke(DshHostIpc.InstallPlugin, packageSpec),
+    removePlugin: (packageName: string) => ipcRenderer.invoke(DshHostIpc.RemovePlugin, packageName),
+    setPluginEnabled: (packageName: string, enabled: boolean) =>
+      ipcRenderer.invoke(DshHostIpc.SetPluginEnabled, packageName, enabled),
+    openProfileDir: () => ipcRenderer.invoke(DshHostIpc.OpenProfileDir),
+    getPermissionPreset: (sessionId?: string) => ipcRenderer.invoke(DshHostIpc.GetPermissionPreset, sessionId),
+    setPermissionPreset: (preset: string, sessionId?: string) =>
+      ipcRenderer.invoke(DshHostIpc.SetPermissionPreset, { preset, ...(sessionId ? { sessionId } : {}) }),
+  },
+  migrationV2: {
+    getReport: () => ipcRenderer.invoke(MigrationV2Ipc.GetReport),
+    dismissReport: () => ipcRenderer.invoke(MigrationV2Ipc.DismissReport),
+    openBackupDir: () => ipcRenderer.invoke(MigrationV2Ipc.OpenBackupDir),
   },
 });

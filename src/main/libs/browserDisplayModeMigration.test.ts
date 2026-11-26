@@ -1,71 +1,48 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
   BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
   BrowserDisplayMode,
-  BrowserNetworkMode,
 } from '../../shared/browserWebAccess/constants';
-import { migrateBrowserDisplayModeToInApp } from './browserDisplayModeMigration';
+import { migrateBrowserDisplayMode, migrateBrowserDisplayModeConfig } from './browserDisplayModeMigration';
 
-const createStore = (initial: Record<string, unknown>) => {
-  const values = new Map(Object.entries(initial));
-  return {
-    get: <T,>(key: string) => values.get(key) as T | undefined,
-    set: <T,>(key: string, value: T) => {
-      values.set(key, value);
-    },
-    values,
-  };
-};
-
-describe('migrateBrowserDisplayModeToInApp', () => {
-  test('switches an existing external browser config once and keeps other settings', () => {
-    const store = createStore({
-      app_config: {
-        theme: 'dark',
-        browserWebAccess: {
-          displayMode: BrowserDisplayMode.External,
-          networkMode: BrowserNetworkMode.Strict,
-        },
-      },
-    });
-
-    expect(migrateBrowserDisplayModeToInApp(store)).toBe(true);
-    expect(store.values.get('app_config')).toEqual({
-      theme: 'dark',
+describe('browser display migration', () => {
+  test('preserves the external mode and connection configuration on DSH upgrade', () => {
+    const config = {
       browserWebAccess: {
-        displayMode: BrowserDisplayMode.InApp,
-        networkMode: BrowserNetworkMode.Strict,
+        displayMode: BrowserDisplayMode.External,
+        profileMode: 'custom',
+        cdpUrl: 'http://127.0.0.1:9222',
+        executablePath: 'browser-executable',
+        remoteCdpHandshakeTimeoutMs: 4000,
+        attachOnly: true,
+        blockedHostnames: ['example.net'],
       },
-      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
-    });
-  });
-
-  test('keeps an explicit choice made after the migration was applied', () => {
-    const appConfig = {
-      browserWebAccess: { displayMode: BrowserDisplayMode.External },
-      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
+      browserDisplayModeMigrationVersion: 1,
+      other: 'retained',
     };
-    const store = createStore({ app_config: appConfig });
-
-    expect(migrateBrowserDisplayModeToInApp(store)).toBe(false);
-    expect(store.values.get('app_config')).toBe(appConfig);
-  });
-
-  test('migrates configs saved before browser settings existed', () => {
-    const store = createStore({ app_config: { language: 'zh' } });
-
-    expect(migrateBrowserDisplayModeToInApp(store)).toBe(true);
-    expect(store.values.get('app_config')).toMatchObject({
-      language: 'zh',
-      browserWebAccess: { displayMode: BrowserDisplayMode.InApp },
+    expect(migrateBrowserDisplayModeConfig(config)).toEqual({
+      ...config,
+      browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
     });
   });
 
-  test('does not create an app config for a fresh install', () => {
-    const store = createStore({});
+  test('restores an implicit external choice from legacy non-headless config', () => {
+    expect(migrateBrowserDisplayModeConfig({ browserWebAccess: { headless: false } }).browserWebAccess)
+      .toEqual({ headless: false, displayMode: BrowserDisplayMode.External });
+  });
 
-    expect(migrateBrowserDisplayModeToInApp(store)).toBe(false);
-    expect(store.values.has('app_config')).toBe(false);
+  test('keeps explicit in-app choices and preserves their dormant external settings', () => {
+    const browserWebAccess = { displayMode: BrowserDisplayMode.InApp, cdpUrl: 'http://127.0.0.1:9222' };
+    const migrated = migrateBrowserDisplayModeConfig({ browserWebAccess, browserDisplayModeMigrationVersion: 2 });
+    expect(migrated.browserWebAccess).toEqual(browserWebAccess);
+    expect(migrateBrowserDisplayModeConfig(migrated)).toBe(migrated);
+  });
+
+  test('defaults existing installs without a choice and does not create a fresh configuration', () => {
+    expect(migrateBrowserDisplayModeConfig({}).browserWebAccess?.displayMode).toBe(BrowserDisplayMode.InApp);
+    const store = { get: () => undefined, set: vi.fn() };
+    expect(migrateBrowserDisplayMode(store)).toBe(false);
+    expect(store.set).not.toHaveBeenCalled();
   });
 });

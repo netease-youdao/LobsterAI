@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { MediaType } from '../../shared/media/defaultPolicy';
 import {
   compactMessageMetadataMedia,
   INLINE_MEDIA_SOURCE_KEY_PREFIX,
@@ -15,23 +16,26 @@ import {
 /**
  * Older builds stored every generated image as an inline data URL in several message rows
  * (one 13-image session held 1.1 GB). New writes keep file references only; this pass rewrites
- * the rows already stored, in the background and resumably.
+ * the rows already stored, before the first window opens.
  */
-export const MEDIA_METADATA_MIGRATION_KEY = 'cowork.mediaMetadataCompaction.v1';
+export const MEDIA_METADATA_MIGRATION_KEY = 'cowork.mediaMetadataCompaction.v3';
 
 /** Rows are visited by rowid range so each scan step stays a few milliseconds long. */
 const SCAN_WINDOW_ROWS = 2000;
-/** Metadata smaller than this cannot hold a generated image. */
+/** Inspect small records in SQL; read large candidates one at a time in migrateRow. */
 const MIN_CANDIDATE_METADATA_BYTES = 64 * 1024;
 const INLINE_MARKER = ';base64,';
-const IMAGE_DATA_URL_PATTERN = /^\s*data:(image\/[a-z0-9.+-]+)(?:;[^,]*)?;base64,/i;
-const IMAGE_EXTENSION_BY_MIME: Record<string, string> = {
+const MEDIA_DATA_URL_PATTERN = /^\s*data:((?:image|video)\/[a-z0-9.+-]+)(?:;[^,]*)?;base64,/i;
+const EXTENSION_BY_MIME: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
   'image/jpg': '.jpg',
   'image/webp': '.webp',
   'image/gif': '.gif',
   'image/avif': '.avif',
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
 };
 
 interface MigrationState {
@@ -42,8 +46,8 @@ interface MigrationState {
 export interface MediaMetadataMigrationDeps {
   db: Database.Database;
   kv: { get<T>(key: string): T | undefined; set(key: string, value: unknown): void };
-  /** Where an image whose saved file is gone is written back, per session. */
-  recoveryDirectory: (sessionId: string) => string;
+  /** Where a missing asset is recovered from its inline copy, per session and media type. */
+  recoveryDirectory: (sessionId: string, mediaType: MediaType) => string;
   /** Lets other main-process work run between rows. */
   pause?: () => Promise<void>;
   /**
@@ -60,6 +64,7 @@ export interface MediaMetadataMigrationResult {
   done: boolean;
   compactedRows: number;
   rescuedImages: number;
+  rescuedVideos: number;
   skippedRows: number;
   bytesBefore: number;
   bytesAfter: number;
@@ -67,27 +72,28 @@ export interface MediaMetadataMigrationResult {
 
 type AssetRescue =
   | { kind: 'unchanged' }
-  | { kind: 'rescued'; asset: Record<string, unknown> }
+  | { kind: 'rescued'; asset: Record<string, unknown>; mediaType: MediaType }
   | { kind: 'blocked' };
 
 const defaultPause = () => new Promise<void>(resolve => setTimeout(resolve, 10));
 const defaultWaitForIdle = () => new Promise<void>(resolve => setTimeout(resolve, 1000));
 
 /**
- * Compaction drops the inline copy of a saved image. When that file no longer exists (moved or
+ * Compaction drops the inline copy of a saved asset. When that file no longer exists (moved or
  * deleted) or was never written, the inline copy is the only one left: write it to the recovery
  * directory first and point the asset at it.
  */
-function rescueAsset(asset: Record<string, unknown>, recoveryDirectory: string): AssetRescue {
+function rescueAsset(asset: Record<string, unknown>, sessionId: string, recovery: MediaMetadataMigrationDeps['recoveryDirectory']): AssetRescue {
   const source = [asset.url, asset.originalUrl].find(isInlineDataUrl);
   if (!source) return { kind: 'unchanged' };
   const filePath = mediaAssetFilePath(asset);
   if (filePath && fs.existsSync(filePath)) return { kind: 'unchanged' };
 
-  const match = IMAGE_DATA_URL_PATTERN.exec(source);
-  const extension = match ? IMAGE_EXTENSION_BY_MIME[match[1].toLowerCase()] : undefined;
+  const mime = MEDIA_DATA_URL_PATTERN.exec(source)?.[1].toLowerCase();
+  const extension = mime && EXTENSION_BY_MIME[mime];
   if (!extension) return { kind: 'blocked' };
-
+  const mediaType = mime.startsWith('video/') ? MediaType.Video : MediaType.Image;
+  const recoveryDirectory = recovery(sessionId, mediaType);
   const hash = mediaSourceKey(source).slice(INLINE_MEDIA_SOURCE_KEY_PREFIX.length);
   const target = path.join(recoveryDirectory, `recovered-${hash.slice(0, 32)}${extension}`);
   if (!fs.existsSync(target)) {
@@ -98,6 +104,7 @@ function rescueAsset(asset: Record<string, unknown>, recoveryDirectory: string):
   }
   return {
     kind: 'rescued',
+    mediaType,
     asset: {
       ...asset,
       filePath: target,
@@ -111,13 +118,13 @@ function rescueAsset(asset: Record<string, unknown>, recoveryDirectory: string):
 type RowOutcome =
   | { kind: 'none' }
   | { kind: 'skipped' }
-  | { kind: 'compacted'; rescued: number; before: number; after: number };
+  | { kind: 'compacted'; images: number; videos: number; before: number; after: number };
 
 /** Synchronous from read to write, so no other writer can interleave with the row. */
 function migrateRow(
   db: Database.Database,
   rowId: number,
-  recoveryDirectory: (sessionId: string) => string,
+  recoveryDirectory: MediaMetadataMigrationDeps['recoveryDirectory'],
 ): RowOutcome {
   const row = db.prepare('SELECT session_id, metadata FROM cowork_messages WHERE rowid = ?').get(rowId) as
     | { session_id: string; metadata: string | null }
@@ -133,7 +140,8 @@ function migrateRow(
   if (!isRecord(metadata)) return { kind: 'none' };
 
   let next = metadata;
-  let rescued = 0;
+  let images = 0;
+  let videos = 0;
   for (const field of MEDIA_DETAILS_FIELDS) {
     const details = next[field];
     if (!isRecord(details) || !Array.isArray(details.assets)) continue;
@@ -144,11 +152,12 @@ function migrateRow(
         assets.push(asset);
         continue;
       }
-      const outcome = rescueAsset(asset, recoveryDirectory(row.session_id));
+      const outcome = rescueAsset(asset, row.session_id, recoveryDirectory);
       if (outcome.kind === 'blocked') return { kind: 'skipped' };
       if (outcome.kind === 'rescued') {
         changed = true;
-        rescued += 1;
+        if (outcome.mediaType === MediaType.Video) videos += 1;
+        else images += 1;
         assets.push(outcome.asset);
       } else {
         assets.push(asset);
@@ -161,12 +170,12 @@ function migrateRow(
   if (compacted === metadata) return { kind: 'none' };
   const json = JSON.stringify(compacted);
   db.prepare('UPDATE cowork_messages SET metadata = ? WHERE rowid = ?').run(json, rowId);
-  return { kind: 'compacted', rescued, before: row.metadata.length, after: json.length };
+  return { kind: 'compacted', images, videos, before: row.metadata.length, after: json.length };
 }
 
 export async function migrateInlineMediaMetadata(deps: MediaMetadataMigrationDeps): Promise<MediaMetadataMigrationResult> {
   const result: MediaMetadataMigrationResult = {
-    done: false, compactedRows: 0, rescuedImages: 0, skippedRows: 0, bytesBefore: 0, bytesAfter: 0,
+    done: false, compactedRows: 0, rescuedImages: 0, rescuedVideos: 0, skippedRows: 0, bytesBefore: 0, bytesAfter: 0,
   };
   const state = deps.kv.get<MigrationState>(MEDIA_METADATA_MIGRATION_KEY) ?? { lastRowId: 0 };
   if (state.done) return { ...result, done: true };
@@ -183,7 +192,7 @@ export async function migrateInlineMediaMetadata(deps: MediaMetadataMigrationDep
     FROM cowork_messages
     WHERE rowid > ? AND rowid <= ?
       AND type IN ('tool_use', 'tool_result', 'system')
-      AND octet_length(metadata) > ?
+      AND (octet_length(metadata) > ? OR instr(metadata, ?) > 0)
     ORDER BY rowid
   `);
 
@@ -191,7 +200,7 @@ export async function migrateInlineMediaMetadata(deps: MediaMetadataMigrationDep
   while (cursor < maxRowId) {
     if (shouldStop()) return result;
     const windowEnd = Math.min(cursor + SCAN_WINDOW_ROWS, maxRowId);
-    const candidates = selectCandidates.all(cursor, windowEnd, MIN_CANDIDATE_METADATA_BYTES) as Array<{ row_id: number }>;
+    const candidates = selectCandidates.all(cursor, windowEnd, MIN_CANDIDATE_METADATA_BYTES, INLINE_MARKER) as Array<{ row_id: number }>;
     for (const { row_id: rowId } of candidates) {
       // An interrupted window is visited again on the next run; rewritten rows are no longer candidates.
       while (!isIdle()) {
@@ -205,7 +214,8 @@ export async function migrateInlineMediaMetadata(deps: MediaMetadataMigrationDep
       if (outcome.kind === 'skipped') result.skippedRows += 1;
       if (outcome.kind !== 'compacted') continue;
       result.compactedRows += 1;
-      result.rescuedImages += outcome.rescued;
+      result.rescuedImages += outcome.images;
+      result.rescuedVideos += outcome.videos;
       result.bytesBefore += outcome.before;
       result.bytesAfter += outcome.after;
     }

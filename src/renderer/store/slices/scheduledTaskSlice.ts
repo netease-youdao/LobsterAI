@@ -93,10 +93,16 @@ const scheduledTaskSlice = createSlice({
       delete state.runsHasMore[action.payload];
       state.allRuns = state.allRuns.filter(r => r.taskId !== action.payload);
     },
-    updateTaskState(state, action: PayloadAction<{ taskId: string; taskState: TaskState }>) {
+    updateTaskState(
+      state,
+      action: PayloadAction<{ taskId: string; taskState: TaskState; enabled?: boolean }>,
+    ) {
       const task = state.tasks.find(t => t.id === action.payload.taskId);
       if (task) {
         task.state = action.payload.taskState;
+        if (action.payload.enabled !== undefined) {
+          task.enabled = action.payload.enabled;
+        }
       }
     },
     // Optimistic UI: reflect a manual run immediately; the next gateway status
@@ -135,16 +141,32 @@ const scheduledTaskSlice = createSlice({
       }
       state.runsHasMore[taskId] = hasMore;
     },
-    addOrUpdateRun(state, action: PayloadAction<ScheduledTaskRun>) {
-      const { taskId } = action.payload;
+    addOrUpdateRun(state, action: PayloadAction<ScheduledTaskRun | ScheduledTaskRunWithName>) {
+      const run = action.payload;
+      const { taskId } = run;
       if (!state.runs[taskId]) {
         state.runs[taskId] = [];
       }
-      const existingIndex = state.runs[taskId].findIndex(r => r.id === action.payload.id);
+      const existingIndex = state.runs[taskId].findIndex(r => r.id === run.id);
       if (existingIndex !== -1) {
-        state.runs[taskId][existingIndex] = action.payload;
+        state.runs[taskId][existingIndex] = run;
       } else {
-        state.runs[taskId].unshift(action.payload);
+        state.runs[taskId].unshift(run);
+      }
+
+      const taskName =
+        'taskName' in run && typeof run.taskName === 'string' && run.taskName.trim().length > 0
+          ? run.taskName
+          : (state.tasks.find(t => t.id === taskId)?.name ?? taskId);
+      const runWithName: ScheduledTaskRunWithName = {
+        ...run,
+        taskName,
+      };
+      const existingAllIndex = state.allRuns.findIndex(r => r.id === run.id);
+      if (existingAllIndex !== -1) {
+        state.allRuns[existingAllIndex] = runWithName;
+      } else {
+        state.allRuns.unshift(runWithName);
       }
     },
     setAllRuns(
@@ -160,7 +182,9 @@ const scheduledTaskSlice = createSlice({
       state,
       action: PayloadAction<{ runs: ScheduledTaskRunWithName[]; hasMore: boolean }>,
     ) {
-      state.allRuns = [...state.allRuns, ...action.payload.runs];
+      const existingIds = new Set(state.allRuns.map(r => r.id));
+      const newRuns = action.payload.runs.filter(r => !existingIds.has(r.id));
+      state.allRuns = [...state.allRuns, ...newRuns];
       state.allRunsHasMore = action.payload.hasMore;
     },
   },

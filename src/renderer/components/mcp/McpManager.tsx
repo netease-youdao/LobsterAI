@@ -4,7 +4,7 @@ import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { McpAuthMode, McpOAuthErrorCode, McpOAuthState } from '../../../shared/mcp/auth';
-import { McpManagedProvider } from '../../../shared/mcp/constants';
+import { McpManagedConnection, McpManagedProvider } from '../../../shared/mcp/constants';
 import { NeteaseMail } from '../../../shared/neteaseMail/constants';
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
@@ -187,12 +187,26 @@ const McpManager: React.FC = () => {
     return () => { isActive = false; };
   }, [dispatch]);
 
+  // Reads overlap (focus, sign-in, sign-out, background expiry); a read that
+  // started earlier never overwrites one that started later.
+  const oauthStatusReadRef = useRef(0);
+  const refreshOAuthStates = useCallback(async () => {
+    const read = ++oauthStatusReadRef.current;
+    const states = await mcpService.oauthStatus();
+    if (read !== oauthStatusReadRef.current) return;
+    setOAuthStates(states);
+    setOAuthStatusReady(true);
+  }, []);
+
   useEffect(() => {
     return mcpService.onChanged(async () => {
       const loaded = await mcpService.loadServers();
       dispatch(setMcpServers(loaded));
+      if (loaded.some(isOAuthRemoteServer)) {
+        void refreshOAuthStates();
+      }
     });
-  }, [dispatch]);
+  }, [dispatch, refreshOAuthStates]);
 
   useEffect(() => {
     let isActive = true;
@@ -209,7 +223,6 @@ const McpManager: React.FC = () => {
   }, []);
 
   // Re-read OAuth state whenever the set of OAuth servers (or their identity) changes.
-  // `mcp status` spawns the OpenClaw CLI, so skip it when no server uses OAuth.
   const oauthServerSignature = useMemo(
     () => servers
       .filter(isOAuthRemoteServer)
@@ -217,17 +230,6 @@ const McpManager: React.FC = () => {
       .join('|'),
     [servers],
   );
-
-  // Reads overlap (focus, sign-in, sign-out); a read that started earlier never
-  // overwrites one that started later.
-  const oauthStatusReadRef = useRef(0);
-  const refreshOAuthStates = useCallback(async () => {
-    const read = ++oauthStatusReadRef.current;
-    const states = await mcpService.oauthStatus();
-    if (read !== oauthStatusReadRef.current) return;
-    setOAuthStates(states);
-    setOAuthStatusReady(true);
-  }, []);
 
   useEffect(() => {
     if (!oauthServerSignature) {
@@ -315,6 +317,8 @@ const McpManager: React.FC = () => {
     const isManagedCandidate = command === 'npx' || command === 'npx.cmd';
     if (!server.launchResolution && !isManagedCandidate) return null;
     const status = server.launchResolution?.status;
+    if (server.runtimeConnection === McpManagedConnection.Connecting) return i18nService.t('mcpLaunchConnecting');
+    if (server.runtimeConnection === McpManagedConnection.Connected) return i18nService.t('mcpLaunchConnected');
     if (!status) return i18nService.t('mcpLaunchPending');
     if (status === 'pending') return i18nService.t('mcpLaunchPending');
     if (status === 'installing') return i18nService.t('mcpLaunchInstalling');
@@ -326,6 +330,8 @@ const McpManager: React.FC = () => {
 
   const getLaunchStatusClass = (server: McpServerConfig): string => {
     const status = server.launchResolution?.status || 'pending';
+    if (server.runtimeConnection === McpManagedConnection.Connecting) return LAUNCH_STATUS_COLORS.installing;
+    if (status === 'ready' && server.runtimeConnection !== McpManagedConnection.Connected) return LAUNCH_STATUS_COLORS.pending;
     return LAUNCH_STATUS_COLORS[status] || LAUNCH_STATUS_COLORS.pending;
   };
 

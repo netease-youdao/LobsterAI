@@ -9,6 +9,8 @@ import type {
   ScheduledTaskDelivery,
   ScheduledTaskPayload,
 } from '../../../scheduledTask/types';
+import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
 import {
   imConversationDisplayName,
   ImPeerKind,
@@ -425,6 +427,20 @@ export function conversationOptionMatchesValue(
   optionConversationId: string,
   selectedValue: string,
 ): boolean {
+  const platform = PlatformRegistry.platformOfChannel(channel);
+  if (platform === RetainedImPlatform.Feishu) {
+    const option = parseFeishuReplyRoute(optionConversationId);
+    const selected = parseFeishuReplyRoute(selectedValue);
+    if (option || selected) {
+      if (!option || !selected || option.chatId !== selected.chatId) return false;
+      if (option.threadId === selected.threadId) {
+        return !!option.threadId || option.replyToMessageId === selected.replyToMessageId;
+      }
+      // A root-only event uses the root message ID as its thread key.
+      return !!option.threadId && !!selected.threadId && option.replyToMessageId === selected.replyToMessageId
+        && (option.threadId === option.replyToMessageId || selected.threadId === selected.replyToMessageId);
+    }
+  }
   // Compare case-insensitively: conversation ids derive from lowercased
   // OpenClaw session keys, while saved delivery targets are restored to the
   // channel-native casing at save time (see applyAnnounceDeliveryNormalization).
@@ -435,7 +451,6 @@ export function conversationOptionMatchesValue(
   if (parseImConversationId(optionId).peerId === value) return true;
   if (optionId.endsWith(`:${value}`)) return true;
 
-  const platform = PlatformRegistry.platformOfChannel(channel);
   if (platform === 'nim' && optionId.endsWith(`|${value}`)) return true;
 
   return false;
@@ -683,6 +698,7 @@ export const TaskDisplayStatus = {
   Success: 'success',
   Error: 'error',
   Skipped: 'skipped',
+  Stopped: 'stopped',
   Never: 'never',
 } as const;
 export type TaskDisplayStatus = typeof TaskDisplayStatus[keyof typeof TaskDisplayStatus];
@@ -694,6 +710,7 @@ export function getTaskDisplayStatus(task: ScheduledTask): TaskDisplayStatus {
   if (state.lastStatus === 'success') return TaskDisplayStatus.Success;
   if (state.lastStatus === 'error') return TaskDisplayStatus.Error;
   if (state.lastStatus === 'skipped') return TaskDisplayStatus.Skipped;
+  if (state.lastStatus === TaskDisplayStatus.Stopped) return TaskDisplayStatus.Stopped;
   return TaskDisplayStatus.Never;
 }
 
@@ -703,5 +720,6 @@ export const taskDisplayStatusLabelKey: Record<TaskDisplayStatus, string> = {
   [TaskDisplayStatus.Success]: 'scheduledTasksStatusSuccess',
   [TaskDisplayStatus.Error]: 'scheduledTasksStatusError',
   [TaskDisplayStatus.Skipped]: 'scheduledTasksStatusSkipped',
+  [TaskDisplayStatus.Stopped]: 'scheduledTasksStatusStopped',
   [TaskDisplayStatus.Never]: 'scheduledTasksStatusNever',
 };

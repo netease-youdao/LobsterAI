@@ -27,6 +27,7 @@ function snapshot(selected: Model = plan): Pick<RootState, 'model' | 'agent'> {
       availableModels: [selected, custom], serverModelLoadStatus: ServerModelLoadStatus.Ready,
     },
     agent: {
+      expertRevisions: {},
       currentAgentId: AgentId.Main, loading: false, sidebarRevealAgentId: null,
       agents: [{
         id: AgentId.Main, name: 'Main', description: '', icon: '', model: toOpenClawModelRef(selected),

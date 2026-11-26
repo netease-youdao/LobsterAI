@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 import { i18nService } from '@/services/i18n';
+import { getSheetPreviewKey, isDelimitedTextFile } from '@/services/office/sheet/sheetPreview';
 import type { Artifact } from '@/types/artifact';
 
+import { DelimitedTextPreview } from './DelimitedTextPreview';
 import { getSheetFileName } from './excelPreprocess';
 import { SheetFallbackRenderer } from './SheetFallbackRenderer';
 
@@ -13,6 +15,12 @@ interface SheetRendererProps {
 }
 
 export const SheetRenderer: React.FC<SheetRendererProps> = ({ artifact }) => {
+  const fileKey = getSheetPreviewKey(artifact.sessionId, artifact.filePath ? normalizeFilePath(artifact.filePath) : undefined, artifact.id);
+  // A new file gets fresh loading/parse state immediately, while its encoding choice is remembered.
+  return <SheetFilePreview key={fileKey} artifact={artifact} fileKey={fileKey} />;
+};
+
+const SheetFilePreview: React.FC<SheetRendererProps & { fileKey: string }> = ({ artifact, fileKey }) => {
   const { data, loading, error } = useSheetFileContent(artifact);
   const fileName = getSheetFileName(artifact.fileName, artifact.filePath);
 
@@ -32,60 +40,66 @@ export const SheetRenderer: React.FC<SheetRendererProps> = ({ artifact }) => {
     );
   }
 
-  return <SheetFallbackRenderer data={data} fileName={fileName} error={error} />;
+  return isDelimitedTextFile(fileName)
+    ? <DelimitedTextPreview key={fileKey} data={data} fileName={fileName} fileKey={fileKey} />
+    : <SheetFallbackRenderer data={data} fileName={fileName} />;
 };
 
-function useSheetFileContent(artifact: Artifact): { data: ArrayBuffer | null; loading: boolean; error: string | null } {
-  const [data, setData] = useState<ArrayBuffer | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+interface SheetFileContent {
+  data: ArrayBuffer | null;
+  loading: boolean;
+  error: string | null;
+}
+
+function useSheetFileContent(artifact: Artifact): SheetFileContent {
+  const request = useMemo(() => ({ content: artifact.content, filePath: artifact.filePath, version: artifact.contentVersion }),
+    [artifact.content, artifact.filePath, artifact.contentVersion]);
+  const [loaded, setLoaded] = useState<{ request: typeof request; result: SheetFileContent } | null>(null);
+  // Inline bytes belong to the current render, not to a later effect. This also keeps the grid
+  // mounted (and its zoom intact) when a refresh replaces one inline snapshot with another.
+  const inline = useMemo<SheetFileContent | null>(() => {
+    if (!request.content) return null;
+    try {
+      return { data: dataUrlToArrayBuffer(request.content), loading: false, error: null };
+    } catch (e) {
+      return { data: null, loading: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [request]);
 
   useEffect(() => {
+    if (request.content) return;
     let cancelled = false;
+    const finish = (data: ArrayBuffer | null, error: string | null) => {
+      if (!cancelled) setLoaded({ request, result: { data, error, loading: false } });
+    };
 
     const load = async () => {
-      setLoading(true);
-      setError(null);
-      setData(null);
-
-      if (artifact.content) {
+      if (request.filePath && window.electron?.dialog?.readFileAsDataUrl) {
         try {
-          const buf = dataUrlToArrayBuffer(artifact.content);
-          if (!cancelled) setData(buf);
-        } catch (e) {
-          if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-        } finally {
-          if (!cancelled) setLoading(false);
-        }
-        return;
-      }
-
-      if (artifact.filePath && window.electron?.dialog?.readFileAsDataUrl) {
-        try {
-          const result = await window.electron.dialog.readFileAsDataUrl(normalizeFilePath(artifact.filePath));
+          const result = await window.electron.dialog.readFileAsDataUrl(normalizeFilePath(request.filePath));
           if (cancelled) return;
           if (result?.success && result.dataUrl) {
-            setData(dataUrlToArrayBuffer(result.dataUrl));
+            finish(dataUrlToArrayBuffer(result.dataUrl), null);
           } else {
-            setError(result?.error || 'Failed to read file');
+            finish(null, result?.error || t('artifactSourceLoadFailed'));
           }
         } catch (e) {
-          if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-        } finally {
-          if (!cancelled) setLoading(false);
+          finish(null, e instanceof Error ? e.message : String(e));
         }
         return;
       }
 
-      setError('No content available');
-      setLoading(false);
+      finish(null, t('artifactNoPreview'));
     };
 
     load();
     return () => { cancelled = true; };
-  }, [artifact.content, artifact.filePath]);
+  }, [request]);
 
-  return { data, loading, error };
+  if (inline) return inline;
+  // Invalidate during render, before passive effects start the next read. A finished request
+  // cannot display cells or errors under a different snapshot/version, even for the same file.
+  return loaded?.request === request ? loaded.result : { data: null, loading: true, error: null };
 }
 
 function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {

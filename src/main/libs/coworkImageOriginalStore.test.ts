@@ -51,4 +51,49 @@ describe('retained originals of payload-only images', () => {
     expect(fs.existsSync(first.retainedOriginalPath!)).toBe(false);
     expect(fs.existsSync(second.retainedOriginalPath!)).toBe(true);
   });
+
+  test('persists inbound IM images with servable extensions and cleans them up with the session', () => {
+    const { store } = createStore();
+    const rawBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const saved = store.persistInboundImage('im-session-1', {
+      mimeType: 'image/png',
+      base64Data: rawBytes.toString('base64'),
+    });
+    expect(saved).not.toBeNull();
+    expect(saved).toMatch(/\.png$/);
+    expect(fs.readFileSync(saved!)).toEqual(rawBytes);
+    // Identical bytes in the same session reuse the persisted file.
+    expect(
+      store.persistInboundImage('im-session-1', {
+        mimeType: 'image/png',
+        base64Data: rawBytes.toString('base64'),
+      }),
+    ).toBe(saved);
+
+    // Unknown MIME types fall back to .jpg so localfile:// can serve them.
+    const fallbackSaved = store.persistInboundImage('im-session-1', {
+      mimeType: 'application/octet-stream',
+      base64Data: Buffer.from('jpeg-ish').toString('base64'),
+    });
+    expect(fallbackSaved).toMatch(/\.jpg$/);
+
+    // Existing localPath is returned as-is; empty base64 returns null.
+    expect(
+      store.persistInboundImage('im-session-1', {
+        mimeType: 'image/jpeg',
+        base64Data: '',
+        localPath: '/existing/image.jpg',
+      }),
+    ).toBe('/existing/image.jpg');
+    expect(
+      store.persistInboundImage('im-session-1', {
+        mimeType: 'image/jpeg',
+        base64Data: '',
+      }),
+    ).toBeNull();
+
+    store.deleteSession('im-session-1');
+    expect(fs.existsSync(saved!)).toBe(false);
+    expect(fs.existsSync(fallbackSaved!)).toBe(false);
+  });
 });

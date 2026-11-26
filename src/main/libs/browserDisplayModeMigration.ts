@@ -1,13 +1,13 @@
 import {
   BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
-  BrowserDisplayMode,
-  type BrowserWebAccessConfig,
+  type LegacyBrowserWebAccessConfigInput,
+  normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 
-const APP_CONFIG_KEY = 'app_config';
+export const APP_CONFIG_KEY = 'app_config';
 
-type BrowserDisplayModeMigrationConfig = Record<string, unknown> & {
-  browserWebAccess?: Partial<BrowserWebAccessConfig>;
+export type BrowserDisplayModeMigrationConfig = Record<string, unknown> & {
+  browserWebAccess?: LegacyBrowserWebAccessConfigInput;
   browserDisplayModeMigrationVersion?: number;
 };
 
@@ -16,32 +16,26 @@ interface BrowserDisplayModeMigrationStore {
   set<T = unknown>(key: string, value: T): void;
 }
 
-/**
- * Switches an existing install to the in-app browser once. The renderer
- * persists the normalized browser config on every launch, so older installs
- * carry an explicit `external` value that a new default alone cannot change.
- *
- * Run it before the first OpenClaw config sync so the gateway starts with the
- * in-app browser profile instead of restarting after the renderer loads.
- */
-export const migrateBrowserDisplayModeToInApp = (
-  store: BrowserDisplayModeMigrationStore,
-): boolean => {
-  const appConfig = store.get<BrowserDisplayModeMigrationConfig>(APP_CONFIG_KEY);
-  // Fresh installs already start from the in-app default; the renderer's
-  // default config records the applied version on its first write.
-  if (!appConfig) return false;
-  if ((appConfig.browserDisplayModeMigrationVersion ?? 0) >= BROWSER_DISPLAY_MODE_MIGRATION_VERSION) {
-    return false;
+export function migrateBrowserDisplayModeConfig(config: BrowserDisplayModeMigrationConfig): BrowserDisplayModeMigrationConfig {
+  const browser = config.browserWebAccess;
+  const displayMode = normalizeBrowserWebAccessConfig(browser).displayMode;
+  const version = config.browserDisplayModeMigrationVersion ?? 0;
+  if (browser?.displayMode === displayMode && version >= BROWSER_DISPLAY_MODE_MIGRATION_VERSION) {
+    return config;
   }
 
-  store.set(APP_CONFIG_KEY, {
-    ...appConfig,
-    browserWebAccess: {
-      ...appConfig.browserWebAccess,
-      displayMode: BrowserDisplayMode.InApp,
-    },
-    browserDisplayModeMigrationVersion: BROWSER_DISPLAY_MODE_MIGRATION_VERSION,
-  });
+  return {
+    ...config,
+    browserWebAccess: { ...browser, displayMode },
+    browserDisplayModeMigrationVersion: Math.max(version, BROWSER_DISPLAY_MODE_MIGRATION_VERSION),
+  };
+}
+
+export function migrateBrowserDisplayMode(store: BrowserDisplayModeMigrationStore): boolean {
+  const config = store.get<BrowserDisplayModeMigrationConfig>(APP_CONFIG_KEY);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return false;
+  const migrated = migrateBrowserDisplayModeConfig(config);
+  if (migrated === config) return false;
+  store.set(APP_CONFIG_KEY, migrated);
   return true;
-};
+}

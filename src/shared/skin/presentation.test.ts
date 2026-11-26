@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  SkinBackdropVisibility,
   SkinParticleDensity,
   SkinPreferredAppearance,
   SkinPresentationMode,
@@ -9,6 +10,7 @@ import {
   getSkinColorContrast,
   inferSkinPreferredAppearance,
   parseSkinPresentation,
+  resolveSkinBackdropVisibility,
 } from './presentation';
 
 const validPresentation = {
@@ -79,6 +81,23 @@ describe('skin presentation schema', () => {
         foreground: '#241416',
         muted: '#2A171A',
       },
+    })).toBeNull();
+  });
+
+  test('validates backdropVisibility presets and defaults omitted values to balanced', () => {
+    expect(resolveSkinBackdropVisibility(parseSkinPresentation(validPresentation) ?? undefined))
+      .toBe(SkinBackdropVisibility.Balanced);
+
+    const vivid = parseSkinPresentation({
+      ...validPresentation,
+      backdropVisibility: SkinBackdropVisibility.Vivid,
+    });
+    expect(vivid?.backdropVisibility).toBe(SkinBackdropVisibility.Vivid);
+    expect(resolveSkinBackdropVisibility(vivid ?? undefined)).toBe(SkinBackdropVisibility.Vivid);
+
+    expect(parseSkinPresentation({
+      ...validPresentation,
+      backdropVisibility: 'transparent',
     })).toBeNull();
   });
 });

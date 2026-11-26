@@ -1,13 +1,13 @@
 export const pptCreationTranslations = {
   zh: {
-    pptCreationHeading: '从一份好演示开始', pptCreationMore: '查看全部示例', pptCreationPreview: '预览与定制',
+    pptCreationHeading: '从一份好演示开始', pptCreationMore: '查看全部示例', pptCreationBackToAll: '返回全部示例', pptCreationPreview: '预览与定制',
     pptCreationGalleryHint: '选一份喜欢的示例，直接试做，或换成你的内容。',
     pptCreationExamplePreview: '示例预览', pptCreationDirectHint: '体验这份示例', pptCreationGuidedHint: '替换为你的主题和资料',
     pptCreationPromptHint: '已为你准备好，可以直接使用或修改。',
     pptCreationDirect: '直接试做', pptCreationGuided: '用我的内容', pptCreationReal: 'LobsterAI 生成与编辑示例',
     pptCreationPage: '第 {page} 页', pptCreationPages: '{count} 页', pptCreationModel: '推荐模型：',
     pptCreationPrompt: '完整提示词', pptCreationTopic: '主题与内容要点', pptCreationTopicPlaceholder: '介绍给谁看、希望讲清什么？可以粘贴大纲或上传资料。',
-    pptCreationAudience: '受众（可选）', pptCreationSlideCount: '页数', pptCreationMaterials: '参考材料',
+    pptCreationAudience: '受众（选填）', pptCreationSlideCount: '页数', pptCreationMaterials: '参考材料',
     pptCreationAddFiles: '添加材料', pptCreationFilesHint: 'PPTX、DOCX、XLSX、PDF、TXT、CSV 或 Markdown；连同原附件、示例资料和模板最多 5 个，每个 20 MB。',
     pptCreationExistingFiles: '输入框中已有的 {count} 个附件也会保留。', pptCreationRemoveFile: '移除 {name}',
     pptCreationDemo: '使用示例内容与资料', pptCreationDemoHint: '示例仅供参考，虚构案例会明确标注；引用的公开资料请核对来源与日期。',
@@ -27,7 +27,7 @@ export const pptCreationTranslations = {
     pptCreationImageFailed: '预览暂不可用，仍可查看提示词',
   },
   en: {
-    pptCreationHeading: 'Start with a great presentation', pptCreationMore: 'Browse all examples', pptCreationPreview: 'Preview and customize',
+    pptCreationHeading: 'Start with a great presentation', pptCreationMore: 'Browse all examples', pptCreationBackToAll: 'Back to all examples', pptCreationPreview: 'Preview and customize',
     pptCreationGalleryHint: 'Choose an example to try, or make it your own.',
     pptCreationExamplePreview: 'Example preview', pptCreationDirectHint: 'Explore this ready-made example', pptCreationGuidedHint: 'Add your own topic and materials',
     pptCreationPromptHint: 'Ready to use. Adjust the prompt if you like.',

@@ -1,5 +1,6 @@
 import {
   SkinAssetSlot,
+  SkinBackdropVisibility,
   SkinParticleDensity,
   SkinPreferredAppearance,
   SkinPresentationMode,
@@ -399,5 +400,80 @@ describe('SkinStore', () => {
       slot: SkinAssetSlot.HomeEmblem,
       source: emblemPath,
     })).rejects.toMatchObject({ code: SkinStoreErrorCode.SlotAlreadyRegistered });
+  });
+
+  test('allows applying a backdrop-only skin, registers buffer assets, and reports exact dimension bounds', async () => {
+    const { rootDir } = createTempWorkspace();
+    const store = createStore(rootDir);
+    await store.createDraft({ name: 'Direct wallpaper', presentation });
+
+    await expect(store.registerAssetBuffer({
+      skinId: 'skin-one',
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      data: createPng(512, 512),
+    })).rejects.toThrow('512x512');
+
+    const backdrop = await store.registerAssetBuffer({
+      skinId: 'skin-one',
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      data: createPng(800, 450),
+    });
+    expect(backdrop.width).toBe(800);
+    expect(backdrop.height).toBe(450);
+
+    const ready = await store.getSkin('skin-one');
+    expect(ready?.status).toBe(SkinRecordStatus.Ready);
+    expect(ready?.assets[SkinAssetSlot.HomeEmblem]).toBeUndefined();
+
+    const applied = await store.apply('skin-one');
+    expect(applied.id).toBe('skin-one');
+    expect((await createStore(rootDir).getActive())?.assets[SkinAssetSlot.WorkspaceBackdrop]).toEqual(backdrop);
+  });
+
+  test('remains backward-compatible with legacy backdrop-only draft records in registry.json', async () => {
+    const { rootDir, sourceDir } = createTempWorkspace();
+    const backdropPath = writeSource(sourceDir, 'background.png', createPng(1600, 900));
+    const store = createStore(rootDir);
+    await store.createDraft({ name: 'Legacy draft' });
+    await store.registerAsset({
+      skinId: 'skin-one',
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      source: backdropPath,
+    });
+
+    const registryPath = path.join(rootDir, 'registry.json');
+    const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as {
+      skins: Record<string, { status: string }>;
+    };
+    registry.skins['skin-one'].status = SkinRecordStatus.Draft;
+    fs.writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+
+    const reloaded = createStore(rootDir);
+    expect((await reloaded.getSkin('skin-one'))?.status).toBe(SkinRecordStatus.Draft);
+    const applied = await reloaded.apply('skin-one');
+    expect(applied.status).toBe(SkinRecordStatus.Ready);
+  });
+
+  test('updates backdropVisibility on active and inactive skins with presentation metadata', async () => {
+    const { rootDir, sourceDir } = createTempWorkspace();
+    const backdropPath = writeSource(sourceDir, 'background.png', createPng(1600, 900));
+    const store = createStore(rootDir, ['skin-one', 'skin-legacy']);
+
+    await store.createDraft({ name: 'Presented', presentation });
+    await store.registerAsset({
+      skinId: 'skin-one',
+      slot: SkinAssetSlot.WorkspaceBackdrop,
+      source: backdropPath,
+    });
+    await store.apply('skin-one');
+
+    const updated = await store.setBackdropVisibility('skin-one', SkinBackdropVisibility.Vivid);
+    expect(updated.presentation?.backdropVisibility).toBe(SkinBackdropVisibility.Vivid);
+    expect((await createStore(rootDir).getActive())?.presentation?.backdropVisibility)
+      .toBe(SkinBackdropVisibility.Vivid);
+
+    await store.createDraft({ name: 'Legacy' });
+    await expect(store.setBackdropVisibility('skin-legacy', SkinBackdropVisibility.Subtle))
+      .rejects.toMatchObject({ code: SkinStoreErrorCode.InvalidDraft });
   });
 });

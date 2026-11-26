@@ -1,4 +1,4 @@
-import { PaperClipIcon as DropPaperClipIcon, ViewfinderCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { DocumentTextIcon, FolderIcon, PaperClipIcon as DropPaperClipIcon, ViewfinderCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef, useState } from 'react';
 
 import { CompanionAnalyticsAction, CompanionAnalyticsOutcome, CompanionAnalyticsSource, CompanionAnalyticsStage,
@@ -11,12 +11,15 @@ import {
   DesktopCompanionTiming,
 } from '../../../shared/desktopCompanion/constants';
 import {
+  formatCompanionContextActionLabel,
+  resolveCompanionLauncherContextAction,
+} from '../../../shared/desktopCompanion/contextActions';
+import {
   CompanionDropAction,
   companionDropActions,
   companionDropCopyKeys,
   type CompanionFileKind,
 } from '../../../shared/desktopCompanion/fileKinds';
-import { COMPANION_WELCOME_TOPIC, companionHintCopyKeys } from '../../../shared/desktopCompanion/hintPolicy';
 import { COMPANION_LAUNCHER_ROWS, CompanionLauncherAction } from '../../../shared/desktopCompanion/launcher';
 import { i18nService } from '../../services/i18n';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -30,44 +33,8 @@ import { useMeasuredSurface } from './useMeasuredSurface';
 
 const t = (key: string) => i18nService.t(key);
 
-type HintStage = Extract<DesktopCompanionStage, { kind: typeof DesktopCompanionStageKind.Hint }>;
 type DropStage = Extract<DesktopCompanionStage, { kind: typeof DesktopCompanionStageKind.Drop }>;
 type TaskStage = Extract<DesktopCompanionStage, { kind: typeof DesktopCompanionStageKind.Task }>;
-
-function HintBubble({ stage }: { stage: HintStage }) {
-  const api = window.electron.desktopCompanion;
-  const [hovering, setHovering] = useState(false);
-  const keys = companionHintCopyKeys(stage.topic, stage.variant);
-  useEffect(() => {
-    if (hovering) return;
-    const timer = setTimeout(() => {
-      void api.stageCommand({ type: DesktopCompanionStageCommandType.HintTimeout });
-    }, DesktopCompanionTiming.HintAutoDismissMs);
-    return () => clearTimeout(timer);
-  }, [api, hovering, stage.id]);
-  const hover = (value: boolean) => {
-    setHovering(value);
-    void api.stageCommand({ type: DesktopCompanionStageCommandType.StageHover, hovering: value });
-  };
-  return (
-    <div className="stage-bubble" role="status" onMouseEnter={() => hover(true)} onMouseLeave={() => hover(false)}>
-      <p className="bubble-message">{t(keys.message)}</p>
-      <div className="bubble-actions">
-        <button type="button" className="bubble-primary" onClick={() => { void api.stageCommand({ type: DesktopCompanionStageCommandType.HintAccept }); }}>
-          {t(keys.action)}
-        </button>
-        <button type="button" className="bubble-text" onClick={() => { void api.stageCommand({ type: DesktopCompanionStageCommandType.HintDismiss }); }}>
-          {t('desktopCompanionHintDismiss')}
-        </button>
-        {stage.topic !== COMPANION_WELCOME_TOPIC && (
-          <button type="button" className="bubble-mute" onClick={() => { void api.stageCommand({ type: DesktopCompanionStageCommandType.HintMute }); }}>
-            {t('desktopCompanionHintMute')}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /** How a task handed to the orb is doing; opens the corresponding task in the main window. */
 function TaskStrip({ stage }: { stage: TaskStage }) {
@@ -82,7 +49,7 @@ function TaskStrip({ stage }: { stage: TaskStage }) {
     if (!over || hovering) return;
     const timer = setTimeout(() => {
       void api.stageCommand({ type: DesktopCompanionStageCommandType.TaskDismiss });
-    }, DesktopCompanionTiming.HintAutoDismissMs);
+    }, DesktopCompanionTiming.TaskAutoDismissMs);
     return () => clearTimeout(timer);
   }, [api, hovering, over]);
   const hover = (value: boolean) => {
@@ -232,7 +199,7 @@ function DropZone({ stage }: { stage: DropStage }) {
   );
 }
 
-const LAUNCHER_ICONS: Record<CompanionLauncherAction, React.ComponentType<{ className?: string }>> = {
+const LAUNCHER_ICONS: Record<Exclude<CompanionLauncherAction, typeof CompanionLauncherAction.ContextFile>, React.ComponentType<{ className?: string }>> = {
   [CompanionLauncherAction.Ask]: ComposeIcon,
   [CompanionLauncherAction.Screenshot]: ViewfinderCircleIcon,
   [CompanionLauncherAction.Files]: PaperClipIcon,
@@ -245,8 +212,9 @@ const LAUNCHER_ICONS: Record<CompanionLauncherAction, React.ComponentType<{ clas
  * panel in the same place; a real input here would take focus from the app the
  * user is working in just for hovering.
  */
-function Launcher() {
+function Launcher({ state }: { state: DesktopCompanionState }) {
   const api = window.electron.desktopCompanion;
+  const contextAction = state.preferences.contextHints ? resolveCompanionLauncherContextAction(state.context) : null;
   // The window's transparent margin reaches over the orb's edge; only the cards themselves take the mouse.
   useEffect(() => {
     let passThrough: boolean | null = null;
@@ -265,11 +233,27 @@ function Launcher() {
       .catch(error => console.error('[DesktopCompanion] Launcher action failed', error));
   };
   const AskIcon = LAUNCHER_ICONS[CompanionLauncherAction.Ask];
+  const ContextIcon = contextAction?.isDirectory ? FolderIcon : DocumentTextIcon;
   return (
     <div className="stage-launcher" role="group" aria-label={t('desktopCompanionLauncherLabel')}>
       <div className="launcher-menu" data-launcher-card>
+        {contextAction && (
+          <>
+            <button
+              type="button"
+              className="launcher-row launcher-row-context"
+              data-context-launcher-row="true"
+              title={contextAction.fileName}
+              onClick={() => run(CompanionLauncherAction.ContextFile)}
+            >
+              <span className="launcher-icon" aria-hidden="true"><ContextIcon /></span>
+              <span>{formatCompanionContextActionLabel(contextAction, t)}</span>
+            </button>
+            <div className="launcher-divider" role="separator" />
+          </>
+        )}
         {COMPANION_LAUNCHER_ROWS.map(row => {
-          const Icon = LAUNCHER_ICONS[row.action];
+          const Icon = LAUNCHER_ICONS[row.action as Exclude<CompanionLauncherAction, typeof CompanionLauncherAction.ContextFile>];
           return (
             <React.Fragment key={row.action}>
               {row.divided && <div className="launcher-divider" role="separator" />}
@@ -297,10 +281,9 @@ export default function CompanionStage({ state }: { state: DesktopCompanionState
   return (
     <div className="stage-surface" data-side={state.stageSide} data-kind={stage.kind}>
       <div className="stage-card" ref={cardRef} key={stage.id}>
-        {stage.kind === DesktopCompanionStageKind.Hint && <HintBubble stage={stage} />}
         {stage.kind === DesktopCompanionStageKind.Drop && <DropZone stage={stage} />}
         {stage.kind === DesktopCompanionStageKind.Task && <TaskStrip stage={stage} />}
-        {stage.kind === DesktopCompanionStageKind.Launcher && <Launcher />}
+        {stage.kind === DesktopCompanionStageKind.Launcher && <Launcher state={state} />}
       </div>
     </div>
   );

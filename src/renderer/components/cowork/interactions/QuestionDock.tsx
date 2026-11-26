@@ -100,7 +100,7 @@ function StandardQuestionDockCard({ request, queueCount = 1, onRespond, onMinimi
   const expandButton = useRef<HTMLButtonElement>(null);
   const focusNextQuestion = useRef(false);
   const focusExpandButton = useRef(false);
-  const canSkip = request.source === QuestionSource.Plugin;
+  const canSkip = request.source !== QuestionSource.Native;
 
   useEffect(() => { saveInteractionDraft(storageKey, draft); }, [storageKey, draft]);
   useEffect(() => {

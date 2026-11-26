@@ -40,6 +40,20 @@ const fixture = () => {
 };
 
 describe('MediaDefaultPolicyManager', () => {
+  test('imports scoped preferences before either account opens the picker and preserves later edits', () => {
+    const f = fixture();
+    const other = 'enterprise:71:9';
+    const legacyKey = MediaDefaultsProtocol.LegacyKey + ':' + other;
+    f.values.set(legacyKey, { image: { modelId: 'old', modelName: 'Old' } });
+    f.values.set(MediaDefaultsProtocol.LegacyKey, {});
+    f.manager.migrateLegacyPreferences([legacyKey]);
+    expect(f.values.get(mediaPreferenceKey(other))).toMatchObject({ image: { modelId: 'old' } });
+    expect(f.values.get(mediaPreferenceKey(owner))).toMatchObject({ image: { mode: MediaPreferenceMode.Off } });
+    const edited = migrateMediaPreferences(undefined, {});
+    f.values.set(mediaPreferenceKey(other), edited);
+    f.manager.migrateLegacyPreferences([legacyKey]);
+    expect(f.values.get(mediaPreferenceKey(other))).toBe(edited);
+  });
   test('migrates legacy data once and consumes the global value only for its first owner', async () => {
     const f = fixture();
     f.values.set(MediaDefaultsProtocol.LegacyKey, { image: { modelId: 'old', modelName: 'Old' } });

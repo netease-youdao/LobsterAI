@@ -337,6 +337,36 @@ describe('buildNodeServiceProjectPackagePlan', () => {
     expect(plan.analysis.excludedCount).toBeGreaterThan(0);
     expect(plan.analysis.warnings.join('\n')).not.toContain('excluded from the deployment package');
   });
+
+  test('excludes .dsh, .openclaw, and .cowork-temp directories from Node and static site packages', async () => {
+    const nodeProjectDirectory = await makeTempProject();
+    await writeFile(nodeProjectDirectory, 'src/app.ts');
+    await writeFile(nodeProjectDirectory, '.dsh/config.json', '{"secret":true}');
+    await writeFile(nodeProjectDirectory, '.openclaw/state.json', '{}');
+    await writeFile(nodeProjectDirectory, '.cowork-temp/draft.txt', 'draft');
+
+    const nodePlan = await buildNodeServiceProjectPackagePlan({
+      projectDirectory: nodeProjectDirectory,
+      localServiceUrl: 'http://localhost:3000',
+    });
+    const nodeArchiveNames = nodePlan.entries.map(entry => entry.archiveName);
+    expect(nodeArchiveNames).toContain('src/app.ts');
+    expect(nodeArchiveNames).not.toContain('.dsh/config.json');
+    expect(nodeArchiveNames).not.toContain('.openclaw/state.json');
+    expect(nodeArchiveNames).not.toContain('.cowork-temp/draft.txt');
+
+    const staticProjectDirectory = await makeTempStaticSiteProject();
+    await writeFile(staticProjectDirectory, '.dsh/config.json', '{"secret":true}');
+    await writeFile(staticProjectDirectory, '.openclaw/state.json', '{}');
+    await writeFile(staticProjectDirectory, '.cowork-temp/draft.txt', 'draft');
+
+    const staticPlan = await buildNodeServiceProjectPackagePlan({
+      projectDirectory: staticProjectDirectory,
+      localServiceUrl: 'http://localhost:8765',
+    });
+    const staticArchiveNames = staticPlan.entries.map(entry => entry.archiveName);
+    expect(staticArchiveNames).toEqual(['app.js', 'index.html', 'style.css']);
+  });
 });
 
 describe('collectNodeServiceDeploymentPackageEntries', () => {

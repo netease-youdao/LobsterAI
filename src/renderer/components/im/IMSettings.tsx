@@ -7,6 +7,7 @@ import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroico
 import { ArrowLeftIcon, CheckCircleIcon, EllipsisVerticalIcon, ExclamationTriangleIcon, PlusIcon, QrCodeIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
+import { weixinCredentialErrorKey } from '@shared/im/weixin';
 import type { Platform } from '@shared/platform';
 import { PlatformRegistry } from '@shared/platform';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
@@ -307,7 +308,6 @@ const reportIMGatewayToggledAction = (
 
 const WeixinRuntimeLastError = {
   Disabled: 'disabled',
-  NotConfigured: 'not configured',
 } as const;
 
 const IMSaveReminderTarget = {
@@ -987,11 +987,7 @@ const IMSettings: React.FC = () => {
   const wecomConnected = status.wecom?.instances?.some(i => i.connected) ?? false;
   const weixinConnected = Boolean(weixinOpenClawConfig.enabled && status.weixin?.connected);
   const weixinLastError = status.weixin?.lastError ?? null;
-  const isWeixinCredentialMissingError = Boolean(
-    weixinOpenClawConfig.enabled
-    && weixinAccountId
-    && weixinLastError?.trim().toLowerCase().includes(WeixinRuntimeLastError.NotConfigured)
-  );
+  const weixinCredentialError = weixinCredentialErrorKey(weixinLastError);
   const shouldShowWeixinError = Boolean(
     weixinLastError && weixinLastError.trim().toLowerCase() !== WeixinRuntimeLastError.Disabled
   );
@@ -1193,8 +1189,8 @@ const IMSettings: React.FC = () => {
 
     if (displayState === IMRuntimeDisplayState.Failed) {
       return (
-        <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-          {i18nService.t('imChannelConnectionFailed').replace('{platform}', i18nService.t(platform))}
+        <div role="alert" className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+          {weixinCredentialError ? i18nService.t(weixinCredentialError) : translateIMError(weixinLastError)}
         </div>
       );
     }
@@ -1243,6 +1239,12 @@ const IMSettings: React.FC = () => {
 
     setConnectivityModalPlatform(platform);
     setTestingPlatform(platform);
+
+    if (platform === 'popo' && activePopoInstanceId) {
+      const selected = config.popo.instances.find(instance => instance.instanceId === activePopoInstanceId);
+      await runConnectivityTest(platform, { popo: { instances: selected ? [selected] : [] } });
+      return;
+    }
 
     // For Telegram, persist telegram config and test (multi-instance)
     if (platform === 'telegram') {
@@ -1323,7 +1325,7 @@ const IMSettings: React.FC = () => {
     // For WeCom, persist wecom config and test (OpenClaw mode)
     if (platform === 'wecom') {
       const wecomMultiConfig = config.wecom;
-      await imService.persistConfig({ wecom: wecomMultiConfig });
+      if (!await imService.persistConfig({ wecom: wecomMultiConfig })) return;
       const result = await runConnectivityTest(platform, {
         wecom: wecomMultiConfig,
       } as Partial<IMGatewayConfig>);
@@ -1333,9 +1335,9 @@ const IMSettings: React.FC = () => {
         if (inst && !inst.enabled) {
           const authCheck = result.checks.find((c) => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId, config: { enabled: true } }));
-            await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true });
-            setSaveReminderTarget('wecom', activeWecomInstanceId, true);
+            if (await imService.updateWecomInstanceConfig(activeWecomInstanceId, { enabled: true })) {
+              setSaveReminderTarget('wecom', activeWecomInstanceId, true);
+            }
           }
         }
       }
@@ -1941,7 +1943,7 @@ const IMSettings: React.FC = () => {
                       </span>
                     </div>
                     {lastError && (
-                      <p className="mt-1 line-clamp-1 text-xs text-red-500">
+                      <p className={`mt-1 text-xs text-red-500 ${platform === 'wecom' ? '' : 'line-clamp-1'}`}>
                         {translateIMError(lastError)}
                       </p>
                     )}
@@ -2800,15 +2802,6 @@ const IMSettings: React.FC = () => {
             <div className="space-y-5 pt-2">
               {renderPlatformRuntimeNotice('weixin')}
 
-              {/* Error display */}
-              {shouldShowWeixinError && weixinLastError && (
-                <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">
-                  {isWeixinCredentialMissingError
-                    ? i18nService.t('imWeixinCredentialsMissing')
-                    : translateIMError(weixinLastError)}
-                </div>
-              )}
-
               {/* QR login: first-time setup, or a rescan in progress */}
               {(!weixinAccountId || (weixinQrStatus !== 'idle' && weixinQrStatus !== 'success')) && (
                 <div className="flex gap-5 rounded-xl border border-border bg-surface p-5">
@@ -2992,7 +2985,8 @@ const IMSettings: React.FC = () => {
                       ? { ...activeWecomInstance, ...override }
                       : activeWecomInstance;
                     const success = await imService.persistWecomInstanceConfig(activeWecomInstanceId!, configToSave);
-                    if (success) reportIMSettingsSaved('wecom', config);
+                    if (!success) return;
+                    reportIMSettingsSaved('wecom', config);
                     if (typeof override?.enabled === 'boolean') {
                       setSaveReminderTarget('wecom', activeWecomInstanceId!, override.enabled);
                     }
@@ -3008,16 +3002,18 @@ const IMSettings: React.FC = () => {
                     try {
                       const bot = await WecomAIBotSDK.openBotInfoAuthWindow({ source: 'lobster-ai' });
                       if (!isMountedRef.current) return;
-                      dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: { botId: bot.botid, secret: bot.secret, enabled: true } }));
                       dispatch(clearError());
                       const quickSetupSaved = await imService.updateWecomInstanceConfig(
                         activeWecomInstanceId!,
                         { botId: bot.botid, secret: bot.secret, enabled: true },
                         IM_AUTH_RESTART_ON_SAVE_OPTIONS,
                       );
-                      if (quickSetupSaved) {
-                        reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
+                      if (!isMountedRef.current) return;
+                      if (!quickSetupSaved) {
+                        setWecomQuickSetupStatus('idle');
+                        return;
                       }
+                      reportIMSettingsSaved('wecom', config, null, 'credential_state,enabled');
                       setSaveReminderTarget('wecom', activeWecomInstanceId!, true);
                       if (!isMountedRef.current) return;
                       await imService.loadStatus();

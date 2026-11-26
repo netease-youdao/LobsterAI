@@ -9,9 +9,8 @@ import {
 } from '../../../shared/browserCredentials/constants';
 import {
   BrowserDisplayMode,
-  BrowserNetworkMode,
-  BrowserProfileMode,
   type BrowserWebAccessConfig,
+  normalizeBrowserCdpUrl,
   normalizeBrowserHostnameList,
 } from '../../../shared/browserWebAccess/constants';
 import { i18nService } from '../../services/i18n';
@@ -98,8 +97,6 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
   const update = (patch: Partial<BrowserWebAccessConfig>) => {
     onChange({
       ...value,
-      browserEnabled: true,
-      profileMode: BrowserProfileMode.Managed,
       ...patch,
     });
   };
@@ -142,9 +139,9 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
   const hostnameDialogTitle = i18nService.t('browserAddBlockedHostnameTitle');
   const hostnameDialogDescription = i18nService.t('browserAddBlockedHostnameDescription');
 
-  const networkModeDescription = value.networkMode === BrowserNetworkMode.Strict
-    ? i18nService.t('browserNetworkStrictDescription')
-    : i18nService.t('browserNetworkOpenDescription');
+  const external = value.displayMode === BrowserDisplayMode.External;
+  const trimmedCdpUrl = value.cdpUrl?.trim() ?? '';
+  const cdpUrlInvalid = external && Boolean(trimmedCdpUrl) && !normalizeBrowserCdpUrl(trimmedCdpUrl);
 
   return (
     <>
@@ -153,117 +150,133 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
           <SettingsCard>
             <SettingsItem
               title={i18nService.t('browserDisplayModeTitle')}
-              description={value.displayMode === BrowserDisplayMode.InApp
-                ? i18nService.t('browserDisplayModeInAppDescription')
-                : i18nService.t('browserDisplayModeExternalDescription')}
+              description={i18nService.t(external ? 'browserDisplayModeExternalDescription' : 'browserDisplayModeInAppDescription')}
               control={(
                 <div className={SELECT_WIDTH_CLASS}>
                   <ThemedSelect
                     id="browser-display-mode"
                     size="sm"
                     value={value.displayMode}
-                    onChange={(mode) => update({ displayMode: mode as BrowserDisplayMode })}
+                    onChange={displayMode => update({ displayMode: displayMode as BrowserDisplayMode })}
                     options={[
-                      {
-                        value: BrowserDisplayMode.InApp,
-                        label: i18nService.t('browserDisplayModeInApp'),
-                      },
-                      {
-                        value: BrowserDisplayMode.External,
-                        label: i18nService.t('browserDisplayModeExternal'),
-                      },
+                      { value: BrowserDisplayMode.InApp, label: i18nService.t('browserDisplayModeInApp') },
+                      { value: BrowserDisplayMode.External, label: i18nService.t('browserDisplayModeExternal') },
                     ]}
                   />
                 </div>
               )}
             />
+            {external ? (
+              <>
+                <SettingsItem
+                  title={i18nService.t('browserExecutablePath')}
+                  description={i18nService.t('browserExecutablePathDescription')}
+                  control={(
+                    <input
+                      aria-label={i18nService.t('browserExecutablePath')}
+                      className="h-8 w-64 rounded-lg border border-border bg-surface px-2.5 text-xs text-foreground outline-none placeholder:text-secondary focus:border-primary focus:ring-1 focus:ring-primary/40"
+                      value={value.executablePath ?? ''}
+                      onChange={event => update({ executablePath: event.target.value })}
+                    />
+                  )}
+                />
+                <SettingsItem
+                  title={i18nService.t('browserCdpUrl')}
+                  description={(
+                    <>
+                      <span>{i18nService.t('browserCdpUrlDescription')}</span>
+                      {cdpUrlInvalid ? (
+                        <p className="mt-1 text-red-500">{i18nService.t('browserCdpUrlInvalid')}</p>
+                      ) : null}
+                    </>
+                  )}
+                  control={(
+                    <input
+                      aria-label={i18nService.t('browserCdpUrl')}
+                      aria-invalid={cdpUrlInvalid}
+                      placeholder="http://127.0.0.1:9222"
+                      className={`h-8 w-64 rounded-lg border bg-surface px-2.5 text-xs text-foreground outline-none placeholder:text-secondary focus:ring-1 ${
+                        cdpUrlInvalid
+                          ? 'border-red-500 focus:border-red-500 focus:ring-red-500/40'
+                          : 'border-border focus:border-primary focus:ring-primary/40'
+                      }`}
+                      value={value.cdpUrl ?? ''}
+                      onChange={event => update({ cdpUrl: event.target.value })}
+                    />
+                  )}
+                />
+              </>
+            ) : (
+              <>
+                <SettingsItem
+                  title={i18nService.t('browserCredentialUseModeTitle')}
+                  description={value.credentialUseMode === BrowserCredentialUseMode.Disabled
+                    ? i18nService.t('browserCredentialUseModeDisabledDescription')
+                    : value.credentialUseMode === BrowserCredentialUseMode.OncePerTask
+                      ? i18nService.t('browserCredentialUseModeOncePerTaskDescription')
+                      : i18nService.t('browserCredentialUseModeAlwaysAskDescription')}
+                  control={(
+                    <div className={SELECT_WIDTH_CLASS}>
+                      <ThemedSelect
+                        id="browser-credential-use-mode"
+                        size="sm"
+                        value={value.credentialUseMode}
+                        onChange={(mode) => update({
+                          credentialUseMode: mode as BrowserCredentialUseModeValue,
+                        })}
+                        options={[
+                          {
+                            value: BrowserCredentialUseMode.AlwaysAsk,
+                            label: i18nService.t('browserCredentialUseModeAlwaysAsk'),
+                          },
+                          {
+                            value: BrowserCredentialUseMode.OncePerTask,
+                            label: i18nService.t('browserCredentialUseModeOncePerTask'),
+                          },
+                          {
+                            value: BrowserCredentialUseMode.Disabled,
+                            label: i18nService.t('browserCredentialUseModeDisabled'),
+                          },
+                        ]}
+                      />
+                    </div>
+                  )}
+                />
 
-            <SettingsItem
-              title={i18nService.t('browserNetworkSectionTitle')}
-              description={networkModeDescription}
-              control={(
-                <div className={SELECT_WIDTH_CLASS}>
-                  <ThemedSelect
-                    id="browser-network-mode"
-                    size="sm"
-                    value={value.networkMode}
-                    onChange={(mode) => update({ networkMode: mode as BrowserNetworkMode })}
-                    options={[
-                      { value: BrowserNetworkMode.ProxyCompatible, label: i18nService.t('browserNetworkOpen') },
-                      { value: BrowserNetworkMode.Strict, label: i18nService.t('browserNetworkStrict') },
-                    ]}
-                  />
-                </div>
-              )}
-            />
-
-            <SettingsItem
-              title={i18nService.t('browserCredentialUseModeTitle')}
-              description={value.credentialUseMode === BrowserCredentialUseMode.Disabled
-                ? i18nService.t('browserCredentialUseModeDisabledDescription')
-                : value.credentialUseMode === BrowserCredentialUseMode.OncePerTask
-                  ? i18nService.t('browserCredentialUseModeOncePerTaskDescription')
-                  : i18nService.t('browserCredentialUseModeAlwaysAskDescription')}
-              control={(
-                <div className={SELECT_WIDTH_CLASS}>
-                  <ThemedSelect
-                    id="browser-credential-use-mode"
-                    size="sm"
-                    value={value.credentialUseMode}
-                    onChange={(mode) => update({
-                      credentialUseMode: mode as BrowserCredentialUseModeValue,
-                    })}
-                    options={[
-                      {
-                        value: BrowserCredentialUseMode.AlwaysAsk,
-                        label: i18nService.t('browserCredentialUseModeAlwaysAsk'),
-                      },
-                      {
-                        value: BrowserCredentialUseMode.OncePerTask,
-                        label: i18nService.t('browserCredentialUseModeOncePerTask'),
-                      },
-                      {
-                        value: BrowserCredentialUseMode.Disabled,
-                        label: i18nService.t('browserCredentialUseModeDisabled'),
-                      },
-                    ]}
-                  />
-                </div>
-              )}
-            />
-
-            <SettingsItem
-              title={i18nService.t('browserCredentialSaveModeTitle')}
-              description={value.credentialSaveMode === BrowserCredentialSaveMode.Never
-                ? i18nService.t('browserCredentialSaveModeNeverDescription')
-                : i18nService.t('browserCredentialSaveModeAskDescription')}
-              control={(
-                <div className={SELECT_WIDTH_CLASS}>
-                  <ThemedSelect
-                    id="browser-credential-save-mode"
-                    size="sm"
-                    value={value.credentialSaveMode}
-                    onChange={(mode) => update({
-                      credentialSaveMode: mode as BrowserCredentialSaveModeValue,
-                    })}
-                    options={[
-                      {
-                        value: BrowserCredentialSaveMode.Ask,
-                        label: i18nService.t('browserCredentialSaveModeAsk'),
-                      },
-                      {
-                        value: BrowserCredentialSaveMode.Never,
-                        label: i18nService.t('browserCredentialSaveModeNever'),
-                      },
-                    ]}
-                  />
-                </div>
-              )}
-            />
+                <SettingsItem
+                  title={i18nService.t('browserCredentialSaveModeTitle')}
+                  description={value.credentialSaveMode === BrowserCredentialSaveMode.Never
+                    ? i18nService.t('browserCredentialSaveModeNeverDescription')
+                    : i18nService.t('browserCredentialSaveModeAskDescription')}
+                  control={(
+                    <div className={SELECT_WIDTH_CLASS}>
+                      <ThemedSelect
+                        id="browser-credential-save-mode"
+                        size="sm"
+                        value={value.credentialSaveMode}
+                        onChange={(mode) => update({
+                          credentialSaveMode: mode as BrowserCredentialSaveModeValue,
+                        })}
+                        options={[
+                          {
+                            value: BrowserCredentialSaveMode.Ask,
+                            label: i18nService.t('browserCredentialSaveModeAsk'),
+                          },
+                          {
+                            value: BrowserCredentialSaveMode.Never,
+                            label: i18nService.t('browserCredentialSaveModeNever'),
+                          },
+                        ]}
+                      />
+                    </div>
+                  )}
+                />
+              </>
+            )}
           </SettingsCard>
         </SettingsSection>
 
-        <BrowserCredentialSettings />
+        <BrowserCredentialSettings externalMode={external} />
 
         <HostnameList
           title={i18nService.t('browserBlockedHostnames')}

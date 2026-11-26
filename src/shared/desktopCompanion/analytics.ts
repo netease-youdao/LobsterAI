@@ -4,7 +4,6 @@ import { OpenClawEnginePhase } from '../openclawEngine/constants';
 import { CompanionAppCategory, knownCompanionAppId } from './appCategories';
 import { DesktopCompanionSnoozeMode, DesktopCompanionSurface } from './constants';
 import { CompanionDropAction, CompanionFileKind } from './fileKinds';
-import { COMPANION_WELCOME_TOPIC, CompanionHintOutcome, type CompanionHintTopic } from './hintPolicy';
 import { LanguageTool, LanguageToolCode, LanguageToolErrorReason } from './languageTools';
 import { CompanionSelectionAction } from './selectionActions';
 import { COMPANION_SKINS } from './skins';
@@ -35,6 +34,10 @@ export const CompanionAnalyticsInteraction = {
   LoginClick: 'login_click', LoginSuccess: 'login_success',
   /** Files picked from the launcher's file dialog. */
   AttachFiles: 'attach_files',
+  /** A contextual suggestion chip or launcher row clicked by the user. */
+  ContextAction: 'context_action',
+  /** Dismissing a clipboard contextual chip. */
+  ContextDismiss: 'context_dismiss',
   /** A selecting gesture over text that no readable selection followed. */
   Miss: 'miss',
 } as const;
@@ -109,7 +112,7 @@ export interface CompanionAnalyticsEvent {
   source: CompanionAnalyticsSource;
   interactionType?: ValueOf<typeof CompanionAnalyticsInteraction>;
   stage?: ValueOf<typeof CompanionAnalyticsStage>;
-  outcome?: CompanionAnalyticsOutcome | CompanionHintOutcome;
+  outcome?: CompanionAnalyticsOutcome;
   surface?: DesktopCompanionSurface;
   tool?: ValueOf<typeof CompanionAnalyticsTool>;
   setting?: ValueOf<typeof CompanionAnalyticsSetting>;
@@ -117,8 +120,8 @@ export interface CompanionAnalyticsEvent {
   failureCode?: CompanionTaskFailure['failureCode'];
   failureStage?: CompanionTaskFailureStage;
   blockedReason?: CompanionTaskFailure['blockedReason'];
-  /** A hint topic, or the category of the app a selection came from. */
-  topic?: CompanionHintTopic;
+  /** The category of the app a selection or contextual action came from. */
+  topic?: CompanionAppCategory;
   /** The app a selection came from, only when it is a well-known app (see knownCompanionAppId). */
   app?: string;
   selectionMethod?: CompanionSelectionMethod;
@@ -146,12 +149,12 @@ export interface CompanionAnalyticsEvent {
 const enumFields = {
   action: Object.values(CompanionAnalyticsAction), source: Object.values(CompanionAnalyticsSource),
   interactionType: Object.values(CompanionAnalyticsInteraction), stage: Object.values(CompanionAnalyticsStage),
-  outcome: [...Object.values(CompanionAnalyticsOutcome), ...Object.values(CompanionHintOutcome)],
+  outcome: Object.values(CompanionAnalyticsOutcome),
   surface: Object.values(DesktopCompanionSurface), tool: Object.values(CompanionAnalyticsTool),
   setting: Object.values(CompanionAnalyticsSetting), reason: Object.values(CompanionAnalyticsReason),
   failureCode: Object.values(CompanionTaskFailureCode), failureStage: Object.values(CompanionTaskFailureStage),
   blockedReason: Object.values(CompanionTaskBlockedReason),
-  topic: [COMPANION_WELCOME_TOPIC, ...Object.values(CompanionAppCategory)], dropAction: Object.values(CompanionDropAction),
+  topic: Object.values(CompanionAppCategory), dropAction: Object.values(CompanionDropAction),
   snoozeMode: Object.values(DesktopCompanionSnoozeMode), skin: COMPANION_SKINS.map(skin => skin.id),
   selectionMethod: Object.values(CompanionSelectionMethod), positionLevel: Object.values(CompanionSelectionPosition),
 };

@@ -2,6 +2,8 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test } from 'vitest';
 
+import { getLocalFileProtocolPath } from '../../main/artifactLocalFileProtocol';
+import { parseUserMessageForDisplay } from '../utils/userMessageDisplay';
 import MarkdownContent, {
   convertLatexMathDelimiters,
   getLargeMarkdownPreview,
@@ -227,4 +229,19 @@ test('kit links are treated as safe internal links', () => {
 
 test('unsafe markdown protocols are still stripped', () => {
   expect(safeUrlTransform('javascript:alert(1)')).toBe('');
+});
+
+test('localMediaAttachments file:// images with spaces (macOS Application Support) do not double-encode to %2520', () => {
+  const localPath = '/Users/demo/Library/Application Support/LobsterAI/cowork-image-originals/sess/img.png';
+  const markdown = parseUserMessageForDisplay('', {
+    localMediaAttachments: [{ localPath, mimeType: 'image/png', name: 'weixin-image-1.png' }],
+  });
+  const html = renderMarkdown(markdown);
+  const srcMatch = /<img[^>]*src="([^"]+)"/.exec(html);
+
+  expect(srcMatch).not.toBeNull();
+  const imgSrc = srcMatch![1];
+  expect(imgSrc).toBe('localfile:///Users/demo/Library/Application%20Support/LobsterAI/cowork-image-originals/sess/img.png');
+  expect(imgSrc).not.toContain('%2520');
+  expect(getLocalFileProtocolPath(imgSrc)).toBe(localPath);
 });

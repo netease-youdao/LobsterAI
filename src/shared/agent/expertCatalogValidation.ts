@@ -66,8 +66,14 @@ export function parseExpertCatalog(value: unknown): ExpertCatalog {
     const normalizedIcon = parseAgentAvatarIcon(icon) || parseAgentAvatarImageUrl(icon) ? icon : DefaultAgentAvatarIcon;
     const skillIds = list(expert.skillIds, 50).map(id);
     unique(skillIds);
+    const revision = expert.revision;
+    if (revision !== undefined && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1)) {
+      throw new Error('Invalid expert revision');
+    }
     return {
       id: id(expert.id), category, tags, starterPrompts, icon: normalizedIcon, skillIds,
+      ...(typeof expert.isNew === 'boolean' ? { isNew: expert.isNew } : {}),
+      ...(typeof revision === 'number' ? { revision } : {}),
       name: text(expert.name, 100), nameEn: text(expert.nameEn, 100),
       description: text(expert.description), descriptionEn: text(expert.descriptionEn),
       identity: text(expert.identity, 4000), identityEn: text(expert.identityEn, 4000),

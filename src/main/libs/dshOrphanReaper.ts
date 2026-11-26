@@ -12,8 +12,18 @@
 // without WMI, so there the quit-time stop is the only protection.
 
 import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
-import { isProcessAlive } from './dshSharedHome';
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
 
 export interface ProcessTableRow {
   pid: number;
@@ -21,10 +31,11 @@ export interface ProcessTableRow {
   command: string;
 }
 
-// The tail dshProcessLauncher + buildDshWebArgs produce after the executable:
-// `--expose-internals <entry> web --port <n> --no-open`. The entry is left
-// open so the direct bin.js and a generated launcher both match.
-const DSH_WEB_COMMAND_TAIL = /^ --expose-internals .+ web --port \d+ --no-open$/;
+// Matches both the App-Owned Profile host (through `lib/bin.js` or the generated
+// `dsh-launcher/launch.mjs`: `--expose-internals <entry> --profile lobsterai --no-open ...`)
+// and legacy `web --port <n> --no-open` runs spawned by this executable, while
+// excluding `dsh plugin --profile ...` CLI invocations.
+const DSH_WEB_COMMAND_TAIL = /^ --expose-internals (?!.+ plugin --profile ).+ (?:web --port \d+ --no-open|--profile \S+ --no-open\b.*)$/;
 
 // dsh shuts itself down within 5s of SIGTERM (PROCESS_SHUTDOWN_TIMEOUT_MS in
 // its profile boot), so a little over that before escalating.
@@ -42,10 +53,6 @@ export function parseProcessTable(output: string): ProcessTableRow[] {
   return rows;
 }
 
-function isLaunchedBy(command: string, executablePath: string): boolean {
-  return command === executablePath || command.startsWith(`${executablePath} `);
-}
-
 // Only runtimes this same install spawned: the executable path keeps a dev
 // build and a packaged app from stopping each other's runtimes.
 export function isDshWebCommand(command: string, executablePath: string): boolean {
@@ -53,16 +60,16 @@ export function isDshWebCommand(command: string, executablePath: string): boolea
   return DSH_WEB_COMMAND_TAIL.test(command.slice(executablePath.length));
 }
 
-// A runtime is owned while its parent is a live main process of this install.
-// Orphans are reparented to launchd (pid 1) on macOS, and to init or a
-// subreaper on Linux, none of which run our executable.
+// macOS launches the runtime through Electron Helper, while its live parent
+// is the Electron main binary (and may have a relative argv[0]). Only reclaim
+// children demonstrably adopted by init or a known Linux subreaper.
 export function findOrphanedDshRuntimes(rows: readonly ProcessTableRow[], executablePath: string): ProcessTableRow[] {
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   return rows.filter((row) => {
     if (!isDshWebCommand(row.command, executablePath)) return false;
-    if (row.ppid <= 1) return true;
+    if (row.ppid === 1) return true;
     const parent = byPid.get(row.ppid);
-    return !parent || !isLaunchedBy(parent.command, executablePath);
+    return Boolean(parent && /^(?:\S*\/)?(?:systemd|tini|dumb-init)(?:\s|$)/.test(parent.command));
   });
 }
 
@@ -73,6 +80,46 @@ export interface DshOrphanReapOptions {
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
   isAlive?: (pid: number) => boolean;
   graceMs?: number;
+  /**
+   * Optional sentinel file written on graceful shutdown and cleared before
+   * spawning DSH. When present for the same executable, the previous run shut
+   * down cleanly and the `ps` scan can be skipped.
+   */
+  cleanShutdownMarkerPath?: string;
+}
+
+export function writeDshCleanShutdownMarker(markerPath: string, executablePath: string): void {
+  try {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ clean: true, executablePath, stoppedAt: Date.now() }),
+      { mode: 0o600 },
+    );
+  } catch {
+    // Best-effort optimization only.
+  }
+}
+
+export function clearDshCleanShutdownMarker(markerPath: string): void {
+  try {
+    fs.rmSync(markerPath, { force: true });
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+function consumeCleanShutdownMarker(markerPath: string, executablePath: string): boolean {
+  try {
+    if (!fs.existsSync(markerPath)) return false;
+    const raw = fs.readFileSync(markerPath, 'utf8');
+    fs.rmSync(markerPath, { force: true });
+    const parsed = JSON.parse(raw) as { clean?: unknown; executablePath?: unknown };
+    return parsed?.clean === true && parsed.executablePath === executablePath;
+  } catch {
+    clearDshCleanShutdownMarker(markerPath);
+    return false;
+  }
 }
 
 function listProcessesWithPs(): Promise<string> {
@@ -95,6 +142,12 @@ export async function reapOrphanedDshRuntimes(options: DshOrphanReapOptions = {}
   const platform = options.platform ?? process.platform;
   if (platform === 'win32') return 0;
   const executablePath = options.executablePath ?? process.execPath;
+  if (
+    options.cleanShutdownMarkerPath
+    && consumeCleanShutdownMarker(options.cleanShutdownMarkerPath, executablePath)
+  ) {
+    return 0;
+  }
   const listProcesses = options.listProcesses ?? listProcessesWithPs;
   const sendSignal = options.sendSignal ?? ((pid, signal) => process.kill(pid, signal));
   const isAlive = options.isAlive ?? isProcessAlive;
@@ -131,8 +184,19 @@ export async function reapOrphanedDshRuntimes(options: DshOrphanReapOptions = {}
     survivors = survivors.filter(isAlive);
   }
   if (survivors.length > 0) {
-    console.warn(`[DSH] Leftover runtime(s) ignored SIGTERM, killing: ${survivors.join(', ')}`);
-    signalAll(survivors, 'SIGKILL');
+    // A PID can be reused during the grace period. Check the executable,
+    // command line and adoptive parent again before escalating.
+    try {
+      const current = findOrphanedDshRuntimes(parseProcessTable(await listProcesses()), executablePath);
+      const verified = current.filter(row => survivors.includes(row.pid)
+        && orphans.some(original => original.pid === row.pid && original.command === row.command));
+      if (verified.length) {
+        console.warn(`[DSH] Leftover runtime(s) ignored SIGTERM, killing: ${verified.map(row => row.pid).join(', ')}`);
+        signalAll(verified.map(row => row.pid), 'SIGKILL');
+      }
+    } catch (error) {
+      console.warn('[DSH] Could not recheck orphaned runtimes before forced termination', error);
+    }
   }
   return orphans.length;
 }

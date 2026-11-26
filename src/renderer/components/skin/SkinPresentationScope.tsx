@@ -2,7 +2,10 @@ import './skinPresentation.css';
 
 import React, { type CSSProperties } from 'react';
 
-import type { SkinPresentation } from '../../../shared/skin/presentation';
+import {
+  resolveSkinBackdropVisibility,
+  type SkinPresentation,
+} from '../../../shared/skin/presentation';
 import { useSkin } from '../../providers/SkinProvider';
 
 type SkinPresentationStyle = CSSProperties & Record<`--lobster-skin-${string}`, string>;
@@ -40,6 +43,7 @@ const SkinPresentationScope: React.FC<SkinPresentationScopeProps> = ({
     <div
       {...props}
       data-skin-presentation={presentation?.mode}
+      data-skin-backdrop-visibility={presentation ? resolveSkinBackdropVisibility(presentation) : undefined}
       style={presentation ? { ...style, ...buildSkinPresentationStyle(presentation) } : style}
     >
       {children}

@@ -1,55 +1,47 @@
-import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
-import { PassThrough } from 'node:stream';
+import { expect, test, vi } from 'vitest';
 
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { NeteaseMailAuth, NeteaseMailScope } from '../../shared/neteaseMail/constants';
+import { McpOAuthManager, type McpOAuthTokenRecord } from './mcpOAuthManager';
+import type { McpServerRecord } from './mcpStore';
+import { createNeteaseMailAuthStore } from './neteaseMailAuthStore';
 
-import { NeteaseMailAuthStoreOperation, NeteaseMailFailure } from '../../shared/neteaseMail/constants';
-import { createNeteaseMailAuthStore, prepareNeteaseMailAuthStore } from './neteaseMailAuthStore';
+function fixture() {
+  const kv = new Map<string, string>();
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+  const manager = new McpOAuthManager({ storage: { get: key => kv.get(key) ?? null, set: (k, v) => { kv.set(k, v); },
+    delete: key => { kv.delete(key); } }, fetcher });
+  const invalidate = vi.fn();
+  const server = { id: 'mail-id', enabled: true } as McpServerRecord;
+  const store = createNeteaseMailAuthStore(manager, 'client', () => server, invalidate);
+  const credential = { type: NeteaseMailAuth.CredentialType, provider: NeteaseMailAuth.Provider, clientId: 'client',
+    access: 'first-access', refresh: 'first-refresh', expires: Date.now() - 1, authorizationId: 'first' };
+  const refreshed = () => finish(Response.json({ token_type: 'Bearer', access_token: 'rotated', expires_in: 3600 }));
+  return { manager, store, invalidate, server, credential, fetcher, refreshed };
+}
 
-const spawn = vi.hoisted(() => vi.fn());
-vi.mock('node:child_process', () => ({ spawn }));
-const context = { runtimeRoot: '/test/runtime', stateDir: '/test/profile/state', electronNodeRuntimePath: '/test/electron' };
-let child: EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn> };
-let input: string;
-beforeEach(() => {
-  input = '';
-  child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
-  child.stdin.on('data', chunk => { input += chunk.toString(); });
-  spawn.mockReset().mockReturnValue(child);
-});
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
-
-test('initialization uses the isolated worker and waits for its successful completion', async () => {
-  const pending = createNeteaseMailAuthStore(context).initialize();
-  expect(JSON.parse(input)).toEqual({ operation: NeteaseMailAuthStoreOperation.Initialize });
-  expect(spawn.mock.calls[0][2]).toMatchObject({ windowsHide: true, env: {
-    ELECTRON_RUN_AS_NODE: '1', OPENCLAW_STATE_DIR: context.stateDir, OPENCLAW_AGENT_DIR: '',
-  } });
-  child.stdout.write('NETEASE_MAIL_STATUS:{"connected":false}\n');
-  child.emit('close', 0);
-  await expect(pending).resolves.toBeUndefined();
-});
-
-test('a failed initialization is surfaced without forwarding worker diagnostics', async () => {
-  const pending = createNeteaseMailAuthStore(context).initialize();
-  child.stderr.write('private credential detail');
-  child.emit('close', 1);
-  await expect(pending).rejects.toMatchObject({ code: NeteaseMailFailure.StorageFailed });
+test('read scopes and connection status exclude credentials and require an enabled connector', async () => {
+  const f = fixture();
+  f.credential.expires = Date.now() + 600_000;
+  await f.store.save(f.credential);
+  expect(await f.store.status()).toEqual({ connected: true, expiresAt: f.credential.expires, scopes: [NeteaseMailScope.Read] });
+  expect(f.manager.getToken(f.server.id)).toMatchObject({ mailAuthorizationId: 'first', accessToken: 'first-access' });
+  f.server.enabled = false;
+  expect(await f.store.status()).toEqual({ connected: false });
+  await f.store.remove();
+  expect(f.manager.getToken(f.server.id)).toBeNull();
+  expect(f.invalidate).toHaveBeenCalledTimes(2);
 });
 
-test('uninstalled mail integration does not add a startup worker', async () => {
-  vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-  await prepareNeteaseMailAuthStore(context, false);
-  expect(spawn).not.toHaveBeenCalled();
-});
-
-test('packaged builds initialize mail credentials using the default registration', async () => {
-  vi.stubEnv('LOBSTER_NETEASE_MAIL_CLIENT_ID', '');
-  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-  const pending = prepareNeteaseMailAuthStore(context, true);
-  expect(JSON.parse(input)).toEqual({ operation: NeteaseMailAuthStoreOperation.Initialize });
-  child.stdout.write('NETEASE_MAIL_STATUS:{"connected":false}\n');
-  child.emit('close', 0);
-  await expect(pending).resolves.toBeUndefined();
+test.each(['disconnect', 'reauthorize'])('%s during token rotation cannot restore an old grant', async action => {
+  const f = fixture();
+  await f.store.save(f.credential);
+  const pending = f.manager.resolveAuthorizationHeaders(f.server.id);
+  await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledOnce());
+  if (action === 'disconnect') await f.store.remove();
+  else await f.store.save({ ...f.credential, access: 'new-account', authorizationId: 'second' });
+  f.refreshed();
+  await expect(pending).rejects.toThrow();
+  const token: McpOAuthTokenRecord | null = f.manager.getToken(f.server.id);
+  expect(token?.accessToken).toBe(action === 'disconnect' ? undefined : 'new-account');
 });

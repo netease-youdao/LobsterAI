@@ -4,13 +4,17 @@ import { ShareDeploymentCandidateSource } from '../../../shared/shareDeployment/
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { RootState } from '..';
 import artifactReducer, {
+  activateArtifactNewTab,
   activateArtifactPreviewTab,
   addArtifact,
   addLinkedFileArtifact,
   openArtifactPreviewTab,
+  renameArtifactFile,
   selectActivePreviewTab,
+  selectIsPanelOpen,
   selectSessionArtifacts,
   setSessionArtifacts,
+  syncMarkdownFileContent,
   updateLocalServiceProjectMetadata,
 } from './artifactSlice';
 
@@ -93,6 +97,22 @@ test('setSessionArtifacts dedupes generated videos by file path within one messa
 
   expect(state.artifactsBySession['session-1']).toHaveLength(1);
   expect(state.artifactsBySession['session-1'][0].id).toBe('video-local-path');
+});
+
+test('saving a library Markdown preview updates existing cards without changing their IDs or the active tab', () => {
+  const sessionId = 'session-1', filePath = '/work/notes.md';
+  const first: Artifact = { ...makeVideoArtifact('first', filePath), type: ArtifactTypeValue.Markdown };
+  const second = { ...first, id: 'second', messageId: 'another-message' };
+  let state = artifactReducer(undefined, setSessionArtifacts({ sessionId, artifacts: [first, second] }));
+  state = artifactReducer(state, openArtifactPreviewTab({ sessionId, artifactId: second.id }));
+  const before = state.activePreviewTabIdBySession[sessionId];
+  const save = syncMarkdownFileContent({ sessionId, filePath, content: 'updated notes', contentVersion: 42 });
+  state = artifactReducer(state, save);
+  expect(state.artifactsBySession[sessionId].map(item => [item.id, item.content]))
+    .toEqual([['first', 'updated notes'], ['second', 'updated notes']]);
+  expect(state.activePreviewTabIdBySession[sessionId]).toEqual(before);
+  expect(artifactReducer(state, save)).toBe(state);
+  expect(artifactReducer(state, syncMarkdownFileContent({ ...save.payload, filePath: '/elsewhere.md' }))).toBe(state);
 });
 
 test('addArtifact keeps same file path cards from different messages', () => {
@@ -559,4 +579,60 @@ test('selectSessionArtifacts hides duplicate generated videos from stale state',
   } as unknown as RootState;
 
   expect(selectSessionArtifacts(rootState, 'session-1')).toHaveLength(1);
+});
+
+test('activateArtifactNewTab opens the panel and clears the active artifact tab', () => {
+  const initial = artifactReducer(undefined, { type: '@@INIT' });
+  const withArtifact = artifactReducer(
+    initial,
+    addArtifact({
+      sessionId: 'session-1',
+      artifact: makeFileArtifact('doc-1', '/work/intro.docx', 'm1', 1),
+    }),
+  );
+  const withOpenDoc = artifactReducer(
+    withArtifact,
+    openArtifactPreviewTab({ sessionId: 'session-1', artifactId: 'doc-1' }),
+  );
+  const withNewTab = artifactReducer(
+    withOpenDoc,
+    activateArtifactNewTab({ sessionId: 'session-1' }),
+  );
+
+  expect(selectIsPanelOpen({ artifact: withNewTab } as RootState, 'session-1')).toBe(true);
+  expect(selectActivePreviewTab({ artifact: withNewTab } as RootState, 'session-1')).toBeNull();
+  expect(withNewTab.selectedArtifactId).toBeNull();
+});
+
+test('renameArtifactFile updates path, filename, and title while keeping open tab stable', () => {
+  const initial = artifactReducer(undefined, { type: '@@INIT' });
+  const withArtifact = artifactReducer(
+    initial,
+    addArtifact({
+      sessionId: 'session-1',
+      artifact: makeFileArtifact('doc-1', '/work/未命名文档.docx', 'm1', 1),
+    }),
+  );
+  const withOpenDoc = artifactReducer(
+    withArtifact,
+    openArtifactPreviewTab({ sessionId: 'session-1', artifactId: 'doc-1' }),
+  );
+  const renamed = artifactReducer(
+    withOpenDoc,
+    renameArtifactFile({
+      sessionId: 'session-1',
+      oldFilePath: '/work/未命名文档.docx',
+      newFilePath: '/work/项目方案.docx',
+      newFileName: '项目方案.docx',
+    }),
+  );
+
+  const items = selectSessionArtifacts({ artifact: renamed } as RootState, 'session-1');
+  expect(items[0]).toMatchObject({
+    id: 'doc-1',
+    filePath: '/work/项目方案.docx',
+    fileName: '项目方案.docx',
+    title: '项目方案.docx',
+  });
+  expect(selectActivePreviewTab({ artifact: renamed } as RootState, 'session-1')?.artifactId).toBe('doc-1');
 });

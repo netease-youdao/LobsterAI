@@ -2,10 +2,13 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import { ComputerUseMcpServerName } from '../../shared/computerUse/constants';
+import {
+  COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
+  ComputerUseMcpServerName,
+} from '../../shared/computerUse/constants';
 import { getLanguage } from '../i18n';
-import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { findSystemNodePath } from '../libs/resolveStdioCommand';
+import type { ResolvedMcpServer } from '../mcp/types';
 import {
   ensureComputerUseLogDir,
   getComputerUseLogRetentionDays,
@@ -16,8 +19,8 @@ import {
   inspectComputerUseRuntime,
 } from './computerUseRuntime';
 
-// Re-exported for existing importers; the constant lives in shared so config sync can use it.
-export { ComputerUseMcpServerName };
+// Re-exported for existing importers; the constants live in shared so config sync can use them.
+export { COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS, ComputerUseMcpServerName };
 
 export const ComputerUseMcpEnv = {
   AskUserUrl: 'LOBSTER_COMPUTER_USE_ASKUSER_URL',
@@ -167,6 +170,7 @@ export function resolveComputerUseMcpServer(
     env,
     // Resolve the bridge secret from the gateway env without persisting its value.
     gatewayEnvRefs: { [ComputerUseMcpEnv.BridgeSecret]: ComputerUseMcpEnv.BridgeSecret },
+    requestTimeoutMs: COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
   };
 }
 

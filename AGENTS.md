@@ -2,7 +2,7 @@
 
 Repository guidance for coding agents working on LobsterAI. Source code,
 `package.json`, and current tests are the authority: when this file, older
-docs, generated runtime workspaces, bundled OpenClaw output, or agent memory
+docs, generated runtime workspaces, bundled DSH output, or agent memory
 notes disagree with them, trust the source and verify before acting.
 
 ## Scoped Guidance
@@ -24,24 +24,29 @@ servers, scheduled tasks, and rich artifacts.
 Names that are easy to misread:
 
 - `Cowork` is LobsterAI's product/session layer: sessions, messages,
-  permissions, UI state, persistence, context usage, artifacts, and IPC
-  contracts. The name is historical; `cowork:*` channels, `claude_session_id`,
-  and "cowork" filenames are compatibility names, not another runtime.
-- `OpenClaw` is the only agent runtime/gateway behind Cowork;
-  `CoworkAgentEngine` is `'openclaw'` only. `yd_cowork` has been removed as a
-  runtime. Do not reintroduce or design around it.
-- `DSH` (DeepSeek Harness) is a separate experimental runtime with its own
-  workbench window (`src/main/libs/dsh*.ts`, `src/shared/dshEngine/`). It is
-  not a Cowork engine, and Cowork never forwards tasks to it.
-- The working directory users see is the session cwd. It is not the OpenClaw
-  agent workspace, which lives under `userData/openclaw/state/`.
+  permission presets (`read-only`, `workspace-write`, `danger-full-access`)
+  and approvals, UI state, persistence, context usage, artifacts, and IPC
+  contracts. Names such as `cowork:*` and `claude_session_id` come from
+  earlier releases and remain part of the IPC and storage contracts.
+- DeepSeek Harness (`DSH`) is Cowork's bundled agent runtime.
+  `CoworkAgentEngine` is `'dsh'`. The main process starts DSH, syncs app
+  settings, and translates DSH events into the Cowork stream.
+- The session cwd is the working directory users select. Agent instructions
+  and memory live under `userData/workspaces/<agentId>/`. LobsterAI's DSH
+  profile lives under `userData/dsh-profile/`, separate from standalone DSH.
 
 Beyond `src/main/`, `src/renderer/`, and `scripts/`:
 
 - `src/shared/`: cross-process constants and types, one directory per domain.
 - `src/common/`: small pure helpers compiled into both processes.
-- `src/scheduledTask/`: scheduled task model and policies, run by OpenClaw cron.
-- `openclaw-extensions/`: local OpenClaw plugins. `SKILLs/`: bundled skills.
+- `src/scheduledTask/`: scheduled task model and policies. The SQLite
+  scheduler in `src/main/scheduledTask/` runs tasks through DSH.
+- `dsh-bundles/`: LobsterAI's two first-party Cordis bundles layered onto DSH:
+  `lobsterai-host/` (`@lobsterai/dsh-bundle`: host tools, model/web-search/MCP
+  bridges, persona/memory scoping, progressive tool disclosure, approval
+  guards, multi-agent delegation, ops RPC, and upstream telemetry disabling)
+  and `lobsterai-channels/` (`@lobsterai/dsh-channels`: IM channel drivers).
+- `SKILLs/`: bundled skills.
 - `specs/`: design docs per feature, refactor, and bugfix, written in Chinese
   (format in `specs/README.md`). Check `specs/features/<topic>/` before
   changing how a feature behaves.
@@ -50,7 +55,7 @@ Beyond `src/main/`, `src/renderer/`, and `scripts/`:
 ## Commands
 
 ```bash
-npm run electron:dev:openclaw  # first run: build the pinned OpenClaw runtime, then start
+npm run electron:dev:dsh       # build the pinned DSH runtime and start Electron
 npm run electron:dev           # daily: Vite on port 5175 + Electron
 npm run compile:electron       # type-check and compile src/main with tsc
 npx tsc                        # type-check renderer, common, and shared; no output
@@ -63,16 +68,16 @@ npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 --no
 ```
 
 - Node.js `>=24.15.0 <25` and npm `>=11.17.0 <12`. `.npmrc` sets
-  `engine-strict`, so other versions fail at install.
+  `engine-strict`, so other versions fail at install. `better-sqlite3@13.0.3`
+  ships prebuilt N-API binaries, and `allowScripts` in `package.json` skips
+  implicit rebuilds on Windows.
 - New libraries go in `devDependencies` (`npm install -D`). Vite bundles main
   and renderer code, and electron-builder copies every production dependency
   into `app.asar` again. `dependencies` is only for modules loaded or resolved
   outside the bundles; `tests/electronBuilderAppFiles.test.ts` lists each one
   with its reason.
-- `OPENCLAW_SRC` overrides the OpenClaw checkout (default `../openclaw`).
-  `OPENCLAW_SKIP_ENSURE=1` skips the automatic tag checkout; use it only when
-  developing OpenClaw locally. `OPENCLAW_FORCE_BUILD=1` forces a rebuild where
-  the scripts support it.
+- `DSH_NPM_REGISTRY` overrides the runtime build's npm registry.
+  `DSH_FORCE_BUILD=1` forces a rebuild of the pinned runtime.
 
 ## Testing And Verification
 
@@ -103,28 +108,38 @@ Before handing off:
   `npm run electron:dev` what tests cannot cover.
 - Main process, IPC, runtime, or preload: targeted tests plus
   `npm run compile:electron`. `npm run build` does not type-check `src/main`.
-- OpenClaw integration: verify runtime startup, config sync, gateway behavior,
-  and the relevant logs with `npm run electron:dev:openclaw`.
+- DSH integration: use `npm run electron:dev:dsh` to verify startup, config
+  sync, session execution and events, and relevant logs. Runtime build
+  checks are documented in `scripts/AGENTS.md`.
 - Always: review the diff for unrelated churn, broad refactors, generated
   files, and user-visible strings that skipped i18n.
 
-## OpenClaw Integration
+## DSH Integration
 
-The pinned OpenClaw version and plugin list live in `package.json` under
-`openclaw`. The runtime is built into `vendor/openclaw-runtime/` (gitignored).
-Do not edit bundled runtime output or generated vendor files unless the task is
-about packaging or runtime generation.
+The `dsh` block in `package.json` pins the `@deepseek-ai/dsh` npm package and
+`pnpm` version (no sibling source checkout is needed). Development uses
+`vendor/dsh-runtime/current`; installers ship the pruned runtime alongside
+`dsh-bundles/`. See `scripts/AGENTS.md` for runtime builds, pruning, checks,
+and packaging gates.
 
-Before changing OpenClaw-related behavior, look for a LobsterAI-side
-integration point: adapter code, config sync, plugin configuration, runtime
-packaging, UI handling, or the local data layer. Prefer it when the behavior is
-product-specific or fits cleanly at the integration boundary. Patch OpenClaw
-only when the behavior is inside OpenClaw and there is no clean LobsterAI-side
-hook, and do not avoid a patch with brittle or contorted workarounds. Patches
-live in `scripts/patches/<openclaw.version>/` and are applied by
-`npm run openclaw:patch`. Never leave manual edits in the sibling OpenClaw
-checkout as the final state; turn them into a small, documented patch tied to
-the pinned version.
+Look for an integration point in the adapter, config sync, host or channel
+bundles, packaging, UI, or data layer. Use a small version-scoped patch when
+the fix needs to live inside DSH. Keep patches in
+`scripts/dsh-patches/<dsh.version>/` and treat `vendor/dsh-runtime/` as
+generated build output.
+
+`dsh-bundles/lobsterai-host/cordis.patch.yml` disables upstream DSH telemetry
+and DeepSeek account plugins (`DSH_REQUIRED_DISABLED_TELEMETRY_IDS`) as well
+as redundant DSH features (`office-kit`, `schedule`, `web-search-deepseek`,
+`web-deepseek-api`). Keep that guard intact and verify bundle, runtime, or
+patch changes with `npm run dsh:upgrade-check` (plus `dsh:runtime:verify` and
+`dsh:e2e`).
+
+Upgrade compatibility lives in `src/main/migration/legacyOpenClawMigrator.ts`
+and related importers: it runs an offline 6-step atomic migration before DSH
+boots and archives retired/incompatible modules under
+`userData/legacy-openclaw-backup/`. Use the original paths and field names
+when reading legacy OpenClaw data.
 
 ## Code Placement And Style
 
@@ -136,7 +151,7 @@ the pinned version.
 - Business logic goes in `src/renderer/services/`, `src/main/libs/`, or a
   domain module, not in UI components. Prefer existing local helpers and
   patterns over new abstractions.
-- Log in English with a module tag such as `[OpenClaw]`. Level rules are in
+- Log in English with a module tag such as `[DshBootstrap]`. Level rules are in
   `src/main/AGENTS.md`.
 - TypeScript throughout; React function components with hooks; Tailwind first,
   reusing existing utility patterns before adding CSS.
@@ -145,10 +160,11 @@ the pinned version.
 
 ## Large Files
 
-Several files are far past a healthy size: `src/main/main.ts` (about 17k
-lines), `openclawRuntimeAdapter.ts` (13k), `src/renderer/services/i18n.ts`
-(10k). Search them with `rg` instead of reading them whole, keep changes to
-them scoped, and do not split files or clean up architecture as drive-by work.
+Search large files such as `src/main/main.ts`,
+`src/main/libs/agentEngine/dshRuntimeAdapter.ts`,
+`src/main/migration/legacyOpenClawMigrator.ts`,
+`src/renderer/components/Settings.tsx`, and
+`src/renderer/services/i18n.ts` with `rg`. Keep changes to them scoped.
 
 If a change would add meaningful complexity to one of them, propose an
 extraction first and wait for the developer to confirm. The proposal names the
@@ -196,4 +212,4 @@ Developer-only logs and DevTools-only diagnostics are exempt.
   the subject starts lowercase.
 - PR descriptions are concise, link the issue when there is one, include
   screenshots for UI changes, and call out Electron-specific changes: IPC,
-  storage, runtime, windowing, or OpenClaw config/restart behavior.
+  storage, runtime startup and configuration, or windowing.

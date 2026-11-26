@@ -1,52 +1,77 @@
 {
   "zh": {
+    "deep-research": {
+      "label": "深度调研",
+      "prompts": {
+        "research-appliance-buy": {
+          "label": "高价家电/数码避坑横评",
+          "description": "多源核查参数、真实差评与 3 年耗材总账",
+          "prompt": "请深度调研 2026 年 3000–5000 元主流旗舰扫地机器人（石头、追觅、科沃斯、云鲸），输出参数对比表、长期真实差评汇总、3 年耗材总成本及按户型推荐结论，附来源角标。"
+        },
+        "research-ev-compare": {
+          "label": "新能源车选购与 5 年账单",
+          "description": "实测续航、智驾口碑、保费与残值对比",
+          "prompt": "请深度对比 20–25 万热门家庭新能源 SUV（Model Y、极氪 7X、小鹏 G6、理想 L6）的冬季实测续航、辅助驾驶口碑与 5 年持有总成本，给出清晰试驾排序。"
+        },
+        "research-company-interview": {
+          "label": "目标公司与面试前深度尽调",
+          "description": "最新财报/业务、竞品格局与高分反问清单",
+          "prompt": "请做一份目标公司面试前深度尽调报告，梳理近 1 年核心业务进展、主要竞品对比、业务挑战，并给出 6 个高频追问与 4 个高分反问问题。"
+        },
+        "research-travel-guide": {
+          "label": "长假自由行深度避坑攻略",
+          "description": "交通精算、网红口碑核验与雨天备选",
+          "prompt": "请调研日本关西（大阪+京都+奈良）7 天自由行深度攻略：住宿片区对比、交通卡精算、每日顺路动线、提前预约避雷及 2 套雨天备选方案。"
+        }
+      }
+    },
     "pptx": {
       "label": "制作幻灯片",
       "prompts": {
-        "pptx-work-report": {
-          "label": "工作汇报",
-          "description": "季度工作总结与下阶段规划汇报",
-          "prompt": "制作一份季度工作汇报 PPT,包含以下内容:\n\n1. 本季度核心工作成果回顾\n2. 关键项目进展与里程碑达成情况\n3. 重点数据指标完成度(用图表呈现)\n4. 遇到的问题与解决方案\n5. 团队协作亮点\n6. 下季度工作计划与目标\n7. 需要的资源支持\n\n风格要求:简洁商务风,逻辑清晰,数据可视化,适合向管理层汇报。"
+        "ppt-tpl-mckinsey": {
+          "label": "极简咨询风 · 麦肯锡蓝白",
+          "description": "结论标题 + 双栏逻辑图表（10 页模板）",
+          "prompt": "采用极简咨询风（深海蓝+纯白、顶部一句话结论标题、双栏结构化图表）制作一份 10 页《2026 现制咖啡与茶饮消费趋势洞察》可编辑 PPT（标注演示示例数据）。"
         },
-        "pptx-content-research": {
-          "label": "内容调研",
-          "description": "行业趋势与竞品分析调研报告",
-          "prompt": "制作一份行业调研分析报告 PPT,涵盖以下板块:\n\n1. 调研背景与目的说明\n2. 行业整体发展现状与市场规模\n3. 主要竞品对比分析(功能、定价、用户口碑)\n4. 目标用户画像与核心需求洞察\n5. 行业趋势与机会点总结\n6. 可落地的策略建议\n\n风格要求:数据驱动,图表丰富,观点有理有据,适合团队内部分享讨论。"
+        "ppt-tpl-emerald-kpi": {
+          "label": "清爽数据看板 · 商务翠绿",
+          "description": "大数字指标卡 + 复盘进度表",
+          "prompt": "采用清爽数据看板风（白灰底+翠绿/琥珀状态色）制作一份 10 页《Q3 业务复盘与 Q4 规划》可编辑汇报 PPT（标注示例数据），包含 KPI 卡片与里程碑状态表。"
         },
-        "pptx-training": {
-          "label": "培训课件",
-          "description": "新员工入职与业务培训课件",
-          "prompt": "制作一套「新员工入职培训」课件 PPT,包含以下内容:\n\n1. 公司介绍与文化价值观\n2. 组织架构与各部门职责\n3. 核心业务流程讲解(用流程图呈现)\n4. 常用办公工具与系统使用指引\n5. 考勤、报销等制度速览\n6. 新人 30/60/90 天成长路径\n7. 互动问答与联系人清单\n\n风格要求:亲切专业,重点突出,图文结合,帮助新人快速融入团队。"
+        "ppt-tpl-dark-keynote": {
+          "label": "深色科技发布 · 极光黑金",
+          "description": "发布会大片感 + 大字金句屏",
+          "prompt": "采用深色科技发布会风（深邃石墨黑+极光高光）制作一份 12 页智能硬件新品发布宣讲 PPT（示例产品），涵盖痛点开场、3 大突破与版本对比。"
         },
-        "pptx-ai-intro": {
-          "label": "人工智能入门",
-          "description": "零基础了解 AI 的科普演示",
-          "prompt": "制作一份面向零基础观众的人工智能入门科普 PPT,内容包括:\n\n1. 什么是人工智能——用生活中的例子解释\n2. AI 的发展简史(从图灵测试到大语言模型)\n3. 常见的 AI 应用场景(语音助手、推荐系统、自动驾驶等)\n4. 机器学习的基本原理(用直观类比说明)\n5. 大模型与 ChatGPT 是怎么工作的\n6. AI 能做什么、不能做什么\n7. 普通人如何开始使用 AI 工具提升效率\n\n风格要求:通俗易懂,多用图示和类比,避免专业术语堆砌,让完全不懂技术的人也能看明白。"
+        "ppt-tpl-warm-editorial": {
+          "label": "暖调杂志叙事 · 莫兰迪米白",
+          "description": "高级留白 + 年度成长时间轴",
+          "prompt": "采用暖调杂志叙事风（暖米白+深青+低饱和暖橙）制作一份 8 页《2026 年度个人述职与成长复盘》可编辑 PPT（示例案例）。"
         }
       }
     },
     "data-analysis": {
       "label": "数据分析",
       "prompts": {
-        "excel-summary": {
-          "label": "Excel 汇总统计",
-          "description": "对 Excel 数据做分类汇总与统计",
-          "prompt": "请读取我的 Excel 文件,帮我完成以下工作:\n\n1. 按类别对数据进行分类汇总(求和、计数、平均值)\n2. 生成各类别的占比分析\n3. 标注异常值和关键数据\n4. 输出一份整理好的汇总统计 Excel 文件,包含图表"
+        "data-personal-bill": {
+          "label": "个人/家庭账单体检",
+          "description": "消费分类占比 + 隐形自动续费预警",
+          "prompt": "请使用一组 4 个月个人脱敏消费明细（标注模拟数据）示范个人账单体检：统计各类支出占比、识别自动续费隐形开销，输出带公式 Excel 与可视化看板。"
         },
-        "image-to-excel": {
-          "label": "图片/截图转表格",
-          "description": "识别图片中的表格数据并生成 Excel",
-          "prompt": "请识别我上传的图片中的表格内容,帮我:\n\n1. 提取图片中所有表格数据\n2. 整理为规范的行列格式\n3. 修正识别中可能出现的错误\n4. 生成一份格式清晰的 Excel 文件"
+        "data-store-sales": {
+          "label": "门店/电商销售与爆品复盘",
+          "description": "时段热力 + 爆品与滞销品毛利矩阵",
+          "prompt": "请基于一组模拟咖啡轻食门店跨时段订单数据（标注示例数据），计算各 SKU 销量与毛利率，找出前 3 爆品与滞销品，输出带图表 Excel 与经营建议。"
         },
-        "word-report": {
-          "label": "数据生成报告",
-          "description": "基于数据文件生成 Word 分析报告",
-          "prompt": "请根据我提供的数据文件,帮我生成一份 Word 分析报告,要求:\n\n1. 包含数据概况说明\n2. 核心指标统计与趋势分析\n3. 重点发现与结论总结\n4. 排版专业、条理清晰,可直接用于汇报"
+        "data-multi-merge": {
+          "label": "多份杂乱表格自动合并对账",
+          "description": "不同表头对齐、去重与来源标记",
+          "prompt": "请演示将两份列名不统一的月度报销示例表（标注示例数据）智能对齐合并、标红疑似重复提交，并生成带 SUMIF 汇总公式的规范 Excel。"
         },
-        "multi-excel-merge": {
-          "label": "多表合并整理",
-          "description": "合并多个 Excel 文件并统一格式",
-          "prompt": "我有多个 Excel 文件需要合并整理,请帮我:\n\n1. 将多个文件的数据合并到一张表中\n2. 统一列名和数据格式\n3. 去除重复数据\n4. 生成一份合并后的 Excel 文件,并添加数据来源标记"
+        "data-decision-matrix": {
+          "label": "租房/买车加权比价打分",
+          "description": "按通勤/价格/采光权重自动量化排行",
+          "prompt": "请建立一套 6 套备选租房房源（标注示例数据）的加权比价模型（通勤 35%、租金 30%、采光 20%、面积 15%），输出可调权重公式 Excel 与推荐结论。"
         }
       }
     },
@@ -54,151 +79,176 @@
       "label": "文档写作",
       "prompts": {
         "doc-meeting-minutes": {
-          "label": "会议纪要整理",
-          "description": "把录音转写或零散记录整理成规范纪要",
-          "prompt": "请根据我提供的会议记录(录音转写或零散笔记),帮我整理一份规范的会议纪要 Word 文档:\n\n1. 会议主题、时间、参会人员\n2. 按议题归纳讨论要点与结论\n3. 待办事项清单(明确负责人和截止时间)\n4. 需要上级决策或跨部门协调的事项单独列出\n5. 排版清晰,可直接发给参会人确认"
+          "label": "杂乱会议记录 → 规范纪要",
+          "description": "结论前置 + 负责人/DDL 彩色待办表",
+          "prompt": "请示范将一段口语化产品改版评审记录（标注示例素材）整理为排版精致的可编辑 Word 会议纪要，包含拍板结论、Owner+DDL 待办表与升级风险提示。"
+        },
+        "doc-contract-review": {
+          "label": "租房/合作合同风险体检",
+          "description": "标红霸王条款 + 给出平等修改措辞",
+          "prompt": "请以租客立场审阅一份常见脱敏租房合同示例，按高/中风险标出押金、维修与违约陷阱条款，给出平等替代措辞与沟通话术，交付 Word 审阅稿。"
         },
         "doc-weekly-report": {
-          "label": "周报生成",
-          "description": "把工作要点整理成一份拿得出手的周报",
-          "prompt": "请根据我提供的本周工作要点,帮我生成一份结构清晰的周报 Word 文档:\n\n1. 本周核心进展(按项目分组,突出结果和数据)\n2. 遇到的问题与风险,以及应对措施\n3. 需要的支持与协调事项\n4. 下周工作计划(按优先级排列)\n\n要求:语言简洁专业,避免流水账,让主管一眼看到重点。"
+          "label": "碎片流水账 → 亮点周报",
+          "description": "把“干了啥”升级成“拿了啥结果”",
+          "prompt": "请把一组零散职场工作流水账（标注示例素材）重构成结果导向的精排周报 Word 文档，按成果、效率提升、卡点诉求与下周优先级呈现。"
         },
-        "doc-proposal": {
-          "label": "方案文档撰写",
-          "description": "项目方案与立项报告的框架与初稿",
-          "prompt": "请帮我撰写一份项目方案 Word 文档,我会提供项目的基本想法,请按以下结构完成初稿:\n\n1. 项目背景与要解决的问题\n2. 目标与预期收益(尽量可量化)\n3. 方案设计与实施路径\n4. 里程碑计划与时间表(用表格呈现)\n5. 所需资源与预算估算\n6. 风险分析与应对预案\n\n要求:逻辑严谨,详略得当,适合提交给管理层评审。"
-        },
-        "doc-polish": {
-          "label": "公文与邮件润色",
-          "description": "通知、公告、邮件的专业化改写",
-          "prompt": "请帮我润色我提供的文稿(通知、公告或重要邮件),要求:\n\n1. 保留原意,修正语病和错别字\n2. 调整为正式、得体的商务语气\n3. 优化段落结构,重点信息前置\n4. 给出修改说明,标注主要改动之处\n5. 如内容缺少关键要素(时间、对象、行动要求),提醒我补充"
+        "doc-resume-polish": {
+          "label": "简历诊断与岗位定制改写",
+          "description": "STAR 法则升级 + JD 关键词对齐",
+          "prompt": "请示范将一份普通运营简历与增长运营经理 JD 对照诊断，按 STAR 法则重写精排一页纸 Word 简历（需用户补填真实数据处用占位提示，绝不编造）。"
         }
       }
     },
     "website": {
       "label": "创建网站",
       "prompts": {
-        "web-resume": {
-          "label": "个人简历",
-          "description": "在线简历与作品集页面",
-          "prompt": "帮我制作一个精美的在线个人简历页面。\n\n基本信息:\n- 姓名:张小明\n- 职位:产品经理(5年经验)\n- 联系方式:邮箱、手机、微信二维码占位区\n\n页面内容:\n- 个人简介:一段简短的自我介绍,突出核心优势\n- 工作经历:3段工作经历,含公司名、职位、时间、主要成果\n- 专业技能:以进度条形式展示产品设计、数据分析、项目管理等技能\n- 项目案例:展示3个代表项目的卡片,含项目名称和简短描述\n- 教育背景与证书\n\n设计风格:\n简洁专业、左右分栏布局、深色侧边栏搭配白色主内容区。适合直接分享给面试官或合作伙伴。"
+        "web-interactive-resume": {
+          "label": "互动在线简历 & 作品集",
+          "description": "杂志感布局、项目筛选与打印友好样式",
+          "prompt": "请制作一个杂志极简风单页互动个人简历与作品集 HTML 网页（含一键复制邮箱、按标签筛选项目并展开案例详情、打印友好样式）。"
         },
-        "web-store": {
-          "label": "店铺主页",
-          "description": "小型商铺或工作室展示页",
-          "prompt": "帮我做一个烘焙工作室的展示网页,工作室名叫「麦田烘焙」。\n\n页面内容:\n- 首屏大图:工作室名称、一句口号「用心烘焙,温暖每一天」、\"查看菜单\"按钮\n- 招牌产品:展示6款人气产品卡片(含图片占位、名称、价格、简短描述)\n- 关于我们:工作室的故事,创始人理念,配一张店内环境图占位\n- 顾客好评:3条用户评价,带头像和星级评分\n- 联系与地址:营业时间、地址、电话,嵌入地图占位区域\n\n设计风格:\n温馨文艺、奶油色和棕色为主色调、圆角卡片、手写风格标题字体。整体氛围温暖亲切。"
+        "web-family-trip": {
+          "label": "可交互家庭旅行攻略页",
+          "description": "每日动线、实时算账与打包勾选清单",
+          "prompt": "请制作一个手机端友好的《成都 4 天松弛美食游》可交互攻略 HTML 网页，含每日行程切换、实时人均预算计算器与本地保存勾选进度的打包清单。"
         },
-        "web-event": {
-          "label": "活动邀请函",
-          "description": "年会、发布会或团建的在线邀请页",
-          "prompt": "帮我制作一个公司年会的在线邀请函网页。\n\n活动信息:\n- 主题:「星辰科技 2026 年会·星光之夜」\n- 时间:2027年1月22日 周五 晚上6:30\n- 地点:城市之光大酒店 三层宴会厅\n\n页面内容:\n- 开场动画:标题渐入,金色粒子飘落效果\n- 邀请语:一段热情的邀请文字\n- 活动安排:时间轴展示流程(签到、晚宴、颁奖、抽奖、文艺表演)\n- 着装建议:正装出席,配色参考图占位\n- 交通指引:地址信息和停车提示\n- RSVP确认:\"准时参加\"和\"无法出席\"两个按钮\n\n设计风格:\n喜庆大气、深蓝色星空背景、金色点缀文字、充满仪式感。页面要适合手机浏览。"
+        "web-life-calculator": {
+          "label": "互动生活计算器（房贷/攒钱）",
+          "description": "滑块实时重算省息对比与可视化曲线",
+          "prompt": "请制作一个清爽的单页「房贷月供与提前还贷省息对比计算器」HTML 应用，支持滑块实时重算等额本息/本金、缩短年限 vs 减少月供对比与曲线图。"
         },
-        "web-survey": {
-          "label": "调查问卷",
-          "description": "在线表单与问卷收集页",
-          "prompt": "帮我做一个客户满意度调查问卷网页。\n\n问卷标题:「您的反馈对我们很重要」\n\n问卷内容:\n- 基本信息:姓名(选填)、联系方式(选填)\n- 单选题:整体满意度(非常满意/满意/一般/不满意/非常不满意)\n- 单选题:您是否愿意推荐给朋友(1-10分评分滑块)\n- 多选题:您最看重的方面(产品质量/服务态度/响应速度/性价比/售后保障)\n- 单选题:使用频率(每天/每周/每月/偶尔)\n- 文本题:您的建议或意见(大文本框)\n- 提交按钮,提交后显示感谢页面\n\n设计风格:\n清爽简洁、白色背景、蓝绿色主色调、每道题之间有足够间距、带进度条显示填写进度。适合手机端操作。"
+        "web-event-invite": {
+          "label": "婚礼/年会高仪式感电子请柬",
+          "description": "实时倒计时、流程轴与在线回执凭证",
+          "prompt": "请制作一个手机优先的高仪式感电子邀请函 HTML 网页（深蓝星空与香槟金），含实时倒计时、流程时间轴、着装色卡与提交后生成电子入场券的 RSVP 表单。"
         }
       }
     }
   },
   "en": {
+    "deep-research": {
+      "label": "Deep Research",
+      "prompts": {
+        "research-appliance-buy": {
+          "label": "Smart Appliance Buying Guide",
+          "description": "Specs, real owner complaints & 3-year consumable costs",
+          "prompt": "Run a deep multi-source comparison of 2026 flagship robot vacuums ($500-$900) covering specs, long-term owner complaints, 3-year consumable costs, and household picks with inline citations."
+        },
+        "research-ev-compare": {
+          "label": "EV & SUV 5-Year Comparison",
+          "description": "Real winter range, ADAS reliability & 5-yr TCO",
+          "prompt": "Compare popular $35k-$48k family electric SUVs on real-world winter range, charging speed, ADAS feedback, and 5-year total cost of ownership with a test-drive shortlist."
+        },
+        "research-company-interview": {
+          "label": "Company & Interview Due Diligence",
+          "description": "Strategy, competitors & high-signal questions",
+          "prompt": "Prepare a pre-interview due diligence dossier covering recent financials/launches, top 3 competitors, key product risks, 6 likely interview questions, and 4 sharp questions to ask."
+        },
+        "research-travel-guide": {
+          "label": "Deep Travel & Pitfall Planner",
+          "description": "Transit pass math, verified food picks & Plan B",
+          "prompt": "Research a 7-day Kyoto, Osaka & Nara trip for 2 adults with stay-area comparisons, transit pass math, low-backtrack routing, reservation lead times, and rainy-day alternatives."
+        }
+      }
+    },
     "pptx": {
       "label": "Create Slides",
       "prompts": {
-        "pptx-work-report": {
-          "label": "Work Report",
-          "description": "Quarterly summary and next phase planning report",
-          "prompt": "Create a quarterly work report PPT with the following content:\n\n1. Review of core work achievements this quarter\n2. Key project progress and milestone completion\n3. Performance metrics completion (visualized with charts)\n4. Problems encountered and solutions\n5. Team collaboration highlights\n6. Next quarter work plans and objectives\n7. Resource support needed\n\nStyle requirements: Concise business style, clear logic, data visualization, suitable for management reporting."
+        "ppt-tpl-mckinsey": {
+          "label": "Consulting Blue & White",
+          "description": "Executive action titles & clean two-column charts",
+          "prompt": "Create a 10-slide Consulting Blue & White presentation (labelled sample data) on 2026 Specialty Coffee & Tea Trends with executive action titles and clean comparison visuals."
         },
-        "pptx-content-research": {
-          "label": "Industry Research",
-          "description": "Industry trends and competitor analysis report",
-          "prompt": "Create an industry research and analysis report PPT covering the following sections:\n\n1. Research background and objectives\n2. Overall industry development status and market size\n3. Main competitor comparison (features, pricing, user reputation)\n4. Target user persona and core needs insights\n5. Industry trends and opportunities summary\n6. Actionable strategy recommendations\n\nStyle requirements: Data-driven, rich in charts, well-reasoned viewpoints, suitable for internal team sharing and discussion."
+        "ppt-tpl-emerald-kpi": {
+          "label": "Clean KPI Dashboard",
+          "description": "Big KPI cards & milestone scorecard",
+          "prompt": "Create a 10-slide Clean KPI Dashboard deck (labelled sample data) for a Q3 Business Review & Q4 Plan with KPI hero cards and RAG milestone tracking."
         },
-        "pptx-training": {
-          "label": "Training Deck",
-          "description": "Onboarding and internal training slides",
-          "prompt": "Create a \"New Employee Onboarding\" training deck PPT, including:\n\n1. Company introduction and culture values\n2. Organizational structure and department responsibilities\n3. Core business process walkthrough (presented with flowcharts)\n4. Guide to commonly used office tools and systems\n5. Quick overview of attendance, expense and other policies\n6. 30/60/90-day growth path for new hires\n7. Interactive Q&A and contact list\n\nStyle requirements: Friendly and professional, well-highlighted key points, combining text and visuals, helping new hires integrate into the team quickly."
+        "ppt-tpl-dark-keynote": {
+          "label": "Dark Keynote Launch",
+          "description": "Stage-ready obsidian slides & bold hero stats",
+          "prompt": "Create a 12-slide Dark Keynote Launch deck for a sample 2026 AI Desk Companion covering status-quo pain, 3 breakthroughs, and clear tier comparisons."
         },
-        "pptx-ai-intro": {
-          "label": "Introduction to AI",
-          "description": "Popular science presentation for understanding AI basics",
-          "prompt": "Create a popular science PPT introducing artificial intelligence for beginners, including:\n\n1. What is artificial intelligence - explain with everyday examples\n2. Brief history of AI development (from Turing Test to large language models)\n3. Common AI application scenarios (voice assistants, recommendation systems, autonomous driving, etc.)\n4. Basic principles of machine learning (explained with intuitive analogies)\n5. How large models and ChatGPT work\n6. What AI can and cannot do\n7. How ordinary people can start using AI tools to improve efficiency\n\nStyle requirements: Easy to understand, use diagrams and analogies, avoid technical jargon, make it understandable even for those with no technical background."
+        "ppt-tpl-warm-editorial": {
+          "label": "Warm Editorial Narrative",
+          "description": "Ivory whitespace & milestone storytelling",
+          "prompt": "Create an 8-slide Warm Editorial Narrative deck (sample case) for a 2026 Annual Career Review with timeline milestones and impact deep dives."
         }
       }
     },
     "data-analysis": {
       "label": "Data Analysis",
       "prompts": {
-        "excel-summary": {
-          "label": "Excel Summary",
-          "description": "Categorize and summarize Excel data",
-          "prompt": "Please read my Excel file and help me complete the following tasks:\n\n1. Categorize data by category (sum, count, average)\n2. Generate proportion analysis for each category\n3. Mark outliers and key data points\n4. Output a well-organized summary statistics Excel file with charts"
+        "data-personal-bill": {
+          "label": "Personal Spending Health Check",
+          "description": "Category breakdown & forgotten auto-renewals",
+          "prompt": "Demonstrate a personal spending audit using a 4-month sample dataset (labelled sample): categorize spend, flag unused recurring subscriptions, and output an Excel workbook + visual dashboard."
         },
-        "image-to-excel": {
-          "label": "Image to Table",
-          "description": "Recognize table data in images and generate Excel",
-          "prompt": "Please recognize the table content in the image I uploaded and help me:\n\n1. Extract all table data from the image\n2. Organize into standard row and column format\n3. Correct possible recognition errors\n4. Generate a clearly formatted Excel file"
+        "data-store-sales": {
+          "label": "Store & E-Commerce Sales Review",
+          "description": "Peak dayparts & SKU profit ranking",
+          "prompt": "Analyze a sample cafe order dataset (labelled sample) to rank SKU margins, compare dayparts, and recommend menu & staffing moves with charts and Excel formulas."
         },
-        "word-report": {
-          "label": "Data Report",
-          "description": "Generate Word analysis report based on data files",
-          "prompt": "Please generate a Word analysis report based on the data file I provided, with the following requirements:\n\n1. Include data overview description\n2. Core metrics statistics and trend analysis\n3. Key findings and conclusion summary\n4. Professional layout, clear structure, ready for reporting"
+        "data-multi-merge": {
+          "label": "Multi-Sheet Merge & Deduplicate",
+          "description": "Align mismatched headers & catch duplicates",
+          "prompt": "Demonstrate merging two sample monthly expense sheets with inconsistent headers (labelled sample), flagging suspected duplicates, and building a formula summary tab."
         },
-        "multi-excel-merge": {
-          "label": "Merge Multiple Tables",
-          "description": "Merge multiple Excel files and standardize format",
-          "prompt": "I have multiple Excel files that need to be merged and organized. Please help me:\n\n1. Merge data from multiple files into one table\n2. Standardize column names and data formats\n3. Remove duplicate data\n4. Generate a merged Excel file with data source markers"
+        "data-decision-matrix": {
+          "label": "Weighted Rent / Purchase Scorer",
+          "description": "Rank shortlisted options by custom weights",
+          "prompt": "Build a weighted scoring workbook for 6 sample apartment listings (Commute 35%, Rent 30%, Light 20%, Area 15%) with editable weight formulas and a clear top-2 ranking."
         }
       }
     },
     "doc-writing": {
-      "label": "Write Documents",
+      "label": "Write Docs",
       "prompts": {
         "doc-meeting-minutes": {
-          "label": "Meeting Minutes",
-          "description": "Turn transcripts or scattered notes into standard minutes",
-          "prompt": "Based on the meeting record I provide (audio transcript or scattered notes), help me organize a standard meeting minutes Word document:\n\n1. Meeting topic, time, and attendees\n2. Summarize discussion points and conclusions by agenda item\n3. Action item list (with clear owners and deadlines)\n4. List items requiring management decisions or cross-team coordination separately\n5. Clean layout, ready to send to attendees for confirmation"
+          "label": "Messy Notes → Actionable Minutes",
+          "description": "Decisions upfront + owner/deadline table",
+          "prompt": "Turn a sample raw product-review transcript (labelled sample) into polished Word meeting minutes with decisions, owner/deadline table, and escalation risks."
+        },
+        "doc-contract-review": {
+          "label": "Lease & Contract Risk Audit",
+          "description": "Flag unfair clauses & polite redline wording",
+          "prompt": "Audit a sample residential lease from the tenant's perspective, flagging high-risk clauses on deposits, repairs, and termination with balanced redline replacements in Word."
         },
         "doc-weekly-report": {
-          "label": "Weekly Report",
-          "description": "Turn work notes into a presentable weekly report",
-          "prompt": "Based on the key work items I provide, help me generate a well-structured weekly report Word document:\n\n1. Core progress this week (grouped by project, highlighting results and data)\n2. Problems and risks encountered, with countermeasures\n3. Support and coordination needed\n4. Next week's work plan (ordered by priority)\n\nRequirements: Concise and professional language, avoid trivial listing, let managers see the highlights at a glance."
+          "label": "Work Bullets → Impact Weekly",
+          "description": "Reframe rough chores into measurable outcomes",
+          "prompt": "Rewrite a sample list of casual weekly notes (labelled sample) into a crisp, outcome-focused weekly report Word document with clear blockers and asks."
         },
-        "doc-proposal": {
-          "label": "Project Proposal",
-          "description": "Complete framework and first draft for proposals",
-          "prompt": "Please help me write a project proposal Word document. I will provide the basic idea; please complete a draft with the following structure:\n\n1. Project background and the problem to solve\n2. Goals and expected benefits (quantified where possible)\n3. Solution design and implementation path\n4. Milestone plan and timeline (presented in a table)\n5. Required resources and budget estimate\n6. Risk analysis and contingency plans\n\nRequirements: Rigorous logic, well-balanced detail, suitable for management review."
-        },
-        "doc-polish": {
-          "label": "Polish Documents",
-          "description": "Professional rewrite of notices, announcements and emails",
-          "prompt": "Please polish the draft I provide (notice, announcement, or important email):\n\n1. Keep the original meaning, fix grammar issues and typos\n2. Adjust to a formal, appropriate business tone\n3. Improve paragraph structure, putting key information first\n4. Provide revision notes marking the main changes\n5. If key elements are missing (time, audience, required actions), remind me to add them"
+        "doc-resume-polish": {
+          "label": "Resume Diagnosis & JD Tailoring",
+          "description": "STAR impact rewrite & keyword alignment",
+          "prompt": "Audit a sample resume against a Growth Manager JD and produce a clean 1-page Word resume using STAR framing without inventing metrics (use clear placeholders where needed)."
         }
       }
     },
     "website": {
       "label": "Create Website",
       "prompts": {
-        "web-resume": {
-          "label": "Personal Resume",
-          "description": "Online resume and portfolio page",
-          "prompt": "Help me create a beautiful online personal resume page.\n\nBasic information:\n- Name: John Smith\n- Position: Product Manager (5 years experience)\n- Contact: Email, phone, WeChat QR code placeholder\n\nPage content:\n- Personal introduction: A brief self-introduction highlighting core strengths\n- Work experience: 3 work experiences, including company name, position, time, main achievements\n- Professional skills: Display product design, data analysis, project management and other skills in progress bar format\n- Project cases: Display 3 representative project cards with project name and brief description\n- Educational background and certificates\n\nDesign style:\nClean and professional, left-right column layout, dark sidebar with white main content area. Suitable for sharing directly with interviewers or partners."
+        "web-interactive-resume": {
+          "label": "Editorial Portfolio & Resume",
+          "description": "Filterable case studies & print-ready CSS",
+          "prompt": "Build an editorial minimal interactive resume & portfolio HTML page with copy-email button, filterable expandable case studies, career timeline, and print-ready styles."
         },
-        "web-store": {
-          "label": "Store Homepage",
-          "description": "Small shop or studio showcase page",
-          "prompt": "Help me create a showcase webpage for a bakery studio called \"Wheat Field Bakery\".\n\nPage content:\n- Hero image: Studio name, a slogan \"Baking with heart, warming every day\", \"View Menu\" button\n- Signature products: Display 6 popular product cards (including image placeholder, name, price, brief description)\n- About us: Studio story, founder philosophy, with a store environment image placeholder\n- Customer reviews: 3 user reviews with avatars and star ratings\n- Contact and address: Business hours, address, phone, embedded map placeholder area\n\nDesign style:\nWarm and artistic, cream and brown as main colors, rounded cards, handwritten style title fonts. Overall atmosphere warm and friendly."
+        "web-family-trip": {
+          "label": "Interactive Trip Itinerary & Budget",
+          "description": "Day tabs, live budget math & packing checklist",
+          "prompt": "Build a mobile-first 4-day Kyoto trip planner HTML page with interactive day tabs, live per-person budget calculator, and a localStorage packing checklist."
         },
-        "web-event": {
-          "label": "Event Invitation",
-          "description": "Online invitation page for annual parties, launches or team events",
-          "prompt": "Help me create an online invitation webpage for a company annual party.\n\nEvent information:\n- Theme: \"Starfield Tech 2026 Annual Party - Starlight Night\"\n- Time: Friday, January 22, 2027, 6:30 PM\n- Location: City Light Grand Hotel, 3rd Floor Ballroom\n\nPage content:\n- Opening animation: Title fade-in, golden particle falling effect\n- Invitation message: A warm invitation text\n- Event schedule: Timeline showing the flow (check-in, dinner, awards, lucky draw, performances)\n- Dress code: Formal attire, color reference image placeholder\n- Transportation guide: Address information and parking tips\n- RSVP confirmation: \"Will attend\" and \"Cannot attend\" two buttons\n\nDesign style:\nFestive and elegant, dark blue starry background, gold accent text, full of ceremony. Page should be mobile-friendly."
+        "web-life-calculator": {
+          "label": "Mortgage & Savings Simulator",
+          "description": "Live sliders & extra-payment payoff curve",
+          "prompt": "Build a clean interactive Mortgage & Extra-Payment Savings Calculator HTML app with live sliders, interest-saved comparison cards, and an interactive payoff chart."
         },
-        "web-survey": {
-          "label": "Survey Questionnaire",
-          "description": "Online form and questionnaire collection page",
-          "prompt": "Help me create a customer satisfaction survey questionnaire webpage.\n\nQuestionnaire title: \"Your Feedback is Important to Us\"\n\nQuestionnaire content:\n- Basic information: Name (optional), Contact (optional)\n- Single choice: Overall satisfaction (Very satisfied/Satisfied/Neutral/Dissatisfied/Very dissatisfied)\n- Single choice: Would you recommend to friends (1-10 rating slider)\n- Multiple choice: What aspects do you value most (Product quality/Service attitude/Response speed/Value for money/After-sales support)\n- Single choice: Usage frequency (Daily/Weekly/Monthly/Occasionally)\n- Text question: Your suggestions or opinions (large text box)\n- Submit button, show thank you page after submission\n\nDesign style:\nFresh and simple, white background, blue-green main color, sufficient spacing between questions, with progress bar showing completion. Suitable for mobile operation."
+        "web-event-invite": {
+          "label": "Ceremony Event Invitation",
+          "description": "Live countdown, schedule & digital RSVP pass",
+          "prompt": "Build a mobile-first Starlight Gala invitation HTML page with a live countdown, timeline, dress palette, directions, and an interactive RSVP generating a digital pass."
         }
       }
     }

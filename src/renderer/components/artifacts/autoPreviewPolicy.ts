@@ -74,8 +74,15 @@ export function getAutoPreviewOpenTarget(artifact: Artifact): ArtifactAutoPrevie
 }
 
 function getAutoPreviewPriority(artifact: Artifact): number | null {
-  // Raster images already show inline in the conversation; opening the panel would only repeat them.
-  if (artifact.type === ArtifactTypeValue.Image) return null;
+  // Raster images and videos already show inline in the conversation; opening the panel would only repeat them.
+  // Markdown files are frequently written or linked during normal turns and should be opened on demand.
+  if (
+    artifact.type === ArtifactTypeValue.Image
+    || artifact.type === ArtifactTypeValue.Video
+    || artifact.type === ArtifactTypeValue.Markdown
+  ) {
+    return null;
+  }
   const category = getAutoPreviewCategory(artifact);
   if (!category) return null;
   const priority = AUTO_PREVIEW_PRIORITY.indexOf(category);

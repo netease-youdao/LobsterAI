@@ -69,6 +69,29 @@ export function writeAgentPersonaFiles(workspaceDir: string, persona: AgentPerso
   }
 }
 
+/** Preserve the actual workspace edits if applying an official upgrade later fails. */
+export function replaceAgentPersonaForUpgrade(workspaceDir: string, persona: AgentPersona): () => void {
+  const originals = listPersonaFiles(persona).map(([filename, value]) => {
+    const file = path.join(workspaceDir, filename);
+    const before = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+    return { file, before, installed: formatPersonaFileContent(value ?? '') };
+  });
+  const restore = () => {
+    for (const { file, before, installed } of originals) {
+      if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== installed) continue;
+      if (before === undefined) fs.unlinkSync(file);
+      else fs.writeFileSync(file, before);
+    }
+  };
+  try {
+    writeAgentPersonaFiles(workspaceDir, persona);
+  } catch (error) {
+    restore();
+    throw error;
+  }
+  return restore;
+}
+
 /**
  * Persona fields of `next` that must be written to disk. A new agent (no
  * `previous`) writes both files so a workspace left behind by a deleted agent

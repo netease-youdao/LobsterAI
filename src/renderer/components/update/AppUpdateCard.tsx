@@ -1,4 +1,4 @@
-import { ArrowPathIcon, ChevronDownIcon, ChevronUpIcon, ExclamationTriangleIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useLayoutEffect, useState } from 'react';
 
 import { type AppUpdateRuntimeState, AppUpdateStatus } from '../../../shared/appUpdate/constants';
@@ -9,6 +9,7 @@ import {
   saveUpdateCardCollapsedVersion,
   shouldExpandUpdateCard,
 } from './appUpdateCardState';
+import { formatAppUpdateError } from './appUpdateErrorText';
 import { isAppUpdateReadyToInstall } from './appUpdateNoticeState';
 
 interface AppUpdateCardProps {
@@ -18,24 +19,35 @@ interface AppUpdateCardProps {
   /** Reports whether the full card (not the collapsed pill) is showing, so the
    * sidebar can yield the bottom promo slot to it. */
   onExpandedChange?: (expanded: boolean) => void;
+  /** Optional initial collapsed version for deterministic rendering in tests;
+   * omitted in production so startup waits for the persisted value. */
+  initialCollapsedVersion?: string | null;
 }
 
 const Spinner: React.FC<{ className?: string }> = ({ className = 'h-3.5 w-3.5' }) => (
-  <svg className={`${className} animate-spin`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+  <svg
+    className={`${className} shrink-0 animate-spin motion-reduce:animate-none`}
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3.5" />
+    <path className="opacity-85" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
   </svg>
 );
 
-const PingDot: React.FC<{ dotClassName: string }> = ({ dotClassName }) => (
-  <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
-    <span
-      className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${dotClassName}`}
-      style={{ animationDuration: '2.4s' }}
-    />
-    <span className={`relative inline-flex h-2 w-2 rounded-full ${dotClassName}`} />
-  </span>
+const StatusDot: React.FC<{ dotClassName: string; ringClassName: string }> = ({
+  dotClassName,
+  ringClassName,
+}) => (
+  <span
+    className={`inline-flex h-1.5 w-1.5 shrink-0 rounded-full ring-[3px] ${dotClassName} ${ringClassName}`}
+    aria-hidden="true"
+  />
 );
+
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 const logCollapsePreferenceFailure = (action: string, error: unknown): void => {
   console.warn(`[AppUpdateCard] failed to ${action}:`, error);
@@ -60,13 +72,17 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
   onUpdate,
   onShowDetails,
   onExpandedChange,
+  initialCollapsedVersion,
 }) => {
   // undefined = persisted collapse state still loading; render nothing to
   // avoid an expand/collapse flash on startup.
-  const [collapsedVersion, setCollapsedVersion] = useState<string | null | undefined>(undefined);
+  const [collapsedVersion, setCollapsedVersion] = useState<string | null | undefined>(
+    initialCollapsedVersion,
+  );
   const [isActing, setIsActing] = useState(false);
 
   useEffect(() => {
+    if (initialCollapsedVersion !== undefined) return undefined;
     let isCurrent = true;
     void readUpdateCardCollapsedVersion()
       .then((version) => {
@@ -79,7 +95,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
     return () => {
       isCurrent = false;
     };
-  }, []);
+  }, [initialCollapsedVersion]);
 
   const updateInfo = updateState.info;
   const isExpanded = collapsedVersion !== undefined
@@ -88,7 +104,7 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
   // The sidebar banner shares this bottom slot. Sync before paint so expanding
   // the card never renders a frame with both elements competing for space.
-  useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     onExpandedChange?.(isExpanded);
     return () => onExpandedChange?.(false);
   }, [isExpanded, onExpandedChange]);
@@ -105,12 +121,21 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
   const lang = i18nService.getLanguage();
   const currentLog = changeLog?.[lang];
   const highlights = (currentLog?.content ?? []).filter((item) => item.trim().length > 0).slice(0, 2);
+  const formattedError = updateState.errorMessage
+    ? formatAppUpdateError(updateState.errorMessage)
+    : null;
 
   const title = isReady || isInstalling
     ? i18nService.t('updateReadyCardTitle')
     : isError
       ? i18nService.t('updateErrorPill')
       : i18nService.t('updateCardTitle');
+
+  const statusDot = isReady || isInstalling
+    ? { dot: 'bg-emerald-500', ring: 'ring-emerald-500/15' }
+    : isError
+      ? { dot: 'bg-destructive', ring: 'ring-destructive/15' }
+      : { dot: 'bg-primary', ring: 'ring-primary/15' };
 
   const handleExpand = () => {
     setCollapsedVersion(null);
@@ -138,66 +163,69 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
   if (!isExpanded) {
     const pillLabel = isInstalling ? i18nService.t('updateInstallingShort') : title;
-    const pillTone = isReady || isInstalling
-      ? 'border-emerald-500/25 bg-emerald-500/[0.07] hover:bg-emerald-500/[0.12]'
-      : isError
-        ? 'border-red-500/25 bg-red-500/[0.06] hover:bg-red-500/[0.1]'
-        : 'border-primary/20 bg-primary/[0.06] hover:bg-primary/[0.1]';
-    const pillDot = isReady || isInstalling
-      ? 'bg-emerald-500'
-      : isError
-        ? 'bg-red-500'
-        : 'bg-primary';
+    const pillTone = isError
+      ? 'border-destructive/30 bg-surface/85 hover:border-destructive/45 hover:bg-surface'
+      : 'border-border bg-surface/80 hover:border-border-input hover:bg-surface';
 
     return (
       <button
         type="button"
         onClick={handleExpand}
-        className={`non-draggable flex h-8 w-full items-center gap-2 rounded-lg border px-2.5 text-xs font-medium text-foreground transition-colors ${pillTone}`}
+        className={`non-draggable group flex h-[34px] w-full items-center gap-2 rounded-[10px] border px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] font-medium text-foreground transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 ${pillTone}`}
         aria-label={`${pillLabel} v${latestVersion}`}
         title={`${pillLabel} v${latestVersion}`}
       >
-        <PingDot dotClassName={pillDot} />
-        <span className="truncate">{pillLabel}</span>
-        {!isInstalling && (
-          <span className="shrink-0 text-secondary">v{latestVersion}</span>
+        {isInstalling ? (
+          <Spinner className="h-3.5 w-3.5 text-secondary" />
+        ) : (
+          <StatusDot dotClassName={statusDot.dot} ringClassName={statusDot.ring} />
         )}
-        <ChevronUpIcon className="ml-auto h-3.5 w-3.5 shrink-0 text-secondary" aria-hidden="true" />
+        <span className="min-w-0 truncate">{pillLabel}</span>
+        {!isInstalling && (
+          <span className="shrink-0 text-[length:var(--lobster-text-sidebarMeta)] font-normal tabular-nums text-muted">
+            v{latestVersion}
+          </span>
+        )}
+        <ChevronUpIcon
+          className="ml-auto h-3.5 w-3.5 shrink-0 text-secondary/75 transition-colors group-hover:text-foreground"
+          aria-hidden="true"
+        />
       </button>
     );
   }
 
-  const cardTone = isReady || isInstalling
-    ? 'border-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.10] via-emerald-500/[0.04] to-transparent'
-    : isError
-      ? 'border-red-500/20 bg-gradient-to-br from-red-500/[0.07] via-red-500/[0.03] to-transparent'
-      : 'border-primary/15 bg-gradient-to-br from-primary/[0.09] via-primary/[0.04] to-transparent';
-  const iconTone = isReady || isInstalling
-    ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400'
-    : isError
-      ? 'bg-red-500/10 text-red-500'
-      : 'bg-primary/12 text-primary';
-  const Icon = isReady || isInstalling ? ArrowPathIcon : isError ? ExclamationTriangleIcon : RocketLaunchIcon;
+  const cardTone = isError
+    ? 'border-destructive/30 bg-surface'
+    : 'border-border bg-surface';
+
+  const primaryLabel = isInstalling
+    ? i18nService.t('updateInstallingShort')
+    : isReady
+      ? i18nService.t('updateRestartNow')
+      : isError
+        ? i18nService.t('updateRetry')
+        : i18nService.t('updateAvailableConfirm');
 
   return (
     <section
-      className={`non-draggable animate-fade-in-up rounded-xl border p-3 shadow-card ${cardTone}`}
+      className={`non-draggable animate-fade-in-up motion-reduce:animate-none rounded-xl border p-3 shadow-subtle ${cardTone}`}
       aria-label={`${title} v${latestVersion}`}
     >
-      <div className="flex items-start gap-1.5">
-        <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${iconTone}`} aria-hidden="true">
-          <Icon className="h-4 w-4" />
-        </span>
-        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
-          <span className="min-w-0 break-words text-sm font-semibold leading-5 text-foreground">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {isInstalling ? (
+            <Spinner className="h-3.5 w-3.5 text-secondary" />
+          ) : (
+            <StatusDot dotClassName={statusDot.dot} ringClassName={statusDot.ring} />
+          )}
+          <span className="min-w-0 truncate text-[length:var(--lobster-text-sidebarCompact)] font-medium leading-5 text-foreground">
             {title}
           </span>
-          <span className="shrink-0 text-xs leading-4 text-secondary">v{latestVersion}</span>
         </div>
         <button
           type="button"
           onClick={handleCollapse}
-          className="-mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]"
+          className="-mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
           aria-label={i18nService.t('collapse')}
           title={i18nService.t('collapse')}
         >
@@ -205,13 +233,39 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
         </button>
       </div>
 
-      {isError && updateState.errorMessage ? (
-        <p className="mt-2 line-clamp-2 break-words text-xs text-secondary">{updateState.errorMessage}</p>
+      <button
+        type="button"
+        data-skin-button-plain="true"
+        onClick={onShowDetails}
+        aria-label={`${i18nService.t('updateWhatsNew')} v${latestVersion}`}
+        className="group -ml-0.5 mt-0.5 inline-flex max-w-full items-center gap-1 rounded px-0.5 py-0.5 text-[length:var(--lobster-text-sidebarMeta)] leading-4 text-secondary transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+      >
+        <span className="shrink-0 tabular-nums text-muted transition-colors group-hover:text-secondary">
+          v{latestVersion}
+        </span>
+        <span className="shrink-0 text-muted/70" aria-hidden="true">·</span>
+        <span className="truncate">{i18nService.t('updateReleaseNotesLabel')}</span>
+        <ChevronRightIcon
+          className="h-3 w-3 shrink-0 text-muted transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground motion-reduce:transform-none"
+          aria-hidden="true"
+        />
+      </button>
+
+      {isError && formattedError ? (
+        <p className="mt-2 line-clamp-2 break-words text-[length:var(--lobster-text-sidebarMeta)] leading-[1.45] text-secondary">
+          {formattedError}
+        </p>
       ) : highlights.length > 0 ? (
         <ul className="mt-2 space-y-1">
           {highlights.map((item, index) => (
-            <li key={index} className="flex items-start gap-1.5 text-xs leading-4 text-secondary">
-              <span className="mt-[7px] h-[3px] w-[3px] shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" />
+            <li
+              key={index}
+              className="flex items-start gap-1.5 text-[length:var(--lobster-text-sidebarMeta)] leading-[1.45] text-secondary"
+            >
+              <span
+                className="mt-[7px] h-[3px] w-[3px] shrink-0 rounded-full bg-muted"
+                aria-hidden="true"
+              />
               <span className="line-clamp-1">{item}</span>
             </li>
           ))}
@@ -220,30 +274,13 @@ const AppUpdateCard: React.FC<AppUpdateCardProps> = ({
 
       <button
         type="button"
+        data-skin-button-solid="true"
         onClick={() => void handlePrimary()}
         disabled={isActing || isInstalling || isChecking}
-        className={`mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-white transition-all active:scale-[0.98] disabled:opacity-70 ${
-          isReady || isInstalling
-            ? 'bg-emerald-600 hover:bg-emerald-500'
-            : 'bg-primary hover:bg-primary-hover'
-        }`}
+        className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-foreground px-3 text-[13px] font-medium text-background transition-opacity duration-150 hover:opacity-90 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {(isActing || isInstalling) && <Spinner />}
-        {isInstalling
-          ? i18nService.t('updateInstallingShort')
-          : isReady
-            ? i18nService.t('updateRestartNow')
-            : isError
-              ? i18nService.t('updateRetry')
-              : i18nService.t('updateAvailableConfirm')}
-      </button>
-
-      <button
-        type="button"
-        onClick={onShowDetails}
-        className="mt-2 w-full text-center text-xs text-secondary transition-colors hover:text-foreground"
-      >
-        {i18nService.t('updateWhatsNew')}
+        {(isActing || isInstalling) && <Spinner className="h-3.5 w-3.5" />}
+        <span className="truncate">{primaryLabel}</span>
       </button>
     </section>
   );

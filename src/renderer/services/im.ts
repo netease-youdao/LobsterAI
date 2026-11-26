@@ -66,6 +66,8 @@ import type {
   WecomInstanceConfig,
   WecomOpenClawConfig,
 } from '../types/im';
+import { showToast } from '../utils/localFileActions';
+import { i18nService } from './i18n';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
 
 type IMConfigUpdateOptions = {
@@ -250,10 +252,12 @@ class IMService {
       if (result.success) {
         return true;
       } else {
+        if (config.wecom) return this.handleWecomSaveFailure(result.error);
         console.error('[IM Service] Failed to persist config:', result.error);
         return false;
       }
     } catch (error) {
+      if (config.wecom) return this.handleWecomSaveFailure(error);
       console.error('[IM Service] Failed to persist config:', error);
       return false;
     }
@@ -266,6 +270,9 @@ class IMService {
   async saveAndSyncConfig(): Promise<boolean> {
     try {
       const result: IMGatewayResult = await window.electron.im.syncConfig();
+      if (result.success) {
+        await this.loadStatus();
+      }
       return result.success;
     } catch (error) {
       console.error('[IM Service] Failed to sync IM config:', error);
@@ -844,6 +851,15 @@ class IMService {
     }
   }
 
+  private async handleWecomSaveFailure(error: unknown): Promise<false> {
+    const reason = error instanceof Error ? error.message : error;
+    const message = typeof reason === 'string' && reason ? reason : i18nService.t('failedToSaveSettings');
+    await this.loadConfig();
+    store.dispatch(setError(message));
+    showToast(message);
+    return false;
+  }
+
   async persistWecomInstanceConfig(instanceId: string, config: Partial<WecomOpenClawConfig>): Promise<boolean> {
     try {
       const result = await window.electron.im.setWecomInstanceConfig(instanceId, config, { syncGateway: false });
@@ -851,11 +867,9 @@ class IMService {
         store.dispatch(setWecomInstanceConfig({ instanceId, config }));
         return true;
       }
-      console.error('[IM Service] Failed to persist WeCom instance config:', result.error);
-      return false;
+      return this.handleWecomSaveFailure(result.error);
     } catch (error) {
-      console.error('[IM Service] Failed to persist WeCom instance config:', error);
-      return false;
+      return this.handleWecomSaveFailure(error);
     }
   }
 
@@ -879,12 +893,9 @@ class IMService {
         }
         return true;
       }
-      store.dispatch(setError(result.error || 'Failed to update WeCom instance config'));
-      return false;
+      return this.handleWecomSaveFailure(result.error);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to update WeCom instance config';
-      store.dispatch(setError(message));
-      return false;
+      return this.handleWecomSaveFailure(error);
     } finally {
       store.dispatch(setLoading(false));
     }

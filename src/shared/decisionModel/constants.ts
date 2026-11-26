@@ -41,6 +41,9 @@ export const DECISION_MODEL_CONFIG_STORE_KEY = 'decision_model_config';
 // registers the decision_evaluate tool.
 export const DECISION_MODEL_PLUGIN_ID = 'lobster-decision';
 
+// Tool name exposed to the agent runtime when the decision model is active.
+export const DECISION_EVALUATE_TOOL_NAME = 'decision_evaluate';
+
 /** One saved key per provider, so switching providers keeps the others. */
 export type DecisionModelApiKeys = Partial<Record<DecisionModelProvider, string>>;
 

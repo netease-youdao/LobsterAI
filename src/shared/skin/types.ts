@@ -43,6 +43,10 @@ export type SkinBindThemeResponse =
   | { success: true; skin: PresentedSkin }
   | { success: false; error: string };
 
+export type SkinSetBackdropVisibilityResponse =
+  | { success: true; skin: PresentedSkin }
+  | { success: false; error: string };
+
 export type SkinDeactivateResponse =
   | { success: true }
   | { success: false; error: string };

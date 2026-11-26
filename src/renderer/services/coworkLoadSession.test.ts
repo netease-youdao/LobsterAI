@@ -705,3 +705,98 @@ describe('coworkService.loadNewerMessages', () => {
     expect(store.getState().cowork.currentSession?.messages).toHaveLength(100);
   });
 });
+
+describe('coworkService rail navigation loading', () => {
+  test('supports forward-biased leadingContext when jumping to a rail turn', async () => {
+    const allMessages = makeMessages(200);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(170), 170, 200)));
+    const getSessionMessages = vi.fn(async (options: { offset: number; limit: number }) => ({
+      success: true,
+      messages: allMessages.slice(options.offset, options.offset + options.limit),
+      offset: options.offset,
+      total: 200,
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: { getSessionMessages },
+      },
+    });
+
+    await expect(coworkService.loadMessageWindowAroundIndex('session-1', 80, {
+      pageSize: 60,
+      leadingContext: 6,
+      expectedMessageId: 'message-80',
+    })).resolves.toBe(true);
+
+    expect(getSessionMessages).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      offset: 74,
+      limit: 60,
+    });
+    expect(store.getState().cowork.currentSession?.messagesOffset).toBe(74);
+  });
+
+  test('keeps an in-flight rail index load alive across pagination window jumps and deduplicates concurrent callers', async () => {
+    const allMessages = makeMessages(120);
+    store.dispatch(setCurrentSession(makeSession(allMessages.slice(90), 90, 120)));
+
+    let resolveRailIndex!: (value: {
+      success: boolean;
+      items: Array<{
+        messageId: string;
+        type: 'user' | 'assistant';
+        sequence: number;
+        messageOffset: number;
+        timestamp: number;
+        preview: string;
+        contentLen: number;
+      }>;
+    }) => void;
+    const getSessionMessageRailIndex = vi.fn(() => new Promise<{
+      success: boolean;
+      items: Array<{
+        messageId: string;
+        type: 'user' | 'assistant';
+        sequence: number;
+        messageOffset: number;
+        timestamp: number;
+        preview: string;
+        contentLen: number;
+      }>;
+    }>(resolve => {
+      resolveRailIndex = resolve;
+    }));
+    const getSessionMessages = vi.fn(async (options: { offset: number; limit: number }) => ({
+      success: true,
+      messages: allMessages.slice(options.offset, options.offset + options.limit),
+      offset: options.offset,
+      total: 120,
+    }));
+    vi.stubGlobal('window', {
+      electron: {
+        cowork: { getSessionMessageRailIndex, getSessionMessages },
+      },
+    });
+
+    const firstRailPromise = coworkService.loadSessionMessageRailIndex('session-1');
+    const secondRailPromise = coworkService.loadSessionMessageRailIndex('session-1');
+    expect(getSessionMessageRailIndex).toHaveBeenCalledTimes(1);
+
+    await expect(coworkService.loadMessageWindowAroundIndex('session-1', 0)).resolves.toBe(true);
+
+    const railItems = [{
+      messageId: 'message-0',
+      type: 'user' as const,
+      sequence: 1,
+      messageOffset: 0,
+      timestamp: 1000,
+      preview: 'First prompt',
+      contentLen: 12,
+    }];
+    resolveRailIndex({ success: true, items: railItems });
+
+    await expect(firstRailPromise).resolves.toEqual(railItems);
+    await expect(secondRailPromise).resolves.toEqual(railItems);
+    expect(store.getState().cowork.messageRailIndexBySessionId['session-1']).toEqual(railItems);
+  });
+});

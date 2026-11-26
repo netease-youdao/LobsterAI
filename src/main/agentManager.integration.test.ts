@@ -7,9 +7,13 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { AgentModelSelectionMode, AgentSource } from '../shared/agent/constants';
 import { createExpertCatalogFixture, ExpertFixtureId } from '../shared/agent/expertCatalogFixture';
+import { expertReminderRevision, ExpertUpgradeStatus, hasExpertUpdate } from '../shared/agent/presets';
+import { CoworkSessionStatusValue } from '../shared/cowork/constants';
 import { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import { AgentManager } from './agentManager';
 import { CoworkStore } from './coworkStore';
+import { upgradePreset } from './ipcHandlers/agents/upgradePreset';
+import { AgentPersonaFile } from './libs/agentPersonaFiles';
 import { presetToCreateRequest } from './presetAgents';
 import { SqliteStore } from './sqliteStore';
 
@@ -96,6 +100,74 @@ test.each([false, true])('recreates a custom agent without reusing its retired i
     expect(db.prepare('SELECT * FROM agent_ownership WHERE agent_id=?').get(legacy.id)).toEqual(retiredIdentity);
     expect(() => store.createAgent({ id: legacy.id, name: '111' })).toThrow('Agent identity cannot be reused');
   }
+});
+
+test.each([undefined, 1])('explicit update keeps the same expert and history (installed revision %s)', async revision => {
+  const feed = createExpertCatalogFixture();
+  const preset = feed.experts[0];
+  preset.revision = revision;
+  const manager = new AgentManager(store, async () => feed);
+  const agent = (await manager.addPresetAgent(preset.id))!;
+  expect(agent.presetRevision).toBe(revision);
+  manager.updateAgent(agent.id, { name: 'Local name', model: 'local/model', pinned: true, workingDirectory: '/project' });
+  const session = store.createSession('Earlier work', '/project', '', 'local', [], agent.id);
+  store.addMessage(session.id, { type: 'user', content: 'Keep this message' });
+  const soul = path.join(userDataPath, AgentPersonaFile.Soul);
+  fs.writeFileSync(soul, 'Independent workspace edit');
+  const previous = store.getAgent(agent.id)!;
+  const deps = {
+    getAgentManager: () => manager, getCoworkStore: () => store,
+    getCoworkEngineRouter: () => ({ isSessionActive: () => false }),
+    resolveAgentWorkspacePath: () => userDataPath,
+    syncOpenClawConfig: vi.fn().mockResolvedValue({ success: true, changed: true }),
+  };
+  preset.revision = 2;
+  const official = presetToCreateRequest(preset);
+  await manager.getExpertCatalog();
+  expect(store.getAgent(agent.id)).toEqual(previous);
+  expect(await upgradePreset(agent.id, 3, deps)).toBe(ExpertUpgradeStatus.Unavailable);
+  store.updateSession(session.id, { status: CoworkSessionStatusValue.Running });
+  expect(await upgradePreset(agent.id, 2, deps)).toBe(ExpertUpgradeStatus.Busy);
+  expect(store.getAgent(agent.id)).toEqual(previous);
+  expect(fs.readFileSync(soul, 'utf8')).toBe('Independent workspace edit');
+  store.updateSession(session.id, { status: CoworkSessionStatusValue.Completed });
+  expect(await upgradePreset(agent.id, 2, { ...deps, hasPendingMediaTask: () => true })).toBe(ExpertUpgradeStatus.Busy);
+  deps.syncOpenClawConfig.mockResolvedValueOnce({ success: false, error: 'offline' });
+  await expect(upgradePreset(agent.id, 2, deps)).rejects.toThrow('offline');
+  expect(store.getAgent(agent.id)).toMatchObject({ ...previous, updatedAt: expect.any(Number) });
+  expect(fs.readFileSync(soul, 'utf8')).toBe('Independent workspace edit');
+  deps.syncOpenClawConfig.mockImplementationOnce(async () => {
+    manager.updateAgent(agent.id, { name: 'Edited during sync' });
+    fs.writeFileSync(soul, 'Changed during sync');
+    return { success: false, error: 'gateway restarting' };
+  });
+  await expect(upgradePreset(agent.id, 2, deps)).rejects.toThrow('gateway restarting');
+  expect(store.getAgent(agent.id)).toMatchObject({ ...previous, name: 'Edited during sync', updatedAt: expect.any(Number) });
+  expect(fs.readFileSync(soul, 'utf8')).toBe('Changed during sync');
+  expect(await upgradePreset(agent.id, 2, deps)).toBe(ExpertUpgradeStatus.Updated);
+  expect(store.getAgent(agent.id)).toMatchObject({
+    id: agent.id, name: official.name, presetRevision: 2, model: 'local/model', pinned: true, workingDirectory: '/project',
+  });
+  expect(fs.readFileSync(soul, 'utf8').trim()).toBe(official.systemPrompt);
+  expect(store.getSession(session.id)?.messages.map(message => message.content)).toContain('Keep this message');
+  manager.updateAgent(agent.id, { name: 'Edited after update' });
+  expect(await upgradePreset(agent.id, 2, deps)).toBe(ExpertUpgradeStatus.Updated);
+  preset.revision = 1;
+  expect(await upgradePreset(agent.id, 1, deps)).toBe(ExpertUpgradeStatus.Unavailable);
+  expect(store.getAgent(agent.id)?.name).toBe('Edited after update');
+});
+
+test('dismissing a revision preserves the installed expert and the next release restores the reminder', async () => {
+  const manager = new AgentManager(store, async () => catalog);
+  const agent = (await manager.addPresetAgent(ExpertFixtureId.Data))!;
+  expect(store.dismissPresetUpdate(agent.id, 2)).toBe(true);
+  expect(store.dismissPresetUpdate(agent.id, 1)).toBe(false);
+  const saved = store.getAgent(agent.id)!;
+  expect(saved.dismissedPresetRevision).toBe(2);
+  expect(saved.presetRevision).toBe(agent.presetRevision);
+  expect(hasExpertUpdate(saved.presetRevision, 2)).toBe(true);
+  expect(expertReminderRevision(saved.presetRevision, 2, saved.dismissedPresetRevision)).toBeUndefined();
+  expect(expertReminderRevision(saved.presetRevision, 3, saved.dismissedPresetRevision)).toBe(3);
 });
 
 test('custom creation preserves an explicit caller-supplied identity', () => {

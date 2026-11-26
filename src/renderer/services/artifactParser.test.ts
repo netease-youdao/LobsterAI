@@ -134,9 +134,11 @@ describe('parseFileLinksFromMessage', () => {
     expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toHaveLength(0);
   });
 
-  test('ignores bare-name links without any separator', () => {
-    const content = '[a.md](a.md)';
-    expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toHaveLength(0);
+  test('accepts an explicit link to a supported filename without a separator', () => {
+    const content = '[演示文稿](release%20review.pptx) [下一步](continue)';
+    expect(parseFileLinksFromMessage(content, 'msg1', 'sess1')).toEqual([
+      expect.objectContaining({ filePath: 'release review.pptx', type: 'document' }),
+    ]);
   });
 });
 
@@ -745,6 +747,25 @@ describe('parseLocalServiceUrlsFromText', () => {
     );
   });
 
+  test('extracts project directory from PowerShell Set-Location command in text', () => {
+    const content = [
+      '启动方式',
+      '```powershell',
+      'Set-Location -Path "C:\\work\\my app"',
+      'npm run dev',
+      '```',
+      '预览地址：http://localhost:5173',
+    ].join('\n');
+    const artifacts = parseLocalServiceUrlsFromText(
+      content,
+      'msg1',
+      'sess1',
+      { projectDirectory: 'C:\\work' },
+    );
+
+    expect(artifacts[0].localService?.projectDirectory).toBe('C:\\work\\my app');
+  });
+
   test('prefers labeled project directory over session cwd', () => {
     const content = [
       '项目目录： `/Users/admin/lobsterai/project/fanren/fanren-vote/`',
@@ -1052,6 +1073,84 @@ describe('parseToolArtifact', () => {
         },
       }, undefined, 'sess1');
       expect(artifact, toolName).toBeNull();
+    }
+  });
+
+  test('parses Office MCP edit tools into document artifacts and ignores read tools or errored edits', () => {
+    const cases = [
+      { toolName: 'word_edit', filePath: '/tmp/out/report.docx', fileName: 'report.docx' },
+      { toolName: 'excel_edit', filePath: '/tmp/out/budget.xlsx', fileName: 'budget.xlsx' },
+      { toolName: 'ppt_edit', filePath: '/tmp/out/deck.pptx', fileName: 'deck.pptx' },
+      { toolName: 'mcp__lobster-word__word_edit', filePath: '/tmp/out/q3.docx', fileName: 'q3.docx' },
+      { toolName: 'mcp__lobster-excel__excel_edit', filePath: 'D:\\work\\plan.xlsx', fileName: 'plan.xlsx' },
+      { toolName: 'mcp__lobster-ppt__ppt_edit', filePath: '/tmp/out/pitch.pptx', fileName: 'pitch.pptx' },
+    ];
+
+    for (const entry of cases) {
+      const artifact = parseToolArtifact({
+        id: `tool-${entry.toolName}`,
+        type: 'tool_use' as const,
+        content: entry.toolName,
+        timestamp: 1000,
+        metadata: {
+          toolName: entry.toolName,
+          toolUseId: `tu-${entry.toolName}`,
+          toolInput: { path: entry.filePath, edits: [] },
+        },
+      }, {
+        id: `res-${entry.toolName}`,
+        type: 'tool_result' as const,
+        content: 'Saved',
+        timestamp: 1001,
+        metadata: { toolUseId: `tu-${entry.toolName}`, isError: false },
+      }, 'sess1');
+
+      expect(artifact, entry.toolName).not.toBeNull();
+      expect(artifact!.type).toBe('document');
+      expect(artifact!.filePath).toBe(entry.filePath);
+      expect(artifact!.fileName).toBe(entry.fileName);
+      expect(artifact!.content).toBe('');
+    }
+
+    // Errored Office edit must not surface as an artifact.
+    expect(parseToolArtifact({
+      id: 'tool-err-word',
+      type: 'tool_use' as const,
+      content: 'mcp__lobster-word__word_edit',
+      timestamp: 1000,
+      metadata: {
+        toolName: 'mcp__lobster-word__word_edit',
+        toolUseId: 'tu-err-word',
+        toolInput: { path: '/tmp/out/report.docx', edits: [] },
+      },
+    }, {
+      id: 'res-err-word',
+      type: 'tool_result' as const,
+      content: 'Revision mismatch',
+      timestamp: 1001,
+      metadata: { toolUseId: 'tu-err-word', isError: true },
+    }, 'sess1')).toBeNull();
+
+    // Read-only Office MCP tools must not surface as write artifacts.
+    for (const readTool of [
+      'word_read',
+      'excel_read',
+      'ppt_read',
+      'mcp__lobster-word__word_read',
+      'mcp__lobster-excel__excel_read',
+      'mcp__lobster-ppt__ppt_read',
+    ]) {
+      expect(parseToolArtifact({
+        id: `tool-${readTool}`,
+        type: 'tool_use' as const,
+        content: readTool,
+        timestamp: 1000,
+        metadata: {
+          toolName: readTool,
+          toolUseId: `tu-${readTool}`,
+          toolInput: { path: '/tmp/out/report.docx' },
+        },
+      }, undefined, 'sess1'), readTool).toBeNull();
     }
   });
 });

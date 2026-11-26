@@ -2,14 +2,19 @@ import crypto from 'crypto';
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
+import { COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS } from '../../shared/computerUse/constants';
 import { ASK_USER_QUESTION_TOOL_NAME, SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpAuthMode } from '../../shared/mcp/auth';
-import { McpIpcChannel } from '../../shared/mcp/constants';
+import { McpIpcChannel, McpManagedConnection } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest } from '../../shared/mcp/toolDiscovery';
 import { type MediaConfirmationCommand, MediaConfirmationReason } from '../../shared/media/confirmation';
-import { NeteaseMail, NeteaseMailAuth, NeteaseMailScope } from '../../shared/neteaseMail/constants';
-import { getNeteaseMailNativeTools } from '../../shared/neteaseMail/scopes';
-import { isComputerUseKitInstalled, syncComputerUseSkillFromRuntime } from '../computerUse/computerUseKit';
+import { NeteaseMail } from '../../shared/neteaseMail/constants';
+import { getNeteaseMailNativeTools, getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
+import {
+  isComputerUseKitInstalled,
+  isComputerUseSkillEnabled,
+  syncComputerUseSkillFromRuntime,
+} from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
 import { installComputerUseRuntime } from '../computerUse/computerUseRuntime';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath } from '../libs/coworkUtil';
@@ -24,11 +29,8 @@ import {
   McpBridgeServer,
   type MediaGenerationRequest,
   type MediaGenerationResponse,
-  type WebSearchPageHandler,
 } from '../libs/mcpBridgeServer';
 import { applyNodeSystemCaDefault } from '../libs/nodeSystemCaEnv';
-import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
-import type { ResolvedMcpServer } from '../libs/openclawConfigSync';
 import { resolveLocalDesktopCoworkSessionIdByOpenClawSessionKey } from '../libs/openclawLocalSessionResolver';
 import { applyPythonEncodingDefaults } from '../libs/pythonEncodingEnv';
 import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
@@ -36,12 +38,22 @@ import { resolveStdioCommand } from '../libs/resolveStdioCommand';
 import type { SqliteStore } from '../sqliteStore';
 import { createMcpLaunchSourceFingerprint, McpLaunchResolutionStatus } from './mcpLaunchResolution';
 import { McpLaunchResolverManager } from './mcpLaunchResolverManager';
+import type { McpOAuthTokenRecord } from './mcpOAuthManager';
 import { type McpServerRecord, McpStore } from './mcpStore';
 import type { McpToolDiscoveryLaunch } from './mcpToolDiscovery';
-import { readNeteaseMailAuthorization } from './neteaseMailAuthorizationState';
 import { getNeteaseMailOAuthConfig } from './neteaseMailConfig';
+import type { ResolvedMcpServer } from './types';
 
 export type { AskUserResponse, MediaGenerationRequest, MediaGenerationResponse };
+
+// Covers the host's bounded connection wait and the surrounding config sync.
+const MANAGED_MCP_SYNC_TIMEOUT_MS = 18_000;
+
+interface ManagedLaunchConnection {
+  sourceFingerprint: string;
+  serverUpdatedAt: number;
+  pending: Promise<void> | null;
+}
 
 const getPackagedNpmBinDir = (): string => (app.isPackaged
   ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
@@ -79,12 +91,14 @@ function buildGatewayChildPath(): string {
 }
 
 export interface McpRuntimeDeps {
+  getMailToken?: (serverId: string) => McpOAuthTokenRecord | null;
   getStore: () => SqliteStore;
   syncOpenClawConfig: (options: {
     reason: string;
     restartGatewayIfRunning?: boolean;
-    expectedImpact?: OpenClawConfigImpact;
-  }) => Promise<{ success: boolean; changed: boolean }>;
+    expectedImpact?: string;
+    waitForMcpServerId?: string;
+  }) => Promise<{ success: boolean; changed: boolean; mcpServerConnected?: boolean }>;
   /** Fired when an AskUserQuestion request is surfaced to the renderer. */
   onAskUserRequested?: (sessionId: string, request: { requestId: string; toolName: string }) => void;
   /** Fired when a pending AskUserQuestion request is dismissed upstream. */
@@ -99,6 +113,7 @@ export interface McpRuntimeDeps {
 export class McpRuntime {
   private mcpStore: McpStore | null = null;
   private launchResolverManager: McpLaunchResolverManager | null = null;
+  private readonly launchConnections = new Map<string, ManagedLaunchConnection>();
   private bridgeServer: McpBridgeServer | null = null;
   private readonly bridgeSecret: string;
   private resolvedServersCache: ResolvedMcpServer[] = [];
@@ -109,7 +124,6 @@ export class McpRuntime {
     | ((request: BrowserToolRequest) => Promise<BrowserToolResponse>)
     | null = null;
   private decisionToolHandler: DecisionToolHandler | null = null;
-  private webSearchPageHandler: WebSearchPageHandler | null = null;
   private readonly editorToolHandlers = new Map<string, { editorName: string; handler: EditorToolHandler }>();
 
   constructor(private readonly deps: McpRuntimeDeps) {
@@ -129,14 +143,7 @@ export class McpRuntime {
       this.launchResolverManager = new McpLaunchResolverManager(
         this.getStore(),
         () => this.broadcastServersChanged(),
-        reason => {
-          this.deps.syncOpenClawConfig({
-            reason,
-            expectedImpact: OpenClawConfigImpact.Sync,
-          }).catch(err =>
-            console.error('[MCP] config sync error after launch resolution:', err),
-          );
-        },
+        (reason, readyServerId) => this.syncLaunchConnection(reason, readyServerId),
       );
     }
     return this.launchResolverManager;
@@ -146,10 +153,97 @@ export class McpRuntime {
     this.getLaunchResolverManager().ensureResolved(serverId, reason);
   }
 
+  private getLaunchConnection(server: McpServerRecord): ManagedLaunchConnection | undefined {
+    const connection = this.launchConnections.get(server.id);
+    if (
+      !server.enabled
+      || connection?.serverUpdatedAt !== server.updatedAt
+      || connection.sourceFingerprint !== server.launchResolution?.sourceFingerprint
+    ) return undefined;
+    return connection;
+  }
+
+  getDisplayServers(): Array<McpServerRecord & { runtimeConnection?: McpManagedConnection }> {
+    return this.getStore().listServers().map(server => {
+      const connection = this.getLaunchConnection(server);
+      return connection ? {
+        ...server,
+        runtimeConnection: connection.pending ? McpManagedConnection.Connecting : McpManagedConnection.Connected,
+      } : server;
+    });
+  }
+
+  private syncLaunchConnection(reason: string, serverId?: string): void {
+    const server = serverId ? this.getStore().getServer(serverId) : null;
+    const resolution = server?.enabled ? this.getLaunchResolverManager().getReadyResolution(server) : undefined;
+    const waitForMcpServerId = resolution && server ? server.id : undefined;
+    const sync = Promise.resolve().then(() => this.deps.syncOpenClawConfig({
+      reason,
+      expectedImpact: 'sync',
+      ...(waitForMcpServerId ? { waitForMcpServerId } : {}),
+    })).catch((err): null => {
+      console.error('[MCP] config sync error after launch resolution:', err);
+      return null;
+    });
+    if (!server || !resolution) return;
+
+    const connection: ManagedLaunchConnection = {
+      sourceFingerprint: resolution.sourceFingerprint,
+      serverUpdatedAt: server.updatedAt,
+      pending: null,
+    };
+    const timeout = AbortSignal.timeout(MANAGED_MCP_SYNC_TIMEOUT_MS);
+    connection.pending = new Promise<void>(resolve => {
+      const finish = (connected: boolean) => {
+        timeout.removeEventListener('abort', onTimeout);
+        if (this.launchConnections.get(server.id) === connection) {
+          if (connected) connection.pending = null;
+          else this.launchConnections.delete(server.id);
+          this.broadcastServersChanged();
+        }
+        resolve();
+      };
+      const onTimeout = () => finish(false);
+      timeout.addEventListener('abort', onTimeout, { once: true });
+      void sync.then(result => finish(result?.success === true && result.mcpServerConnected === true));
+    });
+    this.launchConnections.set(server.id, connection);
+  }
+
+  async waitForPendingLaunchConnections(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    const pending: Promise<void>[] = [];
+    for (const [id, connection] of this.launchConnections) {
+      if (!connection.pending) continue;
+      const server = this.getStore().getServer(id);
+      if (server && this.getLaunchConnection(server) === connection) pending.push(connection.pending);
+    }
+    if (pending.length === 0) return;
+
+    await new Promise<void>(resolve => {
+      const finish = () => {
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      signal.addEventListener('abort', finish, { once: true });
+      void Promise.all(pending).then(finish, finish);
+    });
+  }
+
   setMediaGenerationHandler(
     handler: (request: MediaGenerationRequest) => Promise<MediaGenerationResponse>,
   ): void {
     this.mediaGenerationHandler = handler;
+  }
+
+  async executeMediaGeneration(request: MediaGenerationRequest): Promise<MediaGenerationResponse> {
+    if (!this.mediaGenerationHandler) {
+      return {
+        content: [{ type: 'text', text: 'Media generation service is not ready yet.' }],
+        isError: true,
+      };
+    }
+    return await this.mediaGenerationHandler(request);
   }
 
   setBrowserToolHandler(
@@ -157,15 +251,6 @@ export class McpRuntime {
   ): void {
     this.browserToolHandler = handler;
     this.bridgeServer?.onBrowserTool(handler);
-  }
-
-  setWebSearchPageHandler(handler: WebSearchPageHandler): void {
-    this.webSearchPageHandler = handler;
-    this.bridgeServer?.onWebSearchPage(handler);
-  }
-
-  getWebSearchCallbackUrl(): string | null {
-    return this.bridgeServer?.webSearchCallbackUrl ?? null;
   }
 
   setDecisionToolHandler(handler: DecisionToolHandler): void {
@@ -286,15 +371,7 @@ export class McpRuntime {
       this.deps.onAskUserDismissed?.(requestId);
     });
 
-    this.bridgeServer.onMediaGeneration(async (request) => {
-      if (!this.mediaGenerationHandler) {
-        return {
-          content: [{ type: 'text', text: 'Media generation service is not ready yet.' }],
-          isError: true,
-        };
-      }
-      return await this.mediaGenerationHandler(request);
-    });
+    this.bridgeServer.onMediaGeneration(request => this.executeMediaGeneration(request));
 
     this.bridgeServer.onDecisionTool(async (request, signal) => {
       if (!this.decisionToolHandler) {
@@ -308,9 +385,6 @@ export class McpRuntime {
 
     if (this.browserToolHandler) {
       this.bridgeServer.onBrowserTool(this.browserToolHandler);
-    }
-    if (this.webSearchPageHandler) {
-      this.bridgeServer.onWebSearchPage(this.webSearchPageHandler);
     }
     for (const [route, { editorName, handler }] of this.editorToolHandlers) {
       this.bridgeServer.onEditorTool(route, editorName, handler);
@@ -436,6 +510,7 @@ export class McpRuntime {
     const pushRawStdioServer = async (server: typeof enabledServers[number]): Promise<void> => {
       const r = await resolveStdioCommand(server);
       resolved.push({
+        id: server.id,
         name: server.name,
         transportType: 'stdio',
         command: r.command,
@@ -453,6 +528,7 @@ export class McpRuntime {
           if (readyResolution) {
             optimizedCount++;
             resolved.push({
+              id: server.id,
               name: server.name,
               transportType: 'stdio',
               command: readyResolution.command,
@@ -506,21 +582,16 @@ export class McpRuntime {
         await pushRawStdioServer(server);
       } else {
         if (server.registryId === NeteaseMail.RegistryId) {
-          const mail = getNeteaseMailOAuthConfig(app.isPackaged);
-          if (!mail) continue;
-          // The saved grant, not a tool list frozen by an older app version,
-          // determines which managed tools are available after an upgrade.
-          const grant = readNeteaseMailAuthorization(path.join(app.getPath('userData'), 'openclaw', 'state'), mail.clientId);
-          const tools = getNeteaseMailNativeTools(grant?.scopes ?? [NeteaseMailScope.Read]);
-          // An empty include list would be omitted and expose every remote tool.
-          if (tools.length > 0) resolved.push({
-            name: NeteaseMail.RegistryId, transportType: 'http', url: mail.mcpUrl,
-            auth: McpAuthMode.OAuth, oauth: { authProfileId: NeteaseMailAuth.ProfileId },
-            toolFilter: { include: tools },
-          });
+          const config = getNeteaseMailOAuthConfig(app.isPackaged);
+          const token = this.deps.getMailToken?.(server.id);
+          if (!config || !token?.mailAuthorizationId || token.clientId !== config.clientId) continue;
+          const include = getNeteaseMailNativeTools(getNeteaseMailScopes(token.scope));
+          if (include.length) resolved.push({ id: server.id, name: NeteaseMail.RegistryId, transportType: 'http',
+            url: config.mcpUrl, auth: McpAuthMode.OAuth, toolFilter: { include } });
           continue;
         }
         resolved.push({
+          id: server.id,
           name: server.name,
           transportType: server.transportType,
           url: server.url,
@@ -533,7 +604,8 @@ export class McpRuntime {
 
     const askUserCallbackUrl = this.getAskUserCallbackUrl();
     const shouldEnableComputerUse = askUserCallbackUrl !== null
-      && isComputerUseKitInstalled(this.deps.getStore());
+      && isComputerUseKitInstalled(this.deps.getStore())
+      && isComputerUseSkillEnabled(this.deps.getStore());
     if (shouldEnableComputerUse) {
       const installResult = await installComputerUseRuntime();
       if (!installResult.success) {
@@ -555,7 +627,10 @@ export class McpRuntime {
       })
       : null;
     if (computerUseServer) {
-      resolved.push(computerUseServer);
+      resolved.push({
+        ...computerUseServer,
+        requestTimeoutMs: computerUseServer.requestTimeoutMs ?? COMPUTER_USE_MCP_TOOL_CALL_TIMEOUT_MS,
+      });
       builtInCount++;
     }
 

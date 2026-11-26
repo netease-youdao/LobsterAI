@@ -7,6 +7,7 @@ import { expect, test } from 'vitest';
 import { buildCoworkTurnUsage, CoworkTurnUsageStatus } from '../../../shared/cowork/llmTurnUsage';
 import { ModelPresetId } from '../../../shared/modelPresets/constants';
 import { i18nService } from '../../services/i18n';
+import { type Artifact, ArtifactMediaOriginType, ArtifactTypeValue } from '../../types/artifact';
 import type { CoworkMessage } from '../../types/cowork';
 import AssistantTurnBlock from './AssistantTurnBlock';
 import ConversationTurnsView from './ConversationTurnsView';
@@ -16,10 +17,15 @@ const renderTurn = (
   messages: CoworkMessage[],
   isStreamingTurn: boolean,
   showActivityIndicator = false,
+  options: {
+    artifacts?: Artifact[];
+    enableMessageSpeech?: boolean;
+    showCopyButtons?: boolean;
+  } = {},
 ): string => {
   const store = configureStore({
     reducer: {
-      auth: () => ({ creditQuotaSnapshot: null }),
+      auth: () => ({ creditQuotaSnapshot: null, isLoggedIn: true }),
       cowork: () => ({ isStreaming: isStreamingTurn, currentSession: null }),
       enterpriseAccount: () => ({ context: null }),
     },
@@ -28,7 +34,13 @@ const renderTurn = (
   return renderToStaticMarkup(React.createElement(Provider, {
     store,
     children: React.createElement(AssistantTurnBlock, {
-      turn, isStreamingTurn, showActivityIndicator, onForkMessage: () => {},
+      turn,
+      isStreamingTurn,
+      showActivityIndicator,
+      artifacts: options.artifacts,
+      enableMessageSpeech: options.enableMessageSpeech,
+      showCopyButtons: options.showCopyButtons,
+      onForkMessage: () => {},
     }),
   }));
 };
@@ -160,10 +172,24 @@ test('a running step line carries no timer of its own; the status line owns the 
   ], true);
   expect(writing).toContain('正在写入文件');
   expect(writing).not.toContain('data-diff-stats');
-  expect(writing).toContain('查看详情');
+  expect(writing).toMatch(/正在写入文件<\/span><svg[^>]*aria-hidden="true"/);
+  expect(writing).not.toContain('查看详情');
+  expect(writing).not.toContain('查看修改');
   expect(writing).not.toMatch(/ · \d+s/);
   // The write line leads with the app's compose icon (34×34 artboard).
   expect(writing).toMatch(/data-activity-step-kind="edit"[^]*?viewBox="0 0 34 34"/);
+
+  const written = renderTurn([
+    ...process,
+    {
+      id: 'write-done', type: 'tool_use', content: '', timestamp: startedAt,
+      metadata: { toolName: 'write', toolInput: { path: '/tmp/slide4.html', content: '<div />' }, toolUseId: 'write-done' },
+    },
+    { id: 'write-done-result', type: 'tool_result', content: 'ok', timestamp: startedAt + 500, metadata: { toolUseId: 'write-done' } },
+  ], true);
+  expect(written).toMatch(/已写入 slide4\.html<\/span><svg[^>]*aria-hidden="true"/);
+  expect(written).not.toContain('查看修改');
+  expect(written).not.toContain('查看详情');
 
   const commanding = renderTurn([
     ...process,
@@ -280,4 +306,285 @@ test('a turn stopped during a tool step still shows its credits after usage sett
     ...process.slice(1),
   ], true);
   expect(live).not.toContain('cowork-message-meta');
+});
+
+test('places result file cards above the reply time, model, credits, and actions row', () => {
+  const artifact: Artifact = {
+    id: 'artifact-md-1',
+    messageId: 'reply-1',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Markdown,
+    title: 'report.md',
+    fileName: 'report.md',
+    filePath: '/tmp/report.md',
+    content: '# Report',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    ...process.slice(1),
+    {
+      id: 'reply-1',
+      type: 'assistant',
+      content: 'Report is ready.',
+      timestamp: 55_000,
+      metadata: { model: 'deepseek-flash', modelPresetId: ModelPresetId.Balanced },
+    },
+  ], false, false, { artifacts: [artifact], enableMessageSpeech: true });
+
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html.match(/12\.5 积分/g)).toHaveLength(1);
+  expect(html).toContain('report.md');
+  expect(html).toContain(`aria-label="${i18nService.t('coworkForkFromMessage')}"`);
+  expect(html).toContain(`aria-label="${i18nService.t('copyToClipboard')}"`);
+  expect(html).toContain(`aria-label="${i18nService.t('coworkReadAloud')}"`);
+
+  const replyIndex = html.indexOf('Report is ready.');
+  const cardIndex = html.indexOf('artifact-preview-card-group');
+  const metaIndex = html.indexOf('class="cowork-message-meta ');
+  expect(replyIndex).toBeGreaterThan(-1);
+  expect(cardIndex).toBeGreaterThan(replyIndex);
+  expect(metaIndex).toBeGreaterThan(cardIndex);
+});
+
+test('places result file cards above the reply meta row even without credit usage', () => {
+  const artifact: Artifact = {
+    id: 'artifact-doc-1',
+    messageId: 'reply-no-usage',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Document,
+    title: 'summary.docx',
+    fileName: 'summary.docx',
+    filePath: '/tmp/summary.docx',
+    content: '',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    ...process,
+    {
+      id: 'reply-no-usage',
+      type: 'assistant',
+      content: 'Document created.',
+      timestamp: 55_000,
+      metadata: { model: 'claude-sonnet-4' },
+    },
+  ], false, false, { artifacts: [artifact] });
+
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html).toContain('claude-sonnet-4');
+  expect(html.indexOf('artifact-preview-card-group')).toBeLessThan(html.indexOf('class="cowork-message-meta '));
+});
+
+test('places inline image artifacts above the reply meta row', () => {
+  const imageArtifact: Artifact = {
+    id: 'artifact-img-1',
+    messageId: 'reply-img',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Image,
+    title: 'poster.png',
+    fileName: 'poster.png',
+    filePath: '/tmp/poster.png',
+    content: 'data:image/png;base64,iVBORw0KGgo=',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    {
+      id: 'reply-img',
+      type: 'assistant',
+      content: 'Here is your poster.',
+      timestamp: 55_000,
+    },
+  ], false, false, { artifacts: [imageArtifact] });
+
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html.indexOf('alt="poster.png"')).toBeGreaterThan(html.indexOf('Here is your poster.'));
+  expect(html.indexOf('alt="poster.png"')).toBeLessThan(html.indexOf('class="cowork-message-meta '));
+});
+
+test('keeps the reply meta row hidden while streaming even when artifacts are present', () => {
+  const artifact: Artifact = {
+    id: 'artifact-live-1',
+    messageId: 'reply-live',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Markdown,
+    title: 'draft.md',
+    fileName: 'draft.md',
+    filePath: '/tmp/draft.md',
+    content: '# Draft',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    { id: 'reply-live', type: 'assistant', content: 'Writing draft...', timestamp: 55_000 },
+  ], true, true, { artifacts: [artifact], showCopyButtons: false });
+
+  expect(html).toContain('draft.md');
+  expect(html).not.toContain('cowork-message-meta');
+});
+
+test('renders videos inline without duplicating path rows or generic video file cards', () => {
+  const videoArtifact: Artifact = {
+    id: 'artifact-vid-1',
+    messageId: 'reply-vid',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Video,
+    title: 'demo.mp4',
+    fileName: 'demo.mp4',
+    filePath: '/tmp/demo.mp4',
+    content: '',
+    createdAt: 55_000,
+  };
+  const html = renderTurn([
+    userWithUsage,
+    {
+      id: 'reply-vid',
+      type: 'assistant',
+      content: 'Video is ready.',
+      timestamp: 55_000,
+    },
+  ], false, false, { artifacts: [videoArtifact] });
+
+  expect(html).toContain('data-inline-video-id="artifact-vid-1"');
+  expect(html).toContain('demo.mp4');
+  expect(html).not.toContain('artifact-preview-card-row');
+  expect(html.indexOf('data-inline-video-id="artifact-vid-1"')).toBeGreaterThan(html.indexOf('Video is ready.'));
+  expect(html.indexOf('data-inline-video-id="artifact-vid-1"')).toBeLessThan(html.indexOf('class="cowork-message-meta '));
+});
+
+test('promotes reply-referenced final video and collapses intermediate clips while keeping non-video files in file cards', () => {
+  const clip1: Artifact = {
+    id: 'clip-1',
+    messageId: 'tool-1-result',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Video,
+    title: 'generated-video-1.mp4',
+    fileName: 'generated-video-1.mp4',
+    filePath: '/tmp/generated-video-1.mp4',
+    content: '',
+    createdAt: 10_000,
+  };
+  const clip2: Artifact = {
+    id: 'clip-2',
+    messageId: 'tool-2-result',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Video,
+    title: 'generated-video-2.mp4',
+    fileName: 'generated-video-2.mp4',
+    filePath: '/tmp/generated-video-2.mp4',
+    content: '',
+    createdAt: 20_000,
+  };
+  const finalVideo: Artifact = {
+    id: 'final-video',
+    messageId: 'reply-final',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Video,
+    title: 'arrow-chase-30s-final.mp4',
+    fileName: 'arrow-chase-30s-final.mp4',
+    filePath: '/tmp/arrow-chase-30s-final.mp4',
+    content: '',
+    createdAt: 30_000,
+  };
+  const scriptDoc: Artifact = {
+    id: 'script-doc',
+    messageId: 'reply-final',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Markdown,
+    title: 'storyboard.md',
+    fileName: 'storyboard.md',
+    filePath: '/tmp/storyboard.md',
+    content: '# Storyboard',
+    createdAt: 31_000,
+  };
+
+  const html = renderTurn([
+    userWithUsage,
+    ...process.slice(1),
+    {
+      id: 'reply-final',
+      type: 'assistant',
+      content: 'Final cut and storyboard are ready.',
+      timestamp: 55_000,
+    },
+  ], false, false, { artifacts: [clip1, clip2, finalVideo, scriptDoc] });
+
+  expect(html).toContain('data-inline-video-id="final-video"');
+  expect(html).toContain('arrow-chase-30s-final.mp4');
+  expect(html).toContain(i18nService.t('artifactVideoFinalBadge'));
+  expect(html).toContain(
+    i18nService.t('artifactVideoProcessAssets').replace(
+      '{summary}',
+      i18nService.t('artifactVideoProcessClipMany').replace('{count}', '2'),
+    ),
+  );
+  // Intermediate clips are folded behind the disclosure toggle by default.
+  expect(html).not.toContain('data-inline-video-id="clip-1"');
+  expect(html).not.toContain('data-inline-video-id="clip-2"');
+  // Non-video files stay in the file card group below.
+  expect(html).toContain('storyboard.md');
+  expect(html).toContain('artifact-preview-card-row');
+  expect(html.indexOf('data-inline-video-id="final-video"')).toBeLessThan(html.indexOf('storyboard.md'));
+});
+
+test('folds first-frame reference image under process assets instead of showing a large standalone image below the video', () => {
+  const keyframeImage: Artifact = {
+    id: 'keyframe-1',
+    messageId: 'img-tool-result',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Image,
+    title: 'first-frame.png',
+    fileName: 'first-frame.png',
+    filePath: '/tmp/first-frame.png',
+    content: '',
+    source: 'tool',
+    createdAt: 10_000,
+  };
+  const finalVideo: Artifact = {
+    id: 'generated-video-1',
+    messageId: 'vid-tool-result',
+    sessionId: 'session-1',
+    type: ArtifactTypeValue.Video,
+    title: 'generated-video-20261124-223129-1.mp4',
+    fileName: 'generated-video-20261124-223129-1.mp4',
+    filePath: '/tmp/generated-video-20261124-223129-1.mp4',
+    content: '',
+    source: 'tool',
+    mediaOrigin: {
+      type: ArtifactMediaOriginType.GeneratedVideo,
+      taskId: '99',
+      outputIndex: 0,
+    },
+    createdAt: 20_000,
+  };
+
+  const html = renderTurn([
+    userWithUsage,
+    {
+      id: 'img-tool', type: 'tool_use', content: '', timestamp: 2_000,
+      metadata: { toolName: 'lobsterai_image_generate', toolInput: { prompt: 'first frame' }, toolUseId: 'img-tool' },
+    },
+    { id: 'img-tool-result', type: 'tool_result', content: 'saved', timestamp: 3_000, metadata: { toolUseId: 'img-tool' } },
+    {
+      id: 'vid-tool', type: 'tool_use', content: '', timestamp: 4_000,
+      metadata: {
+        toolName: 'lobsterai_video_generate',
+        toolInput: { prompt: 'cycling boy', firstFrame: '/tmp/first-frame.png' },
+        toolUseId: 'vid-tool',
+      },
+    },
+    { id: 'vid-tool-result', type: 'tool_result', content: 'saved', timestamp: 5_000, metadata: { toolUseId: 'vid-tool' } },
+    { id: 'reply-1', type: 'assistant', content: 'Video generated.', timestamp: 6_000 },
+  ], false, false, { artifacts: [keyframeImage, finalVideo] });
+
+  expect(html).toContain('data-inline-video-id="generated-video-1"');
+  expect(html).toContain(i18nService.t('artifactVideoFinalBadge'));
+  expect(html).toContain(
+    i18nService.t('artifactVideoProcessAssets').replace(
+      '{summary}',
+      i18nService.t('artifactVideoProcessImageOne'),
+    ),
+  );
+  // Keyframe image is folded away and not rendered as a full-size inline image below the video.
+  expect(html).not.toContain('alt="first-frame.png"');
 });

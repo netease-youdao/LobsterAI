@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 
-import { MailCode } from '../openclaw-extensions/netease-mail/protocol';
-import { trashMessageSummary } from '../openclaw-extensions/netease-mail/trash';
+import { MailCode } from '../src/main/mcp/neteaseMail/protocol';
+import { trashMessageSummary } from '../src/main/mcp/neteaseMail/trash';
 import { getNeteaseMailPresentation } from '../src/renderer/services/neteaseMailPresentation';
 import { NeteaseMailBodyFormat, NeteaseMailMessageMode, NeteaseMailTool } from '../src/shared/neteaseMail/constants';
 

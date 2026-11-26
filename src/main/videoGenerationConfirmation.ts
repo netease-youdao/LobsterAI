@@ -1,4 +1,7 @@
+import path from 'path';
+
 import { UsageOutcome, UsageStage } from '../shared/analytics/usage';
+import { ArtifactPreviewHost, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
 import {
   MediaConfirmationReason,
   type MediaConfirmationResponse,
@@ -7,6 +10,7 @@ import {
 } from '../shared/media/confirmation';
 import { MediaTaskStatus } from '../shared/media/constants';
 import { estimateVideoCredits } from '../shared/media/videoCreditEstimate';
+import { getLocalFileMimeType, resolveServableLocalPath } from './artifactLocalFileProtocol';
 import type { AskUserRequest } from './libs/mcpBridgeServer';
 
 export type VideoConfirmationModel = {
@@ -20,28 +24,105 @@ export interface VideoConfirmationInput {
   portalUrl: string;
   references?: VideoConfirmationDetails['references'];
 }
+export type VideoReferencePreview = string | {
+  thumbnail?: string;
+  previewUrl?: string;
+  name?: string;
+};
+export interface DecodedPreviewImage {
+  isEmpty(): boolean;
+  getSize(): { width: number; height: number };
+  resize(options: { width?: number; height?: number }): DecodedPreviewImage;
+  toJPEG(quality: number): Buffer;
+}
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
 const MAX_CONFIRMATION_REFERENCES = 9;
 const MAX_CONFIRMATION_PROMPT = 4000;
+const THUMBNAIL_HEIGHT_PX = 96;
+const THUMBNAIL_JPEG_QUALITY = 80;
+const INLINE_PREVIEW_MAX_EDGE_PX = 1280;
+const INLINE_PREVIEW_JPEG_QUALITY = 85;
+const INLINE_PREVIEW_DIRECT_BYTES = 256 * 1024;
+const INLINE_UNDECODED_MAX_BYTES = 512 * 1024;
+
+export function buildLocalFileImagePreviewUrl(filePath: string): string | undefined {
+  if (!path.isAbsolute(filePath)) return undefined;
+  const servable = resolveServableLocalPath(filePath);
+  if (!servable) return undefined;
+  const mime = getLocalFileMimeType(servable);
+  if (!mime || !mime.startsWith('image/')) return undefined;
+  const normalized = servable.replace(/\\/g, '/');
+  const pathForUrl = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  const encoded = pathForUrl.split('/').map(encodeURIComponent).join('/');
+  return `${ArtifactPreviewProtocol.LocalFile}://${ArtifactPreviewHost.LocalFile}${encoded}`;
+}
+
+export function createVideoReferenceImagePreview(
+  source: string,
+  options: {
+    localPath?: string;
+    decodeDataUrl: (dataUrl: string) => DecodedPreviewImage;
+  },
+): VideoReferencePreview | undefined {
+  if (/^https?:\/\//i.test(source)) return source;
+  if (!source.startsWith('data:image/')) return undefined;
+  const localUrl = options.localPath ? buildLocalFileImagePreviewUrl(options.localPath) : undefined;
+  const name = options.localPath ? path.basename(options.localPath) : undefined;
+  const image = options.decodeDataUrl(source);
+  if (image.isEmpty()) {
+    if (localUrl) return { thumbnail: localUrl, previewUrl: localUrl, ...(name ? { name } : {}) };
+    return source.length <= INLINE_UNDECODED_MAX_BYTES ? { thumbnail: source, previewUrl: source } : undefined;
+  }
+  const thumbnail = `data:image/jpeg;base64,${image.resize({ height: THUMBNAIL_HEIGHT_PX }).toJPEG(THUMBNAIL_JPEG_QUALITY).toString('base64')}`;
+  let previewUrl = localUrl;
+  if (!previewUrl) {
+    if (source.length <= INLINE_PREVIEW_DIRECT_BYTES) {
+      previewUrl = source;
+    } else {
+      const { width, height } = image.getSize();
+      const resized = width > INLINE_PREVIEW_MAX_EDGE_PX || height > INLINE_PREVIEW_MAX_EDGE_PX
+        ? (width >= height
+          ? image.resize({ width: INLINE_PREVIEW_MAX_EDGE_PX })
+          : image.resize({ height: INLINE_PREVIEW_MAX_EDGE_PX }))
+        : image;
+      previewUrl = `data:image/jpeg;base64,${resized.toJPEG(INLINE_PREVIEW_JPEG_QUALITY).toString('base64')}`;
+    }
+  }
+  return {
+    thumbnail,
+    ...(previewUrl ? { previewUrl } : {}),
+    ...(name ? { name } : {}),
+  };
+}
 
 /**
  * The reference media a video request carries, for the confirmation card.
- * `thumbnail` turns one resolved source (data or HTTP URL) into a small preview,
- * so full-size inputs never travel to the renderer twice.
+ * `thumbnail` turns one resolved source (data or HTTP URL) into a small card
+ * preview and an optional higher-resolution preview URL, so full-size base64
+ * inputs never travel to the renderer twice.
  */
 export function videoConfirmationReferences(
   params: Record<string, unknown>,
-  thumbnail: (source: string) => string | undefined,
+  thumbnail: (source: string) => VideoReferencePreview | undefined,
 ): VideoConfirmationDetails['references'] {
   const seen = new Set<string>();
   const references: VideoConfirmationDetails['references'] = [];
   const add = (kind: VideoReferenceKind, source: unknown) => {
     if (typeof source !== 'string' || !source || seen.has(source) || references.length >= MAX_CONFIRMATION_REFERENCES) return;
     seen.add(source);
-    let preview: string | undefined;
+    let preview: VideoReferencePreview | undefined;
     try { preview = kind === VideoReferenceKind.Image ? thumbnail(source) : undefined; } catch { preview = undefined; }
-    references.push({ kind, ...(preview ? { thumbnail: preview } : {}) });
+    if (typeof preview === 'string') {
+      references.push({ kind, ...(preview ? { thumbnail: preview } : {}) });
+      return;
+    }
+    references.push({
+      kind,
+      ...(preview?.thumbnail ? { thumbnail: preview.thumbnail } : {}),
+      ...(preview?.previewUrl ? { previewUrl: preview.previewUrl } : {}),
+      ...(preview?.name ? { name: preview.name } : {}),
+    });
   };
   const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [value];
   for (const key of ['firstFrame', 'lastFrame', 'images', 'referenceImages']) list(params[key]).forEach(source => add(VideoReferenceKind.Image, source));

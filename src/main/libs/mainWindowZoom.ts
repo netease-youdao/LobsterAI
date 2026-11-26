@@ -82,23 +82,47 @@ export function scaleRendererCoordinates<T extends RendererCoordinates>(value: T
 /**
  * Browser-style zoom for the whole main window: Cmd/Ctrl + =, -, 0 and Cmd/Ctrl + mouse wheel.
  *
- * The preload sets the page zoom once when each page loads. That makes this a per-window zoom: Chromium
- * neither shares it with other windows of the same origin nor saves it, so a restart or reload starts at 100%.
+ * Zoom updates go through the preload's `webFrame.setZoomFactor()` handler so Chromium treats
+ * them as per-window temporary zoom (neither saved across restarts nor shared with same-origin
+ * companion windows in development). The initial 100% isolation call waits until `ready-to-show`
+ * or `show` so Electron 40+ (#51972) never suppresses `ready-to-show` on the hidden startup window.
  */
 export const installMainWindowZoom = (window: BrowserWindow, { isMac }: { isMac: boolean }): void => {
   const { webContents } = window;
   let lastWheelZoomAt = 0;
+  let currentZoomFactor = DEFAULT_MAIN_WINDOW_ZOOM_FACTOR;
+  let canApplyZoom = window.isVisible();
+  let hasSentInitialZoom = false;
 
   const syncWindowChrome = (zoomFactor: number): void => {
     if (isMac && !window.isDestroyed()) window.setWindowButtonPosition(getMacTrafficLightPosition(zoomFactor));
   };
 
+  const sendZoomFactor = (zoomFactor: number): void => {
+    if (window.isDestroyed() || webContents.isDestroyed()) return;
+    webContents.send(WindowIpcChannel.ApplyZoom, zoomFactor);
+  };
+
+  const markReadyForZoom = (): void => {
+    canApplyZoom = true;
+    if (hasSentInitialZoom || window.isDestroyed() || webContents.isDestroyed()) return;
+    if (!webContents.isLoadingMainFrame()) {
+      hasSentInitialZoom = true;
+      currentZoomFactor = DEFAULT_MAIN_WINDOW_ZOOM_FACTOR;
+      sendZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR);
+      syncWindowChrome(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR);
+    }
+  };
+
   const applyZoom = (action: MainWindowZoomAction): void => {
-    if (window.isDestroyed()) return;
-    const current = webContents.getZoomFactor();
+    if (window.isDestroyed() || webContents.isDestroyed()) return;
+    canApplyZoom = true;
+    const current = currentZoomFactor;
     const next = getNextZoomFactor(current, action);
     if (Math.abs(next - current) > ZOOM_FACTOR_EPSILON) {
-      webContents.setZoomFactor(next);
+      currentZoomFactor = next;
+      hasSentInitialZoom = true;
+      sendZoomFactor(next);
       syncWindowChrome(next);
       console.debug(`[WindowZoom] zoom factor ${current.toFixed(2)} -> ${next}`);
     }
@@ -106,6 +130,9 @@ export const installMainWindowZoom = (window: BrowserWindow, { isMac }: { isMac:
     const payload: WindowZoomChangedPayload = { zoomFactor: next };
     webContents.send(WindowIpcChannel.ZoomChanged, payload);
   };
+
+  window.once('ready-to-show', markReadyForZoom);
+  window.once('show', markReadyForZoom);
 
   // Handling the keys here also keeps the macOS default View menu from zooming the window a second time.
   webContents.on('before-input-event', (event, input) => {
@@ -122,8 +149,14 @@ export const installMainWindowZoom = (window: BrowserWindow, { isMac }: { isMac:
     applyZoom(direction === 'in' ? MainWindowZoomAction.In : MainWindowZoomAction.Out);
   });
 
-  // A reload starts the page at 100% again, so the traffic lights go back too.
+  // A reload starts the page at 100% again, so re-isolate zoom and move the traffic lights back.
   webContents.on('did-finish-load', () => {
-    if (!window.isDestroyed()) syncWindowChrome(webContents.getZoomFactor());
+    if (window.isDestroyed()) return;
+    currentZoomFactor = DEFAULT_MAIN_WINDOW_ZOOM_FACTOR;
+    if (canApplyZoom) {
+      hasSentInitialZoom = true;
+      sendZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR);
+    }
+    syncWindowChrome(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR);
   });
 };

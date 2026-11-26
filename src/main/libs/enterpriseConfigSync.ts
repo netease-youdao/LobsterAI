@@ -766,7 +766,7 @@ function syncCoworkConfig(
     const agents = config.agents as { defaults?: { sandbox?: { mode?: string }; workspace?: string; cwd?: string } } | undefined;
     const updates: Record<string, string> = {};
 
-    updates.agentEngine = 'openclaw';
+    updates.agentEngine = 'dsh';
 
     if (agents?.defaults?.sandbox?.mode) {
       const mapped = SANDBOX_MODE_MAP[agents.defaults.sandbox.mode];

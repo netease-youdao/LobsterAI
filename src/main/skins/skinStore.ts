@@ -6,12 +6,14 @@ import { fileURLToPath } from 'url';
 import {
   SKIN_ASSET_SLOTS,
   SKIN_REGISTRY_VERSION,
+  SKIN_REQUIRED_ASSET_SLOTS,
   SkinAssetExtension,
   type SkinAssetExtension as SkinAssetExtensionValue,
   SkinAssetFormat,
   SkinAssetMimeType,
   type SkinAssetMimeType as SkinAssetMimeTypeValue,
   SkinAssetSlot,
+  SkinBackdropVisibility,
   SkinRecordStatus,
   SkinStoreErrorCode,
   SkinWorkflowKind,
@@ -70,6 +72,12 @@ export interface RegisterSkinAssetInput {
   source: string;
 }
 
+export interface RegisterSkinAssetBufferInput {
+  skinId: string;
+  slot: SkinAssetSlot;
+  data: Buffer;
+}
+
 export interface ResolvedSkinProtocolAsset {
   relativePath: string;
   mimeType: SkinAssetMimeTypeValue;
@@ -94,8 +102,8 @@ export interface SkinAssetPolicy {
 export const SKIN_ASSET_POLICIES: Record<SkinAssetSlot, SkinAssetPolicy> = {
   [SkinAssetSlot.WorkspaceBackdrop]: {
     maxBytes: 16 * 1024 * 1024,
-    minWidth: 1024,
-    minHeight: 576,
+    minWidth: 800,
+    minHeight: 450,
     maxWidth: 8192,
     maxHeight: 8192,
     maxPixels: 32 * 1024 * 1024,
@@ -236,8 +244,10 @@ function parseSkinRecord(value: unknown, key: string): SkinRecord | null {
     if (!isSkinAssetSlot(slot) || !isValidAssetRecord(asset, key, slot)) return null;
     assets[slot] = asset;
   }
-  const ready = SKIN_ASSET_SLOTS.every(slot => Boolean(assets[slot]));
-  if (value.status !== (ready ? SkinRecordStatus.Ready : SkinRecordStatus.Draft)) return null;
+  const hasRequiredAssets = SKIN_REQUIRED_ASSET_SLOTS.every(slot => Boolean(assets[slot]));
+  const hasAllAssets = SKIN_ASSET_SLOTS.every(slot => Boolean(assets[slot]));
+  if (!hasRequiredAssets && value.status !== SkinRecordStatus.Draft) return null;
+  if (hasAllAssets && value.status !== SkinRecordStatus.Ready) return null;
 
   return {
     id: key,
@@ -381,6 +391,25 @@ export class SkinStore {
     }
 
     const data = await fs.promises.readFile(sourcePath);
+    return this.registerValidatedAssetData(input.skinId, input.slot, data);
+  }
+
+  async registerAssetBuffer(input: RegisterSkinAssetBufferInput): Promise<SkinAssetRecord> {
+    if (!SKIN_ID_PATTERN.test(input.skinId)) {
+      throw new SkinStoreError(SkinStoreErrorCode.InvalidSkinId, 'Skin id is invalid');
+    }
+    if (!isSkinAssetSlot(input.slot)) {
+      throw new SkinStoreError(SkinStoreErrorCode.InvalidSlot, 'Skin asset slot is invalid');
+    }
+    return this.registerValidatedAssetData(input.skinId, input.slot, input.data);
+  }
+
+  private async registerValidatedAssetData(
+    skinId: string,
+    slot: SkinAssetSlot,
+    data: Buffer,
+  ): Promise<SkinAssetRecord> {
+    const policy = SKIN_ASSET_POLICIES[slot];
     if (data.length === 0 || data.length > policy.maxBytes) {
       throw new SkinStoreError(SkinStoreErrorCode.AssetTooLarge, 'Skin asset exceeds the slot size limit');
     }
@@ -388,30 +417,33 @@ export class SkinStore {
     if (!image) {
       throw new SkinStoreError(SkinStoreErrorCode.UnsupportedAssetFormat, 'Skin asset is not a valid PNG, JPEG, or WebP image');
     }
-    if (!hasValidDimensions(input.slot, image.width, image.height)) {
-      throw new SkinStoreError(SkinStoreErrorCode.InvalidAssetDimensions, 'Skin asset dimensions do not satisfy the slot policy');
+    if (!hasValidDimensions(slot, image.width, image.height)) {
+      throw new SkinStoreError(
+        SkinStoreErrorCode.InvalidAssetDimensions,
+        `Skin asset dimensions (${image.width}x${image.height}) do not satisfy the ${slot} policy (width ${policy.minWidth}-${policy.maxWidth}, height ${policy.minHeight}-${policy.maxHeight}, aspect ratio ${policy.minAspectRatio}-${policy.maxAspectRatio})`,
+      );
     }
 
     const contentHash = createHash('sha256').update(data).digest('hex');
-    const relativePath = expectedRelativeAssetPath(input.skinId, input.slot, contentHash, image.extension);
+    const relativePath = expectedRelativeAssetPath(skinId, slot, contentHash, image.extension);
     const destinationPath = this.resolveManagedPath(relativePath);
 
     return this.enqueueMutation(async () => {
       const registry = await this.readRegistry();
-      const skin = registry.skins[input.skinId];
+      const skin = registry.skins[skinId];
       if (!skin) {
         throw new SkinStoreError(SkinStoreErrorCode.SkinNotFound, 'Skin does not exist');
       }
-      if (skin.assets[input.slot]) {
+      if (skin.assets[slot]) {
         throw new SkinStoreError(SkinStoreErrorCode.SlotAlreadyRegistered, 'Skin asset slot is already registered');
       }
       if (
-        input.slot === SkinAssetSlot.HomeEmblem &&
+        slot === SkinAssetSlot.HomeEmblem &&
         !skin.assets[SkinAssetSlot.WorkspaceBackdrop]
       ) {
         throw new SkinStoreError(SkinStoreErrorCode.SlotOutOfOrder, 'Workspace backdrop must be registered first');
       }
-      if (registry.activeSkinId === input.skinId) {
+      if (registry.activeSkinId === skinId) {
         throw new SkinStoreError(SkinStoreErrorCode.ActiveSkinImmutable, 'Deactivate the skin before changing its assets');
       }
 
@@ -419,14 +451,14 @@ export class SkinStore {
       const timestamp = this.now().toISOString();
       const asset: SkinAssetRecord = {
         ...image,
-        slot: input.slot,
+        slot,
         relativePath,
         contentHash,
         byteLength: data.length,
         registeredAt: timestamp,
       };
-      skin.assets[input.slot] = asset;
-      skin.status = SKIN_ASSET_SLOTS.every(slot => Boolean(skin.assets[slot]))
+      skin.assets[slot] = asset;
+      skin.status = SKIN_REQUIRED_ASSET_SLOTS.every(requiredSlot => Boolean(skin.assets[requiredSlot]))
         ? SkinRecordStatus.Ready
         : SkinRecordStatus.Draft;
       skin.updatedAt = timestamp;
@@ -451,17 +483,24 @@ export class SkinStore {
       if (!skin) {
         throw new SkinStoreError(SkinStoreErrorCode.SkinNotFound, 'Skin does not exist');
       }
-      if (skin.status !== SkinRecordStatus.Ready) {
+      if (!SKIN_REQUIRED_ASSET_SLOTS.every(slot => Boolean(skin.assets[slot]))) {
         throw new SkinStoreError(SkinStoreErrorCode.SkinIncomplete, 'Skin is missing one or more required assets');
       }
       for (const slot of SKIN_ASSET_SLOTS) {
         const asset = skin.assets[slot];
-        if (!asset || !(await this.isStoredAssetIntact(asset))) {
+        if (!asset) {
+          if (SKIN_REQUIRED_ASSET_SLOTS.includes(slot)) {
+            throw new SkinStoreError(SkinStoreErrorCode.SkinIncomplete, 'Skin is missing one or more required assets');
+          }
+          continue;
+        }
+        if (!(await this.isStoredAssetIntact(asset))) {
           throw new SkinStoreError(SkinStoreErrorCode.SkinIncomplete, 'Skin contains a missing or invalid managed asset');
         }
       }
 
       const timestamp = this.now().toISOString();
+      skin.status = SkinRecordStatus.Ready;
       registry.activeSkinId = skinId;
       if (skin.boundThemeId === undefined && boundThemeId !== undefined) {
         skin.boundThemeId = boundThemeId;
@@ -495,6 +534,46 @@ export class SkinStore {
       }
 
       skin.boundThemeId = themeId;
+      skin.updatedAt = this.now().toISOString();
+      await this.writeRegistry(registry);
+      return cloneSkinRecord(skin);
+    });
+  }
+
+  async setBackdropVisibility(
+    skinId: string,
+    visibility: SkinBackdropVisibility,
+  ): Promise<SkinRecord> {
+    if (!SKIN_ID_PATTERN.test(skinId)) {
+      throw new SkinStoreError(SkinStoreErrorCode.InvalidSkinId, 'Skin id is invalid');
+    }
+    if (!Object.values(SkinBackdropVisibility).includes(visibility)) {
+      throw new SkinStoreError(
+        SkinStoreErrorCode.InvalidDraft,
+        'Unsupported skin backdrop visibility',
+      );
+    }
+
+    return this.enqueueMutation(async () => {
+      const registry = await this.readRegistry();
+      const skin = registry.skins[skinId];
+      if (!skin) {
+        throw new SkinStoreError(SkinStoreErrorCode.SkinNotFound, 'Skin does not exist');
+      }
+      if (!skin.presentation) {
+        throw new SkinStoreError(
+          SkinStoreErrorCode.InvalidDraft,
+          'Skin does not support backdrop visibility settings',
+        );
+      }
+      if (skin.presentation.backdropVisibility === visibility) {
+        return cloneSkinRecord(skin);
+      }
+
+      skin.presentation = {
+        ...skin.presentation,
+        backdropVisibility: visibility,
+      };
       skin.updatedAt = this.now().toISOString();
       await this.writeRegistry(registry);
       return cloneSkinRecord(skin);

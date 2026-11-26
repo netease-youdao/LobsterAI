@@ -1,0 +1,37 @@
+{
+  "name": "@lobsterai/dsh-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LobsterAI first-class host integration bundle for DeepSeek Harness (DSH)",
+  "exports": {
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./plugins/*": "./plugins/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
+    "@deepseek-ai/dsh-home-paths": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-llm-pi-ai": "*",
+    "@deepseek-ai/dsh-mcp-client": "*",
+    "@deepseek-ai/dsh-mcp-manager": "*",
+    "@deepseek-ai/dsh-skill": "*",
+    "@deepseek-ai/dsh-subagent": "*",
+    "@deepseek-ai/dsh-system-prompt": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-web": "*",
+    "@deepseek-ai/dsh-web-search-deepseek": "*",
+    "@earendil-works/pi-ai": "*",
+    "@modelcontextprotocol/client": "*"
+  }
+}

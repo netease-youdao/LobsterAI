@@ -1,3 +1,6 @@
+import DOMPurify from 'dompurify';
+
+import { renderSlideChartSvg } from './slidesChartRender';
 import { geometryPath, isLineGeometry } from './slidesGeometry';
 import {
   type Box, type Fill, type Line, type ParagraphView, type RunStyle, type ShapeView, ShapeViewKind, type SlideView, type TableView, type TextView,
@@ -5,9 +8,9 @@ import {
 
 /**
  * Draws a SlideView as HTML: positioned shapes with their fills, outlines and text, pictures,
- * tables and groups. The stage and the thumbnails use the same drawing, so what the list shows is
- * what the slide looks like. Text elements carry the paragraph and run positions they came from,
- * so text edited in place can be written back without losing its formatting.
+ * tables, charts and groups. The stage and the thumbnails use the same drawing, so what the list
+ * shows is what the slide looks like. Text elements carry the paragraph and run positions they came
+ * from, so text edited in place can be written back without losing its formatting.
  */
 
 export interface SlideRenderLabels {
@@ -20,6 +23,8 @@ export interface SlideRenderLabels {
   diagram: string;
   object: string;
   picture: string;
+  /** Template for unnamed chart series (e.g. "系列{n}" / "Series{n}"). */
+  series?: string;
 }
 
 export interface SlideRenderOptions {
@@ -235,6 +240,34 @@ function graphicPlaceholder(label: string): HTMLDivElement {
   return element;
 }
 
+function chartLayer(shape: ShapeView, options: SlideRenderOptions): HTMLElement {
+  const chart = shape.chart;
+  if (!chart) return graphicPlaceholder(options.labels.chart);
+  const seriesTemplate = options.labels.series ?? 'Series {n}';
+  const svgString = renderSlideChartSvg(
+    chart,
+    shape.box.w,
+    shape.box.h,
+    index => seriesTemplate.replace('{n}', String(index + 1)),
+  );
+  if (!svgString) return graphicPlaceholder(options.labels.chart);
+  const frame = document.createElement('div');
+  frame.className = 'lobster-slide-chart';
+  if (chart.border && !chart.border.none && chart.border.color) {
+    const width = Math.max(0.75, (chart.border.widthPt ?? 0.75) * PX_PER_PT);
+    frame.style.border = `${px(width)} ${chart.border.dash ? 'dashed' : 'solid'} ${chart.border.color}`;
+  }
+  const clean = DOMPurify.sanitize(svgString, { USE_PROFILES: { svg: true, svgFilters: true }, RETURN_DOM_FRAGMENT: true });
+  if (clean.firstElementChild?.localName === 'svg') {
+    frame.appendChild(clean);
+  } else {
+    const wrapped = svg('svg', { viewBox: `0 0 ${Math.round(shape.box.w)} ${Math.round(shape.box.h)}` });
+    wrapped.appendChild(clean);
+    frame.appendChild(wrapped);
+  }
+  return frame;
+}
+
 function pictureLayer(shape: ShapeView, options: SlideRenderOptions): HTMLElement {
   const url = shape.image ? options.image(shape.image.part) : undefined;
   if (!url) return graphicPlaceholder(options.labels.picture);
@@ -329,6 +362,9 @@ function renderShape(shape: ShapeView, options: SlideRenderOptions): HTMLElement
       break;
     case ShapeViewKind.Table:
       if (shape.table) element.appendChild(tableElement(shape.table, options.image));
+      break;
+    case ShapeViewKind.Chart:
+      element.appendChild(chartLayer(shape, options));
       break;
     case ShapeViewKind.Graphic:
       element.appendChild(graphicPlaceholder(shape.label === 'chart' ? options.labels.chart : shape.label === 'diagram' ? options.labels.diagram : options.labels.object));

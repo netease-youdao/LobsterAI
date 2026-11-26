@@ -1983,7 +1983,7 @@ FunctionEnd
     System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "$INSTDIR")i'
     Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
       $$root = $$env:LOBSTERAI_INSTALL_ROOT;\
-      $$targets = @($$root, (Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\app.asar\"), (Join-Path $$root \"resources\win-resources.tar\"));\
+      $$targets = @($$root, (Join-Path $$root \"resources\dsh-runtime\"), (Join-Path $$root \"resources\dsh-bundles\"), (Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\app.asar\"), (Join-Path $$root \"resources\win-resources.tar\"));\
       try { $$beforePaths = @((Get-MpPreference -ErrorAction Stop).ExclusionPath); $$before = @($$targets | Where-Object { $$beforePaths -contains $$_ }).Count } catch { $$before = \"query-failed\" };\
       try { Remove-MpPreference -ExclusionPath $$targets -ErrorAction Stop; $$remove = \"requested\" } catch { $$remove = \"failed:\" + $$_.Exception.Message.Trim() };\
       try { $$afterPaths = @((Get-MpPreference -ErrorAction Stop).ExclusionPath); $$after = @($$targets | Where-Object { $$afterPaths -contains $$_ }).Count } catch { $$after = \"query-failed\" };\
@@ -2357,9 +2357,9 @@ FunctionEnd
   Call lobsterCleanupRelocatedPayloadStaging
 
   ; -- Extract combined resource archive (win-resources.tar) --
-  ; All large resource directories (cfmind/, SKILLs/, python-win/) are packed
-  ; into a single tar file. NSIS 7z extracts one large file almost instantly;
-  ; we then unpack the tar here using Electron's Node runtime.
+  ; All large resource directories (dsh-runtime/, dsh-bundles/, SKILLs/, python-win/)
+  ; are packed into a single tar file. NSIS 7z extracts one large file almost
+  ; instantly; we then unpack the tar here using bsdtar or Electron's Node runtime.
   ;
   ; The install-scope Defender exclusion was added after every legacy
   ; uninstaller returned and immediately before the NSIS payload extraction;
@@ -2437,7 +2437,7 @@ FunctionEnd
   ; Some security tooling permanently breaks the .NET exit-code query inside
   ; PowerShell ($p.ExitCode stays $null after a successful wait) while the
   ; child itself completes fine. The child therefore publishes a post-verify
-  ; sentinel file (.unpack-cfmind-ok); a null exit code with the sentinel
+  ; sentinel file (.unpack-dsh-ok); a null exit code with the sentinel
   ; present is treated as success, still gated by TarExtractVerify.
   StrCpy $R3 "electron"
   DetailPrint "[Installer] Launching bundled extractor"
@@ -2452,10 +2452,10 @@ FunctionEnd
   StrCmp $lobsterTrustedPowerShellPath "" TarExtractHelperNotFound
   Delete "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker"
   ; A stale sentinel from an earlier run must never vouch for this attempt.
-  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
+  Delete "$INSTDIR\resources\.unpack-dsh-ok"
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_WATCHDOG_MARKER_PATH", t "$PLUGINSDIR\lobster-watchdog-$lobsterInstallerAttemptId.marker")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_EXE", t "$INSTDIR\${APP_EXECUTABLE_FILENAME}")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_SCRIPT", t "$INSTDIR\resources\unpack-cfmind.cjs")i'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_SCRIPT", t "$INSTDIR\resources\unpack-dsh-resources.cjs")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_ARCHIVE", t "$INSTDIR\resources\win-resources.tar")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_DESTINATION", t "$INSTDIR\resources")i'
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_EXTRACTOR_LOG", t "$APPDATA\LobsterAI\install-timing.log")i'
@@ -2483,7 +2483,7 @@ FunctionEnd
       if ($$p.ExitCode -eq $$null) {\
         $$sentinelOk = $$false;\
         try {\
-          $$sentinel = Join-Path $$env:LOBSTERAI_EXTRACTOR_DESTINATION \".unpack-cfmind-ok\";\
+          $$sentinel = Join-Path $$env:LOBSTERAI_EXTRACTOR_DESTINATION \".unpack-dsh-ok\";\
           $$sentinelOk = Test-Path -LiteralPath $$sentinel\
         } catch { $$sentinelOk = $$false };\
         if ($$sentinelOk) {\
@@ -2562,13 +2562,14 @@ FunctionEnd
   TarExtractVerify:
   ; Success requires every large bundled resource to be usable -- an exit code
   ; alone must never trigger deletion of the only recovery source.
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" TarExtractVerifyBundleAssets
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" TarExtractVerifySkills
+  IfFileExists "$INSTDIR\resources\dsh-runtime\lib\bin.js" TarExtractVerifyBundleAssets
   StrCpy $R5 "runtime-entry-missing"
   Goto TarExtractRequiredResourceMissing
 
   TarExtractVerifyBundleAssets:
-  IfFileExists "$INSTDIR\resources\cfmind\web-tree-sitter.wasm" TarExtractVerifySkills
+  IfFileExists "$INSTDIR\resources\dsh-bundles\lobsterai-host\package.json" 0 TarExtractBundleAssetsMissing
+  IfFileExists "$INSTDIR\resources\dsh-bundles\lobsterai-channels\package.json" TarExtractVerifySkills
+  TarExtractBundleAssetsMissing:
   StrCpy $R5 "runtime-bundle-assets-missing"
   Goto TarExtractRequiredResourceMissing
 
@@ -2634,7 +2635,7 @@ FunctionEnd
     ; (Dual of the TarExtractVerify principle: just as an exit code alone must
     ; never trigger deletion, an unreadable exit code alone must never abort
     ; an installation whose payload verifiably exists.)
-    IfFileExists "$INSTDIR\resources\.unpack-cfmind-ok" 0 TarExtractOutputValidationFatal
+    IfFileExists "$INSTDIR\resources\.unpack-dsh-ok" 0 TarExtractOutputValidationFatal
     FileOpen $2 "$APPDATA\LobsterAI\install-timing.log" a
     FileSeek $2 0 END
     !insertmacro GetTimestamp $8
@@ -2676,8 +2677,10 @@ FunctionEnd
   ; lets the app finish an interrupted extraction at first launch. The
   ; sentinel has served its purpose once the install commits.
   Delete "$INSTDIR\resources\win-resources.tar"
-  Delete "$INSTDIR\resources\unpack-cfmind.cjs"
-  Delete "$INSTDIR\resources\.unpack-cfmind-ok"
+  Delete "$INSTDIR\resources\unpack-dsh-resources.cjs"
+  Delete "$INSTDIR\resources\.unpack-dsh-ok"
+  ; Remove any stale OpenClaw cfmind directory left behind by a legacy install.
+  RMDir /r "$INSTDIR\resources\cfmind"
   Goto TarExtractDone
 
   TarExtractFailed:
@@ -2913,9 +2916,9 @@ FunctionEnd
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_DEFENDER_ADD_PERMANENT", t "$R7")i'
   Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "\
     $$root = $$env:LOBSTERAI_INSTALL_ROOT;\
-    try { $$trimTargets = @($$root, (Join-Path $$root \"resources\SKILLs\")); Remove-MpPreference -ExclusionPath $$trimTargets -ErrorAction SilentlyContinue; $$trim = \"removed\" } catch { $$trim = \"failed:\" + $$_.Exception.Message.Trim() };\
+    try { $$trimTargets = @($$root, (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\cfmind\")); Remove-MpPreference -ExclusionPath $$trimTargets -ErrorAction SilentlyContinue; $$trim = \"removed\" } catch { $$trim = \"failed:\" + $$_.Exception.Message.Trim() };\
     if ($$env:LOBSTERAI_DEFENDER_ADD_PERMANENT -ne \"1\") { $$permanent = \"skipped:opt-out\" } else {\
-      try { $$addTargets = @((Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\app.asar\"), (Join-Path $$root \"resources\win-resources.tar\")); Add-MpPreference -ExclusionPath $$addTargets -ErrorAction Stop; $$permanent = \"added\" } catch { $$permanent = \"skipped:\" + $$_.Exception.Message.Trim() }\
+      try { $$addTargets = @((Join-Path $$root \"resources\dsh-runtime\"), (Join-Path $$root \"resources\dsh-bundles\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\app.asar\"), (Join-Path $$root \"resources\win-resources.tar\")); Add-MpPreference -ExclusionPath $$addTargets -ErrorAction Stop; $$permanent = \"added\" } catch { $$permanent = \"skipped:\" + $$_.Exception.Message.Trim() }\
     };\
     Write-Output (\"trim=\" + $$trim + \" permanent=\" + $$permanent)"'
   !insertmacro LobsterExecHiddenToStack
@@ -2945,14 +2948,14 @@ FunctionEnd
   StrCpy $lobsterNewInstallValidationReason "app-asar-missing"
   IfFileExists "$INSTDIR\resources\app.asar" 0 NewInstallPrevalidateFailed
 
-  IfFileExists "$INSTDIR\resources\cfmind\gateway-bundle.mjs" NewInstallPrevalidateBundleAssets
-  IfFileExists "$INSTDIR\resources\cfmind\openclaw.mjs" NewInstallPrevalidateSkills
+  IfFileExists "$INSTDIR\resources\dsh-runtime\lib\bin.js" NewInstallPrevalidateBundleAssets
   StrCpy $lobsterNewInstallValidationReason "runtime-entry-missing"
   Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateBundleAssets:
     StrCpy $lobsterNewInstallValidationReason "runtime-bundle-assets-missing"
-    IfFileExists "$INSTDIR\resources\cfmind\web-tree-sitter.wasm" NewInstallPrevalidateSkills
+    IfFileExists "$INSTDIR\resources\dsh-bundles\lobsterai-host\package.json" 0 NewInstallPrevalidateFailed
+    IfFileExists "$INSTDIR\resources\dsh-bundles\lobsterai-channels\package.json" NewInstallPrevalidateSkills
     Goto NewInstallPrevalidateFailed
 
   NewInstallPrevalidateSkills:
@@ -3238,7 +3241,7 @@ FunctionEnd
   !insertmacro ResolveTrustedPowerShell
   StrCmp $lobsterTrustedPowerShellPath "" DefenderUninstallCleanupDone
   System::Call 'Kernel32::SetEnvironmentVariable(t "LOBSTERAI_INSTALL_ROOT", t "$INSTDIR")i'
-  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "try { $$root = $$env:LOBSTERAI_INSTALL_ROOT; $$targets = @($$root, (Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\win-resources.tar\"), (Join-Path $$root \"resources\app.asar\")); Remove-MpPreference -ExclusionPath $$targets -ErrorAction SilentlyContinue } catch {}"'
+  Push '"$lobsterTrustedPowerShellPath" -NoProfile -NonInteractive -Command "try { $$root = $$env:LOBSTERAI_INSTALL_ROOT; $$targets = @($$root, (Join-Path $$root \"resources\dsh-runtime\"), (Join-Path $$root \"resources\dsh-bundles\"), (Join-Path $$root \"resources\cfmind\"), (Join-Path $$root \"resources\python-win\"), (Join-Path $$root \"resources\SKILLs\"), (Join-Path $$root \"resources\app.asar.unpacked\"), (Join-Path $$root \"resources\win-resources.tar\"), (Join-Path $$root \"resources\app.asar\")); Remove-MpPreference -ExclusionPath $$targets -ErrorAction SilentlyContinue } catch {}"'
   !insertmacro LobsterExecHiddenToStack
   Pop $0
   Pop $1

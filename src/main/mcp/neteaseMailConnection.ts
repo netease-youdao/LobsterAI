@@ -1,8 +1,7 @@
 import { McpAuthMode } from '../../shared/mcp/auth';
-import { NeteaseMail, NeteaseMailFailure, NeteaseMailOutcome, NeteaseMailRuntimeRpc } from '../../shared/neteaseMail/constants';
+import { NeteaseMail, NeteaseMailAction, NeteaseMailError, NeteaseMailFailure, NeteaseMailOutcome } from '../../shared/neteaseMail/constants';
 import { getNeteaseMailNativeTools, getNeteaseMailScopes } from '../../shared/neteaseMail/scopes';
 import type { NeteaseMailActionResult, NeteaseMailAuthorizationOptions, NeteaseMailBridge, NeteaseMailConfirmationReference, NeteaseMailConfirmationRequest } from '../../shared/neteaseMail/types';
-import type { OpenClawConfigRpcClient } from '../libs/openclawConfigDelivery';
 import type { McpStore } from './mcpStore';
 import type { NeteaseMailAuthStore } from './neteaseMailAuthStore';
 import type { NeteaseMailOAuthConfig } from './neteaseMailConfig';
@@ -15,12 +14,16 @@ export interface NeteaseMailConnectionDeps {
   fetch: typeof fetch;
   openExternal: (url: string) => Promise<void>;
   callbackText: () => string;
-  sync: () => Promise<{ success: boolean }>;
+  sync: (serverId?: string) => Promise<{ success: boolean }>;
   broadcast: () => void;
-  ensureRpcClient?: () => Promise<OpenClawConfigRpcClient | null>;
+  confirmations?: {
+    invalidate(): void;
+    status(reference: NeteaseMailConfirmationReference): boolean;
+    resolve(request: NeteaseMailConfirmationRequest): boolean;
+  };
 }
 
-/** Login writes once; native OpenClaw auth profiles exclusively own refresh. */
+/** The DSH MCP OAuth manager owns token storage and refresh. */
 export class NeteaseMailConnection implements NeteaseMailBridge {
   private pending?: { controller: AbortController; result: Promise<NeteaseMailActionResult> };
   private disconnecting = false;
@@ -31,15 +34,8 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
 
   async getAvailability(reference?: NeteaseMailConfirmationReference) {
     if (reference) {
-      // The gateway owns the pending operation and validates its grant. Avoid
-      // starting a credential-store worker just to enable one confirmation card.
-      let confirmation = false;
-      try {
-        const rpc = this.runtimeReady ? await this.deps.ensureRpcClient?.() : null;
-        const result = await rpc?.request<{ pending: boolean }>(NeteaseMailRuntimeRpc.ConfirmationStatus, { ...reference }, { timeoutMs: 15_000 });
-        confirmation = result?.pending === true;
-      } catch { /* Historical or unavailable cards stay disabled. */ }
-      return { authorization: Boolean(this.deps.config), confirmation };
+      return { authorization: Boolean(this.deps.config),
+        confirmation: this.runtimeReady && this.deps.confirmations?.status(reference) === true };
     }
     const store = this.deps.getAuthStore();
     if (!store) return { authorization: false, confirmation: false, connected: false };
@@ -91,14 +87,13 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
     finally { this.disconnecting = false; }
   }
 
+  invalidateConfirmations(): void { this.deps.confirmations?.invalidate(); }
+
   async resolveConfirmation(request: NeteaseMailConfirmationRequest): Promise<NeteaseMailActionResult> {
-    try {
-      const rpc = await this.deps.ensureRpcClient?.();
-      if (!rpc) return { success: false, code: NeteaseMailFailure.Unavailable };
-      return await rpc.request<NeteaseMailActionResult>(NeteaseMailRuntimeRpc.ResolveConfirmation, {
-        confirmationId: request.confirmationId, toolCallId: request.toolCallId, action: request.action,
-      }, { timeoutMs: 15_000 });
-    } catch { return { success: false, code: NeteaseMailFailure.Unavailable }; }
+    if (!this.runtimeReady || !this.deps.confirmations?.resolve(request)) {
+      return { success: false, code: NeteaseMailError.ConfirmationChanged };
+    }
+    return { success: true, outcome: request.action === NeteaseMailAction.Cancel ? NeteaseMailOutcome.Cancelled : NeteaseMailOutcome.Submitted };
   }
 
   private failure(error: unknown): NeteaseMailActionResult {
@@ -106,9 +101,9 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
     return { success: false, code: error instanceof NeteaseMailOAuthError ? error.code : NeteaseMailFailure.Failed };
   }
 
-  private async syncRuntime(): Promise<boolean> {
+  private async syncRuntime(serverId?: string): Promise<boolean> {
     try {
-      this.runtimeReady = (await this.deps.sync()).success;
+      this.runtimeReady = (await this.deps.sync(serverId)).success;
       return this.runtimeReady;
     } catch {
       this.runtimeReady = false;
@@ -130,7 +125,6 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
       signal.throwIfAborted();
       this.committing = true;
       this.runtimeReady = false;
-      await authStore.save(credential);
       const store = this.deps.getMcpStore();
       const existing = store.listServers().find(server => server.registryId === NeteaseMail.RegistryId);
       const data = {
@@ -140,8 +134,9 @@ export class NeteaseMailConnection implements NeteaseMailBridge {
         toolFilter: { include: getNeteaseMailNativeTools(getNeteaseMailScopes(credential.scope)) },
       };
       const server = existing ? store.updateServer(existing.id, data)! : store.createServer(data);
+      await authStore.save(credential);
       store.setEnabled(server.id, true);
-      if (!(await this.syncRuntime())) return { success: false, code: NeteaseMailFailure.SyncFailed };
+      if (!(await this.syncRuntime(server.id))) return { success: false, code: NeteaseMailFailure.SyncFailed };
       return { success: true, outcome: NeteaseMailOutcome.Connected };
     } catch (error) {
       if (signal.aborted) return { success: true, outcome: NeteaseMailOutcome.Cancelled };

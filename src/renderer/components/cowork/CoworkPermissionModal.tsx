@@ -1,12 +1,31 @@
-import { ExclamationTriangleIcon, MinusIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ExclamationTriangleIcon,
+  FolderIcon,
+  MinusIcon,
+  ShieldExclamationIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../../shared/cowork/constants';
+import {
+  DshApprovalPermissionAction,
+} from '../../../shared/dshEngine/hostConstants';
+import { DSH_PERMISSION_PRESET_CHANGED_EVENT } from '../../services/dshHost';
 import { i18nService } from '../../services/i18n';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
+import FullAccessConfirmDialog from './FullAccessConfirmDialog';
+import {
+  type ApprovalDangerLevel,
+  buildPermissionModalPresentation,
+  buildSwitchFullAccessAction,
+  detectDangerFromCommand,
+} from './permissionModalPresentation';
 import { stripQuestionRecommendation } from './questionOptionLabel';
 
-type DangerLevel = 'safe' | 'caution' | 'destructive';
+type DangerLevel = ApprovalDangerLevel;
 
 const POSITIVE_CONFIRM_PATTERNS = [
   /\ballow\b/i,
@@ -33,42 +52,6 @@ const NEGATIVE_CONFIRM_PATTERNS = [
   /不允许/,
   /停止/,
 ] as const;
-
-const DANGER_REASON_I18N_MAP: Record<string, string> = {
-  'recursive-delete': 'dangerReasonRecursiveDelete',
-  'git-force-push': 'dangerReasonGitForcePush',
-  'git-reset-hard': 'dangerReasonGitResetHard',
-  'disk-overwrite': 'dangerReasonDiskOverwrite',
-  'disk-format': 'dangerReasonDiskFormat',
-  'file-delete': 'dangerReasonFileDelete',
-  'git-push': 'dangerReasonGitPush',
-  'process-kill': 'dangerReasonProcessKill',
-  'permission-change': 'dangerReasonPermissionChange',
-};
-
-/** Fallback detection when dangerLevel is not provided by the adapter */
-function detectDangerLevelFromCommand(command: string): DangerLevel {
-  const destructivePatterns = [
-    /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive)\b/i,
-    /\bgit\s+push\s+.*--force\b/i,
-    /\bgit\s+reset\s+--hard\b/i,
-    /\bdd\b/i,
-    /\bmkfs\b/i,
-  ];
-  if (destructivePatterns.some(p => p.test(command))) return 'destructive';
-
-  const cautionPatterns = [
-    /\b(rm|rmdir|unlink|del|erase|remove-item|trash)\b/i,
-    /\bgit\s+push\b/i,
-    /\b(kill|killall|pkill)\b/i,
-    /\b(chmod|chown)\b/i,
-    /\bgit\s+clean\b/i,
-    /\bsudo\b/i,
-  ];
-  if (cautionPatterns.some(p => p.test(command))) return 'caution';
-
-  return 'safe';
-}
 
 interface CoworkPermissionModalProps {
   permission: CoworkPermissionRequest;
@@ -253,6 +236,13 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   }, [isConfirmMode, questions]);
 
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [confirmFullAccessOpen, setConfirmFullAccessOpen] = useState(false);
+
+  useEffect(() => {
+    setShowTechnicalDetails(false);
+    setConfirmFullAccessOpen(false);
+  }, [permission.requestId]);
 
   useEffect(() => {
     if (!isQuestionTool) {
@@ -273,14 +263,6 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
       setAnswers({});
     }
   }, [isQuestionTool, permission.requestId, toolInput]);
-
-  const formatToolInput = (input: Record<string, unknown>): string => {
-    try {
-      return JSON.stringify(input, null, 2);
-    } catch {
-      return String(input);
-    }
-  };
 
   const requestedCommand = useMemo(() => {
     if (!toolInput || typeof toolInput !== 'object') {
@@ -308,32 +290,40 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
     };
   };
 
+  const approvalPresentation = useMemo(
+    () => buildPermissionModalPresentation(
+      permission.toolName,
+      toolInput as Record<string, unknown>,
+      (key) => i18nService.t(key),
+    ),
+    [permission.toolName, toolInput],
+  );
+
   const { dangerLevel, dangerReasonText } = useMemo(() => {
     const questionText = isConfirmMode ? questions[0]?.question ?? '' : '';
     const looksLikeDeleteQuestion = requestedCommand
-      ? detectDangerLevelFromCommand(requestedCommand) !== 'safe'
+      ? detectDangerFromCommand(requestedCommand).level !== 'safe'
       : /\b(delete|remove|rm|unlink|rmdir|erase|del)\b/i.test(questionText) || /删除|移除/.test(questionText);
 
     if (permission.toolName === ASK_USER_QUESTION_TOOL_NAME && looksLikeDeleteQuestion) {
       return { dangerLevel: 'caution' as DangerLevel, dangerReasonText: i18nService.t('dangerReasonFileDelete') };
     }
-    if (permission.toolName !== 'Bash') {
+    if (isQuestionTool) {
       return { dangerLevel: 'safe' as DangerLevel, dangerReasonText: '' };
     }
-    const input = permission.toolInput as Record<string, unknown>;
-    const command = String(input?.command ?? '');
-
-    // Prefer adapter-provided level, fall back to local detection
-    const level = (typeof input?.dangerLevel === 'string' && ['safe', 'caution', 'destructive'].includes(input.dangerLevel))
-      ? input.dangerLevel as DangerLevel
-      : detectDangerLevelFromCommand(command);
-
-    const reason = typeof input?.dangerReason === 'string' ? input.dangerReason : '';
-    const i18nKey = DANGER_REASON_I18N_MAP[reason];
-    const reasonText = i18nKey ? i18nService.t(i18nKey) : '';
-
-    return { dangerLevel: level, dangerReasonText: reasonText };
-  }, [isConfirmMode, permission.toolName, permission.toolInput, questions, requestedCommand]);
+    return {
+      dangerLevel: approvalPresentation.dangerLevel,
+      dangerReasonText: approvalPresentation.dangerReasonText,
+    };
+  }, [
+    approvalPresentation.dangerLevel,
+    approvalPresentation.dangerReasonText,
+    isConfirmMode,
+    isQuestionTool,
+    permission.toolName,
+    questions,
+    requestedCommand,
+  ]);
 
   const getSelectedValues = (question: QuestionItem): string[] => {
     const rawValue = answers[question.question] ?? '';
@@ -411,6 +401,29 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
     });
   };
 
+  const handleAllowForSession = () => {
+    onRespond({
+      behavior: 'allow',
+      updatedInput: toolInput && typeof toolInput === 'object' ? toolInput : {},
+      updatedPermissions: [
+        {
+          type: DshApprovalPermissionAction.AllowSession,
+          scope: approvalPresentation.approvalScopeKey,
+        },
+      ],
+    });
+  };
+
+  const handleSwitchFullAccess = () => {
+    const { eventDetail, response } = buildSwitchFullAccessAction(permission.sessionId, toolInput);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(DSH_PERMISSION_PRESET_CHANGED_EVENT, {
+        detail: eventDetail,
+      }));
+    }
+    onRespond(response);
+  };
+
   const handleDeny = () => {
     onRespond({
       behavior: 'deny',
@@ -420,7 +433,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
   return (
     <div className={`fixed inset-0 z-50 items-center justify-center modal-backdrop ${hidden ? 'hidden' : 'flex'}`}>
-      <div className="modal-content w-fit min-w-[28rem] max-w-[calc(100vw-2rem)] mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
+      <div className="modal-content w-full max-w-xl mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
           <div className={`p-2 rounded-full ${isQuestionTool && !isConfirmMode ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-yellow-100 dark:bg-yellow-900/30'}`}>
@@ -433,20 +446,20 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
               <ExclamationTriangleIcon className={`h-6 w-6 ${isQuestionTool && !isConfirmMode ? 'text-blue-600 dark:text-blue-500' : 'text-yellow-600 dark:text-yellow-500'}`} />
             )}
           </div>
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold text-foreground">
               {isConfirmMode && questions[0]?.title
                 ? questions[0].title
                 : isQuestionTool && !isConfirmMode
                   ? i18nService.t('coworkSelectionRequired')
-                  : i18nService.t('coworkPermissionRequired')}
+                  : approvalPresentation.title}
             </h2>
             <p className="text-sm text-secondary">
               {isConfirmMode && questions[0]?.subtitle
                 ? renderSubtitleWithHighlight(questions[0].subtitle)
                 : isQuestionTool && !isConfirmMode
                   ? i18nService.t('coworkSelectionDescription')
-                  : i18nService.t('coworkPermissionDescription')}
+                  : approvalPresentation.summary}
             </p>
           </div>
           {onMinimize && (
@@ -551,37 +564,83 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
               })}
             </>
           ) : (
-            <>
-              {/* Tool name */}
-              <div>
-                <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
-                  {i18nService.t('coworkToolName')}
-                </label>
-                <div className="px-3 py-2 rounded-lg bg-background">
-                  <code className="text-sm text-foreground">
-                    {permission.toolName}
-                  </code>
+            <div className="space-y-3">
+              {approvalPresentation.modelNote && (
+                <div className="px-3.5 py-2.5 rounded-xl bg-background text-sm text-foreground leading-relaxed">
+                  {approvalPresentation.modelNote}
                 </div>
-              </div>
+              )}
 
-              {/* Tool input */}
-              <div>
-                <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
-                  {i18nService.t('coworkToolInput')}
-                </label>
-                <div className="px-3 py-2 rounded-lg bg-background">
-                  <pre className="text-code text-foreground whitespace-pre-wrap break-words font-mono">
-                    {formatToolInput(permission.toolInput)}
-                  </pre>
+              {approvalPresentation.targetValue && (
+                <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl bg-background">
+                  <FolderIcon className="h-4 w-4 text-secondary shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] font-medium text-secondary">
+                      {approvalPresentation.targetLabel}
+                    </div>
+                    <div className="text-xs text-foreground break-all font-mono mt-0.5">
+                      {approvalPresentation.targetValue}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </>
+              )}
+
+              {approvalPresentation.command && (
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1.5">
+                    {i18nService.t('coworkApprovalCommandLabel')}
+                  </label>
+                  <div className="px-3.5 py-2.5 rounded-xl bg-background border border-border/60 max-h-40 overflow-y-auto">
+                    <pre className="text-xs text-foreground whitespace-pre-wrap break-all font-mono leading-relaxed">
+                      {approvalPresentation.command}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {approvalPresentation.technicalDetails && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTechnicalDetails((prev) => !prev)}
+                    className="inline-flex items-center gap-1 text-xs text-secondary hover:text-foreground transition-colors"
+                  >
+                    {showTechnicalDetails
+                      ? i18nService.t('coworkApprovalHideDetails')
+                      : i18nService.t('coworkApprovalShowDetails')}
+                    {showTechnicalDetails
+                      ? <ChevronUpIcon className="h-3.5 w-3.5" />
+                      : <ChevronDownIcon className="h-3.5 w-3.5" />}
+                  </button>
+                  {showTechnicalDetails && (
+                    <div className="mt-1.5 px-3 py-2 rounded-lg bg-background max-h-40 overflow-y-auto">
+                      <pre className="text-xs text-secondary whitespace-pre-wrap break-words font-mono">
+                        {approvalPresentation.technicalDetails}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {approvalPresentation.canSwitchFullAccess && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmFullAccessOpen(true)}
+                    className="inline-flex items-center gap-1.5 text-xs text-secondary hover:text-primary transition-colors"
+                  >
+                    <ShieldExclamationIcon className="h-3.5 w-3.5" />
+                    <span>{i18nService.t('coworkApprovalSwitchFullAccess')}</span>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
         {/* Warning for dangerous operations - 固定在滚动区域外，始终可见 */}
         {(!isQuestionTool || isConfirmMode) && dangerLevel === 'destructive' && (
-          <div className="flex items-start gap-2 p-3 mx-6 my-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+          <div className="flex items-start gap-2 p-3 mx-6 my-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
             <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-red-700 dark:text-red-400">
@@ -594,7 +653,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           </div>
         )}
         {(!isQuestionTool || isConfirmMode) && dangerLevel === 'caution' && (
-          <div className="flex items-start gap-2 p-3 mx-6 my-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+          <div className="flex items-start gap-2 p-3 mx-6 my-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
             <ExclamationTriangleIcon className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400">
@@ -608,22 +667,45 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
-          <button
-            onClick={isConfirmMode && confirmModeButtons ? () => handleConfirmModeSelect(confirmModeButtons.secondary.label) : handleDeny}
-            className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-          >
-            {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.secondary.label) : denyButtonLabel}
-          </button>
-          <button
-            onClick={handleApprove}
-            disabled={!isComplete}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.primary.label) : approveButtonLabel}
-          </button>
+        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-border">
+          <div>
+            {!isQuestionTool && approvalPresentation.canAllowForSession && (
+              <button
+                type="button"
+                onClick={handleAllowForSession}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-surface-raised transition-colors"
+              >
+                {i18nService.t('coworkApprovalAllowSession')}
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={isConfirmMode && confirmModeButtons ? () => handleConfirmModeSelect(confirmModeButtons.secondary.label) : handleDeny}
+              className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+            >
+              {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.secondary.label) : denyButtonLabel}
+            </button>
+            <button
+              type="button"
+              onClick={handleApprove}
+              disabled={!isComplete}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isConfirmMode && confirmModeButtons ? stripQuestionRecommendation(confirmModeButtons.primary.label) : approveButtonLabel}
+            </button>
+          </div>
         </div>
       </div>
+      <FullAccessConfirmDialog
+        isOpen={confirmFullAccessOpen && !hidden}
+        onCancel={() => setConfirmFullAccessOpen(false)}
+        onConfirm={() => {
+          setConfirmFullAccessOpen(false);
+          handleSwitchFullAccess();
+        }}
+      />
     </div>
   );
 };

@@ -1,64 +1,52 @@
 {
-  "version": 1,
+  "version": 2,
   "actions": [
+    {
+      "id": "deep-research",
+      "icon": "MagnifyingGlassCircleIcon",
+      "color": "#6366F1",
+      "skillMapping": "web-search",
+      "prompts": [
+        { "id": "research-appliance-buy" },
+        { "id": "research-ev-compare" },
+        { "id": "research-company-interview" },
+        { "id": "research-travel-guide" }
+      ]
+    },
     {
       "id": "pptx",
       "icon": "PresentationChartBarIcon",
       "color": "#F59E0B",
       "skillMapping": "pptx",
       "prompts": [
-        {
-          "id": "pptx-work-report"
-        },
-        {
-          "id": "pptx-content-research"
-        },
-        {
-          "id": "pptx-training"
-        },
-        {
-          "id": "pptx-ai-intro"
-        }
+        { "id": "ppt-tpl-mckinsey" },
+        { "id": "ppt-tpl-emerald-kpi" },
+        { "id": "ppt-tpl-dark-keynote" },
+        { "id": "ppt-tpl-warm-editorial" }
       ]
     },
     {
       "id": "data-analysis",
       "icon": "ChartBarIcon",
-      "color": "#8B5CF6",
+      "color": "#10B981",
       "skillMapping": "xlsx",
       "prompts": [
-        {
-          "id": "excel-summary"
-        },
-        {
-          "id": "image-to-excel"
-        },
-        {
-          "id": "word-report"
-        },
-        {
-          "id": "multi-excel-merge"
-        }
+        { "id": "data-personal-bill" },
+        { "id": "data-store-sales" },
+        { "id": "data-multi-merge" },
+        { "id": "data-decision-matrix" }
       ]
     },
     {
       "id": "doc-writing",
       "icon": "DocumentTextIcon",
-      "color": "#10B981",
+      "color": "#8B5CF6",
       "skillMapping": "docx",
       "prompts": [
-        {
-          "id": "doc-meeting-minutes"
-        },
-        {
-          "id": "doc-weekly-report"
-        },
-        {
-          "id": "doc-proposal"
-        },
-        {
-          "id": "doc-polish"
-        }
+        { "id": "doc-meeting-minutes" },
+        { "id": "doc-contract-review" },
+        { "id": "doc-weekly-report" },
+        { "id": "doc-resume-polish" }
       ]
     },
     {
@@ -67,18 +55,10 @@
       "color": "#3B82F6",
       "skillMapping": "frontend-design",
       "prompts": [
-        {
-          "id": "web-resume"
-        },
-        {
-          "id": "web-store"
-        },
-        {
-          "id": "web-event"
-        },
-        {
-          "id": "web-survey"
-        }
+        { "id": "web-interactive-resume" },
+        { "id": "web-family-trip" },
+        { "id": "web-life-calculator" },
+        { "id": "web-event-invite" }
       ]
     }
   ]

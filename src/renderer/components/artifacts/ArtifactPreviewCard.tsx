@@ -1,10 +1,13 @@
 import { ArrowTopRightOnSquareIcon } from '@heroicons/react/20/solid';
 import { ArrowUpTrayIcon, ChevronDownIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { OfficeEditorId } from '@shared/office/core/officeEditor';
+import { officeEditorForPath } from '@shared/office/editors';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch } from 'react-redux';
 
 import { i18nService } from '@/services/i18n';
+import { preloadWordEditor } from '@/services/office/word/wordPreload';
 import {
   getCachedAppsForFile,
   getCachedBrowserApps,
@@ -40,7 +43,7 @@ const AppIcon: React.FC<{ className?: string }> = ({ className }) => (
 
 // ── Dropdown Menu for Document Artifacts ──────────────────────────
 
-interface OpenDropdownProps {
+export interface ArtifactOpenDropdownProps {
   anchorRef: React.RefObject<HTMLElement>;
   artifact: Artifact;
   filePath?: string;
@@ -54,7 +57,7 @@ interface OpenDropdownProps {
   onClose: () => void;
 }
 
-const OpenDropdown: React.FC<OpenDropdownProps> = ({
+export const ArtifactOpenDropdown: React.FC<ArtifactOpenDropdownProps> = ({
   anchorRef,
   artifact,
   filePath,
@@ -428,13 +431,17 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const shouldPrefetchBrowserApps = supportsOpenMenu &&
     artifact.type === ArtifactTypeValue.LocalService &&
     Boolean(localServiceUrl);
+  const isWordArtifact = officeEditorForPath(artifact.fileName || artifact.filePath || '')?.id === OfficeEditorId.Word;
   useEffect(() => {
     if (prefetchFilePath) {
       void prefetchAppsForFile(prefetchFilePath);
     } else if (shouldPrefetchBrowserApps) {
       void prefetchBrowserApps(prefetchBrowserDirectory || undefined);
     }
-  }, [prefetchBrowserDirectory, prefetchFilePath, shouldPrefetchBrowserApps]);
+    if (isWordArtifact && artifact.filePath) {
+      void preloadWordEditor();
+    }
+  }, [artifact.filePath, isWordArtifact, prefetchBrowserDirectory, prefetchFilePath, shouldPrefetchBrowserApps]);
   const displaySubtitle = artifact.type === ArtifactTypeValue.LocalService && localServiceProjectName
     ? `${localServiceProjectName} · ${descriptor.subtitle}`
     : descriptor.subtitle;
@@ -517,7 +524,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           </button>
         )}
         {dropdownOpen && (
-          <OpenDropdown
+          <ArtifactOpenDropdown
             anchorRef={dropdownAnchorRef as React.RefObject<HTMLElement>}
             artifact={artifact}
             filePath={artifact.filePath}

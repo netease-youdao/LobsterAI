@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 
-import { MAIL_PROVIDER, MAIL_SCOPE, MailRefreshError, refreshMailCredential } from '../openclaw-extensions/netease-mail/refresh';
+import { MAIL_PROVIDER, MAIL_SCOPE, MailRefreshError, refreshMailCredential } from '../src/main/mcp/neteaseMail/refresh';
 import { NeteaseMailDefaultScopes, NeteaseMailScope } from '../src/shared/neteaseMail/constants';
 
 const credential = { type: 'oauth' as const, provider: MAIL_PROVIDER, clientId: 'client-test', access: 'old-access', refresh: 'old-refresh', expires: 1 };

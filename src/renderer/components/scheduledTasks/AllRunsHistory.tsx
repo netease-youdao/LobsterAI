@@ -19,6 +19,7 @@ const STATUS_OPTIONS = [
   TaskStatus.Success,
   TaskStatus.Error,
   TaskStatus.Skipped,
+  TaskStatus.Stopped,
   TaskStatus.Running,
 ] as const;
 
@@ -36,6 +37,10 @@ const statusConfig: Record<TaskStatus, { label: string; color: string }> = {
   [TaskStatus.Skipped]: {
     label: 'scheduledTasksStatusSkipped',
     color: 'text-yellow-500',
+  },
+  [TaskStatus.Stopped]: {
+    label: 'scheduledTasksStatusStopped',
+    color: 'text-secondary',
   },
   [TaskStatus.Running]: {
     label: 'scheduledTasksStatusRunning',

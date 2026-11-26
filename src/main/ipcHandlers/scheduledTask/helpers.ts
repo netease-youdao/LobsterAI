@@ -1,6 +1,32 @@
+import { RETAINED_IM_PLATFORM_LIST, RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { buildFeishuTopicConversationId, parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
 import { ImPeerKind, parseImConversationId, PlatformRegistry } from '../../../shared/platform';
+import { isRetainedImPlatform } from '../../im/dshChannelsBridge';
 import type { Platform } from '../../im/types';
-import { resolveAgentBinding } from '../../libs/openclawChannelSessionSync';
+
+const MULTI_INSTANCE_CONFIG_KEYS = new Set<string>(
+  RETAINED_IM_PLATFORM_LIST.filter(platform => platform !== RetainedImPlatform.Weixin),
+);
+
+function resolveAgentBinding(
+  bindings: Record<string, string> | undefined,
+  platform: Platform,
+  accountId?: string | null,
+): string {
+  if (!bindings) return 'main';
+  if (MULTI_INSTANCE_CONFIG_KEYS.has(platform) && accountId) {
+    const prefix = `${platform}:`;
+    for (const key of Object.keys(bindings)) {
+      if (key.startsWith(prefix)) {
+        const instanceId = key.slice(prefix.length);
+        if (instanceId === accountId || instanceId.startsWith(accountId)) {
+          return bindings[key];
+        }
+      }
+    }
+  }
+  return bindings[platform] || 'main';
+}
 
 export interface ScheduledTaskHelperDeps {
   getIMGatewayManager: () => {
@@ -15,8 +41,6 @@ const WECOM_PLATFORM: Platform = 'wecom';
 export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
 }
-
-const MULTI_INSTANCE_CONFIG_KEYS = new Set(['dingtalk', 'feishu', 'nim', 'qq', 'wecom', 'telegram', 'discord', 'popo']);
 
 function deriveNimRuntimeAccountId(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
@@ -106,7 +130,7 @@ export function listScheduledTaskChannels(): Array<{
 
   for (const option of PlatformRegistry.channelOptions()) {
     const platform = PlatformRegistry.platformOfChannel(option.value);
-    if (platform === undefined || !enabledPlatforms.has(platform)) continue;
+    if (platform === undefined || !isRetainedImPlatform(platform) || !enabledPlatforms.has(platform)) continue;
 
     const instances = instancesByPlatform.get(platform);
     if (instances && instances.length > 0) {
@@ -289,6 +313,12 @@ export function resolveWecomGroupDeliveryTargetFromSessions(params: {
   });
 }
 
+function conversationPeerKey(conversationId: string, platform?: Platform): string {
+  const topic = platform === RetainedImPlatform.Feishu ? parseFeishuReplyRoute(conversationId) : null;
+  if (topic?.threadId) return buildFeishuTopicConversationId(topic.chatId, topic.threadId);
+  return parseImConversationId(conversationId).peerId.trim().toLowerCase();
+}
+
 /**
  * Resolves the agent bound to a delivery-target conversation from IM session
  * mappings (sorted by lastActiveAt DESC). IM conversations can be bound to a
@@ -305,7 +335,7 @@ export function resolveConversationAgentIdFromMappings(
     platformAgentBindings?: Record<string, string>;
   },
 ): string | null {
-  const peer = parseImConversationId(to).peerId.trim().toLowerCase();
+  const peer = conversationPeerKey(to, options?.platform);
   if (!peer) return null;
 
   const preferredAgentId = preferredAccountId && options?.platform
@@ -319,7 +349,7 @@ export function resolveConversationAgentIdFromMappings(
   if (preferredAgentId) {
     for (const mapping of mappings) {
       const parsed = parseImConversationId(mapping.imConversationId);
-      if (parsed.peerId.trim().toLowerCase() !== peer) continue;
+      if (conversationPeerKey(mapping.imConversationId, options?.platform) !== peer) continue;
       if (!isAccountlessGroupOrChannel(parsed)) continue;
       const agentId = mapping.agentId?.trim();
       if (agentId === preferredAgentId) return agentId;
@@ -329,7 +359,7 @@ export function resolveConversationAgentIdFromMappings(
   let firstMatch: string | null = null;
   for (const mapping of mappings) {
     const parsed = parseImConversationId(mapping.imConversationId);
-    if (parsed.peerId.trim().toLowerCase() !== peer) continue;
+    if (conversationPeerKey(mapping.imConversationId, options?.platform) !== peer) continue;
     const agentId = mapping.agentId?.trim();
     if (!agentId) continue;
     if (preferredAccountId && parsed.accountId === preferredAccountId) return agentId;
@@ -354,13 +384,14 @@ export function resolveConversationAgentIdFromMappings(
  */
 export function dedupeConversationMappings<T extends { imConversationId: string; agentId?: string }>(
   mappings: readonly T[],
+  platform?: Platform,
 ): T[] {
   const seen = new Set<string>();
   const result: T[] = [];
   for (const mapping of mappings) {
     const parsed = parseImConversationId(mapping.imConversationId);
     if (parsed.peerId.toLowerCase().endsWith(':heartbeat')) continue;
-    const key = `${mapping.agentId ?? ''}:${parsed.peerKind ?? ''}:${parsed.peerId.toLowerCase()}`;
+    const key = `${mapping.agentId ?? ''}:${parsed.peerKind ?? ''}:${conversationPeerKey(mapping.imConversationId, platform)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(mapping);
@@ -379,7 +410,7 @@ export function dedupeConversationMappings<T extends { imConversationId: string;
  * as the best available group ownership signal.
  */
 export function filterConversationMappingsForSelectedAccount<
-  T extends { imConversationId: string; agentId?: string },
+  T extends { imConversationId: string; agentId?: string; platform?: string },
 >(
   mappings: readonly T[],
   platform: Platform,
@@ -397,6 +428,7 @@ export function filterConversationMappingsForSelectedAccount<
   );
 
   const filtered = mappings.filter((mapping) => {
+    if (mapping.platform?.startsWith(`${platform}:`)) return true;
     const parsed = parseImConversationId(mapping.imConversationId);
     if (parsed.accountId) return true;
     if (

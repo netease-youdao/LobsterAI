@@ -23,14 +23,14 @@ import { ModelPresetId } from '../../shared/modelPresets/constants';
 import { getProviderIcon, ProviderIconId } from '../providers/uiRegistry';
 import { authService } from '../services/auth';
 import { getPortalPricingUrl } from '../services/endpoints';
-import { i18nService } from '../services/i18n';
+import { i18nService, type LanguageType } from '../services/i18n';
 import { modelPresetName } from '../services/modelPresets';
 import {
   readRememberedModelThinkingLevel,
   rememberModelThinkingLevel,
 } from '../services/modelThinkingLevelMemory';
 import { RootState } from '../store';
-import type { Model } from '../store/slices/modelSlice';
+import type { Model, ModelCustomTag } from '../store/slices/modelSlice';
 import { getModelIdentityKey, isSameModelIdentity, ServerModelLoadStatus, setSelectedModel } from '../store/slices/modelSlice';
 import { AccountConnectionNotice } from './AccountConnectionNotice';
 import { getAccountConnectionState, getModelConnectionState } from './accountConnectionState';
@@ -443,6 +443,25 @@ export function supportsConfigurableModelThinkingProtocol(
     && supportsLobsterAIRequestOptionsV1(model.requestCapabilities);
 }
 
+/**
+ * Text shown on the custom tag chip. English uses textEn; without it an icon
+ * tag shows the icon alone (full text in the tooltip and hover card), and a
+ * text-only tag falls back to the Chinese text so the tag never disappears.
+ */
+export function resolveModelCustomTagLabel(
+  tag: ModelCustomTag,
+  language: LanguageType,
+): string | undefined {
+  if (language !== 'en') return tag.text;
+  if (tag.textEn) return tag.textEn;
+  return tag.iconUrl ? undefined : tag.text;
+}
+
+/** Hover card and tooltip text: always readable, preferring the UI language. */
+export function resolveModelCustomTagHint(tag: ModelCustomTag, language: LanguageType): string {
+  return language === 'en' && tag.textEn ? tag.textEn : tag.text;
+}
+
 // Same default as Admin and Portal when the server tag has no color.
 const MODEL_CUSTOM_TAG_DEFAULT_COLOR = '#F97316';
 
@@ -465,12 +484,14 @@ export function hasModelHoverDetails(
     | 'supportsThinking'
     | 'thinkingConfig'
     | 'subscriptionPriority'
+    | 'customTag'
     | 'busy'
   >,
 ): boolean {
   return !!model.busy
     || !!model.contextWindowOptions?.length
     || !!model.subscriptionPriority
+    || !!model.customTag
     || !!model.description
     || !!model.costMultiplier
     || !!model.supportsImage
@@ -1287,6 +1308,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const blocked = restricted || agenticBlocked || busy || accountUnavailable;
     const hasThinkingProtocol = supportsConfigurableModelThinkingProtocol(model);
 
+    // English badge labels are about twice as wide; keep their icons (with
+    // tooltips) so the custom tag and the model name keep their room.
+    const language = i18nService.getLanguage();
+    const iconOnlyBadges = language === 'en';
+    const customTagLabel = model.customTag ? resolveModelCustomTagLabel(model.customTag, language) : undefined;
+
     const showCostMultiplier = model.costMultiplier != null && (model.costMultiplier > 0 || !!model.presetId || model.limitedFreeActive === true);
     const costMultiplierLabel = showCostMultiplier
       ? `x${model.costMultiplier?.toFixed(2)}`
@@ -1334,33 +1361,33 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             <span className="max-w-full truncate text-[10px] text-secondary" title={model.restrictionHint}>{model.restrictionHint}</span>
           )}
           {!model.presetId && model.limitedFreeActive && (
-            <span className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] leading-none text-red-600 dark:text-red-400" title={i18nService.t('modelLimitedFreeBadge')}>
+            <span className="inline-flex min-w-0 max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] leading-none text-red-600 dark:text-red-400" title={i18nService.t('modelLimitedFreeBadge')}>
               <GiftIcon className="h-3 w-3 shrink-0" strokeWidth={1.8} aria-hidden="true" />
-              <span className="truncate">{i18nService.t('modelLimitedFreeBadge')}</span>
+              {!iconOnlyBadges && <span className="truncate">{i18nService.t('modelLimitedFreeBadge')}</span>}
             </span>
           )}
           {model.subscriptionPriority && (
-            <span className="inline-flex max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSubscriptionPriorityHint')}>
+            <span className="inline-flex min-w-0 max-w-full items-center gap-[3px] whitespace-nowrap rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSubscriptionPriorityHint')}>
               <VipDiamondLineIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{i18nService.t('modelSubscriptionPriorityBadge')}</span>
+              {!iconOnlyBadges && <span className="truncate">{i18nService.t('modelSubscriptionPriorityBadge')}</span>}
             </span>
           )}
           {!busy && agenticBlocked && (
-            <span className="flex max-w-full items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSelectorAgenticVerifyingBadge')}>
+            <span className="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300" title={i18nService.t('modelSelectorAgenticVerifyingBadge')}>
               <ClockIcon className="h-3 w-3 shrink-0" />
-              <span className="truncate">{i18nService.t('modelSelectorAgenticVerifyingBadge')}</span>
+              {!iconOnlyBadges && <span className="truncate">{i18nService.t('modelSelectorAgenticVerifyingBadge')}</span>}
             </span>
           )}
           {!model.presetId && model.customTag && (
             <span
               className="inline-flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] leading-none"
               style={modelCustomTagStyle(model.customTag.color)}
-              title={model.customTag.text}
+              title={resolveModelCustomTagHint(model.customTag, language)}
             >
               {model.customTag.iconUrl && (
                 <img src={model.customTag.iconUrl} alt="" className="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
               )}
-              <span className="truncate">{model.customTag.text}</span>
+              {customTagLabel && <span>{customTagLabel}</span>}
             </span>
           )}
         </span>
@@ -1444,6 +1471,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         )}
         {!hoveredModel.busy && hoveredModel.subscriptionPriority && (
           <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300 leading-4">{i18nService.t('modelSubscriptionPriorityHint')}</div>
+        )}
+        {!hoveredModel.presetId && hoveredModel.customTag && (
+          <div className="mt-1 text-[11px] leading-4" style={{ color: modelCustomTagStyle(hoveredModel.customTag.color).color }}>
+            {resolveModelCustomTagHint(hoveredModel.customTag, i18nService.getLanguage())}
+          </div>
         )}
         {hoveredModel.presetId && hoveredModel.accessible === false && hoveredModel.restrictionHint && (
           <div className="mt-1 text-[11px] text-secondary leading-4">{hoveredModel.restrictionHint}</div>

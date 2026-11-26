@@ -3,11 +3,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { CoworkTempDirKind } from '../../shared/cowork/constants';
 import {
   createCoworkTempJanitor,
   ensureCoworkTempGitignore,
   findCoworkTempRoot,
   getCoworkTempDirPath,
+  getLegacySqliteBackupDirs,
   measureCoworkTempDir,
   sweepCoworkTempDir,
 } from './coworkTempJanitor';
@@ -299,6 +301,58 @@ describe('createCoworkTempJanitor', () => {
       expect(activeEntry?.cleanableFiles).toBe(0);
     } finally {
       fs.rmSync(activeRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('previews and cleans legacy SQLite backup directories alongside session temp dirs', async () => {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-temp-legacy-'));
+    try {
+      const snapshotFile = path.join(userDataDir, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite');
+      const manifestFile = path.join(userDataDir, 'backups', 'sqlite', 'manifest.json');
+      const oldLegacyFile = path.join(userDataDir, 'sqlite-backups', 'lobsterai-latest.sqlite');
+      fs.mkdirSync(path.dirname(snapshotFile), { recursive: true });
+      fs.mkdirSync(path.dirname(oldLegacyFile), { recursive: true });
+      fs.writeFileSync(snapshotFile, '0123456789');
+      fs.writeFileSync(manifestFile, '{}');
+      fs.writeFileSync(oldLegacyFile, 'abcd');
+
+      writeFileAged('scratch.txt', 0, 'xy');
+
+      const janitor = createCoworkTempJanitor({
+        listAllCwds: () => [workRoot],
+        listActiveCwds: () => [],
+        listLegacyDirs: () => getLegacySqliteBackupDirs(userDataDir),
+      });
+
+      const preview = await janitor.preview();
+      expect(preview.dirs).toHaveLength(3);
+      expect(preview.files).toBe(4);
+      expect(preview.bytes).toBe(18);
+      expect(preview.cleanableFiles).toBe(4);
+      expect(preview.cleanableBytes).toBe(18);
+
+      const legacyEntries = preview.dirs.filter(dir => dir.kind === CoworkTempDirKind.LegacySqliteBackup);
+      expect(legacyEntries).toHaveLength(2);
+      expect(legacyEntries.every(dir => !dir.isActive)).toBe(true);
+
+      // Select only the modern backups/sqlite directory first.
+      const sqliteBackupDir = path.resolve(path.join(userDataDir, 'backups', 'sqlite'));
+      const firstClean = await janitor.clean([sqliteBackupDir]);
+      expect(firstClean.deletedFiles).toBe(2);
+      expect(firstClean.freedBytes).toBe(12);
+      expect(fs.existsSync(path.join(userDataDir, 'backups', 'sqlite'))).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, 'backups'))).toBe(false);
+      expect(fs.existsSync(oldLegacyFile)).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, 'scratch.txt'))).toBe(true);
+
+      // Clean the remaining legacy sqlite-backups directory.
+      const legacyOldDir = path.resolve(path.join(userDataDir, 'sqlite-backups'));
+      const secondClean = await janitor.clean([legacyOldDir]);
+      expect(secondClean.deletedFiles).toBe(1);
+      expect(secondClean.freedBytes).toBe(4);
+      expect(fs.existsSync(legacyOldDir)).toBe(false);
+    } finally {
+      fs.rmSync(userDataDir, { recursive: true, force: true });
     }
   });
 });

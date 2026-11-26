@@ -5,7 +5,6 @@ import {
   SkinPackKitId,
   SkinPackSkillId,
 } from '../../shared/skin/kit';
-import { OpenClawConfigImpact } from '../libs/openclawConfigImpact';
 import {
   buildInstalledSkinPackKitRecord,
   buildSkinPackMarketplaceKit,
@@ -36,7 +35,7 @@ export interface SkinPackKitLifecycleDeps {
   syncOpenClawConfig: (options: {
     reason: string;
     restartGatewayIfRunning?: boolean;
-    expectedImpact?: OpenClawConfigImpact;
+    expectedImpact?: string;
   }) => Promise<{ success: boolean; changed: boolean; error?: string }>;
 }
 
@@ -161,7 +160,7 @@ export function createSkinPackKitLifecycle(
 
       const syncResult = await deps.syncOpenClawConfig({
         reason: 'ai-skin-designer-kit-installed',
-        expectedImpact: OpenClawConfigImpact.Sync,
+        expectedImpact: 'sync',
       });
       if (!syncResult.success) {
         throw new Error(syncResult.error || 'OpenClaw config sync failed after AI Skin Designer install');
@@ -195,7 +194,7 @@ export function createSkinPackKitLifecycle(
 
       const syncResult = await deps.syncOpenClawConfig({
         reason: 'ai-skin-designer-kit-uninstalled',
-        expectedImpact: OpenClawConfigImpact.Sync,
+        expectedImpact: 'sync',
       });
       if (!syncResult.success) {
         throw new Error(syncResult.error || 'OpenClaw config sync failed after AI Skin Designer uninstall');

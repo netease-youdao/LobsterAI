@@ -123,7 +123,9 @@ export function getNeteaseMailPresentation(input: {
     if (input.text.includes('NETEASE_MAIL_AUTH_EXPIRED')) return { kind: NeteaseMailView.Notice, code: NeteaseMailError.Unauthorized };
     if (input.text.includes('NETEASE_MAIL_RATE_LIMITED')) return { kind: NeteaseMailView.Notice, code: NeteaseMailError.RateLimited };
   }
-  const envelope = payloadOf(input.details, input.text);
+  // DSH serializes native MCP failures as Error-prefixed JSON in the tool output.
+  const text = input.isError ? input.text?.replace(/^Error:\s*(?=\{)/, '') : input.text;
+  const envelope = payloadOf(input.details, text);
   if (!envelope) return null;
   const data = record(envelope.data) ?? envelope;
   const rawCode = envelope.code ?? record(envelope.error)?.code ?? data.code;
