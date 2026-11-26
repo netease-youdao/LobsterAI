@@ -34,6 +34,7 @@ import {
   AgentId,
   AgentIpcChannel,
   AgentModelSelectionMode,
+  AgentSource,
 } from '../shared/agent/constants';
 import {
   LogReporterAction,
@@ -6264,12 +6265,16 @@ if (!gotTheLock) {
       // action === 'generate'
       const mediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
       const modelResponse = await fetchWithAuth(`${serverBaseUrl}/api/media/${mediaType === 'image' ? 'images' : 'videos'}/models`, { signal: AbortSignal.timeout(15_000) });
-      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; pricingDescription?: string; capabilities?: string; parameterSpec?: Record<string, unknown>; pricing?: Record<string, unknown> }> };
+      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; supportsWatermarkRemoval?: boolean; pricingDescription?: string; capabilities?: string; parameterSpec?: Record<string, unknown>; pricing?: Record<string, unknown> }> };
       if (modelBody.code !== 0 || !isRequestAccountCurrent()) return staleAccountResult();
       const modelCapability = modelBody.data?.find(model => canonicalizeMediaModelId(model.modelId) === canonicalizeMediaModelId(selectedModel));
       if (!modelCapability) {
         return { content: [{ type: 'text', text: t('mediaSelectedModelUnavailable') }], isError: true,
           details: { status: 'failed', warnings: [MediaGenerationGateReason.ModelUnavailable] } };
+      }
+      const removeWatermark = mediaType === 'image' && args.imageOperation === 'remove_watermark';
+      if (removeWatermark && modelCapability.supportsWatermarkRemoval !== true) {
+        return { content: [{ type: 'text', text: t('mediaWatermarkRemovalUnavailable') }], isError: true };
       }
       const useDurableTasks = modelCapability.protocolVersions?.includes(MediaProtocol.Durable) === true;
       const endpoint = useDurableTasks ? MEDIA_V2_TASKS_PATH
@@ -6311,7 +6316,7 @@ if (!gotTheLock) {
       if (args.count) params.count = args.count;
       if (args.durationSeconds != null) params.durationSeconds = args.durationSeconds;
       if (args.audio != null) params.audio = args.audio;
-      if (args.watermark != null) params.watermark = args.watermark;
+      if (mediaType === 'video' && args.watermark != null) params.watermark = args.watermark;
       if (args.seed != null) params.seed = args.seed;
       if (args.returnLastFrame != null) params.returnLastFrame = args.returnLastFrame;
       if (args.cameraFixed != null) params.cameraFixed = args.cameraFixed;
@@ -6330,7 +6335,7 @@ if (!gotTheLock) {
       const automaticDefault = mediaType === MediaType.Image ? selection?.imageDefault : selection?.videoDefault;
       params = applyMediaDefaultParameters(params, automaticDefault, mediaType);
       const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
-      const imageEditId = mediaType === MediaType.Image ? refs?.find(ref => ref.imageEdit)?.imageEdit?.id : undefined;
+      const imageEditId = mediaType === MediaType.Image && !removeWatermark ? refs?.find(ref => ref.imageEdit)?.imageEdit?.id : undefined;
       const imageEdit = imageEditId && sessionId ? imageEditing.resolve(sessionId, imageEditId) : undefined;
       const editGeneration = imageEdit ? imageEditing.generation(imageEdit, modelCapability ?? {}, prompt) : undefined;
       params = applyMediaReferencesToGenerationParams({
@@ -6339,9 +6344,16 @@ if (!gotTheLock) {
           : MediaGenerationRequestType.Image,
         params,
         refs,
-        preferExplicitImageInputs: Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId),
+        preferExplicitImageInputs: removeWatermark || (Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId)),
       });
       if (editGeneration) params = editGeneration.params;
+      if (removeWatermark) {
+        if (!Array.isArray(params.images) || params.images.length !== 1) {
+          return { content: [{ type: 'text', text: t('mediaWatermarkRemovalSource') }], isError: true };
+        }
+        params.n = 1;
+        delete params.count;
+      }
 
       // Convert local file paths to data URLs
       const MEDIA_MIME: Record<string, string> = {
@@ -6463,7 +6475,12 @@ if (!gotTheLock) {
       const happyHorse11Selection = mediaType === 'video'
         ? resolveHappyHorse11Selection(selectedModel, params)
         : null;
+      const agentId = mediaType === 'image' && ownerSessionId && !nativeRun
+        ? getCoworkStore().getSession(ownerSessionId, 0)?.agentId : undefined;
+      const agent = agentId ? getCoworkStore().getAgent(agentId) : undefined;
       const generateReq = {
+        ...(agent?.source === AgentSource.Preset && agent.presetId ? { expertPresetId: agent.presetId } : {}),
+        ...(removeWatermark ? { imageOperation: 'remove_watermark' } : {}),
         usageContext,
         model: selectedModel,
         type: mediaType === 'video'

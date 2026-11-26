@@ -1,5 +1,7 @@
 export const mediaTranslations = {
   zh: {
+    mediaWatermarkRemovalUnavailable: '当前服务或所选模型不支持去水印。',
+    mediaWatermarkRemovalSource: '请选择一张需要去水印的原图。',
     mediaPreferencesUnavailable: '媒体设置暂时无法读取或保存，请稍后重试。',
     mediaSelectedModelUnavailable: '已选媒体模型当前不可用，请重新选择；不会自动换用其他计费模型。',
     mediaDisableImage: '不生成图片',
@@ -68,6 +70,8 @@ export const mediaTranslations = {
     mediaTaskVideoUrlRequired: '所选模型的参考视频需要可访问的 HTTP(S) 链接，请先上传视频后再生成。',
   },
   en: {
+    mediaWatermarkRemovalUnavailable: 'Watermark removal is unavailable with the current service or model.',
+    mediaWatermarkRemovalSource: 'Select one image to remove its watermark.',
     mediaPreferencesUnavailable: 'Media settings could not be read or saved. Please try again.',
     mediaSelectedModelUnavailable: 'The selected media model is unavailable. Choose another model; no paid model will be substituted automatically.',
     mediaDisableImage: 'Don\'t generate images',

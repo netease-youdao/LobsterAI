@@ -35,6 +35,7 @@ const imageTool: DshHostToolDescriptor = {
       action: { type: 'string', enum: imageActions, description: 'Defaults to generate.' },
       prompt: { type: 'string', description: 'Describe the requested image or edit.' },
       model: { type: 'string', description: 'The selected image model ID.' },
+      imageOperation: { type: 'string', enum: ['remove_watermark'], description: 'Only for an explicit request to remove the LobsterAI watermark from one existing image.' },
       image: { type: 'string', description: 'Reference image file path or URL.' },
       images: { type: 'array', items: { type: 'string' }, description: 'Reference image file paths or URLs.' },
       size: { type: 'string' },
