@@ -75,10 +75,19 @@ export interface ModelRuntimeProfileMetadata {
   maxTokens?: number;
 }
 
+export interface ModelRuntimeProfileMetadataOverrides {
+  supportsImage?: boolean;
+  supportsThinking?: boolean;
+}
+
 export const getModelRuntimeProfileDefinition = (
   profile: ModelRuntimeProfile,
 ): ModelRuntimeProfileDefinition => MODEL_RUNTIME_PROFILES[profile];
 
+/**
+ * Strict profile enforcement for server/package models where untrusted remote
+ * metadata must not override the client-controlled K3 capability contract.
+ */
 export const applyModelRuntimeProfileMetadata = (
   metadata: ModelRuntimeProfileMetadata,
   profile: ModelRuntimeProfile | undefined,
@@ -95,6 +104,35 @@ export const applyModelRuntimeProfileMetadata = (
     supportsThinking: definition.reasoning,
     contextWindow: definition.contextWindow,
     maxTokens: definition.maxTokens,
+  };
+};
+
+/**
+ * User-respectful profile defaults for built-in and custom models: fills in
+ * missing profile limits and repairs unoverridden capability defaults while
+ * preserving explicit user choices (contextWindow, maxTokens, and overrides).
+ */
+export const applyModelRuntimeProfileDefaults = (
+  metadata: ModelRuntimeProfileMetadata,
+  profile: ModelRuntimeProfile | undefined,
+  overrides?: ModelRuntimeProfileMetadataOverrides,
+): ModelRuntimeProfileMetadata => {
+  if (!profile) {
+    return metadata;
+  }
+
+  const definition = getModelRuntimeProfileDefinition(profile);
+  return {
+    ...metadata,
+    supportsImage: typeof overrides?.supportsImage === 'boolean'
+      ? overrides.supportsImage
+      : (metadata.supportsImage || definition.input.includes('image')),
+    supportsVideo: metadata.supportsVideo || definition.input.includes('video'),
+    supportsThinking: typeof overrides?.supportsThinking === 'boolean'
+      ? overrides.supportsThinking
+      : (metadata.supportsThinking || definition.reasoning),
+    contextWindow: metadata.contextWindow ?? definition.contextWindow,
+    maxTokens: metadata.maxTokens ?? definition.maxTokens,
   };
 };
 
@@ -194,4 +232,98 @@ export const findKimiK3ReservedCustomParamKeys = (
   return Object.keys(customParams)
     .filter(key => KIMI_K3_RESERVED_CUSTOM_PARAM_KEY_SET.has(key))
     .sort();
+};
+
+const KIMI_K3_LEGACY_DEFAULT_MAX_TOKENS = 8_192;
+const KIMI_K3_LEGACY_MAX_TOKENS_PARAM_KEYS = [
+  'max_tokens',
+  'max_completion_tokens',
+  'maxTokens',
+  'maxCompletionTokens',
+] as const;
+
+export interface MigrateKimiK3CustomParamsOptions {
+  /**
+   * When true (default, used for stored-config hydration), a valid legacy
+   * `max_tokens` in `customParams` overrides the stock K3 default (`1_048_576`)
+   * or legacy OpenClaw default (`8_192`) so OpenClaw-era workarounds carry over
+   * cleanly into the structured `maxTokens` field. When false (used when saving
+   * the Model Editor form), any explicit `maxTokens` entered by the user wins.
+   */
+  promoteOverDefaultMaxTokens?: boolean;
+}
+
+export interface MigrateKimiK3CustomParamsResult {
+  customParams: Record<string, unknown> | undefined;
+  migratedMaxTokens: number | undefined;
+  strippedKeys: string[];
+}
+
+const extractValidLegacyKimiK3MaxTokens = (
+  customParams: Record<string, unknown>,
+): number | undefined => {
+  for (const key of KIMI_K3_LEGACY_MAX_TOKENS_PARAM_KEYS) {
+    const raw = customParams[key];
+    if (
+      typeof raw === 'number'
+      && Number.isInteger(raw)
+      && raw >= 1
+      && raw <= KIMI_K3_RUNTIME_PROFILE.maxTokens
+    ) {
+      return raw;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Clean up OpenClaw-era / runtime-managed keys from a Kimi K3 model's
+ * `customParams` and promote any valid legacy `max_tokens` workaround into the
+ * structured `maxTokens` field. Non-reserved custom params are preserved as-is.
+ */
+export const migrateKimiK3LegacyCustomParams = (
+  customParams: Record<string, unknown> | undefined,
+  currentMaxTokens?: number,
+  options?: MigrateKimiK3CustomParamsOptions,
+): MigrateKimiK3CustomParamsResult => {
+  if (!customParams || typeof customParams !== 'object' || Array.isArray(customParams)) {
+    return {
+      customParams: undefined,
+      migratedMaxTokens: undefined,
+      strippedKeys: [],
+    };
+  }
+
+  const strippedKeys = findKimiK3ReservedCustomParamKeys(customParams);
+  if (strippedKeys.length === 0) {
+    return {
+      customParams: Object.keys(customParams).length > 0 ? customParams : undefined,
+      migratedMaxTokens: undefined,
+      strippedKeys: [],
+    };
+  }
+
+  const promoteOverDefault = options?.promoteOverDefaultMaxTokens ?? true;
+  const legacyMaxTokens = extractValidLegacyKimiK3MaxTokens(customParams);
+  const canPromote = currentMaxTokens === undefined
+    || (
+      promoteOverDefault
+      && (
+        currentMaxTokens === KIMI_K3_RUNTIME_PROFILE.maxTokens
+        || currentMaxTokens === KIMI_K3_LEGACY_DEFAULT_MAX_TOKENS
+      )
+    );
+  const migratedMaxTokens = legacyMaxTokens !== undefined && canPromote
+    ? legacyMaxTokens
+    : undefined;
+
+  const cleanedEntries = Object.entries(customParams).filter(
+    ([key]) => !KIMI_K3_RESERVED_CUSTOM_PARAM_KEY_SET.has(key),
+  );
+
+  return {
+    customParams: cleanedEntries.length > 0 ? Object.fromEntries(cleanedEntries) : undefined,
+    migratedMaxTokens,
+    strippedKeys,
+  };
 };

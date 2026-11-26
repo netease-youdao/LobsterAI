@@ -1,4 +1,4 @@
-import { ApiFormat, OpenAIApiMode, ProviderAuthType, resolveProviderOpenAIApiMode } from '../../shared/providers';
+import { ApiFormat, getDefaultOpenAIApiMode, OpenAIApiMode, ProviderAuthType, resolveProviderOpenAIApiMode } from '../../shared/providers';
 import {
   getEffectiveApiFormat,
   type Model,
@@ -165,7 +165,7 @@ export const buildProvidersExport = async (
       enabled: provider.enabled,
       baseUrl: includeSecrets ? baseUrl : configurationUrl(baseUrl),
       apiFormat,
-      ...(openaiApiMode === OpenAIApiMode.Responses ? { openaiApiMode } : {}),
+      ...(openaiApiMode && openaiApiMode !== getDefaultOpenAIApiMode(key) ? { openaiApiMode } : {}),
       codingPlanEnabled: provider.codingPlanEnabled,
       displayName: provider.displayName,
       ...(includeSecrets ? { apiKey: provider.apiKey } : {}),

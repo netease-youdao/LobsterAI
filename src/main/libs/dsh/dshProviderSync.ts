@@ -477,8 +477,9 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
         const contextWindow = isPositiveModelLimit(m.contextWindow)
           ? m.contextWindow
           : profileDef?.contextWindow;
-        const rawMaxTokens = profileDef?.maxTokens
-          ?? (isPositiveModelLimit(m.maxTokens) ? m.maxTokens : undefined);
+        const rawMaxTokens = isPositiveModelLimit(m.maxTokens)
+          ? m.maxTokens
+          : profileDef?.maxTokens;
         const fallbackPlanMaxTokens = isLobsterPlanProvider && rawMaxTokens === undefined
           ? (contextWindow && contextWindow > 0
             ? Math.min(LOBSTERAI_SERVER_DEFAULT_MODEL_MAX_TOKENS, contextWindow)
@@ -488,6 +489,7 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
         const defaultMaxTokens = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
           ? Math.min(
             KIMI_K3_DEFAULT_REQUEST_MAX_TOKENS,
+            ...(maxTokens !== undefined ? [maxTokens] : []),
             contextWindow && contextWindow > 0
               ? Math.max(1, Math.floor(contextWindow / 2))
               : KIMI_K3_DEFAULT_REQUEST_MAX_TOKENS,
@@ -527,9 +529,11 @@ export function buildDshProvidersPayload(options: BuildDshProvidersOptions): {
           modelCompat.supportsReasoningEffort = true;
         }
 
-        const supportsImage = profileDef
-          ? profileDef.input.includes('image')
-          : Boolean(m.supportsImage);
+        const supportsImage = m.supportsImage !== undefined
+          ? Boolean(m.supportsImage)
+          : profileDef
+            ? profileDef.input.includes('image')
+            : false;
 
         const spec: DshHostProviderModelSpec = {
           id: modelId,

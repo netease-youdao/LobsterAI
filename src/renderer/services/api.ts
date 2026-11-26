@@ -111,7 +111,10 @@ class ApiService {
   }
 
   private shouldUseOpenAIResponsesApi(provider: string, config?: ApiConfig): boolean {
-    return provider === 'openai' || config?.openaiApiMode === OpenAIApiMode.Responses;
+    if (provider === 'openai') {
+      return config?.openaiApiMode !== OpenAIApiMode.ChatCompletions;
+    }
+    return config?.openaiApiMode === OpenAIApiMode.Responses;
   }
 
   private buildImageHint(images?: ImageAttachment[]): string {

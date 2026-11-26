@@ -189,6 +189,10 @@ import type {
 } from '../../shared/openclawUserConfig/constants';
 import type { PptAssetRequest, PptCatalog, PptPreparedFile } from '../../shared/pptCreation/constants';
 import type { PptCoverExportRequest,PptCoverRequest } from '../../shared/pptCreation/cover';
+import type {
+  ProviderModelDiscoveryRequest,
+  ProviderModelDiscoveryResult,
+} from '../../shared/providers/modelDiscovery';
 import type { ModelThinkingLevel } from '../../shared/providers/modelThinking';
 import type {
   PublishingQuota,
@@ -952,6 +956,9 @@ interface IElectronAPI {
     getConfig: () => Promise<DecisionModelConfigView>;
     saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;
     testConnection: (draft: DecisionModelConfigUpdate) => Promise<DecisionModelTestResult>;
+  };
+  providerModels: {
+    discover: (request: ProviderModelDiscoveryRequest) => Promise<ProviderModelDiscoveryResult>;
   };
   openclaw: {
     engine: {

@@ -16,12 +16,17 @@ type ModelBridgeHelpers = {
     hasExplicitModelBaseUrl?: boolean,
   ) => string;
   isNativeOpenAIEndpoint: (baseUrl: unknown) => boolean;
+  resolveCatalogModelCompat: (
+    modelApi: string,
+    catalogModel?: unknown,
+  ) => Record<string, unknown> | undefined;
   resolveModelCompat: (
     modelApi: string,
     modelBaseUrl: string,
     providerCompat?: unknown,
     modelCompat?: unknown,
     providerApi?: string,
+    catalogCompat?: unknown,
   ) => Record<string, unknown>;
   resolveCatalogProviderCandidates: (
     providerId: string,
@@ -191,6 +196,51 @@ describe('model-bridge-helpers', () => {
       supportsDeveloperRole: false,
       supportsStore: false,
       maxTokensField: 'max_tokens',
+      supportsUsageInStreaming: false,
+    });
+  });
+
+  test('inherits same-protocol pi-ai catalog compat as lowest-priority base without cross-protocol leakage', async () => {
+    const { resolveCatalogModelCompat, resolveModelCompat } = await loadHelpers();
+
+    const deepseekCatalog = {
+      api: 'openai-completions',
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        maxTokensField: 'max_tokens',
+        requiresReasoningContentOnAssistantMessages: true,
+        thinkingFormat: 'deepseek',
+        supportsStrictMode: true,
+      },
+    };
+    const openaiResponsesCatalog = {
+      api: 'openai-responses',
+      compat: { supportsStore: true },
+    };
+
+    expect(resolveCatalogModelCompat('openai-completions', deepseekCatalog)).toEqual(deepseekCatalog.compat);
+    expect(resolveCatalogModelCompat('anthropic-messages', deepseekCatalog)).toBeUndefined();
+    expect(resolveCatalogModelCompat('openai-completions', openaiResponsesCatalog)).toBeUndefined();
+
+    // Catalog compat supplies provider-native thinkingFormat and reasoning_content replay,
+    // while explicit provider/model compat overrides win cleanly.
+    expect(
+      resolveModelCompat(
+        'openai-completions',
+        'https://api.deepseek.com/v1',
+        undefined,
+        { supportsUsageInStreaming: false, supportsStrictMode: false },
+        'openai-completions',
+        resolveCatalogModelCompat('openai-completions', deepseekCatalog),
+      ),
+    ).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: 'max_tokens',
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: 'deepseek',
+      supportsStrictMode: false,
       supportsUsageInStreaming: false,
     });
   });
