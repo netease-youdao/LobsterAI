@@ -55,10 +55,10 @@ export const QuickActionChip: React.FC<QuickActionChipProps> = ({
     type="button"
     aria-pressed={selected}
     {...buttonProps}
-    className={`group relative flex min-h-[108px] w-full flex-col items-start justify-between rounded-2xl border p-4 text-left transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:scale-[0.98] ${
+    className={`group relative flex min-h-[112px] w-full flex-col items-start justify-between rounded-2xl border px-3.5 py-4 text-left transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 active:translate-y-0 active:scale-[0.98] ${
       selected
         ? 'border-primary/45 bg-primary-muted/60 shadow-subtle ring-1 ring-primary/15'
-        : 'border-border/75 bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.03)] hover:-translate-y-0.5 hover:border-border hover:shadow-[0_6px_18px_rgba(0,0,0,0.06)] dark:hover:bg-surface-raised/60'
+        : 'border-border-input bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.03)] hover:-translate-y-0.5 hover:border-foreground/15 hover:shadow-[0_6px_18px_rgba(0,0,0,0.06)] dark:hover:border-foreground/20 dark:hover:bg-surface-raised/60'
     }${className ? ` ${className}` : ''}`}
   >
     <div className="flex w-full items-start justify-between gap-2">
@@ -72,7 +72,7 @@ export const QuickActionChip: React.FC<QuickActionChipProps> = ({
       )}
       {badge && <span className="shrink-0">{badge}</span>}
     </div>
-    <span className="mt-4 w-full truncate text-[13.5px] font-medium leading-5 text-foreground">
+    <span className="mt-4 line-clamp-2 w-full text-sm font-medium leading-snug text-foreground">
       {label}
     </span>
   </button>
@@ -97,7 +97,7 @@ const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, selectedAction
             key={action.id}
             selected={isSelected}
             onClick={() => onActionSelect(action.id)}
-            icon={IconComponent && <IconComponent className="h-[22px] w-[22px]" />}
+            icon={IconComponent && <IconComponent className="h-6 w-6" />}
             iconAccentClassName={iconAccentMap[action.icon] ?? 'text-secondary'}
             label={action.label}
           />

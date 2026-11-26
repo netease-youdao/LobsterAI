@@ -167,7 +167,6 @@ export function normalizeCompanionPreferences(value: unknown): DesktopCompanionP
     shortcut: typeof stored.shortcut === 'string' ? stored.shortcut : DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut,
     skin: normalizeCompanionSkin(stored.skin),
     selectionToolbar: stored.selectionToolbar !== false,
-    dragAssist: stored.dragAssist !== false,
     contextHints: stored.contextHints !== false,
     selectionToolbarOrder: normalizeCompanionToolbarOrder(stored.selectionToolbarOrder),
     selectionExcludedApps: Array.isArray(stored.selectionExcludedApps)
@@ -484,7 +483,6 @@ export class DesktopCompanionManager {
     if (typeof patch?.shortcut === 'string') next.shortcut = patch.shortcut.trim().slice(0, 100);
     if (typeof patch?.skin === 'string') next.skin = normalizeCompanionSkin(patch.skin);
     if (typeof patch?.selectionToolbar === 'boolean') next.selectionToolbar = patch.selectionToolbar;
-    if (typeof patch?.dragAssist === 'boolean') next.dragAssist = patch.dragAssist;
     if (typeof patch?.contextHints === 'boolean') next.contextHints = patch.contextHints;
     if (Array.isArray(patch?.selectionToolbarOrder)) {
       next.selectionToolbarOrder = normalizeCompanionToolbarOrder(patch.selectionToolbarOrder);
@@ -658,7 +656,7 @@ export class DesktopCompanionManager {
     this.selection.sync();
     if (present || this.selection.capability === CompanionCapability.Ready) this.foreground.start();
     else this.foreground.stop();
-    if (present && this.preferences.dragAssist && !this.snooze) this.fileDrag.start();
+    if (present && !this.snooze) this.fileDrag.start();
     else {
       this.fileDrag.stop();
       this.dragProximity.stop();
@@ -1307,7 +1305,7 @@ export class DesktopCompanionManager {
   };
 
   private onGlobalDragStart = (event: FileDragStart): void => {
-    if (!this.isPresent() || !this.preferences.dragAssist || this.snooze || this.capturing) return;
+    if (!this.isPresent() || this.snooze || this.capturing) return;
     const files = describeDraggedPaths(event.paths);
     // macOS tells us what is being dragged; ignore apps, archives and other non-documents.
     if (files.length && !files.some(file => isCompanionDocumentKind(file.kind) || file.kind === FileKind.Folder)) return;
@@ -1328,7 +1326,7 @@ export class DesktopCompanionManager {
   };
 
   private onOrbFileDrag(phase: DesktopCompanionFileDragPhase, kinds: CompanionFileKind[]): void {
-    if (!this.isPresent() || !this.preferences.dragAssist || this.snooze || this.capturing) return;
+    if (!this.isPresent() || this.snooze || this.capturing) return;
     if (phase === DesktopCompanionFileDragPhase.Enter) {
       const known = Array.isArray(kinds) ? kinds.filter(kind => Object.values(FileKind).includes(kind)).slice(0, 8) : [];
       this.stage.showDrop(DesktopCompanionDropSource.Orb, this.draggedFiles, known);

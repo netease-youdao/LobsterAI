@@ -14,7 +14,9 @@ import {
 
 export const DSH_PERMISSION_PRESET_CHANGED_EVENT = 'dsh:permissionPresetChanged';
 export const DSH_PLUGINS_CHANGED_EVENT = 'dsh:pluginsChanged';
+export const DSH_PLUGIN_ORDER_CHANGED_EVENT = 'dsh:pluginOrderChanged';
 export const DSH_OPEN_EMBEDDED_PLUGIN_EVENT = 'dsh:openEmbeddedPlugin';
+export const DSH_PLUGIN_ORDER_STORAGE_KEY = 'dsh.plugins.displayOrder';
 
 export interface DshEmbeddedPluginTarget {
   name: string;
@@ -25,6 +27,55 @@ export interface DshEmbeddedPluginTarget {
 
 export interface DshPluginsChangedDetail {
   plugins?: DshPluginEntry[];
+}
+
+export interface DshPluginOrderChangedDetail {
+  order: string[];
+}
+
+export function sanitizeDshPluginOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+export function dispatchDshPluginOrderChanged(order: readonly string[]): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+    return;
+  }
+  const detail: DshPluginOrderChangedDetail = {
+    order: sanitizeDshPluginOrder(order),
+  };
+  window.dispatchEvent(new CustomEvent(DSH_PLUGIN_ORDER_CHANGED_EVENT, { detail }));
+}
+
+export async function loadDshPluginOrder(): Promise<string[]> {
+  try {
+    const raw = await window.electron?.store?.get?.(DSH_PLUGIN_ORDER_STORAGE_KEY);
+    return sanitizeDshPluginOrder(raw);
+  } catch (error) {
+    console.warn('[dshHost] failed to load plugin display order:', error);
+    return [];
+  }
+}
+
+export async function saveDshPluginOrder(order: readonly string[]): Promise<string[]> {
+  const normalized = sanitizeDshPluginOrder(order);
+  dispatchDshPluginOrderChanged(normalized);
+  try {
+    await window.electron?.store?.set?.(DSH_PLUGIN_ORDER_STORAGE_KEY, normalized);
+  } catch (error) {
+    console.warn('[dshHost] failed to save plugin display order:', error);
+  }
+  return normalized;
 }
 
 export function dispatchDshPluginsChanged(plugins?: DshPluginEntry[]): void {

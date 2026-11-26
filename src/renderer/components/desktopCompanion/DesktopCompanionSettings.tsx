@@ -14,7 +14,7 @@ import LobsterMark from './mascot/LobsterMark';
 import SelectionToolbarSettings from './SelectionToolbarSettings';
 import { useDesktopCompanionState } from './useDesktopCompanionState';
 
-type ToggleKey = 'enabled' | 'selectionToolbar' | 'dragAssist' | 'contextHints';
+type ToggleKey = 'enabled' | 'selectionToolbar' | 'contextHints';
 
 function SkinPreview({ skin }: { skin: CompanionSkin }) {
   if (skin.kind === CompanionSkinKind.Brand || !skin.asset) return <LobsterMark size={32} />;
@@ -143,11 +143,6 @@ export default function DesktopCompanionSettings() {
               <ChevronRightIcon className="h-4 w-4 shrink-0 text-secondary" />
             </button>
           </>
-        ))}
-        {toggle('dragAssist', 'desktopCompanionDragAssist', 'desktopCompanionDragAssistDescription', (
-          state?.capabilities.globalDrag === CompanionCapability.Unsupported && preferences?.dragAssist
-            ? <p className="mt-1.5 text-xs text-secondary">{t('desktopCompanionDragAssistLimited')}</p>
-            : null
         ))}
         {toggle('contextHints', 'desktopCompanionHints', 'desktopCompanionHintsDescription')}
       </SettingsGroup>

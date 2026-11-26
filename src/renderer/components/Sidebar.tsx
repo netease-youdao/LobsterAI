@@ -9,11 +9,14 @@ import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
 import {
   dispatchDshPluginsChanged,
+  DSH_PLUGIN_ORDER_CHANGED_EVENT,
   DSH_PLUGINS_CHANGED_EVENT,
   type DshEmbeddedPluginTarget,
   dshHostService,
   type DshPluginEntry,
+  type DshPluginOrderChangedDetail,
   type DshPluginsChangedDetail,
+  loadDshPluginOrder,
 } from '../services/dshHost';
 import { i18nService } from '../services/i18n';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
@@ -46,7 +49,12 @@ import {
   CoworkUiEvent,
 } from './cowork/constants';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
-import { getSidebarPluginPanels } from './dsh/pluginViewModel';
+import {
+  getSidebarPluginPanels,
+  partitionSidebarPluginPanels,
+  type SidebarPluginPanelItem,
+  sortPluginsByDisplayOrder,
+} from './dsh/pluginViewModel';
 import Cog6ToothIcon from './icons/Cog6ToothIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarAutomationIcon from './icons/SidebarAutomationIcon';
@@ -58,6 +66,7 @@ import LoginButton from './LoginButton';
 import LowCreditPurchaseOfferCard from './LowCreditPurchaseOfferCard';
 import SidebarCapabilitiesMenu from './SidebarCapabilitiesMenu';
 import SidebarExperienceSlot from './SidebarExperienceSlot';
+import SidebarPluginOverflowMenu from './SidebarPluginOverflowMenu';
 import Tooltip, { TooltipAlign, TooltipPosition } from './ui/Tooltip';
 import { useSidebarPurchaseGuide } from './useSidebarPurchaseGuide';
 import { useIsWindowFullscreen } from './window/useIsWindowFullscreen';
@@ -240,6 +249,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [showExpertsNewBadge, setShowExpertsNewBadge] = useState(false);
   const [showLoginPromoTip, setShowLoginPromoTip] = useState(true);
   const [installedDshPlugins, setInstalledDshPlugins] = useState<DshPluginEntry[]>([]);
+  const [dshPluginOrder, setDshPluginOrder] = useState<string[]>([]);
   const isResizingRef = useRef(false);
   const resizeStartXRef = useRef(0);
   const resizeStartWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
@@ -350,6 +360,13 @@ const Sidebar: React.FC<SidebarProps> = ({
       }
     };
 
+    const handlePluginOrderChanged = (event: Event) => {
+      const detail = (event as CustomEvent<DshPluginOrderChangedDetail>).detail;
+      if (detail?.order) {
+        setDshPluginOrder(detail.order);
+      }
+    };
+
     const unsubscribeHostPluginsChanged = dshHostService.onPluginsChanged(() => {
       if (externalRefreshTimer !== null) clearTimeout(externalRefreshTimer);
       externalRefreshTimer = setTimeout(() => {
@@ -361,21 +378,44 @@ const Sidebar: React.FC<SidebarProps> = ({
     });
 
     void loadPlugins();
+    void loadDshPluginOrder().then((order) => {
+      if (active) setDshPluginOrder(order);
+    });
     window.addEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
+    window.addEventListener(DSH_PLUGIN_ORDER_CHANGED_EVENT, handlePluginOrderChanged);
     return () => {
       active = false;
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (externalRefreshTimer !== null) clearTimeout(externalRefreshTimer);
       unsubscribeHostPluginsChanged();
       window.removeEventListener(DSH_PLUGINS_CHANGED_EVENT, handlePluginsChanged);
+      window.removeEventListener(DSH_PLUGIN_ORDER_CHANGED_EVENT, handlePluginOrderChanged);
     };
   }, []);
 
   const sidebarLanguage: 'zh' | 'en' = i18nService.getLanguage() === 'en' ? 'en' : 'zh';
-  const sidebarPluginPanels = useMemo(
-    () => getSidebarPluginPanels(installedDshPlugins, sidebarLanguage, (key) => i18nService.t(key)),
-    [installedDshPlugins, sidebarLanguage],
+  const orderedDshPlugins = useMemo(
+    () => sortPluginsByDisplayOrder(installedDshPlugins, dshPluginOrder),
+    [installedDshPlugins, dshPluginOrder],
   );
+  const sidebarPluginPanels = useMemo(
+    () => getSidebarPluginPanels(orderedDshPlugins, sidebarLanguage, (key) => i18nService.t(key)),
+    [orderedDshPlugins, sidebarLanguage],
+  );
+  const { visiblePanels: visiblePluginPanels, overflowPanels: overflowPluginPanels } = useMemo(
+    () => partitionSidebarPluginPanels(sidebarPluginPanels),
+    [sidebarPluginPanels],
+  );
+  const handleSelectPluginPanel = useCallback((panel: SidebarPluginPanelItem) => {
+    reportSidebarAction('open_plugin_panel', { activeView, isCollapsed });
+    setIsSearchOpen(false);
+    onSelectPluginPanel?.({
+      name: panel.name,
+      panelId: panel.panelId,
+      title: panel.title,
+      ...(panel.icon ? { icon: panel.icon } : {}),
+    });
+  }, [activeView, isCollapsed, onSelectPluginPanel]);
 
   useEffect(() => {
     if (!showLoginPromo) {
@@ -849,7 +889,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             />
             <span className="min-w-0 truncate">{i18nService.t('librarySidebarTitle')}</span>
           </button>
-          {sidebarPluginPanels.map((panel) => {
+          {visiblePluginPanels.map((panel) => {
             const isPanelActive =
               activeView === MainView.PluginPanel && activePluginPanelId === panel.panelId;
             return (
@@ -857,16 +897,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 key={panel.panelId}
                 type="button"
                 title={panel.title}
-                onClick={() => {
-                  reportSidebarAction('open_plugin_panel', { activeView, isCollapsed });
-                  setIsSearchOpen(false);
-                  onSelectPluginPanel?.({
-                    name: panel.name,
-                    panelId: panel.panelId,
-                    title: panel.title,
-                    ...(panel.icon ? { icon: panel.icon } : {}),
-                  });
-                }}
+                onClick={() => handleSelectPluginPanel(panel)}
                 className={isPanelActive ? activeSidebarNavItemClassName : sidebarNavItemClassName}
                 aria-current={isPanelActive ? 'page' : undefined}
               >
@@ -885,6 +916,19 @@ const Sidebar: React.FC<SidebarProps> = ({
               </button>
             );
           })}
+          {overflowPluginPanels.length > 0 && (
+            <SidebarPluginOverflowMenu
+              panels={overflowPluginPanels}
+              activeView={activeView}
+              activePluginPanelId={activePluginPanelId}
+              isCollapsed={isCollapsed}
+              className={sidebarNavItemClassName}
+              activeClassName={activeSidebarNavItemClassName}
+              iconClassName={sidebarNavIconClassName}
+              activeIconClassName={activeSidebarNavIconClassName}
+              onSelect={handleSelectPluginPanel}
+            />
+          )}
         </div>
       </div>
       <div className="mx-3 shrink-0 border-t border-border" role="separator" />

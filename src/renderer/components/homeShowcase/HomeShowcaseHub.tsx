@@ -57,7 +57,7 @@ import { ShowcaseCardThumbnail } from './ShowcasePreviewCard';
 interface PrimaryCardMeta {
   id: HomeShowcasePrimaryEntryId;
   titleKey: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number | string }>;
   iconAccent: string;
 }
 
@@ -371,7 +371,7 @@ const HomeShowcaseHub: React.FC<HomeShowcaseHubProps> = ({
             }`}
           >
             <ShowcaseCardThumbnail example={example} />
-            <p className="mt-2 truncate px-0.5 text-[13px] font-medium leading-5 text-foreground">
+            <p className="mt-2 truncate px-0.5 text-xs font-medium leading-5 text-foreground">
               {example.title[language]}
             </p>
           </button>
@@ -399,7 +399,7 @@ const HomeShowcaseHub: React.FC<HomeShowcaseHubProps> = ({
                 data-home-category-card={entryId}
                 data-image-creation-tab={entryId === HomeShowcaseCategoryId.ImageCreation ? ImageCreation.TabId : undefined}
                 onClick={() => handleCardClick(entryId)}
-                icon={<Icon className="h-[22px] w-[22px]" />}
+                icon={<Icon className="h-6 w-6" strokeWidth={1.75} />}
                 iconAccentClassName={meta.iconAccent}
                 label={t(meta.titleKey)}
               />

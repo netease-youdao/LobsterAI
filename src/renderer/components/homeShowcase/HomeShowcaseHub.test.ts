@@ -107,6 +107,12 @@ describe('HomeShowcaseHub single-row Manus layout & cover image gallery', () => 
     expect(html).toContain('创建网站');
     expect(html).toContain('图像创作');
     expect(html).toContain('探索更多');
+    // Primary cards use scalable text-sm typography, 24px icons, and crisp input-level borders.
+    expect(html).toContain('min-h-[112px]');
+    expect(html).toContain('border-border-input');
+    expect(html).toContain('line-clamp-2 w-full text-sm font-medium leading-snug text-foreground');
+    expect(html).toContain('h-6 w-6');
+    expect(html).not.toContain('text-[13.5px]');
     // Slides and Docs are housed inside Explore More, not in the primary 5-card row.
     expect(html).not.toContain('data-home-category-card="pptx"');
     expect(html).not.toContain('data-home-category-card="doc-writing"');
@@ -127,6 +133,8 @@ describe('HomeShowcaseHub single-row Manus layout & cover image gallery', () => 
     expect(html).toContain('data-showcase-example="data-personal-bill"');
     expect(html).toContain('<img ');
     expect(html).toContain('data-personal-bill.jpg');
+    expect(html).toContain('text-xs font-medium leading-5 text-foreground');
+    expect(html).not.toContain('text-[13px]');
   });
 
   test('renders multi-category Explore More discovery bar featuring Slides and Document Writing', () => {
@@ -209,7 +217,7 @@ describe('HomeShowcaseHub single-row Manus layout & cover image gallery', () => 
       expect(html).toContain('data-ppt-example="quarterly-report"');
       expect(html).toContain('aspect-[16/10]');
       expect(html).toContain('gap-x-4 gap-y-5');
-      expect(html).toContain('text-[13px] font-medium leading-5 text-foreground');
+      expect(html).toContain('text-xs font-medium leading-5 text-foreground');
       // Embedded PPT gallery must not render standalone heading/intro/browse-all/collapse chrome or white card frames.
       expect(html).not.toContain('从一份好演示开始');
       expect(html).not.toContain('查看全部示例');

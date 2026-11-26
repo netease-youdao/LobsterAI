@@ -62,7 +62,7 @@ export type CompanionAnalyticsOutcome = typeof CompanionAnalyticsOutcome[keyof t
 export const CompanionAnalyticsTool = { ...CompanionSelectionAction, ...LanguageTool, Screenshot: 'screenshot' } as const;
 export const CompanionAnalyticsSetting = {
   Enabled: 'enabled', Shortcut: 'shortcut', Skin: 'skin', SelectionToolbar: 'selectionToolbar',
-  DragAssist: 'dragAssist', ContextHints: 'contextHints', ExcludedApps: 'selectionExcludedApps',
+  ContextHints: 'contextHints', ExcludedApps: 'selectionExcludedApps',
   ToolbarOrder: 'selectionToolbarOrder',
 } as const;
 export const CompanionAnalyticsReason = {

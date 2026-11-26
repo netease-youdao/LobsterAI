@@ -5091,8 +5091,8 @@ const Settings: React.FC<SettingsProps> = ({
                 onClick={() => handleTabChange(tab.key)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg ${SETTINGS_NAV_TEXT} font-medium transition-colors text-left ${
                   activeTab === tab.key
-                    ? 'bg-surface text-foreground shadow-subtle dark:bg-white/[0.08] dark:shadow-none'
-                    : 'text-secondary hover:text-foreground hover:bg-black/[0.04] dark:hover:bg-white/[0.05]'
+                    ? 'bg-[var(--lobster-sidebar-item-hover)] text-foreground'
+                    : 'text-secondary hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground'
                 }`}
               >
                 <span className="shrink-0">{tab.icon}</span>

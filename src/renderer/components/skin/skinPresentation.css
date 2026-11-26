@@ -47,6 +47,10 @@
   --lobster-scroll-thumb-hover: var(--lobster-skin-accent);
 }
 
+[data-skin-presentation="immersive_shell"][data-skin-settings="true"] {
+  --lobster-sidebar-item-hover: color-mix(in srgb, var(--lobster-skin-accent) 10%, transparent);
+}
+
 [data-skin-presentation="immersive_shell"][data-skin-task-search="true"] {
   background-color: var(--lobster-skin-panel) !important;
 }

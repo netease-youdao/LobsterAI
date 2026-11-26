@@ -91,7 +91,7 @@ export default function CompanionOrb({ state }: { state: DesktopCompanionState }
 
   const label = i18nService.t(state.result.visible ? 'desktopCompanionCloseResults'
     : state.panelVisible ? 'desktopCompanionClosePanel' : companionMoodLabelKey(mood));
-  const canDrop = state.preferences.enabled && state.preferences.dragAssist && !state.snooze;
+  const canDrop = state.preferences.enabled && !state.snooze;
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;

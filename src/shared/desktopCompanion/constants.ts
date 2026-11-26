@@ -133,7 +133,6 @@ export interface DesktopCompanionPreferences {
   shortcut: string;
   skin: string;
   selectionToolbar: boolean;
-  dragAssist: boolean;
   contextHints: boolean;
   selectionExcludedApps: string[];
   selectionToolbarOrder: CompanionToolbarItem[];
@@ -389,7 +388,6 @@ export const DEFAULT_DESKTOP_COMPANION_PREFERENCES: DesktopCompanionPreferences 
   shortcut: 'Alt+Space',
   skin: DEFAULT_COMPANION_SKIN,
   selectionToolbar: true,
-  dragAssist: true,
   contextHints: true,
   selectionExcludedApps: [],
   selectionToolbarOrder: [...DEFAULT_COMPANION_TOOLBAR_ORDER],
