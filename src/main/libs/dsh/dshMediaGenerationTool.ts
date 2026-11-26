@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { UsageStage } from '../../../shared/analytics/usage';
 import { buildManagedSessionKey } from '../../../shared/cowork/managedSessionKey';
-import { MediaDeliveryStatus, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
+import { ImageProcessingOperation, LOBSTERAI_WATERMARK_TARGET, MediaDeliveryStatus, MediaTaskStatus, REMOVE_WATERMARK_OPERATION, TERMINAL_MEDIA_TASK_STATUSES } from '../../../shared/media/constants';
 import { MediaPreferenceMode, type MediaSelection, MediaSelectionMode } from '../../../shared/media/defaultPolicy';
 import { SkinToolName, SkinWorkflowKind } from '../../../shared/skin/constants';
 import { t } from '../../i18n';
@@ -35,7 +35,8 @@ const imageTool: DshHostToolDescriptor = {
       action: { type: 'string', enum: imageActions, description: 'Defaults to generate.' },
       prompt: { type: 'string', description: 'Describe the requested image or edit.' },
       model: { type: 'string', description: 'The selected image model ID.' },
-      imageOperation: { type: 'string', enum: ['remove_watermark'], description: 'Only for an explicit request to remove the LobsterAI watermark from one existing image.' },
+      imageOperation: { type: 'string', enum: [...Object.values(ImageProcessingOperation), REMOVE_WATERMARK_OPERATION], description: 'Process one existing image. Pick one operation. For erase, identify the target in the prompt. Matting returns a transparent PNG. remove_watermark is the legacy LobsterAI watermark edit.' },
+      eraseTarget: { type: 'string', enum: [LOBSTERAI_WATERMARK_TARGET], description: 'With erase only, set this when the user specifically asks to remove the LobsterAI watermark.' },
       image: { type: 'string', description: 'Reference image file path or URL.' },
       images: { type: 'array', items: { type: 'string' }, description: 'Reference image file paths or URLs.' },
       size: { type: 'string' },

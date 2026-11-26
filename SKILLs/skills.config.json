@@ -7,7 +7,7 @@
     "xlsx": { "order": 20, "enabled": true },
     "pptx": { "order": 30, "enabled": true },
     "pdf": { "order": 40, "enabled": true },
-    "image-watermark-removal": { "order": 45, "enabled": true },
+    "lobsterai-image-processing": { "order": 45, "enabled": true },
     "remotion": { "order": 50, "enabled": true },
     "frontend-design": { "order": 100, "enabled": true },
     "stock-analyzer": { "order": 110, "enabled": true },

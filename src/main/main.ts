@@ -196,7 +196,7 @@ import {
 import { LogIpc } from '../shared/logExport/constants';
 import { McpAuthMode } from '../shared/mcp/auth';
 import { ConfirmationBehavior, type MediaConfirmationCommand, MediaConfirmationGrant, MediaConfirmationKind, MediaConfirmationReason } from '../shared/media/confirmation';
-import { MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
+import { ImageProcessingOperation, LOBSTERAI_WATERMARK_TARGET, MEDIA_V2_TASKS_PATH, MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus, REMOVE_WATERMARK_OPERATION, TERMINAL_MEDIA_TASK_STATUSES } from '../shared/media/constants';
 import { type MediaPreference, MediaType } from '../shared/media/defaultPolicy';
 import { MediaDefaultsProtocol } from '../shared/media/defaultPolicy';
 import { mediaServerFailureFields } from '../shared/media/usage';
@@ -6043,9 +6043,10 @@ if (!gotTheLock) {
         });
         console.log(`[MediaGeneration] server returned ${models.length} ${mediaType} models.`);
         let text = models.length > 0
-          ? `Available ${mediaType} models:\n\n${(models as Array<{ modelId: string; displayName: string; capabilities?: string; parameterSpec?: Record<string, unknown> }>).map(m => {
+          ? `Available ${mediaType} models:\n\n${(models as Array<{ modelId: string; displayName: string; capabilities?: string; supportedImageOperations?: string[]; parameterSpec?: Record<string, unknown> }>).map(m => {
               let line = `### ${m.displayName} (model: "${m.modelId}")`;
               if (m.capabilities) line += `\n${m.capabilities}`;
+              if (m.supportedImageOperations?.length) line += `\nImage operations: ${m.supportedImageOperations.join(', ')}`;
               if (m.parameterSpec) line += `\nSupported parameters:\n${JSON.stringify(m.parameterSpec, null, 2)}`;
               return line;
             }).join('\n\n')}`
@@ -6265,16 +6266,24 @@ if (!gotTheLock) {
       // action === 'generate'
       const mediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
       const modelResponse = await fetchWithAuth(`${serverBaseUrl}/api/media/${mediaType === 'image' ? 'images' : 'videos'}/models`, { signal: AbortSignal.timeout(15_000) });
-      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; supportsWatermarkRemoval?: boolean; pricingDescription?: string; capabilities?: string; parameterSpec?: Record<string, unknown>; pricing?: Record<string, unknown> }> };
+      const modelBody = await modelResponse.json() as { code: number; data?: Array<{ modelId: string; protocolVersions?: number[]; supportsWatermarkRemoval?: boolean; supportedImageOperations?: string[]; pricingDescription?: string; capabilities?: string; parameterSpec?: Record<string, unknown>; pricing?: Record<string, unknown> }> };
       if (modelBody.code !== 0 || !isRequestAccountCurrent()) return staleAccountResult();
       const modelCapability = modelBody.data?.find(model => canonicalizeMediaModelId(model.modelId) === canonicalizeMediaModelId(selectedModel));
       if (!modelCapability) {
         return { content: [{ type: 'text', text: t('mediaSelectedModelUnavailable') }], isError: true,
           details: { status: 'failed', warnings: [MediaGenerationGateReason.ModelUnavailable] } };
       }
-      const removeWatermark = mediaType === 'image' && args.imageOperation === 'remove_watermark';
-      if (removeWatermark && modelCapability.supportsWatermarkRemoval !== true) {
-        return { content: [{ type: 'text', text: t('mediaWatermarkRemovalUnavailable') }], isError: true };
+      let imageOperation = mediaType === 'image' && typeof args.imageOperation === 'string' ? args.imageOperation : undefined;
+      if (imageOperation === ImageProcessingOperation.Erase && args.eraseTarget === LOBSTERAI_WATERMARK_TARGET) {
+        imageOperation = REMOVE_WATERMARK_OPERATION;
+      }
+      if (imageOperation) {
+        const supported = imageOperation === REMOVE_WATERMARK_OPERATION ? modelCapability.supportsWatermarkRemoval
+          : modelCapability.supportedImageOperations?.includes(imageOperation);
+        if (!supported) return { content: [{ type: 'text', text: t('mediaImageProcessingUnavailable') }], isError: true };
+        if (imageOperation === ImageProcessingOperation.Erase && !prompt.trim()) {
+          return { content: [{ type: 'text', text: t('mediaImageEraseTargetRequired') }], isError: true };
+        }
       }
       const useDurableTasks = modelCapability.protocolVersions?.includes(MediaProtocol.Durable) === true;
       const endpoint = useDurableTasks ? MEDIA_V2_TASKS_PATH
@@ -6335,7 +6344,7 @@ if (!gotTheLock) {
       const automaticDefault = mediaType === MediaType.Image ? selection?.imageDefault : selection?.videoDefault;
       params = applyMediaDefaultParameters(params, automaticDefault, mediaType);
       const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
-      const imageEditId = mediaType === MediaType.Image && !removeWatermark ? refs?.find(ref => ref.imageEdit)?.imageEdit?.id : undefined;
+      const imageEditId = mediaType === MediaType.Image && !imageOperation ? refs?.find(ref => ref.imageEdit)?.imageEdit?.id : undefined;
       const imageEdit = imageEditId && sessionId ? imageEditing.resolve(sessionId, imageEditId) : undefined;
       const editGeneration = imageEdit ? imageEditing.generation(imageEdit, modelCapability ?? {}, prompt) : undefined;
       params = applyMediaReferencesToGenerationParams({
@@ -6344,12 +6353,12 @@ if (!gotTheLock) {
           : MediaGenerationRequestType.Image,
         params,
         refs,
-        preferExplicitImageInputs: removeWatermark || (Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId)),
+        preferExplicitImageInputs: Boolean(imageOperation) || (Boolean(refs?.length) && skinRuntime.isSkinWorkflow(sessionId)),
       });
       if (editGeneration) params = editGeneration.params;
-      if (removeWatermark) {
+      if (imageOperation) {
         if (!Array.isArray(params.images) || params.images.length !== 1) {
-          return { content: [{ type: 'text', text: t('mediaWatermarkRemovalSource') }], isError: true };
+          return { content: [{ type: 'text', text: t('mediaImageProcessingSource') }], isError: true };
         }
         params.n = 1;
         delete params.count;
@@ -6480,7 +6489,7 @@ if (!gotTheLock) {
       const agent = agentId ? getCoworkStore().getAgent(agentId) : undefined;
       const generateReq = {
         ...(agent?.source === AgentSource.Preset && agent.presetId ? { expertPresetId: agent.presetId } : {}),
-        ...(removeWatermark ? { imageOperation: 'remove_watermark' } : {}),
+        ...(imageOperation ? { imageOperation } : {}),
         usageContext,
         model: selectedModel,
         type: mediaType === 'video'
