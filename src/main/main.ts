@@ -329,6 +329,7 @@ import { registerAuthGateHandlers } from './ipcHandlers/authGate';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
 import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
+import { registerCoworkSideChatHandlers, wireCoworkSideChatEvents } from './ipcHandlers/coworkSideChat';
 import { registerCoworkSubagentHandlers } from './ipcHandlers/coworkSubagent';
 import {
   createRestoreProgressWindowController,
@@ -2240,7 +2241,7 @@ process.on('exit', code => {
 let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let resolveVirtualModelPresetForSession:
-  | ((sessionId: string, presetId: ModelPresetId) => Promise<string | null>)
+  | ((sessionId: string, presetId: ModelPresetId, persistOnSession?: boolean) => Promise<string | null>)
   | null = null;
 let resolveVirtualModelPresetForSync:
   | ((presetId: ModelPresetId) => Promise<string | null>)
@@ -2433,6 +2434,7 @@ const getDshBootstrap = (): DshBootstrap => {
           storeInstance.updateSession(sessionId, updates);
         },
         getContinuityCapsule: sessionId => storeInstance.getContinuityCapsule(sessionId),
+        forkSession: options => storeInstance.forkSession(options),
         createSession: (
           title,
           cwd,
@@ -2495,7 +2497,11 @@ const getDshBootstrap = (): DshBootstrap => {
             effectivePresetId = presetId;
             if (resolveVirtualModelPresetForSession) {
               try {
-                const resolvedModelId = await resolveVirtualModelPresetForSession(sessionId, presetId);
+                const resolvedModelId = await resolveVirtualModelPresetForSession(
+                  sessionId,
+                  presetId,
+                  !override?.trim(),
+                );
                 if (resolvedModelId) {
                   selection = { provider: OpenClawProviderId.LobsteraiServer, model: resolvedModelId };
                 }
@@ -2556,6 +2562,9 @@ const getDshBootstrap = (): DshBootstrap => {
       onStatusChange: (compatStatus) => {
         forwardOpenClawStatus(compatStatus);
       },
+      onSideChatTurnFinished: (event) => {
+        settleSideChatTurnUsage(event);
+      },
     });
     dshBootstrap.hostManager.on('connectionChange', () => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2572,6 +2581,7 @@ const getDshBootstrap = (): DshBootstrap => {
         if (!win.isDestroyed()) win.webContents.send(DshHostIpc.PluginsChanged, change);
       }
     });
+    wireCoworkSideChatEvents(dshBootstrap.sideChatManager);
   }
   return dshBootstrap;
 };
@@ -2779,10 +2789,30 @@ const bootstrapOpenClawEngine = async (
 
 let waitForPendingTokenRefresh: () => Promise<void> = async () => {};
 let coworkTurnUsageService: CoworkTurnUsageService | null = null;
+let sideChatTurnUsageService: CoworkTurnUsageService | null = null;
 
 const settleCoworkTurnUsage = (sessionId: string, nativeRuns?: NativeTurnRuns): void => {
   void coworkTurnUsageService?.settleLatestTurn(sessionId, nativeRuns).catch((error) => {
     console.warn(`[TurnUsage] settlement failed for session ${sessionId}.`, error);
+  });
+};
+
+const settleSideChatTurnUsage = (event: {
+  sideChatId: string;
+  userMessageId: string;
+  traceId: string;
+  stopped: boolean;
+}): void => {
+  if (!sideChatTurnUsageService) return;
+  const settlement = event.stopped
+    ? sideChatTurnUsageService.settleStoppedTurn(event.sideChatId, {
+        userMessageId: event.userMessageId,
+        traceId: event.traceId,
+        runIds: [],
+      })
+    : sideChatTurnUsageService.settleLatestTurn(event.sideChatId);
+  void settlement.catch((error) => {
+    console.warn(`[TurnUsage] side-chat settlement failed for ${event.sideChatId}.`, error);
   });
 };
 
@@ -5512,6 +5542,38 @@ if (!gotTheLock) {
     },
   });
 
+  sideChatTurnUsageService = new CoworkTurnUsageService({
+    getStore: () => {
+      const scStore = getDshBootstrap().sideChatStore;
+      return {
+        getMessage: (sideChatId, messageId) => scStore.getMessage(sideChatId, messageId) as CoworkMessage | null,
+        getLatestUserMessage: (sideChatId) => scStore.getLatestUserMessage(sideChatId) as CoworkMessage | null,
+        findUserMessageByTrace: (traceId, sideChatId) => {
+          const found = scStore.findUserMessageByTrace(traceId, sideChatId);
+          return found ? { sessionId: found.sideChatId, message: found.message as CoworkMessage } : null;
+        },
+        getRecentConversationMessages: (sideChatId, limit) => (
+          scStore.getRecentConversationMessages(sideChatId, limit) as CoworkMessage[]
+        ),
+        updateMessage: (sideChatId, messageId, updates) => {
+          if (updates.metadata) {
+            scStore.updateMessageMetadata(sideChatId, messageId, updates.metadata as Record<string, unknown>);
+          }
+        },
+      };
+    },
+    fetchWithAuth,
+    hasAuthTokens: () => Boolean(getAuthTokens()?.accessToken),
+    getSessionKey: getAuthSessionKey,
+    isTurnActive: (sideChatId, messageId) => Boolean(dshBootstrap?.sideChatManager.isSideChatActive(sideChatId))
+      && dshBootstrap?.sideChatStore.getLatestUserMessage(sideChatId)?.id === messageId,
+    buildServerUrl: pathWithQuery => appendKeyfromQuery(`${getServerApiBaseUrl()}${pathWithQuery}`),
+    getTraceStats: getModelAuthProxyTraceStats,
+    emitTurnUsage: (event) => {
+      dshBootstrap?.sideChatManager.emitTurnUsageUpdate(event.sessionId, event.messageId, event.turnUsage);
+    },
+  });
+
   const modelPresetClient = createModelPresetClient({
     fetchWithAuth,
     serverBaseUrl: getServerApiBaseUrl,
@@ -5524,21 +5586,27 @@ if (!gotTheLock) {
     },
   });
 
-  resolveVirtualModelPresetForSession = async (sessionId, presetId) => {
-    const resolved = await modelPresetClient.resolve(sessionId, presetId, false);
+  resolveVirtualModelPresetForSession = async (sessionId, presetId, persistOnSession = true) => {
+    const resolved = await modelPresetClient.resolve(
+      persistOnSession ? sessionId : `${sessionId}:override`,
+      presetId,
+      false,
+    );
     const modelId = resolved.modelId?.trim();
     if (!modelId || parseModelPresetModelId(modelId)) {
       return null;
     }
-    const modelRef = `${OpenClawProviderId.LobsteraiServer}/${modelId}`;
-    try {
-      getCoworkStore().updateSession(
-        sessionId,
-        { modelPresetId: presetId, modelOverride: modelRef },
-        { touchUpdatedAt: false },
-      );
-    } catch {
-      // Non-fatal when session is not persisted in cowork_sessions.
+    if (persistOnSession) {
+      const modelRef = `${OpenClawProviderId.LobsteraiServer}/${modelId}`;
+      try {
+        getCoworkStore().updateSession(
+          sessionId,
+          { modelPresetId: presetId, modelOverride: modelRef },
+          { touchUpdatedAt: false },
+        );
+      } catch {
+        // Non-fatal when session is not persisted in cowork_sessions.
+      }
     }
     return modelId;
   };
@@ -10638,8 +10706,18 @@ if (!gotTheLock) {
     async (_event, options: { sessionId?: unknown; messageId?: unknown } | undefined) => {
       const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : '';
       const messageId = typeof options?.messageId === 'string' ? options.messageId.trim() : '';
-      if (!sessionId || !messageId || !coworkTurnUsageService) return null;
-      return coworkTurnUsageService.refresh(sessionId, messageId);
+      if (!sessionId || !messageId) return null;
+      if (coworkTurnUsageService) {
+        const mainResult = await coworkTurnUsageService.refresh(sessionId, messageId);
+        if (mainResult) return mainResult;
+      }
+      if (sideChatTurnUsageService && dshBootstrap) {
+        const sideChatMsg = dshBootstrap.sideChatStore.findMessageById(messageId);
+        if (sideChatMsg) {
+          return sideChatTurnUsageService.refresh(sideChatMsg.sideChatId, messageId);
+        }
+      }
+      return null;
     },
   );
 
@@ -11418,6 +11496,31 @@ if (!gotTheLock) {
 
   registerCoworkSubagentHandlers({
     getSubagentSessions: () => getDshBootstrap().subagentSessions,
+  });
+
+  // ── Side Chat IPC ──────────────────────────────────────────────────────
+
+  registerCoworkSideChatHandlers({
+    getSideChatManager: () => getDshBootstrap().sideChatManager,
+    ensureEngineReady: async (parentSessionId: string) => {
+      const engineStatus = await ensureOpenClawRunningForCowork({
+        taskModelRef: resolveCoworkTurnModelRef({ sessionId: parentSessionId }),
+      });
+      if (engineStatus.phase !== 'running') {
+        return {
+          ready: false,
+          error: getEngineNotReadyResponse(engineStatus).error,
+        };
+      }
+      return { ready: true };
+    },
+    onSessionsChanged: (sessionIds: string[]) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(CoworkIpcChannel.SessionsChanged, { sessionIds });
+        }
+      }
+    },
   });
 
   ipcMain.handle(CoworkIpcChannel.CancelMediaTask, async (_event, taskId: string) => {
@@ -15347,6 +15450,9 @@ if (!gotTheLock) {
         onRequestFinished: origin => {
           void coworkTurnUsageService?.refreshExactTrace(origin).catch(error => {
             console.warn('[TurnUsage] failed to refresh completed background request usage.', error);
+          });
+          void sideChatTurnUsageService?.refreshExactTrace(origin).catch(error => {
+            console.warn('[TurnUsage] failed to refresh completed side-chat request usage.', error);
           });
         },
         onServerRequestFinished: () => {

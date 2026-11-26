@@ -188,6 +188,7 @@ export type DshBridgeSubagentBindingHandler = (
 export interface DshHostSessionContext {
   sessionId: string;
   userQuestionsDisabled?: boolean;
+  sideChat?: boolean;
   agentId?: string;
   coworkSessionId?: string;
   traceId?: string;

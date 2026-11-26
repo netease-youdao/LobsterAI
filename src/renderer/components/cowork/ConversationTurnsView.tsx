@@ -6,7 +6,7 @@ import React, { useMemo } from 'react';
 
 import type { Artifact } from '../../types/artifact';
 import { PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
-import type { CoworkMessage } from '../../types/cowork';
+import { type CoworkMessage, CoworkSessionStatusValue } from '../../types/cowork';
 import type { MarketplaceKit } from '../../types/kit';
 import type { Skill } from '../../types/skill';
 import AssistantTurnBlock from './AssistantTurnBlock';
@@ -16,6 +16,10 @@ import {
   buildConversationTurns,
   buildDisplayItems,
 } from './messageDisplayUtils';
+import {
+  getLastMessageSpeechTurnIndex,
+  isMessageSpeechTurnCompleted,
+} from './messageSpeech/eligibility';
 import { getConversationTurnUsage } from './turnUsageDisplay';
 import UserMessageItem from './UserMessageItem';
 
@@ -31,6 +35,11 @@ export interface ConversationTurnsViewProps {
   localServiceDirectory?: string;
   onOpenLocalService?: (artifact: Artifact) => void;
   onReEdit?: (message: CoworkMessage) => void;
+  onLocateSelectedText?: (sourceMessageId: string) => void;
+  /** When true, enables the read-aloud speaker button on completed assistant turns */
+  enableMessageSpeech?: boolean;
+  /** When true, folds time/model/credits into a compact overflow popover on assistant replies */
+  compactMeta?: boolean;
   /** When true, hides re-edit buttons and other interactive elements */
   readOnly?: boolean;
   className?: string;
@@ -59,6 +68,9 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
   localServiceDirectory,
   onOpenLocalService,
   onReEdit,
+  onLocateSelectedText,
+  enableMessageSpeech = false,
+  compactMeta = false,
   readOnly = false,
   className,
   renderTurnWrapper,
@@ -66,6 +78,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
   const displayItems = useMemo(() => buildDisplayItems(messages), [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
   const mediaTaskPresentations = useMemo(() => buildMediaTaskPresentations(turns), [turns]);
+  const lastMessageSpeechTurnIndex = useMemo(() => getLastMessageSpeechTurnIndex(turns), [turns]);
 
   if (turns.length === 0) {
     if (!isStreaming) return null;
@@ -120,6 +133,7 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
                   skills={skills}
                   marketplaceKits={marketplaceKits}
                   onReEdit={readOnly ? undefined : onReEdit}
+                  onLocateSelectedText={onLocateSelectedText}
                 />
               </div>
             )}
@@ -136,6 +150,15 @@ const ConversationTurnsView: React.FC<ConversationTurnsViewProps> = ({
                   showActivityIndicator={showActivityIndicator}
                   showCopyButtons={!isStreaming || !isLastTurn}
                   isStreamingTurn={isStreaming && isLastTurn}
+                  compactMeta={compactMeta}
+                  enableMessageSpeech={enableMessageSpeech && isMessageSpeechTurnCompleted(turn, {
+                    isLastTurn: index === lastMessageSpeechTurnIndex,
+                    sessionStatus: isStreaming
+                      ? CoworkSessionStatusValue.Running
+                      : CoworkSessionStatusValue.Completed,
+                    isStreaming,
+                    hasRunningSubagents: false,
+                  })}
                 />
               </div>
             )}

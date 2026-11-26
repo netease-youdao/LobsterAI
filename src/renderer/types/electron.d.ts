@@ -94,6 +94,27 @@ import type {
 } from '../../shared/cowork/search';
 import type { CoworkSessionFilterQuery } from '../../shared/cowork/sessionFilter';
 import type {
+  CoworkSideChatActionResponse,
+  CoworkSideChatCreateRequest,
+  CoworkSideChatCreateResponse,
+  CoworkSideChatDeleteRequest,
+  CoworkSideChatGetResponse,
+  CoworkSideChatListResponse,
+  CoworkSideChatPermissionRequest,
+  CoworkSideChatPromoteRequest,
+  CoworkSideChatPromoteResponse,
+  CoworkSideChatRenameRequest,
+  CoworkSideChatRenameResponse,
+  CoworkSideChatRespondPermissionRequest,
+  CoworkSideChatSendRequest,
+  CoworkSideChatStopRequest,
+  CoworkSideChatStreamMessageEvent,
+  CoworkSideChatStreamMessageUpdateEvent,
+  CoworkSideChatStreamMetaChangedEvent,
+  CoworkSideChatStreamPermissionResolvedEvent,
+  CoworkSideChatStreamStatusEvent,
+} from '../../shared/cowork/sideChat';
+import type {
   DataMigrationBackupResult,
   DataMigrationLastRestoreResponse,
   DataMigrationPickArchiveResult,
@@ -1131,6 +1152,23 @@ interface IElectronAPI {
     }>;
     submitBtw: (options: CoworkBtwSubmitRequest) => Promise<CoworkBtwSubmitResponse>;
     abortBtw: (options: CoworkBtwAbortRequest) => Promise<CoworkBtwAbortResponse>;
+    sideChat?: {
+      list: (options: { parentSessionId: string }) => Promise<CoworkSideChatListResponse>;
+      get: (options: { sideChatId: string }) => Promise<CoworkSideChatGetResponse>;
+      create: (options: CoworkSideChatCreateRequest) => Promise<CoworkSideChatCreateResponse>;
+      sendMessage: (options: CoworkSideChatSendRequest) => Promise<CoworkSideChatActionResponse>;
+      stop: (options: CoworkSideChatStopRequest) => Promise<CoworkSideChatActionResponse>;
+      rename: (options: CoworkSideChatRenameRequest) => Promise<CoworkSideChatRenameResponse>;
+      delete: (options: CoworkSideChatDeleteRequest) => Promise<CoworkSideChatActionResponse>;
+      promote: (options: CoworkSideChatPromoteRequest) => Promise<CoworkSideChatPromoteResponse>;
+      respondPermission: (options: CoworkSideChatRespondPermissionRequest) => Promise<CoworkSideChatActionResponse>;
+      onStreamMessage: (callback: (data: CoworkSideChatStreamMessageEvent) => void) => () => void;
+      onStreamMessageUpdate: (callback: (data: CoworkSideChatStreamMessageUpdateEvent) => void) => () => void;
+      onStreamStatus: (callback: (data: CoworkSideChatStreamStatusEvent) => void) => () => void;
+      onStreamMetaChanged: (callback: (data: CoworkSideChatStreamMetaChangedEvent) => void) => () => void;
+      onStreamPermission: (callback: (data: CoworkSideChatPermissionRequest) => void) => () => void;
+      onStreamPermissionResolved: (callback: (data: CoworkSideChatStreamPermissionResolvedEvent) => void) => () => void;
+    };
     submitSteer: (options: { sessionId: string; text: string; clientSteerId: string }) => Promise<{
       success: boolean;
       status: 'pending' | 'accepted' | 'rejected';

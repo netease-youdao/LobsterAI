@@ -33,6 +33,7 @@ export const ArtifactSpecialTab = {
   AgentBrowser: 'agentBrowser',
   Subagents: 'subagents',
   UserAttachment: 'userAttachment',
+  SideChat: 'sideChat',
 } as const;
 export type ArtifactSpecialTab = typeof ArtifactSpecialTab[keyof typeof ArtifactSpecialTab];
 
@@ -475,6 +476,11 @@ const artifactSlice = createSlice({
       setPanelOpen(state, action.payload.sessionId, true);
     },
 
+    activateArtifactSideChatTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
     closeArtifactPreviewTab(state, action: PayloadAction<{ sessionId: string; tabId: string }>) {
       const { sessionId, tabId } = action.payload;
       const tabs = state.previewTabsBySession[sessionId] ?? [];
@@ -547,6 +553,7 @@ export const {
   activateArtifactAgentBrowserTab,
   activateArtifactSubagentTab,
   activateArtifactUserAttachmentTab,
+  activateArtifactSideChatTab,
   activateArtifactPreviewTab,
   activateArtifactNewTab,
   activateArtifactFileListTab,

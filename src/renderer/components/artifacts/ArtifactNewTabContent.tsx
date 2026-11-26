@@ -13,6 +13,10 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { BlankDocumentKind } from '@shared/artifactPreview/blankDocument';
+import {
+  CoworkSideChatStatus,
+  type CoworkSideChatSummary,
+} from '@shared/cowork/sideChat';
 import type { LocalArtifactItem } from '@shared/library/types';
 import type { LocalWebService } from '@shared/localWebServices/constants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,7 +32,9 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 import { SubagentSessionStatus, type SubagentSessionSummary } from '@/types/cowork';
 
+import { getSideChatDisplayTitle } from '../cowork/sideChatHelpers';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import SideChatIcon from '../icons/SideChatIcon';
 import {
   ArtifactNewTabCardId,
   classifyOmniBarInput,
@@ -54,6 +60,7 @@ const LIBRARY_SEARCH_DEBOUNCE_MS = 160;
 const OMNI_RESULT_LIMIT = 5;
 const QUICK_SESSION_FILES_LIMIT = 4;
 const QUICK_LOCAL_SERVICES_LIMIT = 3;
+const QUICK_SIDE_CHATS_LIMIT = 5;
 
 const EMPTY_GIT_PROBE: ProbeGitWorkspaceResponse = {
   isGitRepository: false,
@@ -119,6 +126,7 @@ export interface ArtifactNewTabContentProps {
   workingDirectory?: string;
   artifacts: Artifact[];
   subagents: SubagentSessionSummary[];
+  sideChats?: CoworkSideChatSummary[];
   hasAgentBrowserActivity?: boolean;
   onSelectArtifact: (artifactId: string) => void;
   onOpenLocalFilePath: (filePath: string) => Promise<void> | void;
@@ -129,6 +137,8 @@ export interface ArtifactNewTabContentProps {
   onOpenAgentBrowser?: () => void;
   onOpenSubagents?: () => void;
   onOpenWorkspaceChanges?: () => Promise<void> | void;
+  onCreateSideChat?: () => void;
+  onOpenSideChat?: (sideChatId: string) => void;
 }
 
 const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
@@ -136,6 +146,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   workingDirectory,
   artifacts,
   subagents,
+  sideChats = [],
   hasAgentBrowserActivity = false,
   onSelectArtifact,
   onOpenLocalFilePath,
@@ -146,6 +157,8 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   onOpenAgentBrowser,
   onOpenSubagents,
   onOpenWorkspaceChanges,
+  onCreateSideChat,
+  onOpenSideChat,
 }) => {
   const [query, setQuery] = useState('');
   const [isOmniFocused, setIsOmniFocused] = useState(false);
@@ -169,6 +182,10 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   const runningSubagentCount = useMemo(
     () => subagents.filter(item => item.status === SubagentSessionStatus.Running).length,
     [subagents],
+  );
+  const hasRunningSideChat = useMemo(
+    () => sideChats.some(item => item.status === CoworkSideChatStatus.Running),
+    [sideChats],
   );
 
   // Probe whether current session workspace is a Git repository for adaptive Work/Code cards.
@@ -419,6 +436,9 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
           setBusyCardId(null);
         }
         return;
+      case ArtifactNewTabCardId.SideChat:
+        onCreateSideChat?.();
+        return;
       case ArtifactNewTabCardId.Subagents:
         onOpenSubagents?.();
         return;
@@ -440,6 +460,7 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
     busyCardId,
     hasAgentBrowserActivity,
     onCreateBlankDocument,
+    onCreateSideChat,
     onOpenAgentBrowser,
     onOpenBrowserUrl,
     onOpenFileList,
@@ -449,14 +470,19 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
     workingDirectory,
   ]);
 
-  const primaryCards = useMemo(() => resolveNewTabPrimaryCards(mode), [mode]);
+  const includeSideChat = Boolean(onCreateSideChat);
+  const primaryCards = useMemo(
+    () => resolveNewTabPrimaryCards(mode, { includeSideChat }),
+    [includeSideChat, mode],
+  );
   const overflowItems = useMemo(
     () => resolveNewTabOverflowItems(mode, {
       isGitRepository: gitProbe.isGitRepository && supportsWorkspaceChanges,
       hasWorkingDirectory: Boolean(workingDirectory?.trim()),
       includeSubagents: Boolean(onOpenSubagents),
+      includeSideChat,
     }),
-    [gitProbe.isGitRepository, mode, onOpenSubagents, supportsWorkspaceChanges, workingDirectory],
+    [gitProbe.isGitRepository, includeSideChat, mode, onOpenSubagents, supportsWorkspaceChanges, workingDirectory],
   );
 
   const quickSessionFiles = useMemo(
@@ -524,6 +550,15 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
             </span>
           ) : undefined,
         };
+      case ArtifactNewTabCardId.SideChat:
+        return {
+          renderIcon: className => <SideChatIcon className={className} />,
+          iconColorClassName: 'text-violet-500 dark:text-violet-400',
+          label: t('coworkSideChatTitle'),
+          badge: hasRunningSideChat ? (
+            <span className="h-2 w-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+          ) : undefined,
+        };
       case ArtifactNewTabCardId.Subagents:
         return {
           renderIcon: className => <SubagentMiniIcon className={className} />,
@@ -550,9 +585,14 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
     }
   };
 
+  const quickSideChats = useMemo(
+    () => sideChats.slice(0, QUICK_SIDE_CHATS_LIMIT),
+    [sideChats],
+  );
   const showOmniDropdown = isOmniFocused && omniResults.length > 0;
   const showRunningSubagents = runningSubagentCount > 0 && Boolean(onOpenSubagents);
-  const hasContextualItems = showRunningSubagents || localServices.length > 0 || quickSessionFiles.length > 0;
+  const showSideChatSection = quickSideChats.length > 0 && Boolean(onOpenSideChat);
+  const hasContextualItems = showSideChatSection || showRunningSubagents || localServices.length > 0 || quickSessionFiles.length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto bg-background">
@@ -761,6 +801,38 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
         {/* Contextual Live Strip (shown only when relevant) */}
         {hasContextualItems && (
           <div className="mt-6 space-y-2">
+            {quickSideChats.length > 0 && onOpenSideChat && (
+              <div className="pt-1">
+                <div className="mb-1.5 flex items-center justify-between px-0.5">
+                  <span className="text-[11px] font-medium text-muted">
+                    {t('coworkSideChatRecentSection')}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {quickSideChats.map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => onOpenSideChat(item.id)}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-foreground/90 transition-colors hover:bg-surface-raised hover:text-foreground"
+                    >
+                      <SideChatIcon className="h-4 w-4 shrink-0 text-violet-500 dark:text-violet-400" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {getSideChatDisplayTitle(item.id, sideChats, t('coworkSideChatTitle'))}
+                      </span>
+                      {item.status === CoworkSideChatStatus.Running && (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10.5px] font-medium text-primary">
+                          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+                          {t('coworkSideChatRunningStatus')}
+                        </span>
+                      )}
+                      <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {showRunningSubagents && (
               <button
                 type="button"

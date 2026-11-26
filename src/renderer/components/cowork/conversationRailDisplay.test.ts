@@ -3,31 +3,19 @@ import { describe, expect, test } from 'vitest';
 import {
   buildVisualRailTicks,
   computeCappedPlaceholderRailCount,
-  type ConversationRailItem,
-  filterRailOutlineItems,
-  getRailOutlinePopoverGeometry,
+  computeVisualRailMaxTicks,
+  getRailTooltipGeometry,
   getVisualRailLineWidth,
   RAIL_LINE_ACTIVE_WIDTH,
   RAIL_LINE_DEFAULT_WIDTH,
   RAIL_LINE_HOVER_STEPS,
   RAIL_MAX_PLACEHOLDER_ITEMS,
   RAIL_MAX_VISUAL_TICKS,
-  RAIL_OUTLINE_VIEWPORT_PADDING_PX,
+  RAIL_MIN_VISUAL_TICKS,
+  RAIL_TOOLTIP_MAX_WIDTH_PX,
+  RAIL_TOOLTIP_VERTICAL_PADDING_PX,
+  RAIL_TOOLTIP_VIEWPORT_PADDING_PX,
 } from './conversationRailDisplay';
-
-const makeRailItem = (index: number, overrides: Partial<ConversationRailItem> = {}): ConversationRailItem => ({
-  key: `turn-${index}`,
-  messageId: `msg-${index}`,
-  turnIndex: index,
-  absoluteIndex: index * 2,
-  label: `User prompt ${index + 1}`,
-  summary: `Assistant reply summary ${index + 1}`,
-  timestamp: 1_700_000_000_000 + index * 60_000,
-  contentLen: 40,
-  isUser: false,
-  isLoaded: true,
-  ...overrides,
-});
 
 describe('computeCappedPlaceholderRailCount', () => {
   test('keeps local count when all messages fit in loaded turns', () => {
@@ -39,6 +27,22 @@ describe('computeCappedPlaceholderRailCount', () => {
     expect(computeCappedPlaceholderRailCount(400, 4)).toBe(RAIL_MAX_PLACEHOLDER_ITEMS);
     expect(computeCappedPlaceholderRailCount(400, 28)).toBe(28);
     expect(computeCappedPlaceholderRailCount(16, 4)).toBe(8);
+  });
+});
+
+describe('computeVisualRailMaxTicks', () => {
+  test('returns RAIL_MAX_VISUAL_TICKS for normal desktop container heights and missing heights', () => {
+    expect(computeVisualRailMaxTicks(700)).toBe(RAIL_MAX_VISUAL_TICKS);
+    expect(computeVisualRailMaxTicks(400)).toBe(RAIL_MAX_VISUAL_TICKS);
+    expect(computeVisualRailMaxTicks(null)).toBe(RAIL_MAX_VISUAL_TICKS);
+    expect(computeVisualRailMaxTicks(0)).toBe(RAIL_MAX_VISUAL_TICKS);
+  });
+
+  test('shrinks tick cap gracefully for compact container heights without falling below RAIL_MIN_VISUAL_TICKS', () => {
+    const compact = computeVisualRailMaxTicks(260);
+    expect(compact).toBeGreaterThanOrEqual(RAIL_MIN_VISUAL_TICKS);
+    expect(compact).toBeLessThan(RAIL_MAX_VISUAL_TICKS);
+    expect(computeVisualRailMaxTicks(120)).toBe(RAIL_MIN_VISUAL_TICKS);
   });
 });
 
@@ -99,36 +103,30 @@ describe('getVisualRailLineWidth', () => {
   });
 });
 
-describe('filterRailOutlineItems', () => {
-  const items = [
-    makeRailItem(0, { label: 'Setup Electron build', summary: 'Configured Vite and preload' }),
-    makeRailItem(1, { label: 'Fix SQLite migration', summary: 'Added index on sequence' }),
-    makeRailItem(11, { label: 'Polish right rail', summary: 'Added scrollable turn outline' }),
-  ];
-
-  test('returns all items when query is blank', () => {
-    expect(filterRailOutlineItems(items, '   ').map(entry => entry.railIndex)).toEqual([0, 1, 2]);
-  });
-
-  test('matches title, summary, and 1-based turn number case-insensitively', () => {
-    expect(filterRailOutlineItems(items, 'sqlite').map(entry => entry.railIndex)).toEqual([1]);
-    expect(filterRailOutlineItems(items, 'OUTLINE').map(entry => entry.railIndex)).toEqual([2]);
-    expect(filterRailOutlineItems(items, '#2').map(entry => entry.railIndex)).toEqual([1]);
-    expect(filterRailOutlineItems(items, '3').map(entry => entry.railIndex)).toEqual([2]);
-    expect(filterRailOutlineItems(items, 'nonexistent')).toEqual([]);
-  });
-});
-
-describe('getRailOutlinePopoverGeometry', () => {
-  test('positions the popover to the left of the rail and clamps within small viewports', () => {
-    const geometry = getRailOutlinePopoverGeometry(
-      { top: 40, bottom: 120, left: 980 },
-      { width: 1024, height: 600 },
+describe('getRailTooltipGeometry', () => {
+  test('aligns the tooltip to the left of the hovered tick on spacious viewports', () => {
+    const geometry = getRailTooltipGeometry(
+      { top: 300, height: 13, left: 1180 },
+      { width: 1220, height: 800 },
     );
 
-    expect(geometry.right).toBeGreaterThan(RAIL_OUTLINE_VIEWPORT_PADDING_PX);
-    expect(geometry.width).toBeLessThanOrEqual(1024 - geometry.right - RAIL_OUTLINE_VIEWPORT_PADDING_PX);
-    expect(geometry.top - geometry.maxHeight / 2).toBeGreaterThanOrEqual(RAIL_OUTLINE_VIEWPORT_PADDING_PX);
-    expect(geometry.top + geometry.maxHeight / 2).toBeLessThanOrEqual(600 - RAIL_OUTLINE_VIEWPORT_PADDING_PX);
+    expect(geometry.width).toBe(RAIL_TOOLTIP_MAX_WIDTH_PX);
+    expect(geometry.right).toBeGreaterThan(RAIL_TOOLTIP_VIEWPORT_PADDING_PX);
+    expect(geometry.top).toBeCloseTo(306.5);
+  });
+
+  test('clamps top, bottom, and width inside small viewports', () => {
+    const nearTop = getRailTooltipGeometry(
+      { top: 10, height: 13, left: 320 },
+      { width: 360, height: 500 },
+    );
+    expect(nearTop.top).toBe(RAIL_TOOLTIP_VERTICAL_PADDING_PX);
+    expect(nearTop.width).toBeLessThanOrEqual(360 - nearTop.right - RAIL_TOOLTIP_VIEWPORT_PADDING_PX);
+
+    const nearBottom = getRailTooltipGeometry(
+      { top: 485, height: 13, left: 320 },
+      { width: 360, height: 500 },
+    );
+    expect(nearBottom.top).toBe(500 - RAIL_TOOLTIP_VERTICAL_PADDING_PX);
   });
 });

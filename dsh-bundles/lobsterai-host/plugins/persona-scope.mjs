@@ -19,6 +19,7 @@ import {
   MEMORY_WRITE_POLICY_PROMPT,
   parseSkillFrontmatter,
   readTextCached,
+  SIDE_CHAT_RUNTIME_CONTEXT_PROMPT,
 } from './persona-helpers.mjs';
 import {
   getHostState,
@@ -98,6 +99,21 @@ export function apply(ctx) {
         ? bound.mediaTurnInstruction.trim()
         : '';
       return instruction ? `## Media Generation Policy (Current Turn)\n${instruction}` : '';
+    },
+  });
+
+  // 1c. Inject side-conversation soft-read-only guidance via KV-cache-safe
+  // dynamic runtime context so the forked parent prefix stays byte-identical.
+  ctx.systemPrompt.context({
+    name: 'lobsterai:side-chat',
+    order: ctx.systemPrompt.getContextOrder('APPROVAL_POLICY') + 2,
+    interpolate: false,
+    required: true,
+    text: (assemblyCtx) => {
+      const sessionId = resolveSessionId(assemblyCtx?.scope)
+        ?? resolveSessionId(assemblyCtx?.agent);
+      const bound = resolveSessionContext(ctx, state, sessionId);
+      return bound?.sideChat === true ? SIDE_CHAT_RUNTIME_CONTEXT_PROMPT : '';
     },
   });
 

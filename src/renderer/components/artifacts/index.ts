@@ -10,6 +10,7 @@ export { default as ArtifactPreviewCard } from './ArtifactPreviewCard';
 export { default as ArtifactRenderer } from './ArtifactRenderer';
 export { default as FileDirectoryView } from './FileDirectoryView';
 export { default as InlineVideoGallery } from './InlineVideoGallery';
+export { default as SideChatPanelContent } from './SideChatPanelContent';
 export { default as SubagentPanelContent } from './SubagentPanelContent';
 export {
   default as UserAttachmentPanelContent,

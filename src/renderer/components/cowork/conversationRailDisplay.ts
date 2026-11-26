@@ -1,16 +1,18 @@
 export const RAIL_MAX_VISUAL_TICKS = 20;
+export const RAIL_MIN_VISUAL_TICKS = 6;
 export const RAIL_MAX_PLACEHOLDER_ITEMS = 20;
-export const RAIL_OUTLINE_FILTER_THRESHOLD = 10;
 export const RAIL_LINE_DEFAULT_WIDTH = 8;
 export const RAIL_LINE_ACTIVE_WIDTH = 28;
 export const RAIL_LINE_HOVER_STEPS = [28, 18, 13, 10] as const;
 export const RAIL_LINE_HEIGHT = 3;
+export const RAIL_TICK_PITCH_PX = 13;
+export const RAIL_ARROWS_AND_MARGIN_PX = 96;
 
-export const RAIL_OUTLINE_WIDTH_PX = 336;
-export const RAIL_OUTLINE_MAX_HEIGHT_PX = 460;
-export const RAIL_OUTLINE_MIN_HEIGHT_PX = 180;
-export const RAIL_OUTLINE_VIEWPORT_PADDING_PX = 16;
-export const RAIL_OUTLINE_GAP_PX = 10;
+export const RAIL_TOOLTIP_MAX_WIDTH_PX = 380;
+export const RAIL_TOOLTIP_MIN_WIDTH_PX = 200;
+export const RAIL_TOOLTIP_GAP_PX = 10;
+export const RAIL_TOOLTIP_VIEWPORT_PADDING_PX = 16;
+export const RAIL_TOOLTIP_VERTICAL_PADDING_PX = 90;
 
 export interface ConversationRailItem {
   key: string;
@@ -36,16 +38,10 @@ export interface RailVisualTick {
   isActive: boolean;
 }
 
-export interface FilteredRailOutlineEntry {
-  item: ConversationRailItem;
-  railIndex: number;
-}
-
-export interface RailOutlinePopoverGeometry {
+export interface RailTooltipGeometry {
   top: number;
   right: number;
   width: number;
-  maxHeight: number;
 }
 
 /**
@@ -62,6 +58,24 @@ export const computeCappedPlaceholderRailCount = (
   if (safeTotal <= safeLocal) return safeLocal;
   const estimatedTurns = Math.max(safeLocal, Math.ceil(safeTotal / 2));
   return Math.min(estimatedTurns, Math.max(safeLocal, Math.max(1, Math.floor(maxPlaceholders))));
+};
+
+/**
+ * Compute how many visual ticks fit inside the available rail container height
+ * without overflowing or requiring a nested rail scrollbar.
+ */
+export const computeVisualRailMaxTicks = (
+  containerHeight: number | null | undefined,
+  maxTicks = RAIL_MAX_VISUAL_TICKS,
+  minTicks = RAIL_MIN_VISUAL_TICKS,
+): number => {
+  const safeMax = Math.max(2, Math.floor(maxTicks));
+  const safeMin = Math.max(2, Math.min(safeMax, Math.floor(minTicks)));
+  if (typeof containerHeight !== 'number' || !Number.isFinite(containerHeight) || containerHeight <= 0) {
+    return safeMax;
+  }
+  const fitted = Math.floor((containerHeight - RAIL_ARROWS_AND_MARGIN_PX) / RAIL_TICK_PITCH_PX);
+  return Math.max(safeMin, Math.min(safeMax, fitted));
 };
 
 /**
@@ -136,56 +150,25 @@ export const getVisualRailLineWidth = (
   return slotIndex === activeSlotIndex ? RAIL_LINE_ACTIVE_WIDTH : RAIL_LINE_DEFAULT_WIDTH;
 };
 
-export const filterRailOutlineItems = (
-  items: readonly ConversationRailItem[],
-  query: string,
-): FilteredRailOutlineEntry[] => {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) {
-    return items.map((item, railIndex) => ({ item, railIndex }));
-  }
-
-  const numericQuery = normalized.startsWith('#') ? normalized.slice(1) : normalized;
-  const isTurnNumberQuery = /^\d+$/.test(numericQuery);
-
-  const matches: FilteredRailOutlineEntry[] = [];
-  for (let railIndex = 0; railIndex < items.length; railIndex += 1) {
-    const item = items[railIndex];
-    const turnNumber = String(railIndex + 1);
-    const matchesNumber = isTurnNumberQuery && turnNumber.includes(numericQuery);
-    const matchesText = (
-      item.label.toLowerCase().includes(normalized)
-      || item.summary.toLowerCase().includes(normalized)
-    );
-    if (matchesNumber || matchesText) {
-      matches.push({ item, railIndex });
-    }
-  }
-  return matches;
-};
-
-export const getRailOutlinePopoverGeometry = (
-  railRect: { top: number; bottom: number; left: number },
+export const getRailTooltipGeometry = (
+  tickRect: { top: number; height: number; left: number },
   viewport: { width: number; height: number },
-): RailOutlinePopoverGeometry => {
+): RailTooltipGeometry => {
   const right = Math.max(
-    RAIL_OUTLINE_VIEWPORT_PADDING_PX,
-    viewport.width - railRect.left + RAIL_OUTLINE_GAP_PX,
+    RAIL_TOOLTIP_VIEWPORT_PADDING_PX,
+    viewport.width - tickRect.left + RAIL_TOOLTIP_GAP_PX,
   );
   const availableWidth = Math.max(
-    220,
-    viewport.width - right - RAIL_OUTLINE_VIEWPORT_PADDING_PX,
+    RAIL_TOOLTIP_MIN_WIDTH_PX,
+    viewport.width - right - RAIL_TOOLTIP_VIEWPORT_PADDING_PX,
   );
-  const width = Math.min(RAIL_OUTLINE_WIDTH_PX, availableWidth);
-  const maxHeight = Math.min(
-    RAIL_OUTLINE_MAX_HEIGHT_PX,
-    Math.max(RAIL_OUTLINE_MIN_HEIGHT_PX, viewport.height - RAIL_OUTLINE_VIEWPORT_PADDING_PX * 4),
+  const width = Math.min(RAIL_TOOLTIP_MAX_WIDTH_PX, availableWidth);
+  const verticalPadding = Math.min(RAIL_TOOLTIP_VERTICAL_PADDING_PX, viewport.height / 2);
+  const tickMidY = tickRect.top + tickRect.height / 2;
+  const top = Math.max(
+    verticalPadding,
+    Math.min(tickMidY, viewport.height - verticalPadding),
   );
-  const railMidY = (railRect.top + railRect.bottom) / 2;
-  const halfHeight = maxHeight / 2;
-  const minCenterY = RAIL_OUTLINE_VIEWPORT_PADDING_PX + halfHeight;
-  const maxCenterY = Math.max(minCenterY, viewport.height - RAIL_OUTLINE_VIEWPORT_PADDING_PX - halfHeight);
-  const top = Math.max(minCenterY, Math.min(maxCenterY, railMidY));
 
-  return { top, right, width, maxHeight };
+  return { top, right, width };
 };

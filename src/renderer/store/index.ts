@@ -14,6 +14,7 @@ import mcpReducer from './slices/mcpSlice';
 import modelReducer from './slices/modelSlice';
 import quickActionReducer from './slices/quickActionSlice';
 import scheduledTaskReducer from './slices/scheduledTaskSlice';
+import sideChatReducer from './slices/sideChatSlice';
 import skillReducer from './slices/skillSlice';
 
 export const store = configureStore({
@@ -32,6 +33,7 @@ export const store = configureStore({
     enterpriseAccount: enterpriseAccountReducer,
     artifact: artifactReducer,
     kit: kitReducer,
+    sideChat: sideChatReducer,
   },
   middleware: getDefaultMiddleware => (
     getDefaultMiddleware().prepend(libraryArtifactListener.middleware)

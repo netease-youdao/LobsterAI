@@ -788,6 +788,7 @@ interface ArtifactPanelProps {
   agentBrowserPanel?: React.ReactNode;
   subagentPanel?: React.ReactNode;
   userAttachmentPanel?: React.ReactNode;
+  sideChatPanel?: React.ReactNode;
   onOpenLocalFilePicker?: () => void;
   onOpenWorkspaceFile?: (filePath: string) => Promise<void> | void;
   onCreateBlankDocumentFromFileList?: () => void;
@@ -883,6 +884,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   agentBrowserPanel,
   subagentPanel,
   userAttachmentPanel,
+  sideChatPanel,
   onOpenLocalFilePicker,
   onOpenWorkspaceFile,
   onCreateBlankDocumentFromFileList,
@@ -5488,6 +5490,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         ) : activeSpecialTab === ArtifactSpecialTab.UserAttachment && userAttachmentPanel ? (
           <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
             {userAttachmentPanel}
+          </div>
+        ) : activeSpecialTab === ArtifactSpecialTab.SideChat && sideChatPanel ? (
+          <div className="relative z-10 flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            {sideChatPanel}
           </div>
         ) : (
           /* No artifact selected: show workspace directory tree (fallback to session file list when no cwd) */

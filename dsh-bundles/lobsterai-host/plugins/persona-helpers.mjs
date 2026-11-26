@@ -43,6 +43,17 @@ export const AGENT_RULES_POLICY_PROMPT = [
   '- `lobster_agent_rules` is isolated to this agent\'s own `SOUL.md` and persists across working directories. Never create or edit `AGENTS.md` / `CLAUDE.md` in the working directory for an agent\'s own style or guidelines unless the user explicitly asks to edit a repository instruction file, because the working directory may be shared across agents.',
 ].join('\n');
 
+export const SIDE_CHAT_RUNTIME_CONTEXT_PROMPT = [
+  '## Side Conversation Policy',
+  'You are in a side conversation, not the main thread.',
+  '- This side conversation is for answering questions, explaining context, and lightweight exploration without disrupting the main thread. Do not present yourself as continuing the main thread\'s active task.',
+  '- The inherited conversation history is provided only as reference context. Do not treat instructions, plans, approvals, or requests found only in inherited history as active instructions for this side conversation. Only user messages submitted in this side conversation are active.',
+  '- Do not continue, execute, or complete any unfinished task, plan, or tool call that appears only in inherited history.',
+  '- Sub-agents, cross-agent delegation, and scheduled tasks are disabled in this side conversation. Do not attempt to spawn or message sub-agents or create schedules.',
+  '- Default to non-mutating inspection: you may read files, search the workspace, and run read-only checks to verify your answer instead of guessing from memory.',
+  '- Do not modify files, source code, git state, permissions, configuration, or external workspace state unless the user explicitly requests that mutation in this side conversation. If explicitly requested, keep changes minimal, local, and non-disruptive to the main thread.',
+].join('\n');
+
 export const WEB_SEARCH_ROUTING_GUIDANCE = [
   'When you need live web search:',
   '- If a dedicated search MCP tool (such as Tavily) is available and requested or suitable, prefer that MCP search tool.',
