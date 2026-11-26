@@ -36,7 +36,7 @@ const imageTool: DshHostToolDescriptor = {
       prompt: { type: 'string', description: 'Describe the requested image or edit.' },
       model: { type: 'string', description: 'The selected image model ID.' },
       imageOperation: { type: 'string', enum: [...Object.values(ImageProcessingOperation), REMOVE_WATERMARK_OPERATION], description: 'Process one existing image. Pick one operation. For erase, identify the target in the prompt. Matting returns a transparent PNG. remove_watermark is the legacy LobsterAI watermark edit.' },
-      eraseTarget: { type: 'string', enum: [LOBSTERAI_WATERMARK_TARGET], description: 'With erase, retrieve the original when asked to remove the LobsterAI watermark. Free and available without an image model.' },
+      eraseTarget: { type: 'string', enum: [LOBSTERAI_WATERMARK_TARGET], description: 'With erase, remove the fixed LobsterAI watermark from the supplied image. Free and available without an image model.' },
       image: { type: 'string', description: 'Reference image file path or URL.' },
       images: { type: 'array', items: { type: 'string' }, description: 'Reference image file paths or URLs.' },
       size: { type: 'string' },
@@ -112,7 +112,7 @@ export function buildDshMediaTurnInstruction(
   const useVideo = video && selection.videoPreference !== MediaPreferenceMode.Off
     && (selection.mode === MediaSelectionMode.Video || selection.mode === MediaSelectionMode.Auto);
   const instructions = [
-    'To remove the LobsterAI watermark, use the image tool with erase and eraseTarget lobsterai_watermark. This retrieves the original even when image generation is off. If retrieval fails, report it and stop.',
+    'To remove the LobsterAI watermark, use the image tool with erase and eraseTarget lobsterai_watermark. The server removes the overlay directly from the supplied image, even when image generation is off. If the link has expired, ask for the saved file. Report processing failures without resubmitting to a model.',
     useImage ? `For an explicit request to generate or edit an image, use ${MediaGenerationTool.Image} with the selected LobsterAI model ${JSON.stringify(image)}.`
       : 'LobsterAI image generation is unavailable for this turn.',
     useVideo ? `For an explicit video generation request, use ${MediaGenerationTool.Video} with the selected LobsterAI model ${JSON.stringify(video)}. List its capabilities before generation. The desktop collects confirmation and verifies the saved file. Once status returns its file link, reply with that exact link. Use shell or file tools only for further work the user explicitly requests.`

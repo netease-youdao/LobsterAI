@@ -492,7 +492,7 @@ import { ExpertStore } from './libs/expertStore';
 import { ExternalBrowserHost } from './libs/externalBrowserHost';
 import { refreshFakeIpNetworkState } from './libs/fakeIpNetwork';
 import { fitImageBytesForModel } from './libs/fitImageForModel';
-import { isFixedWatermarkRestore, watermarkOriginalSource } from './libs/fixedImageWatermark';
+import { isFixedWatermarkErase, watermarkEraseSource } from './libs/fixedImageWatermark';
 import { renderHtmlFilesOffscreen } from './libs/htmlOffscreenRenderer';
 import {
   createOfficePreviewSession,
@@ -5960,21 +5960,24 @@ if (!gotTheLock) {
     ) {
       return staleAccountResult();
     }
-    if (isFixedWatermarkRestore(tool, args)) {
+    if (isFixedWatermarkErase(tool, args)) {
       try {
         const refs = !nativeRun && sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
         const cwd = ownerSessionId ? getCoworkStore().getSession(ownerSessionId)?.cwd : undefined;
-        const source = await watermarkOriginalSource(args, refs, cwd);
-        if (!isRequestAccountCurrent()) return staleAccountResult();
-        const response = await fetchWithAuth(serverBaseUrl + '/api/media/images/watermark/original', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }),
-          signal: request.signal ?? AbortSignal.timeout(30_000),
+        const source = await watermarkEraseSource(args, refs, cwd, url => {
+          const cached = persistedGeneratedImageAssetsByUrl.get(`${ownerSessionId}:${mediaSourceKey(url)}`);
+          return cached && fs.existsSync(cached.filePath) ? cached.filePath : undefined;
         });
         if (!isRequestAccountCurrent()) return staleAccountResult();
-        if (!response.ok) throw new Error(t('mediaWatermarkRestoreUnavailable'));
+        const response = await fetchWithAuth(serverBaseUrl + '/api/media/images/watermark/erase', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }),
+          signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(150_000)]) : AbortSignal.timeout(150_000),
+        });
+        if (!isRequestAccountCurrent()) return staleAccountResult();
+        if (!response.ok) throw new Error(t('mediaWatermarkEraseUnavailable'));
         const body = await response.json() as { code: number; message?: string; data?: { url?: string } };
         if (body.code !== 0 || !body.data?.url?.startsWith('https://')) {
-          throw new Error(body.message || t('mediaWatermarkRestoreUnavailable'));
+          throw new Error(body.message || t('mediaWatermarkEraseUnavailable'));
         }
         const asset = { type: MediaType.Image, url: body.data.url, filename: typeof args.filename === 'string' ? args.filename : undefined };
         if (!isRequestAccountCurrent()) return staleAccountResult();
@@ -5984,7 +5987,7 @@ if (!gotTheLock) {
         return { content: [{ type: 'text', text: saved ? formatPersistedImageLink(saved, t('mediaImageSavedToRecovery')) : asset.url }],
           details: { status: MediaTaskStatus.Succeeded, assets: [saved ?? asset] } };
       } catch (error) {
-        return { content: [{ type: 'text', text: error instanceof Error ? error.message : t('mediaWatermarkRestoreUnavailable') }], isError: true };
+        return { content: [{ type: 'text', text: error instanceof Error ? error.message : t('mediaWatermarkEraseUnavailable') }], isError: true };
       }
     }
     const selection: MediaSelectionState | undefined = nativeRun
@@ -6880,7 +6883,7 @@ if (!gotTheLock) {
 
   getMcpRuntime().setMediaGenerationHandler(request => {
     if ((request.tool !== MediaGenerationTool.Image && request.tool !== MediaGenerationTool.Video)
-      || isFixedWatermarkRestore(request.tool, request.args)) {
+      || isFixedWatermarkErase(request.tool, request.args)) {
       return handleMediaGenerationCallback(request);
     }
     const sessionId = extractSessionIdFromKey(request.context.sessionKey);

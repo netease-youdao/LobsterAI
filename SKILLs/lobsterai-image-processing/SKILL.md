@@ -2,7 +2,7 @@
 name: lobsterai-image-processing
 description: 处理已有图片，支持擦除水印和文字、增强画质、人像美化、修复老照片，以及抠出前景并交付透明 PNG。
 official: true
-version: 1.1.0
+version: 1.2.0
 ---
 
 # LobsterAI 图片处理
@@ -24,5 +24,5 @@ version: 1.1.0
    {"action":"generate","image":"./海报.png","imageOperation":"erase","eraseTarget":"lobsterai_watermark","prompt":"去掉右下角的 LobsterAI 水印","n":1}
    ```
 
-3. 去除 LobsterAI 固定水印时，服务端按当前账号和成图取回贴印前的原图，免积分，无需选择模型。直接交付返回的文件或链接。若找不到，请用户选择最初保存的成图或交付链接，停止本次操作，避免重新生成或改用通用擦除。
-4. 其他编辑操作使用会话中选定的模型，沿用费用确认流程。`list` 可查询模型能力。抠图需要支持 `matting` 的模型。每个任务只提交一次，拿到任务 ID 后用 `status` 查询。成功后交付新的图片，保留用户原文件。
+3. 去除 LobsterAI 固定水印时，服务端根据固定水印模板和透明度，直接处理用户提供的完整带水印图片，免积分。链接过期时使用已保存的本地文件。识别失败时请用户提供未裁剪、未缩放的成图。交付处理后的 PNG，保留输入文件。
+4. 通用擦除、`enhance`、`beauty`、`restore` 和 `matting` 使用会话中选定的图片编辑模型，沿用费用确认流程。`list` 可查询模型能力。抠图需要支持 `matting` 的模型。每个任务只提交一次，拿到任务 ID 后用 `status` 查询。成功后交付新的图片，保留用户原文件。
