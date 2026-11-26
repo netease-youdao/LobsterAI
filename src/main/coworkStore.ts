@@ -628,6 +628,8 @@ export interface CoworkSession {
   activeSkillIds: string[];
   agentId: string;
   imPlatform?: Platform | null;
+  /** IM and scheduled sessions have no interactive question UI. */
+  userQuestionsDisabled?: boolean;
   messages: CoworkMessage[];
   /** Offset of the first loaded message in the full message history. */
   messagesOffset: number;
@@ -1152,6 +1154,7 @@ export class CoworkStore {
       activeSkillIds,
       agentId,
       imPlatform: null,
+      userQuestionsDisabled: Boolean(scheduledTaskId),
       messages: [],
       messagesOffset: 0,
       totalMessages: 0,
@@ -1261,6 +1264,8 @@ export class CoworkStore {
       activeSkillIds,
       agentId: row.agent_id || 'main',
       imPlatform: this.normalizeIMPlatform(row.im_platform),
+      // Use the stored mapping, including instance-qualified names such as "feishu:bot-2".
+      userQuestionsDisabled: Boolean(row.scheduled_task_id?.trim() || row.im_platform),
       messages,
       messagesOffset: messageOffset,
       totalMessages,

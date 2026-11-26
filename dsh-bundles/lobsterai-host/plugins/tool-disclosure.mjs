@@ -40,6 +40,7 @@ export const name = 'lobster-tool-disclosure';
 export const inject = ['tools', 'agents'];
 
 const ENABLE_TOOLS_NAME = 'lobster_enable_tools';
+const ASK_USER_QUESTION = 'ask_user_question';
 
 const CAPABILITY_SUMMARY = PROGRESSIVE_TOOL_GROUPS
   .map((g) => `${g.id}（${g.label}）`)
@@ -132,6 +133,9 @@ export function apply(ctx) {
       state.mcpToolFilters,
       state.mcpRegisteredServers,
     );
+    if (bound?.userQuestionsDisabled && restrictableNames.has(ASK_USER_QUESTION)) {
+      denyList.push(ASK_USER_QUESTION);
+    }
     const denyKey = denyList.join('\0');
     if (denyKey === record.lastDenyKey) return;
 
@@ -286,11 +290,13 @@ export function apply(ctx) {
     },
   );
 
-  // Defense-in-depth synchronous guard: even during async registration races,
-  // direct/nested tool invocations, or hallucinated tool calls, a user-filtered
-  // MCP tool can never execute.
-  const disposeMcpFilterGuard = ctx.tools.guard((exec) => {
+  // Also enforce session restrictions when a model or nested caller names a
+  // tool directly, including tools admitted in a previous turn.
+  const disposeToolGuard = ctx.tools.guard((exec) => {
     const toolName = exec?.name;
+    if (toolName === ASK_USER_QUESTION && resolveSessionContext(ctx, state, exec.agent?.id)?.userQuestionsDisabled) {
+      return { reason: 'This session cannot receive interactive questions.' };
+    }
     if (
       typeof toolName !== 'string'
       || !isUserMcpToolDenied(toolName, state.mcpToolFilters, state.mcpRegisteredServers)
@@ -350,7 +356,7 @@ export function apply(ctx) {
   reconcileAllAgents();
 
   ctx.effect(() => () => {
-    disposeMcpFilterGuard();
+    disposeToolGuard();
     enableToolsDisposer();
     for (const record of tracked.values()) {
       if (record.disposeRestriction) {

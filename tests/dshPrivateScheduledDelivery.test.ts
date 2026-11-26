@@ -101,6 +101,7 @@ test('remembers the DingTalk staff ID from a private callback across restart, an
   let receipt: Record<string, unknown> = { processQueryKey: 'ack' };
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     if (url.includes('/oauth2/')) return Response.json({ accessToken: 'token', expireIn: 7200 });
+    if (new URL(url).pathname === '/v1.0/card/instances') return new Response(null, { status: 403 });
     expect(new URL(url).pathname).toBe('/v1.0/robot/oToMessages/batchSend');
     expect(JSON.parse(String(init.body)).userIds).toEqual(['StaffA']);
     return Response.json(receipt);

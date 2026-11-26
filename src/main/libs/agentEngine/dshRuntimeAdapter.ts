@@ -115,6 +115,7 @@ import type {
 
 export interface DshAdapterSessionRecord {
   id: string;
+  userQuestionsDisabled?: boolean;
   cwd: string;
   status?: CoworkSessionStatus;
   title?: string;
@@ -1450,6 +1451,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         coworkSessionId: sessionId,
         traceId: llmTrace.traceId,
         workspaceDir: session.cwd,
+        userQuestionsDisabled: session.userQuestionsDisabled,
         allowedSkillIds,
         customSystemPrompt: effectiveSystemPrompt,
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
@@ -2371,6 +2373,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         coworkSessionId: sessionId,
         traceId: llmTrace.traceId,
         workspaceDir: params.workspaceRoot || session.cwd,
+        userQuestionsDisabled: session.userQuestionsDisabled,
         allowedSkillIds,
         customSystemPrompt: boundCustomSystemPrompt,
         ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
