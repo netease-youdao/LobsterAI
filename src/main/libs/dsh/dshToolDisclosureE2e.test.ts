@@ -197,6 +197,7 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: lobster_enable_tools', 
           sessionId: created.sessionId,
           agentId: 'main',
           coworkSessionId: 'cw-disclosure-1',
+          userQuestionsDisabled: true,
           executionMode: 'auto',
           permissionPreset: DshPermissionPreset.WorkspaceWrite,
         });
@@ -235,6 +236,7 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: lobster_enable_tools', 
         expect(capturedRequests).toHaveLength(2);
         const firstStepTools = (capturedRequests[0].tools ?? []).map((t) => t.function?.name).filter(Boolean);
         expect(firstStepTools).toContain('lobster_enable_tools');
+        expect(firstStepTools).not.toContain('ask_user_question');
         expect(firstStepTools).not.toContain('mcp__computer-use__list_windows');
 
         expect(toolResults).toHaveLength(1);
@@ -249,6 +251,7 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: lobster_enable_tools', 
 
         const secondStepTools = (capturedRequests[1].tools ?? []).map((t) => t.function?.name).filter(Boolean);
         expect(secondStepTools).toContain('mcp__computer-use__list_windows');
+        expect(secondStepTools).not.toContain('ask_user_question');
       } finally {
         await manager.stop();
       }

@@ -549,6 +549,7 @@ describe('DshRuntimeAdapter', () => {
   test('stamps per-turn llmTrace on pre-created user message, binds traceId to DSH, and skips lazy bridge on new sessions', async () => {
     const { store, messages } = createInMemoryStore({
       id: 'cw-fresh',
+      userQuestionsDisabled: true,
       cwd: '/tmp/work',
       title: 'Fresh chat',
       messages: [
@@ -600,6 +601,7 @@ describe('DshRuntimeAdapter', () => {
       sessionId: 'dsh-fresh-1',
       coworkSessionId: 'cw-fresh',
       traceId: llmTrace!.traceId,
+      userQuestionsDisabled: true,
     }));
     // Fresh session must NOT inject a legacy OpenClaw context bridge.
     expect(capturedPrompt).toBe('Hello credits');

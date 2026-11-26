@@ -831,6 +831,7 @@ test('scheduled task sessions preserve their task id in session details and list
 
   expect(session.scheduledTaskId).toBe('job-daily-summary');
   expect(store.getSession(session.id)?.scheduledTaskId).toBe('job-daily-summary');
+  expect(store.getSession(session.id)?.userQuestionsDisabled).toBe(true);
   expect(store.listSessions(10, 0, 'main')[0]?.scheduledTaskId).toBe('job-daily-summary');
   expect(store.searchSessions({ query: 'Daily summary' })[0]?.scheduledTaskId).toBe(
     'job-daily-summary',
@@ -2285,4 +2286,9 @@ test('getSession populates imPlatform from im_session_mappings and returns null 
   expect(desktop.imPlatform).toBeNull();
   expect(store.getSession(desktop.id)?.imPlatform).toBeNull();
   expect(store.getSession(imSession.id)?.imPlatform).toBe('feishu');
+  expect(store.getSession(desktop.id)?.userQuestionsDisabled).toBe(false);
+  expect(store.getSession(imSession.id)?.userQuestionsDisabled).toBe(true);
+
+  db.prepare('UPDATE im_session_mappings SET platform = ? WHERE cowork_session_id = ?').run('feishu:bot-2', imSession.id);
+  expect(store.getSession(imSession.id)?.userQuestionsDisabled).toBe(true);
 });

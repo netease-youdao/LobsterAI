@@ -180,6 +180,7 @@ export function resolveSessionContext(ctx, state, sessionId) {
           ? { officeAgentPrompt: ancestor.officeAgentPrompt }
           : {}),
         ...(ancestor?.executionMode ? { executionMode: ancestor.executionMode } : {}),
+        ...(ancestor?.userQuestionsDisabled ? { userQuestionsDisabled: true } : {}),
         ...(ancestor?.permissionPreset ? { permissionPreset: ancestor.permissionPreset } : {}),
         ...(typeof ancestor?.memoryEnabled === 'boolean' ? { memoryEnabled: ancestor.memoryEnabled } : {}),
       };
