@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { type ImageEditMessageSnapshot, ImageEditOperation } from '../../../../shared/imageEditing/types';
 import { MediaDeliveryStatus, MediaProtocol, MediaTaskPhase, MediaTaskStatus } from '../../../../shared/media/constants';
-import type { CoworkMessage, CoworkMessageMetadata } from '../../../types/cowork';
+import { type CoworkMessage, type CoworkMessageMetadata, CoworkSessionStatusValue } from '../../../types/cowork';
 import { ImageEditJobPhase, imageEditJobStatus } from './imageEditJobStatus';
 
 vi.mock('../../../services/i18n', () => ({ i18nService: { t: (key: string) => key } }));
@@ -58,7 +58,48 @@ describe('image edit job status', () => {
 
   test('ignores other edits and later turns', () => {
     const otherTask = [edit('other'), mediaCall(task({ status: MediaTaskStatus.Failed }))];
-    expect(status([edit(), message('assistant'), ...otherTask]).phase).toBe(ImageEditJobPhase.Preparing);
+    expect(status([edit(), message('assistant'), ...otherTask])).toMatchObject({
+      phase: ImageEditJobPhase.Failed,
+      labelKey: 'imageEditNoResult',
+    });
     expect(status([...otherTask, edit(), mediaCall()]).phase).toBe(ImageEditJobPhase.Generating);
+  });
+
+  test('fails instead of staying preparing when the session errors, stops after running, or moves on without replying', () => {
+    expect(imageEditJobStatus({
+      requestId: REQUEST,
+      messages: [edit()],
+      queued: false,
+      running: false,
+      sessionStatus: CoworkSessionStatusValue.Error,
+    })).toMatchObject({ phase: ImageEditJobPhase.Failed, labelKey: 'imageEditNoResult' });
+
+    expect(imageEditJobStatus({
+      requestId: REQUEST,
+      messages: [edit()],
+      queued: false,
+      running: false,
+      sessionStatus: CoworkSessionStatusValue.Idle,
+      observedRunning: true,
+    })).toMatchObject({ phase: ImageEditJobPhase.Failed, labelKey: 'imageEditNoResult' });
+
+    expect(imageEditJobStatus({
+      requestId: REQUEST,
+      messages: [edit(), message('user', {}, '?')],
+      queued: false,
+      running: false,
+    })).toMatchObject({ phase: ImageEditJobPhase.Failed, labelKey: 'imageEditNoResult' });
+
+    expect(imageEditJobStatus({
+      requestId: REQUEST,
+      messages: [edit(), message('system', {}, '继续会话失败: active write handle')],
+      queued: false,
+      running: false,
+      sessionStatus: CoworkSessionStatusValue.Error,
+    })).toMatchObject({
+      phase: ImageEditJobPhase.Failed,
+      labelKey: 'imageEditNoResult',
+      reason: '继续会话失败: active write handle',
+    });
   });
 });

@@ -9,6 +9,7 @@ import {
 import { setLanguage } from '../i18n';
 import type { PermissionRequest, PermissionResult } from '../libs/agentEngine/types';
 import {
+  DEFAULT_IM_APPROVAL_TIMEOUT_MS,
   formatImApprovalActionSummary,
   formatImApprovalPrompt,
   ImApprovalDecision,
@@ -57,9 +58,10 @@ describe('imApprovalRelay helpers', () => {
     expect(summary.action).toBe('bash: rm -rf ./tmp-cache');
     expect(summary.reason).toContain('file-delete');
 
-    const prompt = formatImApprovalPrompt(req, 90_000);
+    const prompt = formatImApprovalPrompt(req, DEFAULT_IM_APPROVAL_TIMEOUT_MS);
+    expect(DEFAULT_IM_APPROVAL_TIMEOUT_MS).toBe(300_000);
     expect(prompt).toContain('bash: rm -rf ./tmp-cache');
-    expect(prompt).toContain('90');
+    expect(prompt).toContain('300');
     expect(prompt).toContain('1 或 同意');
   });
 });

@@ -17,6 +17,7 @@ import {
   resolveModelCustomTagLabel,
   resolveNestedCascadePlacement,
   resolvePickerThinkingLevel,
+  resolvePortalDropdownPlacement,
   shouldRenderPlanModelLoginPrompt,
   shouldRenderSelectedModelUnavailableFallback,
   supportsConfigurableModelThinkingProtocol,
@@ -193,6 +194,53 @@ test('keeps a third panel cascading outward when the viewport has room', () => {
     left: 740,
     side: CascadeSide.Right,
   });
+});
+
+test('keeps the portal model dropdown inside the chat pane boundary when a right sidebar is open', () => {
+  // Split pane: chat occupies 0..475, Agent Browser WebContentsView occupies 475..1000.
+  expect(resolvePortalDropdownPlacement({
+    anchorLeft: 300,
+    anchorRight: 375,
+    alignToTriggerEnd: true,
+    viewportWidth: 1000,
+    boundaryLeft: 0,
+    boundaryRight: 475,
+  })).toEqual({ left: 15, width: 360 });
+
+  // Even when left-aligned is requested, a trigger near the right sidebar flips inside the chat pane.
+  expect(resolvePortalDropdownPlacement({
+    anchorLeft: 300,
+    anchorRight: 375,
+    alignToTriggerEnd: false,
+    viewportWidth: 1000,
+    boundaryLeft: 0,
+    boundaryRight: 475,
+  })).toEqual({ left: 15, width: 360 });
+});
+
+test('extends portal dropdown leftward over HTML sidebar before capping width when chat pane is narrow', () => {
+  // Left HTML sidebar 0..240, narrow chat 240..580 (340px), Agent Browser 580..1200.
+  const placement = resolvePortalDropdownPlacement({
+    anchorLeft: 460,
+    anchorRight: 530,
+    alignToTriggerEnd: true,
+    viewportWidth: 1200,
+    boundaryLeft: 240,
+    boundaryRight: 580,
+  });
+  expect(placement).toEqual({ left: 170, width: 360 });
+  expect(placement.left + placement.width).toBeLessThanOrEqual(580 - 8);
+});
+
+test('caps portal dropdown width when total space left of the right sidebar is narrower than 360px', () => {
+  expect(resolvePortalDropdownPlacement({
+    anchorLeft: 210,
+    anchorRight: 290,
+    alignToTriggerEnd: true,
+    viewportWidth: 900,
+    boundaryLeft: 0,
+    boundaryRight: 320,
+  })).toEqual({ left: 8, width: 304 });
 });
 
 test('caps the model list at its default height when space allows', () => {

@@ -3,12 +3,12 @@ import './imageEditProgress.css';
 
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useEffect, useMemo, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { i18nService } from '../../../services/i18n';
 import { imageEditTitle } from '../../../services/imageEditing';
 import type { RootState } from '../../../store';
-import type { ImageEditJob } from '../../../store/slices/imageEditorSlice';
+import { type ImageEditJob, markImageEditJobRunning } from '../../../store/slices/imageEditorSlice';
 import { CoworkSessionStatusValue } from '../../../types/cowork';
 import { formatElapsed } from '../../cowork/MediaTaskCard';
 import { AiEditIcon } from './ImageEditingIcons';
@@ -19,11 +19,24 @@ const buttonClass = 'inline-flex h-8 shrink-0 items-center justify-center rounde
 const ghostClass = `${buttonClass} text-secondary hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10`;
 
 export function useImageEditJobStatus(job?: ImageEditJob): ImageEditJobStatus | undefined {
+  const dispatch = useDispatch();
   const session = useSelector((state: RootState) => job && state.cowork.currentSession?.id === job.sessionId ? state.cowork.currentSession : undefined);
   const queued = useSelector((state: RootState) => !!job && (state.cowork.pendingSteers[job.sessionId] ?? [])
     .some(steer => steer.attachments?.some(attachment => attachment.imageEdit?.id === job.requestId)));
-  return useMemo(() => job && imageEditJobStatus({ requestId: job.requestId, messages: session?.messages ?? [], queued,
-    running: session?.status === CoworkSessionStatusValue.Running }), [job, queued, session]);
+  const running = session?.status === CoworkSessionStatusValue.Running;
+  useEffect(() => {
+    if (job && !queued && running && !job.observedRunning) {
+      dispatch(markImageEditJobRunning(job.requestId));
+    }
+  }, [dispatch, job, queued, running]);
+  return useMemo(() => job && imageEditJobStatus({
+    requestId: job.requestId,
+    messages: session?.messages ?? [],
+    queued,
+    running,
+    sessionStatus: session?.status,
+    observedRunning: job.observedRunning === true,
+  }), [job, queued, running, session]);
 }
 
 /** Stands in for the tool panel while an edit runs, so the editor shows what is happening instead of going quiet. */
