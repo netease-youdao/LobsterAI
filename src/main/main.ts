@@ -5975,7 +5975,26 @@ if (!gotTheLock) {
         });
         if (!isRequestAccountCurrent()) return staleAccountResult();
         if (!response.ok) throw new Error(t('mediaWatermarkEraseUnavailable'));
-        const body = await response.json() as { code: number; message?: string; data?: { url?: string } };
+        const body = await response.json() as {
+          code: number; message?: string; data?: { url?: string; error?: { reason?: string } };
+        };
+        if (!isRequestAccountCurrent() || serverBaseUrl !== getServerApiBaseUrl()) return staleAccountResult();
+        if (body.code === 4000 && body.data?.error?.reason === 'WATERMARK_TEMPLATE_MISMATCH') {
+          request.signal?.throwIfAborted();
+          if (sessionId && turnUserMessageId && getCoworkStore().getLatestUserMessage(sessionId)?.id !== turnUserMessageId) {
+            return imageConfirmationFailure({ behavior: ConfirmationBehavior.Deny, reason: MediaConfirmationReason.Interrupted }, t);
+          }
+          // Reuse the same tool call for model selection, credit approval, accounting and task recovery.
+          // The model edit has a distinct operation, so it cannot re-enter the template check.
+          const result = await getMcpRuntime().executeMediaGeneration({
+            ...request,
+            args: {
+              action: MediaGenerationAction.Generate, imageOperation: ImageProcessingOperation.EraseWatermark,
+              image: source, prompt: args.prompt, model: args.model, filename: args.filename,
+            },
+          });
+          return { ...result, content: [{ type: 'text', text: t('mediaWatermarkTemplateMismatch') }, ...result.content] };
+        }
         if (body.code !== 0 || !body.data?.url?.startsWith('https://')) {
           throw new Error(body.message || t('mediaWatermarkEraseUnavailable'));
         }
@@ -6402,7 +6421,24 @@ if (!gotTheLock) {
       const maxMediaBytes = 50 * 1024 * 1024;
       const sessionCwd = sessionId ? getCoworkStore().getSession(sessionId)?.cwd?.trim() : undefined;
       const resolvedLocalFileBySource = new Map<string, string>();
+      const validateImage = (buf: Buffer) => {
+        if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
+        const decodedImage = nativeImage.createFromBuffer(buf);
+        const dimensions = decodedImage.isEmpty() ? readImageDimensions(buf) : decodedImage.getSize();
+        const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
+        if (dimensions && (dimensions.width < minimum || dimensions.height < minimum)) {
+          throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
+        }
+      };
       const resolveRef = async (ref: string): Promise<string> => {
+        // The free template path also accepts larger images. Apply the model's usual input checks
+        // to the exact bytes that failed the template check before starting a paid edit.
+        if (imageOperation === ImageProcessingOperation.EraseWatermark && ref?.startsWith('data:image/')) {
+          const offset = ref.indexOf(',') + 1;
+          if (!offset || !ref.slice(0, offset).endsWith(';base64,')) throw new Error(t('mediaImageProcessingSource'));
+          if (ref.length - offset > 4 * Math.ceil(maxImageBytes / 3)) throw new Error(t('mediaTaskInputTooLarge'));
+          validateImage(Buffer.from(ref.slice(offset), 'base64'));
+        }
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
         const filePath = ref.startsWith('file://')
           ? fileURLToPath(ref)
@@ -6422,15 +6458,7 @@ if (!gotTheLock) {
         const buf = await fs.promises.readFile(filePath);
         // DSH stores attached images at content-addressed paths without extensions.
         const mime = extensionMime ?? sniffImageMimeType(buf) ?? 'application/octet-stream';
-        if (mime.startsWith('image/')) {
-          if (buf.length > maxImageBytes) throw new Error(t('mediaTaskInputTooLarge'));
-          const decodedImage = nativeImage.createFromBuffer(buf);
-          const dimensions = decodedImage.isEmpty() ? readImageDimensions(buf) : decodedImage.getSize();
-          const minimum = selectedModel.toLowerCase().includes('wan') ? 240 : 2;
-          if (dimensions && (dimensions.width < minimum || dimensions.height < minimum)) {
-            throw new Error(t('mediaTaskImageTooSmall', { size: minimum }));
-          }
-        }
+        if (mime.startsWith('image/')) validateImage(buf);
         const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
         resolvedLocalFileBySource.set(dataUrl, filePath);
         return dataUrl;

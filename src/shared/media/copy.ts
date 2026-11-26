@@ -1,5 +1,6 @@
 export const mediaTranslations = {
   zh: {
+    mediaWatermarkTemplateMismatch: '固定模板未匹配，已转入图片编辑流程，按所选模型计费。',
     mediaWatermarkEraseUnavailable: '水印处理失败，请提交本地保存的完整带水印图片。',
     mediaImageProcessingUnavailable: '当前服务或所选模型不支持该操作。可查询模型列表，选择支持此操作的图片编辑模型。',
     mediaImageProcessingSource: '请选择一张要处理的原图。',
@@ -72,6 +73,7 @@ export const mediaTranslations = {
     mediaTaskVideoUrlRequired: '所选模型的参考视频需要可访问的 HTTP(S) 链接，请先上传视频后再生成。',
   },
   en: {
+    mediaWatermarkTemplateMismatch: 'The fixed watermark did not match. Image editing uses the selected model’s pricing.',
     mediaWatermarkEraseUnavailable: 'Watermark removal failed. Submit the full watermarked image saved on your device.',
     mediaImageProcessingUnavailable: 'This operation is unavailable with the current service or model. List the image models to find a compatible one.',
     mediaImageProcessingSource: 'Select one source image to process.',

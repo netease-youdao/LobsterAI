@@ -25,6 +25,7 @@ export const MediaTaskPhase = {
 export const MediaProtocol = { Legacy: 1, Durable: 2 } as const;
 export const ImageProcessingOperation = {
   Erase: 'erase',
+  EraseWatermark: 'erase_watermark',
   Enhance: 'enhance',
   Beauty: 'beauty',
   Restore: 'restore',
