@@ -17,6 +17,7 @@ export const BUNDLED_SKILL_DISPLAY_NAMES: Record<string, LocalizedText> = {
   'docx': { zh: 'Word 文档处理', en: 'Word Documents' },
   'frontend-design': { zh: '前端页面设计', en: 'Frontend Design' },
   'imap-smtp-email': { zh: '邮件收发', en: 'Email (IMAP/SMTP)' },
+  'lobsterai-image-processing': { zh: '图片处理', en: 'Image Processing' },
   'local-tools': { zh: '本地工具', en: 'Local Tools' },
   'pdf': { zh: 'PDF 处理', en: 'PDF Toolkit' },
   'pptx': { zh: 'PPT 制作', en: 'PowerPoint Slides' },
