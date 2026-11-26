@@ -26,6 +26,7 @@ import {
   lookupBuiltinCatalogModel,
   normalizeProtocol,
   normalizeProviderBaseUrl,
+  resolveCatalogModelCompat,
   resolveCatalogProviderCandidates,
   resolveDefaultRequestMaxTokens,
   resolveEffectiveContextWindow,
@@ -272,7 +273,15 @@ function buildResolvedProfile(entry, protocols, getBuiltinModel, getRequestConte
       modelApi,
     );
 
-    const compat = resolveModelCompat(modelApi, modelBaseUrl, entry.compat, rawModel.compat, api);
+    const catalogCompat = resolveCatalogModelCompat(modelApi, catalogModel);
+    const compat = resolveModelCompat(
+      modelApi,
+      modelBaseUrl,
+      entry.compat,
+      rawModel.compat,
+      api,
+      catalogCompat,
+    );
     const thinkingLevelMap = resolveModelThinkingLevelMap(rawModel, reasoning, catalogModel);
     if (hasVerifiedModelThinkingLevels(rawModel, reasoning, catalogModel)) {
       verifiedThinkingModels.add(modelId);

@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
 import { OpenClawApi, OpenClawProviderId } from './constants';
+import { buildModelCapabilityOverrides } from './modelCapabilityOverrides';
 import {
+  applyModelRuntimeProfileDefaults,
   applyModelRuntimeProfileMetadata,
   findKimiK3ReservedCustomParamKeys,
   getModelRuntimeProfileDefinition,
   KIMI_K3_RUNTIME_PROFILE,
+  migrateKimiK3LegacyCustomParams,
   ModelRuntimeProfile,
   ModelRuntimeProfileSource,
   normalizeModelIdForComparison,
@@ -138,4 +141,123 @@ test('findKimiK3ReservedCustomParamKeys reports only runtime-owned keys', () => 
     temperature: 1,
   })).toEqual(['max_tokens', 'reasoning_effort', 'temperature']);
   expect(findKimiK3ReservedCustomParamKeys({ service_tier: 'priority' })).toEqual([]);
+});
+
+describe('applyModelRuntimeProfileDefaults', () => {
+  test('fills missing Kimi K3 limits and repairs unoverridden flags while preserving explicit user settings', () => {
+    expect(applyModelRuntimeProfileDefaults({
+      supportsImage: false,
+      supportsThinking: false,
+    }, ModelRuntimeProfile.MoonshotKimiK3)).toEqual({
+      supportsImage: true,
+      supportsVideo: true,
+      supportsThinking: true,
+      contextWindow: 1_048_576,
+      maxTokens: 1_048_576,
+    });
+
+    expect(applyModelRuntimeProfileDefaults({
+      supportsImage: false,
+      supportsThinking: true,
+      contextWindow: 200_000,
+      maxTokens: 262_144,
+    }, ModelRuntimeProfile.MoonshotKimiK3, {
+      supportsImage: false,
+    })).toEqual({
+      supportsImage: false,
+      supportsVideo: true,
+      supportsThinking: true,
+      contextWindow: 200_000,
+      maxTokens: 262_144,
+    });
+  });
+
+  test('buildModelCapabilityOverrides tracks explicit opt-outs against K3 runtime profile defaults', () => {
+    expect(buildModelCapabilityOverrides(
+      'custom_0',
+      'kimi-k3',
+      { supportsImage: true, supportsThinking: true },
+      ModelRuntimeProfile.MoonshotKimiK3,
+    )).toBeUndefined();
+
+    expect(buildModelCapabilityOverrides(
+      'custom_0',
+      'kimi-k3',
+      { supportsImage: false, supportsThinking: false },
+      ModelRuntimeProfile.MoonshotKimiK3,
+    )).toEqual({ image: false, thinking: false });
+  });
+});
+
+describe('migrateKimiK3LegacyCustomParams', () => {
+  test('promotes legacy max_tokens into maxTokens over stock/legacy defaults and drops empty customParams', () => {
+    expect(migrateKimiK3LegacyCustomParams(
+      { max_tokens: 262_144 },
+      1_048_576,
+    )).toEqual({
+      customParams: undefined,
+      migratedMaxTokens: 262_144,
+      strippedKeys: ['max_tokens'],
+    });
+
+    expect(migrateKimiK3LegacyCustomParams(
+      { max_tokens: 65_536, temperature: 1, compat: { maxTokensField: 'max_tokens' }, service_tier: 'priority' },
+      8_192,
+    )).toEqual({
+      customParams: { service_tier: 'priority' },
+      migratedMaxTokens: 65_536,
+      strippedKeys: ['compat', 'max_tokens', 'temperature'],
+    });
+  });
+
+  test('preserves already-customized maxTokens and respects promoteOverDefaultMaxTokens: false', () => {
+    expect(migrateKimiK3LegacyCustomParams(
+      { max_tokens: 262_144 },
+      65_536,
+    )).toEqual({
+      customParams: undefined,
+      migratedMaxTokens: undefined,
+      strippedKeys: ['max_tokens'],
+    });
+
+    expect(migrateKimiK3LegacyCustomParams(
+      { max_tokens: 262_144 },
+      1_048_576,
+      { promoteOverDefaultMaxTokens: false },
+    )).toEqual({
+      customParams: undefined,
+      migratedMaxTokens: undefined,
+      strippedKeys: ['max_tokens'],
+    });
+
+    expect(migrateKimiK3LegacyCustomParams(
+      { max_tokens: 262_144 },
+      undefined,
+      { promoteOverDefaultMaxTokens: false },
+    )).toEqual({
+      customParams: undefined,
+      migratedMaxTokens: 262_144,
+      strippedKeys: ['max_tokens'],
+    });
+  });
+
+  test('ignores out-of-range or non-integer max_tokens while keeping non-reserved keys intact', () => {
+    expect(migrateKimiK3LegacyCustomParams(
+      { max_tokens: '262144', top_k: 32 },
+      undefined,
+    )).toEqual({
+      customParams: { top_k: 32 },
+      migratedMaxTokens: undefined,
+      strippedKeys: ['max_tokens'],
+    });
+
+    expect(migrateKimiK3LegacyCustomParams(
+      { service_tier: 'priority' },
+      undefined,
+    )).toEqual({
+      customParams: { service_tier: 'priority' },
+      migratedMaxTokens: undefined,
+      strippedKeys: [],
+    });
+  });
 });

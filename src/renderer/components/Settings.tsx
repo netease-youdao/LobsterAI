@@ -21,9 +21,10 @@ import {
 } from '../../shared/notifications/constants';
 import { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import {
-  applyModelRuntimeProfileMetadata,
+  applyModelRuntimeProfileDefaults,
   buildModelCapabilityOverrides,
-  findKimiK3ReservedCustomParamKeys,
+  migrateKimiK3LegacyCustomParams,
+  ModelRuntimeProfile,
   ModelRuntimeProfileSource,
   OpenClawApi,
   ProviderAuthType,
@@ -31,7 +32,6 @@ import {
   ProviderRegistry,
   resolveCodingPlanBaseUrl,
   resolveModelRuntimeProfile,
-  supportsGeminiApiFormatSelection,
 } from '../../shared/providers';
 import { isUrlOnDomain } from '../../shared/url/hostname';
 import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
@@ -86,12 +86,16 @@ import GeneralSettingsSection from './settings/GeneralSettingsSection';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
 import ManualDataMigrationAction from './settings/ManualDataMigrationAction';
 import MemorySettings from './settings/MemorySettings';
+import ModelDiscoveryDialog from './settings/ModelDiscoveryDialog';
+import ModelEditorDialog from './settings/ModelEditorDialog';
 import {
   buildGeminiConnectionTestRequest,
   buildOpenAICompatibleChatCompletionsUrl,
   buildOpenAIConnectionTestRequestBody,
   buildOpenAIResponsesUrl,
   CONNECTIVITY_TEST_TOKEN_BUDGET,
+  CONTEXT_WINDOW_MAX,
+  CONTEXT_WINDOW_MIN,
   CUSTOM_PROVIDER_KEYS,
   getDefaultActiveProvider,
   getDefaultProviders,
@@ -102,6 +106,7 @@ import {
   hasProviderAuthConfigured,
   MAX_OUTPUT_TOKENS_MAX,
   MAX_OUTPUT_TOKENS_MIN,
+  parseContextWindowInput,
   parseMaxOutputTokensInput,
   type ProviderConfig,
   providerKeys,
@@ -113,7 +118,7 @@ import {
   shouldAutoSwitchProviderBaseUrl,
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
-import ModelSettingsSection, { DeleteProviderConfirmDialog, ModelEditorDialog } from './settings/ModelSettingsSection';
+import ModelSettingsSection, { DeleteProviderConfirmDialog } from './settings/ModelSettingsSection';
 import ProviderTransferDialog from './settings/ProviderTransferDialog';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
 import { SettingsSwitch } from './settings/SettingsLayout';
@@ -132,6 +137,7 @@ import {
   SETTINGS_SECTION_TITLE_TEXT,
 } from './settings/settingsTypography';
 import { useDataMigration } from './settings/useDataMigration';
+import { useModelDiscovery } from './settings/useModelDiscovery';
 import { useProviderTransfer } from './settings/useProviderTransfer';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import SkinPresentationScope from './skin/SkinPresentationScope';
@@ -1350,6 +1356,11 @@ const Settings: React.FC<SettingsProps> = ({
   });
   const isImportingProviders = providerTransfer.reading || providerTransfer.busy;
   const isExportingProviders = providerTransfer.busy;
+  const modelDiscovery = useModelDiscovery({
+    activeProvider,
+    providers,
+    setProviders,
+  });
 
 
 
@@ -1395,7 +1406,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [newModelSupportsThinking, setNewModelSupportsThinking] = useState(false);
-  const [newModelContextWindow, setNewModelContextWindow] = useState<number | undefined>(undefined);
+  const [newModelContextWindow, setNewModelContextWindow] = useState<string>('');
   const [newModelMaxTokens, setNewModelMaxTokens] = useState<string>('');
   const [newModelCustomParams, setNewModelCustomParams] = useState<string>('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
@@ -2179,7 +2190,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -3441,15 +3452,16 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   // Handlers for model operations
-  const handleAddModel = () => {
+  const handleAddModel = (prefillModelId?: string) => {
+    const prefill = typeof prefillModelId === 'string' ? prefillModelId.trim() : '';
     setIsAddingModel(true);
     setIsEditingModel(false);
     setEditingModelId(null);
-    setNewModelName('');
-    setNewModelId('');
+    setNewModelName(prefill);
+    setNewModelId(prefill);
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -3464,6 +3476,27 @@ const Settings: React.FC<SettingsProps> = ({
     customParams?: Record<string, unknown>,
     maxTokens?: number,
   ) => {
+    const providerConfig = providers[activeProvider];
+    const effectiveApiFormat = getEffectiveApiFormat(
+      activeProvider,
+      providerConfig?.apiFormat,
+    );
+    const runtimeProfile = resolveModelRuntimeProfile({
+      source: isCustomProvider(activeProvider)
+        ? ModelRuntimeProfileSource.Custom
+        : ModelRuntimeProfileSource.BuiltIn,
+      providerId: activeProvider,
+      modelId,
+      api: effectiveApiFormat === 'openai'
+        ? OpenClawApi.OpenAICompletions
+        : OpenClawApi.AnthropicMessages,
+    });
+    const kimiK3Migration = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
+      ? migrateKimiK3LegacyCustomParams(customParams, maxTokens)
+      : null;
+    const effectiveMaxTokens = kimiK3Migration?.migratedMaxTokens ?? maxTokens;
+    const effectiveCustomParams = kimiK3Migration ? kimiK3Migration.customParams : customParams;
+
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
@@ -3471,11 +3504,11 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId(modelId);
     setNewModelSupportsImage(!!supportsImage);
     setNewModelSupportsThinking(!!supportsThinking);
-    setNewModelContextWindow(contextWindow);
-    setNewModelMaxTokens(maxTokens !== undefined ? String(maxTokens) : '');
+    setNewModelContextWindow(contextWindow !== undefined ? String(contextWindow) : '');
+    setNewModelMaxTokens(effectiveMaxTokens !== undefined ? String(effectiveMaxTokens) : '');
     setNewModelCustomParams(
-      customParams && Object.keys(customParams).length > 0
-        ? JSON.stringify(customParams, null, 2)
+      effectiveCustomParams && Object.keys(effectiveCustomParams).length > 0
+        ? JSON.stringify(effectiveCustomParams, null, 2)
         : '',
     );
     setModelFormError(null);
@@ -3499,25 +3532,13 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleSaveNewModel = () => {
     const modelId = newModelId.trim();
-
-    if (activeProvider === 'ollama' || activeProvider === 'lm-studio') {
-      // For Ollama/LM Studio, only the model name (stored as modelId) is required
-      if (!modelId) {
-        setModelFormError(i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNameRequired' : 'ollamaModelNameRequired'));
-        return;
-      }
-    } else {
-      const modelName = newModelName.trim();
-      if (!modelName || !modelId) {
-        setModelFormError(i18nService.t('modelNameAndIdRequired'));
-        return;
-      }
+    if (!modelId) {
+      setModelFormError(i18nService.t('modelIdRequired'));
+      return;
     }
 
-    // For Ollama, auto-fill display name from modelId if not provided
-    const modelName = activeProvider === 'ollama' || activeProvider === 'lm-studio'
-      ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
-      : newModelName.trim();
+    // Display name is optional for all providers; leave blank to show modelId.
+    const modelName = newModelName.trim() || modelId;
 
     const currentModels = providers[activeProvider].models ?? [];
     const hasDuplicateModel = hasEquivalentProviderModelId(
@@ -3561,23 +3582,18 @@ const Settings: React.FC<SettingsProps> = ({
         ? OpenClawApi.OpenAICompletions
         : OpenClawApi.AnthropicMessages,
     });
-    const conflictingCustomParamKeys = runtimeProfile
-      ? findKimiK3ReservedCustomParamKeys(parsedCustomParams)
-      : [];
-    if (conflictingCustomParamKeys.length > 0) {
+
+    const parsedContextWindow = parseContextWindowInput(newModelContextWindow);
+    if (parsedContextWindow === null) {
       setModelFormError(
-        i18nService.t('kimiK3CustomParamsConflict').replace(
-          '{keys}',
-          conflictingCustomParamKeys.join(', '),
-        ),
+        i18nService.t('contextWindowInvalid')
+          .replace('{min}', String(CONTEXT_WINDOW_MIN))
+          .replace('{max}', String(CONTEXT_WINDOW_MAX)),
       );
       return;
     }
 
-    // Runtime profiles own the output cap, so the (hidden) field is ignored there.
-    const parsedMaxTokens = runtimeProfile
-      ? undefined
-      : parseMaxOutputTokensInput(newModelMaxTokens);
+    const parsedMaxTokens = parseMaxOutputTokensInput(newModelMaxTokens);
     if (parsedMaxTokens === null) {
       setModelFormError(
         i18nService.t('maxOutputTokensInvalid')
@@ -3587,15 +3603,27 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
+    const kimiK3Migration = runtimeProfile === ModelRuntimeProfile.MoonshotKimiK3
+      ? migrateKimiK3LegacyCustomParams(parsedCustomParams, parsedMaxTokens, {
+        promoteOverDefaultMaxTokens: false,
+      })
+      : null;
+    const effectiveCustomParams = kimiK3Migration
+      ? kimiK3Migration.customParams
+      : parsedCustomParams;
+    const effectiveMaxTokens = parsedMaxTokens ?? kimiK3Migration?.migratedMaxTokens;
+
     const editingModel = currentModels.find(model => model.id === editingModelId);
-    // Runtime profiles fix the capabilities, so there is nothing to override.
-    const capabilityOverrides = runtimeProfile
-      ? undefined
-      : buildModelCapabilityOverrides(activeProvider, modelId, {
+    const capabilityOverrides = buildModelCapabilityOverrides(
+      activeProvider,
+      modelId,
+      {
         supportsImage: newModelSupportsImage,
         supportsThinking: newModelSupportsThinking,
-      });
-    const resolvedProfileMetadata = applyModelRuntimeProfileMetadata({
+      },
+      runtimeProfile,
+    );
+    const resolvedProfileMetadata = applyModelRuntimeProfileDefaults({
       supportsImage: ProviderRegistry.resolveModelSupportsImage(
         activeProvider,
         modelId,
@@ -3613,14 +3641,20 @@ const Settings: React.FC<SettingsProps> = ({
         newModelSupportsThinking,
         capabilityOverrides?.thinking,
       ),
-      contextWindow: newModelContextWindow,
-      // An empty field falls back to the registry default instead of the
-      // previously saved value, so clearing it restores automatic inference.
-      maxTokens: parsedMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
+      contextWindow: parsedContextWindow ?? ProviderRegistry.resolveModelContextWindow(
         activeProvider,
         modelId,
       ),
-    }, runtimeProfile);
+      // An empty field falls back to the registry default instead of the
+      // previously saved value, so clearing it restores automatic inference.
+      maxTokens: effectiveMaxTokens ?? ProviderRegistry.resolveModelMaxTokens(
+        activeProvider,
+        modelId,
+      ),
+    }, runtimeProfile, {
+      supportsImage: capabilityOverrides?.image,
+      supportsThinking: capabilityOverrides?.thinking,
+    });
     const nextModel = {
       id: modelId,
       name: modelName,
@@ -3633,8 +3667,8 @@ const Settings: React.FC<SettingsProps> = ({
       ...(resolvedProfileMetadata.maxTokens !== undefined
         ? { maxTokens: resolvedProfileMetadata.maxTokens }
         : {}),
-      ...(parsedCustomParams && Object.keys(parsedCustomParams).length > 0
-        ? { customParams: parsedCustomParams }
+      ...(effectiveCustomParams && Object.keys(effectiveCustomParams).length > 0
+        ? { customParams: effectiveCustomParams }
         : {}),
       ...(capabilityOverrides ? { capabilityOverrides } : {}),
     };
@@ -3657,7 +3691,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -3671,7 +3705,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewModelId('');
     setNewModelSupportsImage(false);
     setNewModelSupportsThinking(false);
-    setNewModelContextWindow(undefined);
+    setNewModelContextWindow('');
     setNewModelMaxTokens('');
     setNewModelCustomParams('');
     setModelFormError(null);
@@ -3701,6 +3735,7 @@ const Settings: React.FC<SettingsProps> = ({
         || isShortcutInputActive(),
       layers: [
         { isOpen: pendingDeleteProvider !== null, dismiss: () => setPendingDeleteProvider(null) },
+        { isOpen: modelDiscovery.dialog !== null, dismiss: modelDiscovery.closeDialog },
         { isOpen: isAddingModel || isEditingModel, dismiss: handleCancelModelEdit },
         { isOpen: isTestResultModalOpen, dismiss: () => setIsTestResultModalOpen(false) },
         { isOpen: showOpenClawRepairConfirm, dismiss: () => setShowOpenClawRepairConfirm(false) },
@@ -3732,6 +3767,19 @@ const Settings: React.FC<SettingsProps> = ({
       provider,
     });
     setIsTestResultModalOpen(true);
+  };
+
+  const handleFetchModels = () => {
+    const providerConfig = providers[activeProvider];
+    if (!providerConfig) return;
+    const copilotSignedIn = copilotAuthStatus === 'authenticated'
+      || providers[ProviderName.Copilot]?.authType === ProviderAuthType.OAuth;
+    void modelDiscovery.fetchModels(activeProvider, providerConfig, {
+      minimaxIsOAuthMode,
+      openaiIsOAuthMode,
+      xaiIsOAuthMode,
+      copilotSignedIn,
+    });
   };
 
   // 测试 API 连接
@@ -3822,15 +3870,14 @@ const Settings: React.FC<SettingsProps> = ({
       }
 
       // Determine format after all overrides (OAuth may switch to openai)
-      // 统一为两种协议格式：
+      // - gemini: native /models/{model}:generateContent (built-in & custom Gemini)
       // - anthropic: /v1/messages
-      // - openai provider: /v1/responses
+      // - openai Responses mode (default for built-in OpenAI API Key & custom Responses): /v1/responses
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
-      const useCustomGeminiFormat = effectiveApiFormat === 'gemini'
-        && supportsGeminiApiFormatSelection(testingProvider);
+      const useGeminiFormat = effectiveApiFormat === 'gemini';
 
-      if (useCustomGeminiFormat) {
+      if (useGeminiFormat) {
         const geminiRequest = buildGeminiConnectionTestRequest(normalizedBaseUrl, firstModel.id);
         response = await window.electron.api.fetch({
           url: geminiRequest.url,
@@ -4775,7 +4822,11 @@ const Settings: React.FC<SettingsProps> = ({
             handleCopilotSignOut={handleCopilotSignOut}
             handleCopilotCancelAuth={handleCopilotCancelAuth}
             handleTestConnection={handleTestConnection}
-            handleAddModel={handleAddModel}
+            isFetchingModels={modelDiscovery.isFetching}
+            fetchModelsError={modelDiscovery.error}
+            onClearFetchModelsError={modelDiscovery.clearError}
+            handleFetchModels={handleFetchModels}
+            handleAddModel={() => handleAddModel()}
             handleEditModel={handleEditModel}
             handleDeleteModel={handleDeleteModel}
           />
@@ -5153,31 +5204,48 @@ const Settings: React.FC<SettingsProps> = ({
           />
         )}
 
-        <ModelEditorDialog
-          activeProvider={activeProvider}
-          isAddingModel={isAddingModel}
-          isEditingModel={isEditingModel}
-          newModelName={newModelName}
-          setNewModelName={setNewModelName}
-          newModelId={newModelId}
-          setNewModelId={setNewModelId}
-          newModelSupportsImage={newModelSupportsImage}
-          setNewModelSupportsImage={setNewModelSupportsImage}
-          newModelSupportsThinking={newModelSupportsThinking}
-          setNewModelSupportsThinking={setNewModelSupportsThinking}
-          newModelContextWindow={newModelContextWindow}
-          setNewModelContextWindow={setNewModelContextWindow}
-          newModelMaxTokens={newModelMaxTokens}
-          setNewModelMaxTokens={setNewModelMaxTokens}
-          newModelCustomParams={newModelCustomParams}
-          setNewModelCustomParams={setNewModelCustomParams}
-          activeProviderConfig={providers[activeProvider]}
-          modelFormError={modelFormError}
-          setModelFormError={setModelFormError}
-          handleSaveNewModel={handleSaveNewModel}
-          handleCancelModelEdit={handleCancelModelEdit}
-          handleModelDialogKeyDown={handleModelDialogKeyDown}
-        />
+        {modelDiscovery.dialog && (
+          <ModelDiscoveryDialog
+            key={`${modelDiscovery.dialog.provider}-${modelDiscovery.dialog.openedAt}`}
+            candidates={modelDiscovery.dialog.candidates}
+            currentModels={providers[modelDiscovery.dialog.provider]?.models ?? []}
+            onClose={modelDiscovery.closeDialog}
+            onConfirm={modelDiscovery.applySelection}
+            onManualAdd={(prefillModelId) => {
+              modelDiscovery.closeDialog();
+              handleAddModel(prefillModelId);
+            }}
+          />
+        )}
+
+        {(isAddingModel || isEditingModel) && (
+          <ModelEditorDialog
+            key={`${activeProvider}-${editingModelId ?? 'new'}-${isAddingModel ? 'add' : 'edit'}`}
+            activeProvider={activeProvider}
+            isAddingModel={isAddingModel}
+            isEditingModel={isEditingModel}
+            newModelName={newModelName}
+            setNewModelName={setNewModelName}
+            newModelId={newModelId}
+            setNewModelId={setNewModelId}
+            newModelSupportsImage={newModelSupportsImage}
+            setNewModelSupportsImage={setNewModelSupportsImage}
+            newModelSupportsThinking={newModelSupportsThinking}
+            setNewModelSupportsThinking={setNewModelSupportsThinking}
+            newModelContextWindow={newModelContextWindow}
+            setNewModelContextWindow={setNewModelContextWindow}
+            newModelMaxTokens={newModelMaxTokens}
+            setNewModelMaxTokens={setNewModelMaxTokens}
+            newModelCustomParams={newModelCustomParams}
+            setNewModelCustomParams={setNewModelCustomParams}
+            activeProviderConfig={providers[activeProvider]}
+            modelFormError={modelFormError}
+            setModelFormError={setModelFormError}
+            handleSaveNewModel={handleSaveNewModel}
+            handleCancelModelEdit={handleCancelModelEdit}
+            handleModelDialogKeyDown={handleModelDialogKeyDown}
+          />
+        )}
 
         <DeleteProviderConfirmDialog
           pendingDeleteProvider={pendingDeleteProvider}

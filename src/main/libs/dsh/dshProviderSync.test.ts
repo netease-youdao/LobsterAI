@@ -505,6 +505,60 @@ describe('buildDshProvidersPayload', () => {
     expect(kimiModel.customParams).toEqual({ top_k: 32 });
   });
 
+  test('honors explicit user maxTokens, contextWindow, and supportsImage on Kimi K3 while keeping safe defaultMaxTokens', () => {
+    const payload = buildDshProvidersPayload({
+      providers: {
+        moonshot: {
+          enabled: true,
+          apiKey: 'sk-kimi',
+          baseUrl: 'https://api.moonshot.cn/v1',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'kimi-k3',
+              contextWindow: 1_048_576,
+              maxTokens: 262_144,
+              supportsImage: false,
+            },
+          ],
+        },
+        custom_0: {
+          enabled: true,
+          apiKey: 'sk-custom',
+          baseUrl: 'https://proxy.example.com/v1',
+          apiFormat: 'openai',
+          models: [
+            {
+              id: 'kimi-k3',
+              contextWindow: 200_000,
+              maxTokens: 65_536,
+            },
+          ],
+        },
+      },
+    });
+
+    const byId = Object.fromEntries(payload.providers.map((p) => [p.id, p]));
+    expect(byId.moonshot.models[0]).toMatchObject({
+      id: 'kimi-k3',
+      runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+      contextWindow: 1_048_576,
+      maxTokens: 262_144,
+      defaultMaxTokens: 131_072,
+      input: ['text'],
+      reasoning: true,
+    });
+    expect(byId.custom_0.models[0]).toMatchObject({
+      id: 'kimi-k3',
+      runtimeProfile: ModelRuntimeProfile.MoonshotKimiK3,
+      contextWindow: 200_000,
+      maxTokens: 65_536,
+      defaultMaxTokens: 65_536,
+      input: ['text', 'image'],
+      reasoning: true,
+    });
+  });
+
   test('supports per-model Anthropic vs OpenAI format and preset context windows on lobsterai-server', () => {
     const payload = buildDshProvidersPayload({
       modelAuthProxyUrl: 'http://127.0.0.1:45555',

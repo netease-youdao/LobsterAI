@@ -167,6 +167,10 @@ import type { Platform } from '../shared/platform';
 import { type PptAssetRequest, type PptCatalog, PptCreationIpc, type PptPreparedFile } from '../shared/pptCreation/constants';
 import { type PptCoverExportRequest, PptCoverIpc, type PptCoverRequest } from '../shared/pptCreation/cover';
 import { ModelContextWindowIpc, type ModelContextWindowRequest } from '../shared/providers/modelContextWindow';
+import {
+  ProviderModelDiscoveryIpcChannel,
+  type ProviderModelDiscoveryRequest,
+} from '../shared/providers/modelDiscovery';
 import type { ModelThinkingLevel } from '../shared/providers/modelThinking';
 import {
   type ShareDeploymentAnalyzeProjectInput,
@@ -514,6 +518,10 @@ contextBridge.exposeInMainWorld('electron', {
     saveConfig: (update: DecisionModelConfigUpdate) => ipcRenderer.invoke(DecisionModelIpcChannel.SaveConfig, update),
     testConnection: (draft: DecisionModelConfigUpdate) =>
       ipcRenderer.invoke(DecisionModelIpcChannel.TestConnection, draft),
+  },
+  providerModels: {
+    discover: (request: ProviderModelDiscoveryRequest) =>
+      ipcRenderer.invoke(ProviderModelDiscoveryIpcChannel.Discover, request),
   },
   openclaw: {
     engine: {

@@ -339,6 +339,7 @@ import { cancelAllMcpOAuthLogins, registerMcpHandlers } from './ipcHandlers/mcp'
 import { registerMigrationV2Handlers } from './ipcHandlers/migrationV2/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
+import { registerProviderModelDiscoveryHandlers } from './ipcHandlers/providerModelDiscovery';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -9458,6 +9459,8 @@ if (!gotTheLock) {
     setDecisionToolHandler: handler => getMcpRuntime().setDecisionToolHandler(handler),
     syncOpenClawConfig,
   });
+
+  registerProviderModelDiscoveryHandlers();
 
   registerDshHostHandlers({
     getHostManager: () => getDshBootstrap().hostManager,

@@ -1,9 +1,8 @@
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowTopRightOnSquareIcon, CheckCircleIcon, ExclamationCircleIcon, KeyIcon, MagnifyingGlassIcon, ShieldCheckIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, CloudArrowDownIcon, ExclamationCircleIcon, KeyIcon, MagnifyingGlassIcon, PlusIcon, ShieldCheckIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
 import {
-  normalizeModelIdForComparison,
   ProviderAuthType,
   ProviderName,
   ProviderRegistry,
@@ -12,14 +11,15 @@ import {
 import { defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, isCustomProvider } from '../../config';
 import { getProviderIcon } from '../../providers/uiRegistry';
 import { i18nService } from '../../services/i18n';
+import { resolveProviderDiscoveryAvailability } from '../../services/providerModelDiscovery';
 import EditIcon from '../icons/EditIcon';
-import PlusCircleIcon from '../icons/PlusCircleIcon';
 import { GitHubCopilotIcon } from '../icons/providers';
 import TrashIcon from '../icons/TrashIcon';
 import ThemedSelect from '../ui/ThemedSelect';
 import {
   ApiFormatOption,
   CUSTOM_PROVIDER_KEYS,
+  formatCompactTokenCount,
   getApiFormatOption,
   getApiFormatOptions,
   getEffectiveApiFormat,
@@ -52,62 +52,6 @@ const API_FORMAT_OPTION_HINT_KEYS: Record<ApiFormatOption, string> = {
   [ApiFormatOption.OpenAIResponses]: 'apiFormatResponsesHint',
   [ApiFormatOption.Gemini]: 'apiFormatGeminiHint',
 };
-
-// Context Window slider constants & helpers
-const CW_MIN = 32000;
-const CW_MAX = 2_000_000;
-const CW_LOG_MIN = Math.log(CW_MIN);
-const CW_LOG_MAX = Math.log(CW_MAX);
-const CW_DEFAULT = 200_000;
-const CW_SCALE_EXP = 1.5;
-const CW_SLIDER_THUMB_SIZE = 14;
-const CW_SLIDER_THUMB_RADIUS = CW_SLIDER_THUMB_SIZE / 2;
-
-function contextWindowToSlider(value: number): number {
-  const t = (Math.log(Math.max(CW_MIN, Math.min(CW_MAX, value))) - CW_LOG_MIN) / (CW_LOG_MAX - CW_LOG_MIN);
-  return Math.pow(t, CW_SCALE_EXP);
-}
-function sliderToContextWindow(t: number): number {
-  const logT = Math.pow(Math.max(0, Math.min(1, t)), 1 / CW_SCALE_EXP);
-  return Math.round(Math.exp(CW_LOG_MIN + logT * (CW_LOG_MAX - CW_LOG_MIN)) / 1000) * 1000;
-}
-const CW_SNAP_THRESHOLD = 0.025;
-const CW_MARKER_STOPS = [
-  { label: '32K', value: CW_MIN },
-  { label: '64K', value: 64000 },
-  { label: '200K', value: 200000 },
-  { label: '1M', value: 1000000 },
-  { label: '2M', value: CW_MAX },
-].map(m => ({ ...m, pos: contextWindowToSlider(m.value) }));
-
-function sliderThumbCenterPosition(pos: number): string {
-  return `calc(${pos * 100}% + ${(0.5 - pos) * CW_SLIDER_THUMB_SIZE}px)`;
-}
-
-function snapSliderValue(t: number): number {
-  for (const m of CW_MARKER_STOPS) {
-    if (Math.abs(t - m.pos) < CW_SNAP_THRESHOLD) return m.pos;
-  }
-  return t;
-}
-
-function parseContextWindowInput(input: string): number | null {
-  const s = input.trim().toLowerCase().replace(/,/g, '');
-  const match = s.match(/^(\d+(?:\.\d+)?)\s*(k|m)?$/);
-  if (!match) return null;
-  let num = parseFloat(match[1]);
-  if (match[2] === 'k') num *= 1000;
-  else if (match[2] === 'm') num *= 1_000_000;
-  const result = Math.round(num);
-  if (result < CW_MIN || result > CW_MAX) return null;
-  return result;
-}
-
-function formatContextWindow(value: number): string {
-  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`;
-  if (value >= 1000 && value % 1000 === 0) return `${value / 1000}K`;
-  return value.toLocaleString();
-}
 
 type MiniMaxOAuthPhase =
   | { kind: 'idle' }
@@ -192,6 +136,10 @@ export interface ModelSettingsSectionProps {
   handleCopilotSignOut: () => void;
   handleCopilotCancelAuth: () => void;
   handleTestConnection: () => void;
+  isFetchingModels: boolean;
+  fetchModelsError: string | null;
+  onClearFetchModelsError: () => void;
+  handleFetchModels: () => void;
   handleAddModel: () => void;
   handleEditModel: (
     modelId: string,
@@ -204,385 +152,6 @@ export interface ModelSettingsSectionProps {
   ) => void;
   handleDeleteModel: (modelId: string) => void;
 }
-
-export interface ModelEditorDialogProps {
-  activeProvider: ProviderType;
-  isAddingModel: boolean;
-  isEditingModel: boolean;
-  newModelName: string;
-  setNewModelName: (v: string) => void;
-  newModelId: string;
-  setNewModelId: (v: string) => void;
-  newModelSupportsImage: boolean;
-  setNewModelSupportsImage: (v: boolean) => void;
-  newModelSupportsThinking: boolean;
-  setNewModelSupportsThinking: (v: boolean) => void;
-  newModelContextWindow: number | undefined;
-  setNewModelContextWindow: (v: number | undefined) => void;
-  newModelMaxTokens: string;
-  setNewModelMaxTokens: (v: string) => void;
-  newModelCustomParams: string;
-  setNewModelCustomParams: (v: string) => void;
-  activeProviderConfig: ProviderConfig;
-  modelFormError: string | null;
-  setModelFormError: (v: string | null) => void;
-  handleSaveNewModel: () => void;
-  handleCancelModelEdit: () => void;
-  handleModelDialogKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
-}
-
-export const ModelEditorDialog: React.FC<ModelEditorDialogProps> = ({
-  activeProvider,
-  isAddingModel,
-  isEditingModel,
-  newModelName,
-  setNewModelName,
-  newModelId,
-  setNewModelId,
-  newModelSupportsImage,
-  setNewModelSupportsImage,
-  newModelSupportsThinking,
-  setNewModelSupportsThinking,
-  newModelContextWindow,
-  setNewModelContextWindow,
-  newModelMaxTokens,
-  setNewModelMaxTokens,
-  newModelCustomParams,
-  setNewModelCustomParams,
-  activeProviderConfig,
-  modelFormError,
-  setModelFormError,
-  handleSaveNewModel,
-  handleCancelModelEdit,
-  handleModelDialogKeyDown,
-}) => {
-  const [newModelContextWindowText, setNewModelContextWindowText] = React.useState<string | null>(null);
-
-  if (!isAddingModel && !isEditingModel) {
-    return null;
-  }
-
-  const usesKimiK3RuntimeProfile = (
-    getEffectiveApiFormat(activeProvider, activeProviderConfig.apiFormat) === 'openai'
-    && normalizeModelIdForComparison(newModelId) === 'kimik3'
-  );
-
-  return (
-    <div
-      className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-background/90 px-4 py-4 backdrop-blur-[2px]"
-      onClick={handleCancelModelEdit}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={isEditingModel ? i18nService.t('editModel') : i18nService.t('addNewModel')}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={handleModelDialogKeyDown}
-        className="flex max-h-full min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-background border-border border shadow-modal"
-      >
-        <div className="flex shrink-0 items-center justify-between px-4 pt-4 pb-3">
-          <h4 className="text-sm font-semibold text-foreground">
-            {isEditingModel ? i18nService.t('editModel') : i18nService.t('addNewModel')}
-          </h4>
-          <button
-            type="button"
-            onClick={handleCancelModelEdit}
-            className="p-1 text-secondary hover:text-foreground rounded-md hover:bg-surface-raised"
-          >
-            <XMarkIcon className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 [scrollbar-gutter:stable]">
-          {modelFormError && (
-            <p className="mb-3 text-xs text-red-600 dark:text-red-400">
-              {modelFormError}
-            </p>
-          )}
-
-          <div className="space-y-4">
-            {(activeProvider === 'ollama' || activeProvider === 'lm-studio') ? (
-              <>
-                <div className="flex items-start gap-3">
-                  <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
-                    {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelName' : 'ollamaModelName')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
-                  </label>
-                  <div className="flex-1 min-w-0">
-                    <input
-                      autoFocus
-                      type="text"
-                      value={newModelId}
-                      onChange={(e) => {
-                        setNewModelId(e.target.value);
-                        if (!newModelName || newModelName === newModelId) {
-                          setNewModelName(e.target.value);
-                        }
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
-                      placeholder={i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNamePlaceholder' : 'ollamaModelNamePlaceholder')}
-                    />
-                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                      {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNameHint' : 'ollamaModelNameHint')}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
-                    {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayName' : 'ollamaDisplayName')}
-                  </label>
-                  <div className="flex-1 min-w-0">
-                    <input
-                      type="text"
-                      value={newModelName === newModelId ? '' : newModelName}
-                      onChange={(e) => {
-                        setNewModelName(e.target.value || newModelId);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
-                      placeholder={i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayNamePlaceholder' : 'ollamaDisplayNamePlaceholder')}
-                    />
-                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                      {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayNameHint' : 'ollamaDisplayNameHint')}
-                    </p>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-start gap-3">
-                  <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
-                    {i18nService.t('modelName')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
-                  </label>
-                  <div className="flex-1 min-w-0">
-                    <input
-                      autoFocus
-                      type="text"
-                      value={newModelName}
-                      onChange={(e) => {
-                        setNewModelName(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
-                      placeholder="GPT-4"
-                    />
-                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                      {i18nService.t('modelNameHint')}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
-                    {i18nService.t('modelId')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
-                  </label>
-                  <div className="flex-1 min-w-0">
-                    <input
-                      type="text"
-                      value={newModelId}
-                      onChange={(e) => {
-                        setNewModelId(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
-                      placeholder="gpt-4"
-                    />
-                    <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                      {i18nService.t('modelIdHint')}
-                    </p>
-                  </div>
-                </div>
-              </>
-            )}
-            <div className="flex items-start gap-3">
-              <label
-                htmlFor={`${activeProvider}-supportsImage`}
-                className="w-24 shrink-0 text-xs font-medium text-secondary pt-0.5 text-right"
-              >
-                {i18nService.t('supportsImageInput')}
-              </label>
-              <div className="flex-1 min-w-0">
-                <input
-                  id={`${activeProvider}-supportsImage`}
-                  type="checkbox"
-                  checked={newModelSupportsImage}
-                  onChange={(e) => setNewModelSupportsImage(e.target.checked)}
-                  className="h-3.5 w-3.5 text-primary focus:ring-primary bg-surface border-border rounded"
-                />
-                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                  {i18nService.t('supportsImageInputHint')}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <label
-                htmlFor={`${activeProvider}-supportsThinking`}
-                className="w-24 shrink-0 text-xs font-medium text-secondary pt-0.5 text-right"
-              >
-                {i18nService.t('supportsThinkingOutput')}
-              </label>
-              <div className="flex-1 min-w-0">
-                <input
-                  id={`${activeProvider}-supportsThinking`}
-                  type="checkbox"
-                  checked={newModelSupportsThinking}
-                  onChange={(e) => setNewModelSupportsThinking(e.target.checked)}
-                  className="h-3.5 w-3.5 text-primary focus:ring-primary bg-surface border-border rounded"
-                />
-                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                  {i18nService.t('supportsThinkingOutputHint')}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
-                {i18nService.t('contextWindow')}
-              </label>
-              <div className="flex-1 min-w-0">
-                <input
-                  type="text"
-                  value={newModelContextWindowText ?? formatContextWindow(newModelContextWindow ?? CW_DEFAULT)}
-                  onFocus={(e) => setNewModelContextWindowText(e.target.value)}
-                  onChange={(e) => setNewModelContextWindowText(e.target.value)}
-                  onBlur={() => {
-                    if (newModelContextWindowText != null) {
-                      const parsed = parseContextWindowInput(newModelContextWindowText);
-                      if (parsed != null) setNewModelContextWindow(parsed);
-                      setNewModelContextWindowText(null);
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      (e.target as HTMLInputElement).blur();
-                    }
-                  }}
-                  className="w-24 rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1 text-xs text-center tabular-nums mb-2"
-                />
-                <div className="relative h-3">
-                  <div
-                    className="absolute top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-border"
-                    style={{ left: CW_SLIDER_THUMB_RADIUS, right: CW_SLIDER_THUMB_RADIUS }}
-                  />
-                  {CW_MARKER_STOPS.map((m) => (
-                    <div
-                      key={m.label}
-                      className="pointer-events-none absolute top-1/2 z-[1] flex h-4 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full"
-                      style={{ left: sliderThumbCenterPosition(m.pos) }}
-                    >
-                      <div className="h-1.5 w-1.5 rounded-full border border-border bg-surface" />
-                    </div>
-                  ))}
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.001}
-                    value={contextWindowToSlider(newModelContextWindow ?? CW_DEFAULT)}
-                    onChange={(e) => setNewModelContextWindow(sliderToContextWindow(snapSliderValue(Number(e.target.value))))}
-                    className="absolute inset-0 w-full h-full appearance-none cursor-pointer bg-transparent z-[2] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_1px_3px_rgba(0,0,0,0.2)] [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-runnable-track]:bg-transparent"
-                  />
-                </div>
-                <div className="relative h-4 mt-0.5">
-                  {CW_MARKER_STOPS.map((m) => (
-                    <span
-                      key={m.label}
-                      className="absolute text-[9px] text-muted select-none -translate-x-1/2"
-                      style={{ left: sliderThumbCenterPosition(m.pos) }}
-                    >
-                      {m.label}
-                    </span>
-                  ))}
-                </div>
-                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                  {i18nService.t('contextWindowHint')}
-                </p>
-              </div>
-            </div>
-            {!usesKimiK3RuntimeProfile && (
-              <div className="flex items-start gap-3">
-                <label
-                  htmlFor={`${activeProvider}-maxOutputTokens`}
-                  className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right"
-                >
-                  {i18nService.t('maxOutputTokens')}
-                </label>
-                <div className="flex-1 min-w-0">
-                  <input
-                    id={`${activeProvider}-maxOutputTokens`}
-                    type="text"
-                    inputMode="numeric"
-                    value={newModelMaxTokens}
-                    onChange={(e) => {
-                      setNewModelMaxTokens(e.target.value);
-                      if (modelFormError) {
-                        setModelFormError(null);
-                      }
-                    }}
-                    placeholder={i18nService.t('maxOutputTokensPlaceholder')}
-                    className="w-24 rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1 text-xs text-center tabular-nums"
-                  />
-                  <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                    {i18nService.t('maxOutputTokensHint')}
-                  </p>
-                </div>
-              </div>
-            )}
-            <div className="flex items-start gap-3">
-              <label className="w-24 shrink-0 text-xs font-medium text-secondary pt-2 text-right">
-                {i18nService.t('customParams')}
-              </label>
-              <div className="flex-1 min-w-0">
-                <textarea
-                  value={newModelCustomParams}
-                  onChange={(e) => {
-                    setNewModelCustomParams(e.target.value);
-                    if (modelFormError) {
-                      setModelFormError(null);
-                    }
-                  }}
-                  placeholder={
-                    usesKimiK3RuntimeProfile
-                      ? '{\n}'
-                      : '{\n  "reasoning_effort": "high"\n}'
-                  }
-                  rows={3}
-                  className="w-full rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1.5 text-xs font-mono resize-y"
-                />
-                <p className={`mt-1 ${SETTINGS_META_TEXT} text-muted`}>
-                  {i18nService.t('customParamsHint')}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 justify-end space-x-2 border-t border-border bg-background px-4 py-3">
-          <button
-            type="button"
-            onClick={handleCancelModelEdit}
-            className="px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised rounded-xl border border-border"
-          >
-            {i18nService.t('cancel')}
-          </button>
-          <button
-            type="button"
-            onClick={handleSaveNewModel}
-            className="px-3 py-1.5 text-xs text-action-foreground bg-action hover:bg-action-hover rounded-xl active:scale-[0.98]"
-          >
-            {i18nService.t('save')}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 export interface DeleteProviderConfirmDialogProps {
   pendingDeleteProvider: ProviderType | null;
@@ -675,6 +244,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
   handleXaiOAuthLogin, handleCancelXaiOAuthLogin, handleXaiOAuthLogout,
   handleCopilotSignIn, handleCopilotSignOut, handleCopilotCancelAuth,
   handleTestConnection,
+  isFetchingModels, fetchModelsError, onClearFetchModelsError, handleFetchModels,
   handleAddModel, handleEditModel, handleDeleteModel,
 }) => {
   const copilotProvider = providers[ProviderName.Copilot];
@@ -683,6 +253,17 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
     || copilotAuthStatus === 'polling';
   const copilotSignedIn = copilotAuthStatus === 'authenticated'
     || copilotProvider?.authType === ProviderAuthType.OAuth;
+
+  const modelDiscoveryAvailability = resolveProviderDiscoveryAvailability(
+    activeProvider,
+    providers[activeProvider],
+    {
+      minimaxIsOAuthMode,
+      openaiIsOAuthMode,
+      xaiIsOAuthMode,
+      copilotSignedIn,
+    },
+  );
 
   const applyApiFormatOption = (provider: ProviderType, option: ApiFormatOption) => {
     const { apiFormat, openaiApiMode } = resolveApiFormatOption(option);
@@ -1894,7 +1475,9 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
               {shouldShowApiFormatSelector(
                 activeProvider,
                 providers[activeProvider].apiFormat,
-              ) && !(activeProvider === 'minimax' && minimaxIsOAuthMode) && (
+              )
+                && !(activeProvider === 'minimax' && minimaxIsOAuthMode)
+                && !(activeProvider === 'openai' && openaiIsOAuthMode) && (
                 <div>
                   <label htmlFor={`${activeProvider}-apiFormat`} className="block text-xs font-medium text-foreground mb-1">
                     {i18nService.t('apiFormat')}
@@ -2119,92 +1702,177 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
               )}
 
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <h3 className="text-xs font-medium text-foreground">
-                    {i18nService.t('availableModels')}
-                    {(providers[activeProvider].models?.length ?? 0) > 0 && (
-                      <span className="ml-1 font-normal text-muted">
-                        ({providers[activeProvider].models?.length})
-                      </span>
-                    )}
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={handleAddModel}
-                    className="inline-flex items-center text-xs font-medium text-foreground transition-opacity hover:opacity-75"
-                  >
-                    <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
-                    {i18nService.t('addModel')}
-                  </button>
-                </div>
-
-                {/* Models List */}
-                <div className="space-y-1.5">
-                  {(providers[activeProvider].models ?? []).map(model => (
-                    <div
-                      key={model.id}
-                      className="bg-surface p-2 rounded-xl border-border border transition-colors hover:border-foreground/25 group"
-                    >
-                      <div className="flex items-center justify-between gap-2 min-w-0">
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                          <div className="w-1.5 h-1.5 shrink-0 rounded-full bg-green-400"></div>
-                          <div className="min-w-0">
-                            <div className={`text-foreground font-medium ${SETTINGS_DESCRIPTION_TEXT} truncate`}>{model.name}</div>
-                            <div className={`${SETTINGS_META_TEXT} text-secondary truncate`}>{model.id}</div>
+                {(() => {
+                  const currentModels = providers[activeProvider].models ?? [];
+                  const hasModels = currentModels.length > 0;
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <h3 className="text-xs font-medium text-foreground">
+                          {i18nService.t('availableModels')}
+                          {hasModels && (
+                            <span className="ml-1 font-normal text-muted">
+                              ({currentModels.length})
+                            </span>
+                          )}
+                        </h3>
+                        {hasModels && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={handleFetchModels}
+                              disabled={isFetchingModels || !modelDiscoveryAvailability.available}
+                              title={!modelDiscoveryAvailability.available
+                                ? i18nService.t(modelDiscoveryAvailability.reasonKey)
+                                : undefined}
+                              className="inline-flex items-center gap-1 rounded-lg border border-primary/25 bg-primary-muted px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50 transition-colors active:scale-[0.98]"
+                            >
+                              {isFetchingModels
+                                ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                                : <CloudArrowDownIcon className="h-3.5 w-3.5" />}
+                              {isFetchingModels ? i18nService.t('fetchingModels') : i18nService.t('fetchAvailableModels')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleAddModel}
+                              className="inline-flex items-center gap-0.5 rounded-lg px-2 py-0.5 text-xs text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                            >
+                              <PlusIcon className="h-3.5 w-3.5" />
+                              {i18nService.t('manualAddModel')}
+                            </button>
                           </div>
-                        </div>
-                        <div className="flex items-center shrink-0 space-x-1">
-                          {model.supportsImage && (
-                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
-                              {i18nService.t('imageInput')}
-                            </span>
-                          )}
-                          {model.supportsThinking && (
-                            <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
-                              {i18nService.t('thinkingOutput')}
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleEditModel(
-                              model.id,
-                              model.name,
-                              model.supportsImage,
-                              model.supportsThinking,
-                              model.contextWindow,
-                              model.customParams,
-                              model.maxTokens,
-                            )}
-                            className="p-0.5 text-secondary hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <EditIcon className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteModel(model.id)}
-                            className="p-0.5 text-secondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <TrashIcon className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
 
-                  {(!providers[activeProvider].models || providers[activeProvider].models.length === 0) && (
-                    <div className="bg-surface p-2.5 rounded-xl border border-border-subtle text-center">
-                      <p className={`${SETTINGS_META_TEXT} text-secondary`}>{i18nService.t('noModelsAvailable')}</p>
-                      <button
-                        type="button"
-                        onClick={handleAddModel}
-                        className={`mt-1.5 inline-flex items-center ${SETTINGS_META_TEXT} font-medium text-foreground transition-opacity hover:opacity-75`}
-                      >
-                        <PlusCircleIcon className="h-3 w-3 mr-1" />
-                        {i18nService.t('addFirstModel')}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                      {fetchModelsError && (
+                        <div
+                          role="alert"
+                          className="mb-2 flex items-start justify-between gap-2 rounded-xl border border-red-500/25 bg-red-500/10 px-2.5 py-2"
+                        >
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <p className={`${SETTINGS_META_TEXT} text-red-600 dark:text-red-400 break-words`}>
+                              {fetchModelsError}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClearFetchModelsError();
+                                handleAddModel();
+                              }}
+                              className={`inline-flex items-center gap-0.5 ${SETTINGS_META_TEXT} font-medium text-primary hover:underline`}
+                            >
+                              {i18nService.t('fetchModelsFallbackManualAdd')} →
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={onClearFetchModelsError}
+                            aria-label={i18nService.t('close')}
+                            className="shrink-0 rounded p-0.5 text-red-500/80 hover:bg-red-500/10 hover:text-red-600 dark:text-red-400"
+                          >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Models List */}
+                      <div className="space-y-1.5">
+                        {currentModels.map(model => (
+                          <div
+                            key={model.id}
+                            className="bg-surface p-2 rounded-xl border-border border transition-colors hover:border-foreground/25 group"
+                          >
+                            <div className="flex items-center justify-between gap-2 min-w-0">
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <div className="w-1.5 h-1.5 shrink-0 rounded-full bg-green-400"></div>
+                                <div className="min-w-0">
+                                  <div className={`text-foreground font-medium ${SETTINGS_DESCRIPTION_TEXT} truncate`}>{model.name}</div>
+                                  <div className={`${SETTINGS_META_TEXT} text-secondary truncate`}>{model.id}</div>
+                                </div>
+                              </div>
+                              <div className="flex items-center shrink-0 space-x-1">
+                                {model.contextWindow !== undefined && model.contextWindow > 0 && (
+                                  <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary tabular-nums`}>
+                                    {formatCompactTokenCount(model.contextWindow)}
+                                  </span>
+                                )}
+                                {model.supportsImage && (
+                                  <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
+                                    {i18nService.t('imageInput')}
+                                  </span>
+                                )}
+                                {model.supportsThinking && (
+                                  <span className={`${SETTINGS_META_TEXT} px-1.5 py-0.5 rounded-md bg-surface-raised text-secondary`}>
+                                    {i18nService.t('thinkingOutput')}
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditModel(
+                                    model.id,
+                                    model.name,
+                                    model.supportsImage,
+                                    model.supportsThinking,
+                                    model.contextWindow,
+                                    model.customParams,
+                                    model.maxTokens,
+                                  )}
+                                  className="p-0.5 text-secondary hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <EditIcon className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteModel(model.id)}
+                                  className="p-0.5 text-secondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <TrashIcon className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        {!hasModels && (
+                          <div className="rounded-xl border border-dashed border-border bg-surface px-3 py-4 text-center">
+                            <p className="text-xs font-medium text-foreground">
+                              {i18nService.t('noModelsAvailable')}
+                            </p>
+                            <p className={`mt-1 ${SETTINGS_META_TEXT} text-secondary`}>
+                              {!modelDiscoveryAvailability.available
+                                ? i18nService.t(modelDiscoveryAvailability.reasonKey)
+                                : i18nService.t('fetchModelsEmptyHint')}
+                            </p>
+                            <div className="mt-3 flex items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleFetchModels}
+                                disabled={isFetchingModels || !modelDiscoveryAvailability.available}
+                                title={!modelDiscoveryAvailability.available
+                                  ? i18nService.t(modelDiscoveryAvailability.reasonKey)
+                                  : undefined}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-action px-3 py-1.5 text-xs font-medium text-action-foreground hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50 transition-colors active:scale-[0.98]"
+                              >
+                                {isFetchingModels
+                                  ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                                  : <CloudArrowDownIcon className="h-3.5 w-3.5" />}
+                                {isFetchingModels ? i18nService.t('fetchingModels') : i18nService.t('fetchAvailableModels')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleAddModel}
+                                className="inline-flex items-center gap-1 rounded-xl border border-border px-3 py-1.5 text-xs font-medium text-secondary hover:bg-surface-raised hover:text-foreground transition-colors active:scale-[0.98]"
+                              >
+                                <PlusIcon className="h-3.5 w-3.5" />
+                                {i18nService.t('manualAddModel')}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>
