@@ -108,6 +108,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles (created by ChannelSessionSync)
     coworkDefaultSessionTitle: '新对话',
+    coworkUnsentRetryUnavailable: '这条消息的状态已变化，请查看当前对话。',
     coworkEditUnsupported: '历史消息已改为从该消息新建分支会话，不再支持原地覆盖编辑。',
     coworkWorkspaceChangesTitle: '工作区变更',
     cronSessionPrefix: '定时',
@@ -583,6 +584,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles
     coworkDefaultSessionTitle: 'New Chat',
+    coworkUnsentRetryUnavailable: 'This message has changed. Check the current conversation.',
     coworkEditUnsupported: 'In-place historical message editing has been replaced by forking a new session from any message.',
     coworkWorkspaceChangesTitle: 'Workspace changes',
     cronSessionPrefix: 'Cron',

@@ -118,6 +118,9 @@ export type CoworkMediaAttachmentRef = {
 export type CoworkMediaSelection = MediaSelection;
 
 export type CoworkStartOptions = {
+  submissionOwner?: string;
+  requestId?: string;
+  checkAccount?: () => void;
   analytics?: UsageContext;
   skipInitialUserMessage?: boolean;
   /** Optional user-facing message text to persist when it differs from the model prompt. */
@@ -142,7 +145,9 @@ export type CoworkStartOptions = {
 };
 
 export type CoworkContinueOptions = {
-  /** Internal edit coordinator fields; never accepted from renderer IPC. */
+  submissionOwner?: string;
+  checkAccount?: () => void;
+  /** The edit operation and acceptance callback belong to the main process. */
   messageEditOperationId?: string;
   requestId?: string;
   onAccepted?: () => void;

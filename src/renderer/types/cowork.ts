@@ -88,6 +88,7 @@ export interface CoworkLiveEditDiff {
 }
 
 export interface CoworkMessageMetadata {
+  dshDelivery?: import('../../shared/dshEngine/hostConstants').DshDeliveryOutcome | null;
   turnOutcome?: CoworkTurnOutcome;
   imageEdits?: import('../../shared/imageEditing/types').ImageEditMessageSnapshot[];
   messageVersion?: import('../../shared/cowork/messageEdit').CoworkMessageVersionInfo;
@@ -450,6 +451,7 @@ export interface CoworkStartOptions {
 
 // Continue session options
 export interface CoworkContinueOptions {
+  retryMessageId?: string;
   analytics?: UsageContext;
   sessionId: string;
   prompt: string;

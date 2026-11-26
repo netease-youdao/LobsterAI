@@ -10,6 +10,7 @@ import {
   DshHostIpc,
   DshPermissionPreset,
   DshPluginApplicationStatus,
+  type DshSessionRecovery,
 } from '../../../shared/dshEngine/hostConstants';
 import type { DshHostManager } from '../../libs/dsh/dshHostManager';
 import type { DshNodeToolchain } from '../../libs/dsh/dshProfileManager';
@@ -76,6 +77,7 @@ export interface InspectPluginPayload {
 
 export interface DshHostIpcDeps {
   getHostManager: () => DshHostManager | null;
+  getRecoveryTask?: (sessionId: string) => DshSessionRecovery | null;
   getRuntimeDir: () => string;
   getExecutablePath: () => string;
   getNodeToolchain?: () => DshNodeToolchain | null;
@@ -184,6 +186,14 @@ export function registerDshHostHandlers(deps: DshHostIpcDeps): void {
     const manager = deps.getHostManager();
     return manager ? manager.getStatus() : null;
   });
+
+  ipcMain.handle(DshHostIpc.GetSessionRecovery, (_event, sessionId: string): DshSessionRecovery | null => {
+    const since = deps.getHostManager()?.getDisconnectedAt();
+    if (since == null) return null;
+    const task = deps.getRecoveryTask?.(sessionId);
+    return task ? { ...task, since: Math.max(since, task.since) } : null;
+  });
+
 
   ipcMain.handle(DshHostIpc.Restart, async () => {
     const manager = deps.getHostManager();

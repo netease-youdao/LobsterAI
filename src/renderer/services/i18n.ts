@@ -3134,6 +3134,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkModelReconnectStopped: '已停止重新连接',
     coworkModelReconnectContinueAction: '继续',
     coworkModelReconnectContinuePrompt: '继续',
+    coworkDeliveryPending: '待发送，稍后会自动发送',
+    coworkDeliveryChecking: '正在确认消息是否已送达',
+    coworkDeliveryWaiting: '正在等待后续回复',
+    coworkDeliveryCancelled: '已取消 · 未发送',
+    coworkDeliveryUnsent: '未发送',
+    coworkDeliveryUnconfirmed: '消息已保存，暂时无法确认是否送达',
+    coworkDeliveryResend: '重新发送',
+    coworkDeliveryInterrupted: '这次回复中断了',
+    coworkDeliveryContinue: '继续对话',
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
@@ -8565,6 +8574,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkModelReconnectStopped: 'Reconnect stopped',
     coworkModelReconnectContinueAction: 'Continue',
     coworkModelReconnectContinuePrompt: 'Continue',
+    coworkDeliveryPending: 'Waiting to send. Your message will be sent automatically.',
+    coworkDeliveryChecking: 'Checking whether your message was delivered',
+    coworkDeliveryWaiting: 'Waiting for the rest of the reply',
+    coworkDeliveryCancelled: 'Cancelled · Not sent',
+    coworkDeliveryUnsent: 'Not sent',
+    coworkDeliveryUnconfirmed: 'Your message is saved. Its delivery could not be confirmed.',
+    coworkDeliveryResend: 'Send again',
+    coworkDeliveryInterrupted: 'This reply was interrupted',
+    coworkDeliveryContinue: 'Continue chatting',
 
     // Cowork error messages
     coworkErrorAuthInvalid:

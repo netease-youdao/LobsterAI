@@ -45,8 +45,11 @@ import {
   DSH_QUESTION_REQUEST_ID_PREFIX,
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
+  DshDeliveryOutcome,
   DshPermissionPreset,
   DshProgressiveCapability,
+  DshRecoveryPhase,
+  type DshSessionRecovery,
   parseDshPermissionPreset,
 } from '../../../shared/dshEngine/hostConstants';
 import { imageEditMessageMetadata } from '../../../shared/imageEditing/messageSnapshot';
@@ -81,6 +84,7 @@ import type {
 import { buildDshMediaTurnInstruction } from '../dsh/dshMediaGenerationTool';
 import { DshChildEvent, record } from '../dsh/dshSubagentHistory';
 import type { DshSubagentSessions } from '../dsh/dshSubagentSessions';
+import { admitDshPrompt, DshAdmissionUnconfirmedError, followDshTurn, isDshTransportError, untilAborted } from '../dsh/dshTurnRecovery';
 import type {
   DshCommandSubmitAttachment,
   DshPromptPart,
@@ -96,6 +100,7 @@ import {
   formatCoworkContinuityCapsuleBridge,
 } from './coworkContinuityCapsule';
 import { DshMessageEditCoordinator } from './dshMessageEdit';
+import { toPersistedMediaReferences } from './messageEditMedia';
 import type {
   CoworkContextUsage,
   CoworkContinueOptions,
@@ -132,6 +137,7 @@ export interface DshCoworkStorePort {
   messageVersions?: CoworkMessageVersionStore;
   getSession(sessionId: string, messageLimit?: number): DshAdapterSessionRecord | null | undefined;
   getLatestUserMessage?(sessionId: string): CoworkMessage | null;
+  getMessage?(sessionId: string, messageId: string): CoworkMessage | null;
   addMessage(
     sessionId: string,
     message: {
@@ -182,7 +188,7 @@ export interface DshRuntimeAdapterDeps {
   hostManager: Pick<
     DshHostManager,
     'start' | 'isReady' | 'getClient' | 'bindSessionContext' | 'deleteSessionFiles'
-  > & Partial<Pick<DshHostManager, 'setPermissionPreset' | 'consumeApprovalCallContext'>>;
+  > & Partial<Pick<DshHostManager, 'setPermissionPreset' | 'consumeApprovalCallContext' | 'hasLiveHost'>>;
   store: DshCoworkStorePort;
   resolveModelSelection?: (
     sessionId: string,
@@ -257,6 +263,9 @@ interface ActiveTurnState {
   lastFinalizedAssistantText: string;
   suppressedPreSteerAssistantText: string | null;
   lastCommittedAssistantSeq: number | null;
+  followInterrupted?: boolean;
+  replyInterrupted?: boolean;
+  admission?: Promise<{ accepted: boolean }>;
   toolCallMessageIds: Map<string, string>;
   currentDshTurnNumber: number | null;
   cancelledDshTurnNumber: number | null;
@@ -344,7 +353,7 @@ async function selectModelWithReasoningFallback(
       ...(effort ? { reasoningEffort: effort } : {}),
     });
   } catch (error) {
-    if (!effort) throw error;
+    if (!effort || isDshTransportError(error) || !/reasoning|effort/i.test(String(error))) throw error;
     // Retry without reasoningEffort when the target model does not declare
     // reasoning support or does not accept the requested effort level.
     console.warn(
@@ -817,7 +826,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly messageEditing?: DshMessageEditCoordinator;
 
   private readonly activeTurns = new Map<string, ActiveTurnState>();
-  private readonly startingAbortControllers = new Map<string, AbortController>();
+  private readonly startingTurns = new Map<string, { controller: AbortController; since: number; messageId?: string }>();
   private readonly pendingCancels = new Map<string, Promise<void>>();
   private readonly lastCancelledTurnBySession = new Map<string, CancelledTurnRecord>();
   private readonly dshToCoworkSession = new Map<string, string>();
@@ -849,7 +858,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         versions: deps.store.messageVersions,
         getSession: id => this.store.getSession(id, 0),
         latestUser: id => this.store.getLatestUserMessage?.(id) ?? null,
-        isRunning: id => this.isSessionActive(id) || this.startingAbortControllers.has(id) || this.pendingCancels.has(id),
+        isRunning: id => this.isSessionActive(id) || this.startingTurns.has(id) || this.pendingCancels.has(id),
         fork: async (id, atSeq) => (await this.forkDshSession(id, atSeq)).storedSessionId,
         send: (id, prompt, options) => this.continueSession(id, prompt, options),
         bindingChanged: id => this.refreshMessageVersionBinding(id),
@@ -931,6 +940,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   ): Promise<void> {
     await this.runTurn(sessionId, prompt, {
       isContinue: false,
+      retryContext: this.retryContext(options),
+      checkAccount: options.checkAccount,
+      requestId: options.requestId,
       skipInitialUserMessage: options.skipInitialUserMessage,
       userMessageContent: options.userMessageContent,
       skillIds: options.skillIds,
@@ -956,6 +968,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   ): Promise<void> {
     await this.runTurn(sessionId, prompt, {
       isContinue: true,
+      retryContext: this.retryContext(options),
+      checkAccount: options.checkAccount,
       requestId: options.requestId,
       onAccepted: options.onAccepted,
       skipInitialUserMessage: options.skipInitialUserMessage,
@@ -1649,15 +1663,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   }
 
   stopSession(sessionId: string): void {
-    const startingAbort = this.startingAbortControllers.get(sessionId);
-    if (startingAbort) {
-      this.startingAbortControllers.delete(sessionId);
-      startingAbort.abort(new Error('Session stopped by user'));
+    const starting = this.startingTurns.get(sessionId);
+    if (starting) {
+      this.startingTurns.delete(sessionId);
+      starting.controller.abort(new Error('Session stopped by user'));
+      this.setDeliveryOutcome(sessionId, starting.messageId, DshDeliveryOutcome.Cancelled);
     }
 
     const turn = this.activeTurns.get(sessionId);
     if (!turn) {
-      if (startingAbort) {
+      if (starting) {
         this.store.updateSession(sessionId, { status: 'idle' });
         this.emit('sessionStatus', sessionId, 'idle');
         this.emit('sessionStopped', sessionId, { runIds: [], startedAt: Date.now() });
@@ -1677,19 +1692,11 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       lastSeenTurnNumber: turn.currentDshTurnNumber,
     });
 
-    if (this.hostManager.isReady()) {
-      const cancelPromise = this.hostManager
-        .getClient()
-        .cancelSession(turn.dshSessionId)
-        .then((): void => undefined)
-        .catch((): void => undefined);
-      this.pendingCancels.set(sessionId, cancelPromise);
-      void cancelPromise.finally(() => {
-        if (this.pendingCancels.get(sessionId) === cancelPromise) {
-          this.pendingCancels.delete(sessionId);
-        }
-      });
-    }
+    const cancelPromise = this.cancelDshTurn(turn).catch((): void => undefined);
+    this.pendingCancels.set(sessionId, cancelPromise);
+    void cancelPromise.finally(() => {
+      if (this.pendingCancels.get(sessionId) === cancelPromise) this.pendingCancels.delete(sessionId);
+    });
 
     const stopped: CoworkStoppedTurn = {
       runIds: [turn.dshSessionId],
@@ -1705,11 +1712,26 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   stopAllSessions(): void {
     const ids = new Set([
       ...this.activeTurns.keys(),
-      ...this.startingAbortControllers.keys(),
+      ...this.startingTurns.keys(),
     ]);
     for (const sessionId of ids) {
       this.stopSession(sessionId);
     }
+  }
+
+  private async cancelDshTurn(turn: ActiveTurnState): Promise<void> {
+    if (turn.admission) await turn.admission.catch((): void => undefined);
+    // Cancellation uses HTTP and can still reach the owner while its mux is down.
+    if (this.hostManager.isReady() || this.hostManager.hasLiveHost?.()) {
+      try {
+        await this.hostManager.getClient().cancelSession(turn.dshSessionId);
+        return;
+      } catch (error) {
+        if (!isDshTransportError(error)) throw error;
+      }
+    }
+    const client = await this.ensureReadyClient();
+    await client.cancelSession(turn.dshSessionId);
   }
 
   async respondToPermission(requestId: string, result: PermissionResult): Promise<void> {
@@ -1817,9 +1839,40 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
   // ── Internal Turn & Stream Lifecycle ───────────────────────────────────────
 
-  private async ensureReadyClient(): Promise<DshTypertClient> {
+  getRecoveryTask(sessionId: string): DshSessionRecovery | null {
+    const starting = this.startingTurns.get(sessionId);
+    if (starting?.messageId) return { since: starting.since, messageId: starting.messageId, phase: DshRecoveryPhase.Pending };
+    const turn = this.activeTurns.get(sessionId);
+    if (!turn?.userMessageId) return null;
+    return { since: turn.startedAt, messageId: turn.userMessageId,
+      phase: turn.admission ? DshRecoveryPhase.Checking : DshRecoveryPhase.Waiting };
+  }
+
+  private retryContext(options: CoworkContinueOptions): Record<string, unknown> | undefined {
+    if (options.submissionOwner === undefined) return undefined;
+    return {
+      skillIds: options.messageSkillIds, kitIds: options.kitIds, kitReferences: options.kitReferences,
+      resolvedKitCapabilities: options.resolvedKitCapabilities, submissionOwner: options.submissionOwner,
+      editContext: { skillIds: options.skillIds, mediaSelection: options.mediaSelection, workflowKind: options.workflowKind,
+        imageAttachmentCount: options.imageAttachments?.length,
+        mediaReferences: toPersistedMediaReferences(options.mediaReferences, options.imageAttachments) },
+    };
+  }
+
+  private setDeliveryOutcome(sessionId: string, messageId: string | undefined, outcome: DshDeliveryOutcome): boolean {
+    if (!messageId) return false;
+    const message = this.store.getMessage?.(sessionId, messageId) ?? this.store.getLatestUserMessage?.(sessionId);
+    if (message?.id !== messageId || message.metadata?.submissionOwner === undefined) return false;
+    this.store.updateMessageContent(sessionId, message.id, message.content, { ...message.metadata, dshDelivery: outcome });
+    this.emit('messageUpdate', sessionId, message.id, message.content, { dshDelivery: outcome });
+    return true;
+  }
+
+  private async ensureReadyClient(signal?: AbortSignal): Promise<DshTypertClient> {
+    signal?.throwIfAborted();
     if (!this.hostManager.isReady()) {
-      await this.hostManager.start();
+      const starting = this.hostManager.start();
+      await (signal ? untilAborted(starting, signal) : starting);
     }
     const client = this.hostManager.getClient();
     this.ensureClientWaterfallHandlers(client);
@@ -2036,8 +2089,10 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     prompt: string,
     params: {
       isContinue: boolean;
+      retryContext?: Record<string, unknown>;
       requestId?: string;
       onAccepted?: () => void;
+      checkAccount?: () => void;
       skipInitialUserMessage?: boolean;
       userMessageContent?: string;
       skillIds?: string[];
@@ -2056,20 +2111,24 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     },
   ): Promise<void> {
     this.messageEditing?.assertCanSend(sessionId, params.requestId);
+    const requestId = params.requestId || randomUUID();
     const session = this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Cowork session "${sessionId}" not found`);
     }
 
     const abortController = new AbortController();
-    const prevStartingAbort = this.startingAbortControllers.get(sessionId);
-    if (prevStartingAbort) {
-      prevStartingAbort.abort(new Error('Replaced by newer turn'));
+    const previous = this.startingTurns.get(sessionId);
+    if (previous) {
+      previous.controller.abort(new Error('Replaced by newer turn'));
+      this.setDeliveryOutcome(sessionId, previous.messageId, DshDeliveryOutcome.Cancelled);
     }
-    this.startingAbortControllers.set(sessionId, abortController);
+    const starting = { controller: abortController, since: Date.now(), messageId: undefined as string | undefined };
+    this.startingTurns.set(sessionId, starting);
+    let waitingForOwner = false;
     const clearStartingAbort = () => {
-      if (this.startingAbortControllers.get(sessionId) === abortController) {
-        this.startingAbortControllers.delete(sessionId);
+      if (this.startingTurns.get(sessionId) === starting) {
+        this.startingTurns.delete(sessionId);
       }
     };
 
@@ -2079,9 +2138,6 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       if (pendingCancel) {
         await pendingCancel;
       }
-      if (abortController.signal.aborted) return;
-
-      const client = await this.ensureReadyClient();
       if (abortController.signal.aborted) return;
 
       // Capture pre-existing messages BEFORE persisting the new prompt so fresh
@@ -2123,7 +2179,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       if (!params.skipInitialUserMessage && hasPersistableUserMessage) {
         const userMetadata: Record<string, unknown> = {
+          ...params.retryContext,
           llmTrace,
+          requestId,
           ...editMetadata,
           ...(localMediaAttachments ? { localMediaAttachments } : {}),
           ...(imageAttachmentPreviews ? { imageAttachmentPreviews } : {}),
@@ -2143,12 +2201,32 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         if (turnUserMessage) {
           const mergedMetadata: Record<string, unknown> = {
             ...(turnUserMessage.metadata ?? {}),
+            ...params.retryContext,
+            ...(turnUserMessage.metadata?.dshDelivery ? { dshDelivery: null } : {}),
             llmTrace,
+            requestId,
           };
           this.store.updateMessageContent(sessionId, turnUserMessage.id, turnUserMessage.content, mergedMetadata);
+          if (turnUserMessage.metadata?.dshDelivery) {
+            this.emit('messageUpdate', sessionId, turnUserMessage.id, turnUserMessage.content, { dshDelivery: null });
+          }
           turnUserMessage = { ...turnUserMessage, metadata: mergedMetadata };
         }
       }
+
+      starting.messageId = turnUserMessage?.id;
+      waitingForOwner = !this.hostManager.isReady();
+      if (waitingForOwner) {
+        this.store.updateSession(sessionId, { status: 'running' });
+        this.emit('sessionStatus', sessionId, 'running');
+      }
+      const client = await this.ensureReadyClient(abortController.signal).catch((error): null => {
+        if (!abortController.signal.aborted) throw error;
+        return null;
+      });
+      if (!client || abortController.signal.aborted) return;
+      waitingForOwner = false;
+      params.checkAccount?.();
 
       // Resolve the target model before registering usage context so preset /
       // resolvedModelId headers and DSH selectModel stay completely aligned.
@@ -2444,7 +2522,6 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       await this.waitForMcpConnections?.(abortController.signal);
       if (abortController.signal.aborted) return;
 
-      const requestId = params.requestId || randomUUID();
       const turn = this.createActiveTurnState({
         coworkSessionId: sessionId,
         dshSessionId,
@@ -2494,18 +2571,38 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
 
       const clientTimeZone = resolveLocalTimeZone();
       try {
-        const admission = await client.promptSession({
+        turn.admission = admitDshPrompt(client, {
           sessionId: dshSessionId,
           requestId,
           content: contentParts,
           mode: 'queue',
           ...(clientTimeZone ? { clientTimeZone } : {}),
-        });
+        }, () => this.ensureReadyClient(abortController.signal), abortController.signal, params.checkAccount);
+        const admission = await turn.admission;
+        if (abortController.signal.aborted) return;
+        turn.admission = undefined;
+        if (admission.accepted === false && this.setDeliveryOutcome(sessionId, turn.userMessageId, DshDeliveryOutcome.Unsent)) {
+          abortController.abort();
+          if (this.activeTurns.get(sessionId) === turn) this.activeTurns.delete(sessionId);
+          this.store.updateSession(sessionId, { status: 'idle' });
+          this.emit('sessionStatus', sessionId, 'idle');
+          this.emit('sessionStopped', sessionId, { runIds: [], startedAt: turn.startedAt });
+          return;
+        }
         if (params.onAccepted && admission.accepted !== true) throw new Error('The DSH host did not accept the replacement message.');
         params.onAccepted?.();
       } catch (error) {
+        if (abortController.signal.aborted) return;
         abortController.abort(error);
         this.activeTurns.delete(sessionId);
+        if (error instanceof DshAdmissionUnconfirmedError
+          && this.setDeliveryOutcome(sessionId, turn.userMessageId, DshDeliveryOutcome.Unconfirmed)) {
+          console.warn('[DSH] Prompt admission could not be verified:', error);
+          this.store.updateSession(sessionId, { status: 'idle' });
+          this.emit('sessionStatus', sessionId, 'idle');
+          this.emit('sessionStopped', sessionId, { runIds: [], startedAt: turn.startedAt });
+          return;
+        }
         const msg = error instanceof Error ? error.message : String(error);
         this.store.updateSession(sessionId, { status: 'error' });
         this.emit('sessionStatus', sessionId, 'error');
@@ -2514,6 +2611,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       }
 
       await streamTask;
+    } catch (error) {
+      if (this.startingTurns.get(sessionId) === starting && (waitingForOwner || isDshTransportError(error))
+        && this.setDeliveryOutcome(sessionId, starting.messageId, DshDeliveryOutcome.Unsent)) {
+        console.warn('[DSH] Could not prepare the pending message:', error);
+        this.store.updateSession(sessionId, { status: 'idle' });
+        this.emit('sessionStatus', sessionId, 'idle');
+        this.emit('sessionStopped', sessionId, { runIds: [], startedAt: starting.since });
+        return;
+      }
+      throw error;
     } finally {
       clearStartingAbort();
     }
@@ -2652,7 +2759,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   ): Promise<void> {
     const { coworkSessionId, dshSessionId } = turn;
     try {
-      for await (const frame of stream) {
+      const signal = turn.abortController.signal;
+      const frames = followDshTurn(stream, dshSessionId, turn.requestId, () => this.ensureReadyClient(signal),
+        signal, () => { turn.followInterrupted = true; }, this.wiredClient ?? undefined, () => {
+          turn.turnAborted = true;
+          turn.replyInterrupted = true;
+        });
+      for await (const frame of frames) {
         if (turn.abortController.signal.aborted) break;
         const done = this.handleFollowFrame(turn, frame);
         if (done) {
@@ -2676,6 +2789,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         return;
       }
       if (turn.turnAborted) {
+        if (turn.replyInterrupted) this.setDeliveryOutcome(coworkSessionId, turn.userMessageId, DshDeliveryOutcome.Interrupted);
         this.store.updateSession(coworkSessionId, { status: 'idle' });
         this.emit('sessionStatus', coworkSessionId, 'idle');
         this.emit('sessionStopped', coworkSessionId, {
@@ -2996,13 +3110,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const alreadyAppliedSeq = seq !== undefined && seq === turn.lastCommittedAssistantSeq;
 
         if (turn.currentThinkingMessageId) {
-          if (!turn.currentThinkingText && thinking) {
+          if ((!turn.currentThinkingText || turn.followInterrupted) && thinking) {
             turn.currentThinkingText = thinking;
           }
           this.finalizeActiveThinkingMessage(turn, seq);
         } else if (turn.lastFinalizedThinkingMessageId) {
           const msgId = turn.lastFinalizedThinkingMessageId;
-          const finalThinking = turn.lastFinalizedThinkingText || thinking;
+          const finalThinking = (turn.followInterrupted && thinking) || turn.lastFinalizedThinkingText || thinking;
           if (finalThinking !== turn.lastFinalizedThinkingText || (seq !== undefined && !alreadyAppliedSeq)) {
             const meta: Record<string, unknown> = {
               isThinking: true,
@@ -3037,13 +3151,13 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         }
 
         if (turn.currentAssistantMessageId) {
-          if (!turn.currentAssistantText && text) {
+          if ((!turn.currentAssistantText || turn.followInterrupted) && text) {
             turn.currentAssistantText = text;
           }
           this.finalizeActiveAssistantMessage(turn, seq);
         } else if (turn.lastFinalizedAssistantMessageId) {
           const msgId = turn.lastFinalizedAssistantMessageId;
-          const finalText = turn.lastFinalizedAssistantText || text;
+          const finalText = (turn.followInterrupted && text) || turn.lastFinalizedAssistantText || text;
           if (finalText !== turn.lastFinalizedAssistantText || (seq !== undefined && !alreadyAppliedSeq)) {
             const meta: Record<string, unknown> = {
               isStreaming: false,
@@ -3137,6 +3251,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           }
           turn.goalArmed = false;
           turn.turnAborted = true;
+          turn.replyInterrupted = (data.reason as { kind?: string }).kind === 'interrupted';
         } else if (isMaxTokensTurnEndReason(data.reason)) {
           // DSH goal-round-driver disarms on max-tokens; do not wait for another round.
           turn.ignoreStaleAbortedTurnEnd = false;
@@ -3530,7 +3645,8 @@ function extractTurnEndError(reason: unknown): string | null {
 
 function isAbortedTurnEndReason(reason: unknown): boolean {
   if (!reason || typeof reason !== 'object') return false;
-  return (reason as { kind?: unknown }).kind === 'aborted';
+  const { kind } = reason as { kind?: unknown };
+  return kind === 'aborted' || kind === 'interrupted';
 }
 
 function isMaxTokensTurnEndReason(reason: unknown): boolean {

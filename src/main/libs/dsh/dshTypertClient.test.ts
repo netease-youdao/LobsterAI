@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { DshOpsAction } from '../../../shared/dshEngine/hostConstants';
 import {
@@ -52,6 +52,50 @@ class FakeWebSocket implements DshWebSocketLike {
 }
 
 describe('DshTypertClient', () => {
+  test('concurrent waiters rejoin the same Host with one fresh API peer after mux loss', async () => {
+    const sockets: FakeWebSocket[] = [];
+    const grants: string[] = [];
+    const cookies: string[] = [];
+    const client = new DshTypertClient({
+      requester: async url => {
+        grants.push(url);
+        return { status: 302, headers: { 'set-cookie': `peer=${grants.length}; HttpOnly` }, body: '' };
+      },
+      webSocketFactory: (_url, headers) => {
+        cookies.push(headers.cookie);
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        queueMicrotask(() => socket.triggerOpen());
+        return socket;
+      },
+    });
+    const finishHandshake = async (index: number) => {
+      await vi.waitFor(() => expect(sockets[index]?.sent[0]?.endpoint).toBe('$events'));
+      expect(client.isConnected()).toBe(false);
+      const socket = sockets[index];
+      socket.triggerMessage({ type: 'item', streamId: socket.sent[0].streamId, value: { type: 'ready', clientId: String(index) } });
+    };
+    try {
+      const boot = client.connect('http://127.0.0.1:41234/?token=original');
+      await finishHandshake(0);
+      await boot;
+      sockets[0].close();
+      const waiting = client.waitUntilConnected();
+      expect(client.waitUntilConnected()).toBe(waiting);
+      await finishHandshake(1);
+      await waiting;
+      expect(client.isConnected()).toBe(true);
+      expect(cookies).toEqual(['peer=1', 'peer=2']);
+      expect(grants[1]).toBe(grants[0]);
+      sockets[1].close();
+      const closed = expect(client.waitUntilConnected()).rejects.toMatchObject({ code: 'gateway/closed' });
+      await client.close();
+      await closed;
+    } finally {
+      await client.close();
+    }
+  });
+
   test('authenticates via /connect, establishes $events, invokes unary RPC & ops, and answers waterfall events', async () => {
     const httpLog: Array<{ url: string; method: string; headers?: Record<string, string>; body?: string }> = [];
     const fakeWs = new FakeWebSocket();

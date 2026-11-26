@@ -11,12 +11,14 @@ import * as https from 'https';
 
 import {
   DSH_OPS_ROUTE_PATH,
-  type DshOpsAction,
+  DshOpsAction,
 } from '../../../shared/dshEngine/hostConstants';
 
 export const DSH_REMOTE_MUX_PATH = '/api/remote.mux';
 export const DSH_REMOTE_EVENT_STREAM_ENDPOINT = '$events';
 export const DSH_REMOTE_EVENT_RESULT_ENDPOINT = '$events/result';
+const INITIAL_HANDSHAKE_TIMEOUT_MS = 90_000;
+const RECONNECT_HANDSHAKE_TIMEOUT_MS = 12_000;
 
 export class DshRemoteError extends Error {
   readonly code: string;
@@ -176,6 +178,10 @@ export function defaultHttpRequester(
       },
       (res) => {
         const chunks: Buffer[] = [];
+        res.once('error', (error) => {
+          cleanup();
+          reject(error);
+        });
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
           cleanup();
@@ -431,12 +437,18 @@ export class DshTypertClient extends EventEmitter {
 
   private origin = '';
   private cookieHeader = '';
+  private connectUrl = '';
+  private peerGrant: Promise<string> | null = null;
+  private verifyPeerBeforeUpgrade = false;
   private socket: DshWebSocketLike | null = null;
   private clientId = '';
   private hostHome = '';
   private disposed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  private muxReady = false;
+  private hasConnected = false;
+  private connectionWait: Promise<void> | null = null;
   private eventsAbort: AbortController | null = null;
 
   private readonly activeStreams = new Map<string, AsyncFrameQueue<PendingStreamFrame>>();
@@ -461,7 +473,25 @@ export class DshTypertClient extends EventEmitter {
   }
 
   isConnected(): boolean {
-    return !this.disposed && this.socket !== null && this.socket.readyState === 1;
+    return !this.disposed && this.muxReady && this.socket?.readyState === 1;
+  }
+
+  waitUntilConnected(): Promise<void> {
+    if (this.disposed) return Promise.reject(new DshRemoteError('gateway/closed', 'DSH client closed'));
+    if (this.isConnected()) return Promise.resolve();
+    if (this.connectionWait) return this.connectionWait;
+    this.connectionWait = new Promise<void>((resolve, reject) => {
+      const connected = () => { cleanup(); resolve(); };
+      const closed = () => { cleanup(); reject(new DshRemoteError('gateway/closed', 'DSH client closed')); };
+      const cleanup = () => {
+        this.off('connected', connected);
+        this.off('closed', closed);
+        this.connectionWait = null;
+      };
+      this.once('connected', connected);
+      this.once('closed', closed);
+    });
+    return this.connectionWait;
   }
 
   /**
@@ -487,12 +517,25 @@ export class DshTypertClient extends EventEmitter {
     const parsed = new URL(authenticatedLaunchUrl);
     const token = parsed.searchParams.get('token');
     if (!token) {
-      throw new Error(`DSH launch URL is missing token query parameter: ${authenticatedLaunchUrl}`);
+      throw new Error('DSH launch URL is missing a token');
     }
     this.origin = parsed.origin;
 
-    const connectUrl = `${this.origin}/connect?token=${encodeURIComponent(token)}&interactions=answer`;
-    const res = await this.requester(connectUrl, { method: 'GET' });
+    this.connectUrl = `${this.origin}/connect?token=${encodeURIComponent(token)}&interactions=answer`;
+    await this.openMuxAndEvents();
+    return { origin: this.origin, hostHome: this.hostHome };
+  }
+
+  private getPeerCookie(): Promise<string> {
+    if (this.disposed || !this.connectUrl) return Promise.reject(new DshRemoteError('gateway/closed', 'DSH client is closed'));
+    if (this.cookieHeader) return Promise.resolve(this.cookieHeader);
+    this.peerGrant ??= this.authorizePeer().finally(() => { this.peerGrant = null; });
+    return this.peerGrant;
+  }
+
+  private async authorizePeer(): Promise<string> {
+    const timeout = this.hasConnected ? RECONNECT_HANDSHAKE_TIMEOUT_MS : INITIAL_HANDSHAKE_TIMEOUT_MS;
+    const res = await this.requester(this.connectUrl, { method: 'GET', signal: AbortSignal.timeout(timeout) });
     const rawSetCookie = res.headers['set-cookie'];
     const cookies = Array.isArray(rawSetCookie)
       ? rawSetCookie
@@ -502,10 +545,29 @@ export class DshTypertClient extends EventEmitter {
     if (res.status < 200 || res.status >= 400 || cookies.length === 0) {
       throw new Error(`DSH /connect failed with HTTP ${res.status}: ${res.body}`);
     }
+    if (this.disposed) throw new DshRemoteError('gateway/closed', 'DSH client closed during authorization');
     this.cookieHeader = cookies.map((entry) => entry.split(';')[0]).join('; ');
+    return this.cookieHeader;
+  }
 
-    await this.openMuxAndEvents();
-    return { origin: this.origin, hostHome: this.hostHome };
+  private async postWithPeer(route: string, body: string, signal?: AbortSignal): Promise<DshHttpResponse> {
+    const post = (cookie: string) => this.requester(`${this.origin}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', cookie },
+      body,
+      signal,
+    });
+    const cookie = await this.getPeerCookie();
+    const response = await post(cookie);
+    if (response.status !== 401) return response;
+    // An HTTP rejection can arrive before the WS close callback. The Host
+    // rejected this peer before dispatch, so this request may be sent once more.
+    if (this.cookieHeader === cookie) {
+      this.cookieHeader = '';
+      if (this.socket?.readyState === 1) this.socket.close(1000, 'renewing DSH peer');
+    }
+    signal?.throwIfAborted();
+    return post(await this.getPeerCookie());
   }
 
   /**
@@ -516,23 +578,10 @@ export class DshTypertClient extends EventEmitter {
     args: Record<string, unknown> = {},
     signal?: AbortSignal,
   ): Promise<TResult> {
-    this.assertAuthenticated();
     const rpcId = randomUUID();
-    const res = await this.requester(`${this.origin}/api/${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json',
-        cookie: this.cookieHeader,
-      },
-      body: JSON.stringify({
-        type: 'client-request',
-        rpcId,
-        method: endpoint,
-        payload: { args },
-      }),
-      signal,
-    });
+    const res = await this.postWithPeer(`/api/${endpoint}`, JSON.stringify({
+      type: 'client-request', rpcId, method: endpoint, payload: { args },
+    }), signal);
 
     if (res.status < 200 || res.status >= 300) {
       if (res.status === 401) {
@@ -577,17 +626,7 @@ export class DshTypertClient extends EventEmitter {
     payload?: unknown,
     signal?: AbortSignal,
   ): Promise<TResult> {
-    this.assertAuthenticated();
-    const res = await this.requester(`${this.origin}${DSH_OPS_ROUTE_PATH}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json',
-        cookie: this.cookieHeader,
-      },
-      body: JSON.stringify({ action, payload }),
-      signal,
-    });
+    const res = await this.postWithPeer(DSH_OPS_ROUTE_PATH, JSON.stringify({ action, payload }), signal);
 
     let parsed: Record<string, unknown>;
     try {
@@ -807,6 +846,10 @@ export class DshTypertClient extends EventEmitter {
 
   async close(): Promise<void> {
     this.disposed = true;
+    this.muxReady = false;
+    this.cookieHeader = '';
+    this.connectUrl = '';
+    this.emit('closed');
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -835,12 +878,6 @@ export class DshTypertClient extends EventEmitter {
     }
   }
 
-  private assertAuthenticated(): void {
-    if (!this.origin || !this.cookieHeader) {
-      throw new Error('DshTypertClient is not connected; call connect() first');
-    }
-  }
-
   private buildMuxWsUrl(): string {
     const url = new URL(DSH_REMOTE_MUX_PATH, this.origin);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -848,21 +885,35 @@ export class DshTypertClient extends EventEmitter {
   }
 
   private async openMuxAndEvents(): Promise<void> {
+    const timeout = this.hasConnected ? RECONNECT_HANDSHAKE_TIMEOUT_MS : INITIAL_HANDSHAKE_TIMEOUT_MS;
+    if (this.verifyPeerBeforeUpgrade && this.cookieHeader) {
+      // A failed upgrade may already have consumed the grant. Probe it before
+      // minting another one while a proxy or the local network is unavailable.
+      await this.callOps(DshOpsAction.Health, undefined, AbortSignal.timeout(timeout));
+    }
+    this.verifyPeerBeforeUpgrade = false;
     const wsUrl = this.buildMuxWsUrl();
-    const socket = this.wsFactory(wsUrl, { cookie: this.cookieHeader });
+    const cookie = await this.getPeerCookie();
+    if (this.disposed) throw new DshRemoteError('gateway/closed', 'DSH client closed before mux setup');
+    const socket = this.wsFactory(wsUrl, { cookie });
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const onOpen = () => {
         settled = true;
         cleanupInit();
+        if (this.disposed) {
+          socket.close();
+          reject(new DshRemoteError('gateway/closed', 'DSH client closed'));
+          return;
+        }
         this.socket = socket;
-        this.reconnectAttempt = 0;
         resolve();
       };
       const onError = (err: unknown) => {
         if (!settled) {
           settled = true;
+          this.verifyPeerBeforeUpgrade = true;
           cleanupInit();
           reject(err instanceof Error ? err : new Error('DSH mux WebSocket failed to connect'));
         }
@@ -870,15 +921,21 @@ export class DshTypertClient extends EventEmitter {
       const onClose = () => {
         if (!settled) {
           settled = true;
+          this.verifyPeerBeforeUpgrade = true;
           cleanupInit();
           reject(new Error('DSH mux WebSocket closed before opening'));
         }
       };
       const cleanupInit = () => {
+        clearTimeout(handshakeTimeout);
         socket.removeEventListener('open', onOpen);
         socket.removeEventListener('error', onError);
         socket.removeEventListener('close', onClose);
       };
+      const handshakeTimeout = setTimeout(() => {
+        onError(new Error('Timed out opening the DSH mux'));
+        socket.close();
+      }, timeout);
       socket.addEventListener('open', onOpen, { once: true });
       socket.addEventListener('error', onError, { once: true });
       socket.addEventListener('close', onClose, { once: true });
@@ -894,9 +951,14 @@ export class DshTypertClient extends EventEmitter {
     socket.addEventListener('close', (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
+      this.muxReady = false;
+      // The Host disposes the API peer backing this cookie on socket termination.
+      // Re-authorize against this same Host before any further HTTP or mux work.
+      if (this.cookieHeader === cookie) this.cookieHeader = '';
       const code = (event as { code?: number } | null)?.code;
       console.warn(`[DSH] Mux disconnected (pid=${this.runtimePid ?? 'unknown'}, closeCode=${code ?? 'unknown'}, activeStreams=${this.activeStreams.size})`);
       const lostError = new DshRemoteError('gateway/disconnected', 'DSH mux WebSocket disconnected');
+      this.eventsAbort?.abort(lostError);
       for (const queue of this.activeStreams.values()) {
         queue.fail(lostError);
       }
@@ -915,7 +977,19 @@ export class DshTypertClient extends EventEmitter {
         }
       });
     });
-    await readyPromise;
+    const readyTimeout = setTimeout(() => eventsAbort.abort(new Error('Timed out waiting for DSH events')), timeout);
+    try {
+      await readyPromise;
+    } catch (error) {
+      if (this.socket === socket && socket.readyState < 2) socket.close();
+      throw error;
+    } finally {
+      clearTimeout(readyTimeout);
+    }
+    if (this.disposed || this.socket !== socket) throw new DshRemoteError('gateway/disconnected', 'DSH mux closed during handshake');
+    this.reconnectAttempt = 0;
+    this.muxReady = true;
+    this.hasConnected = true;
     this.emit('connected', { origin: this.origin, hostHome: this.hostHome });
   }
 

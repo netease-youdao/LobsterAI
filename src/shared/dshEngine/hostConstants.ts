@@ -240,6 +240,8 @@ export type DshPluginInstallSource =
 
 export const DshHostIpc = {
   GetStatus: 'dshHost:getStatus',
+  GetSessionRecovery: 'dshHost:getSessionRecovery',
+  ConnectionChanged: 'dshHost:connectionChanged',
   Restart: 'dshHost:restart',
   GetWebUrl: 'dshHost:getWebUrl',
   OpenEcosystemView: 'dshHost:openEcosystemView',
@@ -258,3 +260,17 @@ export const DshHostIpc = {
   SetPermissionPreset: 'dshHost:setPermissionPreset',
 } as const;
 export type DshHostIpc = typeof DshHostIpc[keyof typeof DshHostIpc];
+
+export const DshRecoveryPhase = { Pending: 'pending', Checking: 'checking', Waiting: 'waiting' } as const;
+export type DshRecoveryPhase = typeof DshRecoveryPhase[keyof typeof DshRecoveryPhase];
+
+export const DshDeliveryOutcome = {
+  Cancelled: 'cancelled', Unsent: 'unsent', Interrupted: 'interrupted', Unconfirmed: 'unconfirmed',
+} as const;
+export type DshDeliveryOutcome = typeof DshDeliveryOutcome[keyof typeof DshDeliveryOutcome];
+
+export interface DshSessionRecovery {
+  since: number;
+  messageId: string;
+  phase: DshRecoveryPhase;
+}

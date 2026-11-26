@@ -760,6 +760,7 @@ contextBridge.exposeInMainWorld('electron', {
   cowork: {
     // Session management
     startSession: (options: {
+      submissionId?: string;
       pptCover?: PptCoverRequest;
       analytics?: UsageContext;
       prompt: string;
@@ -787,6 +788,8 @@ contextBridge.exposeInMainWorld('electron', {
     recoverMessageEdit: (request: { sessionId: string; operationId: string }) => ipcRenderer.invoke(CoworkIpcChannel.RecoverMessageEdit, request),
     switchMessageVersion: (request: import('../shared/cowork/messageEdit').CoworkMessageVersionSwitchRequest) => ipcRenderer.invoke(CoworkIpcChannel.SwitchMessageVersion, request),
     continueSession: (options: {
+      retryMessageId?: string;
+      submissionId?: string;
       analytics?: UsageContext;
       sessionId: string;
       prompt: string;
@@ -1847,6 +1850,12 @@ contextBridge.exposeInMainWorld('electron', {
   },
   dshHost: {
     getStatus: () => ipcRenderer.invoke(DshHostIpc.GetStatus),
+    getSessionRecovery: (sessionId: string) => ipcRenderer.invoke(DshHostIpc.GetSessionRecovery, sessionId),
+    onConnectionChanged: (listener: () => void) => {
+      const notify = () => listener();
+      ipcRenderer.on(DshHostIpc.ConnectionChanged, notify);
+      return () => { ipcRenderer.removeListener(DshHostIpc.ConnectionChanged, notify); };
+    },
     restart: () => ipcRenderer.invoke(DshHostIpc.Restart),
     getWebUrl: () => ipcRenderer.invoke(DshHostIpc.GetWebUrl),
     openEcosystemView: (routeHash?: string) => ipcRenderer.invoke(DshHostIpc.OpenEcosystemView, routeHash),

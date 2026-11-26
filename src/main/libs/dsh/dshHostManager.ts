@@ -586,6 +586,10 @@ export class DshHostManager extends EventEmitter {
   private restartCount = 0;
   private stopping = false;
   private startPromise: Promise<void> | null = null;
+  private restartPromise: Promise<void> | null = null;
+  private stopPromise: Promise<void> | null = null;
+  private terminatingChild: ChildProcess | null = null;
+  private disconnectedAt: number | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly bridgeTools = new Map<string, DshBridgeTool>();
@@ -651,6 +655,20 @@ export class DshHostManager extends EventEmitter {
     return this.phase === DshHostPhase.Ready && this.client !== null && this.client.isConnected();
   }
 
+  hasLiveHost(): boolean {
+    return this.phase === DshHostPhase.Ready && this.client !== null && this.child !== null;
+  }
+
+  getDisconnectedAt(): number | null {
+    return this.disconnectedAt;
+  }
+
+  private setDisconnectedAt(value: number | null): void {
+    if (this.disconnectedAt === value) return;
+    this.disconnectedAt = value;
+    this.emit('connectionChange');
+  }
+
   /**
    * Ensures LobsterAI's App-Owned Profile manifest and managed bundle symlinks
    * (`@lobsterai/dsh-bundle`, `@lobsterai/dsh-channels`) remain intact after
@@ -703,8 +721,21 @@ export class DshHostManager extends EventEmitter {
    * callers share a single in-flight boot promise.
    */
   async start(): Promise<void> {
+    if (this.stopPromise) throw new Error('DSH host is stopping');
+    if (this.restartPromise) return this.restartPromise;
     if (this.isReady()) return;
     if (this.startPromise) return this.startPromise;
+    const owner = this.client;
+    if (owner && this.hasLiveHost()) {
+      try {
+        return await owner.waitUntilConnected();
+      } catch (error) {
+        // Only the supervisor may retire this owner. Join its replacement if it exited.
+        if (this.stopping || this.phase === DshHostPhase.Failed || this.client === owner) throw error;
+        return this.start();
+      }
+    }
+    if (this.child) throw new Error('Waiting for the previous DSH host to exit');
     this.stopping = false;
     this.startPromise = this.doStart().finally(() => {
       this.startPromise = null;
@@ -713,21 +744,35 @@ export class DshHostManager extends EventEmitter {
   }
 
   async restart(): Promise<void> {
-    this.setPhase(DshHostPhase.Restarting);
-    await this.stopProcessOnly();
-    this.restartCount = 0;
-    await this.start();
+    if (this.stopPromise) throw new Error('DSH host is stopping');
+    if (this.restartPromise) return this.restartPromise;
+    this.stopping = false;
+    this.restartPromise = (async () => {
+      await this.startPromise?.catch((): void => undefined);
+      this.setPhase(DshHostPhase.Restarting);
+      await this.stopProcessOnly();
+      this.restartCount = 0;
+      if (!this.stopping) await this.doStart();
+    })().finally(() => { this.restartPromise = null; });
+    return this.restartPromise;
   }
 
   async stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
     this.stopping = true;
+    if (this.phase === DshHostPhase.Starting) this.child?.kill('SIGTERM');
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
-    await this.stopProcessOnly();
-    await this.stopBridgeServer();
-    this.setPhase(DshHostPhase.Stopped);
+    this.stopPromise = (async () => {
+      await (this.restartPromise ?? this.startPromise)?.catch((): void => undefined);
+      await this.stopProcessOnly();
+      await this.stopBridgeServer();
+      this.setDisconnectedAt(null);
+      this.setPhase(DshHostPhase.Stopped);
+    })().finally(() => { this.stopPromise = null; });
+    return this.stopPromise;
   }
 
   // ── Live Host Sync Operations ──────────────────────────────────────────────
@@ -871,6 +916,7 @@ export class DshHostManager extends EventEmitter {
       this.ensureProfileIntegrity();
 
       await this.ensureBridgeServer();
+      if (this.stopping) throw new Error('DSH host stopped during startup');
       const childEnv = this.buildChildEnv();
       const launchInfo = this.prepareLaunchEntry(childEnv);
 
@@ -884,17 +930,24 @@ export class DshHostManager extends EventEmitter {
       });
 
       const launchUrl = await this.spawnAndWaitForLaunchUrl(launchInfo.entryPath, childEnv);
+      const owner = this.child;
 
       const client = this.options.clientFactory
         ? this.options.clientFactory()
         : new DshTypertClient({ runtimePid: this.child?.pid });
+      this.client = client;
+      client.on?.('disconnected', () => {
+        if (this.client === client && this.disconnectedAt === null) this.setDisconnectedAt(Date.now());
+      });
+      client.on?.('connected', () => {
+        if (this.client === client) this.setDisconnectedAt(null);
+      });
       await client.connect(launchUrl);
       const health = await client.callOps<{ ok?: boolean }>(DshOpsAction.Health);
       if (health && 'ok' in health && health.ok === false) {
         throw new Error(`DSH host health check failed: ${JSON.stringify(health)}`);
       }
 
-      this.client = client;
       this.authenticatedWebUrl = launchUrl;
       this.origin = new URL(launchUrl).origin;
       this.startedAt = Date.now();
@@ -903,6 +956,8 @@ export class DshHostManager extends EventEmitter {
       // subagent bindings, permission preset) BEFORE transitioning to Ready so
       // callers waiting on host readiness never race against replay.
       await this.replayCachedSyncs(client);
+      if (this.child !== owner) throw new Error('DSH host exited during startup');
+      this.setDisconnectedAt(null);
       this.setPhase(DshHostPhase.Ready);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1090,6 +1145,7 @@ export class DshHostManager extends EventEmitter {
       });
 
       child.once('error', (error) => {
+        if (!child.pid && this.child === child) this.child = null;
         if (!settled) {
           settled = true;
           clearTimeout(timer);
@@ -1098,9 +1154,8 @@ export class DshHostManager extends EventEmitter {
       });
 
       child.once('exit', (code, signal) => {
-        if (this.child === child) {
-          this.child = null;
-        }
+        if (this.child !== child) return;
+        this.child = null;
         if (!settled) {
           settled = true;
           clearTimeout(timer);
@@ -1111,7 +1166,7 @@ export class DshHostManager extends EventEmitter {
           );
           return;
         }
-        if (!this.stopping) {
+        if (!this.stopping && this.terminatingChild !== child && this.phase === DshHostPhase.Ready) {
           this.handleUnexpectedExit(code, signal);
         }
       });
@@ -1119,6 +1174,7 @@ export class DshHostManager extends EventEmitter {
   }
 
   private handleUnexpectedExit(code: number | null, signal: NodeJS.Signals | null): void {
+    this.setDisconnectedAt(this.disconnectedAt ?? Date.now());
     const reason = `DSH host exited unexpectedly (code=${String(code)}, signal=${String(signal)})`;
     this.lastError = reason;
     this.authenticatedWebUrl = null;
@@ -1147,6 +1203,8 @@ export class DshHostManager extends EventEmitter {
   }
 
   private async stopProcessOnly(): Promise<void> {
+    const child = this.child;
+    this.terminatingChild = child;
     const client = this.client;
     this.client = null;
     this.authenticatedWebUrl = null;
@@ -1155,30 +1213,24 @@ export class DshHostManager extends EventEmitter {
       await client.close().catch((): void => undefined);
     }
 
-    const child = this.child;
-    this.child = null;
-    if (!child || child.exitCode !== null || child.killed) return;
-
-    await new Promise<void>((resolve) => {
-      const killTimer = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          // Process already gone.
-        }
+    if (!child || child.exitCode !== null || child.signalCode != null) return;
+    await new Promise<void>((resolve, reject) => {
+      const exited = () => {
+        clearTimeout(escalate);
+        clearTimeout(deadline);
         resolve();
+      };
+      const escalate = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode == null) child.kill('SIGKILL');
       }, 5_000);
-      child.once('exit', () => {
-        clearTimeout(killTimer);
-        resolve();
-      });
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        clearTimeout(killTimer);
-        resolve();
-      }
+      const deadline = setTimeout(() => {
+        child.off('exit', exited);
+        reject(new Error('Could not confirm the previous DSH host exited'));
+      }, 10_000);
+      child.once('exit', exited);
+      child.kill('SIGTERM');
     });
+    this.terminatingChild = null;
   }
 
   // ── Authenticated Local Callback Bridge ────────────────────────────────────
