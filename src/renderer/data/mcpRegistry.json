@@ -99,10 +99,12 @@
       "name": "GitHub",
       "name_zh": "GitHub",
       "icon": "connector-icons/connector-github.png",
-      "description_zh": "通过 GitHub CLI 管理仓库、Issue、Pull Request 和 Actions。",
-      "description_en": "Manage repositories, issues, pull requests and Actions with GitHub CLI.",
+      "description_zh": "连接 GitHub 账号，管理仓库、Issue、Pull Request 和 Actions。",
+      "description_en": "Connect your GitHub account to manage repositories, issues, pull requests and Actions.",
       "category": "developer",
-      "transportType": "skill",
+      "transportType": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": "oauth",
       "examples_zh": [
         "列出我在 GitHub 上等待评审的 Pull Request"
       ],

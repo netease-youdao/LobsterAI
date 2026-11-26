@@ -19,6 +19,7 @@ import {
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { connectCliAccount } from '../../mcp/cliMarketplaceLogin';
+import { GITHUB_RESOURCE, runMarketplaceLogin, TDX_RESOURCE } from '../../mcp/marketplaceOAuth';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthClientCredentials,
@@ -33,7 +34,6 @@ import {
   normalizeMcpToolDiscoveryRequest,
 } from '../../mcp/mcpToolDiscovery';
 import { startQichachaMcpApiKeyLogin } from '../../mcp/qichachaMcpAuth';
-import { runTdxMarketplaceLogin, TDX_RESOURCE } from '../../mcp/tdxMarketplaceOAuth';
 
 export interface McpHandlerDeps {
   getAuthTokens?: () => { accessToken: string } | null;
@@ -390,7 +390,8 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         const normalizedData = normalizeMcpServerInput(data as McpServerFormData) as McpServerFormData;
         // Multiple renderer windows may request the same marketplace installation.
         const store = mcpRuntime.getStore();
-        if (normalizedData.registryId === 'tdx' && store.listServers().some(server => server.registryId === 'tdx')) {
+        if ((normalizedData.registryId === 'tdx' || normalizedData.registryId === 'connector-github')
+          && store.listServers().some(server => server.registryId === normalizedData.registryId)) {
           return { success: true, servers: mcpRuntime.getDisplayServers() };
         }
         const server = store.createServer(normalizedData);
@@ -673,13 +674,15 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     const controller = new AbortController();
     oauthLoginControllers.set(id, controller);
     try {
-      if (server.registryId === 'tdx') {
-        if (server.url !== TDX_RESOURCE) throw new Error('Invalid Tongdaxin MCP endpoint');
+      if (server.registryId === 'tdx' || server.registryId === 'connector-github') {
+        const github = server.registryId === 'connector-github';
+        if (server.url !== (github ? GITHUB_RESOURCE : TDX_RESOURCE)) throw new Error('Invalid marketplace MCP endpoint');
         const sessionKey = deps.getAuthSessionKey?.();
         const getAccessToken = () => sessionKey && deps.getAuthSessionKey?.() === sessionKey
           ? deps.getAuthTokens?.()?.accessToken : undefined;
-        if (!getAccessToken()) throw new Error('请先登录 LobsterAI，再连接通达信');
-        await runTdxMarketplaceLogin({
+        if (!getAccessToken()) throw new Error(`请先登录 LobsterAI，再连接${github ? ' GitHub' : '通达信'}`);
+        await runMarketplaceLogin({
+          provider: github ? 'github' : 'tdx',
           oauthManager, serverId: id, getAccessToken, signal: controller.signal, openExternal: openAuthorizationUrl,
         });
         try {

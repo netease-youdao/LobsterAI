@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { delimiter } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { dialog, shell } from 'electron';
+import { shell } from 'electron';
 
 import type { CliConnectorId } from '../../shared/mcp/cliConnector';
 import { getNodeToolEnv, resolveUserShellPathAsync } from '../libs/coworkUtil';
@@ -14,7 +14,6 @@ const providers = {
   'connector-wecom': { pkg: '@wecom/cli@1.3.4', domains: ['work.weixin.qq.com'] },
   'connector-feishu': { pkg: '@larksuite/cli@1.0.100', domains: ['feishu.cn', 'larksuite.com'] },
   'connector-dingtalk': { pkg: 'dingtalk-workspace-cli@1.0.70', domains: ['login.dingtalk.com'] },
-  'connector-github': { pkg: '', domains: ['github.com'] },
 } satisfies Record<LoginId, { pkg: string; domains: string[] }>;
 
 function json(text: string) {
@@ -31,10 +30,8 @@ export async function connectCliAccount(id: LoginId, signal: AbortSignal): Promi
   env.npm_config_loglevel = 'error';
   env.DWS_NO_SKILLS = '1';
   const { pkg, domains } = providers[id];
-  const launcher = pkg ? resolveNodePackageCliCommand('npx', env)
-    : { command: 'gh', baseArgs: [], env, shell: false };
-  const prefix = pkg ? [...launcher.baseArgs, '--yes', pkg] : [];
-  let deviceCode = '';
+  const launcher = resolveNodePackageCliCommand('npx', env);
+  const prefix = [...launcher.baseArgs, '--yes', pkg];
 
   async function run(args: string[], interactive = false) {
     signal.throwIfAborted();
@@ -58,11 +55,7 @@ export async function connectCliAccount(id: LoginId, signal: AbortSignal): Promi
     async function offer(line: string) {
       if (opened || !interactive || signal.aborted) return;
       let link = line.trim();
-      if (id === 'connector-github') {
-        const code = /one-time code[: (]+([A-Z0-9]{4}-[A-Z0-9]{4})/i.exec(line);
-        if (code) deviceCode = code[1];
-        link = line.match(/https:\/\/github\.com\/login\/(?:device|oauth\/authorize)\b\S*/)?.[0] ?? '';
-      } else if (id === 'connector-feishu' && line.startsWith('{')) {
+      if (id === 'connector-feishu' && line.startsWith('{')) {
         const event = json(line);
         link = event?.event === 'device_authorization' ? event.verification_uri_complete : '';
       }
@@ -72,11 +65,6 @@ export async function connectCliAccount(id: LoginId, signal: AbortSignal): Promi
         throw new Error('授权地址不属于所选服务商');
       }
       opened = true;
-      if (id === 'connector-github' && deviceCode) {
-        const result = await dialog.showMessageBox({ message: 'GitHub 设备验证码：' + deviceCode,
-          detail: '在 GitHub 授权页输入此验证码。', buttons: ['取消', '打开 GitHub'], cancelId: 0, defaultId: 1 });
-        if (result.response !== 1) throw new Error('已取消 GitHub 授权');
-      }
       if (!signal.aborted && child.exitCode === null) await shell.openExternal(url.href);
     }
     for (const stream of [child.stdout, child.stderr]) {
@@ -91,8 +79,7 @@ export async function connectCliAccount(id: LoginId, signal: AbortSignal): Promi
     }
     try {
       const code = await new Promise<number | null>((resolve, reject) => {
-        child.once('error', (error: NodeJS.ErrnoException) => reject(id === 'connector-github' && error.code === 'ENOENT'
-          ? new Error('请先安装 GitHub CLI（cli.github.com），然后重新连接。') : error));
+        child.once('error', reject);
         child.once('close', resolve);
       });
       signal.throwIfAborted();
@@ -107,12 +94,10 @@ export async function connectCliAccount(id: LoginId, signal: AbortSignal): Promi
     'connector-wecom': ['auth', 'show'],
     'connector-feishu': ['auth', 'status', '--verify', '--json'],
     'connector-dingtalk': ['auth', 'status', '--format', 'json'],
-    'connector-github': ['auth', 'status', '--hostname', 'github.com'],
   };
   const status = () => run(statusArgs[id]);
   const connected = (result: Awaited<ReturnType<typeof status>>) => {
     if (result.code !== 0) return false;
-    if (id === 'connector-github') return true;
     if (id === 'connector-wecom') return /^Status:\s*authorized\s*$/im.test(result.stdout);
     const data = json(result.stdout);
     return id === 'connector-dingtalk' ? data?.authenticated === true
@@ -138,7 +123,6 @@ export async function connectCliAccount(id: LoginId, signal: AbortSignal): Promi
     'connector-wecom': ['auth', 'init', '--noninteractive', '--no-browser'],
     'connector-feishu': ['auth', 'login', '--json'],
     'connector-dingtalk': ['auth', 'login', '--no-browser', '--format', 'json'],
-    'connector-github': ['auth', 'login', '--web', '--hostname', 'github.com'],
   };
   await run(loginArgs[id], true);
   if (!connected(await status())) throw new Error('授权尚未完成，请检查账号状态后重试。');

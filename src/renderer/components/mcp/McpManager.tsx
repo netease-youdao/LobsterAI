@@ -811,7 +811,7 @@ const McpManager: React.FC = () => {
    */
   const handleInstallOAuthRegistryEntry = async (entry: McpRegistryEntry) => {
     setActionError('');
-    const name = entry.id === 'notion-oauth' && servers.some(server => server.name === entry.name)
+    const name = (entry.id === 'notion-oauth' || entry.id === 'connector-github') && servers.some(server => server.name === entry.name)
       ? entry.name + ' (OAuth)' : entry.name;
     if (servers.some(server => server.name === name)) {
       setActionError(i18nService.t('mcpNameExists'));

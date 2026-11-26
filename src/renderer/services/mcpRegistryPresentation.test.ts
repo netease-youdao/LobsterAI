@@ -51,6 +51,9 @@ describe('curated connector marketplace', () => {
     const github = { ...feishu, id: 'connector-github', name: 'GitHub' };
     const retired = { ...feishu, id: 'tavily', transportType: 'stdio' };
     const result = selectMarketplaceRegistry([github, retired, feishu, github]);
+    expect(result[0]).toMatchObject({
+      transportType: 'http', connector: { auth: 'oauth', url: 'https://api.githubcopilot.com/mcp/' },
+    });
     expect(result.map(entry => [entry.id, entry.icon])).toEqual([
       ['connector-github', 'connector-icons/connector-github.png'],
       ['connector-feishu', 'connector-icons/connector-feishu.png'],

@@ -10,7 +10,11 @@ export function selectMarketplaceRegistry(featured?: McpMarketplaceServer[]): Mc
   if (!Array.isArray(featured)) return bundledRegistry;
   const selected: McpRegistryEntry[] = [];
   const seen = new Set<string>();
-  for (const entry of convertMarketplaceToRegistry(featured)) {
+  // Upgrade the GitHub CLI entry in previously cached catalogs at its published position.
+  const github = catalog.servers.find(server => server.id === 'connector-github');
+  const current = featured.map(server => github && server.id === github.id && server.transportType === 'skill'
+    ? github : server);
+  for (const entry of convertMarketplaceToRegistry(current)) {
     const bundled = bundledById.get(entry.id);
     if (!bundled || seen.has(entry.id) || entry.transportType !== bundled.transportType
       || entry.connector?.auth !== bundled.connector?.auth) continue;
