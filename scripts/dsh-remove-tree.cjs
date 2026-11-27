@@ -17,16 +17,6 @@
 const fs = require('fs');
 const path = require('path');
 
-/** Remove a link entry itself. `unlink` covers symlinks; junctions need `rmdir`. */
-function removeLink(target) {
-  try {
-    fs.unlinkSync(target);
-  } catch (error) {
-    if (error.code === 'ENOENT') return;
-    fs.rmdirSync(target);
-  }
-}
-
 /**
  * Delete `target` recursively without ever descending into a symlink or
  * junction. Missing paths are ignored, mirroring `{ force: true }`.
@@ -39,12 +29,17 @@ function removeTree(target) {
     if (error.code === 'ENOENT') return;
     throw error;
   }
-  if (stats.isSymbolicLink()) {
-    removeLink(target);
-    return;
-  }
-  if (!stats.isDirectory()) {
-    fs.rmSync(target, { force: true });
+  const isLink = stats.isSymbolicLink();
+  if (isLink || !stats.isDirectory()) {
+    try {
+      // Electron's rmSync rejects read-only Git objects on Windows. Unlinking
+      // just this entry preserves the permissions of any other hard links.
+      fs.unlinkSync(target);
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      if (!isLink || process.platform !== 'win32') throw error;
+      fs.rmdirSync(target); // Some Windows junctions require rmdir.
+    }
     return;
   }
   for (const entry of fs.readdirSync(target)) {

@@ -23,6 +23,7 @@ import {
   DSH_RUNTIME_ENTRY_RELPATH,
   parseDshPnpmBinRelPath,
 } from '../dshRuntime';
+import { removeTreeNoFollowSync } from '../removeTreeNoFollow';
 
 /** Tools the host supplies for bundled pnpm lifecycle scripts and Git-sourced plugins. */
 export interface DshNodeToolchain {
@@ -471,11 +472,7 @@ export function ensureAppOwnedProfile(options: EnsureAppOwnedProfileOptions): En
   // Link LobsterAI-managed local bundles into `<profileDir>/node_modules/` so
   // `dsh-app-boot` resolves them immediately without invoking pnpm or network.
   ensureScopedBundleLink(profileDir, DSH_HOST_BUNDLE_NAME, hostBundleDir);
-  if (channelsBundleDir) {
-    ensureScopedBundleLink(profileDir, DSH_CHANNELS_BUNDLE_NAME, channelsBundleDir);
-  } else {
-    removeScopedBundleLink(profileDir, DSH_CHANNELS_BUNDLE_NAME);
-  }
+  ensureScopedBundleLink(profileDir, DSH_CHANNELS_BUNDLE_NAME, channelsBundleDir);
 
   return { manifestPath, patchPath, bundles, preservedUserBundles };
 }
@@ -685,30 +682,21 @@ function resolveNodeModulesTarget(profileDir: string, packageName: string): stri
   return path.join(profileDir, 'node_modules', ...packageName.split('/'));
 }
 
-function ensureScopedBundleLink(profileDir: string, packageName: string, targetDir: string): void {
+function ensureScopedBundleLink(profileDir: string, packageName: string, targetDir?: string | null): void {
+  const linkPath = resolveNodeModulesTarget(profileDir, packageName);
+  if (!targetDir) {
+    removeTreeNoFollowSync(linkPath);
+    return;
+  }
   const resolvedTarget = path.resolve(targetDir);
-  const linkPath = resolveNodeModulesTarget(profileDir, packageName);
+  const existing = fs.lstatSync(linkPath, { throwIfNoEntry: false });
+  if (existing?.isSymbolicLink()) {
+    const currentTarget = path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath));
+    if (path.relative(currentTarget, resolvedTarget) === '') return;
+  }
+  if (existing) removeTreeNoFollowSync(linkPath);
   fs.mkdirSync(path.dirname(linkPath), { recursive: true });
-  try {
-    const stat = fs.lstatSync(linkPath);
-    if (stat.isSymbolicLink()) {
-      const currentTarget = path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath));
-      if (currentTarget === resolvedTarget) return;
-    }
-    fs.rmSync(linkPath, { recursive: true, force: true });
-  } catch {
-    // Link does not exist yet.
-  }
   fs.symlinkSync(resolvedTarget, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
-}
-
-function removeScopedBundleLink(profileDir: string, packageName: string): void {
-  const linkPath = resolveNodeModulesTarget(profileDir, packageName);
-  try {
-    fs.rmSync(linkPath, { recursive: true, force: true });
-  } catch {
-    // Best-effort cleanup.
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -6,6 +6,9 @@ import { type InstalledKitRecord, KitStoreKey } from '../../shared/kit/constants
 import { SKIN_PACK_RESOURCE_DIR_NAME } from '../../shared/skills/constants';
 import { SkinPackKitId, SkinPackSkillId } from '../../shared/skin/kit';
 import { cpRecursiveSync } from '../fsCompat';
+import { removeTreeNoFollowSync } from '../libs/removeTreeNoFollow';
+import { resolveSkillInstallTarget } from '../skills/skillInstallTarget';
+import { isShippedSkinCreatorCopy } from './legacySkinCreator';
 
 const SKILL_FILE_NAME = 'SKILL.md';
 const SKILLS_STATE_KEY = 'skills_state';
@@ -73,9 +76,7 @@ export function installSkinCreatorSkillToUserRoot(
 
   fs.mkdirSync(skillsRoot, { recursive: true });
   const targetDir = path.join(skillsRoot, SkinPackSkillId.BuiltIn);
-  if (fs.existsSync(targetDir)) {
-    fs.rmSync(targetDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  }
+  removeTreeNoFollowSync(targetDir);
   cpRecursiveSync(resolvedSource, targetDir, { dereference: true, force: true });
   return hasSkillDefinition(targetDir);
 }
@@ -83,31 +84,86 @@ export function installSkinCreatorSkillToUserRoot(
 export function removeSkinCreatorSkillFromUserRoot(
   skillsRoot: string,
   store: SkinPackSkillStore,
+  sourceDir?: string | null,
 ): void {
   const targetDir = path.join(skillsRoot, SkinPackSkillId.BuiltIn);
-  const upgradingDir = path.join(skillsRoot, `${SkinPackSkillId.BuiltIn}.upgrading`);
-  for (const dir of [targetDir, upgradingDir]) {
-    if (!fs.existsSync(dir)) continue;
-    try {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    } catch (error) {
-      console.warn(`[SkinPackKit] Failed to remove skin-creator skill artifacts at ${dir}:`, error);
-    }
+  const copies = [targetDir, `${targetDir}.upgrading`].filter(dir => fs.lstatSync(dir, { throwIfNoEntry: false }));
+  let managedCopies = copies;
+  let originalId: string = SkinPackSkillId.BuiltIn;
+  if (copies.length && !isSkinPackKitInstalled(store)) {
+    // A case-insensitive filesystem resolves the reserved path even if the imported ID was uppercase.
+    const name = path.basename(copies[0]);
+    const folderNames = fs.readdirSync(skillsRoot);
+    const originalName = folderNames.includes(name) ? name : folderNames.find(entry => entry.toLowerCase() === name);
+    originalId = (originalName ?? name).replace(/\.upgrading$/i, '');
+    const bundled = sourceDir === undefined ? resolveBundledSkinCreatorSkillDir() : sourceDir;
+    const kits = store.get<InstalledKitsMap>(KitStoreKey.Installed) ?? {};
+    const ownedByOtherKit = Object.values(kits).some(kit => kit.skills?.skillIds?.includes(originalId));
+    managedCopies = ownedByOtherKit ? [] : copies.filter(dir => isShippedSkinCreatorCopy(dir, bundled));
+    const userCopies = copies.filter(dir => !managedCopies.includes(dir));
+    if (userCopies.length) preserveUnownedSkinCreator(skillsRoot, originalId, userCopies, store, kits);
   }
+  for (const dir of managedCopies) removeTreeNoFollowSync(dir);
 
   const stateMap = store.get<SkillStateMap>(SKILLS_STATE_KEY);
-  if (stateMap && typeof stateMap === 'object' && !Array.isArray(stateMap) && SkinPackSkillId.BuiltIn in stateMap) {
+  if (stateMap && typeof stateMap === 'object' && !Array.isArray(stateMap) && originalId in stateMap) {
     const next = { ...stateMap };
-    delete next[SkinPackSkillId.BuiltIn];
+    delete next[originalId];
     store.set(SKILLS_STATE_KEY, next);
   }
+}
+
+function preserveUnownedSkinCreator(
+  skillsRoot: string, originalId: string, userCopies: string[], store: SkinPackSkillStore, kits: InstalledKitsMap,
+): void {
+  const { targetDir } = resolveSkillInstallTarget(skillsRoot, originalId);
+  const userId = path.basename(targetDir);
+  const state = store.get<SkillStateMap>(SKILLS_STATE_KEY);
+  // Keep the old preference until cleanup completes. A failed rename can be retried.
+  if (state?.[originalId]) store.set(SKILLS_STATE_KEY, { ...state, [userId]: state[originalId] });
+
+  const changedKits: InstalledKitsMap = {};
+  for (const [kitId, kit] of Object.entries(kits)) {
+    const skills = kit.skills;
+    if (!skills?.skillIds?.includes(originalId)) continue;
+    const metadata = skills.metadata && { ...skills.metadata };
+    if (metadata?.[originalId]) {
+      metadata[userId] = { ...metadata[originalId], id: userId };
+      delete metadata[originalId];
+    }
+    changedKits[kitId] = {
+      ...kit,
+      skills: {
+        ...skills,
+        skillIds: skills.skillIds.map(skillId => skillId === originalId ? userId : skillId),
+        ...(metadata && { metadata }),
+      },
+    };
+  }
+  const moved: Array<{ from: string; to: string }> = [];
+  try {
+    // A lone backup is the recovered skill. Keep a pair together for normal upgrade recovery.
+    for (const [index, from] of userCopies.entries()) {
+      const to = index === 0 ? targetDir : `${targetDir}.upgrading`;
+      fs.renameSync(from, to);
+      moved.push({ from, to });
+    }
+    if (Object.keys(changedKits).length) {
+      store.set(KitStoreKey.Installed, { ...kits, ...changedKits });
+    }
+  } catch (error) {
+    for (const { from, to } of moved.reverse()) fs.renameSync(to, from);
+    if (state?.[originalId]) store.set(SKILLS_STATE_KEY, state);
+    throw error;
+  }
+  console.log(`[SkinPackKit] Preserved existing user skill at ${targetDir}`);
 }
 
 /**
  * Keep `<userData>/SKILLs/skin-creator` aligned with the `ai-skin-designer`
  * Kit installation state on startup:
  * - Installed: refresh skill files from bundled `resources/skin-pack/skin-creator`.
- * - Not installed: clean up any legacy bundled copy left behind by older app releases.
+ * - Not installed: remove stock templates and recover user imports under a free ID.
  */
 export function syncSkinCreatorSkillOnStartup(
   skillsRoot: string,
@@ -128,13 +184,5 @@ export function syncSkinCreatorSkillOnStartup(
     return;
   }
 
-  const legacyDir = path.join(skillsRoot, SkinPackSkillId.BuiltIn);
-  const legacyUpgrading = path.join(skillsRoot, `${SkinPackSkillId.BuiltIn}.upgrading`);
-  const stateMap = store.get<SkillStateMap>(SKILLS_STATE_KEY);
-  const hasLegacyState = Boolean(
-    stateMap && typeof stateMap === 'object' && !Array.isArray(stateMap) && SkinPackSkillId.BuiltIn in stateMap,
-  );
-  if (fs.existsSync(legacyDir) || fs.existsSync(legacyUpgrading) || hasLegacyState) {
-    removeSkinCreatorSkillFromUserRoot(skillsRoot, store);
-  }
+  removeSkinCreatorSkillFromUserRoot(skillsRoot, store, sourceDir);
 }

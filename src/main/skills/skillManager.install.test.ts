@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../libs/skillSecurity/skillSecurityScanner', () => scannerMocks);
 
+import { SkinPackSkillId } from '../../shared/skin/kit';
 import type { SkillSecurityReport } from '../libs/skillSecurity/skillSecurityTypes';
 import type { SqliteStore } from '../sqliteStore';
 import { SkillManager } from './skillManager';
@@ -153,6 +154,17 @@ describe('installing a skill whose SKILL.md sits at the archive root', () => {
     expect(confirmed.success).toBe(true);
     expect(installedSkillDirs()).toEqual(['skill-vetter']);
     expect(fs.readdirSync(fixture.temp)).toEqual([]);
+  });
+
+  test('a reviewed ZIP sharing the skin kit name is installed under a distinct ID', async () => {
+    const id = SkinPackSkillId.BuiltIn.toUpperCase();
+    scannerMocks.mergeReports.mockReturnValue(riskyReport);
+    const pending = await manager.downloadSkill(await writeZip('custom.zip', rootLevelSkillFiles({
+      ...release, slug: id,
+    })));
+    const confirmed = manager.confirmPendingInstall(pending.pendingInstallId!, 'installDisabled');
+    expect(confirmed.installedIds).toEqual([`${id}-1`]);
+    expect(confirmed.skills).toContainEqual(expect.objectContaining({ id: `${id}-1`, enabled: false }));
   });
 
   test('"install disabled" on an already installed release disables it without copying', async () => {
