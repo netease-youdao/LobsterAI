@@ -246,11 +246,11 @@ const HomeCreditsBadge: React.FC = () => {
               ? 'enterpriseAccountQuota'
               : 'authCreditsRemaining',
           )}
-          className="absolute right-0 top-10 z-50 w-[17.5rem] rounded-xl border border-border bg-surface p-3.5 shadow-popover popover-enter"
+          className="absolute right-0 top-10 z-50 flex max-h-[calc(100vh-4rem)] w-[17.5rem] flex-col rounded-xl border border-border bg-surface p-3.5 shadow-popover popover-enter"
         >
           {viewModel.mode === HomeCreditsMode.Enterprise && enterpriseContext ? (
             <>
-              <div className="flex items-start justify-between gap-2 border-b border-border pb-3">
+              <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border pb-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground">
                     {enterpriseContext.enterpriseName}
@@ -283,7 +283,7 @@ const HomeCreditsBadge: React.FC = () => {
                 </button>
               </div>
 
-              <div className="py-3">
+              <div className="min-h-0 overflow-y-auto overscroll-contain py-3">
                 <div className="flex items-center justify-between text-xs text-secondary">
                   <span>{i18nService.t('enterpriseAccountQuota')}</span>
                   {viewModel.periodEndDate && (
@@ -311,7 +311,7 @@ const HomeCreditsBadge: React.FC = () => {
                 </div>
               </div>
 
-              <div className="border-t border-border pt-2.5">
+              <div className="shrink-0 border-t border-border pt-2.5">
                 <button
                   type="button"
                   onClick={() => void openExternalUrl(
@@ -326,7 +326,7 @@ const HomeCreditsBadge: React.FC = () => {
             </>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2 border-b border-border pb-3">
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground">
                     {planLabel}
@@ -348,8 +348,8 @@ const HomeCreditsBadge: React.FC = () => {
                 </button>
               </div>
 
-              <div className="py-3">
-                <div className="flex items-center justify-between text-xs text-secondary">
+              <div className="flex min-h-0 flex-col py-3">
+                <div className="flex shrink-0 items-center justify-between text-xs text-secondary">
                   <span>{i18nService.t('authCreditsRemaining')}</span>
                   <button
                     type="button"
@@ -369,12 +369,12 @@ const HomeCreditsBadge: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleManualRefresh}
-                    className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-secondary transition-colors hover:text-foreground"
+                    className="mt-1.5 inline-flex shrink-0 cursor-pointer items-center gap-1.5 self-start text-xs font-medium text-secondary transition-colors hover:text-foreground"
                   >
                     <span>{i18nService.t('authCreditsUnavailableRetry')}</span>
                   </button>
                 ) : (
-                  <div className="mt-1 flex items-baseline gap-1 tabular-nums">
+                  <div className="mt-1 flex shrink-0 items-baseline gap-1 tabular-nums">
                     <span className="text-xl font-semibold text-foreground">
                       {viewModel.exactText}
                     </span>
@@ -385,34 +385,36 @@ const HomeCreditsBadge: React.FC = () => {
                 )}
 
                 {viewModel.mode === HomeCreditsMode.Personal && viewModel.creditItems.length > 0 && (
-                  <div className="mt-3 space-y-2 border-t border-dashed border-border pt-2.5">
-                    {viewModel.creditItems.map((item, index) => {
-                      const label = (isEn ? item.labelEn : item.label) || item.label || item.labelEn;
-                      const expiry = formatCreditExpiryDate(item.expiresAt);
-                      return (
-                        <div
-                          key={`${item.type}:${label}:${item.expiresAt ?? index}`}
-                          className="flex items-start justify-between gap-3 text-xs"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-foreground/90">{label}</div>
-                            {expiry && (
-                              <div className="text-[10px] text-secondary">
-                                {i18nService.t('authExpiresAt')} {expiry}
-                              </div>
-                            )}
+                  <div className="mt-3 flex min-h-0 flex-col border-t border-dashed border-border pt-2.5">
+                    <div className="-mr-1.5 max-h-60 min-h-0 space-y-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-1.5">
+                      {viewModel.creditItems.map((item, index) => {
+                        const label = (isEn ? item.labelEn : item.label) || item.label || item.labelEn;
+                        const expiry = formatCreditExpiryDate(item.expiresAt);
+                        return (
+                          <div
+                            key={`${item.type}:${label}:${item.expiresAt ?? 'none'}:${index}`}
+                            className="flex items-start justify-between gap-3 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-foreground/90">{label}</div>
+                              {expiry && (
+                                <div className="text-[10px] text-secondary">
+                                  {i18nService.t('authExpiresAt')} {expiry}
+                                </div>
+                              )}
+                            </div>
+                            <span className="shrink-0 font-medium text-foreground tabular-nums">
+                              {formatExactCredits(item.creditsRemaining)}
+                            </span>
                           </div>
-                          <span className="shrink-0 font-medium text-foreground tabular-nums">
-                            {formatExactCredits(item.creditsRemaining)}
-                          </span>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
 
-              <div className="flex items-center justify-between gap-2 border-t border-border pt-2.5">
+              <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border pt-2.5">
                 <button
                   type="button"
                   onClick={() => void openExternalUrl(getPortalCreditsDetailUrl())}
