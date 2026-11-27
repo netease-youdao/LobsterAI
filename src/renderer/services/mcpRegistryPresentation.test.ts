@@ -39,9 +39,9 @@ function server(id: string, registryId?: string): McpServerConfig {
 }
 
 describe('curated connector marketplace', () => {
-  test('uses the seven bundled providers for a legacy catalog', () => {
+  test('uses the eight bundled providers for a legacy catalog', () => {
     expect(selectMarketplaceRegistry().map(entry => entry.id)).toEqual([
-      'tdx', 'connector-wecom', 'connector-feishu', 'connector-dingtalk', 'connector-github', 'notion-oauth', 'baidu-drive',
+      'tdx', 'connector-wecom', 'connector-feishu', 'connector-dingtalk', 'connector-github', 'notion-oauth', 'pkulaw', 'baidu-drive',
     ]);
     expect(selectMarketplaceRegistry([])).toEqual([]);
   });

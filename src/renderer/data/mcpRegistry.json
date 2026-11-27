@@ -131,6 +131,29 @@
       "auth": "oauth"
     },
     {
+      "id": "pkulaw",
+      "name": "PKULaw",
+      "name_zh": "北大法宝·法律智能检索",
+      "icon": "connector-icons/pkulaw.svg",
+      "description_zh": "北大法宝官方法律库：按法名条号精准取条并标注时效，可查任一时点的有效版本、对比新旧条文；分级检索类案及检察、行政处罚文书；逐条核验 AI 引用的法条与案号，附 pkulaw.com 原文链接，让每一次 AI 法律回答都有据可查。",
+      "description_en": "Official PKULaw database for Chinese law: exact article lookup with in-force status, point-in-time versions and diffs, graded similar cases, procuratorate and penalty documents, and citation verification with pkulaw.com source links.",
+      "category": "data-api",
+      "transportType": "http",
+      "url": "https://apim-gateway.pkulaw.com/mcp-law-agg/1.0.0/mcp",
+      "auth": "oauth",
+      "requestTimeoutMs": 60000,
+      "examples_zh": [
+        "员工连续旷工三天，公司能否解除劳动合同？请给出法条依据和类案。",
+        "房东到期不退押金，法院一般怎么判？帮我找几个类似案例。",
+        "《公司法》第四十七条在 2018 版是第几条？两版有什么区别？"
+      ],
+      "examples_en": [
+        "Can a company terminate an employee after three consecutive days of absence? Give the statutory basis and similar cases.",
+        "How do Chinese courts usually rule when a landlord refuses to return a rental deposit? Find similar cases.",
+        "Which article of the 2018 Company Law corresponds to Article 47 of the current version, and what changed between them?"
+      ]
+    },
+    {
       "id": "baidu-drive",
       "name": "Baidu Netdisk",
       "name_zh": "百度网盘",

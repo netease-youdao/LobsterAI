@@ -1,1 +1,1 @@
-export { cancelAllMcpOAuthLogins, registerMcpHandlers } from './handlers';
+export { cancelAllMcpOAuthLogins, registerMcpHandlers, syncPkulawEnvironment } from './handlers';

@@ -339,7 +339,7 @@ import { registerImageCreationHandlers } from './ipcHandlers/imageCreation';
 import { registerImageEditingHandlers } from './ipcHandlers/imageEditing';
 import { registerKitHandlers } from './ipcHandlers/kits';
 import { hasUnsafeMarkdownEdits, registerMarkdownEditingHandlers } from './ipcHandlers/markdownEditing';
-import { cancelAllMcpOAuthLogins, registerMcpHandlers } from './ipcHandlers/mcp';
+import { cancelAllMcpOAuthLogins, registerMcpHandlers, syncPkulawEnvironment } from './ipcHandlers/mcp';
 import { registerMigrationV2Handlers } from './ipcHandlers/migrationV2/handlers';
 import { registerPermissionIpcHandlers } from './ipcHandlers/permissions/handlers';
 import { registerPptCreationHandlers } from './ipcHandlers/pptCreation';
@@ -2502,6 +2502,7 @@ const getDshBootstrap = (): DshBootstrap => {
         forwardOpenClawStatus(compatStatus);
       },
     });
+    syncPkulawEnvironment(getMcpRuntime(), dshBootstrap.mcpOAuthManager);
     dshBootstrap.hostManager.on('connectionChange', () => {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send(DshHostIpc.ConnectionChanged);
@@ -4772,6 +4773,9 @@ if (!gotTheLock) {
         }
       }
       refreshEndpointsTestMode(getStore());
+      if (dshBootstrap && previousAppConfig?.app?.testMode !== nextAppConfig?.app?.testMode) {
+        syncPkulawEnvironment(getMcpRuntime(), dshBootstrap.mcpOAuthManager);
+      }
       const proxyChanged = previousAppConfig?.useSystemProxy !== nextAppConfig?.useSystemProxy;
       if (proxyChanged && getDshBootstrap().getEngineStatus().phase === 'running') {
         console.log('[DSH] Deferred app_config sync to the system proxy watcher.');

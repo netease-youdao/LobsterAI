@@ -24,6 +24,7 @@
     "connector-feishu": { "enabled": false },
     "connector-dingtalk": { "enabled": false },
     "connector-github": { "enabled": false },
+    "pkulaw": { "enabled": false },
     "baidu-drive": { "enabled": false },
     "skill-creator": { "order": 300, "enabled": true }
   }

@@ -19,7 +19,7 @@ import {
 } from '../../../shared/mcp/toolDiscovery';
 import { normalizeMcpServerUrlInput } from '../../../shared/mcp/url';
 import { connectCliAccount } from '../../mcp/cliMarketplaceLogin';
-import { GITHUB_RESOURCE, runMarketplaceLogin, TDX_RESOURCE } from '../../mcp/marketplaceOAuth';
+import { getPkulawResource, marketplaceOAuthProvider, runMarketplaceLogin } from '../../mcp/marketplaceOAuth';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthClientCredentials,
@@ -70,6 +70,19 @@ function cancelMcpOAuthLogin(id: string): void {
 export function cancelAllMcpOAuthLogins(): void {
   for (const controller of oauthLoginControllers.values()) controller.abort();
   for (const controller of cliLogins.values()) controller.abort();
+}
+
+// Test and production use different PKULaw realms and gateways. Drop the previous realm's
+// credentials before publishing the new gateway to DSH.
+export function syncPkulawEnvironment(runtime: McpRuntime, oauth: McpOAuthManager): void {
+  const store = runtime.getStore();
+  const url = getPkulawResource();
+  for (const server of store.listServers()) {
+    if (server.registryId !== 'pkulaw' || server.url === url) continue;
+    cancelMcpOAuthLogin(server.id);
+    oauth.deleteToken(server.id);
+    store.updateServer(server.id, { url });
+  }
 }
 
 async function openAuthorizationUrl(url: string): Promise<void> {
@@ -159,7 +172,7 @@ function normalizeMcpServerInput(data: Partial<McpServerFormData>): Partial<McpS
     if (!normalized.ok) {
       throw new Error(INVALID_URL_ERROR);
     }
-    return { ...data, url: normalized.url };
+    return { ...data, url: data.registryId === 'pkulaw' ? getPkulawResource() : normalized.url };
   }
   return data;
 }
@@ -390,7 +403,7 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
         const normalizedData = normalizeMcpServerInput(data as McpServerFormData) as McpServerFormData;
         // Multiple renderer windows may request the same marketplace installation.
         const store = mcpRuntime.getStore();
-        if ((normalizedData.registryId === 'tdx' || normalizedData.registryId === 'connector-github')
+        if (marketplaceOAuthProvider(normalizedData.registryId)
           && store.listServers().some(server => server.registryId === normalizedData.registryId)) {
           return { success: true, servers: mcpRuntime.getDisplayServers() };
         }
@@ -674,15 +687,15 @@ export function registerMcpHandlers(deps: McpHandlerDeps): void {
     const controller = new AbortController();
     oauthLoginControllers.set(id, controller);
     try {
-      if (server.registryId === 'tdx' || server.registryId === 'connector-github') {
-        const github = server.registryId === 'connector-github';
-        if (server.url !== (github ? GITHUB_RESOURCE : TDX_RESOURCE)) throw new Error('Invalid marketplace MCP endpoint');
+      const provider = marketplaceOAuthProvider(server.registryId);
+      if (provider) {
+        if (server.url !== provider.resource()) throw new Error('Invalid marketplace MCP endpoint');
         const sessionKey = deps.getAuthSessionKey?.();
         const getAccessToken = () => sessionKey && deps.getAuthSessionKey?.() === sessionKey
           ? deps.getAuthTokens?.()?.accessToken : undefined;
-        if (!getAccessToken()) throw new Error(`请先登录 LobsterAI，再连接${github ? ' GitHub' : '通达信'}`);
+        if (!getAccessToken()) throw new Error(`请先登录 LobsterAI，再连接${provider.name}`);
         await runMarketplaceLogin({
-          provider: github ? 'github' : 'tdx',
+          provider,
           oauthManager, serverId: id, getAccessToken, signal: controller.signal, openExternal: openAuthorizationUrl,
         });
         try {

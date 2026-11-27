@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { getServerApiBaseUrl } from '../libs/endpoints';
+import { getServerApiBaseUrl, isTestModeEnabled } from '../libs/endpoints';
 import type { McpOAuthClientCredentials, McpOAuthManager } from './mcpOAuthManager';
 
 export const TDX_RESOURCE = 'https://txmcp.tdx.com.cn:3001/txmcp';
@@ -10,12 +10,29 @@ const GITHUB_AUTHORIZE = 'https://github.com/login/oauth/authorize';
 const TDX_ISSUER = 'https://auth.tdx.com.cn';
 const READ_SCOPE = 'mcp.read';
 
+const PROVIDERS = {
+  tdx: { id: 'tdx', name: '通达信', resource: () => TDX_RESOURCE },
+  'connector-github': { id: 'github', name: 'GitHub', resource: () => GITHUB_RESOURCE },
+  pkulaw: { id: 'pkulaw', name: '北大法宝', resource: getPkulawResource },
+} as const;
+
+export function getPkulawResource(): string {
+  const host = isTestModeEnabled() ? 'test-apim-gateway.pkulaw.com' : 'apim-gateway.pkulaw.com';
+  return `https://${host}/mcp-law-agg/1.0.0/mcp`;
+}
+
+export function marketplaceOAuthProvider(registryId?: string) {
+  if (!registryId || !Object.hasOwn(PROVIDERS, registryId)) return undefined;
+  return PROVIDERS[registryId as keyof typeof PROVIDERS];
+}
+
 interface MarketplaceSession {
   state: string;
   claimToken: string;
   redirectUri: string;
   clientId: string;
   authorizationEndpoint: string;
+  tokenEndpoint?: string;
 }
 
 interface ClaimResult {
@@ -26,7 +43,7 @@ interface ClaimResult {
 }
 
 interface LoginOptions {
-  provider: 'github' | 'tdx';
+  provider: typeof PROVIDERS[keyof typeof PROVIDERS];
   oauthManager: McpOAuthManager;
   serverId: string;
   getAccessToken: () => string | undefined;
@@ -35,7 +52,8 @@ interface LoginOptions {
 }
 
 export async function runMarketplaceLogin(options: LoginOptions): Promise<void> {
-  const { provider, oauthManager, serverId, getAccessToken, openExternal } = options;
+  const { oauthManager, serverId, getAccessToken, openExternal } = options;
+  const { id: provider, name } = options.provider;
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(300_000)]);
   const sessionsUrl = getServerApiBaseUrl() + `/api/connectors/${provider}/oauth/sessions`;
 
@@ -60,7 +78,9 @@ export async function runMarketplaceLogin(options: LoginOptions): Promise<void> 
   try {
     const github = provider === 'github';
     const githubFlow = github ? beginGitHubLogin(session) : undefined;
-    const url = githubFlow?.url ?? await beginTdxLogin(options, session, signal);
+    const url = githubFlow?.url ?? (provider === 'pkulaw'
+      ? beginPkulawLogin(options, session)
+      : await beginTdxLogin(options, session, signal));
     signal.throwIfAborted();
     await openExternal(url);
     for (;;) {
@@ -82,12 +102,12 @@ export async function runMarketplaceLogin(options: LoginOptions): Promise<void> 
             updatedAt: now,
           });
         } else {
-          if (!result.code) throw new Error('通达信授权未完成，请重新连接');
+          if (!result.code) throw new Error(`${name}授权未完成，请重新连接`);
           await oauthManager.completePkceFlow(session.state, result.code, signal);
         }
         return;
       }
-      if (result.status === 'denied') throw new Error(`${github ? 'GitHub' : '通达信'}授权未完成，请重新连接`);
+      if (result.status === 'denied') throw new Error(`${name}授权未完成，请重新连接`);
       if (result.status !== 'pending') throw new Error('TIMEOUT');
       await delay(1500, undefined, { signal });
     }
@@ -96,7 +116,7 @@ export async function runMarketplaceLogin(options: LoginOptions): Promise<void> 
     if (signal.aborted) throw new Error('TIMEOUT');
     throw error;
   } finally {
-    if (provider === 'tdx') oauthManager.discardPkceFlow(session.state);
+    if (provider !== 'github') oauthManager.discardPkceFlow(session.state);
     void post('/cancel', claim, AbortSignal.timeout(3000)).catch(() => {
       // An unreachable relay also expires the session in Redis.
     });
@@ -115,6 +135,23 @@ function beginGitHubLogin(session: MarketplaceSession): { url: string; verifier:
     code_challenge: createHash('sha256').update(verifier).digest('base64url'),
   }).toString();
   return { url: url.href, verifier };
+}
+
+function beginPkulawLogin(options: LoginOptions, session: MarketplaceSession): string {
+  const host = isTestModeEnabled() ? 'testcas.pkulaw.com' : 'cas.pkulaw.com';
+  const issuer = `https://${host}/auth/realms/fabao/protocol/openid-connect`;
+  if (!session.clientId || session.authorizationEndpoint !== issuer + '/auth' || session.tokenEndpoint !== issuer + '/token') {
+    throw new Error('北大法宝授权端点与当前环境不符，请检查服务端配置');
+  }
+  return options.oauthManager.beginPkceFlow({
+    serverId: options.serverId,
+    state: session.state,
+    clientId: session.clientId,
+    redirectUri: session.redirectUri,
+    scope: 'openid wso2-role',
+    tokenEndpointAuthMethod: 'none',
+    metadata: { authorizationEndpoint: session.authorizationEndpoint, tokenEndpoint: session.tokenEndpoint },
+  }).authorizationUrl;
 }
 
 async function beginTdxLogin(options: LoginOptions, session: MarketplaceSession, signal: AbortSignal): Promise<string> {

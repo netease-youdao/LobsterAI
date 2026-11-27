@@ -796,6 +796,10 @@ export class McpOAuthManager {
       expiresAtMs: expiresIn !== undefined ? this.now() + expiresIn * 1000 : record.expiresAtMs,
       updatedAt: this.now(),
     };
+    const current = this.getToken(record.serverId);
+    if (!current || current.refreshToken !== record.refreshToken || current.updatedAt !== record.updatedAt) {
+      throw new Error('MCP OAuth grant changed during refresh');
+    }
     this.saveToken(updated);
     return updated;
   }
