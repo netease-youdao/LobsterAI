@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.11.26",
+  "version": "2026.11.27",
   "dsh": {
     "version": "0.2.2-rc.5",
     "npm": "@deepseek-ai/dsh",
