@@ -25,6 +25,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
+import { getAgentImPlatforms } from '../../services/agentImBindings';
 import { saveAgentOnboardingMeta } from '../../services/agentOnboarding';
 import { i18nService } from '../../services/i18n';
 import { imService } from '../../services/im';
@@ -148,6 +149,8 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
   const [subagentAllowAgentIds, setSubagentAllowAgentIds] = useState<string[]>([]);
   const [boundKeys, setBoundKeys] = useState<Set<string>>(new Set());
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
+  const language = i18nService.getLanguage();
+  const imPlatforms = useMemo(() => getAgentImPlatforms(imConfig, language), [imConfig, language]);
 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showImSection, setShowImSection] = useState(false);
@@ -1082,7 +1085,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({
                 {showImSection && (
                   <div className="border-t border-border-subtle bg-surface-raised/20 px-4 py-3.5">
                     <AgentImBindingList
-                      imConfig={imConfig}
+                      platforms={imPlatforms}
                       boundKeys={boundKeys}
                       agents={agents}
                       onToggleBinding={handleToggleIMBinding}

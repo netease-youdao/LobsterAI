@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
+import { applyImBindingChanges, getAgentImPlatforms, getBoundImKeys } from '../../services/agentImBindings';
 import { saveAgentOnboardingMeta } from '../../services/agentOnboarding';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
@@ -178,8 +179,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
   // IM binding state
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
-  const [boundKeys, setBoundKeys] = useState<Set<string>>(new Set());
-  const [initialBoundKeys, setInitialBoundKeys] = useState<Set<string>>(new Set());
+  const [draftBoundKeys, setDraftBoundKeys] = useState<Set<string> | null>(null);
+  const language = i18nService.getLanguage();
+  const imPlatforms = useMemo(() => getAgentImPlatforms(imConfig, language), [imConfig, language]);
+  const initialBoundKeys = useMemo(
+    () => agentId ? getBoundImKeys(imPlatforms, agentId) : new Set<string>(),
+    [imPlatforms, agentId],
+  );
+  const boundKeys = draftBoundKeys ?? initialBoundKeys;
 
   const isMainAgent = isDefaultAgentId(agentId);
   const enabledSkills = useMemo(() => skills.filter(skill => skill.enabled), [skills]);
@@ -424,19 +431,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       };
     })();
 
-    imService.loadConfig().then((cfg) => {
-      if (cfg && !cancelled) {
-        setImConfig(cfg);
-        const bindings = cfg.settings?.platformAgentBindings || {};
-        const bound = new Set<string>();
-        for (const [key, boundAgentId] of Object.entries(bindings)) {
-          if (boundAgentId === agentId) {
-            bound.add(key);
-          }
-        }
-        setBoundKeys(bound);
-        setInitialBoundKeys(new Set(bound));
-      }
+    setImConfig(null);
+    setDraftBoundKeys(null);
+    void imService.loadConfig().then(cfg => {
+      if (!cancelled) setImConfig(cfg);
     });
 
     return () => {
@@ -794,29 +792,16 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         saveAgentOnboardingMeta(agentId, { starterPrompts: pendingStarterPrompts });
       }
 
-      const bindingsChanged =
-        boundKeys.size !== initialBoundKeys.size
-        || [...boundKeys].some(k => !initialBoundKeys.has(k));
-      if (bindingsChanged && imConfig) {
-        const currentBindings = { ...(imConfig.settings?.platformAgentBindings || {}) };
-        for (const key of Object.keys(currentBindings)) {
-          if (currentBindings[key] === agentId) {
-            delete currentBindings[key];
-          }
+      if (changedFields.includes('imBindings')) {
+        const latest = await imService.loadConfig();
+        if (!latest) throw new Error('Failed to load IM bindings');
+        const platformAgentBindings = applyImBindingChanges(
+          latest.settings?.platformAgentBindings, agentId, initialBoundKeys, boundKeys,
+        );
+        if (!await imService.persistConfig({ settings: { platformAgentBindings } })
+          || !await imService.saveAndSyncConfig()) {
+          throw new Error('Failed to save IM bindings');
         }
-        if (isMainAgent) {
-          for (const key of boundKeys) {
-            delete currentBindings[key];
-          }
-        } else {
-          for (const key of boundKeys) {
-            currentBindings[key] = agentId;
-          }
-        }
-        await imService.persistConfig({
-          settings: { ...imConfig.settings, platformAgentBindings: currentBindings },
-        });
-        await imService.saveAndSyncConfig();
       }
 
       reportAgentSettingsAction('save_success', {
@@ -848,8 +833,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   };
 
   const handleToggleIMBinding = (key: string) => {
-    setBoundKeys((prev) => {
-      const next = new Set(prev);
+    setDraftBoundKeys((prev) => {
+      const next = new Set(prev ?? initialBoundKeys);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
@@ -1234,7 +1219,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                     {i18nService.t('agentTabIM')}
                   </span>
                   <span className="flex shrink-0 items-center gap-1.5 text-xs text-secondary">
-                    <span>{imSummaryLabel}</span>
+                    <span>{imConfig && imSummaryLabel}</span>
                     {showImSection ? (
                       <ChevronDownIcon className="h-4 w-4 text-secondary/70" />
                     ) : (
@@ -1245,11 +1230,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 {showImSection && (
                   <div className="border-t border-border-subtle bg-surface-raised/20 px-4 py-3.5">
                     <AgentImBindingList
-                      imConfig={imConfig}
+                      platforms={imPlatforms}
                       boundKeys={boundKeys}
                       agents={agents}
                       agentId={agentId}
-                      isMainAgent={isMainAgent}
                       onToggleBinding={handleToggleIMBinding}
                       onBeforeOpenImSettings={onClose}
                     />

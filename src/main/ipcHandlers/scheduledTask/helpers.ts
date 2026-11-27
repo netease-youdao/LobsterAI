@@ -1,4 +1,5 @@
 import { RETAINED_IM_PLATFORM_LIST, RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { DEFAULT_IM_INSTANCE_ID, resolveImAgentBinding } from '../../../shared/im/agentBinding';
 import { buildFeishuTopicConversationId, parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
 import { ImPeerKind, parseImConversationId, PlatformRegistry } from '../../../shared/platform';
 import { isRetainedImPlatform } from '../../im/dshChannelsBridge';
@@ -7,25 +8,24 @@ import type { Platform } from '../../im/types';
 const MULTI_INSTANCE_CONFIG_KEYS = new Set<string>(
   RETAINED_IM_PLATFORM_LIST.filter(platform => platform !== RetainedImPlatform.Weixin),
 );
+const OPENCLAW_ACCOUNT_ID_LENGTH = 8;
 
 function resolveAgentBinding(
   bindings: Record<string, string> | undefined,
   platform: Platform,
   accountId?: string | null,
 ): string {
-  if (!bindings) return 'main';
   if (MULTI_INSTANCE_CONFIG_KEYS.has(platform) && accountId) {
-    const prefix = `${platform}:`;
-    for (const key of Object.keys(bindings)) {
-      if (key.startsWith(prefix)) {
-        const instanceId = key.slice(prefix.length);
-        if (instanceId === accountId || instanceId.startsWith(accountId)) {
-          return bindings[key];
-        }
-      }
+    // Delivery options carry OpenClaw's short account ID. Prefer the full instance
+    // override written by the editor even if an older short binding still exists.
+    const key = `${platform}:${accountId}`;
+    if (bindings && (accountId.length === OPENCLAW_ACCOUNT_ID_LENGTH || !bindings[key])) {
+      const fullKey = Object.keys(bindings).find(candidate => candidate !== key && candidate.startsWith(key));
+      if (fullKey) return bindings[fullKey];
     }
+    return resolveImAgentBinding(bindings, platform, accountId);
   }
-  return bindings[platform] || 'main';
+  return resolveImAgentBinding(bindings, platform, platform === RetainedImPlatform.Weixin ? DEFAULT_IM_INSTANCE_ID : undefined);
 }
 
 export interface ScheduledTaskHelperDeps {
@@ -107,7 +107,7 @@ export function listScheduledTaskChannels(): Array<{
           const nimAccountId = key === 'nim'
             ? ((i.instanceId ?? '').slice(0, 8) || deriveNimRuntimeAccountId(inst))
             : null;
-          const accountId = nimAccountId ?? (i.instanceId ?? '').slice(0, 8);
+          const accountId = nimAccountId ?? (i.instanceId ?? '').slice(0, OPENCLAW_ACCOUNT_ID_LENGTH);
           return {
             accountId,
             // Leave unnamed instances empty; the renderer falls back to an
@@ -426,9 +426,16 @@ export function filterConversationMappingsForSelectedAccount<
     platform,
     selectedAccountId,
   );
+  const currentAgentConversations = new Set(mappings
+    .filter(mapping => mapping.agentId === selectedAgentId)
+    .map(mapping => mapping.imConversationId));
 
   const filtered = mappings.filter((mapping) => {
-    if (mapping.platform?.startsWith(`${platform}:`)) return true;
+    if (mapping.platform?.startsWith(`${platform}:`)) {
+      // A bot can have history under several agents after a reassignment.
+      // Keep its known targets, preferring the current owner's task for the same conversation.
+      return mapping.agentId === selectedAgentId || !currentAgentConversations.has(mapping.imConversationId);
+    }
     const parsed = parseImConversationId(mapping.imConversationId);
     if (parsed.accountId) return true;
     if (
