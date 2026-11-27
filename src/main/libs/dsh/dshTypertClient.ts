@@ -18,6 +18,7 @@ import {
 export const DSH_REMOTE_MUX_PATH = '/api/remote.mux';
 export const DSH_REMOTE_EVENT_STREAM_ENDPOINT = '$events';
 export const DSH_REMOTE_EVENT_RESULT_ENDPOINT = '$events/result';
+export const DshSocketErrorCode = { ConnectionReset: 'ECONNRESET' } as const;
 const INITIAL_HANDSHAKE_TIMEOUT_MS = 90_000;
 const RECONNECT_HANDSHAKE_TIMEOUT_MS = 12_000;
 
@@ -837,8 +838,17 @@ export class DshTypertClient extends EventEmitter {
     return this.call('session/state', { request: { sessionId } });
   }
 
-  getSessionProjections(sessionId: string, signal?: AbortSignal): Promise<Record<string, unknown> | null> {
-    return this.call('session/projections', { request: { sessionId } }, signal);
+  async getSessionProjections(sessionId: string, signal?: AbortSignal): Promise<Record<string, unknown> | null> {
+    const read = () => this.call<Record<string, unknown> | null>('session/projections', { request: { sessionId } }, signal);
+    try {
+      return await read();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== DshSocketErrorCode.ConnectionReset
+        || this.disposed || signal?.aborted) throw error;
+      // The peer may reset this HTTP connection independently of the mux.
+      // Reading the same projection again cannot submit a second turn.
+      return read();
+    }
   }
 
   getSessionEvents(

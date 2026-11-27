@@ -63,6 +63,11 @@
 - id: mcp-resources
   disabled: true
 
+# Allow short desktop event-loop stalls without losing active streams.
+- id: typert-gateway
+  config:
+    websocketHeartbeatIntervalMs: 10000
+
 # ── Search policy guard (0.2.2-rc.5) ─────────────────────────────────────────
 # Disable both stock DSH search providers (`web-search-deepseek` and
 # `web-deepseek-api`) so LobsterAI's single `lobster-web-search-bridge` owns

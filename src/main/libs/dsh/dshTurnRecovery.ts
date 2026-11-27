@@ -1,13 +1,13 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { record } from './dshSubagentHistory';
-import type { DshTypertClient } from './dshTypertClient';
+import { DshSocketErrorCode, type DshTypertClient } from './dshTypertClient';
 
 type Frame = Record<string, unknown>;
 type ReadyClient = () => Promise<DshTypertClient>;
 
 const transportErrors = new Set([
-  'gateway/disconnected', 'gateway/closed', 'ECONNRESET', 'ECONNREFUSED',
+  'gateway/disconnected', 'gateway/closed', DshSocketErrorCode.ConnectionReset, 'ECONNREFUSED',
   'EPIPE', 'ETIMEDOUT', 'ERR_STREAM_PREMATURE_CLOSE',
 ]);
 
