@@ -27,6 +27,16 @@ function configure(key: string, config: Record<string, unknown> = {}) {
   db.prepare('INSERT OR REPLACE INTO im_config VALUES (?, ?, 1)').run(key, JSON.stringify(config));
 }
 
+test('recovers the original ordinary Feishu group independently of a newer raw chat mapping', () => {
+  configure('feishu:' + instanceId, { appId: 'cli_original' });
+  const chatId = 'oc_shared';
+  store.createSessionMapping('group:' + chatId, Im.Feishu, 'old', agentId, 'agent:agent-a:feishu:group:oc_shared');
+  store.createSessionMapping(chatId, ('feishu:' + instanceId) as Platform, 'split', agentId);
+  const route = { instanceId, agentId, chatId, conversationIds: ['group:' + chatId] };
+  expect(store.findLegacyFeishuGroupSessionMapping(route)?.coworkSessionId).toBe('old');
+  expect(store.findLegacyFeishuGroupSessionMapping({ ...route, agentId: 'agent-b' })).toBeNull();
+});
+
 describe('Feishu topic and bot ownership across upgrades', () => {
   const group = 'oc_shared';
   const topic = 'group:oc_shared:thread:omt_TopicA';
@@ -39,15 +49,15 @@ describe('Feishu topic and bot ownership across upgrades', () => {
     store.setIMSettings({ platformAgentBindings: { ['feishu:' + instanceId]: agentId, ['feishu:' + other]: 'agent-b' } });
     preserveLegacyImBotIdentities(db);
     store.createSessionMapping(topic, Im.Feishu, 'old', agentId);
-    expect(store.findLegacyFeishuTopicSessionMapping(route)?.coworkSessionId).toBe('old');
-    expect(store.findLegacyFeishuTopicSessionMapping({ ...route, conversationIds: [topic.toLowerCase()] })).toBeNull();
-    expect(store.findLegacyFeishuTopicSessionMapping({ ...route, instanceId: other })).toBeNull();
+    expect(store.findLegacyFeishuGroupSessionMapping(route)?.coworkSessionId).toBe('old');
+    expect(store.findLegacyFeishuGroupSessionMapping({ ...route, conversationIds: [topic.toLowerCase()] })).toBeNull();
+    expect(store.findLegacyFeishuGroupSessionMapping({ ...route, instanceId: other })).toBeNull();
     store.setIMSettings({ platformAgentBindings: { ['feishu:' + instanceId]: agentId, ['feishu:' + other]: agentId } });
-    expect(store.findLegacyFeishuTopicSessionMapping(route)).toBeNull();
+    expect(store.findLegacyFeishuGroupSessionMapping(route)).toBeNull();
     store.createSessionMapping('feishu:' + topic, 'feishu:12345678' as Platform, 'old', agentId);
-    expect(store.findLegacyFeishuTopicSessionMapping(route)?.coworkSessionId).toBe('old');
+    expect(store.findLegacyFeishuGroupSessionMapping(route)?.coworkSessionId).toBe('old');
     configure('feishu:' + instanceId, { instanceId, appId: 'cli_replaced' });
-    expect(store.findLegacyFeishuTopicSessionMapping(route)).toBeNull();
+    expect(store.findLegacyFeishuGroupSessionMapping(route)).toBeNull();
   });
 
   test('lists the selected bot by full or unique short ID even when both bots share a peer and expert', () => {

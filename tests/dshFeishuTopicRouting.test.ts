@@ -4,6 +4,23 @@ const driverPath = '../dsh-bundles/lobsterai-channels/plugins/drivers/feishu.mjs
 
 afterEach(() => vi.unstubAllGlobals());
 
+test('never turns a group mention without a chat ID into a task for its sender', async () => {
+  const { FeishuChannelDriver } = await import(driverPath);
+  const onInbound = vi.fn();
+  const driver = new FeishuChannelDriver({ instanceId: 'bot', config: {}, onInbound });
+  const receive = (chatType: string) => driver.handleFeishuEventPayload({
+    header: { event_type: 'im.message.receive_v1' },
+    event: {
+      sender: { sender_type: 'user', sender_id: { open_id: 'ou_member' } },
+      message: { chat_type: chatType, message_id: 'om_m', message_type: 'text', content: '{"text":"hello"}' },
+    },
+  });
+  await receive('group');
+  expect(onInbound).not.toHaveBeenCalled();
+  await receive('p2p');
+  expect(onInbound).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'ou_member', chatType: 'direct' }));
+});
+
 test('handles native topics and root-only topic groups, and keeps ordinary group quotes out of threads', async () => {
   const { FeishuChannelDriver } = await import(driverPath);
   const groupLookups: string[] = [];

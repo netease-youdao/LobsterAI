@@ -33,4 +33,19 @@ describe('legacy POPO mappings', () => {
     expect(findLegacyPopoMapping(storeFor([instanceId], group), instanceId, 'group', 'room', 'agent-a')).toBe(group);
     expect(findLegacyPopoMapping(storeFor([instanceId, '22222222-other'], group), instanceId, 'group', 'room', 'agent-a')).toBeNull();
   });
+
+  test('uses the stored bot scope or the only bot bound to the original group agent', () => {
+    const other = '22222222-second';
+    const group = { ...mapping, imConversationId: 'group:room' };
+    const scoped = { ...group, platform: 'popo:12345678' as IMSessionMapping['platform'] };
+    const ids = [instanceId, other];
+    expect(findLegacyPopoMapping(storeFor(ids, scoped), instanceId, 'group', 'room', 'agent-a')).toBe(scoped);
+    expect(findLegacyPopoMapping(storeFor(ids, scoped), other, 'group', 'room', 'agent-a')).toBeNull();
+    const store = {
+      ...storeFor(ids, group),
+      getIMSettings: () => ({ platformAgentBindings: { ['popo:' + instanceId]: 'agent-a', ['popo:' + other]: 'agent-b' } }),
+    };
+    expect(findLegacyPopoMapping(store, instanceId, 'group', 'room', 'agent-a')).toBe(group);
+    expect(findLegacyPopoMapping(store, other, 'group', 'room', 'agent-a')).toBeNull();
+  });
 });

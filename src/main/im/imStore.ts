@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 
 import { PlatformRegistry } from '../../shared/platform';
 import { t } from '../i18n';
-import { type FeishuTopicSessionRoute, findLegacyFeishuTopicSession } from './feishuTopicSessionMapping';
+import { type FeishuGroupSessionRoute, findLegacyFeishuGroupSession } from './feishuGroupSessionMapping';
 import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
@@ -1820,8 +1820,8 @@ export class IMStore {
     return row ? mapSessionMappingRow(row) : null;
   }
 
-  findLegacyFeishuTopicSessionMapping(route: FeishuTopicSessionRoute): IMSessionMapping | null {
-    const row = findLegacyFeishuTopicSession(this.db, route, this.getIMSettings().platformAgentBindings);
+  findLegacyFeishuGroupSessionMapping(route: FeishuGroupSessionRoute): IMSessionMapping | null {
+    const row = findLegacyFeishuGroupSession(this.db, route, this.getIMSettings().platformAgentBindings);
     return row ? mapSessionMappingRow(row) : null;
   }
 

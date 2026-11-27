@@ -1048,7 +1048,7 @@ export class CoworkStore {
   }
 
   private normalizeIMPlatform(value: string | null | undefined): Platform | null {
-    const platform = value?.trim();
+    const platform = value?.trim().split(':', 1)[0];
     if (!platform) return null;
     if (this.knownIMPlatforms.has(platform)) return platform as Platform;
     return PlatformRegistry.platformOfChannel(platform) ?? null;

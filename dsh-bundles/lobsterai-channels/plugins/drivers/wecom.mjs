@@ -323,9 +323,10 @@ export class WeComChannelDriver extends BaseChannelDriver {
         if (frame.cmd === 'aibot_msg_callback' && frame.body) {
           const body = frame.body;
           const senderId = String(body.from?.userid || '').trim();
-          const chatId = String(body.chatid || senderId).trim();
+          const isGroup = body.chattype === 'group';
+          const chatId = String(body.chatid || (isGroup ? '' : senderId)).trim();
           if (reqId && chatId) this.rememberReqId(chatId, reqId);
-          if (!senderId || !this.isSenderAllowed(senderId)) return;
+          if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
 
           void this.extractWsInbound(frame, signal)
             .then(({ text, attachments }) => {
@@ -338,7 +339,7 @@ export class WeComChannelDriver extends BaseChannelDriver {
                 text,
                 ...(attachments.length > 0 ? { attachments } : {}),
                 messageId: String(body.msgid || reqId),
-                chatType: body.chattype === 'group' ? 'group' : 'direct',
+                chatType: isGroup ? 'group' : 'direct',
                 replyContext: { reqId, chatType: body.chattype },
               });
             })
