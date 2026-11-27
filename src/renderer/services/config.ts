@@ -812,6 +812,7 @@ const hydrateStoredConfig = (storedConfig: AppConfig): AppConfig => {
 class ConfigService {
   private config: AppConfig = defaultConfig;
   private initGeneration = 0;
+  private updateQueue: Promise<void> = Promise.resolve();
 
   async init() {
     const initGeneration = ++this.initGeneration;
@@ -853,6 +854,14 @@ class ConfigService {
   }
 
   async updateConfig(newConfig: Partial<AppConfig>) {
+    // Serialize read-modify-write updates so concurrent immediate-save toggles
+    // never overwrite each other's changes with a stale stored snapshot.
+    const task = this.updateQueue.then(() => this.performUpdateConfig(newConfig));
+    this.updateQueue = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  private async performUpdateConfig(newConfig: Partial<AppConfig>) {
     // An explicit user/service write must win over any startup read that is
     // still in flight after App's timeout-based recovery moved on.
     this.initGeneration += 1;

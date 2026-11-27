@@ -81,4 +81,18 @@ describe('commandSafety danger classification sanity', () => {
     });
     expect(getCommandDangerLevel('ls -la')).toEqual({ level: 'safe', reason: '' });
   });
+
+  test('uses shared syntax-aware danger detection for scripts, sudo, and benign literals', () => {
+    expect(isDangerousCommand('python3 -c \'fmt = "YYYY-MM-DD"\'')).toBe(false);
+    expect(isDangerousCommand('cat <<\'EOF\' > note.md\nchmod 755 a.sh\nEOF')).toBe(false);
+    expect(isDangerousCommand('chmod 600 credentials.json')).toBe(false);
+    expect(getCommandDangerLevel('sudo apt-get update')).toEqual({
+      level: 'caution',
+      reason: 'privilege-escalation',
+    });
+    expect(getCommandDangerLevel('python3 -c "import os; os.chmod(\'run.sh\', 0o755)"')).toEqual({
+      level: 'caution',
+      reason: 'permission-change',
+    });
+  });
 });

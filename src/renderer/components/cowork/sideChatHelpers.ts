@@ -12,6 +12,22 @@ export function isDefaultSideChatTitle(title: string | null | undefined): boolea
 }
 
 /**
+ * Format an open side chat tab's label based only on currently open tabs.
+ * Shows the plain localized base when a single tab is open (e.g. "侧边聊天"),
+ * and appends a 1-based ordinal when multiple tabs are open (e.g. "侧边聊天 1", "侧边聊天 2").
+ */
+export function getOpenSideChatTabTitle(
+  tabIndex: number,
+  openTabCount: number,
+  localizedBase: string,
+): string {
+  if (openTabCount <= 1) {
+    return localizedBase;
+  }
+  return `${localizedBase} ${Math.max(0, tabIndex) + 1}`;
+}
+
+/**
  * Format a side chat's display title. Custom user-renamed titles take
  * precedence; untouched default titles render as `<localizedBase> <ordinal>`
  * (e.g. "侧边聊天 1", "Side chat 1") ordered by creation time.

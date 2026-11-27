@@ -272,6 +272,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dataMigrationPhaseApplying: '正在替换应用数据并校验完整性...',
     dataMigrationPhaseCompleted: '导入完成，正在重启应用...',
 
+    decisionModelErrorInvalidEndpoint: '请输入有效的 HTTP 或 HTTPS 接口地址。',
+
     // ── IM connectivity test messages ───────────────────────────────────
     // Common
     imMissingCredentials: '缺少必要配置项: {fields}',
@@ -767,6 +769,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     dataMigrationPhaseSanitizing: 'Rewriting paths and preparing migrated data...',
     dataMigrationPhaseApplying: 'Applying restored data and verifying integrity...',
     dataMigrationPhaseCompleted: 'Import complete. Restarting LobsterAI...',
+
+    decisionModelErrorInvalidEndpoint: 'Enter a valid HTTP or HTTPS endpoint URL.',
 
     // ── IM connectivity test messages ───────────────────────────────────
     // Common

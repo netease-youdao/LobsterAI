@@ -27,4 +27,4 @@ export const MANAGEMENT_BODY_TEXT =
 
 /** Badge strips: card meta, counts, pills, stat labels. */
 export const MANAGEMENT_META_TEXT =
-  'text-[length:calc(var(--lobster-ui-font-size)_-_3px)]';
+  'text-[length:max(10px,calc(var(--lobster-ui-font-size)_-_3px))]';

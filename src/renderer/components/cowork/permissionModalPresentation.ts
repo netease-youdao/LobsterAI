@@ -2,7 +2,11 @@
 // `approval/request` payloads) into plain-language, non-technical confirmation
 // copy suitable for everyday users.
 
-import { isDeleteCommand } from '../../../common/deleteCommand';
+import {
+  analyzeCommandDanger,
+  CommandDangerLevel,
+  CommandDangerReason,
+} from '../../../common/commandDanger';
 import {
   DSH_AGENT_RULES_TOOL,
   DshApprovalPermissionAction,
@@ -11,18 +15,26 @@ import {
 import type { DshPermissionPresetChangedDetail } from '../../services/dshHost';
 import type { CoworkPermissionResult } from '../../types/cowork';
 
-export type ApprovalDangerLevel = 'safe' | 'caution' | 'destructive';
+export type ApprovalDangerLevel = CommandDangerLevel;
 
 export interface PermissionModalPresentation {
   title: string;
   summary: string;
   modelNote: string;
+  modelNoteLabel: string;
   targetLabel: string;
   targetValue: string;
   command: string;
   dangerLevel: ApprovalDangerLevel;
+  dangerReason: string;
   dangerReasonText: string;
+  dangerDetailText: string;
+  triggeredSnippet: string;
+  triggeredLineNumber: number;
+  isEmbeddedInScript: boolean;
   approvalScopeKey: string;
+  allowSessionLabel: string;
+  allowSessionHint: string;
   canAllowForSession: boolean;
   canSwitchFullAccess: boolean;
   technicalDetails: string;
@@ -32,73 +44,71 @@ const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'shell', 'exec', 'terminal_exe
 const FILE_MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'apply_patch', 'delete_file', 'move_file']);
 
 const DANGER_REASON_I18N_MAP: Record<string, string> = {
-  'recursive-delete': 'dangerReasonRecursiveDelete',
-  'git-force-push': 'dangerReasonGitForcePush',
-  'git-reset-hard': 'dangerReasonGitResetHard',
-  'disk-overwrite': 'dangerReasonDiskOverwrite',
-  'disk-format': 'dangerReasonDiskFormat',
-  'file-delete': 'dangerReasonFileDelete',
-  'git-push': 'dangerReasonGitPush',
-  'process-kill': 'dangerReasonProcessKill',
-  'permission-change': 'dangerReasonPermissionChange',
+  [CommandDangerReason.RecursiveDelete]: 'dangerReasonRecursiveDelete',
+  [CommandDangerReason.GitForcePush]: 'dangerReasonGitForcePush',
+  [CommandDangerReason.GitResetHard]: 'dangerReasonGitResetHard',
+  [CommandDangerReason.DiskOverwrite]: 'dangerReasonDiskOverwrite',
+  [CommandDangerReason.DiskFormat]: 'dangerReasonDiskFormat',
+  [CommandDangerReason.FileDelete]: 'dangerReasonFileDelete',
+  [CommandDangerReason.GitPush]: 'dangerReasonGitPush',
+  [CommandDangerReason.ProcessKill]: 'dangerReasonProcessKill',
+  [CommandDangerReason.PermissionChange]: 'dangerReasonPermissionChange',
+  [CommandDangerReason.PrivilegeEscalation]: 'dangerReasonPrivilegeEscalation',
+};
+
+const DANGER_DETAIL_I18N_MAP: Record<string, string> = {
+  [CommandDangerReason.RecursiveDelete]: 'coworkApprovalRiskRecursiveDelete',
+  [CommandDangerReason.GitForcePush]: 'coworkApprovalRiskGitForcePush',
+  [CommandDangerReason.GitResetHard]: 'coworkApprovalRiskGitResetHard',
+  [CommandDangerReason.DiskOverwrite]: 'coworkApprovalRiskDiskOverwrite',
+  [CommandDangerReason.DiskFormat]: 'coworkApprovalRiskDiskFormat',
+  [CommandDangerReason.FileDelete]: 'coworkApprovalRiskFileDelete',
+  [CommandDangerReason.GitPush]: 'coworkApprovalRiskGitPush',
+  [CommandDangerReason.ProcessKill]: 'coworkApprovalRiskProcessKill',
+  [CommandDangerReason.PermissionChange]: 'coworkApprovalRiskPermissionChange',
+  [CommandDangerReason.PrivilegeEscalation]: 'coworkApprovalRiskPrivilegeEscalation',
 };
 
 const TITLE_KEY_BY_DANGER_REASON: Record<string, string> = {
-  'git-push': 'coworkApprovalTitleGitPush',
-  'git-force-push': 'coworkApprovalTitleGitForcePush',
-  'git-reset-hard': 'coworkApprovalTitleGitResetHard',
-  'file-delete': 'coworkApprovalTitleFileDelete',
-  'recursive-delete': 'coworkApprovalTitleRecursiveDelete',
-  'process-kill': 'coworkApprovalTitleProcessKill',
-  'permission-change': 'coworkApprovalTitlePermissionChange',
-  'disk-overwrite': 'coworkApprovalTitleDiskOp',
-  'disk-format': 'coworkApprovalTitleDiskOp',
+  [CommandDangerReason.GitPush]: 'coworkApprovalTitleGitPush',
+  [CommandDangerReason.GitForcePush]: 'coworkApprovalTitleGitForcePush',
+  [CommandDangerReason.GitResetHard]: 'coworkApprovalTitleGitResetHard',
+  [CommandDangerReason.FileDelete]: 'coworkApprovalTitleFileDelete',
+  [CommandDangerReason.RecursiveDelete]: 'coworkApprovalTitleRecursiveDelete',
+  [CommandDangerReason.ProcessKill]: 'coworkApprovalTitleProcessKill',
+  [CommandDangerReason.PermissionChange]: 'coworkApprovalTitlePermissionChange',
+  [CommandDangerReason.PrivilegeEscalation]: 'coworkApprovalTitlePrivilegeEscalation',
+  [CommandDangerReason.DiskOverwrite]: 'coworkApprovalTitleDiskOp',
+  [CommandDangerReason.DiskFormat]: 'coworkApprovalTitleDiskOp',
 };
 
 const SUMMARY_KEY_BY_DANGER_REASON: Record<string, string> = {
-  'git-push': 'coworkApprovalSummaryGitPush',
-  'git-force-push': 'coworkApprovalSummaryGitForcePush',
-  'git-reset-hard': 'coworkApprovalSummaryGitResetHard',
-  'file-delete': 'coworkApprovalSummaryFileDelete',
-  'recursive-delete': 'coworkApprovalSummaryRecursiveDelete',
-  'process-kill': 'coworkApprovalSummaryProcessKill',
-  'permission-change': 'coworkApprovalSummaryPermissionChange',
-  'disk-overwrite': 'coworkApprovalSummaryDiskOp',
-  'disk-format': 'coworkApprovalSummaryDiskOp',
+  [CommandDangerReason.GitPush]: 'coworkApprovalSummaryGitPush',
+  [CommandDangerReason.GitForcePush]: 'coworkApprovalSummaryGitForcePush',
+  [CommandDangerReason.GitResetHard]: 'coworkApprovalSummaryGitResetHard',
+  [CommandDangerReason.FileDelete]: 'coworkApprovalSummaryFileDelete',
+  [CommandDangerReason.RecursiveDelete]: 'coworkApprovalSummaryRecursiveDelete',
+  [CommandDangerReason.ProcessKill]: 'coworkApprovalSummaryProcessKill',
+  [CommandDangerReason.PermissionChange]: 'coworkApprovalSummaryPermissionChange',
+  [CommandDangerReason.PrivilegeEscalation]: 'coworkApprovalSummaryPrivilegeEscalation',
+  [CommandDangerReason.DiskOverwrite]: 'coworkApprovalSummaryDiskOp',
+  [CommandDangerReason.DiskFormat]: 'coworkApprovalSummaryDiskOp',
+};
+
+const ALLOW_SESSION_LABEL_KEY_BY_REASON: Record<string, string> = {
+  [CommandDangerReason.FileDelete]: 'coworkApprovalAllowSessionFileDelete',
+  [CommandDangerReason.GitPush]: 'coworkApprovalAllowSessionGitPush',
+  [CommandDangerReason.ProcessKill]: 'coworkApprovalAllowSessionProcessKill',
+  [CommandDangerReason.PermissionChange]: 'coworkApprovalAllowSessionPermissionChange',
+  [CommandDangerReason.PrivilegeEscalation]: 'coworkApprovalAllowSessionPrivilegeEscalation',
 };
 
 export function detectDangerFromCommand(command: string): {
   level: ApprovalDangerLevel;
   reason: string;
 } {
-  if (/\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive)\b/i.test(command)) {
-    return { level: 'destructive', reason: 'recursive-delete' };
-  }
-  if (/\bgit\s+push\s+.*(?:--force|-f)\b/i.test(command)) {
-    return { level: 'destructive', reason: 'git-force-push' };
-  }
-  if (/\bgit\s+reset\s+--hard\b/i.test(command)) {
-    return { level: 'destructive', reason: 'git-reset-hard' };
-  }
-  if (/\bdd\b/i.test(command)) {
-    return { level: 'destructive', reason: 'disk-overwrite' };
-  }
-  if (/\bmkfs\b/i.test(command)) {
-    return { level: 'destructive', reason: 'disk-format' };
-  }
-  if (isDeleteCommand(command)) {
-    return { level: 'caution', reason: 'file-delete' };
-  }
-  if (/\bgit\s+push\b/i.test(command)) {
-    return { level: 'caution', reason: 'git-push' };
-  }
-  if (/\b(kill|killall|pkill)\b/i.test(command)) {
-    return { level: 'caution', reason: 'process-kill' };
-  }
-  if (/\b(chmod|chown)\b/i.test(command) || /\bsudo\b/i.test(command)) {
-    return { level: 'caution', reason: 'permission-change' };
-  }
-  return { level: 'safe', reason: '' };
+  const { level, reason } = analyzeCommandDanger(command);
+  return { level, reason };
 }
 
 function readString(input: Record<string, unknown>, ...keys: string[]): string {
@@ -109,6 +119,16 @@ function readString(input: Record<string, unknown>, ...keys: string[]): string {
     }
   }
   return '';
+}
+
+function readPositiveInt(input: Record<string, unknown>, ...keys: string[]): number {
+  for (const key of keys) {
+    const val = input[key];
+    if (typeof val === 'number' && Number.isInteger(val) && val > 0) {
+      return val;
+    }
+  }
+  return 0;
 }
 
 function extractCommandFromReason(reason: string): string {
@@ -133,6 +153,9 @@ function buildSanitizedTechnicalDetails(input: Record<string, unknown>): string 
     'toolName',
     'dangerLevel',
     'dangerReason',
+    'dangerSnippet',
+    'dangerLineNumber',
+    'isEmbeddedInScript',
     'approvalScopeKey',
     'permissionPreset',
   ]);
@@ -178,6 +201,9 @@ export function buildPermissionModalPresentation(
   const modelNote = isAgentRulesTool
     ? formatAgentRulesPreview(input)
     : readString(input, 'justification', 'description');
+  const modelNoteLabel = modelNote
+    ? (isAgentRulesTool ? t('coworkApprovalAgentRulesPreviewLabel') : t('coworkApprovalModelNoteLabel'))
+    : '';
   const filePath = readString(input, 'filePath', 'file_path', 'path', 'target_path');
   const workdir = readString(input, 'workdir', 'cwd')
     || (command ? extractCdDirectoryFromCommand(command) : '');
@@ -187,11 +213,23 @@ export function buildPermissionModalPresentation(
     || /sandbox|outside.*workspace|wider access/i.test(rawReason),
   );
 
-  const detected = command ? detectDangerFromCommand(command) : { level: 'safe' as ApprovalDangerLevel, reason: '' };
+  const detected = command
+    ? analyzeCommandDanger(command)
+    : {
+        level: CommandDangerLevel.Safe,
+        reason: '' as const,
+        matchedSnippet: '',
+        matchedLineNumber: 0,
+        isEmbeddedInScript: false,
+      };
   const rawDangerLevel = readString(input, 'dangerLevel');
   const dangerLevel: ApprovalDangerLevel =
-    rawDangerLevel === 'destructive' || rawDangerLevel === 'caution' || rawDangerLevel === 'safe'
-      ? (rawDangerLevel === 'safe' && detected.level !== 'safe' ? detected.level : rawDangerLevel)
+    rawDangerLevel === CommandDangerLevel.Destructive
+    || rawDangerLevel === CommandDangerLevel.Caution
+    || rawDangerLevel === CommandDangerLevel.Safe
+      ? (rawDangerLevel === CommandDangerLevel.Safe && detected.level !== CommandDangerLevel.Safe
+          ? detected.level
+          : rawDangerLevel)
       : detected.level;
 
   const dangerReason = readString(input, 'dangerReason')
@@ -200,6 +238,16 @@ export function buildPermissionModalPresentation(
 
   const dangerReasonKey = DANGER_REASON_I18N_MAP[dangerReason];
   const dangerReasonText = dangerReasonKey ? t(dangerReasonKey) : '';
+  const dangerDetailKey = DANGER_DETAIL_I18N_MAP[dangerReason];
+  const dangerDetailText = dangerDetailKey ? t(dangerDetailKey) : '';
+
+  const triggeredSnippet = detected.matchedSnippet || readString(input, 'dangerSnippet');
+  const triggeredLineNumber = detected.matchedLineNumber || readPositiveInt(input, 'dangerLineNumber');
+  const isEmbeddedInScript = Boolean(
+    detected.isEmbeddedInScript
+    || input.isEmbeddedInScript === true
+    || (Boolean(dangerReason) && command.includes('\n')),
+  );
 
   let title: string;
   let summary: string;
@@ -207,6 +255,9 @@ export function buildPermissionModalPresentation(
   if (isAgentRulesTool) {
     title = t('coworkApprovalTitleAgentRules');
     summary = t('coworkApprovalSummaryAgentRules');
+  } else if (dangerReason && isEmbeddedInScript && dangerReasonText) {
+    title = t('coworkApprovalTitleScriptWithDanger').replace('{reason}', dangerReasonText);
+    summary = t('coworkApprovalSummaryScriptWithDanger').replace('{reason}', dangerReasonText);
   } else if (dangerReason && TITLE_KEY_BY_DANGER_REASON[dangerReason]) {
     title = t(TITLE_KEY_BY_DANGER_REASON[dangerReason]);
     summary = t(SUMMARY_KEY_BY_DANGER_REASON[dangerReason]);
@@ -239,20 +290,45 @@ export function buildPermissionModalPresentation(
       ? (dangerReason ? `shell:${dangerReason}` : 'shell:exec')
       : `tool:${normalizedTool || 'tool'}`);
 
+  let allowSessionLabel: string;
+  if (isAgentRulesTool) {
+    allowSessionLabel = t('coworkApprovalAllowSessionAgentRules');
+  } else if (dangerReason && ALLOW_SESSION_LABEL_KEY_BY_REASON[dangerReason]) {
+    allowSessionLabel = t(ALLOW_SESSION_LABEL_KEY_BY_REASON[dangerReason]);
+  } else if (isFileTool) {
+    allowSessionLabel = t('coworkApprovalAllowSessionFileWrite');
+  } else {
+    allowSessionLabel = t('coworkApprovalAllowSessionGeneric');
+  }
+
+  const allowSessionHint = dangerReasonText
+    ? t('coworkApprovalAllowSessionHintScoped').replace('{scope}', dangerReasonText)
+    : t('coworkApprovalAllowSessionHintGeneric');
+
   const currentPreset = readString(input, 'permissionPreset');
-  const canAllowForSession = dangerLevel !== 'destructive' && !isSandboxEscalation && approvalScopeKey.length > 0;
+  const canAllowForSession = dangerLevel !== CommandDangerLevel.Destructive
+    && !isSandboxEscalation
+    && approvalScopeKey.length > 0;
   const canSwitchFullAccess = !isAgentRulesTool && currentPreset !== DshPermissionPreset.FullAccess;
 
   return {
     title,
     summary,
     modelNote,
+    modelNoteLabel,
     targetLabel,
     targetValue,
     command,
     dangerLevel,
+    dangerReason,
     dangerReasonText,
+    dangerDetailText,
+    triggeredSnippet,
+    triggeredLineNumber,
+    isEmbeddedInScript,
     approvalScopeKey,
+    allowSessionLabel,
+    allowSessionHint,
     canAllowForSession,
     canSwitchFullAccess,
     technicalDetails: command ? '' : buildSanitizedTechnicalDetails(input),

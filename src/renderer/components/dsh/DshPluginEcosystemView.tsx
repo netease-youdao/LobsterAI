@@ -55,7 +55,10 @@ import {
   SETTINGS_ITEM_TITLE_TEXT,
   SETTINGS_META_TEXT,
 } from '../settings/settingsTypography';
-import { DshPluginInstallModal } from './DshPluginInstallModal';
+import {
+  BackgroundInstallOutcome,
+  DshPluginInstallModal,
+} from './DshPluginInstallModal';
 import {
   DshPluginUpdateModal,
   type DshPluginUpdateTarget,
@@ -98,6 +101,8 @@ export const DshPluginEcosystemView: React.FC = () => {
   const [busyPlugin, setBusyPlugin] = useState<string | null>(null);
 
   const [installModalOpen, setInstallModalOpen] = useState(false);
+  const [installTaskActive, setInstallTaskActive] = useState(false);
+  const [highlightedPlugin, setHighlightedPlugin] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<DshPluginEntry | null>(null);
   const [updateTarget, setUpdateTarget] = useState<DshPluginUpdateTarget | null>(null);
   const [versionChecks, setVersionChecks] = useState<Record<string, PluginVersionCheckState>>({});
@@ -370,11 +375,37 @@ export const DshPluginEcosystemView: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    if (!highlightedPlugin) return undefined;
+    const timer = setTimeout(() => {
+      setHighlightedPlugin(null);
+    }, 3500);
+    return () => clearTimeout(timer);
+  }, [highlightedPlugin]);
+
   const handleInstalled = (res: DshPluginMutationResult) => {
     setErrorMessage(null);
     applyMutationFeedback(res, 'dshPluginsInstalledHot');
+    if (res.bundle) {
+      setHighlightedPlugin(res.bundle);
+    }
     void refresh();
   };
+
+  const handleBackgroundInstallOutcome = useCallback(
+    (outcome: BackgroundInstallOutcome) => {
+      if (outcome === BackgroundInstallOutcome.Done) {
+        setErrorMessage(null);
+        setNoticeMessage(i18nService.t('dshPluginsInstallBackgroundDone'));
+      } else if (outcome === BackgroundInstallOutcome.Failed) {
+        setNoticeMessage(null);
+        setErrorMessage(i18nService.t('dshPluginsInstallBackgroundFailed'));
+      } else if (outcome === BackgroundInstallOutcome.Cancelled) {
+        setNoticeMessage(i18nService.t('dshPluginsInstallCancelledNotice'));
+      }
+    },
+    [],
+  );
 
   const handleToggleEnabled = async (plugin: DshPluginEntry, nextEnabled: boolean) => {
     if (busyPlugin || restarting) return;
@@ -481,8 +512,12 @@ export const DshPluginEcosystemView: React.FC = () => {
             disabled={restarting || updateTarget !== null}
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <PlusIcon className="h-3.5 w-3.5 stroke-[2.2]" />
-            {t('dshEcosystemInstallBtn')}
+            {installTaskActive ? (
+              <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <PlusIcon className="h-3.5 w-3.5 stroke-[2.2]" />
+            )}
+            {installTaskActive ? t('dshPluginsInstallViewTask') : t('dshPluginsInstallModalTitle')}
           </button>
 
           <div ref={moreMenuRef} className="relative">
@@ -664,7 +699,7 @@ export const DshPluginEcosystemView: React.FC = () => {
               className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-raised"
             >
               <PlusIcon className="h-3.5 w-3.5" />
-              {t('dshEcosystemInstallBtn')}
+              {t('dshPluginsInstallModalTitle')}
             </button>
           </div>
         ) : (
@@ -716,7 +751,13 @@ export const DshPluginEcosystemView: React.FC = () => {
                       dragHandleLabel={t('dshPluginsDragHandleLabel').replace('{name}', title)}
                     >
                       {(dragHandle) => (
-                        <>
+                        <div
+                          className={
+                            highlightedPlugin === plugin.name
+                              ? 'rounded-lg bg-primary/5 ring-1 ring-primary/30 -m-1.5 p-1.5 transition-colors'
+                              : undefined
+                          }
+                        >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex min-w-0 flex-1 items-start gap-3">
                               {dragHandle}
@@ -932,7 +973,7 @@ export const DshPluginEcosystemView: React.FC = () => {
                               />
                             </div>
                           )}
-                        </>
+                        </div>
                       )}
                     </SortablePluginRow>
                   );
@@ -998,6 +1039,9 @@ export const DshPluginEcosystemView: React.FC = () => {
         isOpen={installModalOpen}
         onClose={() => setInstallModalOpen(false)}
         onInstalled={handleInstalled}
+        onRestartHost={handleRestart}
+        onActiveInstallChange={setInstallTaskActive}
+        onBackgroundOutcome={handleBackgroundInstallOutcome}
       />
 
       {/* Update Modal */}

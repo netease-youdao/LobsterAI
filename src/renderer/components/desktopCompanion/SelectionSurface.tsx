@@ -35,7 +35,6 @@ import {
   type SelectionIcon,
   SelectionThinking,
   SourceQuote,
-  SwapLabel,
 } from './SelectionCard';
 import SelectionLoginRequired from './SelectionLoginRequired';
 import { COMPANION_TOOLBAR_PRESENTATION } from './selectionToolbarPresentation';
@@ -318,14 +317,33 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
       <div className="sel-surface" data-menu={selection.menuUp ? 'up' : 'down'}>
         <div className="sel-stack">
           <div className="sel-toolbar" ref={rootRef} role="toolbar" aria-label={t('desktopCompanionSelection')}>
-            {tools.map(({ key, icon: ToolIcon, label, run: onClick }) => (
-              <button key={key} type="button" className="sel-tool" data-done={key === CompanionToolbarItem.Copy && copied} onClick={onClick}>
-                <ToolIcon />
-                {key === CompanionToolbarItem.Copy
-                  ? <SwapLabel off={t('desktopCompanionSelectionCopy')} on={t('desktopCompanionSelectionCopied')} showOn={copied} />
-                  : <span>{label}</span>}
-              </button>
-            ))}
+            <span className="sel-grip" aria-hidden="true">
+              <svg width="6" height="10" viewBox="0 0 6 10" fill="currentColor">
+                <circle cx="1.5" cy="1.5" r="0.9" />
+                <circle cx="4.5" cy="1.5" r="0.9" />
+                <circle cx="1.5" cy="5" r="0.9" />
+                <circle cx="4.5" cy="5" r="0.9" />
+                <circle cx="1.5" cy="8.5" r="0.9" />
+                <circle cx="4.5" cy="8.5" r="0.9" />
+              </svg>
+            </span>
+            {tools.map(({ key, icon: ToolIcon, label, run: onClick }) => {
+              const isCopy = key === CompanionToolbarItem.Copy;
+              const isCopied = isCopy && copied;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className="sel-tool"
+                  data-done={isCopied}
+                  aria-label={isCopied ? label : undefined}
+                  onClick={onClick}
+                >
+                  <ToolIcon />
+                  <span>{isCopy ? t(COMPANION_TOOLBAR_PRESENTATION[CompanionToolbarItem.Copy].labelKey) : label}</span>
+                </button>
+              );
+            })}
             <span className="sel-sep" aria-hidden="true" />
             <button
               type="button"

@@ -13,7 +13,6 @@ import {
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
 import { CoworkTempDirKind } from '../../shared/cowork/constants';
-import type { DecisionModelConfigUpdate } from '../../shared/decisionModel/constants';
 import { DEFAULT_DESKTOP_COMPANION_PREFERENCES } from '../../shared/desktopCompanion/constants';
 import {
   normalizeNotificationSettings,
@@ -34,14 +33,13 @@ import {
   resolveModelRuntimeProfile,
 } from '../../shared/providers';
 import { isUrlOnDomain } from '../../shared/url/hostname';
-import { type AppConfig, defaultConfig, FontPreferences, getProviderDisplayName, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
+import { defaultConfig, FontPreferences, getVisibleProviders, isCustomProvider, normalizeFontPreference, resolveArtifactAutoPreviewEnabled, ShortcutAction, type ShortcutConfig } from '../config';
 import { OPEN_SOURCE_ENTERPRISE_UI_KEY } from '../constants/openSource';
 import { useSkin } from '../providers/SkinProvider';
 import { apiService } from '../services/api';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
 import { i18nService, LanguageType } from '../services/i18n';
-import { imService } from '../services/im';
 import { LogReporterAction, reportYdAnalyzer } from '../services/logReporter';
 import { resolveOpenClawRepairError, resolveOpenClawRepairHistoryWarning } from '../services/openclawRepair';
 import { clearPendingPublishingConversionAttribution } from '../services/publishingConversionAttribution';
@@ -61,9 +59,7 @@ import type {
   CoworkTempDirPreview,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
-  OpenClawSessionKeepAlive,
 } from '../types/cowork';
-import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
 import DecisionModelExperimentalSettings from './DecisionModelExperimentalSettings';
 import DesktopCompanionSettings from './desktopCompanion/DesktopCompanionSettings';
@@ -77,11 +73,17 @@ import EditIcon from './icons/EditIcon';
 import MessageCopyIcon from './icons/MessageCopyIcon';
 import PlugIcon from './icons/PlugIcon';
 import IMSettings from './im/IMSettings';
-import { AboutOpenSourceAction, AboutOpenSourceRows, AboutOpenSourceStarPrompt } from './settings/AboutOpenSource';
+import {
+  AboutEngineAcknowledgement,
+  AboutOpenSourceAction,
+  AboutOpenSourceRows,
+  AboutOpenSourceStarPrompt,
+} from './settings/AboutOpenSource';
 import BrowserWebAccessSettings from './settings/BrowserWebAccessSettings';
 import DataMigrationDialogs from './settings/DataMigrationDialogs';
 import DataMigrationRestoreReportCard from './settings/DataMigrationRestoreReportCard';
 import DataPrivacySettingsSection from './settings/DataPrivacySettingsSection';
+import FontSizeSettingRow from './settings/FontSizeSettingRow';
 import GeneralSettingsSection from './settings/GeneralSettingsSection';
 import HelpFeedbackSettings from './settings/HelpFeedbackSettings';
 import ManualDataMigrationAction from './settings/ManualDataMigrationAction';
@@ -100,7 +102,6 @@ import {
   getDefaultActiveProvider,
   getDefaultProviders,
   getEffectiveApiFormat,
-  getOpenClawProviderIdForConfig,
   getProviderDefaultBaseUrl,
   hasEquivalentProviderModelId,
   hasProviderAuthConfigured,
@@ -114,14 +115,29 @@ import {
   type ProvidersConfig,
   type ProviderType,
   resolveBaseUrl,
-  resolveModelSupportsImageForProvider,
   shouldAutoSwitchProviderBaseUrl,
   shouldUseOpenAIResponsesForProvider,
 } from './settings/modelProviderUtils';
+import {
+  applyImmediateProviderMutation,
+  buildAvailableModelsFromProviders,
+  discardProviderConnectionDraft,
+  isProviderConnectionDirty,
+  normalizeProvidersForSettingsSave,
+  resolvePrimaryProviderForSettingsSave,
+} from './settings/modelSettingsPersistence';
 import ModelSettingsSection, { DeleteProviderConfirmDialog } from './settings/ModelSettingsSection';
 import ProviderTransferDialog from './settings/ProviderTransferDialog';
+import {
+  type RegisterSettingsDirtyGuard,
+  resolveDirtyGuardAction,
+  SETTINGS_FORM_SAVED_RESET_MS,
+  SettingsDirtyGuardAction,
+  type SettingsDirtyGuardEntry,
+  SettingsFormStatus,
+} from './settings/settingsDirtyGuard';
 import { resolveSettingsEscapeAction, SettingsEscapeAction } from './settings/settingsEscape';
-import { SettingsSwitch } from './settings/SettingsLayout';
+import { SETTINGS_ACTION_BUTTON_CLASS, SETTINGS_PRIMARY_BUTTON_CLASS, SettingsSwitch } from './settings/SettingsLayout';
 import {
   filterVisibleSettingsTabs,
   normalizeSettingsTab,
@@ -136,6 +152,7 @@ import {
   SETTINGS_PAGE_TITLE_TEXT,
   SETTINGS_SECTION_TITLE_TEXT,
 } from './settings/settingsTypography';
+import UnsavedChangesConfirmDialog from './settings/UnsavedChangesConfirmDialog';
 import { useDataMigration } from './settings/useDataMigration';
 import { useModelDiscovery } from './settings/useModelDiscovery';
 import { useProviderTransfer } from './settings/useProviderTransfer';
@@ -165,37 +182,6 @@ const formatBackupSize = (sizeBytes?: number): string => {
     unitIndex += 1;
   }
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-};
-
-const normalizeProvidersForSettingsSave = (providers: ProvidersConfig): ProvidersConfig => (
-  Object.fromEntries(
-    Object.entries(providers).map(([providerKey, providerConfig]) => {
-      const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
-      const hasValidAuth = hasProviderAuthConfigured(providerKey as ProviderType, providerConfig);
-      return [
-        providerKey,
-        {
-          ...providerConfig,
-          enabled: providerConfig.enabled && hasValidAuth,
-          apiFormat,
-          ...(providerKey === ProviderName.Copilot ? { apiKey: '' } : {}),
-          baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
-        },
-      ];
-    })
-  ) as ProvidersConfig
-);
-
-const resolvePrimaryProviderForSettingsSave = (
-  providers: ProvidersConfig,
-  activeProvider: ProviderType,
-): ProviderConfig => {
-  const firstEnabledProvider = Object.entries(providers).find(
-    ([_, config]) => config.enabled
-  );
-  return firstEnabledProvider
-    ? firstEnabledProvider[1]
-    : providers[activeProvider];
 };
 
 // The global shortcut stays in companion preferences so existing bindings are preserved.
@@ -446,71 +432,6 @@ const buildBrowserSettingAnalyticsParams = (
     changedKeys: Array.from(changedKeys).sort().join(','),
     displayMode: nextConfig.displayMode,
     previousBlockedHostnameCount: previousConfig.blockedHostnames.length,
-  };
-};
-
-const buildMemorySettingAnalyticsSummary = (
-  previousConfig: {
-    embeddingEnabled: boolean;
-    embeddingModel: string;
-    embeddingProvider: string;
-    embeddingRemoteApiKey: string;
-    embeddingRemoteBaseUrl: string;
-    embeddingVectorWeight: number;
-    memoryEnabled: boolean;
-    memoryLlmJudgeEnabled: boolean;
-  },
-  nextConfig: {
-    embeddingEnabled: boolean;
-    embeddingModel: string;
-    embeddingProvider: string;
-    embeddingRemoteApiKey: string;
-    embeddingRemoteBaseUrl: string;
-    embeddingVectorWeight: number;
-    memoryEnabled: boolean;
-    memoryLlmJudgeEnabled: boolean;
-  },
-): MemorySettingAnalyticsSummary | null => {
-  const changedKeys = new Set<string>();
-  if (previousConfig.memoryEnabled !== nextConfig.memoryEnabled) {
-    changedKeys.add('memory_enabled');
-  }
-  if (previousConfig.memoryLlmJudgeEnabled !== nextConfig.memoryLlmJudgeEnabled) {
-    changedKeys.add('llm_judge_enabled');
-  }
-  if (previousConfig.embeddingEnabled !== nextConfig.embeddingEnabled) {
-    changedKeys.add('embedding_enabled');
-  }
-  if (previousConfig.embeddingProvider !== nextConfig.embeddingProvider) {
-    changedKeys.add('embedding_provider');
-  }
-  if (previousConfig.embeddingModel !== nextConfig.embeddingModel) {
-    changedKeys.add('embedding_model');
-  }
-  if (previousConfig.embeddingRemoteBaseUrl !== nextConfig.embeddingRemoteBaseUrl) {
-    changedKeys.add('embedding_base_url');
-  }
-  if (previousConfig.embeddingRemoteApiKey !== nextConfig.embeddingRemoteApiKey) {
-    changedKeys.add('embedding_api_key');
-  }
-  if (previousConfig.embeddingVectorWeight !== nextConfig.embeddingVectorWeight) {
-    changedKeys.add('embedding_vector_weight');
-  }
-
-  if (changedKeys.size === 0) {
-    return null;
-  }
-
-  return {
-    changedKeys: Array.from(changedKeys).sort().join(','),
-    embeddingEnabled: nextConfig.embeddingEnabled,
-    embeddingProvider: nextConfig.embeddingProvider,
-    embeddingVectorWeight: nextConfig.embeddingVectorWeight,
-    hasEmbeddingApiKey: nextConfig.embeddingRemoteApiKey.trim().length > 0,
-    hasEmbeddingBaseUrl: nextConfig.embeddingRemoteBaseUrl.trim().length > 0,
-    hasEmbeddingModel: nextConfig.embeddingModel.trim().length > 0,
-    memoryEnabled: nextConfig.memoryEnabled,
-    memoryLlmJudgeEnabled: nextConfig.memoryLlmJudgeEnabled,
   };
 };
 
@@ -1180,45 +1101,6 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
-const SettingsNumberInputRow: React.FC<{
-  id: string;
-  title: string;
-  description: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (value: number) => void;
-}> = ({ id, title, description, value, min, max, onChange }) => (
-  <div className="flex items-center justify-between gap-4">
-    <div className="min-w-0 flex-1">
-      <label htmlFor={id} className={`block ${SETTINGS_ITEM_TITLE_TEXT} font-medium text-foreground`}>
-        {title}
-      </label>
-      <p className={`mt-1 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
-        {description}
-      </p>
-    </div>
-    <div className="flex shrink-0 items-center gap-2">
-      <input
-        id={id}
-        type="number"
-        min={min}
-        max={max}
-        step={1}
-        value={value}
-        onChange={(event) => {
-          onChange(normalizeFontPreference(event.currentTarget.value, value, min, max));
-        }}
-        onBlur={(event) => {
-          onChange(normalizeFontPreference(event.currentTarget.value, value, min, max));
-        }}
-        className="h-8 w-16 rounded-lg border border-border bg-surface px-2 text-center text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20"
-      />
-      <span className={`${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>px</span>
-    </div>
-  </div>
-);
-
 const Settings: React.FC<SettingsProps> = ({
   onClose,
   onStartAiSkin,
@@ -1263,7 +1145,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [quitConfirmation, setQuitConfirmationState] = useState(true);
   const [isUpdatingQuitConfirmation, setIsUpdatingQuitConfirmation] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isUpdatingUseSystemProxy, setIsUpdatingUseSystemProxy] = useState(false);
+  const [isUpdatingShortcut, setIsUpdatingShortcut] = useState(false);
+  const [showResetShortcutsConfirm, setShowResetShortcutsConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const buildNoticeMessage = useCallback((): string | null => {
     if (noticeI18nKey) {
@@ -1278,11 +1162,20 @@ const Settings: React.FC<SettingsProps> = ({
   const [isTestResultModalOpen, setIsTestResultModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<ProviderType | null>(null);
-  const initialThemeIdRef = useRef<string>(themeService.getDefaultThemeId());
-  const initialUiFontSizeRef = useRef<number>(FontPreferences.UiFontSizeDefault);
-  const initialCodeFontSizeRef = useRef<number>(FontPreferences.CodeFontSizeDefault);
-  const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
-  const didSaveRef = useRef(false);
+  const dirtyGuardRef = useRef<SettingsDirtyGuardEntry | null>(null);
+  const [pendingGuardedAction, setPendingGuardedAction] = useState<(() => void) | null>(null);
+  const [isSavingPendingGuard, setIsSavingPendingGuard] = useState(false);
+  const [pendingGuardError, setPendingGuardError] = useState<string | null>(null);
+  const fontSizeSaveTimerRef = useRef<number | null>(null);
+  const pendingFontSizesRef = useRef<{ uiFontSize: number; codeFontSize: number } | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const handleDefaultThemeChanged = (event: Event) => {
@@ -1300,11 +1193,6 @@ const Settings: React.FC<SettingsProps> = ({
       window.removeEventListener(ThemeServiceEvent.DefaultChanged, handleDefaultThemeChanged);
     };
   }, []);
-
-  // Plugin settings handle (deferred save)
-  // DSH Ecosystem plugins are managed live via DshPluginEcosystemView.
-  // Unsaved edits from the experimental decision model card (deferred save)
-  const decisionModelDraftRef = useRef<DecisionModelConfigUpdate | null>(null);
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
@@ -1342,8 +1230,66 @@ const Settings: React.FC<SettingsProps> = ({
     { loggedIn: false } | { loggedIn: true; email?: string } | null
   >(null);
 
-  // Add state for providers configuration
+  // Add state for providers configuration (displayed state vs persisted baseline)
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const [savedProviders, setSavedProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const providersRef = useRef<ProvidersConfig>(providers);
+  providersRef.current = providers;
+  const visibleProviderConfigRef = useRef<ProviderConfig | undefined>(undefined);
+  visibleProviderConfigRef.current = activeTab === SettingsTabId.Model ? providers[activeProvider] : undefined;
+  const savedProvidersRef = useRef<ProvidersConfig>(savedProviders);
+  savedProvidersRef.current = savedProviders;
+  const [connectionFormStatus, setConnectionFormStatus] = useState<SettingsFormStatus>(SettingsFormStatus.Idle);
+  const [connectionSaveError, setConnectionSaveError] = useState<string | null>(null);
+  const connectionSavedTimerRef = useRef<number | null>(null);
+
+  const clearConnectionSavedTimer = useCallback(() => {
+    if (connectionSavedTimerRef.current !== null) {
+      window.clearTimeout(connectionSavedTimerRef.current);
+      connectionSavedTimerRef.current = null;
+    }
+  }, []);
+
+  const persistProvidersSnapshot = useCallback(async (
+    nextProvidersToPersist: ProvidersConfig,
+    primaryHint: ProviderType,
+  ): Promise<ProvidersConfig> => {
+    const previousSaved = savedProvidersRef.current;
+    const normalizedProviders = normalizeProvidersForSettingsSave(nextProvidersToPersist);
+    const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, primaryHint);
+
+    await configService.updateConfig({
+      api: {
+        key: primaryProvider.apiKey,
+        baseUrl: primaryProvider.baseUrl,
+      },
+      providers: normalizedProviders,
+    });
+
+    apiService.setConfig({
+      apiKey: primaryProvider.apiKey,
+      baseUrl: primaryProvider.baseUrl,
+    });
+    dispatch(setAvailableModels(buildAvailableModelsFromProviders(normalizedProviders)));
+
+    savedProvidersRef.current = normalizedProviders;
+    if (mountedRef.current) {
+      setSavedProviders(normalizedProviders);
+    }
+
+    if (usageAnalyticsEnabled) {
+      const summary = buildCustomModelSettingsAnalyticsSummary(
+        normalizeProvidersForSettingsSave(previousSaved),
+        normalizedProviders,
+      );
+      if (summary) {
+        reportCustomModelSettingsSaved(summary);
+      }
+    }
+
+    return normalizedProviders;
+  }, [dispatch, usageAnalyticsEnabled]);
+
   const providerTransfer = useProviderTransfer({
     providers,
     onError: setError,
@@ -1352,6 +1298,10 @@ const Settings: React.FC<SettingsProps> = ({
       setIsTestResultModalOpen(false);
       setTestResult(null);
       setNoticeMessage(i18nService.t(legacy ? 'providersLegacyImported' : 'providersImported'));
+      void persistProvidersSnapshot(next, activeProvider).catch((saveError) => {
+        console.error('[Settings] failed to persist imported providers:', saveError);
+        setError(saveError instanceof Error ? saveError.message : i18nService.t('failedToSaveSettings'));
+      });
     },
   });
   const isImportingProviders = providerTransfer.reading || providerTransfer.busy;
@@ -1360,9 +1310,22 @@ const Settings: React.FC<SettingsProps> = ({
     activeProvider,
     providers,
     setProviders,
+    onModelsUpdated: (provider, nextModels) => {
+      const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+        savedProvidersRef.current,
+        providersRef.current,
+        provider,
+        (cfg) => ({ ...cfg, models: nextModels }),
+      );
+      setProviders(nextCurrent);
+      if (nextSaved) {
+        void persistProvidersSnapshot(nextSaved, provider).catch((saveError) => {
+          console.error('[Settings] failed to persist discovered models:', saveError);
+          setError(saveError instanceof Error ? saveError.message : i18nService.t('failedToSaveSettings'));
+        });
+      }
+    },
   });
-
-
 
   // authType defaults to undefined on first open, which should behave as OAuth mode
   const minimaxIsOAuthMode = providers.minimax.authType !== 'apikey';
@@ -1374,8 +1337,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
-  // 内容区下方仍有未滚出的内容时，在底部按钮区上方显示渐隐遮罩
-  const [footerFadeVisible, setFooterFadeVisible] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
   const openClawGatewayCopiedTimerRef = useRef<number | null>(null);
@@ -1384,11 +1345,10 @@ const Settings: React.FC<SettingsProps> = ({
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(() => ({ ...defaultConfig.shortcuts! }));
   const { state: companionState, error: companionLoadError } = useDesktopCompanionState();
-  const [quickPanelShortcutDraft, setQuickPanelShortcutDraft] = useState<string | null>(null);
   const shortcutBindings = useMemo(() => ({
     ...shortcuts,
-    [SettingsShortcutAction.QuickPanel]: quickPanelShortcutDraft ?? companionState?.preferences.shortcut ?? '',
-  }), [shortcuts, quickPanelShortcutDraft, companionState?.preferences.shortcut]);
+    [SettingsShortcutAction.QuickPanel]: companionState?.preferences.shortcut ?? '',
+  }), [shortcuts, companionState?.preferences.shortcut]);
   const [shortcutSearchQuery, setShortcutSearchQuery] = useState('');
 
   // GitHub Copilot device code auth state
@@ -1626,13 +1586,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
   const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
-  const [embeddingLocalModelPath, setEmbeddingLocalModelPath] = useState<string>(coworkConfig.embeddingLocalModelPath ?? '');
   const [embeddingVectorWeight, setEmbeddingVectorWeight] = useState<number>(coworkConfig.embeddingVectorWeight ?? 0.7);
   const [embeddingRemoteBaseUrl, setEmbeddingRemoteBaseUrl] = useState<string>(coworkConfig.embeddingRemoteBaseUrl ?? '');
   const [embeddingRemoteApiKey, setEmbeddingRemoteApiKey] = useState<string>(coworkConfig.embeddingRemoteApiKey ?? '');
-  const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
-    coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
-  );
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
   const [showOpenClawRepairConfirm, setShowOpenClawRepairConfirm] = useState<boolean>(false);
   const [isRepairingOpenClaw, setIsRepairingOpenClaw] = useState<boolean>(false);
@@ -1649,23 +1605,19 @@ const Settings: React.FC<SettingsProps> = ({
     setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
     setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
     setEmbeddingModel(coworkConfig.embeddingModel ?? '');
-    setEmbeddingLocalModelPath(coworkConfig.embeddingLocalModelPath ?? '');
     setEmbeddingVectorWeight(coworkConfig.embeddingVectorWeight ?? 0.7);
     setEmbeddingRemoteBaseUrl(coworkConfig.embeddingRemoteBaseUrl ?? '');
     setEmbeddingRemoteApiKey(coworkConfig.embeddingRemoteApiKey ?? '');
-    setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
-    coworkConfig.openClawSessionPolicy?.keepAlive,
     coworkConfig.openClawHeartbeatEnabled,
     coworkConfig.openClawSkillReviewEnabled,
     coworkConfig.openClawMemoryFlushEnabled,
     coworkConfig.embeddingEnabled,
     coworkConfig.embeddingProvider,
     coworkConfig.embeddingModel,
-    coworkConfig.embeddingLocalModelPath,
     coworkConfig.embeddingVectorWeight,
     coworkConfig.embeddingRemoteBaseUrl,
     coworkConfig.embeddingRemoteApiKey,
@@ -1801,10 +1753,6 @@ const Settings: React.FC<SettingsProps> = ({
         FontPreferences.CodeFontSizeMax,
       );
       const defaultThemeId = themeService.getDefaultThemeId();
-      initialThemeIdRef.current = defaultThemeId;
-      initialUiFontSizeRef.current = resolvedUiFontSize;
-      initialCodeFontSizeRef.current = resolvedCodeFontSize;
-      initialLanguageRef.current = config.language;
       setTheme(config.theme);
       setThemeId(defaultThemeId);
       setUiFontSize(resolvedUiFontSize);
@@ -1849,206 +1797,105 @@ const Settings: React.FC<SettingsProps> = ({
       });
 
       // Set up providers based on saved config
-      if (config.api) {
+      if (config.api && !config.providers) {
         // For backward compatibility with older config
         // Initialize active provider based on baseUrl
         const normalizedApiBaseUrl = config.api.baseUrl.toLowerCase();
-        if (normalizedApiBaseUrl.includes('openai')) {
-          setActiveProvider('openai');
-          setProviders(prev => ({
-            ...prev,
-            openai: {
-              ...prev.openai,
+        const legacyProviderKey: ProviderType | null = normalizedApiBaseUrl.includes('openai')
+          ? 'openai'
+          : normalizedApiBaseUrl.includes('deepseek')
+            ? 'deepseek'
+            : (normalizedApiBaseUrl.includes('moonshot.ai') || normalizedApiBaseUrl.includes('moonshot.cn'))
+              ? 'moonshot'
+              : normalizedApiBaseUrl.includes('bigmodel.cn')
+                ? 'zhipu'
+                : normalizedApiBaseUrl.includes('minimax')
+                  ? 'minimax'
+                  : isUrlOnDomain(normalizedApiBaseUrl, 'openapi.youdao.com')
+                    ? 'youdaozhiyun'
+                    : normalizedApiBaseUrl.includes('dashscope')
+                      ? 'qwen'
+                      : normalizedApiBaseUrl.includes('stepfun')
+                        ? 'stepfun'
+                        : normalizedApiBaseUrl.includes('openrouter.ai')
+                          ? 'openrouter'
+                          : normalizedApiBaseUrl.includes('googleapis')
+                            ? 'gemini'
+                            : normalizedApiBaseUrl.includes('anthropic')
+                              ? 'anthropic'
+                              : (normalizedApiBaseUrl.includes('ollama') || normalizedApiBaseUrl.includes('11434'))
+                                ? 'ollama'
+                                : (normalizedApiBaseUrl.includes('lm-studio') || normalizedApiBaseUrl.includes(':1234'))
+                                  ? 'lm-studio'
+                                  : null;
+        if (legacyProviderKey) {
+          setActiveProvider(legacyProviderKey);
+          const legacyHydrated: ProvidersConfig = {
+            ...getDefaultProviders(),
+            [legacyProviderKey]: {
+              ...getDefaultProviders()[legacyProviderKey],
               enabled: true,
               apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('deepseek')) {
-          setActiveProvider('deepseek');
-          setProviders(prev => ({
-            ...prev,
-            deepseek: {
-              ...prev.deepseek,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('moonshot.ai') || normalizedApiBaseUrl.includes('moonshot.cn')) {
-          setActiveProvider('moonshot');
-          setProviders(prev => ({
-            ...prev,
-            moonshot: {
-              ...prev.moonshot,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('bigmodel.cn')) {
-          setActiveProvider('zhipu');
-          setProviders(prev => ({
-            ...prev,
-            zhipu: {
-              ...prev.zhipu,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('minimax')) {
-          setActiveProvider('minimax');
-          setProviders(prev => ({
-            ...prev,
-            minimax: {
-              ...prev.minimax,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (isUrlOnDomain(normalizedApiBaseUrl, 'openapi.youdao.com')) {
-          setActiveProvider('youdaozhiyun');
-          setProviders(prev => ({
-            ...prev,
-            youdaozhiyun: {
-              ...prev.youdaozhiyun,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('dashscope')) {
-          setActiveProvider('qwen');
-          setProviders(prev => ({
-            ...prev,
-            qwen: {
-              ...prev.qwen,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('stepfun')) {
-          setActiveProvider('stepfun');
-          setProviders(prev => ({
-            ...prev,
-            stepfun: {
-              ...prev.stepfun,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('openrouter.ai')) {
-          setActiveProvider('openrouter');
-          setProviders(prev => ({
-            ...prev,
-            openrouter: {
-              ...prev.openrouter,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('googleapis')) {
-          setActiveProvider('gemini');
-          setProviders(prev => ({
-            ...prev,
-            gemini: {
-              ...prev.gemini,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('anthropic')) {
-          setActiveProvider('anthropic');
-          setProviders(prev => ({
-            ...prev,
-            anthropic: {
-              ...prev.anthropic,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('ollama') || normalizedApiBaseUrl.includes('11434')) {
-          setActiveProvider('ollama');
-          setProviders(prev => ({
-            ...prev,
-            ollama: {
-              ...prev.ollama,
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
-        } else if (normalizedApiBaseUrl.includes('lm-studio') || normalizedApiBaseUrl.includes(':1234')) {
-          setActiveProvider('lm-studio');
-          setProviders(prev => ({
-            ...prev,
-            'lm-studio': {
-              ...prev['lm-studio'],
-              enabled: true,
-              apiKey: config.api.key,
-              baseUrl: config.api.baseUrl
-            }
-          }));
+              baseUrl: config.api.baseUrl,
+            },
+          };
+          setProviders(legacyHydrated);
+          setSavedProviders(legacyHydrated);
+          savedProvidersRef.current = legacyHydrated;
         }
       }
 
       // Load provider-specific configurations if available
       // 合并已保存的配置和默认配置，确保新添加的 provider 能被显示
       if (config.providers) {
-        setProviders(prev => {
-          const merged = {
-            ...prev,  // 保留默认的 providers（包括新添加的 anthropic）
-            ...config.providers,  // 覆盖已保存的配置
-          };
+        const merged = {
+          ...getDefaultProviders(),  // 保留默认的 providers（包括新添加的 anthropic）
+          ...config.providers,  // 覆盖已保存的配置
+        };
 
-          // After merging, find the first enabled provider to set as activeProvider
-          // This ensures we don't use stale activeProvider from old config.api.baseUrl
-          const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
-          if (firstEnabledProvider) {
-            setActiveProvider(firstEnabledProvider);
-          }
+        // After merging, find the first enabled provider to set as activeProvider
+        // This ensures we don't use stale activeProvider from old config.api.baseUrl
+        const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
+        if (firstEnabledProvider) {
+          setActiveProvider(firstEnabledProvider);
+        }
 
-          return Object.fromEntries(
-            Object.entries(merged).map(([providerKey, providerConfig]) => {
-              const models = providerConfig.models?.map((model, idx) => {
-                let id = model.id;
-                // Fix corrupted model IDs from previous OAuth mutation bug
-                if (providerKey === 'qwen' && (id === 'vision-model' || id === 'coder-model')) {
-                  const defaultModel = defaultConfig.providers?.qwen?.models?.[idx];
-                  id = defaultModel?.id || 'qwen3.5-plus';
-                }
-                return {
-                  ...model,
+        const hydratedProviders = Object.fromEntries(
+          Object.entries(merged).map(([providerKey, providerConfig]) => {
+            const models = providerConfig.models?.map((model, idx) => {
+              let id = model.id;
+              // Fix corrupted model IDs from previous OAuth mutation bug
+              if (providerKey === 'qwen' && (id === 'vision-model' || id === 'coder-model')) {
+                const defaultModel = defaultConfig.providers?.qwen?.models?.[idx];
+                id = defaultModel?.id || 'qwen3.5-plus';
+              }
+              return {
+                ...model,
+                id,
+                supportsImage: ProviderRegistry.resolveModelSupportsImage(
+                  providerKey,
                   id,
-                  supportsImage: ProviderRegistry.resolveModelSupportsImage(
-                    providerKey,
-                    id,
-                    model.supportsImage,
-                    model.capabilityOverrides?.image,
-                  ),
-                };
-              });
-              return [
-                providerKey,
-                {
-                  ...providerConfig,
-                  apiFormat: getEffectiveApiFormat(providerKey, (providerConfig as ProviderConfig).apiFormat),
-                  ...(providerKey === ProviderName.Copilot && providerConfig.apiKey?.trim()
-                    ? { authType: ProviderAuthType.OAuth, apiKey: '' }
-                    : {}),
-                  models,
-                },
-              ];
-            })
-          ) as ProvidersConfig;
-        });
+                  model.supportsImage,
+                  model.capabilityOverrides?.image,
+                ),
+              };
+            });
+            return [
+              providerKey,
+              {
+                ...providerConfig,
+                apiFormat: getEffectiveApiFormat(providerKey, (providerConfig as ProviderConfig).apiFormat),
+                ...(providerKey === ProviderName.Copilot && providerConfig.apiKey?.trim()
+                  ? { authType: ProviderAuthType.OAuth, apiKey: '' }
+                  : {}),
+                models,
+              },
+            ];
+          }),
+        ) as ProvidersConfig;
+        setProviders(hydratedProviders);
+        setSavedProviders(hydratedProviders);
+        savedProvidersRef.current = hydratedProviders;
       }
 
       // 加载快捷键设置
@@ -2063,20 +1910,26 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, []);
 
-  useEffect(() => {
-    const initialUiFontSize = initialUiFontSizeRef.current;
-    const initialCodeFontSize = initialCodeFontSizeRef.current;
-    const initialLanguage = initialLanguageRef.current;
-    return () => {
-      if (didSaveRef.current) {
-        return;
-      }
-      applyTypographyPreferences({
-        uiFontSize: initialUiFontSize,
-        codeFontSize: initialCodeFontSize,
+  // Flush any debounced font-size write if the settings dialog closes before the timer fires.
+  useEffect(() => () => {
+    if (connectionSavedTimerRef.current !== null) {
+      window.clearTimeout(connectionSavedTimerRef.current);
+      connectionSavedTimerRef.current = null;
+    }
+    if (fontSizeSaveTimerRef.current !== null) {
+      window.clearTimeout(fontSizeSaveTimerRef.current);
+      fontSizeSaveTimerRef.current = null;
+    }
+    const pendingFonts = pendingFontSizesRef.current;
+    if (pendingFonts) {
+      pendingFontSizesRef.current = null;
+      void configService.updateConfig({
+        uiFontSize: pendingFonts.uiFontSize,
+        codeFontSize: pendingFonts.codeFontSize,
+      }).catch((err) => {
+        console.error('[Settings] failed to flush font preferences on unmount:', err);
       });
-      i18nService.setLanguage(initialLanguage, { persist: false });
-    };
+    }
   }, []);
 
   // 监听标签页切换，确保内容区域滚动到顶部
@@ -2085,33 +1938,6 @@ const Settings: React.FC<SettingsProps> = ({
       contentRef.current.scrollTop = 0;
     }
   }, [activeTab]);
-
-  // 跟踪内容区滚动/尺寸/内容变化，决定底部渐隐遮罩是否显示
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      setFooterFadeVisible(el.scrollHeight - el.scrollTop - el.clientHeight > 1);
-    };
-    const scheduleUpdate = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(update);
-    };
-    scheduleUpdate();
-    el.addEventListener('scroll', scheduleUpdate, { passive: true });
-    const resizeObserver = new ResizeObserver(scheduleUpdate);
-    resizeObserver.observe(el);
-    const mutationObserver = new MutationObserver(scheduleUpdate);
-    mutationObserver.observe(el, { childList: true, subtree: true });
-    return () => {
-      el.removeEventListener('scroll', scheduleUpdate);
-      resizeObserver.disconnect();
-      mutationObserver.disconnect();
-      if (frame) cancelAnimationFrame(frame);
-    };
-  }, []);
 
   useEffect(() => {
     setNoticeMessage(buildNoticeMessage());
@@ -2164,36 +1990,196 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [visibleProviders, activeProvider]);
 
+  const registerDirtyGuard = useCallback<RegisterSettingsDirtyGuard>((entry) => {
+    dirtyGuardRef.current = entry;
+  }, []);
+
+  const requestGuardedAction = useCallback((action: () => void) => {
+    if (resolveDirtyGuardAction(dirtyGuardRef.current) === SettingsDirtyGuardAction.Prompt) {
+      setPendingGuardError(null);
+      setPendingGuardedAction(() => action);
+      return;
+    }
+    action();
+  }, []);
+
+  const handleCancelPendingGuard = useCallback(() => {
+    if (isSavingPendingGuard) return;
+    setPendingGuardedAction(null);
+    setPendingGuardError(null);
+  }, [isSavingPendingGuard]);
+
+  const handleDiscardPendingGuard = useCallback(() => {
+    if (isSavingPendingGuard) return;
+    const action = pendingGuardedAction;
+    dirtyGuardRef.current?.discard();
+    dirtyGuardRef.current = null;
+    setPendingGuardedAction(null);
+    setPendingGuardError(null);
+    action?.();
+  }, [isSavingPendingGuard, pendingGuardedAction]);
+
+  const handleSavePendingGuard = useCallback(async () => {
+    if (isSavingPendingGuard || !pendingGuardedAction) return;
+    const guard = dirtyGuardRef.current;
+    if (!guard?.save) {
+      const action = pendingGuardedAction;
+      setPendingGuardedAction(null);
+      action();
+      return;
+    }
+    setIsSavingPendingGuard(true);
+    setPendingGuardError(null);
+    try {
+      const saved = await guard.save();
+      if (!mountedRef.current) return;
+      if (!saved) {
+        setPendingGuardError(i18nService.t('failedToSaveSettings'));
+        return;
+      }
+      const action = pendingGuardedAction;
+      dirtyGuardRef.current = null;
+      setPendingGuardedAction(null);
+      action();
+    } catch (saveErr) {
+      if (mountedRef.current) {
+        setPendingGuardError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsSavingPendingGuard(false);
+      }
+    }
+  }, [isSavingPendingGuard, pendingGuardedAction]);
+
+  const isActiveProviderConnectionDirty = useMemo(() => (
+    isProviderConnectionDirty(savedProviders[activeProvider], providers[activeProvider], activeProvider)
+  ), [activeProvider, providers, savedProviders]);
+
+  const resolvedConnectionFormStatus: SettingsFormStatus = connectionFormStatus === SettingsFormStatus.Saving
+    ? SettingsFormStatus.Saving
+    : connectionFormStatus === SettingsFormStatus.Error
+      ? SettingsFormStatus.Error
+      : isActiveProviderConnectionDirty
+        ? SettingsFormStatus.Dirty
+        : connectionFormStatus === SettingsFormStatus.Saved
+          ? SettingsFormStatus.Saved
+          : SettingsFormStatus.Idle;
+
+  const handleSaveProviderConnection = useCallback(async (): Promise<boolean> => {
+    const targetProvider = activeProvider;
+    const currentProviderConfig = providersRef.current[targetProvider];
+    if (!currentProviderConfig) return true;
+    clearConnectionSavedTimer();
+    setConnectionFormStatus(SettingsFormStatus.Saving);
+    setConnectionSaveError(null);
+    setError(null);
+    try {
+      const nextToSave: ProvidersConfig = {
+        ...savedProvidersRef.current,
+        [targetProvider]: { ...currentProviderConfig },
+      };
+      const normalized = await persistProvidersSnapshot(nextToSave, targetProvider);
+      if (!mountedRef.current) return true;
+      setProviders(prev => ({
+        ...prev,
+        [targetProvider]: normalized[targetProvider],
+      }));
+      setConnectionFormStatus(SettingsFormStatus.Saved);
+      connectionSavedTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) {
+          setConnectionFormStatus(SettingsFormStatus.Idle);
+        }
+        connectionSavedTimerRef.current = null;
+      }, SETTINGS_FORM_SAVED_RESET_MS);
+      return true;
+    } catch (saveErr) {
+      console.error('[Settings] failed to save provider connection:', saveErr);
+      if (mountedRef.current) {
+        setConnectionFormStatus(SettingsFormStatus.Error);
+        setConnectionSaveError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      }
+      return false;
+    }
+  }, [activeProvider, clearConnectionSavedTimer, persistProvidersSnapshot]);
+
+  const handleDiscardProviderConnection = useCallback(() => {
+    const targetProvider = activeProvider;
+    clearConnectionSavedTimer();
+    setConnectionSaveError(null);
+    setConnectionFormStatus(SettingsFormStatus.Idle);
+    const wasUnsavedCustom = !savedProvidersRef.current[targetProvider];
+    const reverted = discardProviderConnectionDraft(
+      savedProvidersRef.current,
+      providersRef.current,
+      targetProvider,
+    );
+    setProviders(reverted);
+    if (wasUnsavedCustom) {
+      const remainingKeys = Object.keys(reverted) as ProviderType[];
+      const firstEnabled = remainingKeys.find(k => reverted[k]?.enabled);
+      setActiveProvider(firstEnabled ?? remainingKeys[0] ?? providerKeys[0]);
+    }
+  }, [activeProvider, clearConnectionSavedTimer]);
+
+  useEffect(() => {
+    if (activeTab !== SettingsTabId.Model) return;
+    if (isActiveProviderConnectionDirty) {
+      registerDirtyGuard({
+        isDirty: true,
+        canSave: true,
+        save: handleSaveProviderConnection,
+        discard: handleDiscardProviderConnection,
+      });
+    } else {
+      registerDirtyGuard(null);
+    }
+    return () => {
+      registerDirtyGuard(null);
+    };
+  }, [
+    activeTab,
+    handleDiscardProviderConnection,
+    handleSaveProviderConnection,
+    isActiveProviderConnectionDirty,
+    registerDirtyGuard,
+  ]);
+
   // Handle adding a new custom provider
   const handleAddCustomProvider = () => {
-    // Find the first unused custom slot
-    const usedKeys = new Set(Object.keys(providers));
-    const newKey = CUSTOM_PROVIDER_KEYS.find(k => !usedKeys.has(k));
-    if (!newKey) return; // All custom provider slots used
-    setProviders(prev => ({
-      ...prev,
-      [newKey]: {
-        enabled: false,
-        apiKey: '',
-        baseUrl: '',
-        apiFormat: 'openai' as const,
-        models: [],
-        displayName: undefined,
-      },
-    }));
-    setActiveProvider(newKey);
-    setShowApiKey(false);
-    setIsAddingModel(false);
-    setIsEditingModel(false);
-    setEditingModelId(null);
-    setNewModelName('');
-    setNewModelId('');
-    setNewModelSupportsImage(false);
-    setNewModelSupportsThinking(false);
-    setNewModelContextWindow('');
-    setNewModelMaxTokens('');
-    setNewModelCustomParams('');
-    setModelFormError(null);
+    requestGuardedAction(() => {
+      // Find the first unused custom slot
+      const usedKeys = new Set(Object.keys(providersRef.current));
+      const newKey = CUSTOM_PROVIDER_KEYS.find(k => !usedKeys.has(k));
+      if (!newKey) return; // All custom provider slots used
+      clearConnectionSavedTimer();
+      setConnectionSaveError(null);
+      setConnectionFormStatus(SettingsFormStatus.Dirty);
+      setProviders(prev => ({
+        ...prev,
+        [newKey]: {
+          enabled: false,
+          apiKey: '',
+          baseUrl: '',
+          apiFormat: 'openai' as const,
+          models: [],
+          displayName: undefined,
+        },
+      }));
+      setActiveProvider(newKey);
+      setShowApiKey(false);
+      setIsAddingModel(false);
+      setIsEditingModel(false);
+      setEditingModelId(null);
+      setNewModelName('');
+      setNewModelId('');
+      setNewModelSupportsImage(false);
+      setNewModelSupportsThinking(false);
+      setNewModelContextWindow('');
+      setNewModelMaxTokens('');
+      setNewModelCustomParams('');
+      setModelFormError(null);
+    });
   };
 
   // Handle deleting a custom provider
@@ -2205,7 +2191,7 @@ const Settings: React.FC<SettingsProps> = ({
     const key = pendingDeleteProvider;
     if (!key) return;
     setPendingDeleteProvider(null);
-    const currentConfig = configService.getConfig();
+    const wasPersisted = Boolean(savedProvidersRef.current[key]);
     setProviders(prev => {
       const next = { ...prev };
       delete next[key];
@@ -2216,47 +2202,58 @@ const Settings: React.FC<SettingsProps> = ({
     // would still have activeProvider pointing at the just-deleted key, and the
     // model settings render accesses providers[activeProvider].* without guards,
     // crashing the whole view (white screen).
+    let fallbackProvider = activeProvider;
     if (activeProvider === key) {
       const visibleKeys = Object.keys(visibleProviders).filter(k => k !== key) as ProviderType[];
       const firstEnabled = visibleKeys.find(k => visibleProviders[k]?.enabled);
-      setActiveProvider(firstEnabled ?? visibleKeys[0] ?? providerKeys[0]);
+      fallbackProvider = firstEnabled ?? visibleKeys[0] ?? providerKeys[0];
+      setActiveProvider(fallbackProvider);
+      setConnectionFormStatus(SettingsFormStatus.Idle);
+      setConnectionSaveError(null);
     }
-    // Persist the deletion immediately so it survives window close
-    const updatedProviders = { ...currentConfig.providers };
-    delete updatedProviders[key];
+    if (!wasPersisted) return;
+    const updatedSavedProviders = { ...savedProvidersRef.current };
+    delete updatedSavedProviders[key];
     try {
-      await configService.updateConfig({ providers: updatedProviders as AppConfig['providers'] });
-      if (usageAnalyticsEnabled) {
-        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
-          (currentConfig.providers ?? providers) as ProvidersConfig,
-          updatedProviders as ProvidersConfig,
-        );
-        if (customModelSettingsSummary) {
-          reportCustomModelSettingsSaved(customModelSettingsSummary);
-        }
-      }
+      await persistProvidersSnapshot(updatedSavedProviders as ProvidersConfig, fallbackProvider);
     } catch (deleteError) {
       console.warn('[Settings] failed to persist custom provider deletion:', deleteError);
+      setError(deleteError instanceof Error ? deleteError.message : i18nService.t('failedToSaveSettings'));
     }
   };
 
   // Handle provider change
   const handleProviderChange = (provider: ProviderType) => {
-    setIsAddingModel(false);
-    setIsEditingModel(false);
-    setEditingModelId(null);
-    setNewModelName('');
-    setNewModelId('');
-    setNewModelSupportsImage(false);
-    setModelFormError(null);
-    setActiveProvider(provider);
-    // 切换 provider 时清除测试结果
-    setIsTestResultModalOpen(false);
-    setTestResult(null);
+    if (provider === activeProvider) return;
+    requestGuardedAction(() => {
+      clearConnectionSavedTimer();
+      setConnectionFormStatus(SettingsFormStatus.Idle);
+      setConnectionSaveError(null);
+      setIsAddingModel(false);
+      setIsEditingModel(false);
+      setEditingModelId(null);
+      setNewModelName('');
+      setNewModelId('');
+      setNewModelSupportsImage(false);
+      setModelFormError(null);
+      setActiveProvider(provider);
+      // 切换 provider 时清除测试结果
+      setIsTestResultModalOpen(false);
+      setTestResult(null);
+    });
   };
 
   // Handle provider configuration change
   const handleProviderConfigChange = (provider: ProviderType, field: string, value: string) => {
+    clearConnectionSavedTimer();
+    setTestResult(null);
+    setIsTestResultModalOpen(false);
+    setConnectionSaveError(null);
+    setConnectionFormStatus((prev) => (
+      prev === SettingsFormStatus.Error || prev === SettingsFormStatus.Saved
+        ? SettingsFormStatus.Idle
+        : prev
+    ));
     setProviders(prev => {
       if (field === 'apiFormat') {
         const nextApiFormat = getEffectiveApiFormat(provider, value);
@@ -2429,20 +2426,27 @@ const Settings: React.FC<SettingsProps> = ({
             baseUrl = defaultBaseUrl;
           }
 
-          setProviders(prev => ({
-            ...prev,
-            minimax: {
-              ...prev.minimax,
-              enabled: true,
-              oauthAccessToken: tokenPayload.access_token!,
-              oauthBaseUrl: baseUrl,
-              apiFormat: 'anthropic',
-              authType: 'oauth',
-              oauthRefreshToken: tokenPayload.refresh_token,
-              oauthTokenExpiresAt: tokenPayload.expired_in,
-              models: [...(defaultConfig.providers?.minimax.models ?? [])],
-            },
-          }));
+          const nextMinimax: ProviderConfig = {
+            ...providersRef.current.minimax,
+            enabled: true,
+            oauthAccessToken: tokenPayload.access_token!,
+            oauthBaseUrl: baseUrl,
+            apiFormat: 'anthropic',
+            authType: 'oauth',
+            oauthRefreshToken: tokenPayload.refresh_token,
+            oauthTokenExpiresAt: tokenPayload.expired_in,
+            models: [...(defaultConfig.providers?.minimax.models ?? [])],
+          };
+          const nextProviders: ProvidersConfig = {
+            ...providersRef.current,
+            minimax: nextMinimax,
+          };
+          const nextSavedProviders: ProvidersConfig = {
+            ...savedProvidersRef.current,
+            minimax: nextMinimax,
+          };
+          setProviders(nextProviders);
+          persistProviderAuthConfigInBackground(nextSavedProviders, 'minimax');
 
           setMinimaxOAuthPhase({ kind: 'success' });
           setTimeout(() => setMinimaxOAuthPhase({ kind: 'idle' }), 1500);
@@ -2466,17 +2470,24 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleMiniMaxOAuthLogout = () => {
-    setProviders(prev => ({
-      ...prev,
-      minimax: {
-        ...prev.minimax,
-        enabled: false,
-        oauthAccessToken: undefined,
-        oauthBaseUrl: undefined,
-        oauthRefreshToken: undefined,
-        oauthTokenExpiresAt: undefined,
-      },
-    }));
+    const nextMinimax: ProviderConfig = {
+      ...providersRef.current.minimax,
+      enabled: false,
+      oauthAccessToken: undefined,
+      oauthBaseUrl: undefined,
+      oauthRefreshToken: undefined,
+      oauthTokenExpiresAt: undefined,
+    };
+    const nextProviders: ProvidersConfig = {
+      ...providersRef.current,
+      minimax: nextMinimax,
+    };
+    const nextSavedProviders: ProvidersConfig = {
+      ...savedProvidersRef.current,
+      minimax: nextMinimax,
+    };
+    setProviders(nextProviders);
+    persistProviderAuthConfigInBackground(nextSavedProviders, 'minimax');
     setMinimaxOAuthPhase({ kind: 'idle' });
   };
 
@@ -2496,6 +2507,12 @@ const Settings: React.FC<SettingsProps> = ({
           if (prev.openai.authType !== 'oauth') return prev;
           return { ...prev, openai: { ...prev.openai, authType: 'apikey' } };
         });
+        setSavedProviders(prev => {
+          if (prev.openai.authType !== 'oauth') return prev;
+          const next = { ...prev, openai: { ...prev.openai, authType: 'apikey' as const } };
+          savedProvidersRef.current = next;
+          return next;
+        });
       }
     }).catch(() => {
       if (!cancelled) setOpenaiOAuthStatus({ loggedIn: false });
@@ -2503,12 +2520,15 @@ const Settings: React.FC<SettingsProps> = ({
     return () => { cancelled = true; };
   }, [activeProvider]);
 
-  const persistProviderAuthConfigInBackground = useCallback((nextProviders: ProvidersConfig) => {
-    void configService.updateConfig({ providers: nextProviders }).catch((saveError) => {
+  const persistProviderAuthConfigInBackground = useCallback((
+    nextProviders: ProvidersConfig,
+    primaryHint: ProviderType = activeProvider,
+  ) => {
+    void persistProvidersSnapshot(nextProviders, primaryHint).catch((saveError) => {
       console.error('[Settings] failed to save provider auth state:', saveError);
       setError(i18nService.t('failedToSaveSettings'));
     });
-  }, []);
+  }, [activeProvider, persistProvidersSnapshot]);
 
   const handleOpenAIOAuthLogin = async () => {
     setOpenaiOAuthPhase({ kind: 'pending' });
@@ -2518,18 +2538,23 @@ const Settings: React.FC<SettingsProps> = ({
         setOpenaiOAuthPhase({ kind: 'error', message: result.error });
         return;
       }
+      const nextOpenAI: ProviderConfig = {
+        ...providersRef.current.openai,
+        enabled: true,
+        authType: 'oauth',
+      };
       const nextProviders: ProvidersConfig = {
-        ...providers,
-        openai: {
-          ...providers.openai,
-          enabled: true,
-          authType: 'oauth',
-        },
+        ...providersRef.current,
+        openai: nextOpenAI,
+      };
+      const nextSavedProviders: ProvidersConfig = {
+        ...savedProvidersRef.current,
+        openai: nextOpenAI,
       };
       setProviders(nextProviders);
       setOpenaiOAuthStatus({ loggedIn: true, email: result.email ?? undefined });
       setOpenaiOAuthPhase({ kind: 'success', email: result.email ?? undefined });
-      persistProviderAuthConfigInBackground(nextProviders);
+      persistProviderAuthConfigInBackground(nextSavedProviders, 'openai');
       setTimeout(() => setOpenaiOAuthPhase({ kind: 'idle' }), 1500);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2547,21 +2572,23 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleOpenAIOAuthLogout = async () => {
-    const nextOpenAIProvider = {
-      ...providers.openai,
-      enabled: providers.openai.apiKey.trim().length > 0,
-      authType: 'apikey' as const,
+    const nextOpenAIProvider: ProviderConfig = {
+      ...providersRef.current.openai,
+      enabled: providersRef.current.openai.apiKey.trim().length > 0,
+      authType: 'apikey',
     };
     const nextProviders: ProvidersConfig = {
-      ...providers,
-      openai: {
-        ...nextOpenAIProvider,
-      },
+      ...providersRef.current,
+      openai: nextOpenAIProvider,
+    };
+    const nextSavedProviders: ProvidersConfig = {
+      ...savedProvidersRef.current,
+      openai: nextOpenAIProvider,
     };
     setProviders(nextProviders);
     setOpenaiOAuthStatus({ loggedIn: false });
     setOpenaiOAuthPhase({ kind: 'idle' });
-    persistProviderAuthConfigInBackground(nextProviders);
+    persistProviderAuthConfigInBackground(nextSavedProviders, 'openai');
     try {
       await window.electron.openaiCodexOAuth.logout();
     } catch {
@@ -2584,6 +2611,12 @@ const Settings: React.FC<SettingsProps> = ({
         setProviders(prev => {
           if (prev.xai.authType !== 'oauth') return prev;
           return { ...prev, xai: { ...prev.xai, authType: 'apikey' } };
+        });
+        setSavedProviders(prev => {
+          if (prev.xai.authType !== 'oauth') return prev;
+          const next = { ...prev, xai: { ...prev.xai, authType: 'apikey' as const } };
+          savedProvidersRef.current = next;
+          return next;
         });
       }
     }).catch(() => {
@@ -2613,18 +2646,23 @@ const Settings: React.FC<SettingsProps> = ({
         }
         return;
       }
+      const nextXai: ProviderConfig = {
+        ...providersRef.current.xai,
+        enabled: true,
+        authType: 'oauth',
+      };
       const nextProviders: ProvidersConfig = {
-        ...providers,
-        xai: {
-          ...providers.xai,
-          enabled: true,
-          authType: 'oauth',
-        },
+        ...providersRef.current,
+        xai: nextXai,
+      };
+      const nextSavedProviders: ProvidersConfig = {
+        ...savedProvidersRef.current,
+        xai: nextXai,
       };
       setProviders(nextProviders);
       setXaiOAuthStatus({ loggedIn: true, email: result.email ?? undefined });
       setXaiOAuthPhase({ kind: 'success', email: result.email ?? undefined });
-      persistProviderAuthConfigInBackground(nextProviders);
+      persistProviderAuthConfigInBackground(nextSavedProviders, 'xai');
       setTimeout(() => setXaiOAuthPhase({ kind: 'idle' }), 1500);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2644,18 +2682,23 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleXaiOAuthLogout = async () => {
+    const nextXai: ProviderConfig = {
+      ...providersRef.current.xai,
+      enabled: providersRef.current.xai.apiKey.trim().length > 0,
+      authType: 'apikey',
+    };
     const nextProviders: ProvidersConfig = {
-      ...providers,
-      xai: {
-        ...providers.xai,
-        enabled: providers.xai.apiKey.trim().length > 0,
-        authType: 'apikey' as const,
-      },
+      ...providersRef.current,
+      xai: nextXai,
+    };
+    const nextSavedProviders: ProvidersConfig = {
+      ...savedProvidersRef.current,
+      xai: nextXai,
     };
     setProviders(nextProviders);
     setXaiOAuthStatus({ loggedIn: false });
     setXaiOAuthPhase({ kind: 'idle' });
-    persistProviderAuthConfigInBackground(nextProviders);
+    persistProviderAuthConfigInBackground(nextSavedProviders, 'xai');
     try {
       await window.electron.xaiOAuth.logout();
     } catch {
@@ -2663,20 +2706,6 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
-    || coworkMemoryEnabled !== coworkConfig.memoryEnabled
-    || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
-    || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? false)
-    || openClawSkillReviewEnabled !== (coworkConfig.openClawSkillReviewEnabled ?? false)
-    || openClawMemoryFlushEnabled !== (coworkConfig.openClawMemoryFlushEnabled ?? false)
-    || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
-    || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
-    || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
-    || embeddingModel !== (coworkConfig.embeddingModel ?? '')
-    || embeddingLocalModelPath !== (coworkConfig.embeddingLocalModelPath ?? '')
-    || embeddingVectorWeight !== (coworkConfig.embeddingVectorWeight ?? 0.7)
-    || embeddingRemoteBaseUrl !== (coworkConfig.embeddingRemoteBaseUrl ?? '')
-    || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '');
   const isOpenClawAgentEngine = coworkAgentEngine === 'dsh';
 
   const openClawProgressPercent = useMemo(() => {
@@ -2840,20 +2869,7 @@ const Settings: React.FC<SettingsProps> = ({
     }
   }, [openClawRepairResult?.backupPath]);
 
-  const persistModelSettingsBeforeDataBackup = useCallback(async () => {
-    const normalizedProviders = normalizeProvidersForSettingsSave(providers);
-    const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
-    await configService.updateConfig({
-      api: {
-        key: primaryProvider.apiKey,
-        baseUrl: primaryProvider.baseUrl,
-      },
-      providers: normalizedProviders,
-    });
-  }, [activeProvider, providers]);
-
   const dataMigration = useDataMigration({
-    persistModelSettingsBeforeBackup: persistModelSettingsBeforeDataBackup,
     onError: setError,
     onNotice: setNoticeMessage,
     onReportAction: reportAgentEngineMaintenanceAction,
@@ -2905,6 +2921,34 @@ const Settings: React.FC<SettingsProps> = ({
     usageAnalyticsEnabled,
   ]);
 
+  const handleToggleOpenClawBackgroundOption = useCallback(async (
+    key: 'openClawHeartbeatEnabled' | 'openClawSkillReviewEnabled' | 'openClawMemoryFlushEnabled',
+    previousEnabled: boolean,
+    setter: React.Dispatch<React.SetStateAction<boolean>>,
+  ): Promise<void> => {
+    const nextEnabled = !previousEnabled;
+    setter(nextEnabled);
+    setError(null);
+    try {
+      const updated = await coworkService.updateConfig({ [key]: nextEnabled });
+      if (!updated) {
+        setter(previousEnabled);
+        setError(i18nService.t('coworkConfigSaveFailed'));
+        return;
+      }
+      if (usageAnalyticsEnabled) {
+        reportAgentEngineSettingChanged(key, nextEnabled, previousEnabled);
+      }
+    } catch (toggleError) {
+      setter(previousEnabled);
+      setError(
+        toggleError instanceof Error && toggleError.message
+          ? toggleError.message
+          : i18nService.t('coworkConfigSaveFailed'),
+      );
+    }
+  }, [usageAnalyticsEnabled]);
+
   // Toggle provider enabled status
   const toggleProviderEnabled = (provider: ProviderType) => {
     const providerConfig = providers[provider];
@@ -2922,29 +2966,55 @@ const Settings: React.FC<SettingsProps> = ({
       return;
     }
 
-    setProviders(prev => ({
-      ...prev,
-      [provider]: {
-        ...prev[provider],
-        enabled: !prev[provider].enabled
-      }
-    }));
-  };
-
-  const enableProvider = (provider: ProviderType) => {
-    setProviders(prev => {
-      if (prev[provider].enabled) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        [provider]: {
-          ...prev[provider],
-          enabled: true,
-        },
+    // If enabling the active provider while it has unsaved connection edits,
+    // save the connection along with enabling it so auth + toggle stay in sync.
+    if (provider === activeProvider && isEnabling && isActiveProviderConnectionDirty) {
+      const nextProviderConfig: ProviderConfig = {
+        ...providerConfig,
+        enabled: true,
       };
-    });
+      setProviders(prev => ({
+        ...prev,
+        [provider]: nextProviderConfig,
+      }));
+      clearConnectionSavedTimer();
+      setConnectionFormStatus(SettingsFormStatus.Saving);
+      setConnectionSaveError(null);
+      void persistProvidersSnapshot({
+        ...savedProvidersRef.current,
+        [provider]: nextProviderConfig,
+      }, provider).then((normalized) => {
+        if (!mountedRef.current) return;
+        setProviders(prev => ({ ...prev, [provider]: normalized[provider] }));
+        setConnectionFormStatus(SettingsFormStatus.Saved);
+        connectionSavedTimerRef.current = window.setTimeout(() => {
+          if (mountedRef.current) setConnectionFormStatus(SettingsFormStatus.Idle);
+          connectionSavedTimerRef.current = null;
+        }, SETTINGS_FORM_SAVED_RESET_MS);
+      }).catch((saveErr) => {
+        console.error('[Settings] failed to enable and save provider:', saveErr);
+        if (mountedRef.current) {
+          setConnectionFormStatus(SettingsFormStatus.Error);
+          setConnectionSaveError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+        }
+      });
+      return;
+    }
+
+    const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+      savedProvidersRef.current,
+      providersRef.current,
+      provider,
+      (cfg) => ({ ...cfg, enabled: !cfg.enabled }),
+    );
+    setProviders(nextCurrent);
+    if (nextSaved) {
+      void persistProvidersSnapshot(nextSaved, provider).catch((saveErr) => {
+        console.error('[Settings] failed to toggle provider enabled:', saveErr);
+        setProviders(providersRef.current);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      });
+    }
   };
 
   // GitHub Copilot device code authentication
@@ -2976,15 +3046,20 @@ const Settings: React.FC<SettingsProps> = ({
           apiKey: result.token,
           ...(result.baseUrl ? { baseUrl: result.baseUrl } : {}),
         });
+        const nextCopilot: ProviderConfig = {
+          ...providersRef.current[ProviderName.Copilot],
+          enabled: true,
+          authType: ProviderAuthType.OAuth,
+          apiKey: '',
+        };
         setProviders(prev => ({
           ...prev,
-          [ProviderName.Copilot]: {
-            ...prev[ProviderName.Copilot],
-            enabled: true,
-            authType: ProviderAuthType.OAuth,
-            apiKey: '',
-          },
+          [ProviderName.Copilot]: nextCopilot,
         }));
+        persistProviderAuthConfigInBackground({
+          ...savedProvidersRef.current,
+          [ProviderName.Copilot]: nextCopilot,
+        }, ProviderName.Copilot);
       } else {
         setCopilotError(result.error || 'Authentication failed');
         setCopilotAuthStatus('error');
@@ -3003,15 +3078,20 @@ const Settings: React.FC<SettingsProps> = ({
       setCopilotUserCode('');
       setCopilotError(null);
       apiService.setProviderRuntimeCredential(ProviderName.Copilot, null);
+      const nextCopilot: ProviderConfig = {
+        ...providersRef.current[ProviderName.Copilot],
+        enabled: false,
+        authType: ProviderAuthType.ApiKey,
+        apiKey: '',
+      };
       setProviders(prev => ({
         ...prev,
-        [ProviderName.Copilot]: {
-          ...prev[ProviderName.Copilot],
-          enabled: false,
-          authType: ProviderAuthType.ApiKey,
-          apiKey: '',
-        },
+        [ProviderName.Copilot]: nextCopilot,
       }));
+      persistProviderAuthConfigInBackground({
+        ...savedProvidersRef.current,
+        [ProviderName.Copilot]: nextCopilot,
+      }, ProviderName.Copilot);
     } catch (error) {
       console.error('[Settings] GitHub Copilot sign-out failed:', error);
     }
@@ -3028,334 +3108,203 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (isSaving || isAppearanceChanging) return;
-    setIsSaving(true);
+  // Immediate persistence handlers for General, DataPrivacy, Browser, and About settings.
+  const handleLanguageChange = useCallback(async (nextLanguage: LanguageType) => {
+    const previousLanguage = language;
+    if (nextLanguage === previousLanguage) return;
     setError(null);
-
+    setLanguage(nextLanguage);
+    i18nService.setLanguage(nextLanguage, { persist: false });
     try {
-      const normalizedProviders = normalizeProvidersForSettingsSave(providers);
-      const primaryProvider = resolvePrimaryProviderForSettingsSave(normalizedProviders, activeProvider);
-      if (
-        browserWebAccess.displayMode === BrowserDisplayMode.External
-        && browserWebAccess.cdpUrl?.trim()
-        && !normalizeBrowserCdpUrl(browserWebAccess.cdpUrl)
-      ) {
-        throw new Error(i18nService.t('browserCdpUrlInvalid'));
+      await configService.updateConfig({ language: nextLanguage });
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('language', nextLanguage, previousLanguage);
       }
-      const normalizedBrowserWebAccess = normalizeBrowserWebAccessConfig(browserWebAccess);
-      const previousConfig = configService.getConfig();
-      const previousBrowserWebAccess = normalizeBrowserWebAccessConfig(previousConfig.browserWebAccess);
-      const previousShortcuts: ShortcutConfig = {
-        ...defaultConfig.shortcuts!,
-        ...(previousConfig.shortcuts || {}),
-      };
-      const previousProviders = previousConfig.providers
-        ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
-        : normalizedProviders;
-      const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? false;
-      const previousOpenClawSkillReviewEnabled = coworkConfig.openClawSkillReviewEnabled ?? false;
-      const previousOpenClawMemoryFlushEnabled = coworkConfig.openClawMemoryFlushEnabled ?? false;
-      const previousAgentEngine = coworkConfig.agentEngine || 'dsh';
-      const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
-        || OpenClawSessionKeepAliveValues.ThirtyDays;
-      const previousMemorySettings = {
-        embeddingEnabled: coworkConfig.embeddingEnabled ?? false,
-        embeddingModel: coworkConfig.embeddingModel ?? '',
-        embeddingProvider: coworkConfig.embeddingProvider ?? 'openai',
-        embeddingRemoteApiKey: coworkConfig.embeddingRemoteApiKey ?? '',
-        embeddingRemoteBaseUrl: coworkConfig.embeddingRemoteBaseUrl ?? '',
-        embeddingVectorWeight: coworkConfig.embeddingVectorWeight ?? 0.7,
-        memoryEnabled: coworkConfig.memoryEnabled ?? true,
-        memoryLlmJudgeEnabled: coworkConfig.memoryLlmJudgeEnabled ?? false,
-      };
-      const nextMemorySettings = {
-        embeddingEnabled,
-        embeddingModel,
-        embeddingProvider,
-        embeddingRemoteApiKey,
-        embeddingRemoteBaseUrl,
-        embeddingVectorWeight,
-        memoryEnabled: coworkMemoryEnabled,
-        memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
-      };
-      const previousNotificationSettings = normalizeNotificationSettings(
-        previousConfig.notificationSettings,
-      );
-      const previousArtifactAutoPreviewEnabled = resolveArtifactAutoPreviewEnabled(
-        previousConfig.artifactAutoPreviewEnabled,
-      );
-      const previousThemeId = initialThemeIdRef.current;
-      const previousUiFontSize = normalizeFontPreference(
-        previousConfig.uiFontSize,
-        FontPreferences.UiFontSizeDefault,
-        FontPreferences.UiFontSizeMin,
-        FontPreferences.UiFontSizeMax,
-      );
-      const previousCodeFontSize = normalizeFontPreference(
-        previousConfig.codeFontSize,
-        FontPreferences.CodeFontSizeDefault,
-        FontPreferences.CodeFontSizeMin,
-        FontPreferences.CodeFontSizeMax,
-      );
-      // Legacy OpenClaw plugin batch-save removed; DSH ecosystem manages plugins directly.
+    } catch (saveErr) {
+      console.error('[Settings] failed to update language:', saveErr);
+      setLanguage(previousLanguage);
+      i18nService.setLanguage(previousLanguage, { persist: false });
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [language, usageAnalyticsEnabled]);
 
-      if (quickPanelShortcutDraft !== null) {
-        const result = await window.electron.desktopCompanion.setPreferences({ shortcut: quickPanelShortcutDraft });
-        if (!result.success) throw new Error(result.error || i18nService.t('desktopCompanionShortcutConflict'));
-        setQuickPanelShortcutDraft(null);
+  const handleToggleArtifactAutoPreview = useCallback(async () => {
+    const previous = artifactAutoPreviewEnabled;
+    const next = !previous;
+    setError(null);
+    setArtifactAutoPreviewEnabled(next);
+    try {
+      await configService.updateConfig({ artifactAutoPreviewEnabled: next });
+      console.log(`[Settings] artifact auto-preview preference updated: enabled=${next}`);
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('artifactAutoPreviewEnabled', next, previous);
       }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update artifact auto-preview:', saveErr);
+      setArtifactAutoPreviewEnabled(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [artifactAutoPreviewEnabled, usageAnalyticsEnabled]);
 
+  const handleTaskCompletionNotificationModeChange = useCallback(async (nextMode: TaskCompletionNotificationMode) => {
+    const previousMode = taskCompletionNotificationMode;
+    if (nextMode === previousMode) return;
+    setError(null);
+    setTaskCompletionNotificationMode(nextMode);
+    try {
       await configService.updateConfig({
-        api: {
-          key: primaryProvider.apiKey,
-          baseUrl: primaryProvider.baseUrl,
-        },
-        providers: normalizedProviders, // Save all providers configuration
-        theme,
-        uiFontSize,
-        codeFontSize,
-        language,
-        artifactAutoPreviewEnabled,
-        useSystemProxy,
-        usageAnalyticsEnabled,
         notificationSettings: normalizeNotificationSettings({
-          taskCompletionNotificationMode,
+          taskCompletionNotificationMode: nextMode,
           permissionNotificationsEnabled,
           questionNotificationsEnabled,
         }),
-        browserWebAccess: normalizedBrowserWebAccess,
-        shortcuts,
-        app: {
-          ...previousConfig.app,
-          testMode,
-        },
       });
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('taskCompletionNotificationMode', nextMode, previousMode);
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update task completion notification mode:', saveErr);
+      setTaskCompletionNotificationMode(previousMode);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [
+    permissionNotificationsEnabled,
+    questionNotificationsEnabled,
+    taskCompletionNotificationMode,
+    usageAnalyticsEnabled,
+  ]);
 
-      if (!usageAnalyticsEnabled) {
+  const handleToggleAttentionNotifications = useCallback(async () => {
+    const previousPermission = permissionNotificationsEnabled;
+    const previousQuestion = questionNotificationsEnabled;
+    const nextEnabled = !(previousPermission || previousQuestion);
+    setError(null);
+    setPermissionNotificationsEnabled(nextEnabled);
+    setQuestionNotificationsEnabled(nextEnabled);
+    try {
+      await configService.updateConfig({
+        notificationSettings: normalizeNotificationSettings({
+          taskCompletionNotificationMode,
+          permissionNotificationsEnabled: nextEnabled,
+          questionNotificationsEnabled: nextEnabled,
+        }),
+      });
+      if (usageAnalyticsEnabled) {
+        if (previousPermission !== nextEnabled) {
+          reportGeneralSettingChanged('permissionNotificationsEnabled', nextEnabled, previousPermission);
+        }
+        if (previousQuestion !== nextEnabled) {
+          reportGeneralSettingChanged('questionNotificationsEnabled', nextEnabled, previousQuestion);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update attention notifications:', saveErr);
+      setPermissionNotificationsEnabled(previousPermission);
+      setQuestionNotificationsEnabled(previousQuestion);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [
+    permissionNotificationsEnabled,
+    questionNotificationsEnabled,
+    taskCompletionNotificationMode,
+    usageAnalyticsEnabled,
+  ]);
+
+  const handleToggleUseSystemProxy = useCallback(async () => {
+    if (isUpdatingUseSystemProxy) return;
+    const previous = useSystemProxy;
+    const next = !previous;
+    setError(null);
+    setIsUpdatingUseSystemProxy(true);
+    setUseSystemProxy(next);
+    try {
+      await configService.updateConfig({ useSystemProxy: next });
+      if (usageAnalyticsEnabled) {
+        reportGeneralSettingChanged('useSystemProxy', next, previous);
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to update system proxy setting:', saveErr);
+      setUseSystemProxy(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    } finally {
+      if (mountedRef.current) {
+        setIsUpdatingUseSystemProxy(false);
+      }
+    }
+  }, [isUpdatingUseSystemProxy, usageAnalyticsEnabled, useSystemProxy]);
+
+  const handleToggleUsageAnalytics = useCallback(async () => {
+    const previous = usageAnalyticsEnabled;
+    const next = !previous;
+    setError(null);
+    setUsageAnalyticsEnabled(next);
+    try {
+      await configService.updateConfig({ usageAnalyticsEnabled: next });
+      if (!next) {
         clearPendingPublishingConversionAttribution();
         clearPublishingSubscriptionRecoveryAnalytics();
-      }
-
-      if (previousArtifactAutoPreviewEnabled !== artifactAutoPreviewEnabled) {
-        console.log(
-          `[Settings] artifact auto-preview preference updated: enabled=${artifactAutoPreviewEnabled}`,
-        );
-      }
-
-      applyTypographyPreferences({ uiFontSize, codeFontSize });
-
-      // 应用语言
-      i18nService.setLanguage(language, { persist: false });
-
-      // Set API with the primary provider - handle Qwen OAuth
-      let apiKeyToUse = primaryProvider.apiKey;
-      let baseUrlToUse = primaryProvider.baseUrl;
-
-
-      apiService.setConfig({
-        apiKey: apiKeyToUse,
-        baseUrl: baseUrlToUse,
-      });
-
-      // 更新 Redux store 中的可用模型列表
-      const allModels: { id: string; name: string; provider?: string; providerKey?: string; openClawProviderId?: string; supportsImage?: boolean }[] = [];
-      Object.entries(normalizedProviders).forEach(([providerName, config]) => {
-        if (config.enabled && config.models) {
-          const openClawProviderId = getOpenClawProviderIdForConfig(providerName, config);
-          config.models.forEach(model => {
-            allModels.push({
-              id: model.id,
-              name: model.name,
-              provider: getProviderDisplayName(providerName, config),
-              providerKey: providerName,
-              openClawProviderId,
-              supportsImage: resolveModelSupportsImageForProvider(providerName, model),
-            });
-          });
-        }
-      });
-      dispatch(setAvailableModels(allModels));
-
-      if (hasCoworkConfigChanges) {
-        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
-          console.log(
-            `[Settings] updating OpenClaw heartbeat: enabled=${openClawHeartbeatEnabled}, previous=${previousOpenClawHeartbeatEnabled}`,
-          );
-        }
-        if (previousOpenClawSkillReviewEnabled !== openClawSkillReviewEnabled) {
-          console.log(
-            `[Settings] updating OpenClaw skill review: enabled=${openClawSkillReviewEnabled}, previous=${previousOpenClawSkillReviewEnabled}`,
-          );
-        }
-        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
-          console.log(
-            `[Settings] updating OpenClaw memory flush: enabled=${openClawMemoryFlushEnabled}, previous=${previousOpenClawMemoryFlushEnabled}`,
-          );
-        }
-        const updated = await coworkService.updateConfig({
-          agentEngine: coworkAgentEngine,
-          memoryEnabled: coworkMemoryEnabled,
-          memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
-          openClawHeartbeatEnabled,
-          openClawSkillReviewEnabled,
-          openClawMemoryFlushEnabled,
-          embeddingEnabled,
-          embeddingProvider,
-          embeddingModel,
-          embeddingLocalModelPath,
-          embeddingVectorWeight,
-          embeddingRemoteBaseUrl,
-          embeddingRemoteApiKey,
+      } else {
+        void reportYdAnalyzer({
+          action: LogReporterAction.UsageAnalyticsEnabled,
+          source: SettingsAnalyticsSource.General,
         });
-        if (!updated) {
-          throw new Error(i18nService.t('coworkConfigSaveFailed'));
-        }
-        const savedSessionPolicy = await coworkService.updateSessionPolicy({
-          keepAlive: openClawSessionKeepAlive,
-        });
-        if (!savedSessionPolicy) {
-          throw new Error(i18nService.t('coworkConfigSaveFailed'));
-        }
       }
-
-      // Apply pending IM channel changes to the running DSH host.
-      const syncSucceeded = await imService.saveAndSyncConfig();
-      if (!syncSucceeded) {
-        throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
-      }
-
-      // Decision model edits save with the dialog, so switching the tool on
-      // or off restarts the gateway once, on Save, rather than per field.
-      if (decisionModelDraftRef.current) {
-        await window.electron.decisionModel.saveConfig(decisionModelDraftRef.current);
-        decisionModelDraftRef.current = null;
-      }
-
-      if (usageAnalyticsEnabled) {
-        if (previousConfig.language !== language) {
-          reportGeneralSettingChanged('language', language, previousConfig.language);
-        }
-        if (previousArtifactAutoPreviewEnabled !== artifactAutoPreviewEnabled) {
-          reportGeneralSettingChanged(
-            'artifactAutoPreviewEnabled',
-            artifactAutoPreviewEnabled,
-            previousArtifactAutoPreviewEnabled,
-          );
-        }
-        if ((previousConfig.useSystemProxy ?? false) !== useSystemProxy) {
-          reportGeneralSettingChanged('useSystemProxy', useSystemProxy, previousConfig.useSystemProxy ?? false);
-        }
-        if (previousNotificationSettings.taskCompletionNotificationMode !== taskCompletionNotificationMode) {
-          reportGeneralSettingChanged(
-            'taskCompletionNotificationMode',
-            taskCompletionNotificationMode,
-            previousNotificationSettings.taskCompletionNotificationMode,
-          );
-        }
-        if (previousNotificationSettings.permissionNotificationsEnabled !== permissionNotificationsEnabled) {
-          reportGeneralSettingChanged(
-            'permissionNotificationsEnabled',
-            permissionNotificationsEnabled,
-            previousNotificationSettings.permissionNotificationsEnabled,
-          );
-        }
-        if (previousNotificationSettings.questionNotificationsEnabled !== questionNotificationsEnabled) {
-          reportGeneralSettingChanged(
-            'questionNotificationsEnabled',
-            questionNotificationsEnabled,
-            previousNotificationSettings.questionNotificationsEnabled,
-          );
-        }
-        if (previousConfig.theme !== theme) {
-          reportAppearanceSettingChanged('theme', theme, previousConfig.theme);
-        }
-        if (previousThemeId !== themeId) {
-          reportAppearanceSettingChanged('themeId', themeId, previousThemeId);
-        }
-        if (previousUiFontSize !== uiFontSize) {
-          reportAppearanceSettingChanged('uiFontSize', uiFontSize, previousUiFontSize);
-        }
-        if (previousCodeFontSize !== codeFontSize) {
-          reportAppearanceSettingChanged('codeFontSize', codeFontSize, previousCodeFontSize);
-        }
-        const browserSettingParams = buildBrowserSettingAnalyticsParams(
-          previousBrowserWebAccess,
-          normalizedBrowserWebAccess,
-        );
-        if (browserSettingParams) {
-          reportBrowserSettingChanged(browserSettingParams);
-        }
-        if (previousAgentEngine !== coworkAgentEngine) {
-          reportAgentEngineSettingChanged('agentEngine', coworkAgentEngine, previousAgentEngine);
-        }
-        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
-          reportAgentEngineSettingChanged(
-            'openClawHeartbeatEnabled',
-            openClawHeartbeatEnabled,
-            previousOpenClawHeartbeatEnabled,
-          );
-        }
-        if (previousOpenClawSkillReviewEnabled !== openClawSkillReviewEnabled) {
-          reportAgentEngineSettingChanged(
-            'openClawSkillReviewEnabled',
-            openClawSkillReviewEnabled,
-            previousOpenClawSkillReviewEnabled,
-          );
-        }
-        if (previousOpenClawSessionKeepAlive !== openClawSessionKeepAlive) {
-          reportAgentEngineSettingChanged(
-            'openClawSessionKeepAlive',
-            openClawSessionKeepAlive,
-            previousOpenClawSessionKeepAlive,
-          );
-        }
-        if (previousOpenClawMemoryFlushEnabled !== openClawMemoryFlushEnabled) {
-          reportAgentEngineSettingChanged(
-            'openClawMemoryFlushEnabled',
-            openClawMemoryFlushEnabled,
-            previousOpenClawMemoryFlushEnabled,
-          );
-        }
-        const memorySettingsSummary = buildMemorySettingAnalyticsSummary(
-          previousMemorySettings,
-          nextMemorySettings,
-        );
-        if (memorySettingsSummary) {
-          reportMemorySettingChanged(memorySettingsSummary);
-        }
-        const shortcutSettingsSummary = buildShortcutSettingAnalyticsSummary(
-          previousShortcuts,
-          shortcuts,
-        );
-        if (shortcutSettingsSummary) {
-          reportShortcutSettingChanged(shortcutSettingsSummary);
-        }
-        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
-          previousProviders,
-          normalizedProviders,
-        );
-        if (customModelSettingsSummary) {
-          reportCustomModelSettingsSaved(customModelSettingsSummary);
-        }
-        if (previousConfig.usageAnalyticsEnabled === false) {
-          void reportYdAnalyzer({
-            action: LogReporterAction.UsageAnalyticsEnabled,
-            source: SettingsAnalyticsSource.General,
-          });
-        }
-      }
-
-      didSaveRef.current = true;
-      onClose();
-    } catch (error) {
-      console.error('[Settings] failed to save settings:', error);
-      setError(error instanceof Error ? error.message : i18nService.t('failedToSaveSettings'));
-    } finally {
-      setIsSaving(false);
+    } catch (saveErr) {
+      console.error('[Settings] failed to update usage analytics setting:', saveErr);
+      setUsageAnalyticsEnabled(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
     }
-  };
+  }, [usageAnalyticsEnabled]);
+
+  const handleToggleTestMode = useCallback(async () => {
+    const previous = testMode;
+    const next = !previous;
+    setError(null);
+    setTestMode(next);
+    try {
+      const previousApp = configService.getConfig().app;
+      await configService.updateConfig({
+        app: {
+          ...previousApp,
+          testMode: next,
+        },
+      });
+    } catch (saveErr) {
+      console.error('[Settings] failed to update test mode setting:', saveErr);
+      setTestMode(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    }
+  }, [testMode]);
+
+  const handleCommitBrowserWebAccess = useCallback(async (nextConfig: BrowserWebAccessConfig): Promise<boolean> => {
+    setError(null);
+    if (
+      nextConfig.displayMode === BrowserDisplayMode.External
+      && nextConfig.cdpUrl?.trim()
+      && !normalizeBrowserCdpUrl(nextConfig.cdpUrl)
+    ) {
+      setError(i18nService.t('browserCdpUrlInvalid'));
+      return false;
+    }
+    const previous = normalizeBrowserWebAccessConfig(browserWebAccess);
+    const normalized = normalizeBrowserWebAccessConfig(nextConfig);
+    setBrowserWebAccess(normalized);
+    try {
+      await configService.updateConfig({ browserWebAccess: normalized });
+      if (usageAnalyticsEnabled) {
+        const params = buildBrowserSettingAnalyticsParams(previous, normalized);
+        if (params) {
+          reportBrowserSettingChanged(params);
+        }
+      }
+      return true;
+    } catch (saveErr) {
+      console.error('[Settings] failed to save browser web access settings:', saveErr);
+      setBrowserWebAccess(previous);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      return false;
+    }
+  }, [browserWebAccess, usageAnalyticsEnabled]);
 
   // 标签页切换处理
   const doTabChange = useCallback((tab: TabType) => {
@@ -3372,15 +3321,19 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   const handleTabChange = useCallback((tab: TabType) => {
-    if (dataMigration.isBusy) return;
-    doTabChange(tab);
-  }, [dataMigration.isBusy, doTabChange]);
+    if (dataMigration.isBusy || tab === activeTab) return;
+    requestGuardedAction(() => {
+      doTabChange(tab);
+    });
+  }, [activeTab, dataMigration.isBusy, doTabChange, requestGuardedAction]);
 
-  // Guarded close: prevent closing while backup/restore is active
+  // Guarded close: prevent closing while backup/restore is active, and confirm unsaved drafts.
   const guardedClose = useCallback(() => {
     if (dataMigration.isBusy) return;
-    onClose();
-  }, [dataMigration.isBusy, onClose]);
+    requestGuardedAction(() => {
+      onClose();
+    });
+  }, [dataMigration.isBusy, onClose, requestGuardedAction]);
 
   const shortcutCommandMap = useMemo(
     () => new Map(SHORTCUT_COMMANDS.map(command => [command.key, command])),
@@ -3407,8 +3360,8 @@ const Settings: React.FC<SettingsProps> = ({
       .filter(group => group.commands.length > 0);
   }, [shortcutSearchQuery, shortcutBindings]);
 
-  // 快捷键更新处理
-  const handleShortcutChange = (key: SettingsShortcutAction, value: string) => {
+  // 快捷键更新处理（即改即落盘）
+  const handleShortcutChange = async (key: SettingsShortcutAction, value: string) => {
     const normalizedValue = value.trim();
     // Check for conflicts with other shortcuts
     const normalizedSignature = getShortcutConflictSignature(normalizedValue, { isMac: isMacPlatform });
@@ -3427,23 +3380,92 @@ const Settings: React.FC<SettingsProps> = ({
         i18nService
           .t('shortcutConflict')
           .replace('{0}', formatShortcutForDisplay(normalizedValue, { isMac: isMacPlatform }))
-          .replace('{1}', conflictLabel)
+          .replace('{1}', conflictLabel),
       );
       return;
     }
+
+    setError(null);
     if (key === SettingsShortcutAction.QuickPanel) {
-      setQuickPanelShortcutDraft(normalizedValue);
+      setIsUpdatingShortcut(true);
+      try {
+        const result = await window.electron.desktopCompanion.setPreferences({ shortcut: normalizedValue });
+        if (!result.success) {
+          setError(result.error || i18nService.t('desktopCompanionShortcutConflict'));
+        }
+      } catch (saveErr) {
+        console.error('[Settings] failed to update quick panel shortcut:', saveErr);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('desktopCompanionShortcutConflict'));
+      } finally {
+        if (mountedRef.current) {
+          setIsUpdatingShortcut(false);
+        }
+      }
       return;
     }
-    setShortcuts(prev => ({
-      ...prev,
-      [key]: normalizedValue
-    }));
+
+    const previousShortcuts = shortcuts;
+    const nextShortcuts: ShortcutConfig = {
+      ...previousShortcuts,
+      [key]: normalizedValue,
+    };
+    setShortcuts(nextShortcuts);
+    setIsUpdatingShortcut(true);
+    try {
+      await configService.updateConfig({ shortcuts: nextShortcuts });
+      if (usageAnalyticsEnabled) {
+        const summary = buildShortcutSettingAnalyticsSummary(previousShortcuts, nextShortcuts);
+        if (summary) {
+          reportShortcutSettingChanged(summary);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to save shortcut:', saveErr);
+      setShortcuts(previousShortcuts);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    } finally {
+      if (mountedRef.current) {
+        setIsUpdatingShortcut(false);
+      }
+    }
   };
 
   const handleResetShortcuts = () => {
-    setShortcuts({ ...defaultConfig.shortcuts! });
-    if (companionState) setQuickPanelShortcutDraft(DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut);
+    setShowResetShortcutsConfirm(true);
+  };
+
+  const confirmResetShortcuts = async () => {
+    setShowResetShortcutsConfirm(false);
+    const previousShortcuts = shortcuts;
+    const nextShortcuts: ShortcutConfig = { ...defaultConfig.shortcuts! };
+    setError(null);
+    setShortcuts(nextShortcuts);
+    setIsUpdatingShortcut(true);
+    try {
+      await configService.updateConfig({ shortcuts: nextShortcuts });
+      if (companionState) {
+        const result = await window.electron.desktopCompanion.setPreferences({
+          shortcut: DEFAULT_DESKTOP_COMPANION_PREFERENCES.shortcut,
+        });
+        if (!result.success) {
+          setError(result.error || i18nService.t('desktopCompanionShortcutConflict'));
+        }
+      }
+      if (usageAnalyticsEnabled) {
+        const summary = buildShortcutSettingAnalyticsSummary(previousShortcuts, nextShortcuts);
+        if (summary) {
+          reportShortcutSettingChanged(summary);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to reset shortcuts:', saveErr);
+      setShortcuts(previousShortcuts);
+      setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+    } finally {
+      if (mountedRef.current) {
+        setIsUpdatingShortcut(false);
+      }
+    }
   };
 
   // 阻止点击设置窗口时事件传播到背景
@@ -3515,19 +3537,25 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleDeleteModel = (modelId: string) => {
-    if (!providers[activeProvider].models) return;
+    if (!providers[activeProvider]?.models) return;
 
     const updatedModels = providers[activeProvider].models.filter(
-      model => model.id !== modelId
+      model => model.id !== modelId,
     );
 
-    setProviders(prev => ({
-      ...prev,
-      [activeProvider]: {
-        ...prev[activeProvider],
-        models: updatedModels
-      }
-    }));
+    const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+      savedProvidersRef.current,
+      providersRef.current,
+      activeProvider,
+      (cfg) => ({ ...cfg, models: updatedModels }),
+    );
+    setProviders(nextCurrent);
+    if (nextSaved) {
+      void persistProvidersSnapshot(nextSaved, activeProvider).catch((saveErr) => {
+        console.error('[Settings] failed to persist model deletion:', saveErr);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      });
+    }
   };
 
   const handleSaveNewModel = () => {
@@ -3676,13 +3704,19 @@ const Settings: React.FC<SettingsProps> = ({
       ? currentModels.map(model => (model.id === editingModelId ? nextModel : model))
       : [...currentModels, nextModel];
 
-    setProviders(prev => ({
-      ...prev,
-      [activeProvider]: {
-        ...prev[activeProvider],
-        models: updatedModels
-      }
-    }));
+    const { nextSaved, nextCurrent } = applyImmediateProviderMutation(
+      savedProvidersRef.current,
+      providersRef.current,
+      activeProvider,
+      (cfg) => ({ ...cfg, models: updatedModels }),
+    );
+    setProviders(nextCurrent);
+    if (nextSaved) {
+      void persistProvidersSnapshot(nextSaved, activeProvider).catch((saveErr) => {
+        console.error('[Settings] failed to persist model edit:', saveErr);
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      });
+    }
 
     setIsAddingModel(false);
     setIsEditingModel(false);
@@ -3732,8 +3766,11 @@ const Settings: React.FC<SettingsProps> = ({
       isBlocked: dataMigration.isBusy
         || isRepairingOpenClaw
         || isCleaningTempStorage
+        || isSavingPendingGuard
         || isShortcutInputActive(),
       layers: [
+        { isOpen: pendingGuardedAction !== null, dismiss: handleCancelPendingGuard },
+        { isOpen: showResetShortcutsConfirm, dismiss: () => setShowResetShortcutsConfirm(false) },
         { isOpen: pendingDeleteProvider !== null, dismiss: () => setPendingDeleteProvider(null) },
         { isOpen: modelDiscovery.dialog !== null, dismiss: modelDiscovery.closeDialog },
         { isOpen: isAddingModel || isEditingModel, dismiss: handleCancelModelEdit },
@@ -3745,11 +3782,15 @@ const Settings: React.FC<SettingsProps> = ({
           dismiss: () => dataMigration.dismissTopModal(),
         },
       ],
+      hasUnsavedChanges: Boolean(dirtyGuardRef.current?.isDirty),
     });
 
     switch (resolution.action) {
       case SettingsEscapeAction.DismissLayer:
         resolution.dismiss();
+        return;
+      case SettingsEscapeAction.PromptUnsaved:
+        requestGuardedAction(onClose);
         return;
       case SettingsEscapeAction.ClosePanel:
         guardedClose();
@@ -3786,6 +3827,8 @@ const Settings: React.FC<SettingsProps> = ({
   const handleTestConnection = async () => {
     const testingProvider = activeProvider;
     const providerConfig = providers[testingProvider];
+    // An edit replaces the immutable draft, so an earlier response cannot certify it.
+    const isCurrentProbe = () => mountedRef.current && visibleProviderConfigRef.current === providerConfig;
     const testingApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
     setIsTesting(true);
     setIsTestResultModalOpen(false);
@@ -3836,6 +3879,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (testingProvider === ProviderName.Copilot) {
         const result = await window.electron.githubCopilot.refreshToken();
+        if (!isCurrentProbe()) return;
         if (!result.success || !result.token) {
           reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
             failureReason: 'unknown',
@@ -3940,30 +3984,49 @@ const Settings: React.FC<SettingsProps> = ({
         });
       }
 
-      if (response.ok) {
-        enableProvider(testingProvider);
-        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
-        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
-      } else {
+      if (!response.ok) {
         const data = response.data || {};
-        // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
-        if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
-          enableProvider(testingProvider);
-          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
-          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+        if (!(typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached'))) {
+          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
+            failureReason: 'http_error',
+            statusCode: response.status,
+          });
+          if (isCurrentProbe()) showTestResultModal({ success: false, message: errorMessage }, testingProvider);
           return;
         }
-        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
-          failureReason: 'http_error',
-          statusCode: response.status,
-        });
-        showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
+      const autoSave = isCurrentProbe() && (!providerConfig.enabled
+        || isProviderConnectionDirty(savedProvidersRef.current[testingProvider], providerConfig, testingProvider));
+      const normalized = autoSave
+        ? await persistProvidersSnapshot({
+          ...savedProvidersRef.current,
+          [testingProvider]: { ...providerConfig, enabled: true },
+        }, testingProvider)
+        : null;
+      reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
+      if (!isCurrentProbe()) return;
+      if (normalized) {
+        setProviders(prev => prev[testingProvider] === providerConfig
+          ? { ...prev, [testingProvider]: normalized[testingProvider] }
+          : prev);
+        setConnectionSaveError(null);
+        setConnectionFormStatus(SettingsFormStatus.Saved);
+        clearConnectionSavedTimer();
+        connectionSavedTimerRef.current = window.setTimeout(() => {
+          if (mountedRef.current) setConnectionFormStatus(SettingsFormStatus.Idle);
+          connectionSavedTimerRef.current = null;
+        }, SETTINGS_FORM_SAVED_RESET_MS);
+      }
+      showTestResultModal({
+        success: true,
+        message: i18nService.t(autoSave ? 'connectionSuccessAndSaved' : 'connectionSuccess'),
+      }, testingProvider);
     } catch (err) {
       reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
         failureReason: 'network_error',
       });
+      if (!isCurrentProbe()) return;
       showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),
@@ -4027,13 +4090,78 @@ const Settings: React.FC<SettingsProps> = ({
     return () => document.removeEventListener('keydown', handleSettingsTabShortcut);
   }, [shortcuts, sidebarTabs, handleTabChange]);
 
+  const persistFontSizes = useCallback(async (nextUiFontSize: number, nextCodeFontSize: number) => {
+    const previousConfig = configService.getConfig();
+    const previousUiFontSize = normalizeFontPreference(
+      previousConfig.uiFontSize,
+      FontPreferences.UiFontSizeDefault,
+      FontPreferences.UiFontSizeMin,
+      FontPreferences.UiFontSizeMax,
+    );
+    const previousCodeFontSize = normalizeFontPreference(
+      previousConfig.codeFontSize,
+      FontPreferences.CodeFontSizeDefault,
+      FontPreferences.CodeFontSizeMin,
+      FontPreferences.CodeFontSizeMax,
+    );
+    if (previousUiFontSize === nextUiFontSize && previousCodeFontSize === nextCodeFontSize) {
+      return;
+    }
+    try {
+      await configService.updateConfig({
+        uiFontSize: nextUiFontSize,
+        codeFontSize: nextCodeFontSize,
+      });
+      if (usageAnalyticsEnabled) {
+        if (previousUiFontSize !== nextUiFontSize) {
+          reportAppearanceSettingChanged('uiFontSize', nextUiFontSize, previousUiFontSize);
+        }
+        if (previousCodeFontSize !== nextCodeFontSize) {
+          reportAppearanceSettingChanged('codeFontSize', nextCodeFontSize, previousCodeFontSize);
+        }
+      }
+    } catch (saveErr) {
+      console.error('[Settings] failed to save font preferences:', saveErr);
+      if (mountedRef.current) {
+        setError(saveErr instanceof Error ? saveErr.message : i18nService.t('failedToSaveSettings'));
+      }
+    }
+  }, [usageAnalyticsEnabled]);
+
+  const scheduleFontSizePersist = useCallback((nextUiFontSize: number, nextCodeFontSize: number) => {
+    pendingFontSizesRef.current = { uiFontSize: nextUiFontSize, codeFontSize: nextCodeFontSize };
+    if (fontSizeSaveTimerRef.current !== null) {
+      window.clearTimeout(fontSizeSaveTimerRef.current);
+    }
+    fontSizeSaveTimerRef.current = window.setTimeout(() => {
+      fontSizeSaveTimerRef.current = null;
+      const pending = pendingFontSizesRef.current;
+      pendingFontSizesRef.current = null;
+      if (pending) {
+        void persistFontSizes(pending.uiFontSize, pending.codeFontSize);
+      }
+    }, 300);
+  }, [persistFontSizes]);
+
+  const flushPendingFontSizes = useCallback((override?: { uiFontSize?: number; codeFontSize?: number }) => {
+    if (fontSizeSaveTimerRef.current !== null) {
+      window.clearTimeout(fontSizeSaveTimerRef.current);
+      fontSizeSaveTimerRef.current = null;
+    }
+    const nextUi = override?.uiFontSize ?? pendingFontSizesRef.current?.uiFontSize ?? uiFontSize;
+    const nextCode = override?.codeFontSize ?? pendingFontSizesRef.current?.codeFontSize ?? codeFontSize;
+    pendingFontSizesRef.current = null;
+    void persistFontSizes(nextUi, nextCode);
+  }, [codeFontSize, persistFontSizes, uiFontSize]);
+
   const handleUiFontSizeChange = useCallback((nextValue: number) => {
     setUiFontSize(nextValue);
     applyTypographyPreferences({
       uiFontSize: nextValue,
       codeFontSize,
     });
-  }, [codeFontSize]);
+    scheduleFontSizePersist(nextValue, codeFontSize);
+  }, [codeFontSize, scheduleFontSizePersist]);
 
   const handleCodeFontSizeChange = useCallback((nextValue: number) => {
     setCodeFontSize(nextValue);
@@ -4041,33 +4169,54 @@ const Settings: React.FC<SettingsProps> = ({
       uiFontSize,
       codeFontSize: nextValue,
     });
-  }, [uiFontSize]);
+    scheduleFontSizePersist(uiFontSize, nextValue);
+  }, [scheduleFontSizePersist, uiFontSize]);
 
   const handleThemeModeSelection = useCallback(async (
     mode: 'light' | 'dark' | 'system',
   ) => {
+    const previousTheme = theme;
+    const previousThemeId = themeId;
     setError(null);
     try {
       const selection = await selectThemeMode(mode);
       setTheme(selection.mode);
       setThemeId(selection.themeId);
+      if (usageAnalyticsEnabled) {
+        if (previousTheme !== selection.mode) {
+          reportAppearanceSettingChanged('theme', selection.mode, previousTheme);
+        }
+        if (previousThemeId !== selection.themeId) {
+          reportAppearanceSettingChanged('themeId', selection.themeId, previousThemeId);
+        }
+      }
     } catch (selectionError) {
       console.error('[Settings] Failed to select the default theme mode', selectionError);
       setError(i18nService.t('themeApplyFailed'));
     }
-  }, [selectThemeMode]);
+  }, [selectThemeMode, theme, themeId, usageAnalyticsEnabled]);
 
   const handleThemeIdSelection = useCallback(async (nextThemeId: string) => {
+    const previousTheme = theme;
+    const previousThemeId = themeId;
     setError(null);
     try {
       const selection = await selectThemeById(nextThemeId);
       setTheme(selection.mode);
       setThemeId(selection.themeId);
+      if (usageAnalyticsEnabled) {
+        if (previousTheme !== selection.mode) {
+          reportAppearanceSettingChanged('theme', selection.mode, previousTheme);
+        }
+        if (previousThemeId !== selection.themeId) {
+          reportAppearanceSettingChanged('themeId', selection.themeId, previousThemeId);
+        }
+      }
     } catch (selectionError) {
       console.error('[Settings] Failed to select the default color theme', selectionError);
       setError(i18nService.t('themeApplyFailed'));
     }
-  }, [selectThemeById]);
+  }, [selectThemeById, theme, themeId, usageAnalyticsEnabled]);
 
   const renderAppearanceSettings = () => (
     <div className="space-y-8">
@@ -4224,26 +4373,37 @@ const Settings: React.FC<SettingsProps> = ({
 
         <div className="mt-5 divide-y divide-border rounded-xl border border-border bg-surface">
           <div className="px-4 py-3">
-            <SettingsNumberInputRow
+            <FontSizeSettingRow
               id="ui-font-size"
               title={i18nService.t('uiFontSize')}
               description={i18nService.t('uiFontSizeDescription')}
               value={uiFontSize}
+              defaultValue={FontPreferences.UiFontSizeDefault}
               min={FontPreferences.UiFontSizeMin}
               max={FontPreferences.UiFontSizeMax}
               onChange={handleUiFontSizeChange}
+              onCommit={(val) => flushPendingFontSizes({ uiFontSize: val })}
             />
           </div>
           <div className="px-4 py-3">
-            <SettingsNumberInputRow
+            <FontSizeSettingRow
               id="code-font-size"
               title={i18nService.t('codeFontSize')}
               description={i18nService.t('codeFontSizeDescription')}
               value={codeFontSize}
+              defaultValue={FontPreferences.CodeFontSizeDefault}
               min={FontPreferences.CodeFontSizeMin}
               max={FontPreferences.CodeFontSizeMax}
               onChange={handleCodeFontSizeChange}
+              onCommit={(val) => flushPendingFontSizes({ codeFontSize: val })}
             />
+          </div>
+          <div className="px-4 py-2.5">
+            <p className={`${SETTINGS_META_TEXT} text-secondary/80`}>
+              {i18nService
+                .t('fontSizeWindowZoomHint')
+                .replace(/\{mod\}/g, window.electron?.platform === 'darwin' ? '⌘' : 'Ctrl')}
+            </p>
           </div>
         </div>
       </div>
@@ -4326,7 +4486,7 @@ const Settings: React.FC<SettingsProps> = ({
       case SettingsTabId.Experimental:
         return (
           <div className="space-y-8">
-            <DecisionModelExperimentalSettings draftRef={decisionModelDraftRef} />
+            <DecisionModelExperimentalSettings onRegisterDirtyGuard={registerDirtyGuard} />
           </div>
         );
       case SettingsTabId.General:
@@ -4334,20 +4494,19 @@ const Settings: React.FC<SettingsProps> = ({
           <GeneralSettingsSection
             language={language}
             onLanguageChange={(nextLanguage) => {
-              setLanguage(nextLanguage);
-              i18nService.setLanguage(nextLanguage, { persist: false });
+              void handleLanguageChange(nextLanguage);
             }}
             artifactAutoPreviewEnabled={artifactAutoPreviewEnabled}
             onToggleArtifactAutoPreview={() => {
-              setArtifactAutoPreviewEnabled((previous) => !previous);
+              void handleToggleArtifactAutoPreview();
             }}
             taskCompletionNotificationMode={taskCompletionNotificationMode}
-            onTaskCompletionNotificationModeChange={setTaskCompletionNotificationMode}
+            onTaskCompletionNotificationModeChange={(nextMode) => {
+              void handleTaskCompletionNotificationModeChange(nextMode);
+            }}
             attentionNotificationsEnabled={permissionNotificationsEnabled || questionNotificationsEnabled}
             onToggleAttentionNotifications={() => {
-              const nextEnabled = !(permissionNotificationsEnabled || questionNotificationsEnabled);
-              setPermissionNotificationsEnabled(nextEnabled);
-              setQuestionNotificationsEnabled(nextEnabled);
+              void handleToggleAttentionNotifications();
             }}
             autoLaunch={autoLaunch}
             isUpdatingAutoLaunch={isUpdatingAutoLaunch}
@@ -4359,9 +4518,8 @@ const Settings: React.FC<SettingsProps> = ({
             isUpdatingQuitConfirmation={isUpdatingQuitConfirmation}
             onToggleQuitConfirmation={handleToggleQuitConfirmation}
             useSystemProxy={useSystemProxy}
-            onToggleUseSystemProxy={() => {
-              setUseSystemProxy((prev) => !prev);
-            }}
+            isUpdatingUseSystemProxy={isUpdatingUseSystemProxy}
+            onToggleUseSystemProxy={handleToggleUseSystemProxy}
           />
         );
 
@@ -4402,7 +4560,7 @@ const Settings: React.FC<SettingsProps> = ({
             }}
             usageAnalyticsEnabled={usageAnalyticsEnabled}
             onToggleUsageAnalytics={() => {
-              setUsageAnalyticsEnabled((prev) => !prev);
+              void handleToggleUsageAnalytics();
             }}
           />
         );
@@ -4414,7 +4572,7 @@ const Settings: React.FC<SettingsProps> = ({
         return <DesktopCompanionSettings />;
 
       case SettingsTabId.Email:
-        return <EmailSkillConfig />;
+        return <EmailSkillConfig onRegisterDirtyGuard={registerDirtyGuard} />;
 
       case 'coworkAgentEngine':
         return (
@@ -4515,7 +4673,11 @@ const Settings: React.FC<SettingsProps> = ({
                             checked={openClawHeartbeatEnabled}
                             label={i18nService.t('openClawHeartbeatEnabled')}
                             onClick={() => {
-                              setOpenClawHeartbeatEnabled((prev) => !prev);
+                              void handleToggleOpenClawBackgroundOption(
+                                'openClawHeartbeatEnabled',
+                                openClawHeartbeatEnabled,
+                                setOpenClawHeartbeatEnabled,
+                              );
                             }}
                           />
                         </div>
@@ -4546,7 +4708,11 @@ const Settings: React.FC<SettingsProps> = ({
                             checked={openClawSkillReviewEnabled}
                             label={i18nService.t('openClawSkillReviewEnabled')}
                             onClick={() => {
-                              setOpenClawSkillReviewEnabled((prev) => !prev);
+                              void handleToggleOpenClawBackgroundOption(
+                                'openClawSkillReviewEnabled',
+                                openClawSkillReviewEnabled,
+                                setOpenClawSkillReviewEnabled,
+                              );
                             }}
                           />
                         </div>
@@ -4577,7 +4743,11 @@ const Settings: React.FC<SettingsProps> = ({
                             checked={openClawMemoryFlushEnabled}
                             label={i18nService.t('openClawMemoryFlushEnabled')}
                             onClick={() => {
-                              setOpenClawMemoryFlushEnabled((prev) => !prev);
+                              void handleToggleOpenClawBackgroundOption(
+                                'openClawMemoryFlushEnabled',
+                                openClawMemoryFlushEnabled,
+                                setOpenClawMemoryFlushEnabled,
+                              );
                             }}
                           />
                         </div>
@@ -4762,7 +4932,8 @@ const Settings: React.FC<SettingsProps> = ({
         return (
           <BrowserWebAccessSettings
             value={browserWebAccess}
-            onChange={setBrowserWebAccess}
+            onCommit={handleCommitBrowserWebAccess}
+            onRegisterDirtyGuard={registerDirtyGuard}
           />
         );
 
@@ -4829,6 +5000,11 @@ const Settings: React.FC<SettingsProps> = ({
             handleAddModel={() => handleAddModel()}
             handleEditModel={handleEditModel}
             handleDeleteModel={handleDeleteModel}
+            connectionFormStatus={resolvedConnectionFormStatus}
+            isConnectionDirty={isActiveProviderConnectionDirty}
+            connectionSaveError={connectionSaveError}
+            onSaveConnection={handleSaveProviderConnection}
+            onDiscardConnection={handleDiscardProviderConnection}
           />
         );
 
@@ -4883,22 +5059,22 @@ const Settings: React.FC<SettingsProps> = ({
                           {command.inputType === 'send' ? (
                             <SendShortcutSelect
                               value={value}
-                              onChange={(nextValue) => handleShortcutChange(command.key, nextValue)}
+                              onChange={(nextValue) => { void handleShortcutChange(command.key, nextValue); }}
                             />
                           ) : (
                             <ShortcutRecorder
                               value={value}
                               label={commandLabel}
                               global={isQuickPanel}
-                              disabled={isSaving || (isQuickPanel && !companionState)}
-                              onChange={(nextValue) => handleShortcutChange(command.key, nextValue)}
+                              disabled={isUpdatingShortcut || (isQuickPanel && !companionState)}
+                              onChange={(nextValue) => { void handleShortcutChange(command.key, nextValue); }}
                             />
                           )}
                           {value ? (
                             <button
                               type="button"
-                              onClick={() => handleShortcutChange(command.key, '')}
-                              disabled={isSaving || (isQuickPanel && !companionState)}
+                              onClick={() => { void handleShortcutChange(command.key, ''); }}
+                              disabled={isUpdatingShortcut || (isQuickPanel && !companionState)}
                               title={i18nService.t('shortcutClear')}
                               aria-label={i18nService.t('shortcutClear')}
                               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
@@ -4932,7 +5108,12 @@ const Settings: React.FC<SettingsProps> = ({
         );
 
       case 'im':
-        return <IMSettings />;
+        return (
+          <IMSettings
+            onRegisterDirtyGuard={registerDirtyGuard}
+            requestNavigation={requestGuardedAction}
+          />
+        );
 
       case 'plugins':
         return <DshPluginEcosystemView />;
@@ -5006,7 +5187,7 @@ const Settings: React.FC<SettingsProps> = ({
                     type="button"
                     role="switch"
                     aria-checked={testMode}
-                    onClick={() => setTestMode((prev) => !prev)}
+                    onClick={() => { void handleToggleTestMode(); }}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
                       testMode ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
@@ -5050,7 +5231,11 @@ const Settings: React.FC<SettingsProps> = ({
                 </button>
               </div>
 
-              <p className="mt-5 text-center text-xs text-secondary">
+              {showOpenSourceEntries && (
+                <AboutEngineAcknowledgement onAction={reportAboutOpenSourceAction} />
+              )}
+
+              <p className={`${showOpenSourceEntries ? 'mt-4' : 'mt-5'} text-center text-xs text-secondary`}>
                 {i18nService.t('copyrightHolder')}
               </p>
               <p className="mt-1 text-center text-xs text-secondary">
@@ -5150,50 +5335,64 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
             {/* Tab content */}
             <div
               ref={contentRef}
               className={`px-6 flex-1 min-h-0 ${
                 activeTab === SettingsTabId.CoworkMemory
                   ? 'pt-2 pb-5 overflow-hidden'
-                  : 'py-4 overflow-y-auto'
+                  : 'py-4 pb-6 overflow-y-auto'
               }`}
               style={{ scrollbarGutter: 'stable' }}
             >
               {renderTabContent()}
             </div>
-
-            {/* Footer buttons */}
-            {activeTab !== SettingsTabId.CoworkMemory && activeTab !== SettingsTabId.Email && (
-              <div className="relative shrink-0">
-                <div
-                  aria-hidden="true"
-                  className={`pointer-events-none absolute inset-x-0 bottom-full h-10 bg-gradient-to-t from-background to-transparent transition-opacity duration-200 ${
-                    footerFadeVisible ? 'opacity-100' : 'opacity-0'
-                  }`}
-                />
-                <div className="flex justify-end space-x-4 px-6 pb-5 pt-3 bg-background">
-                  <button
-                    type="button"
-                    onClick={guardedClose}
-                    className={`px-4 py-2 rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium border border-border text-foreground hover:bg-surface-raised active:scale-[0.98]`}
-                  >
-                    {i18nService.t('cancel')}
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSaving || isAppearanceChanging}
-                    className={`px-4 py-2 bg-action hover:bg-action-hover text-action-foreground rounded-xl transition-colors ${SETTINGS_ITEM_TITLE_TEXT} font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]`}
-                  >
-                    {isSaving ? i18nService.t('saving') : i18nService.t('save')}
-                  </button>
-                </div>
-              </div>
-            )}
-          </form>
+          </div>
 
         </div>
+
+        <UnsavedChangesConfirmDialog
+          isOpen={pendingGuardedAction !== null}
+          canSave={Boolean(dirtyGuardRef.current?.canSave)}
+          isSaving={isSavingPendingGuard}
+          errorMessage={pendingGuardError}
+          onContinueEditing={handleCancelPendingGuard}
+          onDiscard={handleDiscardPendingGuard}
+          onSaveAndContinue={dirtyGuardRef.current?.save ? handleSavePendingGuard : undefined}
+        />
+
+        {showResetShortcutsConfirm && (
+          <Modal
+            onClose={() => setShowResetShortcutsConfirm(false)}
+            onEscape={() => setShowResetShortcutsConfirm(false)}
+            overlayClassName="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 px-4"
+            className="w-full max-w-[400px] rounded-2xl border border-border bg-background p-5 shadow-modal"
+          >
+            <h3 className="text-base font-semibold text-foreground">
+              {i18nService.t('shortcutResetConfirmTitle')}
+            </h3>
+            <p className={`mt-2 ${SETTINGS_DESCRIPTION_TEXT} text-secondary`}>
+              {i18nService.t('shortcutResetConfirmDesc')}
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowResetShortcutsConfirm(false)}
+                className={SETTINGS_ACTION_BUTTON_CLASS}
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void confirmResetShortcuts(); }}
+                className={SETTINGS_PRIMARY_BUTTON_CLASS}
+              >
+                {i18nService.t('shortcutResetAll')}
+              </button>
+            </div>
+          </Modal>
+        )}
 
         {providerTransfer.dialog && (
           <ProviderTransferDialog

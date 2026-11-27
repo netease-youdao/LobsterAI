@@ -297,13 +297,13 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
 
   return (
     <div className="group/agent-section space-y-0.5">
-      <div className={`group/agent-header sticky top-9 ${isMenuOpen ? 'z-50' : 'z-20'} -mx-2.5 h-[34px] bg-[var(--lobster-sidebar-bg)] px-2.5`}>
-        <div className="relative flex h-full items-center gap-1 rounded-[10px] pr-14 transition-colors group-hover/agent-header:bg-[var(--lobster-sidebar-item-hover)]">
+      <div className={`group/agent-header sticky top-9 ${isMenuOpen ? 'z-50' : 'z-20'} -mx-2.5 flex min-h-[34px] bg-[var(--lobster-sidebar-bg)] px-2.5`}>
+        <div className="relative flex flex-1 min-w-0 items-center gap-1 rounded-[10px] pr-14 transition-colors group-hover/agent-header:bg-[var(--lobster-sidebar-item-hover)]">
           <button
             type="button"
             ref={rowButton}
             onClick={handleAgentClick}
-            className={`flex h-full min-w-0 items-center gap-2.5 rounded-[10px] pl-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors ${
+            className={`flex min-h-[34px] py-1 min-w-0 items-center gap-2.5 rounded-[10px] pl-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-colors ${
               isHighlighted
                 ? 'font-medium text-foreground'
                 : 'font-normal text-foreground/90 group-hover/agent-header:text-foreground'
@@ -480,20 +480,20 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="flex h-[32px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="flex min-h-[32px] py-1 w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>
               )}
 
               {agent.isLoadingTasks && !hasVisibleTasks && (
-                <div className="flex h-[32px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
+                <div className="flex min-h-[32px] py-1 w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
                   {i18nService.t('loading')}
                 </div>
               )}
 
               {!agent.isLoadingTasks && !agent.hasLoadError && !hasVisibleTasks && (
-                <div className="flex h-[32px] w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
+                <div className="flex min-h-[32px] py-1 w-full items-center pl-[38px] pr-2.5 text-[length:var(--lobster-text-sidebarTask)] text-secondary">
                   {i18nService.t('myAgentSidebarNoTasks')}
                 </div>
               )}
@@ -527,7 +527,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                 <button
                   type="button"
                   onClick={() => onRetryLoadTasks(agent.id)}
-                  className="flex h-[32px] w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
+                  className="flex min-h-[32px] py-1 w-full items-center rounded-[9px] pl-[38px] pr-2.5 text-left text-[length:var(--lobster-text-sidebarTask)] text-red-500 transition-colors hover:bg-red-500/10"
                 >
                   {i18nService.t('myAgentSidebarLoadFailed')}
                 </button>

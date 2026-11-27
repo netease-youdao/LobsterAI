@@ -57,6 +57,42 @@ const setPxVariable = (
   root.style.setProperty(name, `${Math.round(value)}px`);
 };
 
+export const parseFontSizeDraft = (
+  raw: string,
+  min: number,
+  max: number,
+): number | null => {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Math.round(Number.parseFloat(trimmed));
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return null;
+  }
+  return parsed;
+};
+
+export const commitFontSizeDraft = (
+  raw: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const trimmed = raw.trim();
+  if (!/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    return normalizeFontPreference(fallback, fallback, min, max);
+  }
+  return normalizeFontPreference(trimmed, fallback, min, max);
+};
+
+export const stepFontSize = (
+  current: number,
+  delta: number,
+  min: number,
+  max: number,
+): number => normalizeFontPreference(current + delta, current, min, max);
+
 export const resolveTypographyPreferences = (config: TypographyConfig) => ({
   uiFontSize: normalizeFontPreference(
     config.uiFontSize,

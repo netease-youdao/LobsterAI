@@ -21,6 +21,7 @@ import {
   skillService,
 } from '../../services/skill';
 import Modal from '../common/Modal';
+import type { RegisterSettingsDirtyGuard } from '../settings/settingsDirtyGuard';
 import {
   SETTINGS_ACTION_BUTTON_CLASS,
   SETTINGS_ICON_BUTTON_CLASS,
@@ -81,6 +82,11 @@ interface EditingAccountState {
   draft: EmailSkillAccountConfig;
   makeDefault: boolean;
   previousEmail?: string;
+  initialSnapshot: string;
+}
+
+interface EmailSkillConfigProps {
+  onRegisterDirtyGuard?: RegisterSettingsDirtyGuard;
 }
 
 const getAccountDisplayName = (account: EmailSkillAccountConfig): string => {
@@ -141,7 +147,7 @@ const buildEmailSkillAnalyticsParams = (
   mailboxCustomized: Boolean(account?.mailbox && account.mailbox !== 'INBOX'),
 });
 
-const EmailSkillConfig: React.FC = () => {
+const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onRegisterDirtyGuard }) => {
   const [config, setConfig] = useState<EmailSkillAccountsConfig>({
     version: 1,
     defaultAccountId: '',
@@ -253,30 +259,36 @@ const EmailSkillConfig: React.FC = () => {
   const openCreateForm = () => {
     const id = nextEmailAccountId(config.accounts);
     const hasEnabledAccount = config.accounts.some(account => account.enabled);
+    const draft = createDraftEmailAccount(id);
+    const makeDefault = !hasEnabledAccount;
     resetFormTransientState();
     setShowAdvanced(false);
     setEditing({
       mode: EditMode.Create,
-      draft: createDraftEmailAccount(id),
-      makeDefault: !hasEnabledAccount,
+      draft,
+      makeDefault,
+      initialSnapshot: JSON.stringify({ draft, makeDefault }),
     });
   };
 
   const openEditForm = (account: EmailSkillAccountConfig) => {
+    const draft = { ...account };
+    const makeDefault = account.id === config.defaultAccountId;
     resetFormTransientState();
     setShowAdvanced(account.provider === EmailProviderId.Custom);
     setEditing({
       mode: EditMode.Edit,
-      draft: { ...account },
-      makeDefault: account.id === config.defaultAccountId,
+      draft,
+      makeDefault,
       previousEmail: account.email,
+      initialSnapshot: JSON.stringify({ draft, makeDefault }),
     });
   };
 
-  const closeForm = () => {
+  const closeForm = useCallback(() => {
     setEditing(null);
     resetFormTransientState();
-  };
+  }, []);
 
   const updateDraft = useCallback((patch: Partial<EmailSkillAccountConfig>) => {
     setEditing(prev => (prev ? { ...prev, draft: { ...prev.draft, ...patch } } : prev));
@@ -345,9 +357,9 @@ const EmailSkillConfig: React.FC = () => {
       : prev));
   };
 
-  const handleSaveForm = async () => {
-    if (!editing || saving) return;
-    if (!isEmailAccountConfigured(editing.draft)) return;
+  const handleSaveForm = useCallback(async (): Promise<boolean> => {
+    if (!editing || saving) return false;
+    if (!isEmailAccountConfigured(editing.draft)) return false;
 
     const preset = getEmailProviderPreset(editing.draft.provider);
     const fallbackName = preset && preset.id !== EmailProviderId.Custom
@@ -368,12 +380,34 @@ const EmailSkillConfig: React.FC = () => {
 
     setSaving(true);
     const success = await persistConfig(nextConfig, changedKeys, savedAccount.id);
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current) return success;
     setSaving(false);
     if (success) {
       closeForm();
     }
-  };
+    return success;
+  }, [closeForm, config, editing, persistConfig, saving]);
+
+  const isEditingDirty = editing !== null
+    && JSON.stringify({ draft: editing.draft, makeDefault: editing.makeDefault }) !== editing.initialSnapshot;
+  const canSaveEditingForm = editing !== null && isEmailAccountConfigured(editing.draft);
+
+  useEffect(() => {
+    if (!onRegisterDirtyGuard) return;
+    if (isEditingDirty) {
+      onRegisterDirtyGuard({
+        isDirty: true,
+        canSave: canSaveEditingForm,
+        save: handleSaveForm,
+        discard: closeForm,
+      });
+    } else {
+      onRegisterDirtyGuard(null);
+    }
+    return () => {
+      onRegisterDirtyGuard(null);
+    };
+  }, [canSaveEditingForm, closeForm, handleSaveForm, isEditingDirty, onRegisterDirtyGuard]);
 
   const handleToggleAccountInList = async (accountId: string) => {
     const nextConfig = toggleEmailAccountEnabled(config, accountId);

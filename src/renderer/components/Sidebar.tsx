@@ -110,7 +110,7 @@ const SidebarNewFeatureBadge = {
   ExpertsVersion: '2026-10-12',
 } as const;
 const sidebarNavItemBaseClassName =
-  'group w-full inline-flex h-[34px] items-center gap-2.5 rounded-[10px] px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35';
+  'group w-full inline-flex min-h-[34px] py-1 items-center gap-2.5 rounded-[10px] px-2.5 text-left text-[length:var(--lobster-text-sidebarCompact)] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35';
 const sidebarNavItemClassName =
   `${sidebarNavItemBaseClassName} font-normal text-foreground/90 hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground`;
 const activeSidebarNavItemClassName =

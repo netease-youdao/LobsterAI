@@ -78,7 +78,7 @@ import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/
 import { SkinToolName } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { t } from '../../i18n';
-import { getCommandDangerLevel } from '../commandSafety';
+import { analyzeCommandDanger } from '../commandSafety';
 import type { CoworkMessageEditStore } from '../coworkMessageEditStore';
 import type { CoworkMessageVersionStore } from '../coworkMessageVersionStore';
 import {
@@ -2295,8 +2295,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       ? rawArgs.sandbox_permissions.trim()
       : '';
 
-    const danger = command ? getCommandDangerLevel(command) : { level: 'safe' as const, reason: '' };
-    let dangerReason = danger.reason;
+    const danger = command
+      ? analyzeCommandDanger(command)
+      : {
+          level: 'safe' as const,
+          reason: '' as const,
+          matchedSnippet: '',
+          matchedLineNumber: 0,
+          isEmbeddedInScript: false,
+        };
+    let dangerReason: string = danger.reason;
     if (!dangerReason && rawReason) {
       const parsedReason = /requires confirmation \(([^)]+)\)/i.exec(rawReason);
       if (parsedReason?.[1]) {
@@ -2325,6 +2333,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       ...(rawReason ? { reason: rawReason } : {}),
       dangerLevel,
       ...(dangerReason ? { dangerReason } : {}),
+      ...(danger.matchedSnippet ? { dangerSnippet: danger.matchedSnippet } : {}),
+      ...(danger.matchedLineNumber > 0 ? { dangerLineNumber: danger.matchedLineNumber } : {}),
+      ...(danger.isEmbeddedInScript ? { isEmbeddedInScript: true } : {}),
       approvalScopeKey,
       permissionPreset,
     };

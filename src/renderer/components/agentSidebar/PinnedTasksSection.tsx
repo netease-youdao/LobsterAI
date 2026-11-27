@@ -356,7 +356,7 @@ const PinnedTasksSection: React.FC<PinnedTasksSectionProps> = ({
             <button
               type="button"
               onClick={() => setIsExpandedAll((previous) => !previous)}
-              className="flex h-[28px] w-full items-center rounded-[9px] pl-2.5 pr-2 text-left text-[length:var(--lobster-text-sidebarMeta)] text-secondary/80 transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground"
+              className="flex min-h-[28px] py-1 w-full items-center rounded-[9px] pl-2.5 pr-2 text-left text-[length:var(--lobster-text-sidebarMeta)] text-secondary/80 transition-colors hover:bg-[var(--lobster-sidebar-item-hover)] hover:text-foreground"
             >
               {isExpandedAll
                 ? i18nService.t('myAgentSidebarCollapse')

@@ -1380,4 +1380,26 @@ describe('configService builtin default model refresh', () => {
     }
     expect(savedConfig.model).toEqual(storedConfig.model);
   });
+
+  test('serializes concurrent updateConfig calls so rapid immediate saves do not overwrite each other', async () => {
+    const storedConfig: AppConfig = {
+      ...defaultConfig,
+      language: 'zh',
+      useSystemProxy: false,
+      artifactAutoPreviewEnabled: false,
+    };
+    const { configService, storeData } = await loadConfigServiceWithStoredConfig(storedConfig);
+    await configService.init();
+
+    await Promise.all([
+      configService.updateConfig({ language: 'en' }),
+      configService.updateConfig({ useSystemProxy: true }),
+      configService.updateConfig({ artifactAutoPreviewEnabled: true }),
+    ]);
+
+    const saved = storeData[CONFIG_KEYS.APP_CONFIG] as AppConfig;
+    expect(saved.language).toBe('en');
+    expect(saved.useSystemProxy).toBe(true);
+    expect(saved.artifactAutoPreviewEnabled).toBe(true);
+  });
 });

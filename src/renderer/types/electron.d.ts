@@ -2561,6 +2561,8 @@ interface IElectronAPI {
       status?: 'cancelled' | 'too-late' | 'not-running';
       error?: string;
     }>;
+    onPluginInstallState: (listener: (progress: DshHostPluginInstallProgress) => void) => () => void;
+    onPluginInstallLog: (listener: (chunk: DshHostPluginInstallLogChunk) => void) => () => void;
     removePlugin: (packageName: string) => Promise<DshHostPluginMutationResult>;
     setPluginEnabled: (packageName: string, enabled: boolean) => Promise<DshHostPluginMutationResult>;
     checkPluginVersions: (
@@ -2672,6 +2674,7 @@ interface DshHostPluginMutationResult {
   application?: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
   restartRequired?: boolean;
   restartReason?: string;
+  stage?: 'install' | 'enable' | 'remove';
   changed?: boolean;
   enabled?: boolean;
   bundle?: string;
@@ -2681,12 +2684,37 @@ interface DshHostPluginMutationResult {
   failedAt?: 'registry' | 'spec-host';
   error?: string;
   pendingBuilds?: string[];
+  approvedBuilds?: string[];
+  registries?: Array<string | null>;
   incompatible?: DshHostPluginIncompatibleInfo[];
+  exitCode?: number | null;
   output?: string;
   logPath?: string;
   stdout?: string;
   stderr?: string;
   plugins?: Array<DshHostPluginEntry>;
+}
+
+interface DshHostPluginInstallAttempt {
+  registry: string | null;
+  index: number;
+  total: number;
+}
+
+interface DshHostPluginInstallProgress {
+  requestId: string;
+  phase: 'installing' | 'cancelling' | 'applying';
+  attempt?: DshHostPluginInstallAttempt;
+}
+
+interface DshHostPluginInstallLogChunk {
+  requestId?: string;
+  jobId: string;
+  argv: string[];
+  cwd: string;
+  stream: 'stdout' | 'stderr';
+  text: string;
+  exitCode?: number | null;
 }
 
 interface DshHostPluginRegistryAttempt {

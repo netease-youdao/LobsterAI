@@ -2,6 +2,8 @@ import { StarIcon } from '@heroicons/react/24/solid';
 import React from 'react';
 
 import {
+  DSH_ENGINE_NAME,
+  DSH_OPEN_SOURCE_REPO_URL,
   OPEN_SOURCE_FORK_URL,
   OPEN_SOURCE_LICENSE_URL,
   OPEN_SOURCE_REPO_URL,
@@ -14,6 +16,7 @@ import { SETTINGS_DESCRIPTION_TEXT, SETTINGS_ITEM_TITLE_TEXT } from './settingsT
 export const AboutOpenSourceAction = {
   OpenRepo: 'open_source_repo',
   OpenLicense: 'open_source_license',
+  OpenEngineRepo: 'open_source_engine_repo',
   StarPromptStar: 'star_prompt_star',
   StarPromptFork: 'star_prompt_fork',
 } as const;
@@ -107,3 +110,26 @@ export const AboutOpenSourceStarPrompt: React.FC<AboutOpenSourceProps> = ({ onAc
     </div>
   </div>
 );
+
+/** Footer acknowledgement for the bundled DeepSeek Harness engine. */
+export const AboutEngineAcknowledgement: React.FC<AboutOpenSourceProps> = ({ onAction }) => {
+  const [before, after = ''] = i18nService.t('aboutEngineAcknowledgement').split('{link}');
+
+  return (
+    <p className="mt-4 text-center text-xs text-secondary">
+      {before}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAction(AboutOpenSourceAction.OpenEngineRepo);
+          openExternalLink(DSH_OPEN_SOURCE_REPO_URL);
+        }}
+        className="inline bg-transparent border-none appearance-none p-0 text-inherit underline decoration-secondary/40 underline-offset-2 cursor-pointer hover:text-foreground hover:decoration-foreground/60 focus:outline-none focus-visible:underline transition-colors"
+      >
+        {DSH_ENGINE_NAME}
+      </button>
+      {after}
+    </p>
+  );
+};

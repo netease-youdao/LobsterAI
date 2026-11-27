@@ -12,6 +12,7 @@ import * as https from 'https';
 import {
   DSH_OPS_ROUTE_PATH,
   DshOpsAction,
+  type DshPluginInstallPhase,
   type DshPluginUpdateStep,
 } from '../../../shared/dshEngine/hostConstants';
 
@@ -492,6 +493,28 @@ export interface DshPluginUpdateBundleOptions {
 export interface DshPluginUpdateProgress {
   readonly requestId: string;
   readonly step: DshPluginUpdateStep;
+}
+
+export interface DshPluginInstallAttempt {
+  readonly registry: string | null;
+  readonly index: number;
+  readonly total: number;
+}
+
+export interface DshPluginInstallProgress {
+  readonly requestId: string;
+  readonly phase: DshPluginInstallPhase;
+  readonly attempt?: DshPluginInstallAttempt;
+}
+
+export interface DshPluginInstallLogChunk {
+  readonly requestId?: string;
+  readonly jobId: string;
+  readonly argv: readonly string[];
+  readonly cwd: string;
+  readonly stream: 'stdout' | 'stderr';
+  readonly text: string;
+  readonly exitCode?: number | null;
 }
 
 export interface DshPluginUpdateResult {

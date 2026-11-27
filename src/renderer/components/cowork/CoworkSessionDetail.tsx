@@ -299,8 +299,10 @@ import {
   mergeCoworkTextExportMessages,
 } from './sessionExport';
 import {
+  getOpenSideChatTabTitle,
   getSideChatDisplayTitle,
   getSideChatPromoteEligibility,
+  isDefaultSideChatTitle,
 } from './sideChatHelpers';
 import SubagentSpawnCard from './SubagentSpawnCard';
 import { getConversationTurnUsage } from './turnUsageDisplay';
@@ -7297,10 +7299,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment)}
                     />
                   )}
-                  {sideChats.openSideChatTabs.map(tab => {
-                    const tabTitle = getSideChatDisplayTitle(
-                      tab.id,
-                      sideChats.summaries,
+                  {sideChats.openSideChatTabs.map((tab, index) => {
+                    const customTitle = tab.summary?.title && !isDefaultSideChatTitle(tab.summary.title)
+                      ? tab.summary.title.trim()
+                      : null;
+                    const tabTitle = customTitle ?? getOpenSideChatTabTitle(
+                      index,
+                      sideChats.openSideChatTabs.length,
                       i18nService.t('coworkSideChatTitle'),
                     );
                     const promoteEligibility = getSideChatPromoteEligibility(tab.summary);

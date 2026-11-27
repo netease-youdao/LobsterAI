@@ -50,6 +50,42 @@ describe('registerDecisionModelHandlers', () => {
     vi.restoreAllMocks();
   });
 
+  test('rejects an invalid replacement before storing credentials or disabling an active tool', async () => {
+    const store = createMemoryStore();
+    const syncOpenClawConfig = vi.fn();
+    registerDecisionModelHandlers({ getStore: () => store, setDecisionToolHandler: vi.fn(), syncOpenClawConfig });
+    const save = registeredHandlers.get(DecisionModelIpcChannel.SaveConfig)!;
+    await save({}, {
+      enabled: true,
+      provider: DecisionModelProvider.Compatible,
+      endpoint: 'https://jev.example/v1/systemone',
+      apiKey: 'working-key',
+    });
+    const before = store.get(DECISION_MODEL_CONFIG_STORE_KEY);
+    syncOpenClawConfig.mockClear();
+
+    for (const endpoint of ['invalid', '', 'ftp://jev.example', 'https://user:pass@jev.example']) {
+      await expect(save({}, { endpoint, apiKey: 'replacement-key' })).rejects.toThrow();
+      expect(store.get(DECISION_MODEL_CONFIG_STORE_KEY)).toEqual(before);
+    }
+    expect(syncOpenClawConfig).not.toHaveBeenCalled();
+  });
+
+  test('allows turning off a legacy invalid endpoint and requires a valid address to enable it again', async () => {
+    const store = createMemoryStore({
+      [DECISION_MODEL_CONFIG_STORE_KEY]: {
+        enabled: true, provider: DecisionModelProvider.Compatible, endpoint: 'legacy-invalid', apiKey: 'saved-key',
+      },
+    });
+    registerDecisionModelHandlers({ getStore: () => store, setDecisionToolHandler: vi.fn(), syncOpenClawConfig: vi.fn() });
+    const save = registeredHandlers.get(DecisionModelIpcChannel.SaveConfig)!;
+
+    await expect(save({}, { enabled: false })).resolves.toMatchObject({ enabled: false, active: false });
+    await expect(save({}, { enabled: true })).rejects.toThrow();
+    await expect(save({}, { enabled: true, endpoint: 'http://127.0.0.1:9191/v1/systemone' }))
+      .resolves.toMatchObject({ enabled: true, active: true });
+  });
+
   test('hot-syncs dynamic host tools without restarting DSH when active state flips', async () => {
     const store = createMemoryStore();
     const syncOpenClawConfig = vi.fn(async () => ({ success: true }));

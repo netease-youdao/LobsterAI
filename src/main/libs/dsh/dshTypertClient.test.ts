@@ -567,11 +567,33 @@ describe('DshTypertClient', () => {
     await client.connect('http://127.0.0.1:41234/?token=tok');
 
     const updateStates: unknown[] = [];
+    const installStates: unknown[] = [];
+    const installLogs: unknown[] = [];
     const pluginChanges: unknown[] = [];
     client.on('remote:plugin-manager/update-state', (payload) => updateStates.push(payload));
+    client.on('remote:plugin-manager/install-state', (payload) => installStates.push(payload));
+    client.on('remote:plugin-manager/install-log', (payload) => installLogs.push(payload));
     client.on('remote:plugin-manager/changed', (payload) => pluginChanges.push(payload));
 
     const openEvents = fakeWs.sent.find((m) => m.endpoint === '$events');
+    fakeWs.triggerMessage({
+      type: 'item',
+      streamId: openEvents!.streamId,
+      value: {
+        type: 'emit',
+        event: 'plugin-manager/install-state',
+        args: [{ requestId: 'ins-1', phase: 'installing', attempt: { registry: null, index: 1, total: 2 } }],
+      },
+    });
+    fakeWs.triggerMessage({
+      type: 'item',
+      streamId: openEvents!.streamId,
+      value: {
+        type: 'emit',
+        event: 'plugin-manager/install-log',
+        args: [{ requestId: 'ins-1', jobId: 'job-1', argv: ['pnpm', 'add', 'foo'], cwd: '/tmp', stream: 'stdout', text: 'Adding foo\n' }],
+      },
+    });
     fakeWs.triggerMessage({
       type: 'item',
       streamId: openEvents!.streamId,
@@ -621,6 +643,14 @@ describe('DshTypertClient', () => {
       },
     });
 
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(installStates).toEqual([
+      { requestId: 'ins-1', phase: 'installing', attempt: { registry: null, index: 1, total: 2 } },
+    ]);
+    expect(installLogs).toEqual([
+      { requestId: 'ins-1', jobId: 'job-1', argv: ['pnpm', 'add', 'foo'], cwd: '/tmp', stream: 'stdout', text: 'Adding foo\n' },
+    ]);
     expect(updateStates).toEqual([{ requestId: 'upd-1', step: 'removing' }]);
     expect(pluginChanges).toEqual([{ reason: 'install' }]);
 

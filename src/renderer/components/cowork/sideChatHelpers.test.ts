@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { CoworkSideChatStatus } from '../../../shared/cowork/sideChat';
 import {
   formatSideChatApprovalPreview,
+  getOpenSideChatTabTitle,
   getSideChatDisplayTitle,
   getSideChatPromoteEligibility,
   isDefaultSideChatTitle,
@@ -17,6 +18,14 @@ describe('sideChatHelpers', () => {
     expect(isDefaultSideChatTitle('侧边聊天 2')).toBe(true);
     expect(isDefaultSideChatTitle('排查登录超时的思路')).toBe(false);
     expect(isDefaultSideChatTitle('Side chat notes')).toBe(false);
+  });
+
+  test('getOpenSideChatTabTitle omits ordinal for a single open tab and numbers multiple open tabs sequentially', () => {
+    expect(getOpenSideChatTabTitle(0, 1, '侧边聊天')).toBe('侧边聊天');
+    expect(getOpenSideChatTabTitle(0, 1, 'Side chat')).toBe('Side chat');
+    expect(getOpenSideChatTabTitle(0, 2, '侧边聊天')).toBe('侧边聊天 1');
+    expect(getOpenSideChatTabTitle(1, 2, '侧边聊天')).toBe('侧边聊天 2');
+    expect(getOpenSideChatTabTitle(2, 3, '侧边聊天')).toBe('侧边聊天 3');
   });
 
   test('getSideChatDisplayTitle prefers custom renamed titles and falls back to localized ordinals', () => {

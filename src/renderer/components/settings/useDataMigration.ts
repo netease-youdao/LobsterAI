@@ -25,7 +25,7 @@ export interface DataBackupSavedSummary {
 }
 
 export interface UseDataMigrationOptions {
-  persistModelSettingsBeforeBackup: () => Promise<void>;
+  persistModelSettingsBeforeBackup?: () => Promise<void>;
   onError: (message: string | null) => void;
   onNotice: (message: string | null) => void;
   onReportAction?: (
@@ -103,7 +103,9 @@ export function useDataMigration({
     setIsBackingUp(true);
     try {
       await waitForNextPaint();
-      await persistModelSettingsBeforeBackup();
+      if (persistModelSettingsBeforeBackup) {
+        await persistModelSettingsBeforeBackup();
+      }
       const result = await dataMigrationService.backup();
       if (!result.success) {
         const message = mapDataMigrationErrorMessage(

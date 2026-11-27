@@ -26,8 +26,9 @@ export function useModelDiscovery(params: {
   activeProvider: ProviderType;
   providers: ProvidersConfig;
   setProviders: React.Dispatch<React.SetStateAction<ProvidersConfig>>;
+  onModelsUpdated?: (provider: ProviderType, nextModels: Model[]) => void;
 }) {
-  const { activeProvider, providers, setProviders } = params;
+  const { activeProvider, providers, setProviders, onModelsUpdated } = params;
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState<ModelDiscoveryErrorState | null>(null);
   const [dialog, setDialog] = useState<ModelDiscoveryDialogState | null>(null);
@@ -110,27 +111,36 @@ export function useModelDiscovery(params: {
   const applySelection = useCallback((selectedIds: ReadonlySet<string>) => {
     if (!dialog) return;
     const { provider, candidates, effectiveApiFormat } = dialog;
-    setProviders((prev) => {
-      const currentProvider = prev[provider];
-      if (!currentProvider) return prev;
-      const currentModels: readonly Model[] = currentProvider.models ?? [];
-      const nextModels = mergeDiscoveredModels({
-        provider,
-        effectiveApiFormat,
-        currentModels,
-        candidates,
-        selectedIds,
-      });
-      return {
-        ...prev,
-        [provider]: {
-          ...currentProvider,
-          models: nextModels,
-        },
-      };
+    const currentProvider = latestProvidersRef.current[provider];
+    if (!currentProvider) {
+      setDialog(null);
+      return;
+    }
+    const currentModels: readonly Model[] = currentProvider.models ?? [];
+    const nextModels = mergeDiscoveredModels({
+      provider,
+      effectiveApiFormat,
+      currentModels,
+      candidates,
+      selectedIds,
     });
+    if (onModelsUpdated) {
+      onModelsUpdated(provider, nextModels);
+    } else {
+      setProviders((prev) => {
+        const latest = prev[provider];
+        if (!latest) return prev;
+        return {
+          ...prev,
+          [provider]: {
+            ...latest,
+            models: nextModels,
+          },
+        };
+      });
+    }
     setDialog(null);
-  }, [dialog, setProviders]);
+  }, [dialog, onModelsUpdated, setProviders]);
 
   return {
     isFetching,

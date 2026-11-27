@@ -6,6 +6,7 @@ import {
   type DshPermissionPreset,
   type DshPluginApplicationStatus,
   type DshPluginAvailability,
+  type DshPluginInstallPhase,
   type DshPluginSurface,
   type DshPluginUpdateKind,
   type DshPluginUpdateOutcomeKind,
@@ -17,6 +18,7 @@ export const DSH_PLUGINS_CHANGED_EVENT = 'dsh:pluginsChanged';
 export const DSH_PLUGIN_ORDER_CHANGED_EVENT = 'dsh:pluginOrderChanged';
 export const DSH_OPEN_EMBEDDED_PLUGIN_EVENT = 'dsh:openEmbeddedPlugin';
 export const DSH_PLUGIN_ORDER_STORAGE_KEY = 'dsh.plugins.displayOrder';
+export const DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY = 'dsh.plugins.installRegistry';
 
 export interface DshEmbeddedPluginTarget {
   name: string;
@@ -76,6 +78,52 @@ export async function saveDshPluginOrder(order: readonly string[]): Promise<stri
     console.warn('[dshHost] failed to save plugin display order:', error);
   }
   return normalized;
+}
+
+export type PersistedInstallRegistryChoice =
+  | { readonly kind: 'offered'; readonly registry: string | null }
+  | { readonly kind: 'custom'; readonly url: string };
+
+export function sanitizePersistedInstallRegistryChoice(
+  value: unknown,
+): PersistedInstallRegistryChoice | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind === 'offered') {
+    if (record.registry === null) {
+      return { kind: 'offered', registry: null };
+    }
+    if (typeof record.registry === 'string' && record.registry.trim()) {
+      return { kind: 'offered', registry: record.registry.trim() };
+    }
+    return null;
+  }
+  if (record.kind === 'custom' && typeof record.url === 'string' && record.url.trim()) {
+    return { kind: 'custom', url: record.url.trim() };
+  }
+  return null;
+}
+
+export async function loadDshPluginInstallRegistry(): Promise<PersistedInstallRegistryChoice | null> {
+  try {
+    const raw = await window.electron?.store?.get?.(DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY);
+    return sanitizePersistedInstallRegistryChoice(raw);
+  } catch (error) {
+    console.warn('[dshHost] failed to load plugin install registry choice:', error);
+    return null;
+  }
+}
+
+export async function saveDshPluginInstallRegistry(
+  choice: PersistedInstallRegistryChoice,
+): Promise<void> {
+  const sanitized = sanitizePersistedInstallRegistryChoice(choice);
+  if (!sanitized) return;
+  try {
+    await window.electron?.store?.set?.(DSH_PLUGIN_INSTALL_REGISTRY_STORAGE_KEY, sanitized);
+  } catch (error) {
+    console.warn('[dshHost] failed to save plugin install registry choice:', error);
+  }
 }
 
 export function dispatchDshPluginsChanged(plugins?: DshPluginEntry[]): void {
@@ -223,6 +271,7 @@ export interface DshPluginMutationResult {
   application?: DshPluginApplicationStatus;
   restartRequired?: boolean;
   restartReason?: string;
+  stage?: 'install' | 'enable' | 'remove';
   changed?: boolean;
   enabled?: boolean;
   bundle?: string;
@@ -232,12 +281,37 @@ export interface DshPluginMutationResult {
   failedAt?: 'registry' | 'spec-host';
   error?: string;
   pendingBuilds?: string[];
+  approvedBuilds?: string[];
+  registries?: Array<string | null>;
   incompatible?: DshPluginIncompatibleInfo[];
+  exitCode?: number | null;
   output?: string;
   logPath?: string;
   stdout?: string;
   stderr?: string;
   plugins?: DshPluginEntry[];
+}
+
+export interface DshPluginInstallAttempt {
+  registry: string | null;
+  index: number;
+  total: number;
+}
+
+export interface DshPluginInstallProgress {
+  requestId: string;
+  phase: DshPluginInstallPhase;
+  attempt?: DshPluginInstallAttempt;
+}
+
+export interface DshPluginInstallLogChunk {
+  requestId?: string;
+  jobId: string;
+  argv: string[];
+  cwd: string;
+  stream: 'stdout' | 'stderr';
+  text: string;
+  exitCode?: number | null;
 }
 
 export interface DshPluginRegistriesResult {
@@ -386,6 +460,22 @@ export const dshHostService = {
     error?: string;
   }> {
     return window.electron.dshHost.cancelPluginInstall(requestId);
+  },
+
+  onPluginInstallState(listener: (progress: DshPluginInstallProgress) => void): () => void {
+    const subscribe = window.electron?.dshHost?.onPluginInstallState;
+    if (typeof subscribe !== 'function') {
+      return () => undefined;
+    }
+    return subscribe(listener);
+  },
+
+  onPluginInstallLog(listener: (chunk: DshPluginInstallLogChunk) => void): () => void {
+    const subscribe = window.electron?.dshHost?.onPluginInstallLog;
+    if (typeof subscribe !== 'function') {
+      return () => undefined;
+    }
+    return subscribe(listener);
   },
 
   async removePlugin(packageName: string): Promise<DshPluginMutationResult> {
