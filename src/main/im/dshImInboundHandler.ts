@@ -83,6 +83,7 @@ export interface DshImInboundCoworkStorePort {
 
 export interface DshImInboundIMStorePort {
   resolveQQGroupPeer(botPlatform: Platform, groupPeer: string, unionId?: string): string;
+  canReuseQQGroupSession(botPlatform: Platform, groupPeer: string, sessionId: string): boolean;
   findSharedGroupMapping(
     platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string, botPlatform?: Platform,
   ): IMSessionMapping | null;
@@ -717,7 +718,9 @@ export class DshImInboundHandler {
       ?? legacyPopo;
     const storedChatId = existingMapping?.imConversationId ?? conversationId;
     const storedPlatform = existingMapping?.platform ?? mappingPlatform;
-    let session = existingMapping
+    const differentQQGroup = existingMapping && groupId && platform === RetainedImPlatform.QQ
+      && !this.deps.imStore.canReuseQQGroupSession(mappingPlatform, groupId, existingMapping.coworkSessionId);
+    let session = existingMapping && !differentQQGroup
       ? this.deps.coworkStore.getSession(existingMapping.coworkSessionId)
       : null;
     const isExistingSession = Boolean(session);

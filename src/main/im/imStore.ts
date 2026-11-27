@@ -12,7 +12,7 @@ import { PlatformRegistry } from '../../shared/platform';
 import { t } from '../i18n';
 import { type FeishuGroupSessionRoute, findLegacyFeishuGroupSession } from './feishuGroupSessionMapping';
 import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
-import { findQQGroupSession, resolveQQGroupPeer } from './qqGroupSessionMapping';
+import { canReuseQQGroupSession, findQQGroupSession, hasConflictingQQGroupPeer, resolveQQGroupPeer } from './qqGroupSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
   DEFAULT_DINGTALK_OPENCLAW_CONFIG,
@@ -184,6 +184,7 @@ export class IMStore {
       )
     `).run();
     this.db.prepare('CREATE INDEX IF NOT EXISTS idx_im_qq_group_union ON im_qq_group_peers(union_id)').run();
+    this.db.prepare('CREATE INDEX IF NOT EXISTS idx_im_qq_group_peer ON im_qq_group_peers(group_peer)').run();
     this.db
       .prepare(
         'CREATE INDEX IF NOT EXISTS idx_im_session_mappings_openclaw_session_key ON im_session_mappings(openclaw_session_key) WHERE openclaw_session_key IS NOT NULL',
@@ -1449,12 +1450,12 @@ export class IMStore {
   }
 
   deleteQQInstance(instanceId: string): void {
-    const now = Date.now();
-    this.db.prepare('DELETE FROM im_config WHERE key = ?').run(`qq:${instanceId}`);
-    // Clean up session mappings for this instance
-    this.db.prepare('DELETE FROM im_session_mappings WHERE platform = ?').run(`qq:${instanceId}`);
-    this.db.prepare('DELETE FROM im_qq_group_peers WHERE bot_platform = ?').run(`qq:${instanceId}`);
-    void now;
+    const botPlatform = `qq:${instanceId}`;
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM im_config WHERE key = ?').run(botPlatform);
+      this.db.prepare('DELETE FROM im_session_mappings WHERE platform = ?').run(botPlatform);
+      this.db.prepare('DELETE FROM im_qq_group_peers WHERE bot_platform = ?').run(botPlatform);
+    })();
   }
 
   getQQMultiInstanceConfig(): QQMultiInstanceConfig {
@@ -1836,13 +1837,19 @@ export class IMStore {
     return resolveQQGroupPeer(this.db, botPlatform, groupPeer, unionId);
   }
 
+  canReuseQQGroupSession(botPlatform: Platform, groupPeer: string, sessionId: string): boolean {
+    return canReuseQQGroupSession(this.db, botPlatform, groupPeer, sessionId);
+  }
+
   /** Ordinary groups share a Cowork task across accounts bound to the same agent. */
   findSharedGroupMapping(
     platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string, botPlatform?: Platform,
   ): IMSessionMapping | null {
+    let accountOnly: Platform | null = null;
     if (platform === RetainedImPlatform.QQ && botPlatform) {
       const linked = findQQGroupSession(this.db, botPlatform, groupId, agentId);
       if (linked) return mapSessionMappingRow(linked);
+      if (hasConflictingQQGroupPeer(this.db, botPlatform, groupId)) accountOnly = botPlatform;
     }
     // OpenClaw lowercased its group keys. DSH peer IDs are case-sensitive.
     // Older DSH rows stored an untyped chat ID: only reuse another bot's row
@@ -1851,6 +1858,7 @@ export class IMStore {
       SELECT m.* FROM im_session_mappings m JOIN cowork_sessions s ON s.id = m.cowork_session_id
       WHERE m.agent_id = @agentId AND COALESCE(NULLIF(s.agent_id, ''), 'main') = m.agent_id
         AND (m.platform = @platform OR m.platform GLOB @instances)
+        AND (@accountOnly IS NULL OR m.platform = @accountOnly)
         AND (m.im_conversation_id = @groupId
           OR (m.openclaw_session_key IS NOT NULL AND m.im_conversation_id = lower(@groupId))
           OR (m.openclaw_session_key IS NULL AND m.im_conversation_id = @chatId AND s.title = @groupTitle
@@ -1860,7 +1868,7 @@ export class IMStore {
                 OR json_extract(c.value, '$.sharedMemoryAcrossConversations') = 1))))
       ORDER BY (m.openclaw_session_key IS NOT NULL) DESC, (m.im_conversation_id = @groupId) DESC,
         m.last_active_at DESC, m.rowid DESC LIMIT 1
-    `).get({ platform, instances: `${platform}:*`, groupId, chatId, agentId, groupTitle }) as SessionMappingRow | undefined;
+    `).get({ platform, instances: `${platform}:*`, groupId, chatId, agentId, groupTitle, accountOnly }) as SessionMappingRow | undefined;
     return row ? mapSessionMappingRow(row) : null;
   }
 

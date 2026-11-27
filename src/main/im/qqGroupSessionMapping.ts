@@ -15,11 +15,40 @@ export function resolveQQGroupPeer(
   }
   // The first linked address keeps the queue stable when another bot joins.
   const row = db.prepare(`
-    SELECT group_peer FROM im_qq_group_peers WHERE union_id = (
+    SELECT peer.group_peer, peer.union_id, (
+      SELECT owner.union_id FROM im_qq_group_peers owner WHERE owner.group_peer = peer.group_peer
+      ORDER BY owner.rowid LIMIT 1
+    ) AS first_union FROM im_qq_group_peers peer WHERE peer.union_id = (
       SELECT union_id FROM im_qq_group_peers WHERE bot_platform = ? AND group_peer = ?
-    ) ORDER BY rowid LIMIT 1
-  `).get(botPlatform, groupPeer) as { group_peer: string } | undefined;
-  return row?.group_peer ?? groupPeer;
+    ) ORDER BY peer.rowid LIMIT 1
+  `).get(botPlatform, groupPeer) as { group_peer: string; union_id: string; first_union: string } | undefined;
+  if (!row) return groupPeer;
+  // App-local addresses can coincide. Keep the original queue and give a
+  // positively identified different group its own queue.
+  return row.union_id === row.first_union ? row.group_peer : `union:${row.union_id}`;
+}
+
+export function hasConflictingQQGroupPeer(db: Database.Database, botPlatform: Platform, groupPeer: string): boolean {
+  return Boolean(db.prepare(`
+    SELECT 1 FROM im_qq_group_peers own JOIN im_qq_group_peers other
+      ON own.group_peer = other.group_peer AND own.union_id <> other.union_id
+    WHERE own.bot_platform = ? AND own.group_peer = ? LIMIT 1
+  `).get(botPlatform, groupPeer));
+}
+
+/** Older builds could already have pointed both app-local peers at one transcript. */
+export function canReuseQQGroupSession(
+  db: Database.Database, botPlatform: Platform, groupPeer: string, sessionId: string,
+): boolean {
+  const conflict = db.prepare(`
+    SELECT 1 FROM im_qq_group_peers own WHERE own.bot_platform = ? AND own.group_peer = ?
+      AND own.union_id <> (
+        SELECT peer.union_id FROM im_session_mappings m JOIN im_qq_group_peers peer
+          ON m.platform = peer.bot_platform AND m.im_conversation_id = peer.group_peer
+        WHERE m.cowork_session_id = ? ORDER BY peer.rowid LIMIT 1
+      )
+  `).get(botPlatform, groupPeer, sessionId);
+  return !conflict;
 }
 
 export function findQQGroupSession(

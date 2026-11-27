@@ -79,6 +79,7 @@ function createFixture(options?: {
 
   const imStore = {
     resolveQQGroupPeer: (_platform: Platform, groupPeer: string) => groupPeer,
+    canReuseQQGroupSession: () => true,
     findSharedGroupMapping: vi.fn((platform: Platform, groupId: string, _chatId: string, agentId: string) =>
       [...mappings.values()].find(m => m.agentId === agentId && m.imConversationId === groupId
         && (m.platform === platform || m.platform.startsWith(platform + ':'))) ?? null,

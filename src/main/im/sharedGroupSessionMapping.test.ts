@@ -78,6 +78,22 @@ test('excludes private chats, topics, other platforms, agents, groups and differ
   expect(find()).toBeNull();
 });
 
+test('QQ gives distinct union IDs priority over coincident app-scoped delivery addresses', () => {
+  const a = 'qq:a' as Platform, b = 'qq:b' as Platform;
+  const peer = 'group:SameNativePeer', label = '[QQ] group:SameNativePeer';
+  const firstQueue = store.resolveQQGroupPeer(a, peer, 'UnionA');
+  add('group-a', a, peer, label);
+  const secondQueue = store.resolveQQGroupPeer(b, peer, 'UnionB');
+  expect(secondQueue).not.toBe(firstQueue);
+  expect(store.resolveQQGroupPeer(a, peer)).toBe(firstQueue);
+  expect(store.findSharedGroupMapping(Im.QQ, peer, 'SameNativePeer', 'main', label, b)).toBeNull();
+  add('group-b', b, 'SameNativePeer', label);
+  expect(store.findSharedGroupMapping(Im.QQ, peer, 'SameNativePeer', 'main', label, b)?.coworkSessionId).toBe('group-b');
+  store.recordGroupSessionRoute(peer, b, 'group-a', 'main');
+  expect(store.canReuseQQGroupSession(a, peer, 'group-a')).toBe(true);
+  expect(store.canReuseQQGroupSession(b, peer, 'group-a')).toBe(false);
+});
+
 test('does not adopt an untyped group from a DingTalk bot using a custom session scope', () => {
   add('custom', 'dingtalk:scoped', room, title);
   db.prepare('INSERT INTO im_config VALUES (?, ?, ?)').run('dingtalk:scoped', JSON.stringify({ groupSessionScope: 'group_sender' }), 1);
