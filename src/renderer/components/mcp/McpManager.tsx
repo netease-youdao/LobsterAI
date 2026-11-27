@@ -33,6 +33,7 @@ import CardToggle from '../common/CardToggle';
 import ManagementSearchHeader from '../common/ManagementSearchHeader';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
+import ContextCleanupBanner from '../cowork/ContextCleanupBanner';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
@@ -1583,6 +1584,8 @@ const McpManager: React.FC = () => {
             <span>{i18nService.t('mcpAddServer')}</span>
           </button>
         </ManagementSearchHeader>
+
+        <ContextCleanupBanner className="mb-3" />
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">

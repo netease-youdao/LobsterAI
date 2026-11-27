@@ -63,6 +63,13 @@ import type {
 } from '../../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../../shared/browserWebAccess/passkeys';
 import type {
+  ContextCleanupApplyResult,
+  ContextCleanupDismissResult,
+  ContextCleanupScanResult,
+  ContextCleanupTargetItem,
+  ContextCleanupUndoResult,
+} from '../../shared/contextCleanup/types';
+import type {
   BrowserAnnotationRect,
   BrowserAnnotationScreenshotRef,
   CoworkBrowserAnnotationMessageBatch,
@@ -986,6 +993,16 @@ interface IElectronAPI {
     getConfig: () => Promise<DecisionModelConfigView>;
     saveConfig: (update: DecisionModelConfigUpdate) => Promise<DecisionModelConfigView>;
     testConnection: (draft: DecisionModelConfigUpdate) => Promise<DecisionModelTestResult>;
+  };
+  contextCleanup: {
+    scan: (options?: { idleDays?: number }) => Promise<{
+      success: boolean;
+      result?: ContextCleanupScanResult;
+      error?: string;
+    }>;
+    apply: (items: ContextCleanupTargetItem[]) => Promise<ContextCleanupApplyResult>;
+    undo: (undoToken: string) => Promise<ContextCleanupUndoResult>;
+    dismiss: () => Promise<ContextCleanupDismissResult>;
   };
   providerModels: {
     discover: (request: ProviderModelDiscoveryRequest) => Promise<ProviderModelDiscoveryResult>;

@@ -73,12 +73,8 @@ function mergeRules(existing: string, incoming: string, mode: DshAgentRulesMode)
 
 export const dshAgentRulesToolDescriptor: DshHostToolDescriptor = {
   name: DSH_AGENT_RULES_TOOL,
-  description: [
-    'Read or save THIS agent\'s own durable role, persona, output style, and working guidelines (`SOUL.md` + Agent Settings -> Role & Rules).',
-    'Changes are strictly isolated to the current agent and persist even if the user switches working directories.',
-    'Always use this tool (instead of creating or editing `AGENTS.md` / `CLAUDE.md` in the working directory) when saving an agent\'s own working guidelines, so other agents sharing the same default folder are never affected.',
-    'Call `action: "read"` first before updating existing rules, and call `action: "save"` only after confirming the guidelines with the user.',
-  ].join(' '),
+  description:
+    'Read or save this agent\'s own durable persona/rules (`SOUL.md`, isolated per agent across working directories; prefer over editing repo `AGENTS.md`/`CLAUDE.md`). Call `read` before updating; call `save` only after user confirmation.',
   inputSchema: {
     type: 'object',
     required: ['action'],
@@ -86,20 +82,20 @@ export const dshAgentRulesToolDescriptor: DshHostToolDescriptor = {
       action: {
         type: 'string',
         enum: Object.values(DshAgentRulesAction),
-        description: '"read" to inspect this agent\'s current rules and description; "save" to persist updated rules.',
+        description: '"read" current rules or "save" updates.',
       },
       rules: {
         type: 'string',
-        description: 'Markdown text of this agent\'s role, workflow, and output guidelines (required for action="save").',
+        description: 'Markdown persona/workflow rules (required for save).',
       },
       mode: {
         type: 'string',
         enum: Object.values(DshAgentRulesMode),
-        description: 'For action="save": "replace" overwrites SOUL.md (default, preferred after reading); "append" adds new rules to the end.',
+        description: '"replace" (default) or "append".',
       },
       description: {
         type: 'string',
-        description: 'Optional concise one-line summary of what this agent does (recommended when the agent currently has no description).',
+        description: 'Optional one-line agent summary.',
       },
     },
   },

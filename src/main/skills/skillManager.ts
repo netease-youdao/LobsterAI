@@ -1980,6 +1980,20 @@ export class SkillManager {
     return this.listSkills();
   }
 
+  setSkillsEnabledBatch(ids: readonly string[], enabled: boolean): SkillRecord[] {
+    const cleanIds = [...new Set(ids.map(id => id.trim()).filter(Boolean))];
+    if (cleanIds.length === 0) {
+      return this.listSkills();
+    }
+    const state = this.loadSkillStateMap();
+    for (const id of cleanIds) {
+      state[id] = { enabled };
+    }
+    this.saveSkillStateMap(state);
+    this.notifySkillsChanged(createSkillChangeBatch(SkillChangeSource.Enabled));
+    return this.listSkills();
+  }
+
   async deleteSkill(id: string): Promise<SkillRecord[]> {
     const root = this.ensureSkillsRoot();
     if (id !== path.basename(id)) {

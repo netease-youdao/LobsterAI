@@ -1,3 +1,5 @@
+import type { DshProgressiveCapability } from '../dshEngine/hostConstants';
+
 export const ExpertUiEvent = {
   OpenPlaza: 'experts:open-plaza',
   Preparing: 'experts:preparing',
@@ -28,6 +30,7 @@ export interface PresetAgent {
   systemPrompt: string;
   systemPromptEn: string;
   skillIds: string[];
+  hostCapabilities?: DshProgressiveCapability[];
   category: string;
   tags: LocalizedExpertText[];
   starterPrompts: LocalizedExpertText[];

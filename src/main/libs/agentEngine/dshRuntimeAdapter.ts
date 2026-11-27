@@ -14,6 +14,10 @@ import {
 } from '../../../common/coworkSystemMessages';
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import {
+  CleanupCapabilityKind,
+  DECISION_MODEL_JEV_ITEM_ID,
+} from '../../../shared/contextCleanup/constants';
+import {
   BrowserAnnotationScreenshotStatus,
   buildBrowserAnnotationPromptSection,
   type CoworkBrowserAnnotationMessageBatch,
@@ -39,9 +43,11 @@ import {
 } from '../../../shared/cowork/selectedText';
 import { type CoworkSteerResponse, CoworkSteerStatus } from '../../../shared/cowork/steer';
 import { isDshSubagentSpawn } from '../../../shared/cowork/subagent';
+import { DECISION_EVALUATE_TOOL_NAME } from '../../../shared/decisionModel/constants';
 import {
   DEFAULT_DSH_PERMISSION_PRESET,
   DSH_APPROVAL_REQUEST_ID_PREFIX,
+  DSH_HTML_RENDER_TOOL,
   DSH_QUESTION_REQUEST_ID_PREFIX,
   DSH_SESSION_ID_PREFIX,
   DshApprovalPermissionAction,
@@ -69,6 +75,7 @@ import {
   parseModelThinkingLevel,
 } from '../../../shared/providers';
 import { USER_CONTEXT_WINDOW_SELECTION_PREFIX } from '../../../shared/providers/modelContextWindow';
+import { SkinToolName } from '../../../shared/skin/constants';
 import type { CoworkMessage, CoworkSessionStatus } from '../../coworkStore';
 import { getCommandDangerLevel } from '../commandSafety';
 import type { CoworkMessageEditStore } from '../coworkMessageEditStore';
@@ -210,6 +217,8 @@ export interface DshRuntimeAdapterDeps {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
+  resolveAgentHostCapabilities?: (agentId: string) => DshProgressiveCapability[];
+  onCapabilityUsed?: (event: { kind: CleanupCapabilityKind; itemId: string }) => void;
   waitForMcpConnections?: (signal: AbortSignal) => Promise<void>;
   resolveDefaultPermissionPreset?: () => DshPermissionPreset;
   onPermissionPresetChanged?: (
@@ -427,6 +436,7 @@ const SKILL_TO_PROGRESSIVE_CAPABILITY: Readonly<Record<string, DshProgressiveCap
   docx: DshProgressiveCapability.Word,
   xlsx: DshProgressiveCapability.Excel,
   pptx: DshProgressiveCapability.Ppt,
+  'skin-creator': DshProgressiveCapability.SkinManage,
 };
 
 const SELECTED_TEXT_SOURCE_TO_CAPABILITY: Readonly<Record<string, DshProgressiveCapability>> = {
@@ -475,8 +485,22 @@ export function resolveUnlockedCapabilitiesForTurn(params: {
   prompt?: string;
   localMediaAttachments?: CoworkStartOptions['localMediaAttachments'];
   lazyBridgePrefix?: string;
+  agentHostCapabilities?: readonly DshProgressiveCapability[];
+  mediaInstruction?: string;
+  systemPrompt?: string;
 }): DshProgressiveCapability[] {
   const unlocked = new Set<DshProgressiveCapability>();
+  if (Array.isArray(params.agentHostCapabilities)) {
+    for (const cap of params.agentHostCapabilities) {
+      unlocked.add(cap);
+    }
+  }
+  if (typeof params.mediaInstruction === 'string' && params.mediaInstruction.includes(SkinToolName.Manage)) {
+    unlocked.add(DshProgressiveCapability.SkinManage);
+  }
+  if (typeof params.systemPrompt === 'string' && params.systemPrompt.includes(DSH_HTML_RENDER_TOOL)) {
+    unlocked.add(DshProgressiveCapability.HtmlRender);
+  }
   if (Array.isArray(params.messageSkillIds)) {
     for (const rawId of params.messageSkillIds) {
       if (typeof rawId !== 'string') continue;
@@ -847,6 +871,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly store: DshCoworkStorePort;
   private readonly resolveModelSelection?: DshRuntimeAdapterDeps['resolveModelSelection'];
   private readonly resolveAllowedSkillIds?: DshRuntimeAdapterDeps['resolveAllowedSkillIds'];
+  private readonly resolveAgentHostCapabilities?: DshRuntimeAdapterDeps['resolveAgentHostCapabilities'];
+  private readonly onCapabilityUsed?: DshRuntimeAdapterDeps['onCapabilityUsed'];
   private readonly waitForMcpConnections?: DshRuntimeAdapterDeps['waitForMcpConnections'];
   private readonly resolveDefaultPermissionPreset?: DshRuntimeAdapterDeps['resolveDefaultPermissionPreset'];
   private readonly onPermissionPresetChanged?: DshRuntimeAdapterDeps['onPermissionPresetChanged'];
@@ -882,6 +908,8 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
     this.store = deps.store;
     this.resolveModelSelection = deps.resolveModelSelection;
     this.resolveAllowedSkillIds = deps.resolveAllowedSkillIds;
+    this.resolveAgentHostCapabilities = deps.resolveAgentHostCapabilities;
+    this.onCapabilityUsed = deps.onCapabilityUsed;
     this.waitForMcpConnections = deps.waitForMcpConnections;
     this.resolveDefaultPermissionPreset = deps.resolveDefaultPermissionPreset;
     this.onPermissionPresetChanged = deps.onPermissionPresetChanged;
@@ -1525,6 +1553,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         traceId: llmTrace.traceId,
         workspaceDir: session.cwd,
         userQuestionsDisabled: session.userQuestionsDisabled,
+        goalToolsEnabled: true,
         allowedSkillIds,
         customSystemPrompt: effectiveSystemPrompt,
         ...(session.executionMode ? { executionMode: session.executionMode } : {}),
@@ -1540,6 +1569,16 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
           reasoningEffort: modelSelection.reasoningEffort,
         });
       }
+    } else if (
+      translated.kind === DshGoalCommandKind.Create
+      || translated.kind === DshGoalCommandKind.Resume
+      || translated.kind === DshGoalCommandKind.Edit
+    ) {
+      await this.hostManager.bindSessionContext({
+        sessionId: dshSessionId,
+        coworkSessionId: sessionId,
+        goalToolsEnabled: true,
+      });
     }
 
     if (willStartGoalTurn) {
@@ -2548,9 +2587,19 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
       // `customSystemPrompt` (including `''`) so turning off Plan Mode clears the
       // previous turn's `# Plan Mode` system prompt in `ops-rpc.mjs`.
       const agentId = params.agentId || session.agentId || 'main';
+      if (this.onCapabilityUsed && Array.isArray(params.messageSkillIds)) {
+        for (const skillId of params.messageSkillIds) {
+          if (typeof skillId === 'string' && skillId.trim()) {
+            this.onCapabilityUsed({ kind: CleanupCapabilityKind.Skill, itemId: skillId.trim() });
+          }
+        }
+      }
       const allowedSkillIds = this.resolveAllowedSkillIds
         ? this.resolveAllowedSkillIds(sessionId, agentId, params.skillIds)
         : params.skillIds ?? null;
+      const agentHostCapabilities = this.resolveAgentHostCapabilities
+        ? this.resolveAgentHostCapabilities(agentId)
+        : undefined;
       const turnUnlockedCapabilities = resolveUnlockedCapabilitiesForTurn({
         messageSkillIds: params.messageSkillIds,
         browserAnnotations: params.browserAnnotations,
@@ -2558,6 +2607,9 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         prompt,
         localMediaAttachments: params.localMediaAttachments,
         lazyBridgePrefix,
+        agentHostCapabilities,
+        mediaInstruction: params.mediaInstruction,
+        systemPrompt: boundCustomSystemPrompt,
       });
       if (turnUnlockedCapabilities.length > 0) {
         let sessionSet = this.sessionUnlockedCapabilities.get(sessionId);
@@ -2601,6 +2653,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         ? DshPermissionPreset.FullAccess
         : (explicitPermissionPreset ?? this.getEffectivePermissionPreset(sessionId));
 
+      const goalToolsEnabled = Boolean(session.goal || latestSessionMeta?.goal || goalPrompt);
       const contextPayload: DshHostSessionContext = {
         sessionId: dshSessionId,
         agentId,
@@ -2608,6 +2661,7 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         traceId: llmTrace.traceId,
         workspaceDir: params.workspaceRoot || session.cwd,
         userQuestionsDisabled: session.userQuestionsDisabled,
+        ...(goalToolsEnabled ? { goalToolsEnabled: true } : {}),
         allowedSkillIds,
         customSystemPrompt: boundCustomSystemPrompt,
         ...(officeAgentPrompt ? { officeAgentPrompt } : {}),
@@ -3259,6 +3313,22 @@ export class DshRuntimeAdapter extends EventEmitter implements CoworkRuntime {
         const callId = String(data.callId ?? randomUUID());
         const toolName = String(data.name ?? 'tool');
         const toolInput = parseToolArgs(data.arguments);
+        if (this.onCapabilityUsed) {
+          if (toolName === 'skill' && typeof toolInput.name === 'string' && toolInput.name.trim()) {
+            this.onCapabilityUsed({ kind: CleanupCapabilityKind.Skill, itemId: toolInput.name.trim() });
+          } else if (toolName === DECISION_EVALUATE_TOOL_NAME) {
+            this.onCapabilityUsed({
+              kind: CleanupCapabilityKind.DecisionModel,
+              itemId: DECISION_MODEL_JEV_ITEM_ID,
+            });
+          } else if (toolName.startsWith('mcp__')) {
+            const rest = toolName.slice('mcp__'.length);
+            const sep = rest.indexOf('__');
+            if (sep > 0) {
+              this.onCapabilityUsed({ kind: CleanupCapabilityKind.McpServer, itemId: rest.slice(0, sep) });
+            }
+          }
+        }
         if (isDshSubagentSpawn(toolName)) {
           turn.subagentTasksByCall.set(callId, typeof toolInput.prompt === 'string' ? toolInput.prompt : '');
         }

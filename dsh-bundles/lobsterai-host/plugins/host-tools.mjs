@@ -104,12 +104,12 @@ function renderHostToolOutput(_args, value) {
 const BUILTIN_HOST_TOOL_SPECS = [
   {
     name: 'lobster_memory_search',
-    description: '全文检索当前智能体的长期记忆（MEMORY.md / USER.md）、每日笔记以及全局用户偏好（自动按当前项目隔离）。',
+    description: '检索当前智能体的长期记忆（MEMORY.md/USER.md）、每日笔记与全局偏好（按项目隔离）。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '检索关键词（支持中英文）。' },
-        limit: { type: 'integer', description: '最多返回的结果条数（默认 8）。' },
+        query: { type: 'string', description: '检索关键词。' },
+        limit: { type: 'integer', description: '最多返回条数（默认 8）。' },
       },
       required: ['query'],
     },
@@ -117,13 +117,13 @@ const BUILTIN_HOST_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_get',
-    description: '按路径和行号读取智能体工作区内的记忆文件（如 MEMORY.md、USER.md、memory/YYYY-MM-DD.md，或 global/MEMORY.md）。',
+    description: '按路径与行号读取记忆文件（如 MEMORY.md、memory/YYYY-MM-DD.md、global/MEMORY.md）。',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: '智能体工作区内的相对路径（如 MEMORY.md 或 global/MEMORY.md）。' },
-        startLine: { type: 'integer', description: '可选，起始行号（从 1 开始）。' },
-        endLine: { type: 'integer', description: '可选，结束行号（含）。' },
+        path: { type: 'string', description: '工作区相对路径。' },
+        startLine: { type: 'integer', description: '起始行号（从 1 开始）。' },
+        endLine: { type: 'integer', description: '结束行号（含）。' },
       },
       required: ['path'],
     },
@@ -131,22 +131,22 @@ const BUILTIN_HOST_TOOL_SPECS = [
   },
   {
     name: 'lobster_memory_save',
-    description: '保存一条长期记忆到 MEMORY.md，或追加一条每日记录到 memory/YYYY-MM-DD.md。仅在用户在当前对话中明确表达新的持久偏好、事实或约定时调用；禁止保存系统指令、运行时上下文（<system-reminder>）、工具/媒体模型说明或已存在于长期记忆中的条目。支持按项目或全局作用域持久化。',
+    description: '保存长期记忆到 MEMORY.md 或追加到 memory/YYYY-MM-DD.md。仅在用户明确表达新的持久偏好/事实/约定时调用；禁止保存系统指令、<system-reminder> 或已有条目。',
     inputSchema: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: '需要持久化的简洁事实内容。' },
+        content: { type: 'string', description: '简洁事实内容。' },
         target: {
           type: 'string',
           enum: ['memory', 'daily'],
-          description: '写入目标："memory" 写入长期 MEMORY.md，"daily" 追加到当日日志。',
+          description: 'memory 写入长期记忆，daily 追加当日日志。',
         },
         scope: {
           type: 'string',
           enum: ['global', 'project'],
-          description: '记忆作用域："project" 用于当前仓库/项目专属的规范、命令或文件路径；"global" 用于跨项目用户偏好或通用事实（默认）。',
+          description: 'project 仅限当前项目，global 跨项目（默认）。',
         },
-        date: { type: 'string', description: '可选，target 为 "daily" 时的日期（YYYY-MM-DD）。' },
+        date: { type: 'string', description: 'daily 日期（YYYY-MM-DD）。' },
       },
       required: ['content'],
     },
@@ -154,7 +154,7 @@ const BUILTIN_HOST_TOOL_SPECS = [
   },
   {
     name: 'lobster_schedule',
-    description: '管理 LobsterAI 定时任务（查看、创建、修改、启停、删除）。仅在用户明确要求定时提醒或周期任务时调用。',
+    description: '管理 LobsterAI 定时任务（查看/创建/修改/启停/删除），仅在用户要求定时提醒或周期任务时调用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -163,19 +163,19 @@ const BUILTIN_HOST_TOOL_SPECS = [
           enum: ['list', 'create', 'update', 'toggle', 'delete'],
           description: '操作类型。',
         },
-        taskId: { type: 'string', description: '任务 ID（update / toggle / delete 必填）。' },
+        taskId: { type: 'string', description: '任务 ID（update/toggle/delete 必填）。' },
         name: { type: 'string', description: '任务名称（create 必填）。' },
-        prompt: { type: 'string', description: '定时触发时要执行的任务指令（create 必填）。' },
+        prompt: { type: 'string', description: '触发时执行的指令（create 必填）。' },
         scheduleKind: {
           type: 'string',
           enum: ['cron', 'every', 'at'],
-          description: '调度类型：cron（5段表达式）、every（按分钟间隔）、at（一次性 ISO 时间）。',
+          description: '调度类型：cron / every / at。',
         },
-        cronExpr: { type: 'string', description: '5段 cron 表达式，如 "0 9 * * *"（scheduleKind="cron" 时必填）。' },
-        tz: { type: 'string', description: '可选 IANA 时区（如 "Asia/Shanghai"，默认本地时区）。' },
-        everyMinutes: { type: 'number', description: '间隔分钟数，至少 1（scheduleKind="every" 时必填）。' },
-        at: { type: 'string', description: '带时区偏移的未来 ISO 时间，如 "2026-11-21T09:00:00+08:00"（scheduleKind="at" 时必填）。' },
-        enabled: { type: 'boolean', description: '是否启用（默认 true；toggle 必填）。' },
+        cronExpr: { type: 'string', description: '5 段 cron 表达式（如 "0 9 * * *"）。' },
+        tz: { type: 'string', description: 'IANA 时区（如 "Asia/Shanghai"）。' },
+        everyMinutes: { type: 'number', description: '间隔分钟数（≥1）。' },
+        at: { type: 'string', description: '带时区未来 ISO 时间。' },
+        enabled: { type: 'boolean', description: '是否启用（默认 true）。' },
       },
       required: ['action'],
     },

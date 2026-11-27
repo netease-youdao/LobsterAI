@@ -24,12 +24,14 @@ import type {
   ScheduledTaskRunEvent,
   ScheduledTaskStatusEvent,
 } from '../../../scheduledTask/types';
+import { type CleanupCapabilityKind } from '../../../shared/contextCleanup/constants';
 import {
   DSH_ECOSYSTEM_PARTITION,
   DSH_PERMISSION_PRESET_KV_KEY,
   DSH_PROFILE_DIR_NAME,
   DshHostPhase,
   type DshPermissionPreset,
+  type DshProgressiveCapability,
   parseDshPermissionPreset,
   WORKSPACES_DIR_NAME,
 } from '../../../shared/dshEngine/hostConstants';
@@ -206,6 +208,8 @@ export interface DshBootstrapOptions {
     agentId: string,
     optionSkillIds?: string[],
   ) => string[] | null;
+  resolveAgentHostCapabilities?: (agentId: string) => DshProgressiveCapability[];
+  onCapabilityUsed?: (event: { kind: CleanupCapabilityKind; itemId: string }) => void;
   allowRules?: ApprovalAllowRulePort;
   toolProviders?: HostToolProvider[];
   webSearchHandler?: DshBridgeWebSearchHandler;
@@ -659,6 +663,8 @@ export class DshBootstrap {
       store: options.coworkStore,
       resolveModelSelection: options.resolveModelSelection,
       resolveAllowedSkillIds: options.resolveAllowedSkillIds,
+      resolveAgentHostCapabilities: options.resolveAgentHostCapabilities,
+      onCapabilityUsed: options.onCapabilityUsed,
       waitForMcpConnections: options.waitForMcpConnections,
       resolveDefaultPermissionPreset: () => this.defaultPermissionPreset,
       onPermissionPresetChanged: async (preset, coworkSessionId) => {

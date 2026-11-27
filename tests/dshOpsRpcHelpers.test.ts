@@ -140,4 +140,18 @@ describe('ops-rpc-helpers mergeBoundSessionContext', () => {
     });
     expect(clearedNull.context.mediaTurnInstruction).toBe('');
   });
+
+  test('merges goalToolsEnabled monotonically once enabled in a session', async () => {
+    const { mergeBoundSessionContext } = await loadHelpers();
+
+    const nonGoal = mergeBoundSessionContext({}, { agentId: 'main' });
+    expect(nonGoal.context.goalToolsEnabled).toBeUndefined();
+
+    const enabled = mergeBoundSessionContext(nonGoal.context, { goalToolsEnabled: true });
+    expect(enabled.context.goalToolsEnabled).toBe(true);
+
+    // Subsequent ordinary turn in the same session keeps goal tools admitted for cache stability.
+    const nextTurn = mergeBoundSessionContext(enabled.context, { goalToolsEnabled: false });
+    expect(nextTurn.context.goalToolsEnabled).toBe(true);
+  });
 });

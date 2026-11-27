@@ -23,6 +23,7 @@ import CardToggle from '../common/CardToggle';
 import ManagementSearchHeader from '../common/ManagementSearchHeader';
 import { MANAGEMENT_BODY_TEXT, MANAGEMENT_META_TEXT, MANAGEMENT_TITLE_TEXT } from '../common/managementTypography';
 import Modal from '../common/Modal';
+import ContextCleanupBanner from '../cowork/ContextCleanupBanner';
 import ErrorMessage from '../ErrorMessage';
 import EditIcon from '../icons/EditIcon';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
@@ -1287,6 +1288,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat,
           )}
         </div>
         </ManagementSearchHeader>
+
+        {!readOnly && <ContextCleanupBanner className="mb-3" />}
 
         {/* Tabs */}
         <div className="flex items-center border-b border-border">

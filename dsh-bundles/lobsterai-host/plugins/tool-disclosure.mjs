@@ -27,7 +27,9 @@ import {
   collectAdmittedCapabilitiesFromTools,
   computeCombinedDeniedTools,
   evaluateSideChatToolGuard,
+  GOAL_TOOL_NAMES,
   groupMountedProgressiveTools,
+  hasAdmittedGoalTools,
   hasAnyProgressiveToolMounted,
   listMountedToolsForCapability,
   normalizeCapabilityIds,
@@ -42,6 +44,7 @@ export const inject = ['tools', 'agents'];
 
 const ENABLE_TOOLS_NAME = 'lobster_enable_tools';
 const ASK_USER_QUESTION = 'ask_user_question';
+const GOAL_TOOL_NAME_SET = new Set(GOAL_TOOL_NAMES);
 
 const CAPABILITY_SUMMARY = PROGRESSIVE_TOOL_GROUPS
   .map((g) => `${g.id}（${g.label}）`)
@@ -62,11 +65,17 @@ export function apply(ctx) {
       unlocked.add(cap);
     }
 
-    // 2. Apply capabilities pre-unlocked via `bindSessionContext`.
+    // 2. Apply capabilities pre-unlocked via `bindSessionContext` or bound agent's `hostCapabilities`.
     const sid = agent?.id || agent?.session?.id;
     const bound = resolveSessionContext(ctx, state, sid);
     if (bound && Array.isArray(bound.unlockedCapabilities)) {
       for (const cap of normalizeCapabilityIds(bound.unlockedCapabilities)) {
+        unlocked.add(cap);
+      }
+    }
+    const agentSpec = bound?.agentId ? state.agents?.get?.(bound.agentId) : undefined;
+    if (agentSpec && Array.isArray(agentSpec.hostCapabilities)) {
+      for (const cap of normalizeCapabilityIds(agentSpec.hostCapabilities)) {
         unlocked.add(cap);
       }
     }
@@ -112,11 +121,17 @@ export function apply(ctx) {
     const record = ensureRecord(agent);
     if (!record) return;
 
-    // Pull in any newly bound pre-unlocked capabilities from `bindSessionContext`.
+    // Pull in any newly bound pre-unlocked capabilities from `bindSessionContext` or agent spec.
     const sid = agent.id || agent.session?.id;
     const bound = resolveSessionContext(ctx, state, sid);
     if (bound && Array.isArray(bound.unlockedCapabilities)) {
       for (const cap of normalizeCapabilityIds(bound.unlockedCapabilities)) {
+        record.unlocked.add(cap);
+      }
+    }
+    const agentSpec = bound?.agentId ? state.agents?.get?.(bound.agentId) : undefined;
+    if (agentSpec && Array.isArray(agentSpec.hostCapabilities)) {
+      for (const cap of normalizeCapabilityIds(agentSpec.hostCapabilities)) {
         record.unlocked.add(cap);
       }
     }
@@ -137,6 +152,16 @@ export function apply(ctx) {
     if (bound?.userQuestionsDisabled && restrictableNames.has(ASK_USER_QUESTION)) {
       denyList.push(ASK_USER_QUESTION);
     }
+    const headerTools = agent?.session?.requestHeader?.()?.tools;
+    const goalToolsAdmitted = bound?.goalToolsEnabled === true || hasAdmittedGoalTools(headerTools);
+    if (!goalToolsAdmitted) {
+      for (const goalTool of GOAL_TOOL_NAMES) {
+        if (restrictableNames.has(goalTool)) {
+          denyList.push(goalTool);
+        }
+      }
+    }
+    denyList.sort();
     const denyKey = denyList.join('\0');
     if (denyKey === record.lastDenyKey) return;
 
@@ -302,6 +327,12 @@ export function apply(ctx) {
     }
     if (toolName === ASK_USER_QUESTION && bound?.userQuestionsDisabled) {
       return { reason: 'This session cannot receive interactive questions.' };
+    }
+    if (typeof toolName === 'string' && GOAL_TOOL_NAME_SET.has(toolName)) {
+      const headerTools = exec.agent?.session?.requestHeader?.()?.tools;
+      if (bound?.goalToolsEnabled !== true && !hasAdmittedGoalTools(headerTools)) {
+        return { reason: 'Goal tools are only available when Goal mode is active (/goal or Goal button).' };
+      }
     }
     if (
       typeof toolName !== 'string'

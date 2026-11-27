@@ -209,6 +209,8 @@ export const DshProgressiveCapability = {
   Word: 'word',
   Excel: 'excel',
   Ppt: 'ppt',
+  HtmlRender: 'html-render',
+  SkinManage: 'skin-manage',
 } as const;
 export type DshProgressiveCapability =
   typeof DshProgressiveCapability[keyof typeof DshProgressiveCapability];

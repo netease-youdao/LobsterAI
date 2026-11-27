@@ -9,9 +9,63 @@ import {
   type SubagentCollaborationMode,
 } from '../../../shared/agent/constants';
 import { deriveAgentRoutingDescription } from '../../../shared/agent/description';
+import {
+  DSH_HTML_RENDER_TOOL,
+  DshProgressiveCapability,
+} from '../../../shared/dshEngine/hostConstants';
 import { canonicalizeDshProviderId } from '../../../shared/providers/constants';
 import type { Agent } from '../../coworkStore';
 import type { DshHostAgentSpec } from './dshHostManager';
+
+const EXPERT_PRESET_DEFAULT_CAPABILITIES: Readonly<Record<string, readonly DshProgressiveCapability[]>> = {
+  'xiaohongshu-editor': [DshProgressiveCapability.HtmlRender],
+  'xiaohongshu-viral-expert': [DshProgressiveCapability.HtmlRender],
+};
+
+const VALID_PROGRESSIVE_CAPABILITIES = new Set<string>(Object.values(DshProgressiveCapability));
+
+/**
+ * Resolve progressive host capabilities that should be pre-unlocked whenever a
+ * session runs as the given LobsterAI agent (direct session or delegated subagent).
+ */
+export function resolveHostCapabilitiesForAgent(
+  agent: Pick<Agent, 'id' | 'presetId' | 'systemPrompt' | 'skillIds'> | undefined,
+  declaredCapabilities?: readonly string[],
+): DshProgressiveCapability[] {
+  if (!agent) return [];
+  const caps = new Set<DshProgressiveCapability>();
+
+  if (Array.isArray(declaredCapabilities)) {
+    for (const raw of declaredCapabilities) {
+      const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+      if (VALID_PROGRESSIVE_CAPABILITIES.has(normalized)) {
+        caps.add(normalized as DshProgressiveCapability);
+      }
+    }
+  }
+
+  for (const key of [agent.presetId, agent.id]) {
+    const normalized = typeof key === 'string' ? key.trim().toLowerCase() : '';
+    const presetCaps = normalized ? EXPERT_PRESET_DEFAULT_CAPABILITIES[normalized] : undefined;
+    if (presetCaps) {
+      for (const cap of presetCaps) caps.add(cap);
+    }
+  }
+
+  if (typeof agent.systemPrompt === 'string' && agent.systemPrompt.includes(DSH_HTML_RENDER_TOOL)) {
+    caps.add(DshProgressiveCapability.HtmlRender);
+  }
+
+  if (Array.isArray(agent.skillIds)) {
+    for (const rawSkill of agent.skillIds) {
+      if (typeof rawSkill === 'string' && rawSkill.trim().toLowerCase() === 'skin-creator') {
+        caps.add(DshProgressiveCapability.SkinManage);
+      }
+    }
+  }
+
+  return [...caps];
+}
 
 export interface DshAgentSkillCatalogItem {
   id: string;
@@ -104,6 +158,7 @@ export function buildDshHostAgentSpecs(input: BuildDshHostAgentSpecsInput): DshH
     );
     const allowAgentIds = normalizeAllowAgentIds(id, agent.subagentAllowAgentIds);
     const skillSummaries = buildSkillSummariesForAgent(allowedSkillIds, enabledSkills);
+    const hostCapabilities = isMain ? [] : resolveHostCapabilitiesForAgent(agent);
 
     specs.push({
       id,
@@ -114,6 +169,7 @@ export function buildDshHostAgentSpecs(input: BuildDshHostAgentSpecsInput): DshH
       ...(agent.systemPrompt?.trim() ? { systemPrompt: agent.systemPrompt } : {}),
       ...(agent.workingDirectory?.trim() ? { workingDirectory: agent.workingDirectory.trim() } : {}),
       allowedSkillIds,
+      ...(hostCapabilities.length > 0 ? { hostCapabilities } : {}),
       ...(resolvedModel ? { modelSelection: resolvedModel } : {}),
       collaborationMode,
       allowAgentIds,

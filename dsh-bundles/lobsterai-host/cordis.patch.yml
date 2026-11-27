@@ -146,7 +146,7 @@
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
             config:
-              catalogDescriptionMaxLength: 160
+              catalogDescriptionMaxLength: 100
           - id: command-goal
             name: '@deepseek-ai/dsh-command-goal'
           - id: tool-goal
@@ -179,13 +179,8 @@
             config:
               provider: spawn
               toolName: subagent
-              modelSelection: true
-              modelDiscovery: true
-          - id: tool-subagent-fork
-            name: '@deepseek-ai/dsh-tool-subagent'
-            config:
-              provider: fork
-              toolName: subagent_fork
+              modelSelection: false
+              modelDiscovery: false
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-todo
