@@ -12,6 +12,17 @@ export const MIGRATION_V2_DREAM_DIARY_BACKFILL_KV_KEY = 'engine.migration.v2.dre
 export const MIGRATION_V2_DREAMING_PROMOTIONS_CLEANED_KV_KEY = 'engine.migration.v2.dreamingPromotionsCleaned';
 export const MIGRATION_V2_TAVILY_BACKFILL_KV_KEY = 'engine.migration.v2.tavilyBackfillCompleted';
 export const MIGRATION_V2_MCP_OAUTH_BACKFILL_KV_KEY = 'engine.migration.v2.mcpOAuthBackfillCompleted';
+export const MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY = 'engine.migration.v2.experimentalDshCleaned';
+
+export const LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY = 'dsh_config';
+export const LEGACY_EXPERIMENTAL_DSH_STATE_DIR_NAME = 'dsh';
+
+export const ExperimentalDshCleanupSkipReason = {
+  FreshInstall: 'freshInstall',
+  BackupRestore: 'backupRestore',
+} as const;
+export type ExperimentalDshCleanupSkipReason =
+  typeof ExperimentalDshCleanupSkipReason[keyof typeof ExperimentalDshCleanupSkipReason];
 
 export const MigrationV2Status = {
   Skipped: 'skipped',

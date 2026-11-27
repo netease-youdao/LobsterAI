@@ -56,6 +56,11 @@ import {
 } from '../../mcp/mcpOAuthManager';
 import { LobsterMemoryService } from '../../memory/lobsterMemoryService';
 import {
+  cleanupLegacyExperimentalDsh,
+  type CleanupLegacyExperimentalDshResult,
+  ExperimentalDshCleanupStatus,
+} from '../../migration/legacyExperimentalDshCleanup';
+import {
   backfillLegacyMcpOAuthTokensFromBackup,
   backfillLegacyScheduledTasksFromBackup,
   backfillLegacyTavilyFromBackup,
@@ -281,6 +286,35 @@ export function createSingleFlightAsyncTracker<T>(): SingleFlightAsyncTracker<T>
  * opened by the app store, ensuring clean snapshot, archival, and rollback.
  */
 export { cleanupLegacyOpenClawDisposableCaches };
+
+export async function runDeferredLegacyExperimentalDshCleanup(options: {
+  userDataDir: string;
+  db: Database.Database;
+}): Promise<CleanupLegacyExperimentalDshResult> {
+  const result = await cleanupLegacyExperimentalDsh({
+    userDataDir: options.userDataDir,
+    kv: createSqliteKvStoragePort(options.db),
+  });
+  if (result.status === ExperimentalDshCleanupStatus.Completed) {
+    if (
+      result.removedRoutes.length > 0
+      || result.clearedDefaultProfiles.length > 0
+      || result.writerLockRemoved
+    ) {
+      console.log(
+        `[MigrationV2] legacy experimental DSH cleanup completed: removedRoutes=${result.removedRoutes.join(',') || 'none'} clearedDefaults=${result.clearedDefaultProfiles.join(',') || 'none'} cleanedFiles=${result.cleanedFiles.length} writerLockRemoved=${result.writerLockRemoved}`,
+      );
+    }
+  } else if (
+    result.status === ExperimentalDshCleanupStatus.RetryScheduled
+    || result.status === ExperimentalDshCleanupStatus.PartialGaveUp
+  ) {
+    console.warn(
+      `[MigrationV2] legacy experimental DSH cleanup ${result.status} (attempt=${result.attempts ?? 0}): ${result.warnings.join('; ')}`,
+    );
+  }
+  return result;
+}
 
 export function runPreBootLegacyOpenClawMigration(options: {
   userDataDir: string;

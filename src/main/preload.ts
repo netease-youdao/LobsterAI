@@ -134,7 +134,6 @@ import { CompanionPermissionGuideIpc } from '../shared/desktopCompanion/permissi
 import { CompanionResultIpc } from '../shared/desktopCompanion/results';
 import { CompanionScreenshotIpc } from '../shared/desktopCompanion/screenshot';
 import { DialogIpc } from '../shared/dialog/constants';
-import { DshIpcChannel } from '../shared/dshEngine/constants';
 import { DshHostIpc } from '../shared/dshEngine/hostConstants';
 import {
   EnterpriseAccountIpcChannel,
@@ -540,13 +539,6 @@ contextBridge.exposeInMainWorld('electron', {
   generateSessionTitle: (request: GenerateSessionTitleRequest) =>
     ipcRenderer.invoke(CoworkIpcChannel.GenerateSessionTitle, request),
   getRecentCwds: (limit?: number) => ipcRenderer.invoke('get-recent-cwds', limit),
-  dsh: {
-    getState: () => ipcRenderer.invoke(DshIpcChannel.GetState),
-    getConfig: () => ipcRenderer.invoke(DshIpcChannel.GetConfig),
-    setEnabled: (enabled: boolean) => ipcRenderer.invoke(DshIpcChannel.SetEnabled, enabled),
-    openWorkbench: () => ipcRenderer.invoke(DshIpcChannel.OpenWorkbench),
-    stop: () => ipcRenderer.invoke(DshIpcChannel.Stop),
-  },
   decisionModel: {
     getConfig: () => ipcRenderer.invoke(DecisionModelIpcChannel.GetConfig),
     saveConfig: (update: DecisionModelConfigUpdate) => ipcRenderer.invoke(DecisionModelIpcChannel.SaveConfig, update),

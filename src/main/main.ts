@@ -484,6 +484,7 @@ import {
   createSingleFlightAsyncTracker,
   DshBootstrap,
   type DshCompatEngineStatus,
+  runDeferredLegacyExperimentalDshCleanup,
   runPreBootLegacyOpenClawMigration,
 } from './libs/dsh/dshBootstrap';
 import { createDshDecisionToolProvider } from './libs/dsh/dshDecisionTool';
@@ -15886,17 +15887,29 @@ if (!gotTheLock) {
     });
     console.log('[Main] initApp: window created');
 
-    // Clean up legacy OpenClaw pure disposable caches asynchronously after the
-    // main window is created so removing thousands of NTFS files never blocks boot.
-    void cleanupLegacyOpenClawDisposableCaches(app.getPath('userData'))
-      .then(({ dirsRemoved }) => {
+    // Run legacy experimental DSH model cleanup (stripping obsolete `lobsterai-*`
+    // routes from `~/.dsh` and `<userData>/dsh` while keeping those directories
+    // intact) before removing pure disposable caches, asynchronously after
+    // window creation so neither task ever blocks startup.
+    const deferredUserDataDir = app.getPath('userData');
+    void (async () => {
+      try {
+        await runDeferredLegacyExperimentalDshCleanup({
+          userDataDir: deferredUserDataDir,
+          db: getStore().getDatabase(),
+        });
+      } catch (error) {
+        console.warn('[MigrationV2] deferred experimental DSH cleanup failed (non-fatal):', error);
+      }
+      try {
+        const { dirsRemoved } = await cleanupLegacyOpenClawDisposableCaches(deferredUserDataDir);
         if (dirsRemoved > 0) {
           console.log(`[MigrationV2] deferred disposable cache cleanup removed ${dirsRemoved} dir(s)`);
         }
-      })
-      .catch(error => {
+      } catch (error) {
         console.warn('[MigrationV2] deferred disposable cache cleanup failed (non-fatal):', error);
-      });
+      }
+    })();
 
     // Refresh quota & model caches in background (SWR) without delaying window or DSH spawn.
     if (getAuthTokens()) {

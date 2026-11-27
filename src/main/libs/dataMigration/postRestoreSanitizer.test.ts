@@ -5,6 +5,11 @@ import path from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import {
+  ExperimentalDshCleanupSkipReason,
+  LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY,
+  MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY,
+} from '../../../shared/migration/constants';
+import {
   detectMissingThirdPartyDshPluginsSync,
   type PostRestoreSafeStoragePort,
   sanitizeRestoredStateSync,
@@ -304,6 +309,45 @@ describe('postRestoreSanitizer', () => {
         .prepare("SELECT value FROM kv WHERE key = 'auth_access_policy'")
         .get() as { value: string } | undefined;
       expect(row ? JSON.parse(row.value) : null).toBe('login_required');
+    } finally {
+      checkDb.close();
+    }
+  });
+
+  test('drops legacy dsh_config on restore and skips ~/.dsh cleanup on cross-machine restores', () => {
+    const dir = makeTempDir();
+    const targetUserData = path.join(dir, 'target', 'LobsterAI');
+    const dbPath = path.join(targetUserData, 'lobsterai.sqlite');
+
+    const db = createTestDb(dbPath);
+    db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY,
+      JSON.stringify({ enabled: true }),
+      1,
+    );
+    db.close();
+
+    sanitizeRestoredStateSync({
+      dbPath,
+      userDataPath: targetUserData,
+      sourceUserDataPath: '/Users/source-machine/Library/Application Support/LobsterAI',
+      sourcePlatform: process.platform,
+    });
+
+    const checkDb = new Database(dbPath, { readonly: true });
+    try {
+      const legacyCfg = checkDb
+        .prepare('SELECT value FROM kv WHERE key = ?')
+        .get(LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY);
+      expect(legacyCfg).toBeUndefined();
+
+      const cleanupMarker = checkDb
+        .prepare('SELECT value FROM kv WHERE key = ?')
+        .get(MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY) as { value: string } | undefined;
+      expect(cleanupMarker).toBeDefined();
+      expect(JSON.parse(cleanupMarker!.value)).toMatchObject({
+        skipped: ExperimentalDshCleanupSkipReason.BackupRestore,
+      });
     } finally {
       checkDb.close();
     }

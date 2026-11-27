@@ -14,6 +14,11 @@ import {
   DSH_PROFILE_DIR_NAME,
   DSH_PROFILE_NAME,
 } from '../../../shared/dshEngine/hostConstants';
+import {
+  ExperimentalDshCleanupSkipReason,
+  LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY,
+  MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY,
+} from '../../../shared/migration/constants';
 import { readInstalledProfilePlugins } from '../../ipcHandlers/dshHost/pluginOperations';
 import {
   detectLegacyInstallationInSqlite,
@@ -72,9 +77,24 @@ export const detectCrossMachineRestore = (options: {
   return false;
 };
 
-const clearTransientStateInSqlite = (db: Database.Database): void => {
+const clearTransientStateInSqlite = (db: Database.Database, isCrossMachine: boolean): void => {
   if (sqliteTableExists(db, 'kv')) {
     db.prepare('DELETE FROM kv WHERE key = ?').run(DSH_CACHED_SHELL_PATH_KV_KEY);
+    db.prepare('DELETE FROM kv WHERE key = ?').run(LEGACY_EXPERIMENTAL_DSH_CONFIG_KV_KEY);
+    // Never let a backup restored from another machine mutate this machine's `~/.dsh`.
+    if (isCrossMachine) {
+      db.prepare(`
+        INSERT OR IGNORE INTO kv (key, value, updated_at)
+        VALUES (?, ?, ?)
+      `).run(
+        MIGRATION_V2_EXPERIMENTAL_DSH_CLEANUP_KV_KEY,
+        JSON.stringify({
+          completedAt: new Date().toISOString(),
+          skipped: ExperimentalDshCleanupSkipReason.BackupRestore,
+        }),
+        Date.now(),
+      );
+    }
   }
   if (sqliteTableExists(db, 'mcp_launch_resolutions')) {
     db.prepare('DELETE FROM mcp_launch_resolutions').run();
@@ -359,7 +379,7 @@ export const sanitizeRestoredStateSync = (
     let db: Database.Database | null = null;
     try {
       db = new Database(options.dbPath);
-      clearTransientStateInSqlite(db);
+      clearTransientStateInSqlite(db, isCrossMachine);
       backfillLegacyAuthAccessPolicyInSqlite(db, options.userDataPath);
 
       const clearedBrowserCredentialCount = sanitizeBrowserCredentials(
