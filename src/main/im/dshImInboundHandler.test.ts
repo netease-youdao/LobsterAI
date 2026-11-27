@@ -78,6 +78,13 @@ function createFixture(options?: {
   };
 
   const imStore = {
+    findSharedGroupMapping: vi.fn((platform: Platform, groupId: string, _chatId: string, agentId: string) =>
+      [...mappings.values()].find(m => m.agentId === agentId && m.imConversationId === groupId
+        && (m.platform === platform || m.platform.startsWith(platform + ':'))) ?? null,
+    ),
+    recordGroupSessionRoute: (groupId: string, platform: Platform, taskId: string, agentId: string) => {
+      imStore.createSessionMapping(groupId, platform, taskId, agentId);
+    },
     findLegacyDirectSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
     findLegacyFeishuGroupSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
     getConversationReplyRoute: vi.fn<() => { to: string } | null>(() => null),
@@ -150,6 +157,40 @@ function createFixture(options?: {
 }
 
 describe('DshImInboundHandler', () => {
+  test.each(['dingtalk', 'feishu', 'popo', 'wecom'])('%s shares ordinary groups across bots and preserves each reply route', async platform => {
+    const { handler, runtime, pushMessage, sendReply, sessions } = createFixture();
+    const group = { platform, chatId: 'room', chatType: 'group' as const, senderId: 'alice', agentId: 'expert' };
+    const event = (bot: string, text: string) => ({
+      ...group, instanceId: bot, text, replyContext: { message: text },
+    });
+    const first = handler.enqueue(event('a', 'first'));
+    await vi.waitFor(() => expect(runtime.startSession).toHaveBeenCalledTimes(1));
+    const second = handler.enqueue(event('b', 'second'));
+    const third = handler.enqueue(event('a', 'third'));
+    const [task] = sessions.keys();
+    const answer = async (id: string, text: string) => {
+      pushMessage(id, { type: 'assistant', id: text, content: text });
+      runtime.emit('complete', id);
+    };
+    runtime.continueSession.mockImplementation(answer);
+    await answer(task, 'first answer');
+    await Promise.all([first, second, third]);
+    expect(runtime.stopSession).not.toHaveBeenCalled();
+    expect(runtime.continueSession.mock.calls).toEqual([[task, '[alice] second'], [task, '[alice] third']]);
+    expect(sendReply.mock.calls.map(([reply]) => reply)).toEqual([
+      { platform, instanceId: 'a', chatId: 'room', text: 'first answer', replyContext: { message: 'first' } },
+      { platform, instanceId: 'b', chatId: 'room', text: '[alice] second', replyContext: { message: 'second' } },
+      { platform, instanceId: 'a', chatId: 'room', text: '[alice] third', replyContext: { message: 'third' } },
+    ]);
+    runtime.startSession.mockImplementation(answer);
+    await handler.enqueue({ ...event('b', 'different agent'), agentId: 'other' });
+    await handler.enqueue({ ...event('a', 'private a'), chatType: 'direct' });
+    await handler.enqueue({ ...event('b', 'private b'), chatType: 'direct' });
+    await handler.enqueue({ ...event('b', 'private first'), chatType: 'direct', chatId: 'second-room' });
+    await handler.enqueue({ ...event('b', 'group second'), chatId: 'second-room' });
+    expect(sessions.size).toBe(6);
+  });
+
   test('queues different group members in one task and routes other groups and DMs separately', async () => {
     const { handler, runtime, coworkStore, sessions } = createFixture();
     const group = { platform: 'popo', instanceId: 'bot', chatType: 'group' as const, chatId: '8054099', text: 'first' };
@@ -173,6 +214,26 @@ describe('DshImInboundHandler', () => {
     expect([...sessions.values()].map(row => row.title)).toEqual([
       '[POPO] group:8054099', '[POPO] group:8072584', '[POPO] bob',
     ]);
+  });
+
+  test('only the addressed bot can consume a pending group approval', async () => {
+    const { handler, runtime, sendReply } = createFixture();
+    const group = { platform: 'dingtalk', chatType: 'group' as const, chatId: 'cidRoom', senderId: 'alice' };
+    const requestId = DSH_APPROVAL_REQUEST_ID_PREFIX + 'group-request';
+    runtime.startSession.mockImplementationOnce(async (id: string) => {
+      runtime.emit('permissionRequest', id, { requestId, toolName: 'read', toolInput: {} });
+    });
+    runtime.respondToPermission.mockImplementationOnce(async () => { runtime.emit('complete', 'cowork-session-1'); });
+    runtime.continueSession.mockImplementationOnce(async (id: string) => { runtime.emit('complete', id); });
+    const first = handler.enqueue({ ...group, instanceId: 'a', text: 'start' });
+    await vi.waitFor(() => expect(sendReply).toHaveBeenCalled());
+    const wrongBot = handler.enqueue({ ...group, instanceId: 'b', text: '1' });
+    expect(runtime.respondToPermission).not.toHaveBeenCalled();
+    await handler.enqueue({ ...group, instanceId: 'a', text: '1' });
+    await Promise.all([first, wrongBot]);
+    expect(runtime.stopSession).not.toHaveBeenCalled();
+    expect(runtime.respondToPermission).toHaveBeenCalledExactlyOnceWith(requestId, { behavior: 'allow' });
+    expect(runtime.continueSession).toHaveBeenCalledWith('cowork-session-1', '[alice] 1');
   });
 
   test('repairs the generated group title on an existing DSH task and preserves a custom title', async () => {

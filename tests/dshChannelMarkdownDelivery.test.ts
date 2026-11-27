@@ -139,15 +139,16 @@ test('DingTalk falls back on explicit rejection and avoids a duplicate after amb
 });
 
 test.each([
-  { groupReplyMode: 'text', msgKey: 'sampleText' },
-  { groupReplyMode: 'markdown', msgKey: 'sampleMarkdown' },
-])('DingTalk honors $groupReplyMode for proactive group delivery', async ({ groupReplyMode, msgKey }) => {
+  { groupReplyMode: 'text', msgKey: 'sampleText', chatId: 'cidRoom' },
+  { groupReplyMode: 'markdown', msgKey: 'sampleMarkdown', chatId: 'group:cidRoom' },
+  { groupReplyMode: 'text', msgKey: 'sampleText', chatId: 'account:group:cidRoom' },
+])('DingTalk delivers $groupReplyMode to the native group for $chatId', async ({ groupReplyMode, msgKey, chatId }) => {
   const { DingTalkChannelDriver } = await import(dingTalkModule);
   const driver = new DingTalkChannelDriver({ config: { clientId: 'bot', clientSecret: 'secret', groupReplyMode } });
   driver.getAppAccessToken = async () => 'token';
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ processQueryKey: 'ack' }));
   vi.stubGlobal('fetch', fetch);
-  await driver.sendMessage({ chatId: 'cidRoom', text: reply });
+  await driver.sendMessage({ chatId, text: reply });
   expect(fetch).toHaveBeenCalledTimes(1);
   const [url, init] = fetch.mock.calls[0];
   expect(new URL(url).pathname).toBe('/v1.0/robot/groupMessages/send');
