@@ -483,7 +483,8 @@ function dropEmptyExtensions(xml: string): string {
   const extPrefix = list[1].slice(0, list[1].length - 'extLst'.length);
   const inner = result.slice(result.indexOf('>', list.index) + 1, listEnd);
   // Direct `<ext>` children only; extensions may nest their own extension lists.
-  const token = new RegExp(`<(/?)${extPrefix.replace(/[.]/g, '\\.')}ext(?=[\\s/>])[^>]*?(/?)>`, 'g');
+  const escapedExtPrefix = extPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const token = new RegExp(`<(/?)${escapedExtPrefix}ext(?=[\\s/>])[^>]*?(/?)>`, 'g');
   let depth = 0;
   let start = -1;
   const empty: [number, number][] = [];

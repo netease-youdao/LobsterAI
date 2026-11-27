@@ -1352,11 +1352,11 @@ export class DshBootstrap {
 
       if (deferExternalSync) {
         const hasOAuthMcp = input.mcpServers.some((s) => s.enabled !== false && s.oauthEnabled);
-        const nonOAuthRecords = hasOAuthMcp
+        const immediateMcpRecords = hasOAuthMcp
           ? input.mcpServers.filter((s) => !s.oauthEnabled)
           : input.mcpServers;
         const { servers: immediateMcpServers } = await buildDshMcpServerSpecs(
-          nonOAuthRecords,
+          immediateMcpRecords,
           this.mcpOAuthManager,
         );
         coreSyncTasks.push(

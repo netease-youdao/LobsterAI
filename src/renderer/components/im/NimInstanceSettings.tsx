@@ -39,14 +39,22 @@ function deepSet(obj: Record<string, unknown>, path: string, value: unknown): Re
   const result = { ...obj };
   let current: Record<string, unknown> = result;
   for (let i = 0; i < keys.length - 1; i++) {
-    const nextValue = current[keys[i]];
+    const key = keys[i];
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      return obj;
+    }
+    const nextValue = Object.prototype.hasOwnProperty.call(current, key) ? current[key] : undefined;
     const nextObject = nextValue && typeof nextValue === 'object' && !Array.isArray(nextValue)
       ? nextValue as Record<string, unknown>
       : {};
-    current[keys[i]] = { ...nextObject };
-    current = current[keys[i]] as Record<string, unknown>;
+    current[key] = { ...nextObject };
+    current = current[key] as Record<string, unknown>;
   }
-  current[keys[keys.length - 1]] = value;
+  const lastKey = keys[keys.length - 1];
+  if (lastKey === '__proto__' || lastKey === 'constructor' || lastKey === 'prototype') {
+    return obj;
+  }
+  current[lastKey] = value;
   return result;
 }
 

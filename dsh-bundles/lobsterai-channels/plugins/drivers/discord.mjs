@@ -7,6 +7,9 @@ import {
 } from './media-utils.mjs';
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 41_250;
+const MIN_HEARTBEAT_INTERVAL_MS = 5_000;
+const MAX_HEARTBEAT_INTERVAL_MS = 120_000;
 
 function acceptsGuildMessage(message, botId, config) {
   if (config.groupPolicy === 'disabled') return false;
@@ -177,7 +180,19 @@ export class DiscordChannelDriver extends BaseChannelDriver {
           }
           if (typeof payload.s === 'number') this.lastSeq = payload.s;
           if (payload.op === 10) {
-            const interval = Number(payload.d?.heartbeat_interval || 41250);
+            if (this.heartbeatTimer) {
+              clearInterval(this.heartbeatTimer);
+              this.heartbeatTimer = null;
+            }
+            const rawInterval = Number(payload.d?.heartbeat_interval);
+            let interval = DEFAULT_HEARTBEAT_INTERVAL_MS;
+            if (
+              Number.isFinite(rawInterval) &&
+              rawInterval >= MIN_HEARTBEAT_INTERVAL_MS &&
+              rawInterval <= MAX_HEARTBEAT_INTERVAL_MS
+            ) {
+              interval = rawInterval;
+            }
             this.heartbeatTimer = setInterval(() => {
               if (ws.readyState === 1) ws.send(JSON.stringify({ op: 1, d: this.lastSeq }));
             }, interval);

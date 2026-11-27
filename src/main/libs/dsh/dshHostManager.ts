@@ -1566,7 +1566,8 @@ export class DshHostManager extends EventEmitter {
       res.end(JSON.stringify({ error: `Unknown bridge route: ${pathname}` }));
     } catch (error) {
       if (res.destroyed) return;
-      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[DshHostManager] Bridge request failed:', error);
+      const message = error instanceof Error ? error.message : 'Bridge request failed';
       if (res.headersSent) {
         res.end(JSON.stringify({ bridgeError: message }));
       } else {

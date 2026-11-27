@@ -8,6 +8,7 @@ const WECOM_DRIVER_PATH = '../dsh-bundles/lobsterai-channels/plugins/drivers/wec
 const QQ_DRIVER_PATH = '../dsh-bundles/lobsterai-channels/plugins/drivers/qq.mjs';
 const TELEGRAM_DRIVER_PATH = '../dsh-bundles/lobsterai-channels/plugins/drivers/telegram.mjs';
 const DISCORD_DRIVER_PATH = '../dsh-bundles/lobsterai-channels/plugins/drivers/discord.mjs';
+const MEDIA_UTILS_PATH = '../dsh-bundles/lobsterai-channels/plugins/drivers/media-utils.mjs';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -639,5 +640,149 @@ describe('DSH IM Channel Drivers — Voice & Image Inbound Support', () => {
         },
       ],
     });
+  });
+
+  test('validateMediaDownloadUrl and fetchBinaryWithLimit block SSRF targets and unsafe redirects', async () => {
+    const { fetchBinaryWithLimit, validateMediaDownloadUrl } = await import(MEDIA_UTILS_PATH);
+
+    expect(validateMediaDownloadUrl('//qq.cdn.test/voice.wav?sig=abc%2B1')).toBe(
+      'https://qq.cdn.test/voice.wav?sig=abc%2B1',
+    );
+    expect(validateMediaDownloadUrl('https://cdn.discordapp.com:443/attachments/1/2/photo%20[1].png')).toBe(
+      'https://cdn.discordapp.com/attachments/1/2/photo%20[1].png',
+    );
+
+    for (const blockedUrl of [
+      'file:///etc/passwd',
+      'data:image/png;base64,AAAA',
+      'https://user:pass@cdn.example.com/a.png',
+      'http://localhost/secret',
+      'http://sub.localhost:8080/secret',
+      'http://service.internal/meta',
+      'http://printer.local/status',
+      'http://127.0.0.1:9000/api/lobsterai/ops',
+      'http://0x7f000001/secret',
+      'http://10.0.0.1/internal',
+      'http://172.16.5.4/internal',
+      'http://192.168.1.1/router',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://[::1]:8080/secret',
+      'http://[::ffff:127.0.0.1]/secret',
+      'https://cdn.example.com/a/%2e%2e/secret',
+    ]) {
+      expect(() => validateMediaDownloadUrl(blockedUrl), blockedUrl).toThrow();
+    }
+
+    // Follows a safe redirect and strips Authorization on cross-origin redirect
+    const fetchCalls: Array<{ url: string; auth: string | null }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        fetchCalls.push({ url, auth: headers.get('authorization') });
+        if (url === 'https://cdn-a.example.test/start.png') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://cdn-b.example.test/final.png' },
+          });
+        }
+        if (url === 'https://cdn-b.example.test/final.png') {
+          return new Response(new Uint8Array(PNG_MAGIC), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          });
+        }
+        if (url === 'https://cdn-a.example.test/evil-redirect') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'http://127.0.0.1:8080/api/lobsterai/ops' },
+          });
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      }),
+    );
+
+    const ok = await fetchBinaryWithLimit('https://cdn-a.example.test/start.png', {
+      headers: { authorization: 'Bearer secret-token' },
+    });
+    expect(ok.buffer.equals(PNG_MAGIC)).toBe(true);
+    expect(fetchCalls).toEqual([
+      { url: 'https://cdn-a.example.test/start.png', auth: 'Bearer secret-token' },
+      { url: 'https://cdn-b.example.test/final.png', auth: null },
+    ]);
+
+    await expect(fetchBinaryWithLimit('https://cdn-a.example.test/evil-redirect')).rejects.toThrow(
+      /not allowed/i,
+    );
+  });
+
+  test('DiscordChannelDriver and QQChannelDriver clamp out-of-range heartbeat intervals', async () => {
+    const { DiscordChannelDriver } = await import(DISCORD_DRIVER_PATH);
+    const { QQChannelDriver } = await import(QQ_DRIVER_PATH);
+
+    const intervals: number[] = [];
+    const realSetInterval = globalThis.setInterval;
+    const setIntervalSpy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation(((fn: TimerHandler, ms?: number) => {
+        intervals.push(Number(ms));
+        return realSetInterval(fn, 60_000);
+      }) as typeof globalThis.setInterval);
+
+    class FakeWebSocket extends EventTarget {
+      readyState = 1;
+      sent: string[] = [];
+      send(data: string) {
+        this.sent.push(data);
+      }
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new Event('close'));
+      }
+    }
+
+    const sockets: FakeWebSocket[] = [];
+    vi.stubGlobal(
+      'WebSocket',
+      class extends FakeWebSocket {
+        constructor() {
+          super();
+          sockets.push(this);
+        }
+      },
+    );
+
+    const discord = new DiscordChannelDriver({
+      instanceId: 'dc-hb',
+      config: { botToken: 'tok' },
+      onInbound: async () => {},
+    });
+    const dcAbort = new AbortController();
+    const dcLoop = discord.runGateway('wss://gateway.discord.gg/?v=10&encoding=json', { id: '1', username: 'b' }, dcAbort.signal);
+    const dcWs = sockets[0];
+    dcWs.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 1 } }) }));
+    dcWs.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 9_999_999 } }) }));
+    dcWs.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 45_000 } }) }));
+    dcAbort.abort();
+    await dcLoop;
+
+    const qq = new QQChannelDriver({
+      instanceId: 'qq-hb',
+      config: { appId: '1', clientSecret: 'sec' },
+      onInbound: async () => {},
+    });
+    qq.accessToken = 'qq-tok';
+    qq.tokenExpiresAt = Date.now() + 600_000;
+    const qqAbort = new AbortController();
+    const qqLoop = qq.runGateway('wss://api.sgroup.qq.com/websocket', qqAbort.signal);
+    await Promise.resolve();
+    const qqWs = sockets[1];
+    qqWs.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 10 } }) }));
+    qqWs.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 35_000 } }) }));
+    qqAbort.abort();
+    await qqLoop;
+
+    setIntervalSpy.mockRestore();
+    expect(intervals).toEqual([41_250, 41_250, 45_000, 30_000, 35_000]);
   });
 });

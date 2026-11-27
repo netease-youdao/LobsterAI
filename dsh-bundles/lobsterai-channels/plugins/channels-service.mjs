@@ -120,10 +120,11 @@ export function apply(ctx) {
             return jsonResponse({ ok: false, error: `Unknown channels action: ${String(action)}` }, 400);
         }
       } catch (error) {
-        return jsonResponse(
-          { ok: false, error: error instanceof Error ? error.message : String(error) },
-          500,
+        ctx.logger?.warn?.(
+          `[LobsterAI:Channels] action "${String(action)}" failed: ${error instanceof Error ? error.message : String(error)}`,
         );
+        const message = error instanceof Error ? error.message : 'Channels request failed';
+        return jsonResponse({ ok: false, error: message }, 500);
       }
     },
   });

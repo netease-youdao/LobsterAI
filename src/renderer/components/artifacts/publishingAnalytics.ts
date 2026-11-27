@@ -196,10 +196,20 @@ export interface CreatePublishingRecoveryAnalyticsContextFromAttemptInput {
   resourceKey: string;
 }
 
-const createId = (): string => (
-  globalThis.crypto?.randomUUID?.()
-  ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-);
+let fallbackIdCounter = 0;
+
+const createId = (): string => {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  fallbackIdCounter += 1;
+  return `${Date.now()}-${fallbackIdCounter}`;
+};
 
 export const createPublishingAnalyticsOperationId = createId;
 

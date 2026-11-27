@@ -727,10 +727,8 @@ export function apply(ctx) {
         ctx.logger.warn(
           `[LobsterAI:OpsRpc] action "${String(action)}" failed: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return jsonResponse(
-          { ok: false, error: error instanceof Error ? error.message : String(error) },
-          500,
-        );
+        const message = error instanceof Error ? error.message : 'Ops request failed';
+        return jsonResponse({ ok: false, error: message }, 500);
       }
     },
   });

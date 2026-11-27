@@ -343,7 +343,8 @@ function editedComment(element: XmlElement, key: string, text: string, prefix: s
 /** Prefixes a VML part uses for the VML, Office and Excel namespaces. */
 function vmlPrefixes(vml: string): { v: string; o: string; x: string } {
   const prefix = (namespace: string, fallback: string) => {
-    const match = new RegExp(`xmlns:([\\w.-]+)="${namespace.replace(/[.]/g, '\\.')}"`).exec(vml);
+    const escapedNamespace = namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`xmlns:([\\w.-]+)="${escapedNamespace}"`).exec(vml);
     return match ? match[1] : fallback;
   };
   return { v: prefix(VML_NS, 'v'), o: prefix(OFFICE_NS, 'o'), x: prefix(EXCEL_NS, 'x') };

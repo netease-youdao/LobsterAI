@@ -10,6 +10,9 @@ import {
 const QQ_AUTH_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQ_API_BASE = 'https://api.sgroup.qq.com';
 const MAX_CACHED_MSG_SEQS = 512;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const MIN_HEARTBEAT_INTERVAL_MS = 5_000;
+const MAX_HEARTBEAT_INTERVAL_MS = 120_000;
 
 export class QQChannelDriver extends BaseChannelDriver {
   constructor(options) {
@@ -181,7 +184,19 @@ export class QQChannelDriver extends BaseChannelDriver {
           try { payload = JSON.parse(String(event.data)); } catch { return; }
           if (typeof payload.s === 'number') this.lastSeq = payload.s;
           if (payload.op === 10) {
-            const interval = Number(payload.d?.heartbeat_interval || 30_000);
+            if (this.heartbeatTimer) {
+              clearInterval(this.heartbeatTimer);
+              this.heartbeatTimer = null;
+            }
+            const rawInterval = Number(payload.d?.heartbeat_interval);
+            let interval = DEFAULT_HEARTBEAT_INTERVAL_MS;
+            if (
+              Number.isFinite(rawInterval) &&
+              rawInterval >= MIN_HEARTBEAT_INTERVAL_MS &&
+              rawInterval <= MAX_HEARTBEAT_INTERVAL_MS
+            ) {
+              interval = rawInterval;
+            }
             this.heartbeatTimer = setInterval(() => {
               if (ws.readyState === 1) ws.send(JSON.stringify({ op: 1, d: this.lastSeq }));
             }, interval);

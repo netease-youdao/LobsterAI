@@ -745,7 +745,7 @@ describe('xlsx export', () => {
     }, bytes).bytes);
     const dataRels = parts['xl/worksheets/_rels/sheet1.xml.rels'];
     expect(dataRels).toContain(`Type="${rel}/comments" Target="../comments2.xml"`);
-    expect(dataRels).toMatch(new RegExp(`Id="(rId\\d+)" Type="${rel}/vmlDrawing" Target="../drawings/vmlDrawing2.vml"`));
+    expect(dataRels).toMatch(/Id="(rId\d+)" Type="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships\/vmlDrawing" Target="\.\.\/drawings\/vmlDrawing2\.vml"/);
     expect(parts['xl/comments2.xml']).toContain('<comment ref="A2" authorId="0"><text><t xml:space="preserve">首条批注</t></text></comment>');
     expect(parts['xl/drawings/vmlDrawing2.vml']).toContain('<x:Row>1</x:Row><x:Column>0</x:Column>');
     expect(parts[PARTS.data]).toMatch(/<legacyDrawing r:id="rId\d+"\/><tableParts/);
