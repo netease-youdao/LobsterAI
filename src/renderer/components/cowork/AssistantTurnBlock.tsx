@@ -1239,6 +1239,7 @@ const AssistantTurnBlock: React.FC<{
                 turnUsageSlot={trailingTurnUsageSlot}
                 mapDisplayText={mapDisplayText}
                 onForkMessage={onForkMessage}
+                compactMeta={compactMeta}
               />
             )}
           </div>

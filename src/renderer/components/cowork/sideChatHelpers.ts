@@ -1,22 +1,60 @@
-import type { CoworkSideChatSummary } from '../../../shared/cowork/sideChat';
+import {
+  CoworkSideChatStatus,
+  type CoworkSideChatSummary,
+} from '../../../shared/cowork/sideChat';
 
 const MAX_PERMISSION_PREVIEW_CHARS = 420;
+const DEFAULT_SIDE_CHAT_TITLE_PATTERN = /^(?:Side chat|侧边聊天)(?:\s+\d+)?$/i;
+
+export function isDefaultSideChatTitle(title: string | null | undefined): boolean {
+  const trimmed = title?.trim() ?? '';
+  return trimmed.length === 0 || DEFAULT_SIDE_CHAT_TITLE_PATTERN.test(trimmed);
+}
 
 /**
- * Format a side chat's display title as `<localizedBase> <ordinal>` (e.g.
- * "侧边聊天 1", "侧边聊天 2", "Side chat 1") ordered by creation time.
+ * Format a side chat's display title. Custom user-renamed titles take
+ * precedence; untouched default titles render as `<localizedBase> <ordinal>`
+ * (e.g. "侧边聊天 1", "Side chat 1") ordered by creation time.
  */
 export function getSideChatDisplayTitle(
   sideChatId: string,
-  allSummaries: ReadonlyArray<Pick<CoworkSideChatSummary, 'id' | 'createdAt'>>,
+  allSummaries: ReadonlyArray<Pick<CoworkSideChatSummary, 'id' | 'createdAt'> & { title?: string }>,
   localizedBase: string,
 ): string {
+  const target = allSummaries.find((item) => item.id === sideChatId);
+  if (target?.title && !isDefaultSideChatTitle(target.title)) {
+    return target.title.trim();
+  }
   const ordered = [...allSummaries].sort(
     (a, b) => (a.createdAt - b.createdAt) || a.id.localeCompare(b.id),
   );
   const index = ordered.findIndex((item) => item.id === sideChatId);
   const ordinal = index >= 0 ? index + 1 : ordered.length + 1;
   return `${localizedBase} ${ordinal}`;
+}
+
+export type SideChatPromoteDisabledReasonKey =
+  | 'coworkSideChatPromoteRunningHint'
+  | 'coworkSideChatPromoteEmptyHint';
+
+export interface SideChatPromoteEligibility {
+  allowed: boolean;
+  reasonKey?: SideChatPromoteDisabledReasonKey;
+}
+
+export function getSideChatPromoteEligibility(
+  sideChat: Pick<CoworkSideChatSummary, 'status' | 'messageCount'> | null | undefined,
+): SideChatPromoteEligibility {
+  if (!sideChat) {
+    return { allowed: false, reasonKey: 'coworkSideChatPromoteEmptyHint' };
+  }
+  if (sideChat.status === CoworkSideChatStatus.Running) {
+    return { allowed: false, reasonKey: 'coworkSideChatPromoteRunningHint' };
+  }
+  if (sideChat.messageCount <= 0) {
+    return { allowed: false, reasonKey: 'coworkSideChatPromoteEmptyHint' };
+  }
+  return { allowed: true };
 }
 
 /**

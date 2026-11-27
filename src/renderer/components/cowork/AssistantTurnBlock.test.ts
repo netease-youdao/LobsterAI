@@ -21,6 +21,7 @@ const renderTurn = (
     artifacts?: Artifact[];
     enableMessageSpeech?: boolean;
     showCopyButtons?: boolean;
+    compactMeta?: boolean;
   } = {},
 ): string => {
   const store = configureStore({
@@ -40,6 +41,7 @@ const renderTurn = (
       artifacts: options.artifacts,
       enableMessageSpeech: options.enableMessageSpeech,
       showCopyButtons: options.showCopyButtons,
+      compactMeta: options.compactMeta,
       onForkMessage: () => {},
     }),
   }));
@@ -85,6 +87,45 @@ test.each([
   expect(copyButton?.includes('disabled=""')).toBe(!items.some(
     item => item.type === 'assistant' && !item.metadata?.isThinking,
   ));
+});
+
+test.each([
+  { name: 'before any assistant output', items: [] },
+  { name: 'during thinking', items: [process[1]] },
+  { name: 'during a tool call after earlier text', items: [
+    { id: 'progress', type: 'assistant' as const, content: 'Working on it.', timestamp: 2_000 },
+    ...toolMessages('stopped-tool', 3_000).slice(0, 1),
+  ] },
+])('collapses stopped turn footer time/model/credits into overflow when compactMeta is enabled $name', ({ items }) => {
+  const html = renderTurn([userWithUsage, ...items], false, false, { compactMeta: true });
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html).toContain(`aria-label="${i18nService.t('more')}"`);
+  expect(html).not.toContain('cowork-message-meta-full-date');
+  expect(html).not.toContain('12.5 积分');
+  expect(html).not.toContain('deepseek-flash');
+});
+
+test('collapses stopped turn footer in ConversationTurnsView when compactMeta is enabled (side chat)', () => {
+  const store = configureStore({
+    reducer: {
+      auth: () => ({ creditQuotaSnapshot: null }),
+      enterpriseAccount: () => ({ context: null }),
+      kit: () => ({ installedKits: [] }),
+      cowork: () => ({ isStreaming: false }),
+    },
+  });
+  const html = renderToStaticMarkup(React.createElement(Provider, {
+    store,
+    children: React.createElement(ConversationTurnsView, {
+      messages: [userWithUsage, ...toolMessages('side-stopped-tool', 3_000).slice(0, 1)],
+      scrollContainerRef: React.createRef<HTMLDivElement>(),
+      compactMeta: true,
+    }),
+  }));
+  expect(html.match(/class="cowork-message-meta /g)).toHaveLength(1);
+  expect(html).toContain(`aria-label="${i18nService.t('more')}"`);
+  expect(html).not.toContain('cowork-message-meta-full-date');
+  expect(html).not.toContain('12.5 积分');
 });
 
 test('keeps a single usage chip with the final reply, including a stopped partial reply', () => {

@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { splitArtifactFileNameExtension } from '@/components/artifacts/artifactHeaderPath';
 import { i18nService } from '@/services/i18n';
 
-import ArtifactPreviewTabMenu from './ArtifactPreviewTabMenu';
+import ArtifactPreviewTabMenu, { type ArtifactPreviewTabMenuAction } from './ArtifactPreviewTabMenu';
 
 interface ArtifactPreviewTabItemProps {
   active: boolean;
@@ -17,6 +17,9 @@ interface ArtifactPreviewTabItemProps {
   onCloseOthers?: () => void;
   onCloseToRight?: () => void;
   canRename?: boolean;
+  preserveExtensionOnRename?: boolean;
+  renameLabel?: string;
+  extraMenuActions?: ArtifactPreviewTabMenuAction[];
   isRenaming?: boolean;
   onStartRename?: () => void;
   onCancelRename?: () => void;
@@ -49,6 +52,9 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
   onCloseOthers,
   onCloseToRight,
   canRename = false,
+  preserveExtensionOnRename = true,
+  renameLabel,
+  extraMenuActions,
   isRenaming = false,
   onStartRename,
   onCancelRename,
@@ -56,7 +62,10 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
   indicator,
 }) => {
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number }>();
-  const { stem, extension } = useMemo(() => splitArtifactFileNameExtension(label), [label]);
+  const { stem, extension } = useMemo(
+    () => (preserveExtensionOnRename ? splitArtifactFileNameExtension(label) : { stem: label, extension: '' }),
+    [label, preserveExtensionOnRename],
+  );
   const [draftStem, setDraftStem] = useState(stem);
   const [isSubmittingRename, setIsSubmittingRename] = useState(false);
   const tabRef = useRef<HTMLDivElement>(null);
@@ -175,7 +184,7 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
                 cancelRename();
               }
             }}
-            aria-label={i18nService.t('artifactRenameFile')}
+            aria-label={renameLabel || i18nService.t('artifactRenameFile')}
             className="min-w-[72px] flex-1 bg-transparent text-xs font-medium text-foreground outline-none"
           />
           {extension && (
@@ -207,6 +216,8 @@ const ArtifactPreviewTabItem: React.FC<ArtifactPreviewTabItemProps> = ({
               position={menuPosition}
               onDismiss={dismissMenu}
               onRenameTab={canRename && onStartRename ? onStartRename : undefined}
+              renameLabel={renameLabel}
+              extraActions={extraMenuActions}
               onCloseTab={onClose}
               onCloseOthers={onCloseOthers}
               onCloseToRight={onCloseToRight}
