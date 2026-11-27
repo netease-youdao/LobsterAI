@@ -8,6 +8,10 @@
 import { EventEmitter } from 'events';
 
 import { CoworkSystemMessageKind } from '../../common/coworkSystemMessages';
+import {
+  DSH_APPROVAL_REQUEST_ID_PREFIX,
+  DSH_QUESTION_REQUEST_ID_PREFIX,
+} from '../../shared/dshEngine/hostConstants';
 import type { CoworkMessage,CoworkStore } from '../coworkStore';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
 import { DEFAULT_IM_EMPTY_REPLY, stripThinkingBlocks } from './imReplyGuard';
@@ -70,6 +74,7 @@ export class IMCoworkHandler extends EventEmitter {
   private readonly onMessage = this.handleMessage.bind(this);
   private readonly onMessageUpdate = this.handleMessageUpdate.bind(this);
   private readonly onPermissionRequest = this.handlePermissionRequest.bind(this);
+  private readonly onPermissionResolved = this.handlePermissionResolved.bind(this);
   private readonly onComplete = this.handleComplete.bind(this);
   private readonly onError = this.handleError.bind(this);
   private readonly onSessionStopped = this.handleSessionStopped.bind(this);
@@ -124,6 +129,7 @@ export class IMCoworkHandler extends EventEmitter {
     this.coworkRuntime.on('message', this.onMessage);
     this.coworkRuntime.on('messageUpdate', this.onMessageUpdate);
     this.coworkRuntime.on('permissionRequest', this.onPermissionRequest);
+    this.coworkRuntime.on('permissionResolved', this.onPermissionResolved);
     this.coworkRuntime.on('complete', this.onComplete);
     this.coworkRuntime.on('error', this.onError);
     this.coworkRuntime.on('sessionStopped', this.onSessionStopped);
@@ -224,11 +230,32 @@ export class IMCoworkHandler extends EventEmitter {
     keysToRemove.forEach((key) => this.clearPendingPermissionByKey(key));
   }
 
+  private handlePermissionResolved(_sessionId: string, requestId: string): void {
+    for (const [key, pending] of this.pendingPermissionByConversation.entries()) {
+      if (pending.request.requestId === requestId) {
+        this.clearPendingPermissionByKey(key);
+        break;
+      }
+    }
+  }
+
   /**
-   * Track permission requests on IM sessions: deny one after 60s, or as soon as
-   * a newer request in the same conversation supersedes it.
+   * Track legacy permission requests on IM sessions: deny one after 60s, or as
+   * soon as a newer request in the same conversation supersedes it.
+   *
+   * DSH approval and question lifecycles are owned by `ImApprovalRelay` (for
+   * IM-triggered turns, with its 300s timeout) and the desktop permission modal,
+   * so they must not be raced by this legacy 60s fallback timer.
    */
   private handlePermissionRequest(sessionId: string, request: PermissionRequest): void {
+    if (
+      !request?.requestId
+      || request.requestId.startsWith(DSH_APPROVAL_REQUEST_ID_PREFIX)
+      || request.requestId.startsWith(DSH_QUESTION_REQUEST_ID_PREFIX)
+    ) {
+      return;
+    }
+
     // Only process permission requests from IM sessions
     if (!this.ensureTrackedSession(sessionId)) return;
     const conversation = this.sessionConversationMap.get(sessionId);
@@ -540,6 +567,7 @@ export class IMCoworkHandler extends EventEmitter {
     this.coworkRuntime.off('message', this.onMessage);
     this.coworkRuntime.off('messageUpdate', this.onMessageUpdate);
     this.coworkRuntime.off('permissionRequest', this.onPermissionRequest);
+    this.coworkRuntime.off('permissionResolved', this.onPermissionResolved);
     this.coworkRuntime.off('complete', this.onComplete);
     this.coworkRuntime.off('error', this.onError);
     this.coworkRuntime.off('sessionStopped', this.onSessionStopped);
