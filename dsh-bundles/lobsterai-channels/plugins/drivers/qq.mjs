@@ -214,7 +214,10 @@ export class QQChannelDriver extends BaseChannelDriver {
                   ...(attachments.length > 0 ? { attachments } : {}),
                   messageId: String(d.id || ''),
                   chatType: isGroup ? 'group' : 'direct',
-                  replyContext: { isGroup, msgId: d.id },
+                  replyContext: {
+                    isGroup, msgId: d.id,
+                    ...(isGroup && d.union_group_openid ? { unionGroupOpenId: d.union_group_openid } : {}),
+                  },
                 });
               })
               .catch((err) => {

@@ -7,10 +7,12 @@ import { randomUUID } from 'node:crypto';
 
 import Database from 'better-sqlite3';
 
+import { RetainedImPlatform } from '../../shared/dshEngine/hostConstants';
 import { PlatformRegistry } from '../../shared/platform';
 import { t } from '../i18n';
 import { type FeishuGroupSessionRoute, findLegacyFeishuGroupSession } from './feishuGroupSessionMapping';
 import { type DirectSessionRoute, findLegacyDirectSession } from './legacyDirectSessionMapping';
+import { findQQGroupSession, resolveQQGroupPeer } from './qqGroupSessionMapping';
 import {
   DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
   DEFAULT_DINGTALK_OPENCLAW_CONFIG,
@@ -173,6 +175,15 @@ export class IMStore {
         .run();
     }
     this.ensureAgentScopedSessionMappingPrimaryKey(mappingCols);
+    this.db.prepare(`
+      CREATE TABLE IF NOT EXISTS im_qq_group_peers (
+        bot_platform TEXT NOT NULL,
+        group_peer TEXT NOT NULL,
+        union_id TEXT NOT NULL,
+        PRIMARY KEY (bot_platform, group_peer)
+      )
+    `).run();
+    this.db.prepare('CREATE INDEX IF NOT EXISTS idx_im_qq_group_union ON im_qq_group_peers(union_id)').run();
     this.db
       .prepare(
         'CREATE INDEX IF NOT EXISTS idx_im_session_mappings_openclaw_session_key ON im_session_mappings(openclaw_session_key) WHERE openclaw_session_key IS NOT NULL',
@@ -1442,6 +1453,7 @@ export class IMStore {
     this.db.prepare('DELETE FROM im_config WHERE key = ?').run(`qq:${instanceId}`);
     // Clean up session mappings for this instance
     this.db.prepare('DELETE FROM im_session_mappings WHERE platform = ?').run(`qq:${instanceId}`);
+    this.db.prepare('DELETE FROM im_qq_group_peers WHERE bot_platform = ?').run(`qq:${instanceId}`);
     void now;
   }
 
@@ -1820,10 +1832,18 @@ export class IMStore {
     return row ? mapSessionMappingRow(row) : null;
   }
 
+  resolveQQGroupPeer(botPlatform: Platform, groupPeer: string, unionId?: string): string {
+    return resolveQQGroupPeer(this.db, botPlatform, groupPeer, unionId);
+  }
+
   /** Ordinary groups share a Cowork task across accounts bound to the same agent. */
   findSharedGroupMapping(
-    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string,
+    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string, botPlatform?: Platform,
   ): IMSessionMapping | null {
+    if (platform === RetainedImPlatform.QQ && botPlatform) {
+      const linked = findQQGroupSession(this.db, botPlatform, groupId, agentId);
+      if (linked) return mapSessionMappingRow(linked);
+    }
     // OpenClaw lowercased its group keys. DSH peer IDs are case-sensitive.
     // Older DSH rows stored an untyped chat ID: only reuse another bot's row
     // when the desktop task also identifies this group. Keep split transcripts intact.

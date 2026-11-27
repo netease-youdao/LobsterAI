@@ -128,6 +128,21 @@ beforeEach(() => {
 });
 
 describe('registerScheduledTaskHandlers', () => {
+  test.each(['-10022:topic:18', 'group:-10022:topic:18', 'account:group:-10022:topic:18'])(
+    'preserves the Telegram chat and topic when saving %s', async (to) => {
+      const { deps, cronJobService } = makeDeps();
+      registerScheduledTaskHandlers(deps);
+      await registeredHandlers.get(ScheduledTaskIpc.Create)?.(undefined, {
+        name: 'topic report',
+        schedule: { kind: 'cron', expr: '0 8 * * *' },
+        payload: { kind: PayloadKind.AgentTurn, message: 'report' },
+        delivery: { mode: DeliveryMode.Announce, channel: 'telegram', to, accountId: 'account' },
+      });
+      expect(cronJobService.addJob).toHaveBeenCalledWith(expect.objectContaining({
+        delivery: expect.objectContaining({ to: '-10022:topic:18', accountId: 'account' }),
+      }));
+    },
+  );
   test('lists scheduled tasks directly from the local scheduler', async () => {
     const { cronJobService, deps } = makeDeps();
     registerScheduledTaskHandlers(deps);

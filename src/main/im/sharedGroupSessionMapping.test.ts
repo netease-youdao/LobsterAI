@@ -45,6 +45,28 @@ test('recovers the original lowercased OpenClaw group ahead of a split DSH task'
   expect(find()?.coworkSessionId).toBe('original');
 });
 
+test('QQ unifies confirmed peers across bots and keeps the native mapping for each account', () => {
+  const a = 'qq:a' as Platform, b = 'qq:b' as Platform;
+  const first = 'group:NativeA', second = 'group:NativeB';
+  add('original', a, first, 'Renamed chat');
+  add('split', b, second, 'Old split task');
+  expect(store.resolveQQGroupPeer(a, first)).toBe(first);
+  expect(store.resolveQQGroupPeer(a, first, 'Union')).toBe(first);
+  expect(store.resolveQQGroupPeer(b, second, 'Union')).toBe(first);
+  const lookup = (agent: string) => store.findSharedGroupMapping(Im.QQ, second, 'NativeB', agent, '', b);
+  expect(lookup('main')?.coworkSessionId).toBe('original');
+  expect(lookup('expert')).toBeNull();
+  store.recordGroupSessionRoute(second, b, 'original', 'main');
+  store = new IMStore(db);
+  expect(store.resolveQQGroupPeer(b, second)).toBe(first);
+  expect(store.getSessionMapping(second, b, 'main')?.coworkSessionId).toBe('original');
+  expect(store.getSessionMapping(first, b, 'main')).toBeNull();
+  expect(store.resolveQQGroupPeer(b, 'group:third', 'union')).toBe('group:third');
+  store.deleteQQInstance('a');
+  expect(store.resolveQQGroupPeer(b, second)).toBe(second);
+  expect(lookup('main')?.coworkSessionId).toBe('original');
+});
+
 test('excludes private chats, topics, other platforms, agents, groups and differently cased DSH peers', () => {
   add('dm', 'dingtalk:a', room, '[钉钉] Alice');
   add('other-agent', 'dingtalk:a', group, title, 'expert');

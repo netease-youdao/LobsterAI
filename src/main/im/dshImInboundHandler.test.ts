@@ -78,6 +78,7 @@ function createFixture(options?: {
   };
 
   const imStore = {
+    resolveQQGroupPeer: (_platform: Platform, groupPeer: string) => groupPeer,
     findSharedGroupMapping: vi.fn((platform: Platform, groupId: string, _chatId: string, agentId: string) =>
       [...mappings.values()].find(m => m.agentId === agentId && m.imConversationId === groupId
         && (m.platform === platform || m.platform.startsWith(platform + ':'))) ?? null,
@@ -157,7 +158,7 @@ function createFixture(options?: {
 }
 
 describe('DshImInboundHandler', () => {
-  test.each(['dingtalk', 'feishu', 'popo', 'wecom'])('%s shares ordinary groups across bots and preserves each reply route', async platform => {
+  test.each(['dingtalk', 'feishu', 'popo', 'wecom', 'qq', 'telegram', 'discord'])('%s shares ordinary groups across bots and preserves each reply route', async platform => {
     const { handler, runtime, pushMessage, sendReply, sessions } = createFixture();
     const group = { platform, chatId: 'room', chatType: 'group' as const, senderId: 'alice', agentId: 'expert' };
     const event = (bot: string, text: string) => ({
