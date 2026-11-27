@@ -406,8 +406,10 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
             let payload;
             try { payload = JSON.parse(String(frame.data || '{}')); } catch { return; }
             const senderId = String(payload.senderStaffId || payload.senderId || '').trim();
-            if (!senderId || !this.isSenderAllowed(senderId)) return;
-            if (payload.conversationType === '1' && payload.conversationId && payload.senderStaffId) {
+            const isDirect = payload.conversationType === '1';
+            const chatId = String(payload.conversationId || (isDirect ? senderId : '')).trim();
+            if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
+            if (isDirect && payload.conversationId && payload.senderStaffId) {
               this.privateRecipients.remember(String(payload.conversationId), String(payload.senderStaffId));
             }
 
@@ -417,13 +419,13 @@ export class DingTalkChannelDriver extends BaseChannelDriver {
                 return this.onInbound({
                   platform: 'dingtalk',
                   instanceId: this.instanceId,
-                  chatId: String(payload.conversationId || senderId),
+                  chatId,
                   senderId,
                   senderName: payload.senderNick || senderId,
                   text,
                   ...(attachments.length > 0 ? { attachments } : {}),
                   messageId: String(payload.msgId || frame.headers?.messageId || ''),
-                  chatType: payload.conversationType === '1' ? 'direct' : 'group',
+                  chatType: isDirect ? 'direct' : 'group',
                   replyContext: {
                     sessionWebhook: payload.sessionWebhook,
                     senderStaffId: payload.senderStaffId,

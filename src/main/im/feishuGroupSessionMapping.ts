@@ -7,16 +7,16 @@ import { currentImBotIdentities } from '../migration/legacyImBotIdentities';
 import type { SessionMappingRow } from './imStore';
 import { resolveLegacyImAccountIds } from './legacyDirectSessionMapping';
 
-export interface FeishuTopicSessionRoute {
+export interface FeishuGroupSessionRoute {
   instanceId: string;
   agentId: string;
   chatId: string;
   conversationIds: string[];
 }
 
-export function findLegacyFeishuTopicSession(
+export function findLegacyFeishuGroupSession(
   db: Database.Database,
-  route: FeishuTopicSessionRoute,
+  route: FeishuGroupSessionRoute,
   bindings: Record<string, string> | undefined,
 ): SessionMappingRow | null {
   const platform = RetainedImPlatform.Feishu;

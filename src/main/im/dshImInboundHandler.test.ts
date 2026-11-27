@@ -45,6 +45,9 @@ function createFixture(options?: {
 
   const coworkStore = {
     getSession: vi.fn((id: string) => sessions.get(id) ?? null),
+    updateSession: vi.fn((id: string, updates: { title: string }) => {
+      Object.assign(sessions.get(id)!, updates);
+    }),
     createSession: vi.fn((
       title: string,
       cwd: string,
@@ -76,7 +79,7 @@ function createFixture(options?: {
 
   const imStore = {
     findLegacyDirectSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
-    findLegacyFeishuTopicSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
+    findLegacyFeishuGroupSessionMapping: vi.fn<() => IMSessionMapping | null>(() => null),
     getConversationReplyRoute: vi.fn<() => { to: string } | null>(() => null),
     setConversationReplyRoute: vi.fn(),
     getSessionMapping: vi.fn((convId: string, platform: Platform, agentId = 'main') =>
@@ -147,6 +150,45 @@ function createFixture(options?: {
 }
 
 describe('DshImInboundHandler', () => {
+  test('queues different group members in one task and routes other groups and DMs separately', async () => {
+    const { handler, runtime, coworkStore, sessions } = createFixture();
+    const group = { platform: 'popo', instanceId: 'bot', chatType: 'group' as const, chatId: '8054099', text: 'first' };
+    const first = handler.enqueue({ ...group, senderId: 'alice' });
+    await vi.waitFor(() => expect(runtime.startSession).toHaveBeenCalledTimes(1));
+    const second = handler.enqueue({ ...group, senderId: 'bob', text: 'second' });
+    const third = handler.enqueue({ ...group, senderId: 'carol', text: 'third' });
+    expect(runtime.stopSession).not.toHaveBeenCalled();
+    const [session] = sessions.values();
+    expect(session.title).toBe('[POPO] group:8054099');
+    expect(runtime.startSession).toHaveBeenCalledWith(session.id, '[alice] first', expect.anything());
+    runtime.continueSession.mockImplementation(async () => { runtime.emit('complete', session.id); });
+    runtime.emit('complete', session.id);
+    await Promise.all([first, second, third]);
+    expect(runtime.continueSession.mock.calls).toEqual([[session.id, '[bob] second'], [session.id, '[carol] third']]);
+
+    runtime.startSession.mockImplementation(async (id: string) => { runtime.emit('complete', id); });
+    await handler.enqueue({ ...group, senderId: 'bob', chatId: '8072584' });
+    await handler.enqueue({ ...group, senderId: 'bob', chatId: 'bob', chatType: 'direct' });
+    expect(coworkStore.createSession).toHaveBeenCalledTimes(3);
+    expect([...sessions.values()].map(row => row.title)).toEqual([
+      '[POPO] group:8054099', '[POPO] group:8072584', '[POPO] bob',
+    ]);
+  });
+
+  test('repairs the generated group title on an existing DSH task and preserves a custom title', async () => {
+    const { handler, runtime, imStore, coworkStore } = createFixture();
+    const event = { platform: 'popo', instanceId: 'bot', chatType: 'group' as const, chatId: '8054099', senderName: 'Alice', text: 'hello' };
+    const existing = coworkStore.createSession('[POPO] Alice', '/original');
+    imStore.createSessionMapping(event.chatId, 'popo:bot' as Platform, existing.id);
+    runtime.continueSession.mockImplementation(async () => { runtime.emit('complete', existing.id); });
+    await handler.enqueue(event);
+    expect(existing.title).toBe('[POPO] group:8054099');
+    existing.title = 'Project chat';
+    await handler.enqueue({ ...event, senderName: 'Bob' });
+    expect(existing.title).toBe('Project chat');
+    expect(coworkStore.createSession).toHaveBeenCalledTimes(1);
+  });
+
   test('keeps separate Feishu threads on the same bot and resumes a thread from its root-only event', async () => {
     const { handler, runtime, imStore, coworkStore, pushMessage, sendReply } = createFixture();
     let count = 0;

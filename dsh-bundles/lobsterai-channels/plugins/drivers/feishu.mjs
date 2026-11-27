@@ -353,7 +353,8 @@ export class FeishuChannelDriver extends BaseChannelDriver {
     if (sender.sender_type === 'bot' || sender.sender_type === 'app') return;
 
     const senderId = String(sender.sender_id?.open_id || sender.sender_id?.user_id || '').trim();
-    const chatId = String(message.chat_id || senderId).trim();
+    const isGroup = message.chat_type !== 'p2p';
+    const chatId = String(message.chat_id || (isGroup ? '' : senderId)).trim();
     const messageId = String(message.message_id || '').trim();
     if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
 
@@ -527,7 +528,6 @@ export class FeishuChannelDriver extends BaseChannelDriver {
 
     if (!text && attachments.length === 0) return;
 
-    const isGroup = message.chat_type !== 'p2p';
     const rootMessageId = String(message.root_id || '').trim();
     // Topic-group reply events can omit thread_id. A quote in a regular
     // group can also have root_id, so verify the group mode before using it.

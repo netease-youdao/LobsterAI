@@ -17,13 +17,14 @@ import { ImPeerKind } from '../../shared/platform';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkLocalMediaAttachment, CoworkRuntime } from '../libs/agentEngine/types';
+import { buildChannelDisplayName } from '../libs/openclawChannelSessionSync';
 import { isRetainedImPlatform } from './dshChannelsBridge';
-import type { FeishuTopicSessionRoute } from './feishuTopicSessionMapping';
+import type { FeishuGroupSessionRoute } from './feishuGroupSessionMapping';
 import { ImApprovalRelay } from './imApprovalRelay';
 import { stripThinkingBlocks } from './imReplyGuard';
 import type { DirectSessionRoute } from './legacyDirectSessionMapping';
 import { findLegacyPopoMapping } from './popoSessionMapping';
-import type { IMSessionMapping, Platform } from './types';
+import type { IMSessionMapping, IMSettings, Platform } from './types';
 
 export const DshImAttachmentKind = {
   Voice: 'voice',
@@ -68,6 +69,7 @@ export interface DshImInboundEvent {
 
 export interface DshImInboundCoworkStorePort {
   getSession(id: string): CoworkSession | null;
+  updateSession(id: string, updates: { title: string }, options: { touchUpdatedAt: boolean }): void;
   createSession(
     title: string,
     cwd: string,
@@ -80,7 +82,7 @@ export interface DshImInboundCoworkStorePort {
 
 export interface DshImInboundIMStorePort {
   findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null;
-  findLegacyFeishuTopicSessionMapping(route: FeishuTopicSessionRoute): IMSessionMapping | null;
+  findLegacyFeishuGroupSessionMapping(route: FeishuGroupSessionRoute): IMSessionMapping | null;
   getConversationReplyRoute(platform: Platform, imConversationId: string): { to: string } | null;
   setConversationReplyRoute(platform: Platform, imConversationId: string, route: {
     channel: string;
@@ -88,6 +90,7 @@ export interface DshImInboundIMStorePort {
     accountId?: string;
   }): void;
   getPopoInstances?(): Array<{ instanceId: string }>;
+  getIMSettings?(): Pick<IMSettings, 'platformAgentBindings'>;
   getSessionMapping(
     imConversationId: string,
     platform: Platform,
@@ -205,6 +208,12 @@ function readFeishuThread(event: DshImInboundEvent) {
   const replyToMessageId = rootMessageId
     || (typeof context.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '');
   return { threadId, rootMessageId, replyToMessageId };
+}
+
+function groupConversationId(event: DshImInboundEvent): string | null {
+  if (event.chatType !== ImPeerKind.Group) return null;
+  const kind = event.platform === RetainedImPlatform.Discord ? ImPeerKind.Channel : ImPeerKind.Group;
+  return `${kind}:${event.chatId}`;
 }
 
 function extractTurnReplyText(
@@ -340,7 +349,7 @@ export class DshImInboundHandler {
     const thread = readFeishuThread(event);
     const conversationId = thread
       ? buildFeishuTopicConversationId(event.chatId, thread.rootMessageId || thread.threadId)
-      : event.chatId;
+      : groupConversationId(event) ?? event.chatId;
     const queueKey = `${platform}:${instanceId}:${conversationId}:${agentId}`;
 
     // If an approval request is currently awaiting confirmation for this IM
@@ -399,7 +408,9 @@ export class DshImInboundHandler {
     if (state.activeRun) {
       // Interrupt the in-flight turn immediately so rapid multi-image bursts or
       // follow-up corrections don't wait for the stale reply to finish.
-      if (options.interruptActiveRun && !state.activeRun.interrupted) {
+      const canInterrupt = event.chatType !== ImPeerKind.Group
+        || (event.senderId && event.senderId === state.activeRun.events[0].senderId);
+      if (canInterrupt && options.interruptActiveRun && !state.activeRun.interrupted) {
         state.activeRun.interrupted = true;
         if (state.activeRun.sessionId) {
           console.log(
@@ -469,7 +480,12 @@ export class DshImInboundHandler {
       state.debounceTimer = null;
     }
 
-    const batch = state.pendingEvents.splice(0);
+    // An IM turn has one approval requester and one reply context. Keep group members' turns in order.
+    const first = state.pendingEvents[0];
+    const nextSender = first.chatType === ImPeerKind.Group
+      ? state.pendingEvents.findIndex(event => event.senderId !== first.senderId)
+      : -1;
+    const batch = state.pendingEvents.splice(0, nextSender < 0 ? state.pendingEvents.length : nextSender);
     state.firstPendingAt = null;
     const run: ActiveImRun = {
       sessionId: null,
@@ -592,7 +608,8 @@ export class DshImInboundHandler {
       }
 
       if (eventText) {
-        textParts.push(eventText);
+        const speaker = event.chatType === ImPeerKind.Group ? event.senderName || event.senderId : undefined;
+        textParts.push(speaker ? `[${speaker}] ${eventText}` : eventText);
       }
 
       for (const att of event.attachments ?? []) {
@@ -637,12 +654,13 @@ export class DshImInboundHandler {
     const resolvedCwd = eventCwd || this.deps.getDefaultCwd(agentId);
 
     const topic = readFeishuThread(latestEvent);
+    const groupId = groupConversationId(latestEvent);
     const conversationId = topic ? buildFeishuTopicConversationId(chatId, topic.threadId) : chatId;
     const topicAlias = topic?.rootMessageId && topic.rootMessageId !== topic.threadId
       ? buildFeishuTopicConversationId(chatId, topic.rootMessageId)
       : null;
-    const legacyTopic = topic ? this.deps.imStore.findLegacyFeishuTopicSessionMapping({
-      instanceId, agentId, chatId, conversationIds: topicAlias ? [conversationId, topicAlias] : [conversationId],
+    const legacyFeishuGroup = groupId && platform === RetainedImPlatform.Feishu ? this.deps.imStore.findLegacyFeishuGroupSessionMapping({
+      instanceId, agentId, chatId, conversationIds: topicAlias ? [conversationId, topicAlias] : [topic ? conversationId : groupId],
     }) : null;
 
     // Prefer the verified original even if an earlier DSH build already split
@@ -652,12 +670,13 @@ export class DshImInboundHandler {
           platform, instanceId, agentId, chatId, senderId: latestEvent.senderId,
         })
       : null;
-    const existingMapping = legacyTopic ?? legacyDirect
+    const legacyPopo = platform === RetainedImPlatform.Popo
+      ? findLegacyPopoMapping(this.deps.imStore, instanceId, latestEvent.chatType ?? ImPeerKind.Direct, chatId, agentId)
+      : null;
+    const existingMapping = legacyFeishuGroup ?? legacyDirect ?? (groupId ? legacyPopo : null)
       ?? this.deps.imStore.getSessionMapping(conversationId, mappingPlatform, agentId)
       ?? (topicAlias ? this.deps.imStore.getSessionMapping(topicAlias, mappingPlatform, agentId) : null)
-      ?? (platform === RetainedImPlatform.Popo
-        ? findLegacyPopoMapping(this.deps.imStore, instanceId, latestEvent.chatType ?? 'direct', chatId, agentId)
-        : null);
+      ?? legacyPopo;
     const storedChatId = existingMapping?.imConversationId ?? conversationId;
     const storedPlatform = existingMapping?.platform ?? mappingPlatform;
     let session = existingMapping
@@ -665,8 +684,9 @@ export class DshImInboundHandler {
       : null;
     const isExistingSession = Boolean(session);
 
+    const prefix = getPlatformTitlePrefix(platform);
+    const groupTitle = groupId ? `[${prefix}] ${buildChannelDisplayName(groupId)}${topic ? ` · ${topic.threadId}` : ''}` : null;
     if (!session) {
-      const prefix = getPlatformTitlePrefix(platform);
       const label = platform === RetainedImPlatform.Weixin
         ? buildWeixinSessionLabel({
             chatId,
@@ -678,7 +698,7 @@ export class DshImInboundHandler {
           })
         : (senderName || chatId).slice(0, 32);
       session = this.deps.coworkStore.createSession(
-        `[${prefix}] ${label}${topic ? ` · ${topic.threadId}` : ''}`,
+        groupTitle ?? `[${prefix}] ${label}`,
         resolvedCwd,
         '',
         'auto',
@@ -700,6 +720,10 @@ export class DshImInboundHandler {
       this.deps.notifySessionsChanged?.(session.id);
     } else {
       this.deps.imStore.updateSessionLastActive(storedChatId, storedPlatform, agentId);
+      // Only replace the previous generated title when this inbound event proves its value.
+      if (groupTitle && !topic && storedChatId === chatId && session.title === `[${prefix}] ${(senderName || chatId).slice(0, 32)}`) {
+        this.deps.coworkStore.updateSession(session.id, { title: groupTitle }, { touchUpdatedAt: false });
+      }
     }
 
     if (topic) {

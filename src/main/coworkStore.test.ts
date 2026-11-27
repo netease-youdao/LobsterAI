@@ -850,8 +850,9 @@ test('scheduled task sessions preserve their task id in session details and list
 
 test('list and search session summaries include IM platform from mappings', () => {
   insertSession('weixin-session', 'main', '[微信] group:o9cq', 2_000);
+  insertSession('popo-group', 'main', '[POPO] group:8054099', 3_000);
   insertSession('regular-session', 'main', '[微信] user-written title', 1_000);
-  db.prepare(
+  const mapSession = db.prepare(
     `INSERT INTO im_session_mappings (
       im_conversation_id,
       platform,
@@ -861,7 +862,8 @@ test('list and search session summaries include IM platform from mappings', () =
       created_at,
       last_active_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  );
+  mapSession.run(
     'group:o9cq',
     'weixin',
     'weixin-session',
@@ -870,9 +872,12 @@ test('list and search session summaries include IM platform from mappings', () =
     1_000,
     2_000,
   );
+  mapSession.run('8054099', 'popo:instance-a', 'popo-group', 'main', null, 3_000, 3_000);
 
   const listed = store.listSessions(10, 0);
   expect(listed.find((session) => session.id === 'weixin-session')?.imPlatform).toBe('weixin');
+  expect(listed.find((session) => session.id === 'popo-group')?.imPlatform).toBe('popo');
+  expect(store.getSession('popo-group')?.imPlatform).toBe('popo');
   expect(listed.find((session) => session.id === 'regular-session')?.imPlatform).toBeNull();
 
   const searched = store.searchSessions({ query: 'group:o9cq', limit: 10, offset: 0 });
