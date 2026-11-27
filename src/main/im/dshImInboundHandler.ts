@@ -13,6 +13,7 @@ import {
 } from '../../shared/dshEngine/hostConstants';
 import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../shared/im/feishuTopicRoute';
 import { buildWeixinSessionLabel } from '../../shared/im/sessionNaming';
+import { parseTelegramGroupTopic } from '../../shared/im/telegramTopicRoute';
 import { ImPeerKind } from '../../shared/platform';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import { t } from '../i18n';
@@ -81,8 +82,10 @@ export interface DshImInboundCoworkStorePort {
 }
 
 export interface DshImInboundIMStorePort {
+  resolveQQGroupPeer(botPlatform: Platform, groupPeer: string, unionId?: string): string;
+  canReuseQQGroupSession(botPlatform: Platform, groupPeer: string, sessionId: string): boolean;
   findSharedGroupMapping(
-    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string,
+    platform: Platform, groupId: string, chatId: string, agentId: string, groupTitle: string, botPlatform?: Platform,
   ): IMSessionMapping | null;
   recordGroupSessionRoute(groupId: string, botPlatform: Platform, taskId: string, agentId: string): void;
   findLegacyDirectSessionMapping(route: DirectSessionRoute): IMSessionMapping | null;
@@ -366,9 +369,14 @@ export class DshImInboundHandler {
 
     const thread = readFeishuThread(event);
     const groupId = groupConversationId(event);
+    const unionId = event.replyContext?.unionGroupOpenId;
+    const queueGroupId = platform === RetainedImPlatform.QQ && groupId
+      ? this.deps.imStore.resolveQQGroupPeer(buildMappingPlatform(platform, instanceId), groupId,
+          typeof unionId === 'string' ? unionId.trim() : undefined)
+      : groupId;
     const conversationId = thread
       ? buildFeishuTopicConversationId(event.chatId, thread.rootMessageId || thread.threadId)
-      : groupId ?? event.chatId.trim();
+      : queueGroupId ?? event.chatId.trim();
     const queueKey = JSON.stringify([platform, sharedGroupId(event, groupId, !!thread) ? null : instanceId, conversationId, agentId]);
 
     // If an approval request is currently awaiting confirmation for this IM
@@ -673,8 +681,11 @@ export class DshImInboundHandler {
 
     const topic = readFeishuThread(latestEvent);
     const groupId = groupConversationId(latestEvent);
+    const telegramTopic = groupId && platform === RetainedImPlatform.Telegram ? parseTelegramGroupTopic(chatId) : null;
+    const titlePeer = telegramTopic ? `${ImPeerKind.Group}:${telegramTopic.chatId}` : groupId;
+    const titleThreadId = telegramTopic?.threadId ?? topic?.threadId;
     const prefix = getPlatformTitlePrefix(platform);
-    const groupTitle = groupId ? `[${prefix}] ${buildChannelDisplayName(groupId)}${topic ? ` · ${topic.threadId}` : ''}` : null;
+    const groupTitle = titlePeer ? `[${prefix}] ${buildChannelDisplayName(titlePeer)}${titleThreadId ? ` · ${titleThreadId}` : ''}` : null;
     const ordinaryGroup = sharedGroupId(latestEvent, groupId, !!topic);
     // Weixin's single-account routes use the native user ID. Multi-bot routes
     // use the peer kind so a new DM can never be adopted as an untyped group.
@@ -698,7 +709,7 @@ export class DshImInboundHandler {
       ? findLegacyPopoMapping(this.deps.imStore, instanceId, latestEvent.chatType ?? ImPeerKind.Direct, chatId, agentId)
       : null;
     const sharedGroup = ordinaryGroup && groupTitle
-      ? this.deps.imStore.findSharedGroupMapping(platform, ordinaryGroup, chatId, agentId, groupTitle)
+      ? this.deps.imStore.findSharedGroupMapping(platform, ordinaryGroup, chatId, agentId, groupTitle, mappingPlatform)
       : null;
     const existingMapping = sharedGroup ?? legacyFeishuGroup ?? legacyDirect ?? (groupId ? legacyPopo : null)
       ?? this.deps.imStore.getSessionMapping(conversationId, mappingPlatform, agentId)
@@ -707,7 +718,9 @@ export class DshImInboundHandler {
       ?? legacyPopo;
     const storedChatId = existingMapping?.imConversationId ?? conversationId;
     const storedPlatform = existingMapping?.platform ?? mappingPlatform;
-    let session = existingMapping
+    const differentQQGroup = existingMapping && groupId && platform === RetainedImPlatform.QQ
+      && !this.deps.imStore.canReuseQQGroupSession(mappingPlatform, groupId, existingMapping.coworkSessionId);
+    let session = existingMapping && !differentQQGroup
       ? this.deps.coworkStore.getSession(existingMapping.coworkSessionId)
       : null;
     const isExistingSession = Boolean(session);

@@ -17,6 +17,7 @@ import type {
 import { AgentId } from '../../../shared/agent/constants';
 import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
 import { buildFeishuTopicConversationId, formatFeishuReplyRoute, parseFeishuReplyRoute } from '../../../shared/im/feishuTopicRoute';
+import { parseTelegramGroupTopic } from '../../../shared/im/telegramTopicRoute';
 import { sanitizeWeixinDeliveryError } from '../../../shared/im/weixin';
 import {
   imConversationDisplayName,
@@ -72,6 +73,7 @@ function normalizeImAnnounceDeliveryTo(
     if (route) return formatFeishuReplyRoute(route);
   }
   const parsed = parseImConversationId(rawTo);
+  if (platform === RetainedImPlatform.Telegram && parseTelegramGroupTopic(parsed.peerId)) return parsed.peerId;
   let candidate: string;
   if (
     parsed.peerKind === ImPeerKind.Direct ||

@@ -9,6 +9,32 @@ import {
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const API_TIMEOUT_MS = 15_000;
+const GENERAL_TOPIC_ID = 1;
+
+function acceptsGroupMessage(msg, bot, config) {
+  if (config.groupPolicy === 'disabled') return false;
+  const text = msg.text ?? msg.caption ?? '';
+  const entities = msg.entities ?? msg.caption_entities ?? [];
+  const username = bot?.username?.toLowerCase();
+  const command = entities.find(entity => entity.type === 'bot_command' && entity.offset === 0);
+  const commandTarget = command && text.slice(0, command.length).match(/^\/\w+@(\w+)$/)?.[1];
+  if (commandTarget) return commandTarget.toLowerCase() === username;
+
+  const groups = config.groups;
+  if (!(groups?.[msg.chat.id]?.requireMention ?? groups?.['*']?.requireMention ?? true)) return true;
+  const reply = msg.reply_to_message;
+  if (bot?.id != null && reply?.from?.id === bot.id && !Object.keys(reply).some(key => /^(?:general_)?forum_topic_/.test(key))) {
+    return true;
+  }
+  if (bot?.id != null && entities.some(entity => entity.type === 'text_mention' && entity.user?.id === bot.id)) return true;
+  if (!username) return false;
+  // Bot API entities use UTF-16 offsets, the same units as String.slice.
+  if (entities.length) {
+    return entities.some(entity => entity.type === 'mention'
+      && text.slice(entity.offset, entity.offset + entity.length).toLowerCase() === `@${username}`);
+  }
+  return Array.from(text.matchAll(/(?<![\w@])@(\w+)/g)).some(match => match[1].toLowerCase() === username);
+}
 
 export class TelegramChannelDriver extends BaseChannelDriver {
   constructor(options) {
@@ -143,6 +169,35 @@ export class TelegramChannelDriver extends BaseChannelDriver {
     void this.pollLoop(signal);
   }
 
+  async handleMessage(msg, signal) {
+    const senderId = String(msg.from?.id ?? '').trim();
+    const chatId = String(msg.chat?.id ?? '');
+    const isGroup = msg.chat?.type !== 'private';
+    if (!chatId || !senderId || !this.isSenderAllowed(senderId)) return;
+    if (isGroup && !acceptsGroupMessage(msg, this.botInfo, this.config)) return;
+
+    const { text, attachments } = await this.extractInboundPayload(msg, signal);
+    if (!text && attachments.length === 0) return;
+
+    // A regular group's reply can also carry message_thread_id. Only a
+    // forum topic has its own conversation identity in OpenClaw.
+    const isForum = isGroup && (msg.chat.is_forum || msg.is_topic_message);
+    const topicId = msg.message_thread_id ?? GENERAL_TOPIC_ID;
+    await this.onInbound({
+      platform: 'telegram',
+      instanceId: this.instanceId,
+      chatId: isForum ? `${chatId}:topic:${topicId}` : chatId,
+      senderId,
+      senderName: msg.from?.username || msg.from?.first_name || senderId,
+      text,
+      ...(attachments.length > 0 ? { attachments } : {}),
+      // Telegram allocates message numbers independently in each chat.
+      messageId: msg.message_id == null ? undefined : `${chatId}:${msg.message_id}`,
+      chatType: isGroup ? 'group' : 'direct',
+      replyContext: { replyToMessageId: msg.message_id },
+    });
+  }
+
   async pollLoop(signal) {
     while (!signal.aborted) {
       try {
@@ -165,26 +220,7 @@ export class TelegramChannelDriver extends BaseChannelDriver {
           if (typeof update.update_id === 'number') {
             this.offset = Math.max(this.offset, update.update_id + 1);
           }
-          const msg = update.message;
-          if (!msg) continue;
-          const senderId = String(msg.from?.id ?? '').trim();
-          if (!senderId || !this.isSenderAllowed(senderId)) continue;
-
-          const { text, attachments } = await this.extractInboundPayload(msg, signal);
-          if (!text && attachments.length === 0) continue;
-
-          await this.onInbound({
-            platform: 'telegram',
-            instanceId: this.instanceId,
-            chatId: String(msg.chat?.id ?? ''),
-            senderId,
-            senderName: msg.from?.username || msg.from?.first_name || senderId,
-            text,
-            ...(attachments.length > 0 ? { attachments } : {}),
-            messageId: String(msg.message_id ?? ''),
-            chatType: msg.chat?.type === 'private' ? 'direct' : 'group',
-            replyContext: { replyToMessageId: msg.message_id },
-          });
+          if (update.message) await this.handleMessage(update.message, signal);
         }
       } catch (error) {
         if (signal.aborted) return;
@@ -195,11 +231,14 @@ export class TelegramChannelDriver extends BaseChannelDriver {
   }
 
   async sendMessage({ chatId, text }) {
+    const topic = /^(-\d+):topic:(\d+)$/.exec(chatId);
+    const threadId = topic && Number(topic[2]);
     const res = await fetch(this.apiUrl('sendMessage'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        chat_id: chatId,
+        chat_id: topic?.[1] ?? chatId,
+        ...(threadId && threadId !== GENERAL_TOPIC_ID ? { message_thread_id: threadId } : {}),
         text: String(text || '').slice(0, 4096),
       }),
     });

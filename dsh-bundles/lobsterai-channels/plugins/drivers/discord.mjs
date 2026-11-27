@@ -8,6 +8,15 @@ import {
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 
+function acceptsGuildMessage(message, botId, config) {
+  if (config.groupPolicy === 'disabled') return false;
+  const guilds = config.guilds;
+  const requireMention = guilds?.[message.guild_id]?.requireMention ?? guilds?.['*']?.requireMention ?? true;
+  return !requireMention || message.mention_everyone === true
+    || message.mentions?.some(user => user.id === botId)
+    || message.referenced_message?.author?.id === botId;
+}
+
 export class DiscordChannelDriver extends BaseChannelDriver {
   constructor(options) {
     super({ ...options, platform: 'discord' });
@@ -101,6 +110,28 @@ export class DiscordChannelDriver extends BaseChannelDriver {
     return { text, attachments };
   }
 
+  async handleMessage(message, signal) {
+    if (message.author?.bot || message.author?.id === this.botUserId) return;
+    const senderId = String(message.author?.id || '').trim();
+    const chatId = String(message.channel_id || '').trim();
+    if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
+    if (message.guild_id && !acceptsGuildMessage(message, this.botUserId, this.config)) return;
+
+    const { text, attachments } = await this.extractInboundPayload(message, signal);
+    if (!text && attachments.length === 0) return;
+    await this.onInbound({
+      platform: 'discord',
+      instanceId: this.instanceId,
+      chatId,
+      senderId,
+      senderName: message.author?.username || senderId,
+      text,
+      ...(attachments.length > 0 ? { attachments } : {}),
+      messageId: String(message.id || ''),
+      chatType: message.guild_id ? 'group' : 'direct',
+    });
+  }
+
   async connect(signal) {
     if (!this.token) throw new Error('Discord botToken is required');
     const [meRes, gwRes] = await Promise.all([
@@ -162,30 +193,9 @@ export class DiscordChannelDriver extends BaseChannelDriver {
           } else if (payload.t === 'READY') {
             this.setState('connected', null, { id: me.id, username: me.username });
           } else if (payload.t === 'MESSAGE_CREATE' && payload.d) {
-            const d = payload.d;
-            if (d.author?.bot || d.author?.id === this.botUserId) return;
-            const senderId = String(d.author?.id || '').trim();
-            const chatId = String(d.channel_id || '').trim();
-            if (!senderId || !chatId || !this.isSenderAllowed(senderId)) return;
-
-            void this.extractInboundPayload(d, signal)
-              .then(({ text, attachments }) => {
-                if (!text && attachments.length === 0) return;
-                return this.onInbound({
-                  platform: 'discord',
-                  instanceId: this.instanceId,
-                  chatId,
-                  senderId,
-                  senderName: d.author?.username || senderId,
-                  text,
-                  ...(attachments.length > 0 ? { attachments } : {}),
-                  messageId: String(d.id || ''),
-                  chatType: d.guild_id ? 'group' : 'direct',
-                });
-              })
-              .catch((err) => {
-                console.warn('[DiscordChannelDriver] inbound handling failed:', err);
-              });
+            void this.handleMessage(payload.d, signal).catch((err) => {
+              console.warn('[DiscordChannelDriver] inbound handling failed:', err);
+            });
           }
         });
 

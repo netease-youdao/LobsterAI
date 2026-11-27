@@ -45,6 +45,28 @@ test('recovers the original lowercased OpenClaw group ahead of a split DSH task'
   expect(find()?.coworkSessionId).toBe('original');
 });
 
+test('QQ unifies confirmed peers across bots and keeps the native mapping for each account', () => {
+  const a = 'qq:a' as Platform, b = 'qq:b' as Platform;
+  const first = 'group:NativeA', second = 'group:NativeB';
+  add('original', a, first, 'Renamed chat');
+  add('split', b, second, 'Old split task');
+  expect(store.resolveQQGroupPeer(a, first)).toBe(first);
+  expect(store.resolveQQGroupPeer(a, first, 'Union')).toBe(first);
+  expect(store.resolveQQGroupPeer(b, second, 'Union')).toBe(first);
+  const lookup = (agent: string) => store.findSharedGroupMapping(Im.QQ, second, 'NativeB', agent, '', b);
+  expect(lookup('main')?.coworkSessionId).toBe('original');
+  expect(lookup('expert')).toBeNull();
+  store.recordGroupSessionRoute(second, b, 'original', 'main');
+  store = new IMStore(db);
+  expect(store.resolveQQGroupPeer(b, second)).toBe(first);
+  expect(store.getSessionMapping(second, b, 'main')?.coworkSessionId).toBe('original');
+  expect(store.getSessionMapping(first, b, 'main')).toBeNull();
+  expect(store.resolveQQGroupPeer(b, 'group:third', 'union')).toBe('group:third');
+  store.deleteQQInstance('a');
+  expect(store.resolveQQGroupPeer(b, second)).toBe(second);
+  expect(lookup('main')?.coworkSessionId).toBe('original');
+});
+
 test('excludes private chats, topics, other platforms, agents, groups and differently cased DSH peers', () => {
   add('dm', 'dingtalk:a', room, '[钉钉] Alice');
   add('other-agent', 'dingtalk:a', group, title, 'expert');
@@ -54,6 +76,22 @@ test('excludes private chats, topics, other platforms, agents, groups and differ
   add('case', 'dingtalk:d', group.toLowerCase(), title);
   store.createSessionMapping(group, 'dingtalk:deleted' as Platform, 'deleted', 'main');
   expect(find()).toBeNull();
+});
+
+test('QQ gives distinct union IDs priority over coincident app-scoped delivery addresses', () => {
+  const a = 'qq:a' as Platform, b = 'qq:b' as Platform;
+  const peer = 'group:SameNativePeer', label = '[QQ] group:SameNativePeer';
+  const firstQueue = store.resolveQQGroupPeer(a, peer, 'UnionA');
+  add('group-a', a, peer, label);
+  const secondQueue = store.resolveQQGroupPeer(b, peer, 'UnionB');
+  expect(secondQueue).not.toBe(firstQueue);
+  expect(store.resolveQQGroupPeer(a, peer)).toBe(firstQueue);
+  expect(store.findSharedGroupMapping(Im.QQ, peer, 'SameNativePeer', 'main', label, b)).toBeNull();
+  add('group-b', b, 'SameNativePeer', label);
+  expect(store.findSharedGroupMapping(Im.QQ, peer, 'SameNativePeer', 'main', label, b)?.coworkSessionId).toBe('group-b');
+  store.recordGroupSessionRoute(peer, b, 'group-a', 'main');
+  expect(store.canReuseQQGroupSession(a, peer, 'group-a')).toBe(true);
+  expect(store.canReuseQQGroupSession(b, peer, 'group-a')).toBe(false);
 });
 
 test('does not adopt an untyped group from a DingTalk bot using a custom session scope', () => {
