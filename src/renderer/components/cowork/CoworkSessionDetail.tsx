@@ -7,6 +7,7 @@ import {
   PaperClipIcon,
   PhotoIcon,
   QuestionMarkCircleIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -300,8 +301,6 @@ import {
 } from './sessionExport';
 import {
   getOpenSideChatTabTitle,
-  getSideChatDisplayTitle,
-  getSideChatPromoteEligibility,
   isDefaultSideChatTitle,
 } from './sideChatHelpers';
 import SubagentSpawnCard from './SubagentSpawnCard';
@@ -4321,6 +4320,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       close: handleCloseArtifactNewTab,
     }] : []),
   ];
+  const artifactTabMenuOptions = {
+    onClosePanel: () => dispatch(closePanel(sessionId ? { sessionId } : undefined)),
+  };
 
   const handleToggleArtifactPanel = useCallback(() => {
     reportArtifactPreviewAction({
@@ -7243,7 +7245,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactFileListTab}
                       onClose={handleCloseArtifactFileListTab}
-                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList, artifactTabMenuOptions)}
                     />
                   )}
                   {browserTabs.map(tab => (
@@ -7257,7 +7259,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={() => handleActivateArtifactBrowserTab(tab.id)}
                       onClose={() => handleCloseArtifactBrowserTab(tab.id)}
-                      {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, tab.id, artifactTabMenuOptions)}
                     />
                   ))}
                   {isAgentBrowserPreviewTabOpen && (
@@ -7274,7 +7276,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       ) : undefined}
                       onActivate={handleActivateArtifactAgentBrowserTab}
                       onClose={handleCloseArtifactAgentBrowserTab}
-                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.AgentBrowser)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.AgentBrowser, artifactTabMenuOptions)}
                     />
                   )}
                   {isSubagentPreviewTabOpen && (
@@ -7285,7 +7287,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactSubagentTab}
                       onClose={handleCloseArtifactSubagentTab}
-                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Subagents)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.Subagents, artifactTabMenuOptions)}
                     />
                   )}
                   {isUserAttachmentPreviewTabOpen && (
@@ -7296,7 +7298,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactUserAttachmentTab}
                       onClose={handleCloseArtifactUserAttachmentTab}
-                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment, artifactTabMenuOptions)}
                     />
                   )}
                   {sideChats.openSideChatTabs.map((tab, index) => {
@@ -7308,14 +7310,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       sideChats.openSideChatTabs.length,
                       i18nService.t('coworkSideChatTitle'),
                     );
-                    const promoteEligibility = getSideChatPromoteEligibility(tab.summary);
-                    const isPromotingTab = sideChats.promotingSideChatId === tab.id;
-                    const promoteDisabled = !promoteEligibility.allowed || Boolean(sideChats.promotingSideChatId);
-                    const promoteTooltip = isPromotingTab
-                      ? i18nService.t('coworkSideChatPromoting')
-                      : promoteEligibility.reasonKey
-                        ? i18nService.t(promoteEligibility.reasonKey)
-                        : i18nService.t('coworkSideChatPromote');
                     return (
                       <ArtifactPreviewTabItem
                         key={`sidechat:${tab.id}`}
@@ -7337,15 +7331,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                         onCommitRename={!remoteManaged ? (nextTitle) => sideChats.renameSideChat(tab.id, nextTitle) : undefined}
                         extraMenuActions={!remoteManaged ? [
                           {
-                            id: 'promote-side-chat',
-                            label: i18nService.t(isPromotingTab ? 'coworkSideChatPromoting' : 'coworkSideChatPromote'),
-                            disabled: promoteDisabled,
-                            title: promoteTooltip,
-                            onClick: () => { void sideChats.promoteSideChat(tab.id); },
-                          },
-                          {
                             id: 'delete-side-chat',
                             label: i18nService.t('coworkSideChatDelete'),
+                            icon: <TrashIcon className="h-[15px] w-[15px] shrink-0" strokeWidth={1.7} aria-hidden="true" />,
                             danger: true,
                             onClick: () => setPendingDeleteSideChatId(tab.id),
                           },
@@ -7355,7 +7343,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                           setRenamingSideChatTabId(current => (current === tab.id ? null : current));
                           sideChats.closeSideChatTabById(tab.id);
                         }}
-                        {...artifactTabMenuActions(artifactTabActionTargets, `sidechat:${tab.id}`)}
+                        {...artifactTabMenuActions(artifactTabActionTargets, `sidechat:${tab.id}`, artifactTabMenuOptions)}
                       />
                     );
                   })}
@@ -7376,7 +7364,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                         onCommitRename={renamable ? (nextStem) => handleCommitArtifactTabRename(artifact, nextStem) : undefined}
                         onActivate={() => handleActivateArtifactTab(tab.id)}
                         onClose={() => handleCloseArtifactTab(tab.id)}
-                        {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
+                        {...artifactTabMenuActions(artifactTabActionTargets, tab.id, artifactTabMenuOptions)}
                       />
                     );
                   })}
@@ -7388,7 +7376,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       closeLabel={i18nService.t('artifactCloseTab')}
                       onActivate={handleActivateArtifactNewTab}
                       onClose={handleCloseArtifactNewTab}
-                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.NewTab)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.NewTab, artifactTabMenuOptions)}
                     />
                   )}
                   {shouldShowArtifactAddButton && (
@@ -8050,9 +8038,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   onOpenWorkspaceChanges={handleNewTabOpenWorkspaceChanges}
                   onCreateSideChat={!remoteManaged ? () => void sideChats.openNewSideChat({ fromNewTab: true }) : undefined}
                   onOpenSideChat={(sideChatId) => sideChats.openExistingSideChat(sideChatId, { fromNewTab: true })}
-                  promotingSideChatId={sideChats.promotingSideChatId}
                   onRenameSideChat={!remoteManaged ? sideChats.renameSideChat : undefined}
-                  onPromoteSideChat={!remoteManaged ? sideChats.promoteSideChat : undefined}
                   onDeleteSideChat={!remoteManaged ? (sideChatId) => setPendingDeleteSideChatId(sideChatId) : undefined}
                 />
               )}
@@ -8091,18 +8077,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               sideChatPanel={(
                 <SideChatPanelContent
                   sideChat={sideChats.activeSideChat}
-                  displayTitle={sideChats.activeSideChatId
-                    ? getSideChatDisplayTitle(
-                      sideChats.activeSideChatId,
-                      sideChats.summaries,
-                      i18nService.t('coworkSideChatTitle'),
-                    )
-                    : undefined}
                   parentSession={currentSession}
                   loading={sideChats.isLoadingDetail}
-                  isPromoting={Boolean(
-                    sideChats.activeSideChatId && sideChats.promotingSideChatId === sideChats.activeSideChatId,
-                  )}
                   draft={sideChats.activeDraft}
                   selectedTextSnippets={sideChats.activeSelectedTextSnippets}
                   attachments={sideChats.activeAttachments}
@@ -8115,15 +8091,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   onRemoveAttachment={sideChats.removeActiveAttachment}
                   onModelSelectionChange={sideChats.setActiveModelSelection}
                   onLocateSelectedText={handleLocateSelectedText}
-                  onRename={!remoteManaged && sideChats.activeSideChatId
-                    ? (nextTitle) => sideChats.renameSideChat(sideChats.activeSideChatId!, nextTitle)
-                    : undefined}
-                  onPromote={!remoteManaged && sideChats.activeSideChatId
-                    ? () => sideChats.promoteSideChat(sideChats.activeSideChatId!)
-                    : undefined}
-                  onRequestDelete={!remoteManaged && sideChats.activeSideChatId
-                    ? () => setPendingDeleteSideChatId(sideChats.activeSideChatId!)
-                    : undefined}
                   onSend={(options) => void sideChats.sendActiveMessage(options)}
                   onStop={sideChats.stopActiveSideChat}
                   onRespondPermission={sideChats.respondActivePermission}

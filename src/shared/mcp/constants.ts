@@ -26,6 +26,12 @@ export const McpManagedConnection = {
 } as const;
 export type McpManagedConnection = typeof McpManagedConnection[keyof typeof McpManagedConnection];
 
+export const McpMarketplaceSource = {
+  Remote: 'remote',
+  LocalFile: 'local-file',
+} as const;
+export type McpMarketplaceSource = typeof McpMarketplaceSource[keyof typeof McpMarketplaceSource];
+
 export const MCP_PACKAGES_DIR_NAME = 'mcp-packages';
 
 /** Node.js env names that matter when launching stdio MCP servers. */

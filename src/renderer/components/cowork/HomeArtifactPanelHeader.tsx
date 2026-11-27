@@ -65,6 +65,7 @@ export interface HomeArtifactPanelHeaderProps {
   onOpenNewTab: () => void;
   onToggleExpanded: () => void;
   onTogglePanel: () => void;
+  onClosePanel?: () => void;
 }
 
 const HomeArtifactPanelHeader: React.FC<HomeArtifactPanelHeaderProps> = ({
@@ -102,8 +103,12 @@ const HomeArtifactPanelHeader: React.FC<HomeArtifactPanelHeaderProps> = ({
   onOpenNewTab,
   onToggleExpanded,
   onTogglePanel,
+  onClosePanel,
 }) => {
   const toggleArtifactPanelShortcutHint = useShortcutHint(ShortcutAction.ToggleArtifacts);
+  const tabMenuOptions = {
+    onClosePanel: onClosePanel ?? (isPanelOpen ? onTogglePanel : undefined),
+  };
   const expandArtifactPanelLabel = isArtifactPanelExpanded
     ? i18nService.t('artifactBrowserRestorePanelWidth')
     : i18nService.t('artifactBrowserExpandPanel');
@@ -151,7 +156,7 @@ const HomeArtifactPanelHeader: React.FC<HomeArtifactPanelHeaderProps> = ({
                     closeLabel={i18nService.t('artifactCloseTab')}
                     onActivate={onActivateFileListTab}
                     onClose={onCloseFileListTab}
-                    {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList)}
+                    {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.FileList, tabMenuOptions)}
                   />
                 )}
                 {browserTabs.map(tab => (
@@ -165,7 +170,7 @@ const HomeArtifactPanelHeader: React.FC<HomeArtifactPanelHeaderProps> = ({
                     closeLabel={i18nService.t('artifactCloseTab')}
                     onActivate={() => onActivateBrowserTab(tab.id)}
                     onClose={() => onCloseBrowserTab(tab.id)}
-                    {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
+                    {...artifactTabMenuActions(artifactTabActionTargets, tab.id, tabMenuOptions)}
                   />
                 ))}
                 {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
@@ -185,7 +190,7 @@ const HomeArtifactPanelHeader: React.FC<HomeArtifactPanelHeaderProps> = ({
                       onCommitRename={renamable ? (nextStem) => onCommitArtifactTabRename(artifact, nextStem) : undefined}
                       onActivate={() => onActivateArtifactTab(tab.id)}
                       onClose={() => onCloseArtifactTab(tab.id)}
-                      {...artifactTabMenuActions(artifactTabActionTargets, tab.id)}
+                      {...artifactTabMenuActions(artifactTabActionTargets, tab.id, tabMenuOptions)}
                     />
                   );
                 })}
@@ -197,7 +202,7 @@ const HomeArtifactPanelHeader: React.FC<HomeArtifactPanelHeaderProps> = ({
                     closeLabel={i18nService.t('artifactCloseTab')}
                     onActivate={onActivateNewTab}
                     onClose={onCloseNewTab}
-                    {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.NewTab)}
+                    {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.NewTab, tabMenuOptions)}
                   />
                 )}
                 {shouldShowArtifactAddButton && (

@@ -906,6 +906,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         onOpenNewTab={homePanel.handleOpenArtifactNewTab}
         onToggleExpanded={homePanel.handleToggleArtifactPanelExpanded}
         onTogglePanel={homePanel.handleToggleArtifactPanel}
+        onClosePanel={homePanel.handleClosePanel}
       />
     </div>
   );

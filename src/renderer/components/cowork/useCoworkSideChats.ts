@@ -15,7 +15,6 @@ import {
   CoworkSideChatStatus,
   type CoworkSideChatSummary,
 } from '../../../shared/cowork/sideChat';
-import { coworkService } from '../../services/cowork';
 import {
   CoworkPromptPayloadFailureCode,
   prepareCoworkPromptPayload,
@@ -78,7 +77,6 @@ export function useCoworkSideChats({
 }: UseCoworkSideChatsOptions) {
   const dispatch = useDispatch<AppDispatch>();
   const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null);
-  const [promotingSideChatId, setPromotingSideChatId] = useState<string | null>(null);
 
   const summaries = useSelector((state: RootState) => (
     sessionId ? state.sideChat.summariesByParent[sessionId] ?? EMPTY_SUMMARIES : EMPTY_SUMMARIES
@@ -463,30 +461,6 @@ export function useCoworkSideChats({
     sessionId,
   ]);
 
-  const promoteSideChat = useCallback(async (sideChatId: string): Promise<boolean> => {
-    if (!sessionId || promotingSideChatId) return false;
-    setPromotingSideChatId(sideChatId);
-    try {
-      const res = await coworkSideChatService.promote(sessionId, sideChatId);
-      if (!res.success || !res.sessionId) {
-        const message = res.error?.includes('Cannot fork a running session')
-          ? i18nService.t('coworkForkRunningBlocked')
-          : (res.error || i18nService.t('coworkSideChatPromoteFailed'));
-        showToast(message);
-        return false;
-      }
-      await coworkService.loadSessions();
-      await coworkService.loadSession(res.sessionId);
-      showToast(i18nService.t('coworkSideChatPromoteSuccess'));
-      return true;
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : i18nService.t('coworkSideChatPromoteFailed'));
-      return false;
-    } finally {
-      setPromotingSideChatId((current) => (current === sideChatId ? null : current));
-    }
-  }, [promotingSideChatId, sessionId]);
-
   const respondActivePermission = useCallback(async (
     requestId: string,
     result: CoworkSideChatPermissionResult,
@@ -511,7 +485,6 @@ export function useCoworkSideChats({
     activeAttachments,
     activeModelSelection,
     activePendingPermissions,
-    promotingSideChatId,
     isLoadingDetail: Boolean(activeSideChatId && loadingDetailId === activeSideChatId && !activeSideChat),
     activateSideChatTab,
     openExistingSideChat,
@@ -519,7 +492,6 @@ export function useCoworkSideChats({
     closeSideChatTabById,
     renameSideChat,
     deleteSideChat,
-    promoteSideChat,
     openFromSelectedText,
     submitBtwCommand,
     setActiveDraft,

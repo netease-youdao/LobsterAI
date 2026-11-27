@@ -1,8 +1,11 @@
+import fs from 'fs';
 import http from 'http';
+import os from 'os';
+import path from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { McpAuthMode, McpOAuthState } from '../../../shared/mcp/auth';
-import { McpIpcChannel } from '../../../shared/mcp/constants';
+import { McpIpcChannel, McpMarketplaceSource } from '../../../shared/mcp/constants';
 import {
   DEFAULT_MCP_OAUTH_CLIENT_ID,
   type McpOAuthFetch,
@@ -12,11 +15,14 @@ import type { McpServerRecord } from '../../mcp/mcpStore';
 
 const registeredHandlers = new Map<string, (...args: unknown[]) => unknown>();
 const openExternalMock = vi.fn(async (_url: string) => undefined);
+const electronState = vi.hoisted(() => ({ isPackaged: false }));
 
 vi.mock('electron', () => ({
   app: {
     getVersion: () => '1.0.0',
-    isPackaged: false,
+    get isPackaged() {
+      return electronState.isPackaged;
+    },
   },
   BrowserWindow: {
     fromWebContents: () => null,
@@ -252,6 +258,7 @@ describe('registerMcpHandlers OAuth IPC', () => {
           listServers: () => [serverRecord],
         }),
       }) as never,
+      getMcpMarketplaceUrl: () => 'https://example.invalid/mcp-marketplace',
       syncDshConfig,
       getMcpOAuthManager: () => oauthManager,
     });
@@ -339,6 +346,7 @@ describe('registerMcpHandlers OAuth IPC', () => {
           listServers: () => [serverRecord],
         }),
       }) as never,
+      getMcpMarketplaceUrl: () => 'https://example.invalid/mcp-marketplace',
       syncDshConfig: vi.fn(async () => ({ success: true, changed: true })),
       getMcpOAuthManager: () => oauthManager,
     });
@@ -372,6 +380,7 @@ describe('registerMcpHandlers OAuth IPC', () => {
           listServers: () => [serverRecord],
         }),
       }) as never,
+      getMcpMarketplaceUrl: () => 'https://example.invalid/mcp-marketplace',
       syncDshConfig,
       getMcpOAuthManager: () => oauthManager,
     });
@@ -472,6 +481,7 @@ describe('registerMcpHandlers OAuth IPC', () => {
           ],
         }),
       }) as never,
+      getMcpMarketplaceUrl: () => 'https://example.invalid/mcp-marketplace',
       syncDshConfig,
       getMcpOAuthManager: () => oauthManager,
     });
@@ -490,5 +500,106 @@ describe('registerMcpHandlers OAuth IPC', () => {
     });
     expect(oauthManager.getToken(srvExpiringRefreshOk.id)?.accessToken).toBe('refreshed-tok');
     expect(syncDshConfig).toHaveBeenCalledWith({ reason: 'mcp-oauth-refreshed' });
+  });
+});
+
+describe('registerMcpHandlers FetchMarketplace IPC', () => {
+  const originalLocalCatalogEnv = process.env.LOBSTERAI_MCP_MARKETPLACE_FILE;
+
+  beforeEach(() => {
+    registeredHandlers.clear();
+    electronState.isPackaged = false;
+    delete process.env.LOBSTERAI_MCP_MARKETPLACE_FILE;
+  });
+
+  afterEach(() => {
+    electronState.isPackaged = false;
+    if (originalLocalCatalogEnv === undefined) {
+      delete process.env.LOBSTERAI_MCP_MARKETPLACE_FILE;
+    } else {
+      process.env.LOBSTERAI_MCP_MARKETPLACE_FILE = originalLocalCatalogEnv;
+    }
+    vi.restoreAllMocks();
+  });
+
+  test('fetches from getMcpMarketplaceUrl dynamically as endpoint changes', async () => {
+    let activeUrl = 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace';
+    const prodPayload = { servers: [{ id: 'tavily' }], categories: [{ id: 'all' }] };
+    const testPayload = { servers: [{ id: 'tdx' }], categories: [{ id: 'all' }] };
+    const fetchMarketplaceText = vi.fn(async (url: string) => {
+      if (url.includes('/prod/')) {
+        return JSON.stringify({ data: { value: prodPayload } });
+      }
+      return JSON.stringify({ data: { value: JSON.stringify(testPayload) } });
+    });
+
+    registerMcpHandlers({
+      getMcpRuntime: () => ({}) as never,
+      getMcpMarketplaceUrl: () => activeUrl,
+      fetchMarketplaceText,
+      syncDshConfig: vi.fn(async () => ({ success: true, changed: false })),
+      getMcpOAuthManager: () => null,
+    });
+
+    const fetchHandler = registeredHandlers.get(McpIpcChannel.FetchMarketplace)!;
+
+    expect(await fetchHandler({})).toEqual({
+      success: true,
+      data: prodPayload,
+      source: McpMarketplaceSource.Remote,
+    });
+    expect(fetchMarketplaceText).toHaveBeenLastCalledWith(
+      'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace',
+    );
+
+    activeUrl = 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    expect(await fetchHandler({})).toEqual({
+      success: true,
+      data: testPayload,
+      source: McpMarketplaceSource.Remote,
+    });
+    expect(fetchMarketplaceText).toHaveBeenLastCalledWith(
+      'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace',
+    );
+  });
+
+  test('uses LOBSTERAI_MCP_MARKETPLACE_FILE only in non-packaged builds and marks it as local-file', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-mcp-market-'));
+    const catalogPath = path.join(tempDir, 'catalog.json');
+    const localPayload = { servers: [{ id: 'local-only' }], categories: [{ id: 'all' }] };
+    const remotePayload = { servers: [{ id: 'prod-only' }], categories: [{ id: 'all' }] };
+    fs.writeFileSync(catalogPath, JSON.stringify(localPayload), 'utf8');
+    process.env.LOBSTERAI_MCP_MARKETPLACE_FILE = catalogPath;
+
+    const fetchMarketplaceText = vi.fn(async () => JSON.stringify({ data: { value: remotePayload } }));
+
+    try {
+      registerMcpHandlers({
+        getMcpRuntime: () => ({}) as never,
+        getMcpMarketplaceUrl: () => 'https://example.invalid/prod/mcp-marketplace',
+        fetchMarketplaceText,
+        syncDshConfig: vi.fn(async () => ({ success: true, changed: false })),
+        getMcpOAuthManager: () => null,
+      });
+
+      const fetchHandler = registeredHandlers.get(McpIpcChannel.FetchMarketplace)!;
+
+      expect(await fetchHandler({})).toEqual({
+        success: true,
+        data: localPayload,
+        source: McpMarketplaceSource.LocalFile,
+      });
+      expect(fetchMarketplaceText).not.toHaveBeenCalled();
+
+      electronState.isPackaged = true;
+      expect(await fetchHandler({})).toEqual({
+        success: true,
+        data: remotePayload,
+        source: McpMarketplaceSource.Remote,
+      });
+      expect(fetchMarketplaceText).toHaveBeenCalledWith('https://example.invalid/prod/mcp-marketplace');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,9 +1,6 @@
 import {
-  EllipsisHorizontalIcon,
-  PencilSquareIcon,
   ShieldExclamationIcon,
   StopIcon,
-  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { ArrowUpIcon } from '@heroicons/react/24/solid';
 import React, {
@@ -52,14 +49,10 @@ import { QuestionDockCard } from '../cowork/interactions/QuestionDock';
 import { permissionDockRequest } from '../cowork/interactions/questionDockModel';
 import { hasFileTransfer } from '../cowork/pageFileDrop';
 import SelectedTextSnippetBadge from '../cowork/SelectedTextSnippetBadge';
-import {
-  formatSideChatApprovalPreview,
-  getSideChatPromoteEligibility,
-} from '../cowork/sideChatHelpers';
+import { formatSideChatApprovalPreview } from '../cowork/sideChatHelpers';
 import { useCoworkVoiceInput } from '../cowork/voiceInput/useCoworkVoiceInput';
 import VoiceInputButton from '../cowork/voiceInput/VoiceInputButton';
 import VoiceInputRecordingStatus from '../cowork/voiceInput/VoiceInputRecordingStatus';
-import MessageForkIcon from '../icons/MessageForkIcon';
 import PromptAddIcon from '../icons/PromptAddIcon';
 import SideChatIcon from '../icons/SideChatIcon';
 import ModelSelector, {
@@ -69,10 +62,8 @@ import ModelSelector, {
 
 export interface SideChatPanelContentProps {
   sideChat: CoworkSideChat | null;
-  displayTitle?: string;
   parentSession?: CoworkSession | null;
   loading?: boolean;
-  isPromoting?: boolean;
   draft: string;
   selectedTextSnippets: CoworkSelectedTextSnippet[];
   attachments: DraftAttachment[];
@@ -85,9 +76,6 @@ export interface SideChatPanelContentProps {
   onRemoveAttachment: (path: string) => void;
   onModelSelectionChange: (selection: SideChatModelSelection) => void;
   onLocateSelectedText?: (sourceMessageId: string) => void;
-  onRename?: (nextTitle: string) => Promise<boolean> | boolean;
-  onPromote?: () => Promise<boolean> | void;
-  onRequestDelete?: () => void;
   onSend: (options?: { promptOverride?: string; modelSupportsImage?: boolean }) => void;
   onStop: () => void;
   onRespondPermission: (
@@ -213,10 +201,8 @@ const SideChatInlineApprovalCard: React.FC<{
 
 const SideChatPanelContent: React.FC<SideChatPanelContentProps> = ({
   sideChat,
-  displayTitle,
   parentSession,
   loading = false,
-  isPromoting = false,
   draft,
   selectedTextSnippets,
   attachments,
@@ -229,19 +215,12 @@ const SideChatPanelContent: React.FC<SideChatPanelContentProps> = ({
   onRemoveAttachment,
   onModelSelectionChange,
   onLocateSelectedText,
-  onRename,
-  onPromote,
-  onRequestDelete,
   onSend,
   onStop,
   onRespondPermission,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const headerRenameInputRef = useRef<HTMLInputElement>(null);
-  const headerMenuRef = useRef<HTMLDivElement>(null);
-  const headerMenuButtonRef = useRef<HTMLButtonElement>(null);
-  const headerRenameSettledRef = useRef(false);
   const isNearBottomRef = useRef(true);
   const previousSnippetCountRef = useRef(selectedTextSnippets.length);
   const draftRef = useRef(draft);
@@ -249,10 +228,6 @@ const SideChatPanelContent: React.FC<SideChatPanelContentProps> = ({
 
   const [isAddingFile, setIsAddingFile] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
-  const [isRenamingTitle, setIsRenamingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
-  const [isSubmittingRename, setIsSubmittingRename] = useState(false);
   const dragDepthRef = useRef(0);
 
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
@@ -291,93 +266,13 @@ const SideChatPanelContent: React.FC<SideChatPanelContentProps> = ({
   const modelSupportsImage = Boolean(effectiveSelectedModel?.supportsImage);
 
   const sideChatId = sideChat?.id ?? null;
-  const resolvedTitle = displayTitle?.trim() || sideChat?.title || i18nService.t('coworkSideChatTitle');
   const isRunning = sideChat?.status === CoworkSideChatStatus.Running;
   const messages = useMemo<CoworkMessage[]>(
     () => (sideChat?.messages ?? []) as CoworkMessage[],
     [sideChat?.messages],
   );
-  const promoteEligibility = useMemo(
-    () => getSideChatPromoteEligibility(
-      sideChat ? { status: sideChat.status, messageCount: messages.length } : null,
-    ),
-    [messages.length, sideChat],
-  );
   const lastMessage = messages[messages.length - 1];
   const lastMessageTailKey = lastMessage ? `${lastMessage.id}:${lastMessage.content.length}` : 'empty';
-
-  useEffect(() => {
-    setIsHeaderMenuOpen(false);
-    setIsRenamingTitle(false);
-    setIsSubmittingRename(false);
-    headerRenameSettledRef.current = false;
-  }, [sideChatId]);
-
-  useEffect(() => {
-    if (!isHeaderMenuOpen) return undefined;
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (
-        target
-        && !headerMenuRef.current?.contains(target)
-        && !headerMenuButtonRef.current?.contains(target)
-      ) {
-        setIsHeaderMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsHeaderMenuOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isHeaderMenuOpen]);
-
-  useEffect(() => {
-    if (!isRenamingTitle) return undefined;
-    headerRenameSettledRef.current = false;
-    const frame = window.requestAnimationFrame(() => {
-      headerRenameInputRef.current?.focus();
-      headerRenameInputRef.current?.select();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [isRenamingTitle]);
-
-  const startHeaderRename = useCallback(() => {
-    if (!onRename || !sideChat) return;
-    setIsHeaderMenuOpen(false);
-    setTitleDraft(resolvedTitle);
-    setIsRenamingTitle(true);
-  }, [onRename, resolvedTitle, sideChat]);
-
-  const cancelHeaderRename = useCallback(() => {
-    if (headerRenameSettledRef.current || isSubmittingRename) return;
-    headerRenameSettledRef.current = true;
-    setIsRenamingTitle(false);
-    setTitleDraft(resolvedTitle);
-  }, [isSubmittingRename, resolvedTitle]);
-
-  const commitHeaderRename = useCallback(async () => {
-    if (headerRenameSettledRef.current || isSubmittingRename) return;
-    headerRenameSettledRef.current = true;
-    const trimmed = titleDraft.trim();
-    if (!trimmed || trimmed === resolvedTitle || !onRename) {
-      setIsRenamingTitle(false);
-      return;
-    }
-    setIsSubmittingRename(true);
-    try {
-      await onRename(trimmed);
-    } finally {
-      setIsSubmittingRename(false);
-      setIsRenamingTitle(false);
-    }
-  }, [isSubmittingRename, onRename, resolvedTitle, titleDraft]);
 
   const handleVoiceSetValue = useCallback((next: SetStateAction<string>) => {
     const resolved = typeof next === 'function' ? next(draftRef.current) : next;
@@ -673,143 +568,9 @@ const SideChatPanelContent: React.FC<SideChatPanelContentProps> = ({
   }
 
   const activePermission = pendingPermissions[0] ?? null;
-  const promoteDisabled = !promoteEligibility.allowed || isPromoting;
-  const promoteTitle = isPromoting
-    ? i18nService.t('coworkSideChatPromoting')
-    : promoteEligibility.reasonKey
-      ? i18nService.t(promoteEligibility.reasonKey)
-      : i18nService.t('coworkSideChatPromote');
-  const hasHeaderActions = Boolean(onRename || onPromote || onRequestDelete);
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
-      {/* Compact Header Action Bar */}
-      {hasHeaderActions && (
-        <div
-          data-sidechat-header="true"
-          className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/70 px-3"
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <SideChatIcon className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" />
-            {isRenamingTitle ? (
-              <input
-                ref={headerRenameInputRef}
-                type="text"
-                value={titleDraft}
-                disabled={isSubmittingRename}
-                onChange={(event) => setTitleDraft(event.target.value)}
-                onBlur={() => { void commitHeaderRename(); }}
-                onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing) return;
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void commitHeaderRename();
-                  } else if (event.key === 'Escape') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    cancelHeaderRename();
-                  }
-                }}
-                aria-label={i18nService.t('coworkSideChatRename')}
-                data-sidechat-rename-input="header"
-                className="h-6 min-w-0 flex-1 rounded-md border border-primary/60 bg-background px-1.5 text-xs font-medium text-foreground outline-none ring-2 ring-primary/15"
-              />
-            ) : (
-              <span
-                title={resolvedTitle}
-                onDoubleClick={onRename ? startHeaderRename : undefined}
-                data-sidechat-header-title="true"
-                className="min-w-0 truncate text-xs font-medium text-foreground"
-              >
-                {resolvedTitle}
-              </span>
-            )}
-          </div>
-
-          <div className="flex shrink-0 items-center gap-1">
-            {onPromote && (
-              <button
-                type="button"
-                disabled={promoteDisabled}
-                title={promoteTitle}
-                aria-label={i18nService.t('coworkSideChatPromote')}
-                data-sidechat-action="promote"
-                onClick={() => void onPromote()}
-                className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {isPromoting ? (
-                  <span className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
-                ) : (
-                  <MessageForkIcon className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <span className="max-w-[120px] truncate">
-                  {i18nService.t(isPromoting ? 'coworkSideChatPromoting' : 'coworkSideChatPromote')}
-                </span>
-              </button>
-            )}
-
-            {(onRename || onRequestDelete) && (
-              <div className="relative">
-                <button
-                  ref={headerMenuButtonRef}
-                  type="button"
-                  onClick={() => setIsHeaderMenuOpen((open) => !open)}
-                  title={i18nService.t('more')}
-                  aria-label={i18nService.t('more')}
-                  aria-haspopup="menu"
-                  aria-expanded={isHeaderMenuOpen}
-                  data-sidechat-action="more"
-                  className={`inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
-                    isHeaderMenuOpen
-                      ? 'bg-surface-raised text-foreground'
-                      : 'text-secondary hover:bg-surface-raised hover:text-foreground'
-                  }`}
-                >
-                  <EllipsisHorizontalIcon className="h-4 w-4" />
-                </button>
-
-                {isHeaderMenuOpen && (
-                  <div
-                    ref={headerMenuRef}
-                    role="menu"
-                    className="absolute right-0 top-8 z-30 min-w-40 overflow-hidden rounded-xl border border-border bg-surface-raised p-1.5 shadow-popover"
-                  >
-                    {onRename && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        data-sidechat-menu-item="rename"
-                        onClick={startHeaderRename}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary/10"
-                      >
-                        <PencilSquareIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
-                        <span>{i18nService.t('coworkSideChatRename')}</span>
-                      </button>
-                    )}
-                    {onRequestDelete && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        data-sidechat-menu-item="delete"
-                        onClick={() => {
-                          setIsHeaderMenuOpen(false);
-                          onRequestDelete();
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive/10"
-                      >
-                        <TrashIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span>{i18nService.t('coworkSideChatDelete')}</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Message Stream */}
       <div
         ref={scrollContainerRef}

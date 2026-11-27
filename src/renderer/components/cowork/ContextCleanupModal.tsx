@@ -1,6 +1,5 @@
 import { ExclamationTriangleIcon, SparklesIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 
 import {
   CleanupActionMode,
@@ -23,12 +22,6 @@ import {
 import { i18nService } from '../../services/i18n';
 import { formatTokenCount } from '../../utils/tokenFormat';
 import Modal from '../common/Modal';
-
-export interface ContextCleanupUndoState {
-  closedCount: number;
-  savedTokens: number;
-  undoToken: string;
-}
 
 interface ContextCleanupModalProps {
   isOpen: boolean;
@@ -63,66 +56,6 @@ function formatIdleLabel(candidate: ContextCleanupCandidate): string {
   }
   return i18nService.t('contextCleanupIdleDays').replace('{days}', String(candidate.idleDays));
 }
-
-export const ContextCleanupUndoToast: React.FC<{
-  undoState: ContextCleanupUndoState | null;
-  onDismiss: () => void;
-  onUndone?: () => void;
-}> = ({ undoState, onDismiss, onUndone }) => {
-  const [undoing, setUndoing] = useState(false);
-
-  useEffect(() => {
-    if (!undoState) return undefined;
-    const timer = window.setTimeout(onDismiss, 8_000);
-    return () => window.clearTimeout(timer);
-  }, [undoState, onDismiss]);
-
-  if (!undoState || typeof document === 'undefined') return null;
-
-  const handleUndo = async () => {
-    if (undoing) return;
-    setUndoing(true);
-    try {
-      const res = await contextCleanupService.undo(undoState.undoToken);
-      onDismiss();
-      if (res.success) {
-        onUndone?.();
-        window.dispatchEvent(new CustomEvent('app:showToast', {
-          detail: i18nService.t('contextCleanupToastUndone').replace('{count}', String(res.restoredCount)),
-        }));
-      }
-    } finally {
-      setUndoing(false);
-    }
-  };
-
-  return createPortal(
-    <div className="fixed bottom-6 left-1/2 z-[90] flex -translate-x-1/2 items-center gap-3 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-foreground shadow-popover">
-      <span>
-        {i18nService.t('contextCleanupToastSuccess')
-          .replace('{count}', String(undoState.closedCount))
-          .replace('{tokens}', formatTokenCount(undoState.savedTokens))}
-      </span>
-      <button
-        type="button"
-        disabled={undoing}
-        onClick={handleUndo}
-        className="rounded-lg bg-action px-2.5 py-1 text-xs font-medium text-action-foreground transition-colors hover:bg-action-hover disabled:opacity-50"
-      >
-        {i18nService.t('contextCleanupToastUndo')}
-      </button>
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label={i18nService.t('close')}
-        className="rounded p-0.5 text-secondary hover:bg-surface-raised hover:text-foreground"
-      >
-        <XMarkIcon className="h-4 w-4" />
-      </button>
-    </div>,
-    document.body,
-  );
-};
 
 const ContextCleanupModal: React.FC<ContextCleanupModalProps> = ({
   isOpen,

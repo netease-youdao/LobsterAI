@@ -193,7 +193,7 @@ import type {
   LocalWebService,
 } from '../../shared/localWebServices/constants';
 import type { McpAuthMode, McpOAuthActionResult, McpOAuthStatusResult } from '../../shared/mcp/auth';
-import type { McpManagedConnection } from '../../shared/mcp/constants';
+import type { McpManagedConnection, McpMarketplaceSource } from '../../shared/mcp/constants';
 import type { McpToolDiscoveryRequest, McpToolDiscoveryResult } from '../../shared/mcp/toolDiscovery';
 import type {
   MediaPreference,
@@ -852,6 +852,7 @@ interface IElectronAPI {
     fetchMarketplace: () => Promise<{
       success: boolean;
       data?: McpMarketplaceData;
+      source?: McpMarketplaceSource;
       error?: string;
     }>;
     connectQichacha: () => Promise<{

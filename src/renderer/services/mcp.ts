@@ -4,43 +4,15 @@ import {
   type McpToolDiscoveryRequest,
   type McpToolDiscoveryResult,
 } from '../../shared/mcp/toolDiscovery';
-import { McpMarketplaceCategoryInfo, McpMarketplaceServer,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
+import { McpMarketplaceCategoryInfo, McpRegistryEntry, McpServerConfig, McpServerFormData } from '../types/mcp';
+import { isTestModeEnabled } from './endpoints';
 import { LogReporterAction, reportYdAnalyzer } from './logReporter';
+import {
+  readMcpMarketplaceCache,
+  shouldCacheMcpMarketplaceResult,
+  writeMcpMarketplaceCache,
+} from './mcpMarketplaceCache';
 import { convertMarketplaceToRegistry } from './mcpMarketplaceInstall';
-
-/**
- * Last successful marketplace payload, kept so the page's first frame renders
- * the same localized names and entries as the eventual fetch — without it the
- * grid mounts on the bundled English-only registry and visibly renames itself
- * a few seconds later.
- */
-const MARKETPLACE_CACHE_KEY = 'mcpMarketplaceCache.v1';
-
-interface MarketplaceCachePayload {
-  servers: McpMarketplaceServer[];
-  categories: McpMarketplaceCategoryInfo[];
-}
-
-function readMarketplaceCache(): MarketplaceCachePayload | null {
-  try {
-    const raw = window.localStorage.getItem(MARKETPLACE_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as MarketplaceCachePayload;
-    if (!Array.isArray(parsed?.servers) || !Array.isArray(parsed?.categories)) return null;
-    return parsed;
-  } catch {
-    // localStorage unavailable or the cache is corrupt; fetch will repopulate.
-    return null;
-  }
-}
-
-function writeMarketplaceCache(payload: MarketplaceCachePayload): void {
-  try {
-    window.localStorage.setItem(MARKETPLACE_CACHE_KEY, JSON.stringify(payload));
-  } catch {
-    // Cache is an optimization only; failing to persist must not break fetch.
-  }
-}
 
 function getMcpAnalyticsSource(server: McpServerConfig): string {
   if (server.isBuiltIn) return 'built_in';
@@ -281,10 +253,13 @@ class McpService {
     registry: McpRegistryEntry[];
     categories: McpMarketplaceCategoryInfo[];
   } | null> {
+    const requestedTestMode = isTestModeEnabled();
     try {
       const result = await window.electron.mcp.fetchMarketplace();
       if (result.success && result.data) {
-        writeMarketplaceCache(result.data);
+        if (shouldCacheMcpMarketplaceResult(result.source)) {
+          writeMcpMarketplaceCache(window.localStorage, requestedTestMode, result.data);
+        }
         const registry = convertMarketplaceToRegistry(result.data.servers);
         return { registry, categories: result.data.categories };
       }
@@ -295,12 +270,12 @@ class McpService {
     }
   }
 
-  /** Cached copy of the last fetch, already converted; null on first run. */
+  /** Cached copy of the last fetch for the active environment, already converted; null on first run. */
   getCachedMarketplace(): {
     registry: McpRegistryEntry[];
     categories: McpMarketplaceCategoryInfo[];
   } | null {
-    const cached = readMarketplaceCache();
+    const cached = readMcpMarketplaceCache(window.localStorage, isTestModeEnabled());
     if (!cached) return null;
     return {
       registry: convertMarketplaceToRegistry(cached.servers),

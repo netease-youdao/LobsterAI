@@ -6,10 +6,8 @@ import { contextCleanupService } from '../../services/contextCleanup';
 import { i18nService } from '../../services/i18n';
 import type { CoworkContextUsage } from '../../types/cowork';
 import { formatTokenCount } from '../../utils/tokenFormat';
-import ContextCleanupModal, {
-  type ContextCleanupUndoState,
-  ContextCleanupUndoToast,
-} from './ContextCleanupModal';
+import ContextCleanupModal from './ContextCleanupModal';
+import { showContextCleanupUndoToast } from './contextCleanupToast';
 import {
   buildContextUsagePopoverViewModel,
   ContextBarSegmentKind,
@@ -93,9 +91,16 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
   const [placement, setPlacement] = useState<FixedPopoverPlacement | null>(null);
   const [cleanupScan, setCleanupScan] = useState<ContextCleanupScanResult | null>(null);
   const [cleanupModalOpen, setCleanupModalOpen] = useState(false);
-  const [undoState, setUndoState] = useState<ContextCleanupUndoState | null>(null);
+  const mountedRef = useRef(true);
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const setOpenWithCallback = useCallback((nextOpen: boolean) => {
     setOpen((prev) => {
@@ -218,11 +223,20 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
 
   const handleCleanupApplied = (result: ContextCleanupApplyResult) => {
     if (result.closedCount > 0 && result.undoToken) {
-      setUndoState({
-        closedCount: result.closedCount,
-        savedTokens: result.savedTokens,
-        undoToken: result.undoToken,
-      });
+      showContextCleanupUndoToast(
+        {
+          closedCount: result.closedCount,
+          savedTokens: result.savedTokens,
+          undoToken: result.undoToken,
+        },
+        {
+          onUndone: () => {
+            if (mountedRef.current) {
+              setCleanupScan(null);
+            }
+          },
+        },
+      );
     }
     setCleanupScan(null);
   };
@@ -398,11 +412,6 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
         scanResult={cleanupScan}
         onClose={() => setCleanupModalOpen(false)}
         onApplied={handleCleanupApplied}
-      />
-      <ContextCleanupUndoToast
-        undoState={undoState}
-        onDismiss={() => setUndoState(null)}
-        onUndone={() => setCleanupScan(null)}
       />
     </span>
   );
