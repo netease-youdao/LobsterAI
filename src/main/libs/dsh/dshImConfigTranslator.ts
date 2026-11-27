@@ -5,6 +5,7 @@
 import path from 'node:path';
 
 import { RetainedImPlatform } from '../../../shared/dshEngine/hostConstants';
+import { DEFAULT_IM_INSTANCE_ID, resolveImAgentBinding } from '../../../shared/im/agentBinding';
 import { legacyWeixinAccountId, WeixinPlugin } from '../../../shared/im/weixin';
 import type { DshChannelInstanceConfig } from '../../im/dshChannelsBridge';
 import { wecomDuplicateOwners } from '../../im/wecomConnections';
@@ -18,28 +19,6 @@ const MULTI_INSTANCE_PLATFORMS: readonly RetainedImPlatform[] = [
   RetainedImPlatform.Discord,
   RetainedImPlatform.Popo,
 ];
-
-function resolveBindingAgentId(
-  bindings: Record<string, string> | undefined,
-  platform: string,
-  instanceId?: string,
-): string {
-  if (!bindings) return 'main';
-  if (instanceId) {
-    const exact = bindings[`${platform}:${instanceId}`];
-    if (exact) return exact;
-    const prefix = `${platform}:`;
-    for (const [key, value] of Object.entries(bindings)) {
-      if (key.startsWith(prefix)) {
-        const suffix = key.slice(prefix.length);
-        if (suffix === instanceId || instanceId.startsWith(suffix)) {
-          return value;
-        }
-      }
-    }
-  }
-  return bindings[platform] || 'main';
-}
 
 export function buildDshImChannelInstances(options: {
   imConfig: Record<string, unknown>;
@@ -64,8 +43,8 @@ export function buildDshImChannelInstances(options: {
       const inst = raw as Record<string, unknown>;
       const instanceId = typeof inst.instanceId === 'string' && inst.instanceId.trim()
         ? inst.instanceId.trim()
-        : 'default';
-      const agentId = resolveBindingAgentId(bindings, platform, instanceId);
+        : DEFAULT_IM_INSTANCE_ID;
+      const agentId = resolveImAgentBinding(bindings, platform, instanceId);
       result.push({
         platform,
         instanceId,
@@ -81,14 +60,14 @@ export function buildDshImChannelInstances(options: {
   const weixin = imConfig[RetainedImPlatform.Weixin];
   if (weixin && typeof weixin === 'object') {
     const rec = weixin as Record<string, unknown>;
-    const agentId = resolveBindingAgentId(bindings, RetainedImPlatform.Weixin, 'default');
+    const agentId = resolveImAgentBinding(bindings, RetainedImPlatform.Weixin, DEFAULT_IM_INSTANCE_ID);
     const account = typeof rec.accountId === 'string' ? legacyWeixinAccountId(rec.accountId) : '';
     const legacyContextFile = options.userDataDir && account
       ? path.join(options.userDataDir, 'openclaw', 'state', WeixinPlugin.Id, 'accounts', account + '.context-tokens.json')
       : undefined;
     result.push({
       platform: RetainedImPlatform.Weixin,
-      instanceId: 'default',
+      instanceId: DEFAULT_IM_INSTANCE_ID,
       enabled: rec.enabled === true,
       agentId,
       cwd: getDefaultCwd?.(agentId),
