@@ -217,26 +217,18 @@ export const dshHtmlRenderToolDescriptor: DshHostToolDescriptor = {
   description: [
     'Render one or more local HTML/CSS files directly to pixel-exact PNG/JPEG images on disk using LobsterAI\'s built-in Chromium offscreen renderer (`deviceScaleFactor: 1`, silent, never disturbs visible browser tabs).',
     'Prefer this tool for deterministic covers, graphic cards, long summary posters, and social post carousels (e.g. 1242x1656 3:4 or 1242x1242 1:1).',
-    'Pass `items` to batch-render up to 20 files in one call, or top-level `htmlPath` and `outputPath` for a single file.',
+    'Pass `items` with 1-20 render jobs per call.',
   ].join(' '),
-  deferLoading: true,
   timeoutMs: HTML_RENDER_LIMITS.DefaultTimeoutMs,
   inputSchema: {
     type: 'object',
+    required: ['items'],
     properties: {
       items: {
         type: 'array',
-        description: `Batch render jobs (1-${HTML_RENDER_LIMITS.MaxItems}).`,
+        description: `Render jobs (1-${HTML_RENDER_LIMITS.MaxItems}). Pass a single-element array for one file.`,
         items: ITEM_SCHEMA,
       },
-      htmlPath: ITEM_SCHEMA.properties.htmlPath,
-      outputPath: ITEM_SCHEMA.properties.outputPath,
-      width: ITEM_SCHEMA.properties.width,
-      height: ITEM_SCHEMA.properties.height,
-      fullPage: ITEM_SCHEMA.properties.fullPage,
-      format: ITEM_SCHEMA.properties.format,
-      quality: ITEM_SCHEMA.properties.quality,
-      waitMs: ITEM_SCHEMA.properties.waitMs,
     },
   },
 };

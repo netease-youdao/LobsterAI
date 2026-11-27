@@ -43,11 +43,9 @@ const imageTool: DshHostToolDescriptor = {
       aspectRatio: { type: 'string' },
       resolution: { type: 'string' },
       imageSize: { type: 'string' },
-      n: { type: 'integer', description: 'Number of outputs, defaults to one. Alias of count.' },
-      count: { type: 'integer', description: 'Number of outputs, defaults to one.' },
+      n: { type: 'integer', description: 'Number of outputs (default 1).' },
       quality: { type: 'string' },
       outputFormat: { type: 'string' },
-      output_format: { type: 'string', description: 'Alias of outputFormat.' },
       temperature: { type: 'number' },
       layerDecomposition: { type: 'boolean', description: 'Split one reference image into layers. Each output is billed.' },
       layerDecompositionOptions: {

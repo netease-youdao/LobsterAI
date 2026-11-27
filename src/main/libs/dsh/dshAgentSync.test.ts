@@ -6,8 +6,13 @@ import {
   AgentSource,
   SubagentCollaborationMode,
 } from '../../../shared/agent/constants';
+import { DshProgressiveCapability } from '../../../shared/dshEngine/hostConstants';
 import type { Agent } from '../../coworkStore';
-import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './dshAgentSync';
+import {
+  buildDshHostAgentSpecs,
+  resolveAllowedSkillIdsForTurn,
+  resolveHostCapabilitiesForAgent,
+} from './dshAgentSync';
 
 function makeAgent(overrides: Partial<Agent> & { id: string; name: string }): Agent {
   return {
@@ -269,5 +274,34 @@ describe('resolveAllowedSkillIdsForTurn', () => {
       agentSkillIds: [],
       optionSkillIds: ['docx'],
     })).toBeNull();
+  });
+
+  test('resolves hostCapabilities for Xiaohongshu experts, prompt-referenced html-render, and skin-creator agents', () => {
+    expect(resolveHostCapabilitiesForAgent(
+      makeAgent({ id: 'xhs-1', name: '小红书编辑', presetId: 'xiaohongshu-editor' }),
+    )).toEqual([DshProgressiveCapability.HtmlRender]);
+
+    expect(resolveHostCapabilitiesForAgent(
+      makeAgent({
+        id: 'poster-expert',
+        name: '海报专家',
+        systemPrompt: 'Use lobsterai_render_html_to_image to export posters.',
+      }),
+    )).toEqual([DshProgressiveCapability.HtmlRender]);
+
+    expect(resolveHostCapabilitiesForAgent(
+      makeAgent({ id: 'skin-agent', name: '换肤助手', skillIds: ['skin-creator'] }),
+    )).toEqual([DshProgressiveCapability.SkinManage]);
+
+    expect(resolveHostCapabilitiesForAgent(
+      makeAgent({ id: 'plain-agent', name: '普通助手' }),
+    )).toEqual([]);
+
+    const specs = buildDshHostAgentSpecs({
+      agents: [
+        makeAgent({ id: 'xhs-1', name: '小红书编辑', presetId: 'xiaohongshu-editor' }),
+      ],
+    });
+    expect(specs[0]?.hostCapabilities).toEqual([DshProgressiveCapability.HtmlRender]);
   });
 });

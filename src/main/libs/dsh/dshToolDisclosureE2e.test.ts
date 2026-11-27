@@ -190,6 +190,16 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: lobster_enable_tools', 
             description: 'Mock Computer Use list windows tool',
             inputSchema: { type: 'object', properties: {} },
           },
+          {
+            name: 'lobsterai_render_html_to_image',
+            description: 'Mock HTML render tool',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'lobsterai_skin_manage',
+            description: 'Mock skin manage tool',
+            inputSchema: { type: 'object', properties: {} },
+          },
         ]);
 
         const created = await client.createSession({ cwd: workspaceDir, agentPreset: 'lobsterai' });
@@ -238,6 +248,13 @@ describe.skipIf(!HAS_DSH_RUNTIME)('Real DSH Runtime E2E: lobster_enable_tools', 
         expect(firstStepTools).toContain('lobster_enable_tools');
         expect(firstStepTools).not.toContain('ask_user_question');
         expect(firstStepTools).not.toContain('mcp__computer-use__list_windows');
+        expect(firstStepTools).not.toContain('lobsterai_render_html_to_image');
+        expect(firstStepTools).not.toContain('lobsterai_skin_manage');
+        expect(firstStepTools).not.toContain('subagent_fork');
+        expect(firstStepTools).not.toContain('list_subagent_models');
+        expect(firstStepTools).not.toContain('create_goal');
+        expect(firstStepTools).not.toContain('update_goal');
+        expect(firstStepTools).not.toContain('get_goal');
 
         expect(toolResults).toHaveLength(1);
         expect(toolResults[0].isError).not.toBe(true);

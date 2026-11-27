@@ -91,6 +91,7 @@ import {
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { normalizeClientBannerPlacement } from '../shared/clientBanner/constants';
 import { ClipboardIpc } from '../shared/clipboard/constants';
+import { CleanupCapabilityKind } from '../shared/contextCleanup/constants';
 import {
   type CoworkBrowserAnnotationMessageBatch,
   normalizeBrowserAnnotationBatches,
@@ -144,6 +145,7 @@ import {
 } from '../shared/cowork/steer';
 import { stripNullChars } from '../shared/cowork/text';
 import type { DataMigrationLastRestoreResult } from '../shared/dataMigration/constants';
+import { DECISION_MODEL_CONFIG_STORE_KEY } from '../shared/decisionModel/constants';
 import { CompanionAnalyticsSource } from '../shared/desktopCompanion/analytics';
 import { getCompanionTaskPreview } from '../shared/desktopCompanion/results';
 import { DialogIpc } from '../shared/dialog/constants';
@@ -263,6 +265,8 @@ import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQ
 import { type AutoLaunchStatus, getAutoLaunchStatus, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
 import { BrowserCredentialApprovalService } from './browserCredentials/browserCredentialApprovalService';
 import { BrowserCredentialService } from './browserCredentials/browserCredentialService';
+import { CapabilityUsageStore } from './contextCleanup/capabilityUsageStore';
+import { ContextCleanupService } from './contextCleanup/contextCleanupService';
 import { readEnvironmentSnapshot } from './conversation/environmentSnapshot';
 import { MessageSpeechController } from './conversation/messageSpeechController';
 import { WorkspaceReviewSourceStore } from './conversation/reviewSource';
@@ -327,6 +331,7 @@ import {
 } from './ipcHandlers/asr';
 import { registerAuthGateHandlers } from './ipcHandlers/authGate';
 import { registerBrowserCredentialHandlers } from './ipcHandlers/browserCredentials/handlers';
+import { registerContextCleanupHandlers } from './ipcHandlers/contextCleanup';
 import { registerCoworkMessageEditHandlers } from './ipcHandlers/coworkMessageEdit/handlers';
 import { registerCoworkPinnedHandlers } from './ipcHandlers/coworkPinned';
 import { registerCoworkSideChatHandlers, wireCoworkSideChatEvents } from './ipcHandlers/coworkSideChat';
@@ -460,6 +465,7 @@ import {
   getDefaultCoworkProjectDirectory,
 } from './libs/coworkWorkingDirectory';
 import { performPendingDataMigrationRestoreSync } from './libs/dataMigration/dataMigrationService';
+import { isDecisionModelActive } from './libs/decisionModelConfig';
 import { DesktopNotificationManager } from './libs/desktopNotificationManager';
 import { clearLegacyDevelopmentServerHttpCache } from './libs/developmentHttpCache';
 import {
@@ -468,7 +474,11 @@ import {
   resolveDevelopmentLaunchContext,
 } from './libs/developmentProtocolContext';
 import { createDshAgentRulesProvider } from './libs/dsh/dshAgentRulesTool';
-import { buildDshHostAgentSpecs, resolveAllowedSkillIdsForTurn } from './libs/dsh/dshAgentSync';
+import {
+  buildDshHostAgentSpecs,
+  resolveAllowedSkillIdsForTurn,
+  resolveHostCapabilitiesForAgent,
+} from './libs/dsh/dshAgentSync';
 import {
   cleanupLegacyOpenClawDisposableCaches,
   createSingleFlightAsyncTracker,
@@ -2555,6 +2565,30 @@ const getDshBootstrap = (): DshBootstrap => {
           optionSkillIds,
         });
       },
+      resolveAgentHostCapabilities: (agentId) => {
+        if (!agentId || agentId === AgentId.Main) return [];
+        const agent = getAgentManager().getAgent(agentId);
+        return resolveHostCapabilitiesForAgent(agent);
+      },
+      onCapabilityUsed: ({ kind, itemId }) => {
+        try {
+          let resolvedId = itemId;
+          if (kind === CleanupCapabilityKind.McpServer) {
+            const normalized = itemId.trim().toLowerCase();
+            const match = getMcpRuntime().getStore().listServers().find((srv) => {
+              const nameNorm = srv.name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+              return srv.id.toLowerCase() === normalized
+                || srv.name.trim().toLowerCase() === normalized
+                || nameNorm === normalized;
+            });
+            if (!match) return;
+            resolvedId = match.id;
+          }
+          getCapabilityUsageStore().recordUsage(kind, resolvedId);
+        } catch {
+          // Non-fatal diagnostic tracking.
+        }
+      },
       waitForMcpConnections: signal => getMcpRuntime().waitForPendingLaunchConnections(signal),
       instanceId: getStore().get<string>('installation_uuid') ?? undefined,
       ecosystemWindowTitle: t('dshEcosystemTitle'),
@@ -3598,6 +3632,77 @@ const getDesktopNotificationManager = (): DesktopNotificationManager => {
     });
   }
   return desktopNotificationManager;
+};
+
+let capabilityUsageStore: CapabilityUsageStore | null = null;
+const getCapabilityUsageStore = (): CapabilityUsageStore => {
+  if (!capabilityUsageStore) {
+    capabilityUsageStore = new CapabilityUsageStore(getStore().getDatabase());
+  }
+  return capabilityUsageStore;
+};
+
+let contextCleanupService: ContextCleanupService | null = null;
+const getContextCleanupService = (): ContextCleanupService => {
+  if (!contextCleanupService) {
+    const dshHomeDir = path.join(app.getPath('userData'), DSH_PROFILE_DIR_NAME);
+    contextCleanupService = new ContextCleanupService({
+      usageStore: getCapabilityUsageStore(),
+      kvStore: getStore(),
+      dshHomeDir,
+      listSkills: () => getSkillManager().listSkills().map(skill => ({
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+        enabled: skill.enabled,
+        isBuiltIn: skill.isBuiltIn,
+        updatedAt: skill.updatedAt,
+        skillDirPath: skill.skillPath ? path.dirname(skill.skillPath) : undefined,
+      })),
+      setSkillsEnabledBatch: (ids, enabled) => {
+        getSkillManager().setSkillsEnabledBatch(ids, enabled);
+      },
+      listMcpServers: () => getMcpRuntime().getStore().listServers().map(srv => ({
+        id: srv.id,
+        name: srv.name,
+        description: srv.description,
+        enabled: srv.enabled,
+        createdAt: srv.createdAt,
+      })),
+      setMcpServerEnabled: (id, enabled) => getMcpRuntime().getStore().setEnabled(id, enabled),
+      listAgents: () => getAgentManager().listAgents().map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        skillIds: agent.skillIds,
+        enabled: agent.enabled,
+      })),
+      isDecisionModelActive: () => isDecisionModelActive(readDecisionModelConfig(getStore())),
+      getDecisionModelUpdatedAt: () => {
+        try {
+          const row = getStore().getDatabase()
+            .prepare('SELECT updated_at FROM kv WHERE key = ?')
+            .get(DECISION_MODEL_CONFIG_STORE_KEY) as { updated_at?: number } | undefined;
+          return typeof row?.updated_at === 'number' ? row.updated_at : null;
+        } catch {
+          return null;
+        }
+      },
+      setDecisionModelEnabled: (enabled) => {
+        const prev = readDecisionModelConfig(getStore());
+        getStore().set(DECISION_MODEL_CONFIG_STORE_KEY, { ...prev, enabled });
+      },
+      listScheduledTasks: () => (dshBootstrap?.scheduler.listTasks() ?? []).map(task => ({
+        id: task.id,
+        name: task.name,
+        enabled: task.enabled,
+        prompt: task.payload?.kind === 'agentTurn' ? task.payload.message : undefined,
+      })),
+      syncRuntimeConfig: async (reason) => {
+        await syncOpenClawConfig({ reason, restartGatewayIfRunning: false });
+      },
+    });
+  }
+  return contextCleanupService;
 };
 
 const getSkillManager = () => {
@@ -9715,6 +9820,10 @@ if (!gotTheLock) {
     syncOpenClawConfig,
   });
 
+  registerContextCleanupHandlers({
+    getService: getContextCleanupService,
+  });
+
   registerProviderModelDiscoveryHandlers();
 
   registerDshHostHandlers({
@@ -15337,7 +15446,10 @@ if (!gotTheLock) {
         signal: AbortSignal.timeout(10_000),
       }),
     });
-    app.once('before-quit', () => usageTitleSync.stop());
+    app.once('before-quit', () => {
+      usageTitleSync.stop();
+      capabilityUsageStore?.flush();
+    });
     configureNativeUsageSessionTitleResolver((sessionKey, jobId) => {
       const agentMatch = /^agent:([^:]+):/.exec(sessionKey);
       const sessionId = getCoworkStore().getSessionIdByScheduledTaskId(

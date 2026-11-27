@@ -181,6 +181,9 @@ export function resolveSessionContext(ctx, state, sessionId) {
           : {}),
         ...(ancestor?.executionMode ? { executionMode: ancestor.executionMode } : {}),
         ...(ancestor?.userQuestionsDisabled ? { userQuestionsDisabled: true } : {}),
+        ...(Array.isArray(spec?.hostCapabilities) && spec.hostCapabilities.length > 0
+          ? { unlockedCapabilities: spec.hostCapabilities }
+          : {}),
         ...(ancestor?.permissionPreset ? { permissionPreset: ancestor.permissionPreset } : {}),
         ...(typeof ancestor?.memoryEnabled === 'boolean' ? { memoryEnabled: ancestor.memoryEnabled } : {}),
       };

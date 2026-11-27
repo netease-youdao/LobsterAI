@@ -123,7 +123,7 @@ describe('dshHtmlRenderTool', () => {
     expect(() => parseHtmlRenderJobs({ items }, [cwd])).toThrow(/At most 20/i);
   });
 
-  test('provider exposes deferLoading descriptor and forwards jobs to renderer', async () => {
+  test('provider exposes deduplicated items-only schema and forwards legacy top-level jobs to renderer', async () => {
     const cwd = makeTempDir();
     const htmlFile = path.join(cwd, 'cover.html');
     fs.writeFileSync(htmlFile, '<html></html>', 'utf8');
@@ -142,8 +142,14 @@ describe('dshHtmlRenderTool', () => {
     });
 
     expect(provider.listDescriptors()).toEqual([dshHtmlRenderToolDescriptor]);
-    expect(dshHtmlRenderToolDescriptor.deferLoading).toBe(true);
+    expect(dshHtmlRenderToolDescriptor.deferLoading).toBeUndefined();
     expect(dshHtmlRenderToolDescriptor.name).toBe(DSH_HTML_RENDER_TOOL);
+    expect(dshHtmlRenderToolDescriptor.inputSchema).toMatchObject({
+      type: 'object',
+      required: ['items'],
+    });
+    const schemaProps = (dshHtmlRenderToolDescriptor.inputSchema.properties ?? {}) as Record<string, unknown>;
+    expect(Object.keys(schemaProps)).toEqual(['items']);
 
     const output = await provider.execute(
       DSH_HTML_RENDER_TOOL,

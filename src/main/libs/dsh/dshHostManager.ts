@@ -149,6 +149,7 @@ export interface DshHostAgentSpec {
   systemPrompt?: string;
   workingDirectory?: string;
   allowedSkillIds: string[] | null;
+  hostCapabilities?: DshProgressiveCapability[];
   modelSelection?: {
     provider: string;
     model: string;
@@ -189,6 +190,7 @@ export interface DshHostSessionContext {
   sessionId: string;
   userQuestionsDisabled?: boolean;
   sideChat?: boolean;
+  goalToolsEnabled?: boolean;
   agentId?: string;
   coworkSessionId?: string;
   traceId?: string;

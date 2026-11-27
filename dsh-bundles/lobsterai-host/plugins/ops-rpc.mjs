@@ -480,6 +480,9 @@ export function apply(ctx) {
                       : {}),
                   }))
                 : [];
+              const hostCapabilities = Array.isArray(item.hostCapabilities)
+                ? item.hostCapabilities.filter((c) => typeof c === 'string' && c.trim().length > 0).map((c) => c.trim())
+                : [];
               nextAgents.set(id, {
                 id,
                 name: typeof item.name === 'string' && item.name.trim().length > 0 ? item.name.trim() : id,
@@ -495,6 +498,7 @@ export function apply(ctx) {
                   ? { workingDirectory: item.workingDirectory.trim() }
                   : {}),
                 allowedSkillIds,
+                ...(hostCapabilities.length > 0 ? { hostCapabilities } : {}),
                 ...(modelSelection ? { modelSelection } : {}),
                 collaborationMode,
                 allowAgentIds,

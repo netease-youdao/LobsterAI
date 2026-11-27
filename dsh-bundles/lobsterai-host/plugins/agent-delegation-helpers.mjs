@@ -7,13 +7,13 @@
 export const DELEGATE_AGENT_TOOL_NAME = 'delegate_agent';
 export const LIST_COLLABORATORS_TOOL_NAME = 'list_collaborator_agents';
 export const DELEGATE_MAX_DEPTH = 2;
-export const MAX_INLINE_COLLABORATORS = 20;
+export const MAX_INLINE_COLLABORATORS = 10;
 
 const DSH_AGENT_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const UUID_PREFIX_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ROOT_RESERVED_NAME = 'lead';
-const MAX_DESC_CHARS = 120;
-const MAX_SKILLS_PER_LINE = 6;
+const MAX_DESC_CHARS = 60;
+const MAX_SKILLS_PER_LINE = 4;
 const MIN_PRIMARY_LINE_CHARS = 18;
 const MIN_SENTENCE_BOUNDARY_CHARS = 24;
 const GENERIC_HEADING_RE = /^(?:角色|角色定位|角色与规则|角色设定|人设|定位|职责|规则|工作原则|输出风格|输出规范|行为准则|工作指南|指南|说明|系统提示词?|role|role\s*(?:&|and)\s*rules|identity|persona|purpose|responsibilities|instructions|guidelines|rules|system\s*prompt|overview)\s*[:：]?$/i;
@@ -267,10 +267,8 @@ export function formatCollaboratorRosterPrompt(collaborators, options = {}) {
 
   const shown = collaborators.slice(0, maxInline);
   const lines = [
-    '## Available Specialist Agents for Collaboration',
-    'You can delegate tasks to the configured LobsterAI specialist agents below using `delegate_agent`.',
-    'Unlike `subagent` / `subagent_fork` (which spawn copies of yourself with your own persona and skills), `delegate_agent` starts an independent subagent running as that specialist — with its own workspace persona, long-term memory (`MEMORY.md`), skills, working directory, and configured model.',
-    'When the user asks to hand off work to one of these agents or a task matches a specialist\'s domain, call `delegate_agent` with its `agent_id` and a complete self-contained `prompt` (include absolute file paths and all relevant context, since the specialist does not see this conversation). After delegating, end your turn when only waiting remains; the runtime automatically delivers the specialist\'s completion result, and you can send follow-ups via `send_message`.',
+    '## Specialist Collaborator Agents',
+    'Delegate matching tasks via `delegate_agent` (uses each specialist\'s own persona, memory, skills, cwd, and model; pass a self-contained `prompt` with absolute paths, then end turn when only waiting; use `send_message` for follow-ups).',
     '',
     ...shown.map(formatAgentRow),
   ];

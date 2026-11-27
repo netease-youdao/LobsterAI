@@ -30,9 +30,9 @@
    - 将 `lobsterai_render_html_to_image` 与 `lobsterai_skin_manage` 纳入渐进披露，默认对普通会话隐藏：小红书等声明该能力的专家与换肤 Kit 会话初始化自动预解锁，主 Agent 必要时也可通过 `lobster_enable_tools` 按需唤起；同步去除 HTML 渲染工具重复定义的参数 Schema。
    - 非 Goal 会话隐藏全部 3 个 Goal 工具（`create_goal`、`update_goal`、`get_goal`），统一通过 `/goal` 命令或输入框 Goal 按钮触发并放行。
 2. **P1 — 闲置能力治理与一键关闭（重度用户收益最大，单用户可省 ~4k–8k+ tok）**
-   - 轻量追踪 Skills、MCP 连接器、专家 Agent、Jev 判断模型及第三方 DSH 插件的实际使用时间与频次，支持从历史 DSH 投影缓存冷启动回填。
+   - 轻量追踪 Skills、MCP 连接器、Jev 判断模型及第三方 DSH 插件的实际使用时间与频次，支持从历史 DSH 投影缓存冷启动回填（不把专家 Agent 列入停用候选，避免把用户侧边栏专家隐藏造成误解）。
    - 当存在**超过 30 天未使用**（且已过 **14 天新安装保护期**）的启用项，且预计可节省 **≥ 1,500 tokens/轮** 时，在「上下文进度条弹窗」与「套件·技能·连接器管理页顶部」提供低打扰提示与「一键精简」弹窗。
-   - 自动识别定时任务、已启用专家 `skillIds`、IM 绑定等依赖关系，默认不勾选高风险项；关闭操作热同步生效、不卸载文件，并支持一键撤销。
+   - 自动识别定时任务、已启用专家 `skillIds`、核心内置技能等依赖关系，默认不勾选高风险项；关闭操作热同步生效、不卸载文件，并支持一键撤销。
 3. **P2 — 深度底噪压缩与超量兜底（再降 ~1.5k–3.5k tok）**
    - 压缩 `lobsterai:collaborators` 引导文案、单行摘要上限及内联人数上限。
    - 精简低频宿主工具（媒体生成冗余别名参数、定时/规则/安装类工具描述）。
@@ -122,13 +122,12 @@
 ### P1 功能需求（闲置能力检测与一键关闭）
 
 #### FR-4: 轻量能力使用追踪与冷启动回填
-- 追踪范围覆盖 5 类可导致首轮上下文膨胀的能力：
+- 追踪范围覆盖 4 类可导致首轮上下文膨胀的能力（不包含专家 Agent，避免侧边栏专家被意外隐藏）：
   1. `skill`：已启用的全局 Skills（来自 `skillManager`）；
   2. `mcp_server`：已启用的用户/市场 MCP 连接器（来自 `mcpStore`，排除由 `tool-disclosure` 管控的内置重型 MCP）；
-  3. `agent`：已启用的非主专家 Agent（来自 `agents` 表，排除 `main`）；
-  4. `decision_model`：Jev 判断模型（`decision_model_config`）；
-  5. `dsh_plugin`：已安装的第三方 DSH 插件（来自用户 profile `package.json`，排除 `@deepseek-ai/*` 与 `@lobsterai/*`）。
-- 首次启用该功能时执行一次后台冷启动回填，从近 30 天 DSH 会话投影缓存（`contextTimeline.totals.skills` / `timing.tools`）与 SQLite 会话记录填充 `last_used_at` 与 `use_count`；历史已安装项以目录/配置创建时间作为 `first_seen_at`，避免升级后被迫再等 14 天。
+  3. `decision_model`：Jev 判断模型（`decision_model_config`）；
+  4. `dsh_plugin`：已安装的第三方 DSH 插件（来自用户 profile `package.json`，排除 `@deepseek-ai/*` 与 `@lobsterai/*`）。
+- 首次启用该功能时执行一次后台冷启动回填，从近 30 天 DSH 会话投影缓存（`contextTimeline.totals.skills` / `timing.tools`）填充 `last_used_at` 与 `use_count`；历史已安装项以目录/配置创建时间作为 `first_seen_at`，避免升级后被迫再等 14 天。
 - 日常运行时异步增量更新 `last_used_at` 与 `use_count`，写入采用防抖合并，不阻塞消息流。
 
 #### FR-5: 闲置判定规则、Token 估算与安全护栏
@@ -139,14 +138,12 @@
 - **Token 估算口径**：
   - MCP：复用 `estimateMcpToolTokens()`（汇总该 Server 已启用工具的估算值）；
   - Skill：按中英文加权公式估算 `- \`{name}\`: {truncatedDescription}\n` 的单轮开销；
-  - Agent：估算其在 `lobsterai:collaborators` 中的摘要行开销；
   - Jev：按 `DECISION_EVALUATE_TOOL_DESCRIPTOR` 实测 JSON 估算（约 680 tokens）；
   - 第三方 DSH 插件：若能从已注册工具反查则汇总工具估算值，否则标记为“未知/需在插件管理查看”。
 - **依赖保护护栏**（命中任一条则 `defaultSelected = false` 并附带 `dependencyReasons` 标签）：
-  1. 被任一启用中的定时任务（`lobster_scheduled_tasks`）绑定的 `agentId` 或引用的 `skillId`；
+  1. 被任一启用中的定时任务（`lobster_scheduled_tasks`）显式引用的 `skillId`；
   2. 被任一启用中的专家 Agent（`agents.skill_ids`）显式绑定的 `skillId`；
-  3. 被任一启用中的 IM 频道（`im_config` / `im_session_mappings`）绑定的 `agentId`；
-  4. 核心基础内置技能白名单（`web-search`、`docx`、`xlsx`、`pptx`、`pdf`）。
+  3. 核心基础内置技能白名单（`web-search`、`docx`、`xlsx`、`pptx`、`pdf`）。
 
 #### FR-6: 低打扰 UI 提醒与一键关闭 / 撤销闭环
 - **入口 1 — 上下文弹窗**（[ContextUsageIndicator.tsx](file:///Users/wangning/Dev/lobsterai/src/renderer/components/cowork/ContextUsageIndicator.tsx)）：
@@ -154,7 +151,7 @@
 - **入口 2 — 「套件·技能·连接器」管理页顶部轻 Banner**（[SkillsManager.tsx](file:///Users/wangning/Dev/lobsterai/src/renderer/components/skills/SkillsManager.tsx) 与 MCP 管理页）：
   - 当可省 ≥ 1,500 tokens 且未处于 30 天冷却期时展示顶部轻 Banner，提供「一键整理」与「暂不提醒（30 天）」两个操作。
 - **「上下文瘦身」弹窗（`ContextCleanupModal`）**：
-  - 支持按分组展示（技能 / MCP 连接器 / 专家 Agent / 实验功能 / 第三方插件），每组按可省 Token 降序排列。
+  - 支持按分组展示（技能 / MCP 连接器 / 实验功能 / 第三方插件），每组按可省 Token 降序排列。
   - 顶部动态汇总已勾选数量及预计每轮节省 Token 数；底部注明“仅关闭开关，不删除本地文件，随时可重新开启”。
   - 支持全选安全闲置项、单项勾选/取消；第三方 DSH 插件行展示「前往插件管理」外链而非勾选框。
   - 点击「一键关闭所选」：通过单次 IPC 批量热关闭，立即同步到 DSH（无需重启），返回 `undoToken` 并在页面展示 8 秒带「撤销」按钮的 Toast，点击「撤销」可一键恢复本次关闭的全部开关。
@@ -310,7 +307,6 @@ export type ContextCleanupIpcChannel =
 export const CleanupCapabilityKind = {
   Skill: 'skill',
   McpServer: 'mcp_server',
-  Agent: 'agent',
   DecisionModel: 'decision_model',
   DshPlugin: 'dsh_plugin',
 } as const;
@@ -320,7 +316,6 @@ export type CleanupCapabilityKind =
 export const CleanupDependencyKind = {
   ScheduledTask: 'scheduled_task',
   EnabledAgentSkill: 'enabled_agent_skill',
-  ImChannelBinding: 'im_channel_binding',
   CoreBuiltinSkill: 'core_builtin_skill',
 } as const;
 export type CleanupDependencyKind =
@@ -351,14 +346,13 @@ export const CONTEXT_CLEANUP_DEFAULTS = {
 - **冷启动一次性回填**（`backfillFromDshHistoryOnce()`，受 `kv['capability_usage_backfilled_v1']` 控制）：
   1. 读取 `userData/dsh-profile/storages/session_projcache/sessions/*.json`（仅扫描 `mtime >= now - 90d` 的文件，流式容错，坏文件跳过）；
   2. 从 `record.rows.contextTimeline.val.totals.skills` 提取技能调用次数与文件 `mtime` 作为 `last_used_at`；
-  3. 从 `record.rows.contextTimeline.val.timing.tools` 提取 `mcp__<server>__*`、`decision_evaluate`、`delegate_agent` 等调用记录；
-  4. 从 `cowork_sessions` 按 `agent_id` 聚合 `MAX(updated_at)` 与 `COUNT(*)` 回填各专家 Agent 的使用记录；
-  5. 为所有已启用的 Skill（取目录 `stat.birthtimeMs / mtimeMs`）、MCP（取 `mcp_servers.created_at`）、Agent（取 `agents.created_at`）、Jev（取 `kv.updated_at`）写入 `first_seen_at`（`INSERT OR IGNORE`）。
+  3. 从 `record.rows.contextTimeline.val.timing.tools` 提取 `mcp__<server>__*` 与 `decision_evaluate` 调用记录；
+  4. 为所有已启用的 Skill（取目录 `stat.birthtimeMs / mtimeMs`）、MCP（取 `mcp_servers.created_at`）、Jev（取 `kv.updated_at`）写入 `first_seen_at`（`INSERT OR IGNORE`）。
 - **运行时增量埋点**：
   - 提供纯方法 `recordUsage(kind, itemId, now = Date.now())`，内部维护 5 分钟防抖缓冲，批量 flush 到 SQLite，在 `app.on('before-quit')` 刷盘一次。
   - 在 `dshRuntimeAdapter.ts` 中通过注入可选回调 `onCapabilityUsed?: (kind, itemId) => void`（保持 adapter 低耦合）接入：
-    - 收到 `tool/call`：`skill` → `('skill', args.name)`；`decision_evaluate` → `('decision_model', 'jev')`；`mcp__<normalizedServer>__*` → 映射回 `mcpServer.id` 并记 `('mcp_server', id)`；`delegate_agent` → `('agent', targetAgentId)`；
-    - 会话启动/续聊时：若 `agentId !== 'main'` 记 `('agent', agentId)`；若本轮显式选中 `activeSkillIds`，记对应 `('skill', id)`。
+    - 收到 `tool/call`：`skill` → `('skill', args.name)`；`decision_evaluate` → `('decision_model', 'jev')`；`mcp__<normalizedServer>__*` → 映射回 `mcpServer.id` 并记 `('mcp_server', id)`；
+    - 会话启动/续聊时：若本轮显式选中 `activeSkillIds`，记对应 `('skill', id)`。
 
 #### 4.5.3 扫描、估算、依赖检查与批量关闭（`src/main/contextCleanup/contextCleanupService.ts`）
 
@@ -371,14 +365,13 @@ export const CONTEXT_CLEANUP_DEFAULTS = {
 - **Token 估算函数**（独立纯函数文件 `tokenEstimator.ts`，便于 Vitest 单元测试）：
   - `estimateTextTokensCjkAware(text: string): number`：复用 [mcpToolDiscovery.ts](file:///Users/wangning/Dev/lobsterai/src/main/mcp/mcpToolDiscovery.ts#L118) 的中英文加权公式（CJK 字符与 ASCII 区分权重）；
   - Skill：按 `- \`${id}\`: ${truncatedDesc}\n` 计算；
-  - MCP：读取 `mcp_launch_resolutions` 缓存工具列表汇总 `estimatedTokens`（无缓存时给出保守下界并标注“约”）；
-  - Agent：按 `formatAgentRow` 生成的行估算；
+  - MCP：读取缓存工具列表汇总 `estimatedTokens`（无缓存时标注“占用未知”）；
   - Jev：常量 `estimateMcpToolTokens(DECISION_EVALUATE_TOOL_DESCRIPTOR)`。
 - **批量关闭与撤销**：
   - `apply(items: Array<{ kind, id }>)`：
     1. 记录变更前状态快照存入内存 LRU（key 为随机 `undoToken`，保留最近 5 次操作）；
-    2. 按类型调用现有主进程服务（`skillManager.setSkillEnabled(id, false)`、`mcpStore.setEnabled(id, false)`、`agentManager.updateAgent(id, { enabled: false })`、更新 `decision_model_config.enabled = false`）；
-    3. 统一触发一次去重后的 DSH 同步（避免关闭 80 个技能时触发 80 次 `syncSkills` / `syncAgents` —— 新增批量关闭接口 `setSkillsEnabledBatch(ids, false)` 仅写盘和同步 DSH 一次！）；
+    2. 按类型调用现有主进程服务（`skillManager.setSkillsEnabledBatch(ids, false)`、`mcpStore.setEnabled(id, false)`、更新 `decision_model_config.enabled = false`）；
+    3. 统一触发一次去重后的 DSH 同步（避免关闭 80 个技能时触发 80 次 `syncSkills` —— `setSkillsEnabledBatch(ids, false)` 仅写盘和同步 DSH 一次！）；
     4. 返回 `{ closedCount, savedTokens, undoToken, failedItems }`。
   - `undo(undoToken: string)`：按快照批量恢复开关并同步一次 DSH。
 
@@ -392,7 +385,7 @@ export const CONTEXT_CLEANUP_DEFAULTS = {
    - 进入页面时调用 `contextCleanupService.scan()`，若 `shouldShowBanner === true` 渲染顶部可忽略提示卡片；点击「暂不提醒」调用 `contextCleanup.dismiss()` 写入 `kv['context_cleanup_dismissed_at']`。
 4. **「一键精简」弹窗**（`src/renderer/components/cowork/ContextCleanupModal.tsx`）：
    - 复用项目现有 Modal / Checkbox / Badge Tailwind 样式；
-   - 关闭成功后刷新 Redux 中的 `skill` / `mcp` / `agent` store，并弹出 8 秒撤销 Toast。
+   - 关闭成功后刷新 Redux 中的 `skill` / `mcp` store，并弹出 8 秒撤销 Toast。
 
 ### 4.6 P2：深度底噪压缩实现要点
 
@@ -412,8 +405,8 @@ export const CONTEXT_CLEANUP_DEFAULTS = {
 - `contextCleanupPopoverHint` / `contextCleanupPopoverAction`
 - `contextCleanupBannerText` / `contextCleanupBannerAction` / `contextCleanupDismiss`
 - `contextCleanupModalTitle` / `contextCleanupModalSubtitle` / `contextCleanupModalSummary` / `contextCleanupModalConfirm` / `contextCleanupSafeNote`
-- `contextCleanupGroupSkills` / `contextCleanupGroupMcp` / `contextCleanupGroupAgents` / `contextCleanupGroupExperimental` / `contextCleanupGroupPlugins`
-- `contextCleanupNeverUsed` / `contextCleanupIdleDays` / `contextCleanupDepScheduledTask` / `contextCleanupDepAgentSkill` / `contextCleanupDepImChannel` / `contextCleanupDepCoreSkill`
+- `contextCleanupGroupSkills` / `contextCleanupGroupMcp` / `contextCleanupGroupExperimental` / `contextCleanupGroupPlugins`
+- `contextCleanupNeverUsed` / `contextCleanupIdleDays` / `contextCleanupDepScheduledTask` / `contextCleanupDepAgentSkill` / `contextCleanupDepCoreSkill`
 - `contextCleanupToastSuccess` / `contextCleanupToastUndo` / `contextCleanupToastUndone`
 
 ---
@@ -460,7 +453,7 @@ export const CONTEXT_CLEANUP_DEFAULTS = {
 | `src/shared/contextCleanup/constants.ts` *(新增)* | IPC 通道常量、能力类型/依赖类型枚举、默认阈值常量 |
 | `src/shared/contextCleanup/types.ts` *(新增)* | `ContextCleanupCandidate`、`ContextCleanupScanResult`、`ContextCleanupApplyResult` 等跨进程类型 |
 | `src/main/contextCleanup/capabilityUsageStore.ts` *(新增)* | SQLite `capability_usage` 表管理、防抖增量写入与 DSH 投影缓存冷启动回填 |
-| `src/main/contextCleanup/tokenEstimator.ts` *(新增)* | 统一的 Skill / MCP / Agent / Jev 首轮 Token 估算纯函数 |
+| `src/main/contextCleanup/tokenEstimator.ts` *(新增)* | 统一的 Skill / MCP / Jev 首轮 Token 估算纯函数 |
 | `src/main/contextCleanup/contextCleanupService.ts` *(新增)* | 扫描闲置能力、依赖护栏判定、批量热关闭与撤销快照 |
 | `src/main/ipcHandlers/contextCleanup/handlers.ts` & `index.ts` *(新增)* | 注册 `contextCleanup:*` IPC 处理器 |
 | [src/main/skills/skillManager.ts](file:///Users/wangning/Dev/lobsterai/src/main/skills/skillManager.ts) | 新增 `setSkillsEnabledBatch()` 避免批量关闭反复同步 DSH |

@@ -1,11 +1,20 @@
 /**
  * Pure helpers for progressive on-demand disclosure of LobsterAI's built-in
  * heavy MCP tool groups (`computer-use`, `browser`, `word`, `excel`, `ppt`)
- * combined with user-configured per-server MCP `toolFilter` denials.
+ * and scoped host tools (`html-render`, `skin-manage`), combined with
+ * user-configured per-server MCP `toolFilter` denials and Goal-mode gating.
  * Zero DSH peer imports so Vitest can test them directly.
  */
 
 import { computeDeniedUserMcpTools } from './mcp-tool-filter-helpers.mjs';
+
+export const GOAL_TOOL_NAMES = Object.freeze([
+  'create_goal',
+  'update_goal',
+  'get_goal',
+]);
+
+const GOAL_TOOL_NAME_SET = new Set(GOAL_TOOL_NAMES);
 
 export const PROGRESSIVE_TOOL_GROUPS = Object.freeze([
   {
@@ -38,6 +47,18 @@ export const PROGRESSIVE_TOOL_GROUPS = Object.freeze([
     skills: ['pptx'],
     label: 'PPT 演示文稿读写编辑',
   },
+  {
+    id: 'html-render',
+    toolNames: ['lobsterai_render_html_to_image'],
+    skills: [],
+    label: '离屏 HTML 渲染为 PNG/JPEG 图片（封面、海报、社媒图文卡片）',
+  },
+  {
+    id: 'skin-manage',
+    toolNames: ['lobsterai_skin_manage'],
+    skills: ['skin-creator'],
+    label: 'LobsterAI 皮肤草稿创建、资源注册与应用',
+  },
 ]);
 
 export const PROGRESSIVE_CAPABILITY_IDS = Object.freeze(
@@ -45,8 +66,14 @@ export const PROGRESSIVE_CAPABILITY_IDS = Object.freeze(
 );
 
 const GROUP_BY_ID = new Map(PROGRESSIVE_TOOL_GROUPS.map((group) => [group.id, group]));
+const EXACT_TOOL_TO_CAPABILITY = new Map();
 const SKILL_TO_CAPABILITY = new Map();
 for (const group of PROGRESSIVE_TOOL_GROUPS) {
+  if (Array.isArray(group.toolNames)) {
+    for (const toolName of group.toolNames) {
+      EXACT_TOOL_TO_CAPABILITY.set(toolName, group.id);
+    }
+  }
   for (const skillName of group.skills) {
     SKILL_TO_CAPABILITY.set(skillName, group.id);
   }
@@ -55,16 +82,36 @@ for (const group of PROGRESSIVE_TOOL_GROUPS) {
 /**
  * Resolve which progressive capability group owns a registered tool name,
  * or `null` if the tool is not managed by progressive disclosure (e.g. DSH
- * built-in tools, host tools, or user-added custom MCP servers).
+ * built-in tools, general host tools, or user-added custom MCP servers).
  * @param {string} toolName
  * @returns {string | null}
  */
 export function resolveCapabilityForToolName(toolName) {
-  if (typeof toolName !== 'string' || !toolName.startsWith('mcp__')) return null;
+  if (typeof toolName !== 'string' || !toolName) return null;
+  const exact = EXACT_TOOL_TO_CAPABILITY.get(toolName);
+  if (exact) return exact;
+  if (!toolName.startsWith('mcp__')) return null;
   for (const group of PROGRESSIVE_TOOL_GROUPS) {
-    if (toolName.startsWith(group.prefix)) return group.id;
+    if (group.prefix && toolName.startsWith(group.prefix)) return group.id;
   }
   return null;
+}
+
+/**
+ * Check whether a resumed session's logged request header already admitted any
+ * Goal-mode tool (`create_goal`, `update_goal`, `get_goal`) so Goal tools stay
+ * admitted for cache & behavior stability on resume.
+ * @param {Array<{ name?: unknown }> | undefined} headerTools
+ * @returns {boolean}
+ */
+export function hasAdmittedGoalTools(headerTools) {
+  if (!Array.isArray(headerTools) || headerTools.length === 0) return false;
+  for (const tool of headerTools) {
+    if (tool && typeof tool.name === 'string' && GOAL_TOOL_NAME_SET.has(tool.name)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -183,9 +230,12 @@ export function computeCombinedDeniedTools(
 export function listMountedToolsForCapability(restrictableNames, capabilityId) {
   const group = GROUP_BY_ID.get(capabilityId);
   if (!group) return [];
+  const exactSet = Array.isArray(group.toolNames) ? new Set(group.toolNames) : null;
   const tools = [];
   for (const name of restrictableNames) {
-    if (name.startsWith(group.prefix)) tools.push(name);
+    if ((group.prefix && name.startsWith(group.prefix)) || (exactSet && exactSet.has(name))) {
+      tools.push(name);
+    }
   }
   tools.sort();
   return tools;

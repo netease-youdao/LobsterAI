@@ -73,6 +73,8 @@ import {
 } from '../shared/browserWebAccess/constants';
 import type { BrowserPasskeyRequest } from '../shared/browserWebAccess/passkeys';
 import { ClipboardIpc } from '../shared/clipboard/constants';
+import { ContextCleanupIpcChannel } from '../shared/contextCleanup/constants';
+import type { ContextCleanupTargetItem } from '../shared/contextCleanup/types';
 import type { CoworkBrowserAnnotationMessageBatch } from '../shared/cowork/browserAnnotations';
 import type {
   CoworkBtwAbortRequest,
@@ -550,6 +552,12 @@ contextBridge.exposeInMainWorld('electron', {
     saveConfig: (update: DecisionModelConfigUpdate) => ipcRenderer.invoke(DecisionModelIpcChannel.SaveConfig, update),
     testConnection: (draft: DecisionModelConfigUpdate) =>
       ipcRenderer.invoke(DecisionModelIpcChannel.TestConnection, draft),
+  },
+  contextCleanup: {
+    scan: (options?: { idleDays?: number }) => ipcRenderer.invoke(ContextCleanupIpcChannel.Scan, options),
+    apply: (items: ContextCleanupTargetItem[]) => ipcRenderer.invoke(ContextCleanupIpcChannel.Apply, items),
+    undo: (undoToken: string) => ipcRenderer.invoke(ContextCleanupIpcChannel.Undo, undoToken),
+    dismiss: () => ipcRenderer.invoke(ContextCleanupIpcChannel.Dismiss),
   },
   providerModels: {
     discover: (request: ProviderModelDiscoveryRequest) =>

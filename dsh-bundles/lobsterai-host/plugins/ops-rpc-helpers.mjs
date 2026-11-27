@@ -44,9 +44,16 @@ export function mergeBoundSessionContext(prev, payload, validPermissionPresets =
       ? { mediaTurnInstruction: '' }
       : {};
 
+  const goalToolsEnabledPatch = base.goalToolsEnabled === true || p.goalToolsEnabled === true
+    ? { goalToolsEnabled: true }
+    : typeof p.goalToolsEnabled === 'boolean'
+      ? { goalToolsEnabled: p.goalToolsEnabled }
+      : {};
+
   const context = {
     ...base,
     ...(typeof p.userQuestionsDisabled === 'boolean' ? { userQuestionsDisabled: p.userQuestionsDisabled } : {}),
+    ...goalToolsEnabledPatch,
     ...(typeof p.agentId === 'string' ? { agentId: p.agentId } : {}),
     ...(typeof p.coworkSessionId === 'string' ? { coworkSessionId: p.coworkSessionId } : {}),
     ...(typeof p.traceId === 'string' && p.traceId.length > 0 ? { traceId: p.traceId } : {}),

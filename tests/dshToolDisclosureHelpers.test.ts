@@ -7,9 +7,11 @@ const HELPERS_URL = pathToFileURL(
 ).href;
 
 type DisclosureHelpers = {
+  GOAL_TOOL_NAMES: readonly string[];
   PROGRESSIVE_CAPABILITY_IDS: readonly string[];
   resolveCapabilityForToolName: (toolName: string) => string | null;
   resolveCapabilityForSkillName: (skillName: string) => string | null;
+  hasAdmittedGoalTools: (headerTools: Array<{ name?: unknown }> | undefined) => boolean;
   hasAnyProgressiveToolMounted: (toolNames: Iterable<string>) => boolean;
   normalizeCapabilityIds: (raw: unknown) => string[];
   collectAdmittedCapabilitiesFromTools: (headerTools: Array<{ name?: unknown }> | undefined) => string[];
@@ -37,7 +39,7 @@ async function loadHelpers(): Promise<DisclosureHelpers> {
 }
 
 describe('tool-disclosure-helpers', () => {
-  test('classifies only the 5 built-in progressive MCP prefixes and leaves custom MCP & built-ins ungated', async () => {
+  test('classifies built-in progressive MCP prefixes and scoped host tools while leaving custom MCP & built-ins ungated', async () => {
     const h = await loadHelpers();
 
     expect(h.resolveCapabilityForToolName('mcp__computer-use__desktop_click')).toBe('computer-use');
@@ -45,13 +47,20 @@ describe('tool-disclosure-helpers', () => {
     expect(h.resolveCapabilityForToolName('mcp__lobster-word__word_edit')).toBe('word');
     expect(h.resolveCapabilityForToolName('mcp__lobster-excel__excel_read')).toBe('excel');
     expect(h.resolveCapabilityForToolName('mcp__lobster-ppt__ppt_add_slide')).toBe('ppt');
+    expect(h.resolveCapabilityForToolName('lobsterai_render_html_to_image')).toBe('html-render');
+    expect(h.resolveCapabilityForToolName('lobsterai_skin_manage')).toBe('skin-manage');
 
-    // DSH built-ins, host tools, and user-installed custom MCP servers must NOT be gated.
+    // DSH built-ins, general host tools, and user-installed custom MCP servers must NOT be gated.
     expect(h.resolveCapabilityForToolName('bash')).toBeNull();
     expect(h.resolveCapabilityForToolName('lobster_schedule')).toBeNull();
     expect(h.resolveCapabilityForToolName('lobster_enable_tools')).toBeNull();
     expect(h.resolveCapabilityForToolName('mcp__github__list_issues')).toBeNull();
     expect(h.resolveCapabilityForToolName('mcp__my-custom-db__query')).toBeNull();
+
+    // Goal tools detection from resumed session headers.
+    expect(h.GOAL_TOOL_NAMES).toEqual(['create_goal', 'update_goal', 'get_goal']);
+    expect(h.hasAdmittedGoalTools([{ name: 'read' }, { name: 'create_goal' }])).toBe(true);
+    expect(h.hasAdmittedGoalTools([{ name: 'read' }, { name: 'bash' }])).toBe(false);
   });
 
   test('maps matching skill names to their capability group', async () => {
@@ -61,6 +70,7 @@ describe('tool-disclosure-helpers', () => {
     expect(h.resolveCapabilityForSkillName('XLSX')).toBe('excel');
     expect(h.resolveCapabilityForSkillName(' pptx ')).toBe('ppt');
     expect(h.resolveCapabilityForSkillName('computer-use')).toBe('computer-use');
+    expect(h.resolveCapabilityForSkillName('skin-creator')).toBe('skin-manage');
     expect(h.resolveCapabilityForSkillName('web-search')).toBeNull();
     expect(h.resolveCapabilityForSkillName('article-writer')).toBeNull();
   });
