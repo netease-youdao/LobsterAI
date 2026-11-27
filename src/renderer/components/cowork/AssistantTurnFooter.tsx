@@ -17,7 +17,8 @@ const AssistantTurnFooter: React.FC<{
   turnUsageSlot: React.ReactNode;
   mapDisplayText?: (value: string) => string;
   onForkMessage?: (messageId: string) => void;
-}> = ({ turn, turnUsageSlot, mapDisplayText, onForkMessage }) => {
+  compactMeta?: boolean;
+}> = ({ turn, turnUsageSlot, mapDisplayText, onForkMessage, compactMeta = false }) => {
   const messages = turn.assistantItems.flatMap((item): CoworkMessage[] => (
     item.type === 'tool_group'
       ? [item.group.toolUse, ...(item.group.toolResult ? [item.group.toolResult] : [])]
@@ -46,6 +47,7 @@ const AssistantTurnFooter: React.FC<{
       turnUsageSlot={turnUsageSlot}
       copyContent={copyContent}
       onFork={onForkMessage}
+      compactMeta={compactMeta}
     />
   );
 };

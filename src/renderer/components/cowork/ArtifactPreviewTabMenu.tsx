@@ -3,10 +3,21 @@ import { createPortal } from 'react-dom';
 
 import { i18nService } from '../../services/i18n';
 
+export interface ArtifactPreviewTabMenuAction {
+  id: string;
+  label: string;
+  disabled?: boolean;
+  title?: string;
+  danger?: boolean;
+  onClick: () => void;
+}
+
 interface ArtifactPreviewTabMenuProps {
   position: { x: number; y: number };
   onDismiss: () => void;
   onRenameTab?: () => void;
+  renameLabel?: string;
+  extraActions?: ArtifactPreviewTabMenuAction[];
   onCloseTab: () => void;
   onCloseOthers?: () => void;
   onCloseToRight?: () => void;
@@ -16,6 +27,8 @@ export default function ArtifactPreviewTabMenu({
   position,
   onDismiss,
   onRenameTab,
+  renameLabel,
+  extraActions,
   onCloseTab,
   onCloseOthers,
   onCloseToRight,
@@ -62,16 +75,39 @@ export default function ArtifactPreviewTabMenu({
         event.preventDefault(); items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
       }
     }}>
-    {onRenameTab && (
+    {(onRenameTab || (extraActions && extraActions.length > 0)) && (
       <>
-        <button
-          role="menuitem"
-          type="button"
-          className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-primary/10 focus:bg-primary/10 focus:outline-none"
-          onClick={() => { onDismiss(); onRenameTab(); }}
-        >
-          {i18nService.t('artifactRenameFile')}
-        </button>
+        {onRenameTab && (
+          <button
+            role="menuitem"
+            type="button"
+            className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-primary/10 focus:bg-primary/10 focus:outline-none"
+            onClick={() => { onDismiss(); onRenameTab(); }}
+          >
+            {renameLabel || i18nService.t('artifactRenameFile')}
+          </button>
+        )}
+        {extraActions?.map(item => (
+          <button
+            key={item.id}
+            role="menuitem"
+            type="button"
+            disabled={item.disabled}
+            title={item.title}
+            className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-sm focus:outline-none disabled:cursor-default disabled:opacity-35 ${
+              item.danger
+                ? 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10'
+                : 'text-foreground hover:bg-primary/10 focus:bg-primary/10'
+            }`}
+            onClick={() => {
+              if (item.disabled) return;
+              onDismiss();
+              item.onClick();
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
         <div className="my-1 border-t border-border/70" role="separator" />
       </>
     )}

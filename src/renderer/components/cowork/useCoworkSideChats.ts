@@ -15,6 +15,7 @@ import {
   CoworkSideChatStatus,
   type CoworkSideChatSummary,
 } from '../../../shared/cowork/sideChat';
+import { coworkService } from '../../services/cowork';
 import {
   CoworkPromptPayloadFailureCode,
   prepareCoworkPromptPayload,
@@ -77,6 +78,7 @@ export function useCoworkSideChats({
 }: UseCoworkSideChatsOptions) {
   const dispatch = useDispatch<AppDispatch>();
   const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null);
+  const [promotingSideChatId, setPromotingSideChatId] = useState<string | null>(null);
 
   const summaries = useSelector((state: RootState) => (
     sessionId ? state.sideChat.summariesByParent[sessionId] ?? EMPTY_SUMMARIES : EMPTY_SUMMARIES
@@ -423,6 +425,68 @@ export function useCoworkSideChats({
     void coworkSideChatService.stop(sessionId, activeSideChatId);
   }, [activeSideChatId, sessionId]);
 
+  const renameSideChat = useCallback(async (
+    sideChatId: string,
+    nextTitle: string,
+  ): Promise<boolean> => {
+    if (!sessionId) return false;
+    const trimmed = nextTitle.trim();
+    if (!trimmed) return false;
+    const ok = await coworkSideChatService.rename(sessionId, sideChatId, trimmed);
+    if (!ok) {
+      showToast(i18nService.t('coworkSideChatRenameFailed'));
+    }
+    return ok;
+  }, [sessionId]);
+
+  const deleteSideChat = useCallback(async (sideChatId: string): Promise<boolean> => {
+    if (!sessionId) return false;
+    const wasActive = !hasActiveArtifactPreviewTab
+      && activeSpecialPreviewTab === ArtifactSpecialTab.SideChat
+      && activeSideChatId === sideChatId;
+    const remainingCount = openTabIds.filter((id) => id !== sideChatId).length;
+    const ok = await coworkSideChatService.delete(sessionId, sideChatId);
+    if (!ok) {
+      showToast(i18nService.t('coworkSideChatDeleteFailed'));
+      return false;
+    }
+    if (wasActive && remainingCount === 0) {
+      onFallbackAfterClose();
+    }
+    return true;
+  }, [
+    activeSideChatId,
+    activeSpecialPreviewTab,
+    hasActiveArtifactPreviewTab,
+    onFallbackAfterClose,
+    openTabIds,
+    sessionId,
+  ]);
+
+  const promoteSideChat = useCallback(async (sideChatId: string): Promise<boolean> => {
+    if (!sessionId || promotingSideChatId) return false;
+    setPromotingSideChatId(sideChatId);
+    try {
+      const res = await coworkSideChatService.promote(sessionId, sideChatId);
+      if (!res.success || !res.sessionId) {
+        const message = res.error?.includes('Cannot fork a running session')
+          ? i18nService.t('coworkForkRunningBlocked')
+          : (res.error || i18nService.t('coworkSideChatPromoteFailed'));
+        showToast(message);
+        return false;
+      }
+      await coworkService.loadSessions();
+      await coworkService.loadSession(res.sessionId);
+      showToast(i18nService.t('coworkSideChatPromoteSuccess'));
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : i18nService.t('coworkSideChatPromoteFailed'));
+      return false;
+    } finally {
+      setPromotingSideChatId((current) => (current === sideChatId ? null : current));
+    }
+  }, [promotingSideChatId, sessionId]);
+
   const respondActivePermission = useCallback(async (
     requestId: string,
     result: CoworkSideChatPermissionResult,
@@ -447,11 +511,15 @@ export function useCoworkSideChats({
     activeAttachments,
     activeModelSelection,
     activePendingPermissions,
+    promotingSideChatId,
     isLoadingDetail: Boolean(activeSideChatId && loadingDetailId === activeSideChatId && !activeSideChat),
     activateSideChatTab,
     openExistingSideChat,
     openNewSideChat,
     closeSideChatTabById,
+    renameSideChat,
+    deleteSideChat,
+    promoteSideChat,
     openFromSelectedText,
     submitBtwCommand,
     setActiveDraft,

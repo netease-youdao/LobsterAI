@@ -8,8 +8,10 @@ import {
   FolderOpenIcon,
   GlobeAltIcon,
   MagnifyingGlassIcon,
+  PencilSquareIcon,
   PresentationChartBarIcon,
   TableCellsIcon,
+  TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { BlankDocumentKind } from '@shared/artifactPreview/blankDocument';
@@ -32,8 +34,12 @@ import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 import { SubagentSessionStatus, type SubagentSessionSummary } from '@/types/cowork';
 
-import { getSideChatDisplayTitle } from '../cowork/sideChatHelpers';
+import {
+  getSideChatDisplayTitle,
+  getSideChatPromoteEligibility,
+} from '../cowork/sideChatHelpers';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import MessageForkIcon from '../icons/MessageForkIcon';
 import SideChatIcon from '../icons/SideChatIcon';
 import {
   ArtifactNewTabCardId,
@@ -139,6 +145,10 @@ export interface ArtifactNewTabContentProps {
   onOpenWorkspaceChanges?: () => Promise<void> | void;
   onCreateSideChat?: () => void;
   onOpenSideChat?: (sideChatId: string) => void;
+  promotingSideChatId?: string | null;
+  onRenameSideChat?: (sideChatId: string, nextTitle: string) => Promise<boolean> | boolean;
+  onPromoteSideChat?: (sideChatId: string) => Promise<boolean> | void;
+  onDeleteSideChat?: (sideChatId: string) => void;
 }
 
 const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
@@ -159,6 +169,10 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   onOpenWorkspaceChanges,
   onCreateSideChat,
   onOpenSideChat,
+  promotingSideChatId = null,
+  onRenameSideChat,
+  onPromoteSideChat,
+  onDeleteSideChat,
 }) => {
   const [query, setQuery] = useState('');
   const [isOmniFocused, setIsOmniFocused] = useState(false);
@@ -168,11 +182,18 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
   const [localServices, setLocalServices] = useState<LocalWebService[]>([]);
   const [showOverflowMenu, setShowOverflowMenu] = useState(false);
   const [busyCardId, setBusyCardId] = useState<ArtifactNewTabCardId | null>(null);
+  const [openSideChatMenuId, setOpenSideChatMenuId] = useState<string | null>(null);
+  const [renamingSideChatId, setRenamingSideChatId] = useState<string | null>(null);
+  const [sideChatTitleDraft, setSideChatTitleDraft] = useState('');
+  const [isSubmittingSideChatRename, setIsSubmittingSideChatRename] = useState(false);
 
   const omniContainerRef = useRef<HTMLDivElement>(null);
   const omniInputRef = useRef<HTMLInputElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
+  const sideChatMenuRef = useRef<HTMLDivElement>(null);
+  const sideChatRenameInputRef = useRef<HTMLInputElement>(null);
+  const sideChatRenameSettledRef = useRef(false);
 
   const language = i18nService.getLanguage();
   const supportsWorkspaceChanges = Boolean(onOpenWorkspaceChanges);
@@ -302,9 +323,9 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
     setHighlightedIndex(0);
   }, [query, omniResults.length]);
 
-  // Close Omni-Bar dropdown and overflow menu on outside pointerdown or Escape.
+  // Close Omni-Bar dropdown, overflow menu, and recent side-chat menu on outside pointerdown or Escape.
   useEffect(() => {
-    if (!isOmniFocused && !showOverflowMenu) return undefined;
+    if (!isOmniFocused && !showOverflowMenu && !openSideChatMenuId) return undefined;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (isOmniFocused && target && !omniContainerRef.current?.contains(target)) {
@@ -318,11 +339,19 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
       ) {
         setShowOverflowMenu(false);
       }
+      if (
+        openSideChatMenuId
+        && target
+        && !sideChatMenuRef.current?.contains(target)
+      ) {
+        setOpenSideChatMenuId(null);
+      }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setShowOverflowMenu(false);
         setIsOmniFocused(false);
+        setOpenSideChatMenuId(null);
       }
     };
     document.addEventListener('pointerdown', handlePointerDown);
@@ -331,7 +360,46 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOmniFocused, showOverflowMenu]);
+  }, [isOmniFocused, openSideChatMenuId, showOverflowMenu]);
+
+  useEffect(() => {
+    if (!renamingSideChatId) return undefined;
+    sideChatRenameSettledRef.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      sideChatRenameInputRef.current?.focus();
+      sideChatRenameInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [renamingSideChatId]);
+
+  const startRecentSideChatRename = useCallback((sideChatId: string, currentTitle: string) => {
+    setOpenSideChatMenuId(null);
+    setSideChatTitleDraft(currentTitle);
+    setRenamingSideChatId(sideChatId);
+  }, []);
+
+  const cancelRecentSideChatRename = useCallback(() => {
+    if (sideChatRenameSettledRef.current || isSubmittingSideChatRename) return;
+    sideChatRenameSettledRef.current = true;
+    setRenamingSideChatId(null);
+  }, [isSubmittingSideChatRename]);
+
+  const commitRecentSideChatRename = useCallback(async (sideChatId: string, currentTitle: string) => {
+    if (sideChatRenameSettledRef.current || isSubmittingSideChatRename) return;
+    sideChatRenameSettledRef.current = true;
+    const trimmed = sideChatTitleDraft.trim();
+    if (!trimmed || trimmed === currentTitle || !onRenameSideChat) {
+      setRenamingSideChatId(null);
+      return;
+    }
+    setIsSubmittingSideChatRename(true);
+    try {
+      await onRenameSideChat(sideChatId, trimmed);
+    } finally {
+      setIsSubmittingSideChatRename(false);
+      setRenamingSideChatId(null);
+    }
+  }, [isSubmittingSideChatRename, onRenameSideChat, sideChatTitleDraft]);
 
   const executeOmniResult = useCallback((item: OmniResultItem) => {
     setIsOmniFocused(false);
@@ -809,26 +877,157 @@ const ArtifactNewTabContent: React.FC<ArtifactNewTabContentProps> = ({
                   </span>
                 </div>
                 <div className="space-y-1">
-                  {quickSideChats.map(item => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => onOpenSideChat(item.id)}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-foreground/90 transition-colors hover:bg-surface-raised hover:text-foreground"
-                    >
-                      <SideChatIcon className="h-4 w-4 shrink-0 text-violet-500 dark:text-violet-400" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {getSideChatDisplayTitle(item.id, sideChats, t('coworkSideChatTitle'))}
-                      </span>
-                      {item.status === CoworkSideChatStatus.Running && (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10.5px] font-medium text-primary">
-                          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-                          {t('coworkSideChatRunningStatus')}
-                        </span>
-                      )}
-                      <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted" />
-                    </button>
-                  ))}
+                  {quickSideChats.map(item => {
+                    const itemTitle = getSideChatDisplayTitle(item.id, sideChats, t('coworkSideChatTitle'));
+                    const isRenamingItem = renamingSideChatId === item.id;
+                    const isMenuOpen = openSideChatMenuId === item.id;
+                    const isPromotingItem = promotingSideChatId === item.id;
+                    const promoteEligibility = getSideChatPromoteEligibility(item);
+                    const promoteDisabled = !promoteEligibility.allowed || Boolean(promotingSideChatId);
+                    const promoteTooltip = isPromotingItem
+                      ? t('coworkSideChatPromoting')
+                      : promoteEligibility.reasonKey
+                        ? t(promoteEligibility.reasonKey)
+                        : t('coworkSideChatPromote');
+                    const hasRowActions = Boolean(onRenameSideChat || onPromoteSideChat || onDeleteSideChat);
+
+                    if (isRenamingItem) {
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex w-full items-center gap-2.5 rounded-xl border border-primary/60 bg-background px-2.5 py-1.5 ring-2 ring-primary/15"
+                        >
+                          <SideChatIcon className="h-4 w-4 shrink-0 text-violet-500 dark:text-violet-400" />
+                          <input
+                            ref={sideChatRenameInputRef}
+                            type="text"
+                            value={sideChatTitleDraft}
+                            disabled={isSubmittingSideChatRename}
+                            onChange={(event) => setSideChatTitleDraft(event.target.value)}
+                            onBlur={() => { void commitRecentSideChatRename(item.id, itemTitle); }}
+                            onKeyDown={(event) => {
+                              if (event.nativeEvent.isComposing) return;
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void commitRecentSideChatRename(item.id, itemTitle);
+                              } else if (event.key === 'Escape') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                cancelRecentSideChatRename();
+                              }
+                            }}
+                            aria-label={t('coworkSideChatRename')}
+                            data-recent-sidechat-rename-input={item.id}
+                            className="h-6 min-w-0 flex-1 bg-transparent text-[13px] font-medium text-foreground outline-none"
+                          />
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={item.id}
+                        data-recent-sidechat-item={item.id}
+                        className="group relative flex w-full items-center rounded-xl transition-colors hover:bg-surface-raised"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onOpenSideChat(item.id)}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-foreground/90 hover:text-foreground"
+                        >
+                          <SideChatIcon className="h-4 w-4 shrink-0 text-violet-500 dark:text-violet-400" />
+                          <span className="min-w-0 flex-1 truncate">
+                            {itemTitle}
+                          </span>
+                          {item.status === CoworkSideChatStatus.Running && (
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10.5px] font-medium text-primary">
+                              <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+                              {t('coworkSideChatRunningStatus')}
+                            </span>
+                          )}
+                        </button>
+                        {hasRowActions ? (
+                          <div ref={isMenuOpen ? sideChatMenuRef : undefined} className="relative mr-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setOpenSideChatMenuId((current) => (current === item.id ? null : item.id));
+                              }}
+                              title={t('more')}
+                              aria-label={t('more')}
+                              aria-haspopup="menu"
+                              aria-expanded={isMenuOpen}
+                              data-recent-sidechat-more={item.id}
+                              className={`inline-flex h-6 w-6 items-center justify-center rounded-lg transition-all ${
+                                isMenuOpen
+                                  ? 'bg-background text-foreground opacity-100'
+                                  : 'text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-background hover:text-foreground'
+                              }`}
+                            >
+                              <EllipsisHorizontalIcon className="h-4 w-4" />
+                            </button>
+
+                            {isMenuOpen && (
+                              <div
+                                role="menu"
+                                className="absolute right-0 top-7 z-30 min-w-44 overflow-hidden rounded-xl border border-border bg-surface-raised p-1.5 shadow-popover"
+                              >
+                                {onRenameSideChat && (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    data-recent-sidechat-menu-item="rename"
+                                    onClick={() => startRecentSideChatRename(item.id, itemTitle)}
+                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary/10"
+                                  >
+                                    <PencilSquareIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
+                                    <span>{t('coworkSideChatRename')}</span>
+                                  </button>
+                                )}
+                                {onPromoteSideChat && (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    disabled={promoteDisabled}
+                                    title={promoteTooltip}
+                                    data-recent-sidechat-menu-item="promote"
+                                    onClick={() => {
+                                      if (promoteDisabled) return;
+                                      setOpenSideChatMenuId(null);
+                                      void onPromoteSideChat(item.id);
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    <MessageForkIcon className="h-3.5 w-3.5 shrink-0 text-secondary" />
+                                    <span>{t(isPromotingItem ? 'coworkSideChatPromoting' : 'coworkSideChatPromote')}</span>
+                                  </button>
+                                )}
+                                {onDeleteSideChat && (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    data-recent-sidechat-menu-item="delete"
+                                    onClick={() => {
+                                      setOpenSideChatMenuId(null);
+                                      onDeleteSideChat(item.id);
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive/10"
+                                  >
+                                    <TrashIcon className="h-3.5 w-3.5 shrink-0" />
+                                    <span>{t('coworkSideChatDelete')}</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <ChevronRightIcon className="mr-2.5 h-3.5 w-3.5 shrink-0 text-muted" />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

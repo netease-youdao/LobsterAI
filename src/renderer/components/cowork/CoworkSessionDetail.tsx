@@ -130,6 +130,8 @@ import {
 } from '../../types/cowork';
 import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { parseUserMessageForDisplay } from '../../utils/userMessageDisplay';
+import AgentConfirmDialog from '../agent/AgentConfirmDialog';
+import { AgentConfirmDialogVariant } from '../agent/constants';
 import { useShortcutHint } from '../agentSidebar/useShortcutHint';
 import {
   AgentBrowserInAppPanel,
@@ -296,7 +298,10 @@ import {
   type CoworkTextExportFormat as CoworkTextExportFormatValue,
   mergeCoworkTextExportMessages,
 } from './sessionExport';
-import { getSideChatDisplayTitle } from './sideChatHelpers';
+import {
+  getSideChatDisplayTitle,
+  getSideChatPromoteEligibility,
+} from './sideChatHelpers';
 import SubagentSpawnCard from './SubagentSpawnCard';
 import { getConversationTurnUsage } from './turnUsageDisplay';
 import { useConversationEntrySettle } from './useConversationEntrySettle';
@@ -2245,6 +2250,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [promptInputAreaHeight, setPromptInputAreaHeight] = useState(0);
   const [isArtifactPanelExpanded, setIsArtifactPanelExpanded] = useState(false);
   const [renamingArtifactTabId, setRenamingArtifactTabId] = useState<string | null>(null);
+  const [renamingSideChatTabId, setRenamingSideChatTabId] = useState<string | null>(null);
+  const [pendingDeleteSideChatId, setPendingDeleteSideChatId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRenamingSideChatTabId(null);
+    setPendingDeleteSideChatId(null);
+  }, [sessionId]);
   const [isExpandedPromptInputHidden, setIsExpandedPromptInputHidden] = useState(false);
   const [isExpandedConversationPreviewOpen, setIsExpandedConversationPreviewOpen] = useState(false);
   const [goalStatusBarPortalTarget, setGoalStatusBarPortalTarget] = useState<HTMLDivElement | null>(null);
@@ -7285,20 +7297,63 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       {...artifactTabMenuActions(artifactTabActionTargets, ArtifactSpecialTab.UserAttachment)}
                     />
                   )}
-                  {sideChats.openSideChatTabs.map(tab => (
-                    <ArtifactPreviewTabItem
-                      key={`sidechat:${tab.id}`}
-                      active={!activeArtifactPreviewTab
-                        && activeSpecialPreviewTab === ArtifactSpecialTab.SideChat
-                        && sideChats.activeSideChatId === tab.id}
-                      icon={<SideChatIcon className="h-3.5 w-3.5 shrink-0" />}
-                      label={getSideChatDisplayTitle(tab.id, sideChats.summaries, i18nService.t('coworkSideChatTitle'))}
-                      closeLabel={i18nService.t('artifactCloseTab')}
-                      onActivate={() => sideChats.activateSideChatTab(tab.id)}
-                      onClose={() => sideChats.closeSideChatTabById(tab.id)}
-                      {...artifactTabMenuActions(artifactTabActionTargets, `sidechat:${tab.id}`)}
-                    />
-                  ))}
+                  {sideChats.openSideChatTabs.map(tab => {
+                    const tabTitle = getSideChatDisplayTitle(
+                      tab.id,
+                      sideChats.summaries,
+                      i18nService.t('coworkSideChatTitle'),
+                    );
+                    const promoteEligibility = getSideChatPromoteEligibility(tab.summary);
+                    const isPromotingTab = sideChats.promotingSideChatId === tab.id;
+                    const promoteDisabled = !promoteEligibility.allowed || Boolean(sideChats.promotingSideChatId);
+                    const promoteTooltip = isPromotingTab
+                      ? i18nService.t('coworkSideChatPromoting')
+                      : promoteEligibility.reasonKey
+                        ? i18nService.t(promoteEligibility.reasonKey)
+                        : i18nService.t('coworkSideChatPromote');
+                    return (
+                      <ArtifactPreviewTabItem
+                        key={`sidechat:${tab.id}`}
+                        active={!activeArtifactPreviewTab
+                          && activeSpecialPreviewTab === ArtifactSpecialTab.SideChat
+                          && sideChats.activeSideChatId === tab.id}
+                        icon={<SideChatIcon className="h-3.5 w-3.5 shrink-0" />}
+                        label={tabTitle}
+                        closeLabel={i18nService.t('artifactCloseTab')}
+                        canRename={!remoteManaged}
+                        preserveExtensionOnRename={false}
+                        renameLabel={i18nService.t('coworkSideChatRename')}
+                        isRenaming={renamingSideChatTabId === tab.id}
+                        onStartRename={!remoteManaged ? () => {
+                          sideChats.activateSideChatTab(tab.id);
+                          setRenamingSideChatTabId(tab.id);
+                        } : undefined}
+                        onCancelRename={() => setRenamingSideChatTabId(current => (current === tab.id ? null : current))}
+                        onCommitRename={!remoteManaged ? (nextTitle) => sideChats.renameSideChat(tab.id, nextTitle) : undefined}
+                        extraMenuActions={!remoteManaged ? [
+                          {
+                            id: 'promote-side-chat',
+                            label: i18nService.t(isPromotingTab ? 'coworkSideChatPromoting' : 'coworkSideChatPromote'),
+                            disabled: promoteDisabled,
+                            title: promoteTooltip,
+                            onClick: () => { void sideChats.promoteSideChat(tab.id); },
+                          },
+                          {
+                            id: 'delete-side-chat',
+                            label: i18nService.t('coworkSideChatDelete'),
+                            danger: true,
+                            onClick: () => setPendingDeleteSideChatId(tab.id),
+                          },
+                        ] : undefined}
+                        onActivate={() => sideChats.activateSideChatTab(tab.id)}
+                        onClose={() => {
+                          setRenamingSideChatTabId(current => (current === tab.id ? null : current));
+                          sideChats.closeSideChatTabById(tab.id);
+                        }}
+                        {...artifactTabMenuActions(artifactTabActionTargets, `sidechat:${tab.id}`)}
+                      />
+                    );
+                  })}
                   {artifactTabsWithArtifacts.map(({ tab, artifact }) => {
                     const fileName = artifact.fileName || artifact.title;
                     const renamable = canRenameArtifactFile(artifact);
@@ -7990,6 +8045,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   onOpenWorkspaceChanges={handleNewTabOpenWorkspaceChanges}
                   onCreateSideChat={!remoteManaged ? () => void sideChats.openNewSideChat({ fromNewTab: true }) : undefined}
                   onOpenSideChat={(sideChatId) => sideChats.openExistingSideChat(sideChatId, { fromNewTab: true })}
+                  promotingSideChatId={sideChats.promotingSideChatId}
+                  onRenameSideChat={!remoteManaged ? sideChats.renameSideChat : undefined}
+                  onPromoteSideChat={!remoteManaged ? sideChats.promoteSideChat : undefined}
+                  onDeleteSideChat={!remoteManaged ? (sideChatId) => setPendingDeleteSideChatId(sideChatId) : undefined}
                 />
               )}
               onOpenLocalFilePicker={() => void handleNewTabOpenLocalFilePicker()}
@@ -8027,8 +8086,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               sideChatPanel={(
                 <SideChatPanelContent
                   sideChat={sideChats.activeSideChat}
+                  displayTitle={sideChats.activeSideChatId
+                    ? getSideChatDisplayTitle(
+                      sideChats.activeSideChatId,
+                      sideChats.summaries,
+                      i18nService.t('coworkSideChatTitle'),
+                    )
+                    : undefined}
                   parentSession={currentSession}
                   loading={sideChats.isLoadingDetail}
+                  isPromoting={Boolean(
+                    sideChats.activeSideChatId && sideChats.promotingSideChatId === sideChats.activeSideChatId,
+                  )}
                   draft={sideChats.activeDraft}
                   selectedTextSnippets={sideChats.activeSelectedTextSnippets}
                   attachments={sideChats.activeAttachments}
@@ -8041,6 +8110,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   onRemoveAttachment={sideChats.removeActiveAttachment}
                   onModelSelectionChange={sideChats.setActiveModelSelection}
                   onLocateSelectedText={handleLocateSelectedText}
+                  onRename={!remoteManaged && sideChats.activeSideChatId
+                    ? (nextTitle) => sideChats.renameSideChat(sideChats.activeSideChatId!, nextTitle)
+                    : undefined}
+                  onPromote={!remoteManaged && sideChats.activeSideChatId
+                    ? () => sideChats.promoteSideChat(sideChats.activeSideChatId!)
+                    : undefined}
+                  onRequestDelete={!remoteManaged && sideChats.activeSideChatId
+                    ? () => setPendingDeleteSideChatId(sideChats.activeSideChatId!)
+                    : undefined}
                   onSend={(options) => void sideChats.sendActiveMessage(options)}
                   onStop={sideChats.stopActiveSideChat}
                   onRespondPermission={sideChats.respondActivePermission}
@@ -8058,6 +8136,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       </div>
       <ImageStudioHost sessionId={currentSession.id} />
       <MessageSpeechSession sessionId={currentSession.id} />
+      {pendingDeleteSideChatId && (
+        <AgentConfirmDialog
+          variant={AgentConfirmDialogVariant.Delete}
+          title={i18nService.t('coworkSideChatDelete')}
+          message={i18nService.t('coworkSideChatDeleteConfirm')}
+          cancelLabel={i18nService.t('cancel')}
+          confirmLabel={i18nService.t('delete')}
+          onCancel={() => setPendingDeleteSideChatId(null)}
+          onConfirm={() => {
+            const targetId = pendingDeleteSideChatId;
+            setPendingDeleteSideChatId(null);
+            setRenamingSideChatTabId(current => (current === targetId ? null : current));
+            void sideChats.deleteSideChat(targetId);
+          }}
+        />
+      )}
     </MarkdownLinkOpenerContext.Provider>
     </ArtifactFileShareProvider>
   );
