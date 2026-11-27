@@ -127,6 +127,12 @@ const PATCH_SENTINELS = [
     expect: 'markBoot("tree-loaded");',
     occurrences: 1,
   },
+  {
+    patch: '03-hmr-electron-module-binding.cjs',
+    file: 'node_modules/@deepseek-ai/dsh-hmr/lib/index.js',
+    expect: 'process.versions.electron && requireInternal("internal/test/binding")',
+    occurrences: 1,
+  },
 ];
 
 const TARGETS = {

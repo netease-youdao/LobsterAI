@@ -6,6 +6,7 @@ import {
   DshRemoteError,
   type DshSessionControlFrame,
   DshSessionControlFrameType,
+  DshSocketErrorCode,
   DshTypertClient,
   type DshWebSocketLike,
 } from './dshTypertClient';
@@ -54,6 +55,31 @@ class FakeWebSocket implements DshWebSocketLike {
 }
 
 describe('DshTypertClient', () => {
+  test('recovers a reset projection read once and propagates a second reset', async () => {
+    const client = new DshTypertClient();
+    const reset = Object.assign(new Error('socket hang up'), { code: DshSocketErrorCode.ConnectionReset });
+    const projection = { values: { subagentCatalog: [] } };
+    const call = vi.spyOn(client, 'call').mockRejectedValueOnce(reset).mockResolvedValueOnce(projection)
+      .mockRejectedValue(reset);
+    await expect(client.getSessionProjections('parent')).resolves.toEqual(projection);
+    expect(call.mock.calls[0]).toEqual(call.mock.calls[1]);
+    await expect(client.getSessionProjections('parent')).rejects.toBe(reset);
+    expect(call).toHaveBeenCalledTimes(4);
+  });
+
+  test('does not retry a cancelled projection read or a host application error', async () => {
+    const client = new DshTypertClient();
+    const controller = new AbortController();
+    const reset = Object.assign(new Error('socket hang up'), { code: DshSocketErrorCode.ConnectionReset });
+    const call = vi.spyOn(client, 'call').mockImplementationOnce(async () => {
+      controller.abort();
+      throw reset;
+    }).mockRejectedValueOnce(new Error('unknown session'));
+    await expect(client.getSessionProjections('parent', controller.signal)).rejects.toBe(reset);
+    await expect(client.getSessionProjections('parent')).rejects.toThrow('unknown session');
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   test('concurrent waiters rejoin the same Host with one fresh API peer after mux loss', async () => {
     const sockets: FakeWebSocket[] = [];
     const grants: string[] = [];
