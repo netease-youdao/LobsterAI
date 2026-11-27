@@ -795,7 +795,7 @@ function preprocessPythonCode(code: string): {
         : innerSpans;
       if (listSpans.length > 0) {
         const joined = listSpans
-          .map((s) => (/\s/.test(s.value) ? `"${s.value.replace(/"/g, '\\"')}"` : s.value))
+          .map((s) => (/\s/.test(s.value) ? `"${s.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : s.value))
           .join(' ');
         shellExecCalls.push({ command: joined, lineOffset: listSpans[0].lineOffset });
       }
